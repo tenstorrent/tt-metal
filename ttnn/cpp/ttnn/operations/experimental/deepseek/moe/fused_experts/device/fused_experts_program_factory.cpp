@@ -48,6 +48,8 @@ constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
 // The in-op router runs on up to kRouterCores cores of the first grid row below the expert grid, which
 // take the gate's [K, 32] tile columns round-robin (core c: columns c, c + cores, ...).
 constexpr uint32_t kRouterCores = 12;
+// The persistent op's source ring on each sender: kFeSourceRing (kernels/persistent.h) words.
+constexpr uint32_t kFeSourceRingBytes = 16u * 4u;
 // A core's score and ranking tiles sit in DEST together: 8 16-bit tiles in half-sync mode.
 constexpr uint32_t kRouterMaxTilesPerCore = 4;
 
@@ -70,18 +72,14 @@ struct AllReduceBranch {
     std::array<uint32_t, 4> hops;
 };
 
-// The persistent op's per-chip extras (see FusedPersistentParams): the all-reduce becomes a reduce to
-// `root`, whose output cores sum the two halves of the scratch in alternate iterations.
+// The persistent op's per-chip extras (see FusedPersistentParams): there is no cross-chip reduce; every chip
+// sends its partial row to the iteration's requester (fe_reduce_sender.cpp), which sums them.
 struct PersistentEpilogue {
-    bool is_root;
-    ttnn::MeshCoordinate root;
-    // GlobalSemaphores: the odd iterations' out_ready (the epilogue's is the even ones') on the output
-    // cores, and the root's per-iteration credit on the senders.
+    // GlobalSemaphore on the output cores; unused by the persistent op's kernels, which stage at the senders.
     uint32_t out_ready1_sem_addr;
-    uint32_t credit_sem_addr;
     // kFeHdrWords + kFeGoWords words on every core of the input replica's grid, zeroed.
     tt::tt_metal::Buffer* header;
-    // Two [1, H] rows on the control core: the root's output on its way to the output socket.
+    // The writers' output staging argument; unused by the persistent op's kernels.
     tt::tt_metal::Buffer* out_staging;
 };
 
@@ -1748,12 +1746,16 @@ ProgramDescriptor build_program_descriptor(
     }
     // NoC coordinates of the sender an output core reports to and the core's place in that link's run
     // (its staging slot there); {0, 0} and 0 on every other core.
+    // The persistent op sends each link's part of the row as one run of columns (fe_reduce_sender.cpp), so there
+    // an output core's place is its down slot, which picks its columns: link down_local / ar_cores_per_link, slot
+    // down_local % ar_cores_per_link.
     auto ar_sender_for = [&](const CoreCoord& core) -> std::pair<CoreCoord, uint32_t> {
         const auto it = std::find(ar_out_cores.begin(), ar_out_cores.end(), core);
         if (it == ar_out_cores.end()) {
             return {CoreCoord{0, 0}, 0u};
         }
-        const auto pos = static_cast<uint32_t>(it - ar_out_cores.begin());
+        const auto pos =
+            persistent != nullptr ? down_local_for(core) : static_cast<uint32_t>(it - ar_out_cores.begin());
         return {device->worker_core_from_logical_core(ar_senders[pos / ar_cores_per_link]), pos % ar_cores_per_link};
     };
 
@@ -2099,36 +2101,48 @@ ProgramDescriptor build_program_descriptor(
 
         // RISCV_1: the one DM processor a router core leaves free (its router_topk reader is RISCV_0).
         // Pushed before its runtime args, which the fabric connections append to it by kernel index.
-        // The persistent op reduces to the root instead (fe_reduce_sender.cpp): off the root the one
-        // connection is the route to it, and the root's branches carry its credits back.
-        const bool to_root = persistent != nullptr && !persistent->is_root;
+        // The persistent op does no cross-chip reduce (fe_reduce_sender.cpp): each sender sends its link's part
+        // of this chip's partial row to every chip of the iteration's requester, which sums the chips' partials.
         KernelDescriptor ar_sender;
         ar_sender.source_type = KernelDescriptor::SourceType::FILE_PATH;
         ar_sender.core_ranges = ar_sender_set;
-        const uint32_t num_connections = to_root ? 1u : static_cast<uint32_t>(all_reduce->branches.size());
+        // On a sender, past its staging's two halves: the source ring the control core writes each iteration's
+        // requester into.
+        const uint32_t part_bytes = ar_cores_per_link * core_bytes;
+        const uint32_t sender_ring_addr = static_cast<uint32_t>(all_reduce->scratch->address()) + 2u * part_bytes;
         if (persistent != nullptr) {
+            const auto& params = *operation_attributes.persistent;
+            TT_FATAL(
+                ar_out_cores.size() == ar_cores_per_link * all_reduce->num_links &&
+                    params.row_bytes == part_bytes * all_reduce->num_links,
+                "fused_experts: the persistent op sends a row as {} parts of {} output cores each, but the output has "
+                "{} cores and a {} B row",
+                all_reduce->num_links,
+                ar_cores_per_link,
+                ar_out_cores.size(),
+                params.row_bytes);
+            TT_FATAL(
+                (2u * part_bytes + kFeSourceRingBytes) <= all_reduce->scratch->aligned_size_per_bank(),
+                "fused_experts: a sender's staging and source ring take {} B of the {} B scratch",
+                2u * part_bytes + kFeSourceRingBytes,
+                all_reduce->scratch->aligned_size_per_bank());
             ar_sender.kernel_source = std::string(kKernelDir) + "/dataflow/fe_reduce_sender.cpp";
             ar_sender.compile_time_args = {
                 all_reduce->device_index,
-                persistent->is_root ? 1u : 0u,
-                num_connections,
-                core_bytes,
+                part_bytes,
                 sem_ar_ready_id,
-                all_reduce->ring_size,
                 sem_go_id,
                 cb_ar_scratch,
-                ar_cores_per_link,
+                static_cast<uint32_t>(params.partials_addresses.size()),
+                static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()),
+                params.num_chips,
+                static_cast<uint32_t>(params.partials_connection_chip_ids.at(all_reduce->device_index).size()),
             };
-            ar_sender.emplace_common_runtime_args(
-                {all_reduce->scratch,
-                 all_reduce->out_ready_sem_addr,
-                 persistent->out_ready1_sem_addr,
-                 persistent->credit_sem_addr});
         } else {
             ar_sender.kernel_source = std::string(kKernelDir) + "/dataflow/ar_sender.cpp";
             ar_sender.compile_time_args = {
                 all_reduce->device_index,
-                num_connections,
+                static_cast<uint32_t>(all_reduce->branches.size()),
                 core_bytes,
                 sem_ar_ready_id,
                 cb_ar_scratch,
@@ -2140,14 +2154,6 @@ ProgramDescriptor build_program_descriptor(
         desc.kernels.push_back(std::move(ar_sender));
 
         const auto src_node = device->get_fabric_node_id(all_reduce->coord);
-        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
-        if (to_root) {
-            dst_nodes.push_back(device->get_fabric_node_id(persistent->root));
-        } else {
-            for (const auto& branch : all_reduce->branches) {
-                dst_nodes.push_back(device->get_fabric_node_id(branch.first_hop));
-            }
-        }
         const auto api_type = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())
                                   ? tt::tt_fabric::FabricApiType::Mesh
                                   : tt::tt_fabric::FabricApiType::Linear;
@@ -2156,15 +2162,35 @@ ProgramDescriptor build_program_descriptor(
             const uint32_t count =
                 std::min<uint32_t>(ar_cores_per_link, static_cast<uint32_t>(ar_out_cores.size()) - first);
             std::vector<uint32_t> sender_args = {count};
-            for (uint32_t i = first; i < first + count; ++i) {
-                sender_args.push_back(device->worker_core_from_logical_core(ar_out_cores[i]).x);
-            }
-            for (uint32_t i = first; i < first + count; ++i) {
-                sender_args.push_back(device->worker_core_from_logical_core(ar_out_cores[i]).y);
-            }
-            if (!to_root) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+            if (persistent != nullptr) {
+                const auto& params = *operation_attributes.persistent;
+                sender_args.push_back(sender_ring_addr);
+                const auto& routes = params.partials_route_args.at(all_reduce->device_index);
+                const auto& connection_index = params.partials_connection_index.at(all_reduce->device_index);
+                for (size_t k = 0; k < params.partials_addresses.size(); ++k) {
+                    sender_args.push_back(connection_index.at(k));
+                    sender_args.push_back(params.partials_addresses[k]);
+                    sender_args.push_back(params.sum_core_noc_xs[k].at(link));
+                    sender_args.push_back(params.sum_core_noc_ys[k].at(link));
+                    sender_args.push_back(static_cast<uint32_t>(routes[k].size() / kD2DRouteArgs));
+                    sender_args.insert(sender_args.end(), routes[k].begin(), routes[k].end());
+                }
+                const auto& mesh_ids = params.partials_connection_mesh_ids.at(all_reduce->device_index);
+                const auto& chip_ids = params.partials_connection_chip_ids.at(all_reduce->device_index);
+                for (size_t c = 0; c < chip_ids.size(); ++c) {
+                    dst_nodes.push_back(tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_ids[c]}, chip_ids[c]));
+                }
+            } else {
+                for (uint32_t i = first; i < first + count; ++i) {
+                    sender_args.push_back(device->worker_core_from_logical_core(ar_out_cores[i]).x);
+                }
+                for (uint32_t i = first; i < first + count; ++i) {
+                    sender_args.push_back(device->worker_core_from_logical_core(ar_out_cores[i]).y);
+                }
                 for (const auto& branch : all_reduce->branches) {
                     sender_args.insert(sender_args.end(), branch.hops.begin(), branch.hops.end());
+                    dst_nodes.push_back(device->get_fabric_node_id(branch.first_hop));
                 }
             }
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
@@ -2217,9 +2243,6 @@ ProgramDescriptor build_program_descriptor(
                 kernel.defines.emplace_back("FE_SEM_OUT_COUNT", std::to_string(sem_out_count_id));
                 kernel.defines.emplace_back("FE_CTRL_X", std::to_string(ctrl_noc.x));
                 kernel.defines.emplace_back("FE_CTRL_Y", std::to_string(ctrl_noc.y));
-                if (persistent->is_root) {
-                    kernel.defines.emplace_back("FE_REDUCE_ROOT", "1");
-                }
             }
 
             constexpr uint32_t kHeaderBytes = 64;
@@ -2255,7 +2278,7 @@ ProgramDescriptor build_program_descriptor(
                 params.num_layers,
                 cb_ctrl,
                 GRID_X * GRID_Y,
-                persistent->is_root ? 1u : 0u,
+                0u,  // is_root: no chip reduces, so no chip has an output to wait for
                 sem_out_done_id,
                 sem_out_stop_id,
                 sem_go_id,
@@ -2299,51 +2322,9 @@ ProgramDescriptor build_program_descriptor(
                 ctrl_rt_args.end(),
                 params.input_socket_config_addresses.begin(),
                 params.input_socket_config_addresses.end());
+            ctrl_rt_args.push_back(sender_ring_addr);
             ctrl_desc.emplace_runtime_args(ctrl_core, ctrl_rt_args);
             desc.kernels.push_back(std::move(ctrl_desc));
-
-            if (persistent->is_root) {
-                KernelDescriptor out_desc;
-                out_desc.kernel_source = std::string(kKernelDir) + "/dataflow/fe_out.cpp";
-                out_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-                out_desc.core_ranges = ctrl_set;
-                out_desc.compile_time_args = {
-                    num_requesters,
-                    row_bytes,
-                    static_cast<uint32_t>(ar_out_cores.size()),
-                    sem_out_count_id,
-                    sem_out_done_id,
-                    sem_out_stop_id,
-                    static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()),
-                    cb_ctrl,
-                    source_ring_offset,
-                };
-                out_desc.config =
-                    DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
-                tt::tt_metal::KernelHandle out_id = desc.kernels.size();
-                desc.kernels.push_back(std::move(out_desc));
-                std::vector<uint32_t> out_args = {static_cast<uint32_t>(persistent->out_staging->address())};
-                for (uint32_t k = 0; k < num_requesters; ++k) {
-                    out_args.push_back(params.output_socket_config_addresses[k]);
-                    out_args.push_back(static_cast<uint32_t>(params.output_route_args[k].size() / kD2DRouteArgs));
-                    out_args.insert(
-                        out_args.end(), params.output_route_args[k].begin(), params.output_route_args[k].end());
-                }
-                // Link 0: the root's reduce senders hold no connection in the outputs' direction.
-                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                    *device,
-                    src_node,
-                    {tt::tt_fabric::FabricNodeId(
-                        tt::tt_fabric::MeshId{params.output_connection_mesh_id}, params.output_connection_chip_id)},
-                    {0u},
-                    desc,
-                    out_id,
-                    ctrl_core,
-                    out_args,
-                    tt::tt_fabric::FabricApiType::Mesh);
-                desc.kernels[out_id].runtime_args.emplace_back(
-                    ctrl_core, KernelDescriptor::CoreRuntimeArgs(out_args.begin(), out_args.end()));
-            }
         }
     }
 
@@ -2524,12 +2505,8 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
             .branches = std::move(branches),
         };
         if (persistent.has_value()) {
-            const ttnn::MeshCoordinate root(0, 0);
             epilogue.persistent = PersistentEpilogue{
-                .is_root = coord == root,
-                .root = root,
                 .out_ready1_sem_addr = static_cast<uint32_t>(workload.semaphores[1].address()),
-                .credit_sem_addr = static_cast<uint32_t>(workload.semaphores[2].address()),
                 .header = header->buffer(),
                 .out_staging = out_staging->buffer(),
             };

@@ -759,12 +759,19 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         attributes.persistent.has_value() ? attributes.persistent->socket_core.y : 0u,
         attributes.persistent.has_value() ? attributes.persistent->input_socket_config_addresses
                                           : std::vector<uint32_t>{},
-        attributes.persistent.has_value() ? attributes.persistent->output_socket_config_addresses
-                                          : std::vector<uint32_t>{},
-        attributes.persistent.has_value() ? attributes.persistent->output_route_args
+        attributes.persistent.has_value() ? attributes.persistent->partials_addresses : std::vector<uint32_t>{},
+        attributes.persistent.has_value() ? attributes.persistent->sum_core_noc_xs
                                           : std::vector<std::vector<uint32_t>>{},
-        attributes.persistent.has_value() ? attributes.persistent->output_connection_mesh_id : 0u,
-        attributes.persistent.has_value() ? attributes.persistent->output_connection_chip_id : 0u,
+        attributes.persistent.has_value() ? attributes.persistent->sum_core_noc_ys
+                                          : std::vector<std::vector<uint32_t>>{},
+        attributes.persistent.has_value() ? attributes.persistent->partials_route_args
+                                          : std::vector<std::vector<std::vector<uint32_t>>>{},
+        attributes.persistent.has_value() ? attributes.persistent->partials_connection_mesh_ids
+                                          : std::vector<std::vector<uint32_t>>{},
+        attributes.persistent.has_value() ? attributes.persistent->partials_connection_chip_ids
+                                          : std::vector<std::vector<uint32_t>>{},
+        attributes.persistent.has_value() ? attributes.persistent->partials_connection_index
+                                          : std::vector<std::vector<uint32_t>>{},
         tensor_args.layer_table);
     return hash;
 }
@@ -829,7 +836,7 @@ FusedExpertsDeviceOperation::invoke(
     const std::optional<Tensor>& persistent_layer_table,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
     const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_input_sockets,
-    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_output_sockets) {
+    const std::optional<std::vector<Tensor>>& persistent_partials) {
     operation_attributes_t attributes{
         .num_experts = num_experts,
         .intermediate_size = intermediate_size,
@@ -880,30 +887,43 @@ FusedExpertsDeviceOperation::invoke(
         using tt::tt_metal::distributed::SocketEndpoint;
         TT_FATAL(
             persistent_socket_core.has_value() && persistent_input_sockets.has_value() &&
-                persistent_output_sockets.has_value() && !persistent_input_sockets->empty() &&
-                persistent_input_sockets->size() == persistent_output_sockets->size() &&
-                persistent_input_sockets->size() <= kMaxPersistentRequesters,
-            "fused_experts: the persistent op needs the socket core and 1 to {} pairs of input and output sockets "
-            "along with persistent_layer_table",
+                persistent_partials.has_value() && !persistent_input_sockets->empty() &&
+                persistent_input_sockets->size() == persistent_partials->size() &&
+                persistent_input_sockets->size() <= kMaxPersistentRequesters && attributes.all_reduce.has_value(),
+            "fused_experts: the persistent op needs the socket core, the all-reduce, and 1 to {} pairs of input "
+            "sockets and partials buffers along with persistent_layer_table",
             kMaxPersistentRequesters);
         const auto& socket_core = *persistent_socket_core;
         auto* mesh = input_tensor.device();
-        const ttnn::MeshCoordinate root(0, 0);
-        const auto root_node = mesh->get_fabric_node_id(root);
+        const uint32_t num_links = attributes.all_reduce->num_links;
+        const uint32_t row_bytes = static_cast<uint32_t>(input_tensor.logical_shape()[-1]) * 2u;
+        const uint32_t num_chips = static_cast<uint32_t>(mesh->shape().mesh_size());
+        TT_FATAL(
+            row_bytes % num_links == 0, "fused_experts: a {} B row does not split into {} parts", row_bytes, num_links);
+        const uint32_t part_bytes = row_bytes / num_links;
         FusedPersistentParams persistent{
             .num_layers = static_cast<uint32_t>(persistent_layer_table->logical_shape()[-2]),
             .socket_core = socket_core,
+            .row_bytes = row_bytes,
+            .num_chips = num_chips,
         };
-        std::optional<tt::tt_fabric::FabricNodeId> connection;
+        // Per chip of the op, in its linear index (its slot) order.
+        std::vector<ttnn::MeshCoordinate> chips(num_chips, ttnn::MeshCoordinate(0, 0));
+        for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
+            chips.at(ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, coord, std::nullopt)) = coord;
+        }
+        persistent.partials_route_args.resize(num_chips);
+        persistent.partials_connection_mesh_ids.resize(num_chips);
+        persistent.partials_connection_chip_ids.resize(num_chips);
+        persistent.partials_connection_index.resize(num_chips);
+        std::vector<std::vector<tt::tt_fabric::FabricNodeId>> connections(num_chips);
         for (size_t k = 0; k < persistent_input_sockets->size(); ++k) {
             const auto& input_socket = (*persistent_input_sockets)[k];
-            const auto& output_socket = (*persistent_output_sockets)[k];
+            const auto& partials = (*persistent_partials)[k];
             TT_FATAL(
                 input_socket.get_socket_endpoint_type() == SocketEndpoint::RECEIVER &&
-                    output_socket.get_socket_endpoint_type() == SocketEndpoint::SENDER &&
-                    input_socket.get_mesh_device() == mesh && output_socket.get_mesh_device() == mesh,
-                "fused_experts: requester {} must receive on its input socket and send on its output socket, both "
-                "endpoints on the op's mesh",
+                    input_socket.get_mesh_device() == mesh,
+                "fused_experts: requester {} must receive on its input socket on the op's mesh",
                 k);
             // Every chip's control core receives the rows.
             std::set<ttnn::MeshCoordinate> receivers;
@@ -922,48 +942,80 @@ FusedExpertsDeviceOperation::invoke(
                 k,
                 mesh->shape(),
                 receivers.size());
-            // The root's control core sends the reduced row to receivers that share a core.
-            const auto& out_connections = output_socket.get_config().socket_connection_config;
-            std::vector<tt::tt_fabric::FabricNodeId> out_receivers;
-            for (const auto& c : out_connections) {
-                TT_FATAL(
-                    c.sender_core == tt::tt_metal::distributed::MeshCoreCoord(root, socket_core) &&
-                        c.receiver_core.core_coord == out_connections.front().receiver_core.core_coord,
-                    "fused_experts: requester {}'s output socket must send from the socket core {} of {} to one core "
-                    "on every receiving chip",
-                    k,
-                    socket_core.str(),
-                    root);
-                out_receivers.push_back(
-                    output_socket.get_fabric_node_id(SocketEndpoint::RECEIVER, c.receiver_core.device_coord));
-            }
-            const auto routes = d2d_routes(root_node, out_receivers);
+            // The partials buffer: on every chip of the requester, one L1 shard per link -- num_chips slots of that
+            // link's part of a row, then a flag word per chip -- on that link's sum core.
             TT_FATAL(
-                routes.size() <= kMaxPersistentRoutes,
-                "fused_experts: requester {}'s output takes {} sends, more than the kernel's {}",
-                k,
-                routes.size(),
-                kMaxPersistentRoutes);
-            if (!connection.has_value()) {
-                connection = routes.front().next;
-            }
-            TT_FATAL(
-                routes.front().next == *connection,
-                "fused_experts: every output must leave the root in one direction, which its one fabric connection "
-                "holds; requester {}'s does not",
+                partials.storage_type() == StorageType::DEVICE && partials.device() != mesh &&
+                    partials.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                    partials.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                "fused_experts: requester {}'s partials must be an L1 HEIGHT_SHARDED tensor on its own mesh",
                 k);
-            std::vector<uint32_t> route_args;
-            for (const auto& route : routes) {
-                append_d2d_route_args(route, route_args);
+            const auto& shard = partials.shard_spec().value();
+            const auto sum_cores = corerange_to_cores(shard.grid, std::nullopt, /*row_wise=*/true);
+            const uint32_t shard_bytes = partials.buffer()->aligned_size_per_bank();
+            TT_FATAL(
+                sum_cores.size() == num_links && shard_bytes >= num_chips * (part_bytes + 4u),
+                "fused_experts: requester {}'s partials need {} shards (one per link) of at least {} B, got {} of {} B",
+                k,
+                num_links,
+                num_chips * (part_bytes + 4u),
+                sum_cores.size(),
+                shard_bytes);
+            auto* requester = partials.device();
+            persistent.partials_addresses.push_back(static_cast<uint32_t>(partials.buffer()->address()));
+            std::vector<uint32_t> xs;
+            std::vector<uint32_t> ys;
+            for (const auto& core : sum_cores) {
+                const auto noc = requester->worker_core_from_logical_core(core);
+                xs.push_back(static_cast<uint32_t>(noc.x));
+                ys.push_back(static_cast<uint32_t>(noc.y));
+            }
+            persistent.sum_core_noc_xs.push_back(std::move(xs));
+            persistent.sum_core_noc_ys.push_back(std::move(ys));
+            // Every chip of the op sends its partial to every chip of the requester.
+            std::vector<tt::tt_fabric::FabricNodeId> requester_chips;
+            for (const auto& coord : ttnn::MeshCoordinateRange(requester->shape())) {
+                requester_chips.push_back(requester->get_fabric_node_id(coord));
+            }
+            for (uint32_t chip = 0; chip < num_chips; ++chip) {
+                const auto routes = d2d_routes(mesh->get_fabric_node_id(chips[chip]), requester_chips);
+                TT_FATAL(
+                    routes.size() <= kMaxPersistentRoutes,
+                    "fused_experts: {}'s partials to requester {} take {} sends, more than the kernel's {}",
+                    chips[chip],
+                    k,
+                    routes.size(),
+                    kMaxPersistentRoutes);
+                // A requester's sends all leave in one direction (d2d_routes); each direction gets one connection.
+                auto& chip_connections = connections[chip];
+                auto it = std::find(chip_connections.begin(), chip_connections.end(), routes.front().next);
+                if (it == chip_connections.end()) {
+                    chip_connections.push_back(routes.front().next);
+                    it = chip_connections.end() - 1;
+                }
+                persistent.partials_connection_index[chip].push_back(
+                    static_cast<uint32_t>(it - chip_connections.begin()));
+                std::vector<uint32_t> route_args;
+                for (const auto& route : routes) {
+                    append_d2d_route_args(route, route_args);
+                }
+                persistent.partials_route_args[chip].push_back(std::move(route_args));
             }
             persistent.input_socket_config_addresses.push_back(
                 static_cast<uint32_t>(input_socket.get_config_buffer_address()));
-            persistent.output_socket_config_addresses.push_back(
-                static_cast<uint32_t>(output_socket.get_config_buffer_address()));
-            persistent.output_route_args.push_back(std::move(route_args));
         }
-        persistent.output_connection_mesh_id = *connection->mesh_id;
-        persistent.output_connection_chip_id = connection->chip_id;
+        for (uint32_t chip = 0; chip < num_chips; ++chip) {
+            TT_FATAL(
+                connections[chip].size() <= kMaxPersistentConnections,
+                "fused_experts: {}'s partials leave it in {} directions, more than the kernel's {}",
+                chips[chip],
+                connections[chip].size(),
+                kMaxPersistentConnections);
+            for (const auto& connection : connections[chip]) {
+                persistent.partials_connection_mesh_ids[chip].push_back(*connection.mesh_id);
+                persistent.partials_connection_chip_ids[chip].push_back(connection.chip_id);
+            }
+        }
         attributes.persistent = std::move(persistent);
     }
     tensor_args_t tensor_args{
@@ -1013,7 +1065,7 @@ fused_experts(
     const std::optional<Tensor>& persistent_layer_table,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
     const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_input_sockets,
-    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_output_sockets) {
+    const std::optional<std::vector<Tensor>>& persistent_partials) {
     using OperationType = ttnn::operations::experimental::deepseek::moe::fused_experts::FusedExpertsDeviceOperation;
     auto [operation_attributes, tensor_args] = OperationType::invoke(
         input_tensor,
@@ -1042,7 +1094,7 @@ fused_experts(
         persistent_layer_table,
         persistent_socket_core,
         persistent_input_sockets,
-        persistent_output_sockets);
+        persistent_partials);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
