@@ -105,11 +105,7 @@ static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in 
 
 constexpr uint32_t PROFILER_STALL_ZONE_ID = TT_ZONE_STALL_ID;
 
-// Wire encode, duplicated from spsc_packet.h because the JIT build lacks that include path. word0 = type(5) |
-// low27. A zone ships whole at close: a 2-word ZONE_S when its end is within 2^16 cycles of the lane cursor
-// and its duration fits 16 bits, else a 3-word ZONE_ATOMIC (id | end timer_low | duration) that re-anchors
-// the cursor, or a 5-word ZONE_L when the duration overflows 32 bits. Lane identity and the timer's high half
-// are host-reconstructed from stickies.
+// Wire encode, duplicated from spsc_packet.h because the JIT build lacks that include path: word0 = type(5) | low27.
 struct ppfmt {
     static constexpr uint32_t TYPE_SHIFT = 27;
     static constexpr uint32_t TYPE_MASK = 0x1Fu;
@@ -129,11 +125,10 @@ struct ppfmt {
     static inline uint32_t w0(uint32_t type, uint32_t low27) {
         return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
     }
-    static inline uint32_t zone_atomic_w0(uint32_t id) { return w0(T_ZONE_ATOMIC, id & LOW27_MASK); }
-    static inline uint32_t zone_s_w0(uint32_t id) { return w0(T_ZONE_S, id & LOW27_MASK); }
-    static inline uint32_t data_w0(uint32_t id) { return w0(T_DATA, id & LOW27_MASK); }
+    // A descriptor id is 16 bits, so it needs no mask to sit under the type.
+    static constexpr uint32_t type_bits(uint32_t type) { return type << TYPE_SHIFT; }
+    static inline uint32_t zone_atomic_w0(uint32_t id) { return type_bits(T_ZONE_ATOMIC) | id; }
     static inline uint32_t data_w2(uint32_t size_words) { return (size_words & DATA_SIZE_MASK) << DATA_SIZE_SHIFT; }
-    static inline uint32_t event_w0(uint32_t id) { return w0(T_EVENT, id & LOW27_MASK); }
 };
 
 static constexpr uint32_t SPSC_MARKER_WORDS = 2;
@@ -260,7 +255,7 @@ struct profileScopeStall {
     FORCE_INLINE ~profileScopeStall() { stall_zone_close(start_hi, start_lo); }
 };
 
-// Out of line so there is one copy rather than one per zone site. Waits for the caller's words and the zone's
+// Out of line so there is one copy rather than one per event. Waits for the caller's words and the zone's
 // own closing half, so the reserve is whole again for the next stall.
 __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     if constexpr (myRiscID < SPSC_STALL_COUNT_MAX) {
@@ -298,7 +293,7 @@ constexpr uint32_t ZONE_CLOSE_WORDS = std::max(SPSC_ATOMIC_ZONE_WORDS + 1, SPSC_
 // Duration >= 2^32 cycles (~3.2 s), which the 32-bit duration word cannot carry: one ZONE_L packet of two full
 // 64-bit values; no sticky, cursor untouched on both sides. The decoder normalizes it to a START/END pair
 // whose in-the-past START trips the order-regression diagnostic once, kept as visibility: a >3.2 s on-device
-// zone is a wedge. Out of line: the always_inline zone sites can never take it.
+// zone is a wedge. Out of line: the always_inline events can never take it.
 __attribute__((noinline)) void mark_zone_long(
     uint32_t timer_id, uint32_t start_hi, uint32_t start_lo, uint32_t end_hi, uint32_t end_lo) {
     ring_ensure_room(SPSC_ZONE_L_WORDS);
@@ -314,8 +309,10 @@ __attribute__((noinline)) void mark_zone_long(
 
 // One 3-word packet per zone with the start the scope object carried. Room is reserved before the end clock
 // is read so a stall elongates the zone it happened inside; otherwise the packet would carry a pre-stall end
-// yet sit after the stall zone.
-PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
+// yet sit after the stall zone. The caller passes the finished ZONE_S word0, which an event materializes in the
+// same two instructions as its bare id (descriptor_id_plus); the rarer packet types retype it through w0(), whose
+// 27-bit mask drops the ZONE_S type.
+PROFILER_INLINE_ATTR void mark_zone_close(uint32_t zone_s_w0, uint32_t start_hi, uint32_t start_lo) {
     ring_ensure_room(ZONE_CLOSE_WORDS);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
@@ -325,7 +322,7 @@ PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, 
     // invalid cursor (hi = ~0) fails via c_hi_d. Fall-through because it is the dominant case on a dense lane.
     const uint32_t c_lo_d = lo - g_cursor_lo;
     if (__builtin_expect((((c_lo_d | lo_d) >> 16) | (hi ^ g_cursor_hi) | hi_d) == 0, 1)) {
-        ring_write_word(ppfmt::zone_s_w0(timer_id));
+        ring_write_word(zone_s_w0);
         ring_write_word((c_lo_d << 16) | lo_d);
         g_cursor_lo = lo;
         g_cursor_hi = hi;
@@ -333,11 +330,11 @@ PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, 
         return;
     }
     if (__builtin_expect(hi_d != 0, 0)) {
-        mark_zone_long(timer_id, start_hi, start_lo, hi, lo);
+        mark_zone_long(zone_s_w0, start_hi, start_lo, hi, lo);
         return;
     }
     ring_write_sticky_timer(hi);
-    ring_write_word(ppfmt::zone_atomic_w0(timer_id));
+    ring_write_word(ppfmt::w0(ppfmt::T_ZONE_ATOMIC, zone_s_w0));
     ring_write_word(lo);
     ring_write_word(lo_d);
     g_cursor_lo = lo;  // ZONE_ATOMIC re-anchors the cursor (decoder: cursor = sticky_hi<<32 | end_lo)
@@ -421,17 +418,18 @@ __attribute__((noinline)) void finish_profiler() { publish_tail(); }
 // The constructor touches nothing but the wall clock; the whole zone ships at close with the start as member
 // state, 8 B per open zone. Hold exactly these two words: anything more is register pressure across the user
 // code inside the zone, and a globals-maxed kernel on the 192-256 B loader stack floor gets tight around
-// 10-20 open zones (see stackCanaryScope).
-template <uint32_t timer_id>
+// 10-20 open zones (see stackCanaryScope). Event is the type TT_ZONE_DEFINE_ID declares where the zone is written; its
+// ZONE_S word0 is two instructions at the close, so the id is carried by the type, not by a member.
+template <typename Event>
 struct profileScope {
     uint32_t start_hi, start_lo;
     FORCE_INLINE profileScope() { read_wall_clock(start_hi, start_lo); }
-    FORCE_INLINE ~profileScope() { mark_zone_close(timer_id, start_hi, start_lo); }
+    FORCE_INLINE ~profileScope() { mark_zone_close(Event::descriptor_id_plus(), start_hi, start_lo); }
 };
 
 // profileScope gated on a bool evaluated once at entry; false reads no clock and writes nothing. A constant argument
 // folds to the plain zone or to no code.
-template <uint32_t timer_id>
+template <typename Event>
 struct profileScopeIf {
     bool on;
     uint32_t start_hi, start_lo;
@@ -442,7 +440,7 @@ struct profileScopeIf {
     }
     FORCE_INLINE ~profileScopeIf() {
         if (on) {
-            mark_zone_close(timer_id, start_hi, start_lo);
+            mark_zone_close(Event::descriptor_id_plus(), start_hi, start_lo);
         }
     }
 };
@@ -456,7 +454,7 @@ struct profileScopeLifecycle {
 // Tag, timestamp, payload; the length is self-describing (word2), bounded by the 7-bit length field. Same
 // reserve-before-clock-read ordering as mark_zone_close.
 template <typename... Args>
-PROFILER_INLINE_ATTR void time_stamped_data(uint32_t data_id, uint64_t data, Args... trailers) {
+PROFILER_INLINE_ATTR void time_stamped_data(uint32_t data_w0, uint64_t data, Args... trailers) {
     constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
     static_assert(2 * total_data_count <= ppfmt::DATA_SIZE_MASK, "payload overflows PP_DATA's 7-bit length field");
 
@@ -464,7 +462,7 @@ PROFILER_INLINE_ATTR void time_stamped_data(uint32_t data_id, uint64_t data, Arg
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
     ring_write_sticky_timer(hi);
-    ring_write_word(ppfmt::data_w0(data_id));
+    ring_write_word(data_w0);
     ring_write_word(lo);
     ring_write_word(ppfmt::data_w2(2 * total_data_count));
     ring_write_word(data >> 32);
@@ -474,12 +472,12 @@ PROFILER_INLINE_ATTR void time_stamped_data(uint32_t data_id, uint64_t data, Arg
 }
 
 // PP_EVENT point marker: compile-time event, 2 words, no payload.
-PROFILER_INLINE_ATTR void record_event(uint32_t data_id) {
+PROFILER_INLINE_ATTR void record_event(uint32_t event_w0) {
     ring_ensure_room(SPSC_MARKER_WORDS + 1);
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
     ring_write_sticky_timer(hi);
-    ring_write_word(ppfmt::event_w0(data_id));
+    ring_write_word(event_w0);
     ring_write_word(lo);
     publish_tail_batched(SPSC_MARKER_WORDS + 1);
 }
@@ -490,13 +488,13 @@ PROFILER_INLINE_ATTR void record_event(uint32_t data_id) {
 // intact canary reads as painted-and-unused to measure_stack_usage(). Compiled out for firmware
 // (__stack_base is a kernel-link symbol) and active ERISC (stack guarded by -Werror=stack-usage).
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
-TT_EVENT_DESCRIPTOR_DEFINE_ID(STACK_CANARY_DEAD_ID, "STACK-OVERFLOW");
+TT_EVENT_DESCRIPTOR_DEFINE_ID_PLUS(STACK_CANARY_DEAD_ID, "STACK-OVERFLOW", ppfmt::type_bits(ppfmt::T_EVENT));
 constexpr uint32_t STACK_CANARY_PATTERN = 0xBABABABA;  // == watcher stack_usage_pattern
 struct stackCanaryScope {
     FORCE_INLINE stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
     FORCE_INLINE ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
-            record_event(STACK_CANARY_DEAD_ID);
+            record_event(STACK_CANARY_DEAD_ID::descriptor_id_plus());
         }
     }
 };
@@ -510,27 +508,33 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #include "perf_counters.hpp"
 #include "internal/profiler/synchronization_event_profiler.hpp"
 
-#define DeviceZoneScopedN(name)                \
-    TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name); \
+// A zone's event carries the ZONE_S type bits in its id's relocation, so the close writes a finished word0.
+#define TT_ZONE_DEFINE_ID(event, name) \
+    TT_EVENT_DESCRIPTOR_DEFINE_ID_PLUS(event, name, kernel_profiler::ppfmt::type_bits(kernel_profiler::ppfmt::T_ZONE_S))
+
+#define DeviceZoneScopedN(name)    \
+    TT_ZONE_DEFINE_ID(hash, name); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-#define DeviceZoneScopedNIf(name, active)      \
-    TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name); \
+#define DeviceZoneScopedNIf(name, active) \
+    TT_ZONE_DEFINE_ID(hash, name);        \
     kernel_profiler::profileScopeIf<hash> zone = kernel_profiler::profileScopeIf<hash>(active);
 
 // DeviceTimestampedData carries a payload; DeviceRecordEvent is a bare 2-word marker. Both have a compile-time
 // tag and an ELF-resolvable name. The DRAM backend's DeviceRecordEvent takes a runtime uint16 id; here the wire
 // names every point marker from the ELF, so the argument is a compile-time name like the other macros'.
-#define DeviceTimestampedData(name, data)               \
-    {                                                   \
-        TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name);      \
-        kernel_profiler::time_stamped_data(hash, data); \
+#define DeviceTimestampedData(name, data)                                                   \
+    {                                                                                       \
+        TT_EVENT_DESCRIPTOR_DEFINE_ID_PLUS(                                                 \
+            hash, name, kernel_profiler::ppfmt::type_bits(kernel_profiler::ppfmt::T_DATA)); \
+        kernel_profiler::time_stamped_data(hash::descriptor_id_plus(), data);               \
     }
 
-#define DeviceRecordEvent(name)                    \
-    {                                              \
-        TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name); \
-        kernel_profiler::record_event(hash);       \
+#define DeviceRecordEvent(name)                                                              \
+    {                                                                                        \
+        TT_EVENT_DESCRIPTOR_DEFINE_ID_PLUS(                                                  \
+            hash, name, kernel_profiler::ppfmt::type_bits(kernel_profiler::ppfmt::T_EVENT)); \
+        kernel_profiler::record_event(hash::descriptor_id_plus());                           \
     }
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
