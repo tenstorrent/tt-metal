@@ -448,7 +448,8 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t max_active_tokens,
     uint32_t l1_end,
     const std::optional<ttnn::Tensor>& x_row_index,
-    uint32_t zero_output_row) {
+    uint32_t zero_output_row,
+    bool weights_tile_transposed) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -464,7 +465,8 @@ ttnn::Tensor unified_routed_expert_moe(
             .l1_end = l1_end,
             .x_indexed = x_row_index.has_value(),
             .output_row_major = output.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            .zero_output_row = zero_output_row},
+            .zero_output_row = zero_output_row,
+            .weights_tile_transposed = weights_tile_transposed},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

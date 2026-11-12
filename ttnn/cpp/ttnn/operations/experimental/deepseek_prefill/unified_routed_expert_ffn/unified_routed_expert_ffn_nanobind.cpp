@@ -73,6 +73,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             output_row_major (bool, optional): ROW_MAJOR bf16 output instead of TILE bf8 (ROW_MAJOR
                 dispatched_buffer only). Rows outside every expert region stay uninitialized.
             zero_output_row (int, optional): with output_row_major, one output row the op sets to zeros.
+            weights_tile_transposed (bool, optional): every weight tile is stored transposed within itself (the
+                tile grid is unchanged); the matmuls transpose it back as they unpack it. A block-float weight then
+                shares one exponent per 16 consecutive input rows of one output column instead of per 16 columns.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -101,7 +104,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("l1_end") = 0,
         nb::arg("x_row_index") = nb::none(),
         nb::arg("output_row_major") = false,
-        nb::arg("zero_output_row") = std::numeric_limits<uint32_t>::max());
+        nb::arg("zero_output_row") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("weights_tile_transposed") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

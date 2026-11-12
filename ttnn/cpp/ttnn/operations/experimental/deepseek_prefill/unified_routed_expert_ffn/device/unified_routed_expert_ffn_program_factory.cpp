@@ -1220,6 +1220,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // The down phase packs cb_out untilized, one output tile-row per push.
         compute_defines.emplace_back("OUT_ROW_MAJOR", "1");
     }
+    if (op.weights_tile_transposed) {
+        // Weight tiles stored transposed within themselves: every matmul transposes in1 as it unpacks it.
+        compute_defines.emplace_back("WEIGHTS_TILE_TRANSPOSED", "1");
+    }
 
     tt::tt_metal::KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =

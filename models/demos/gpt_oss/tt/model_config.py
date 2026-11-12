@@ -431,6 +431,7 @@ class ModelArgs:
         from models.demos.gpt_oss.tt.experts.prefill_routed import (
             ROUTED_PREFILL_NUM_EXPERTS,
             ROUTED_PREFILL_WEIGHTS_VERSION,
+            prefill_kgptq_enabled,
             routed_prefill_bf8_layers,
             routed_prefill_enabled,
             routed_prefill_mesh_supported,
@@ -443,8 +444,9 @@ class ModelArgs:
             and routed_prefill_mesh_supported(self.mesh_device, num_experts)
         ):
             bf8 = routed_prefill_bf8_layers()
-            # The bf8 layer set changes which routed caches must exist, so it is part of the marker.
-            return f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
+            # The bf8 layer set and the K-GPTQ switch change which routed caches must exist, so both are in the marker.
+            version = f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
+            return f"{version}:kgptq" if prefill_kgptq_enabled() else version
         return None
 
     def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):

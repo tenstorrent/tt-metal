@@ -31,6 +31,7 @@ compute_kernel_config, so this module does not pass one.
 Only one sequence per call (batch 1, leading dims all 1); anything else runs the dense prefill path.
 """
 
+import hashlib
 import math
 import os
 import types
@@ -95,6 +96,15 @@ ROUTED_L1_CAP_BYTES = 72 << 20
 # Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
+# GPT_OSS_PREFILL_KGPTQ=1: the bfloat4_b routed prefill experts read the same K-GPTQ weights as the decode experts
+# (GPT_OSS_DECODE_SPLIT_ROUND_DIR: layer_<L>.pt rounded on the bfloat4_b grid whose 16-value exponent groups run along
+# the INPUT dimension, inside one MXFP4 block). Each weight tile is stored transposed within itself, so its bfloat4_b
+# groups run along the input dimension and hold those values exactly; the expert op transposes the tiles back as it
+# unpacks them (weights_tile_transposed). The tile grid, sharding and reads are unchanged. Prefills the routed path does
+# not take on its own (shorter than its minimum, or not a multiple of 64) are padded into it (MLP.__call__), so every
+# batch-1 prefill reads these weights and no separately rounded prefill copy (GPT_OSS_DECODE_BF4_ROUNDED with
+# GPT_OSS_PREFILL_BF4_ROUNDED) is needed. The bfloat8_b layers keep the checkpoint values.
+PREFILL_KGPTQ_ENV = "GPT_OSS_PREFILL_KGPTQ"
 ROUTED_WEIGHTS_DTYPE = ttnn.bfloat4_b
 # Layers whose routed expert weights are bfloat8_b instead of bfloat4_b ("all", "" or a comma list of layer ids).
 # bf8 holds the MXFP4 checkpoint values almost exactly (weight rel. error ~1e-4 for gate/up); bf4 shares one exponent
@@ -120,6 +130,18 @@ def routed_prefill_chunk():
 def routed_prefill_bf8_layers():
     """Raw GPT_OSS_ROUTED_PREFILL_BF8_LAYERS spec (recorded in the weight-cache marker)."""
     return os.getenv(ROUTED_PREFILL_BF8_LAYERS_ENV, ROUTED_PREFILL_BF8_LAYERS_DEFAULT).strip()
+
+
+def prefill_kgptq_enabled():
+    return os.getenv(PREFILL_KGPTQ_ENV, "0") == "1"
+
+
+def tile_transpose(w):
+    """w [R, C] (R, C multiples of 32) with every 32x32 tile transposed in place: tile (i, j) of the result is tile
+    (i, j) of w, transposed. It commutes with a full transpose: tile_transpose(w.T) == tile_transpose(w).T."""
+    R, C = w.shape[-2], w.shape[-1]
+    assert R % 32 == 0 and C % 32 == 0, f"tile_transpose needs tile-aligned dims, got {tuple(w.shape)}"
+    return w.reshape(R // 32, 32, C // 32, 32).transpose(1, 3).reshape(R, C).contiguous()
 
 
 def routed_weights_dtype(layer_idx):
@@ -358,6 +380,16 @@ class RoutedPrefillExperts:
         self.min_seq = routed_prefill_min_seq()
         self.num_links = 1
         self.weights_dtype = routed_weights_dtype(layer_idx)
+        # GPT_OSS_PREFILL_KGPTQ: the bfloat4_b layers read the decode experts' K-GPTQ weights, tile-transposed.
+        self.weights_tile_transposed = prefill_kgptq_enabled() and self.weights_dtype == ttnn.bfloat4_b
+        kgptq_dir = ""
+        if self.weights_tile_transposed:
+            from ..weight_source import env_path
+
+            kgptq_dir = env_path("GPT_OSS_DECODE_SPLIT_ROUND_DIR")
+            assert (
+                kgptq_dir and layer_idx is not None
+            ), f"{PREFILL_KGPTQ_ENV}=1 needs GPT_OSS_DECODE_SPLIT_ROUND_DIR (the K-GPTQ experts) and the layer index"
         # Slot v (device v // experts_per_chip, local slot v % experts_per_chip) holds expert expert_order[v]; None is
         # the identity order. The ids this module receives are slot ids: the MLP routes with a router whose output
         # column v is expert expert_order[v] (TopKRouter.with_expert_order), so the dispatch / global-index tables and
@@ -471,6 +503,9 @@ class RoutedPrefillExperts:
             cache_dir = Path(tensor_cache_path) / f"{ROUTED_CACHE_SUBDIR}{mesh_device.shape[0]}x{mesh_device.shape[1]}"
         self.cache_dir = cache_dir
         prefix = f"routed_v{ROUTED_PREFILL_WEIGHTS_VERSION}"
+        if self.weights_tile_transposed:
+            # Own cache files per K-GPTQ source (the resolved path names the pinned Hub revision).
+            prefix += "_kt" + hashlib.sha1(kgptq_dir.rstrip("/").encode()).hexdigest()[:10]
 
         has_weights = bool(state_dict) and "gate_up_proj" in state_dict
         if has_weights and cache_dir is not None and not self._cache_complete(prefix):
@@ -494,9 +529,19 @@ class RoutedPrefillExperts:
         if has_weights:
             from models.demos.gpt_oss_d_p.tt.moe.weights import prepare_routed_expert_weights
 
+            weights_source = state_dict
+            if self.weights_tile_transposed:
+                # K-GPTQ weights (checkpoint channel order, HF layout); the biases stay the checkpoint's.
+                rw = torch.load(f"{kgptq_dir}/layer_{int(layer_idx)}.pt")
+                weights_source = dict(state_dict, gate_up_proj=rw["gate_up_proj"], down_proj=rw["down_proj"])
+                del rw
             torch_weights, _ = prepare_routed_expert_weights(
-                state_dict, self.num_experts, self.hidden_size, self.intermediate_size
+                weights_source, self.num_experts, self.hidden_size, self.intermediate_size
             )
+            del weights_source
+            if self.weights_tile_transposed:
+                # HF (out, in) per expert; the loaders transpose to (in, out), which keeps the per-tile transpose.
+                torch_weights = [{k: tile_transpose(v) for k, v in w.items()} for w in torch_weights]
         # TtRoutedExpert only loads/places the weights here (DRAM ND-sharded on Blackhole); forward calls
         # unified_routed_expert_moe directly so the per-expert token bound follows the chunk length.
         if self.expert_order is None:
@@ -934,6 +979,7 @@ class RoutedPrefillExperts:
             x_row_index=tok_of_row,
             output_row_major=True,
             zero_output_row=consts["spare"],
+            weights_tile_transposed=self.weights_tile_transposed,
         )  # [rows, H] bf16 ROW_MAJOR
         ttnn.deallocate(x_rm)
         ttnn.deallocate(tok_of_row)

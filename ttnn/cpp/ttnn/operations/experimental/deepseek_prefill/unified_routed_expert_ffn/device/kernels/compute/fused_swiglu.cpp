@@ -67,6 +67,16 @@
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
 
+// WEIGHTS_TILE_TRANSPOSED: every weight tile (gate / up / down, the in1 operand of every matmul here) is stored
+// transposed within itself; the unpacker transposes it back as it loads it. The tile grid and the reader are unchanged.
+// It lets a bfloat4_b weight share one exponent per 16 consecutive INPUT rows of one column instead of per 16 output
+// columns of one row (gpt-oss: GPTQ weights rounded on the input-grouped grid of the MXFP4 checkpoint's blocks).
+#ifdef WEIGHTS_TILE_TRANSPOSED
+constexpr uint32_t kWeightsTranspose = 1;
+#else
+constexpr uint32_t kWeightsTranspose = 0;
+#endif
+
 #ifdef FUSE_BIAS
 // Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
 // tile-row; add_tiles_bcast_rows adds its row 0 to every row of the output
@@ -263,7 +273,7 @@ FORCE_INLINE void matmul_phase(
                                     in0_index,
                                     in1_index,
                                     /*dst_index=*/0,
-                                    /*transpose=*/0,
+                                    /*transpose=*/kWeightsTranspose,
                                     this_w,
                                     out_subblock_h,
                                     in0_block_w);
@@ -549,7 +559,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                 }
             }
             reconfig_data_format_srca(gate_cb_id);
-            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+            matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, out_subblock_h, in0_block_w);
             pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
@@ -582,7 +592,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                                 in0_index,
                                 in1_index,
                                 /*dst_index=*/0,
-                                /*transpose=*/0,
+                                /*transpose=*/kWeightsTranspose,
                                 out_subblock_w,
                                 out_subblock_h,
                                 in0_block_w);
@@ -609,7 +619,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                                 in0_index,
                                 in1_index,
                                 /*dst_index=*/0,
-                                /*transpose=*/0,
+                                /*transpose=*/kWeightsTranspose,
                                 out_subblock_w,
                                 out_subblock_h,
                                 in0_block_w);
@@ -1115,7 +1125,7 @@ void kernel_main() {
             matmul_block_init(
                 cb_in0_x,
                 cb_in1_gate,
-                /*transpose=*/0,
+                /*transpose=*/kWeightsTranspose,
                 gu_out_subblock_w,
                 gu_out_subblock_h,
                 g_in0_block_w);
@@ -1178,7 +1188,7 @@ void kernel_main() {
             matmul_block_init(
                 cb_in0_down_full,
                 cb_in1_down,
-                /*transpose=*/0,
+                /*transpose=*/kWeightsTranspose,
                 d_out_subblock_w,
                 d_out_subblock_h,
                 d_in0_block_w);
