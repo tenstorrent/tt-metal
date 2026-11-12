@@ -983,6 +983,8 @@ run_test_invocation() {
 
     if [[ -n "${TTSIM_LIB:-}" ]]; then
         export TT_METAL_SIMULATOR="$sim_path"
+        # ttsim does not support SFPLOADMACRO (it stops with an UnsupportedFunctionality error), so always use the SFPI kernels.
+        export TT_METAL_DISABLE_SFPLOADMACRO=1
     else
         export TT_METAL_SIMULATOR="$sim_path/"
     fi
