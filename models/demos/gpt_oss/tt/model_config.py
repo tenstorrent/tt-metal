@@ -368,8 +368,9 @@ class ModelArgs:
     WEIGHT_CACHE_FORMAT_VERSION = 1
     # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
     FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
-    # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
-    DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
+    # Layout version of the batched dense decode MoE weights (experts dense_decode_*). 2: each expert padded to whole
+    # tiles (dense_decode_p736_*, experts/dense_layout.py); the routed prefill reads them (no routed copy).
+    DENSE_MOE_DECODE_WEIGHTS_VERSION = 2
 
     def weight_cache_is_complete(self, dtype, fused_decode=False, dense_moe=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was

@@ -39,6 +39,12 @@ device computes every (token, expert) pair; its outputs are partial sums over it
 closing reduction (all-reduce / reduce-scatter / per-user reduce) sums them. The down bias is non-zero on device 0
 only, so the sum adds it once. Placement (prefill_routed_placement.py) does not apply. The bf16 biases are the values
 decode adds (unpacked from the streams' bias tiles) and cached under their own names.
+
+Dense TP mode (the batch-32 model, MLP.dense_decode): the same TP dispatch, reading the batched dense decode MoE
+weights (experts/weights.py load_dense_decode_expert_weights: gate / up [H, E * 736], down [E * 736, H], DRAM
+width-sharded, normal tiles of the decode weight dtype, each expert's 720 columns zero padded to 23 whole tiles)
+through a page table (stream_pages.py dense_page_table), so prefill computes with the values batch-32 decode reads.
+The biases are copies, made on device, of the dense decode biases (the down bias non-zero on device 0 only).
 """
 
 import hashlib
@@ -215,6 +221,17 @@ def routed_tp_stream_supported(layer_idx, decode_weights):
         and layer_idx is not None
         and routed_weights_dtype(layer_idx) == ttnn.bfloat4_b
         and decode_stream_kinds(layer_idx) is not None
+    )
+
+
+def routed_tp_dense_supported(dense_weights):
+    """Whether the routed prefill experts read the batched dense decode MoE weights (dense TP mode): they exist
+    (experts/weights.py DenseDecodeExpertWeights), every expert is whole tiles, and the weight dtype is one the
+    page-table weights take (bfloat4_b / bfloat8_b)."""
+    return (
+        dense_weights is not None
+        and dense_weights.intermediate_padded % ttnn.TILE_SIZE == 0
+        and dense_weights.gate.dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b)
     )
 
 
@@ -420,7 +437,8 @@ def _bias_dims(num_experts, hidden_size, intermediate_size, state_dict):
 
 class RoutedPrefillExperts:
     """Top-k routed prefill experts over the columns of a 1xN mesh: local expert parallelism with weights of their own
-    (EP mode), or every expert's TP shard read from the fused decode's expert streams (TP mode, decode_weights)."""
+    (EP mode), or every expert's TP shard read from the fused decode's expert streams (TP mode, decode_weights) or from
+    the batched decode's dense expert weights (dense TP mode, dense_weights)."""
 
     def __init__(
         self,
@@ -432,9 +450,12 @@ class RoutedPrefillExperts:
         tensor_cache_path=None,
         layer_idx=None,
         decode_weights=None,
+        dense_weights=None,
     ):
         """decode_weights: the fused decode's DecodeExpertWeights (experts/weights.py) of this layer; when
-        routed_tp_stream_supported, the experts read them (TP mode) and state_dict is not used."""
+        routed_tp_stream_supported, the experts read them (TP mode) and state_dict is not used.
+        dense_weights: the batched decode's DenseDecodeExpertWeights of this layer; when routed_tp_dense_supported (and
+        not TP mode), the experts read them (dense TP mode) and state_dict is not used."""
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
@@ -446,10 +467,13 @@ class RoutedPrefillExperts:
         self.dispatch_group_size = 1
         self.num_dispatch_groups = self.num_devices
         self.tp_stream = routed_tp_stream_supported(layer_idx, decode_weights)
-        if self.tp_stream:
-            assert mesh_config.decode.tp == self.num_devices, "TP mode needs the decode streams sharded over the row"
+        self.tp_dense = not self.tp_stream and routed_tp_dense_supported(dense_weights)
+        # Either TP mode: every device runs every expert on its TP shard of the intermediate dimension.
+        self.tp_mode = self.tp_stream or self.tp_dense
+        if self.tp_mode:
+            assert mesh_config.decode.tp == self.num_devices, "TP mode needs the decode weights sharded over the row"
         # TP mode: every expert is local (its TP shard) on every device.
-        self.experts_per_chip = self.num_experts if self.tp_stream else self.num_experts // self.num_devices
+        self.experts_per_chip = self.num_experts if self.tp_mode else self.num_experts // self.num_devices
         # Extra unified_routed_expert_moe arguments of the TP mode (the page-table weights); empty in EP mode.
         self._table_kwargs = {}
         self.chunk_size = routed_prefill_chunk()
@@ -461,11 +485,14 @@ class RoutedPrefillExperts:
         self.l1_held = 0
         self.min_seq = routed_prefill_min_seq()
         self.num_links = 1
-        self.weights_dtype = routed_weights_dtype(layer_idx)
-        # GPT_OSS_PREFILL_KGPTQ: the bfloat4_b layers read the decode experts' K-GPTQ weights, tile-transposed.
-        self.weights_tile_transposed = prefill_kgptq_enabled() and self.weights_dtype == ttnn.bfloat4_b
+        self.weights_dtype = dense_weights.gate.dtype if self.tp_dense else routed_weights_dtype(layer_idx)
+        # GPT_OSS_PREFILL_KGPTQ: the bfloat4_b layers read the decode experts' K-GPTQ weights, tile-transposed (the
+        # dense TP mode reads the batched decode's own weights, normal tiles).
+        self.weights_tile_transposed = (
+            prefill_kgptq_enabled() and self.weights_dtype == ttnn.bfloat4_b and not self.tp_dense
+        )
         kgptq_dir = ""
-        if self.weights_tile_transposed and not self.tp_stream:
+        if self.weights_tile_transposed and not self.tp_mode:
             from ..weight_source import env_path
 
             kgptq_dir = env_path("GPT_OSS_DECODE_SPLIT_ROUND_DIR")
@@ -479,9 +506,7 @@ class RoutedPrefillExperts:
         # (_load_weights_ordered). Mapping HF ids to slot ids on device instead (tables in HF ids) needs offset_cumsum
         # regions over all E experts, 32*(E - E/N) more dispatch rows: measured +0.6 ms TTFT at 128, +1.5 ms at 512.
         # (TP mode: every device holds every expert's shard, so there is no placement.)
-        self.expert_order = (
-            None if self.tp_stream else routed_expert_order(layer_idx, self.num_experts, self.num_devices)
-        )
+        self.expert_order = None if self.tp_mode else routed_expert_order(layer_idx, self.num_experts, self.num_devices)
 
         # Device g's table row maps its own experts [g*E/N, (g+1)*E/N) to chip g and every other expert to -1: the
         # histogram mask of masked_bincount and the non-local skip of post_combine_reduce. Each pair is computed
@@ -494,7 +519,7 @@ class RoutedPrefillExperts:
         for g in range(self.num_devices):
             dispatch_table[g, g * self.experts_per_chip : (g + 1) * self.experts_per_chip] = g
         count_table = dispatch_table
-        if self.tp_stream:
+        if self.tp_mode:
             dispatch_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
             for g in range(self.num_devices):
                 dispatch_table[g, : self.num_experts] = g
@@ -592,7 +617,7 @@ class RoutedPrefillExperts:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
             )
-        if self.tp_stream:
+        if self.tp_mode:
             # local expert e is global expert e on every device: [N groups, 1 chip, E]
             idx_table = torch.arange(self.num_experts, dtype=torch.int32).repeat(self.num_devices, 1, 1)
         else:
@@ -612,6 +637,9 @@ class RoutedPrefillExperts:
 
         if self.tp_stream:
             self._init_tp_stream(decode_weights, decode_stream_kinds(layer_idx), tensor_cache_path)
+            return
+        if self.tp_dense:
+            self._init_tp_dense(dense_weights)
             return
 
         cache_dir = None
@@ -733,6 +761,94 @@ class RoutedPrefillExperts:
             rows, cols = self.mesh_device.shape
             self.cache_dir = Path(tensor_cache_path) / f"{ROUTED_TP_CACHE_SUBDIR}{rows}x{cols}"
         self.gate_biases, self.up_biases, self.down_biases = self._load_tp_biases(streams, layouts, table, n_gu, n_dn)
+
+    def _init_tp_dense(self, dense):
+        """Dense TP mode: the page table over the batched decode's dense expert weights (stream_pages.py
+        dense_page_table, from the tensors' own shard specs) and per-expert bias copies of its dense biases."""
+        from . import stream_pages as sp
+
+        E, H, tile = self.num_experts, self.hidden_size, ttnn.TILE_SIZE
+        banks = self.mesh_device.dram_grid_size().x
+        il_pad = dense.intermediate_padded
+        dtype = dense.gate.dtype
+        tile_bytes = {ttnn.bfloat4_b: sp.BFP4_BYTES, ttnn.bfloat8_b: sp.BFP8_BYTES}[dtype]
+        shard_tiles = {}
+        for name, t, k in (("gate", dense.gate, H), ("up", dense.up, H), ("down", dense.down, E * il_pad)):
+            mc = t.memory_config()
+            spec = mc.shard_spec
+            assert (
+                t.dtype == dtype
+                and t.layout == ttnn.TILE_LAYOUT
+                and mc.buffer_type == ttnn.BufferType.DRAM
+                and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                and spec is not None
+                and spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+                and spec.shape[0] == k
+                and spec.shape[1] % tile == 0
+            ), f"dense decode {name}: {t.dtype} {t.layout} {mc}; the page table needs DRAM width-sharded {dtype} tiles"
+            # shard i on DRAM bank i: the shard grid is (0, 0)..(banks - 1, 0) in row-major order
+            ranges = [(r.start.x, r.start.y, r.end.x, r.end.y) for r in spec.grid.ranges()]
+            assert ranges == [(0, 0, banks - 1, 0)], f"dense decode {name}: shard grid {spec.grid} is not the banks"
+            shard_tiles[name] = spec.shape[1] // tile
+        assert shard_tiles["gate"] == shard_tiles["up"], shard_tiles
+        assert dense.gate.shape[-1] == E * il_pad and dense.down.shape[-2] == E * il_pad and H % tile == 0
+        n_gu, n_dn = il_pad // tile, H // tile
+        # gate and up are separate buffers at the same address in every bank: the up entries are offsets from gate's
+        # (unified_routed_expert_moe adds them to the gate source's bank base address in 32-bit arithmetic).
+        up_delta = (dense.up.buffer_address() - dense.gate.buffer_address()) % (1 << 32)
+        table = sp.dense_page_table(E, il_pad, H, shard_tiles["gate"], shard_tiles["down"], tile_bytes, up_delta)
+        self.weight_pages = ttnn.from_torch(
+            sp.as_uint32_words(table),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self.weights_tile_transposed = False
+        self.routed_expert = types.SimpleNamespace(gate_projs=[], up_projs=[], down_projs=[])
+        # (up is read through the table only; keep the source tensors referenced here)
+        self._dense_sources = (dense.gate, dense.up, dense.down)
+        self._table_kwargs = dict(
+            weight_pages=self.weight_pages,
+            gate_up_weight_source=dense.gate,
+            down_weight_source=dense.down,
+            gate_up_k_stride=shard_tiles["gate"] * tile_bytes,
+            down_k_stride=shard_tiles["down"] * tile_bytes,
+            weights_n_gate_up=n_gu,
+            weights_n_down=n_dn,
+            weights_k_gate_up=H // tile,
+            weights_k_down=n_gu,
+            weights_dtype=dtype,
+        )
+        self.cache_dir = None
+        self.gate_biases, self.up_biases, self.down_biases = self._dense_tp_biases(dense, il_pad)
+
+    def _dense_tp_biases(self, dense, il_pad):
+        """Dense TP mode: one (1, N) bf16 TILE bias per expert and projection, copied on device from the dense decode
+        biases (gate / up: row 0 of [32, E * il_pad], columns of expert e; down: row e of [E, H], zero off device 0),
+        so the values are exactly those decode adds."""
+        E, H = self.num_experts, self.hidden_size
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        out = {}
+        # (projection, source, width, (row, first column) of expert e)
+        for proj, src, width, at in (
+            ("gate", dense.gate_bias, il_pad, lambda e: (0, e * il_pad)),
+            ("up", dense.up_bias, il_pad, lambda e: (0, e * il_pad)),
+            ("down", dense.down_bias, H, lambda e: (e, 0)),
+        ):
+            assert src.layout == ttnn.TILE_LAYOUT  # (rm is then a new tensor, freed below)
+            rm = ttnn.to_layout(src, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+            out[proj] = []
+            for e in range(E):
+                r, c = at(e)
+                piece = ttnn.reshape(
+                    ttnn.slice(rm, [0, 0, r, c], [1, 1, r + 1, c + width], memory_config=dram), (1, width)
+                )
+                out[proj].append(ttnn.to_layout(piece, ttnn.TILE_LAYOUT, memory_config=dram))
+                ttnn.deallocate(piece)
+            ttnn.deallocate(rm)
+        return out["gate"], out["up"], out["down"]
 
     def _load_tp_biases(self, streams, layouts, table, n_gu, n_dn):
         """TP mode: one (1, N) bf16 TILE bias per expert and projection (gate / up: this device's n_gu * 32 padded

@@ -89,14 +89,19 @@ def fused_decode_layout_supported(
 # Batched decode MoE (experts/decode.py decode_forward_dense): with one 32-row tile of tokens per device nearly every
 # expert is routed (an expert is idle with probability (28/32)^32 ~ 1.4%), so decode computes all experts densely with
 # two DRAM-sharded matmuls over every expert's weights, side by side ([gate] and [up]: [hidden, E * I]; [down]:
-# [E * I, hidden]), instead of the per-expert sparse matmuls. DENSE_MOE_CORES worker cores width-shard the [32, E * I]
-# activation (16 tiles each for gpt-oss-20b at TP=4), which is also the down matmul's input sharding.
+# [E * I, hidden]), instead of the per-expert sparse matmuls. Each expert's TP shard is padded to whole tiles (720 ->
+# 736 columns for gpt-oss-20b at TP=4, experts/dense_layout.py). DENSE_MOE_CORES worker cores width-shard the
+# [32, E * 736] activation (16 tiles each), which is also the down matmul's input sharding; DENSE_MOE_HIDDEN_CORES
+# width-shard the hidden dim (the gate|up input and the down output, 2 tiles each).
 DENSE_MOE_TOKENS = 32
-DENSE_MOE_CORES = 45
+DENSE_MOE_CORES = 46
+DENSE_MOE_HIDDEN_CORES = 45
+# DRAM readers per bank of the DRAM-sharded matmuls; the weight shards are sized for it (dense_layout.dram_shard_tiles:
+# gate / up 93 tiles per bank for 736 tiles, down 12 for 90).
 DENSE_MOE_WORKERS_PER_BANK = 3
 # Cores of the elementwise steps between gate|up and down (bias adds, SwiGLU, routing-weight scaling): twice the
 # matmul cores (8 tiles each), the gate/up outputs resharded there and the scaled activation back.
-DENSE_MOE_ELTWISE_CORES = 90
+DENSE_MOE_ELTWISE_CORES = 92
 
 
 def dense_moe_decode_layout_supported(
@@ -121,7 +126,7 @@ def dense_moe_decode_layout_supported(
         and num_experts == 32
         and not use_throughput_experts
         and tokens == DENSE_MOE_TOKENS
-        and grid[0] * grid[1] >= DENSE_MOE_CORES
+        and grid[0] * grid[1] >= max(DENSE_MOE_CORES, DENSE_MOE_HIDDEN_CORES, DENSE_MOE_ELTWISE_CORES)
         and dram_banks == FUSED_DECODE_DRAM_BANKS
         and system_devices == mesh_shape[0] * mesh_shape[1]
     )

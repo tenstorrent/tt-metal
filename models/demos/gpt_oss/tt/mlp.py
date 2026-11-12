@@ -20,6 +20,7 @@ from .experts.prefill_routed import (
     RoutedPrefillExperts,
     prefill_kgptq_enabled,
     routed_prefill_supported,
+    routed_tp_dense_supported,
     routed_tp_stream_supported,
 )
 from .experts_throughput import (
@@ -242,24 +243,27 @@ class MLP:
         # RoutedWeightsUnavailable instead of silently falling back to dense.
         # In the batch-1 fused decode model they hold no weights of their own: every device runs every expert's TP shard
         # from the decode experts' streams (TP mode, experts/prefill_routed.py routed_tp_stream_supported), so no
-        # expert weights are passed. The batched dense-decode model keeps its own routed copy: its side-by-side decode
-        # experts are 720 columns (22.5 tiles) wide per device, which the per-tile page table cannot address
-        # (stream_pages.py dense_page_table).
+        # expert weights are passed. Likewise in the batched dense-decode model: the routed experts read its side-by-side
+        # decode experts (each padded to 736 columns, 23 whole tiles, per device) through a page table (dense TP mode,
+        # routed_tp_dense_supported), so prefill and decode compute with one copy of the same values.
         self.routed_prefill = None
         if mesh_config is not None and routed_prefill_supported(
             mesh_device, mesh_config, hf_config, use_throughput_experts
         ):
             decode_weights = None if use_throughput_experts else self.experts.decode_weights
+            dense_weights = None if use_throughput_experts else self.experts.dense_decode_weights
             tp_stream = routed_tp_stream_supported(layer_idx, decode_weights)
+            tp_dense = not tp_stream and routed_tp_dense_supported(dense_weights)
             self.routed_prefill = RoutedPrefillExperts(
                 mesh_device,
                 hf_config,
-                None if tp_stream else experts_state_dict,
+                None if tp_stream or tp_dense else experts_state_dict,
                 ccl_manager,
                 mesh_config,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 layer_idx=layer_idx,
                 decode_weights=decode_weights if tp_stream else None,
+                dense_weights=dense_weights if tp_dense else None,
             )
         # The routed experts may hold the experts in a per-layer calibrated order (device-load balance,
         # experts/prefill_routed_placement.py); their router then emits slot ids (expert order[v] as id v).

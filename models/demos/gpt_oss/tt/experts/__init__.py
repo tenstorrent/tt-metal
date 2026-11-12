@@ -150,7 +150,7 @@ class Experts:
             self.dense_decode_plan = DenseDecodePlan(
                 mesh_device,
                 config.hidden_size,
-                self.dense_decode_weights.intermediate_local,
+                self.dense_decode_weights.intermediate_padded,
                 config.num_experts,
                 dense_decode_tokens,
             )
