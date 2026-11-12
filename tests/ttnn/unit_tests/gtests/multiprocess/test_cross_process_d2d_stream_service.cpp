@@ -1074,6 +1074,7 @@ void run_forward_chain(
     auto& cq = mesh->mesh_command_queue();
     const auto loop_start = std::chrono::steady_clock::now();
     std::vector<double> iter_done_ms;
+    std::vector<std::vector<std::byte>> readbacks;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         // (a) Outbound overwrite-gate — the SEPARATE d2d_sync op, BEFORE the op: waits the
         //     prior forward to drain (sender consumed_sem) so the op doesn't overwrite the
@@ -1134,15 +1135,19 @@ void run_forward_chain(
             // ForwardChain: payload only
             d2h_service->read_from_tensor(host_buf);
             d2h_service->barrier();
-            auto expected = make_iota_u32(host_buf.size() / sizeof(uint32_t), kFillBase + iter);
-            std::vector<uint32_t> actual(host_buf.size() / sizeof(uint32_t));
-            std::memcpy(actual.data(), host_buf.data(), host_buf.size());
-            EXPECT_EQ(actual, expected) << "D2H readback mismatch at iter " << iter;
+            // Checked after the loop: comparing tens of MB on the host would otherwise set the pace of the whole chain.
+            readbacks.push_back(host_buf);
         }
         iter_done_ms.push_back(
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loop_start).count());
     }
     report_chain_timing(rank, global_shape, transport, iter_done_ms, inbound.get(), outbound.get());
+    for (uint32_t iter = 0; iter < readbacks.size(); ++iter) {
+        const auto expected = make_iota_u32(readbacks[iter].size() / sizeof(uint32_t), kFillBase + iter);
+        std::vector<uint32_t> actual(readbacks[iter].size() / sizeof(uint32_t));
+        std::memcpy(actual.data(), readbacks[iter].data(), readbacks[iter].size());
+        EXPECT_EQ(actual, expected) << "D2H readback mismatch at iter " << iter;
+    }
 
     // Stage 0: the feeder has pushed all tokens (its barrier() returns once the device
     // drained them, which the loop above did). Join before leaving the scope its lambda
