@@ -608,12 +608,13 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     const Hal& hal = MetalContext::instance(mesh_device.impl().get_context_id()).hal();
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "A tensor-prefetcher GlobalCircularBuffer needs programmable DRAM cores, which this device ({}) does not have",
+        "A tensor-prefetcher GlobalCircularBuffer needs programmable DRAM cores, which this device ({}) does not have; "
+        "on Blackhole they auto-enable with firmware >= 19.12.0.0",
         mesh_device.arch());
     if (hal.has_cce_dram_cores()) {
         TT_THROW(
-            "Quasar has no worker receivers: pass each bank's receiver CCEs as ordered DRAM-logical coords to the "
-            "CreateGlobalCircularBufferForTensorPrefetcher overload that takes bank_to_dram_receivers");
+            "CCE DRAM cores have no worker receivers: pass each bank's receiver CCEs as ordered DRAM-logical coords to "
+            "the CreateGlobalCircularBufferForTensorPrefetcher overload that takes bank_to_dram_receivers");
     }
     // Multi-receiver shards (legacy interleaved layout) force one sender per bank; the
     // receiver-contiguous layout that disallows them is what lets a bank use two senders.
