@@ -13,8 +13,8 @@ from transformers import SwinForImageClassification as HF_SwinForImageClassifica
     "model_name",
     (("microsoft/swin-tiny-patch4-window7-224"),),
 )
-def test_cpu_demo(model_name, imagenet_sample_input, reset_seeds):
-    image = imagenet_sample_input
+def test_cpu_demo(model_name, imagenet_sample_image, reset_seeds):
+    image = imagenet_sample_image
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     HF_model = HF_SwinForImageClassification.from_pretrained(model_name)

@@ -27,8 +27,8 @@ from models.experimental.vgg.vgg_utils import store_weights, get_tt_cache_path
         (8),
     ),
 )
-def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict, batch_size, dtype):
-    images = batch_size * [imagenet_sample_input]
+def test_gs_demo(device, imagenet_sample_input_normalized, imagenet_label_dict, batch_size, dtype):
+    images = batch_size * [imagenet_sample_input_normalized]
     class_labels = imagenet_label_dict
 
     model_version = "vgg16"
