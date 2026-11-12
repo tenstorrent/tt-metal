@@ -152,6 +152,25 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb) {
 #endif
 }
 
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// The count as the front end sees it: N for a constant, 0 for one known only at run time (main's loop, no block path).
+template <std::uint32_t N>
+struct pack_block_count {
+    std::uint32_t value;
+    constexpr explicit pack_block_count(std::uint32_t v) : value(v) {}
+    constexpr operator std::uint32_t() const { return value; }
+};
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t N>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, pack_block_count<N> ntiles) {
+    if constexpr (N != 0) {
+        pack_block<N, is_fp32_dest_acc_en>(ifrom_dst, icb);
+    } else {
+        pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles.value);
+    }
+}
+#endif
+
 // clang-format off
 /**
  * Issues a single no-write packer op: it steps the packer engine only -- no DST is committed to L1 and it
@@ -213,3 +232,21 @@ ALWI void pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { PACK((llk_pack_r
 ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_config(config))); }
 
 }  // namespace ckernel
+
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// Lets today's pack_block(dst, cb, n) calls with a constant count reach the block forms; other arities pass through.
+#define PACK_BLOCK_NARGS_(a1, a2, a3, a4, a5, a6, a7, a8, n, ...) n
+#define PACK_BLOCK_NARGS(...) PACK_BLOCK_NARGS_(__VA_ARGS__, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+#define PACK_BLOCK_CAT_(a, b) a##b
+#define PACK_BLOCK_CAT(a, b) PACK_BLOCK_CAT_(a, b)
+#define PACK_BLOCK_CALL_1(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_2(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_3(d, cb, n) \
+    pack_block(d, cb, ::ckernel::pack_block_count<(__builtin_constant_p(n) ? (n) : 0)>(n))
+#define PACK_BLOCK_CALL_4(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_5(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_6(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_7(...) pack_block(__VA_ARGS__)
+#define PACK_BLOCK_CALL_8(...) pack_block(__VA_ARGS__)
+#define pack_block(...) PACK_BLOCK_CAT(PACK_BLOCK_CALL_, PACK_BLOCK_NARGS(__VA_ARGS__))(__VA_ARGS__)
+#endif
