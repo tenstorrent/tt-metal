@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.gemma4_31b_qb2.tt.decode_rows import verify_shapes
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.generator import CacheState, Gemma4Generator
 from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM
@@ -15,8 +16,9 @@ from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM
 
 def adapter():
     model = object.__new__(Gemma4ForCausalLM)
+    model.sub_caches, model.verify_caches, model.row_sizes, model.verify_shapes, model.cur_state = {}, {}, (), (), None
     model.cache = SimpleNamespace(
-        batch=4, kv=[None, None], page_tables={i: torch.zeros(4, 8, dtype=torch.int32) for i in range(2)}
+        batch=4, kv=[None, None], page_tables={i: torch.zeros(4, 8, dtype=torch.int32) for i in range(2)}, columns=1
     )
     return model
 
@@ -224,45 +226,66 @@ def test_decode_releases_only_its_slot_history_despite_page_id_collision(remap):
 def spec_adapter(slots, spec_k):
     model = object.__new__(Gemma4ForCausalLM)
     model.spec_k = spec_k
-    model.max_batch_size = slots
-    model.rows = slots * (1 + spec_k)
+    model.max_batch_size = model.rows = slots
+    model.sub_caches, model.verify_caches, model.row_sizes, model.cur_state = {}, {}, (), None
+    model.verify_shapes = verify_shapes(slots, spec_k)
     return model
 
 
 @pytest.mark.parametrize(
-    "slots,requested,effective",
-    [(1, 7, 7), (4, 7, 7), (8, 7, 3), (8, 2, 2), (16, 7, 1), (16, 1, 1)],
+    "slots,requested,effective,k_by_rows",
+    [
+        (1, 7, 5, ((1, 5),)),
+        (4, 7, 5, ((1, 5), (4, 3))),
+        (8, 7, 5, ((1, 5), (4, 3), (8, 0))),
+        (8, 2, 2, ((1, 2), (4, 2), (8, 0))),
+        (32, 7, 5, ((1, 5), (4, 3), (32, 0))),
+        (32, 1, 1, ((1, 1), (4, 1), (32, 0))),
+    ],
 )
-def test_spec_plan_fits_the_decode_trace(slots, requested, effective):
+def test_spec_plan_follows_the_live_requests_and_fits_the_decode_trace(slots, requested, effective, k_by_rows):
     plan = Gemma4ForCausalLM.spec_plan(None, slots, requested)
-    assert plan.effective_k == effective and slots * (1 + plan.effective_k) <= 32
+    assert plan.effective_k == effective and plan.k_by_rows == k_by_rows
+    assert all(users * (1 + k) <= 32 for users, k in verify_shapes(slots, requested))
     assert plan.accept_modes == ("argmax_ids",) and plan.supports_narrow_decode
 
 
-@pytest.mark.parametrize("slots", [17, 32])
-def test_spec_plan_refuses_slot_counts_without_room_for_drafts(slots):
-    reject = Gemma4ForCausalLM.spec_plan(None, slots, 3)
-    assert reject.supported_k == ()
+def test_spec_plan_refuses_a_draft_length_of_zero():
+    assert Gemma4ForCausalLM.spec_plan(None, 8, 0).supported_k == ()
 
 
 def test_draft_columns_ride_in_rows_after_the_plain_decode_rows():
     slots, spec_k = 2, 2
     model = spec_adapter(slots, spec_k)
+    state = SimpleNamespace(
+        batch=slots * (1 + spec_k),
+        kv=[None],
+        page_tables={0: torch.zeros(slots * (1 + spec_k), 4, dtype=torch.int32)},
+        columns=1 + spec_k,
+    )
+    model.verify_caches = {slots: state}
     model.cache = SimpleNamespace(
-        batch=model.rows, kv=[None], page_tables={0: torch.zeros(model.rows, 4, dtype=torch.int32)}
+        batch=slots, kv=[None], page_tables={0: torch.zeros(slots, 4, dtype=torch.int32)}, columns=1
     )
     source = torch.tensor([[5, 6], [7, 8]])
-    tables = model._tables(model.cache, [source])[0]
+    tables = model._tables(state, [source])[0]
     assert tables.tolist() == [[5, 6, 0, 0], [7, 8, 0, 0]] * (1 + spec_k)
-    assert model._pad_rows(torch.tensor([[11], [12]]), 0).reshape(-1).tolist() == [11, 12, 0, 0, 0, 0]
-    assert model._pad_rows(torch.tensor([3, 4]), -1).tolist() == [3, 4, -1, -1, -1, -1]
+    assert model._pad_rows(torch.tensor([[11]]), 0).reshape(-1).tolist() == [11, 0]
+    assert model._pad_rows(torch.tensor([3]), -1).tolist() == [3, -1]
 
 
 def test_verify_block_is_flattened_by_column_and_answers_per_slot():
     slots, spec_k = 2, 2
     model = spec_adapter(slots, spec_k)
+    state = SimpleNamespace(
+        batch=slots * (1 + spec_k),
+        kv=[None],
+        page_tables={0: torch.zeros(slots * (1 + spec_k), 4, dtype=torch.int32)},
+        columns=1 + spec_k,
+    )
+    model.verify_caches = {slots: state}
     model.cache = SimpleNamespace(
-        batch=model.rows, kv=[None], page_tables={0: torch.zeros(model.rows, 4, dtype=torch.int32)}
+        batch=slots, kv=[None], page_tables={0: torch.zeros(slots, 4, dtype=torch.int32)}, columns=1
     )
     seen = {}
 
@@ -281,7 +304,7 @@ def test_verify_block_is_flattened_by_column_and_answers_per_slot():
     out = model._verify(block, positions, model.cache, [torch.tensor([[1, 2], [3, 4]])], None)
     assert seen["tokens"] == [10, 20, 11, 0, 12, 0] and seen["positions"] == [7, 3, 8, -1, 9, -1]
     assert seen["batch"] == 6
-    # device row j * slots + u answers slot u, column j
+    # device row j * users + u answers slot u, column j
     assert out.argmax_ids.tolist() == [[0, 2, 4], [1, 3, 5]]
 
 

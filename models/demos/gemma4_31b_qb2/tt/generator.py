@@ -36,6 +36,8 @@ class CacheState:
     # Standalone mode retains the stricter private cyclic-cache contract.
     vllm_owned: bool = False
     prefill_history: dict = field(default_factory=dict)
+    # Draft columns of a speculative decode (see Decoder.decode_forward): rows = users x columns, one cache update per column.
+    columns: int = 1
 
 
 class Gemma4Generator:
@@ -52,8 +54,6 @@ class Gemma4Generator:
         # Persistent inputs of each decode entry, kept when the traces are retired: only the traces are recaptured, one at a
         # time, and capturing one trace allocates no persistent tensor that could land on another trace's memory.
         self.entries = {}
-        # Draft columns of a speculative decode, each with its own cache update (see Decoder.decode_forward).
-        self.update_columns = 1
         self.counters = {
             k: 0
             for k in (
@@ -604,8 +604,8 @@ class Gemma4Generator:
         # positions themselves.
         entry["update_positions"] = (
             [entry["positions"]]
-            if self.update_columns == 1
-            else [self._upload(torch.zeros(state.batch, dtype=torch.int32)) for _ in range(self.update_columns)]
+            if state.columns == 1
+            else [self._upload(torch.zeros(state.batch, dtype=torch.int32)) for _ in range(state.columns)]
         )
         return entry
 

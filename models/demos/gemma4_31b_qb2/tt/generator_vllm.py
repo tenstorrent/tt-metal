@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4_31b_qb2.tt.decode_rows import decode_row_sizes, rows_covering
+from models.demos.gemma4_31b_qb2.tt.decode_rows import decode_row_sizes, rows_covering, verify_shapes, verify_users
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.generator import CacheState, build_generator
 
@@ -45,14 +45,15 @@ class Gemma4ForCausalLM:
         self.mesh = generator.mesh
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
-        # Draft columns ride in extra decode rows: column j of slot u is row j * max_batch_size + u, so column 0
-        # is the plain decode layout and a plain decode leaves the other rows inactive.
-        self.rows = max_batch_size * (1 + self.spec_k)
-        generator.update_columns = 1 + self.spec_k
+        self.rows = max_batch_size
         self.entry = None
         self.cache = None
         # Decode traces of fewer rows over the same KV pool; a step runs the smallest one that covers its live rows.
-        self.row_sizes = decode_row_sizes(max_batch_size, self.spec_k)
+        self.row_sizes = decode_row_sizes(max_batch_size)
+        # Speculative verify traces: draft columns ride in extra decode rows, column j of user u is row j * users + u.
+        # One trace per (users, draft length) of decode_rows.VERIFY_K_BY_USERS; a step with more live requests is a plain decode.
+        self.verify_shapes = verify_shapes(max_batch_size, self.spec_k) if self.spec_k else ()
+        self.verify_caches = {}
         self.sub_caches = {}
         self.cur_state = None
         self.prefill_slot_keys = {}
@@ -114,16 +115,16 @@ class Gemma4ForCausalLM:
 
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
-        """Draft columns are decode rows, so slots * (1 + K) must fit the 32-row decode trace."""
+        """Speculation follows the number of live requests (decode_rows.VERIFY_K_BY_USERS); beyond that a step is plain.
+
+        The draft cap above the last verify trace is 0, which needs the plugin's zero cap (k_by_rows entries may be 0).
+        """
         from vllm_tt_plugin.spec_decode import DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
 
-        fits = cls.DECODE_ROWS // max_num_seqs - 1
-        if fits < 1 or requested_k < 1:
-            return SpecReject(
-                reason=f"{max_num_seqs} slots leave no decode rows for drafts: slots * (1 + K) must be <= {cls.DECODE_ROWS}",
-                supported_k=(fits,) if fits >= 1 else (),
-            )
-        cls.spec_k = min(requested_k, fits)
+        shapes = verify_shapes(max_num_seqs, requested_k)
+        if not shapes:
+            return SpecReject(reason=f"no verify trace fits {max_num_seqs} slots and K={requested_k}", supported_k=())
+        cls.spec_k = shapes[0][1]
         return SpecPlan(
             effective_k=cls.spec_k,
             lanes_per_request=1 + cls.spec_k,
@@ -132,6 +133,8 @@ class Gemma4ForCausalLM:
             accept_modes=("argmax_ids",),
             drafter_state=DRAFTER_STATE_INTERNAL,
             supports_narrow_decode=True,
+            k_by_rows=tuple((users, k) for users, k in shapes)
+            + (((max_num_seqs, 0),) if max_num_seqs > shapes[-1][0] else ()),
         )
 
     @classmethod
@@ -152,18 +155,26 @@ class Gemma4ForCausalLM:
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         pools, kv, scratch = {}, [], {}
+        scratch_rows = max([self.rows] + [users * (1 + k) for users, k in self.verify_shapes])
         for i, (layer, (shape, dtype, pool_id)) in enumerate(zip(self.generator.model.layers, per_layer_specs)):
             if tuple(shape[1:]) != (layer.kv_heads, 128, layer.head_dim) or dtype != torch.bfloat16:
                 raise ValueError(f"Unexpected allocator geometry or accounting dtype: {shape}, {dtype}")
             key = (pool_id, tuple(shape[1:]))
             if key not in pools:
-                pools[key] = layer.allocate_cache(physical_pages=shape[0] + self.rows)
+                pools[key] = layer.allocate_cache(physical_pages=shape[0] + scratch_rows)
             kv.append(pools[key])
-            scratch[i] = list(range(shape[0], shape[0] + self.rows))
+            scratch[i] = list(range(shape[0], shape[0] + scratch_rows))
         if len(kv) != len(self.generator.model.layers):
             raise ValueError("The allocator must supply one spec per layer")
         tables = {i: torch.zeros(self.rows, self.max_seq_len // 128, dtype=torch.int32) for i in range(len(kv))}
-        self.cache = CacheState(kv, tables, self.rows, self.max_seq_len, scratch_pages=scratch, vllm_owned=True)
+        self.cache = CacheState(
+            kv,
+            tables,
+            self.rows,
+            self.max_seq_len,
+            scratch_pages={i: scratch[i][: self.rows] for i in scratch},
+            vllm_owned=True,
+        )
         self.sub_caches = {
             n: CacheState(
                 kv,
@@ -175,10 +186,24 @@ class Gemma4ForCausalLM:
             )
             for n in self.row_sizes
         }
+        self.verify_caches = {
+            users: CacheState(
+                kv,
+                {i: torch.zeros(users * (1 + k), self.max_seq_len // 128, dtype=torch.int32) for i in range(len(kv))},
+                users * (1 + k),
+                self.max_seq_len,
+                scratch_pages={i: scratch[i][: users * (1 + k)] for i in scratch},
+                vllm_owned=True,
+                columns=1 + k,
+            )
+            for users, k in self.verify_shapes
+        }
         return self.cache
 
     def _tables(self, cache, page_tables_per_layer, *, slots=None):
-        if cache is not self.cache and all(cache is not sub for sub in self.sub_caches.values()):
+        if cache is not self.cache and all(
+            cache is not sub for sub in (*self.sub_caches.values(), *self.verify_caches.values())
+        ):
             raise ValueError("Serving must use the cache allocated by vLLM")
         if page_tables_per_layer is None or len(page_tables_per_layer) != len(cache.kv):
             raise ValueError("Hybrid attention requires a page table for every layer")
@@ -200,7 +225,7 @@ class Gemma4ForCausalLM:
                 # Scatter only the live prefix into its assigned state slots.
                 dest[indices, :cols] = source[: len(indices)].to(torch.int32).clamp_min(0)
                 if slots is None:
-                    for column in range(1, 1 + self.spec_k):
+                    for column in range(1, cache.columns):
                         dest[column * rows : (column + 1) * rows] = dest[:rows]
                 translated[key] = dest
             result[i] = translated[key]
@@ -307,7 +332,7 @@ class Gemma4ForCausalLM:
         if kv_cache is not self.cache:
             raise ValueError("Serving must use the cache allocated by vLLM")
         if spec_mode is not None:
-            return self._verify(tokens, start_pos, kv_cache, page_tables_per_layer, sampling_params)
+            return self._verify(tokens, start_pos, kv_cache, page_tables_per_layer, sampling_params, num_valid_drafts)
         sample = sampling_params is not None
         slot_positions = start_pos
         tokens = self._pad_rows(tokens.reshape(-1, 1), 0)
@@ -352,31 +377,71 @@ class Gemma4ForCausalLM:
         padded[: values.shape[0]] = values
         return padded
 
-    def _verify(self, tokens, start_pos, kv_cache, page_tables_per_layer, sampling_params):
-        """Verify a [slots, 1 + K] candidate block as one decode step: column j of slot u is row j * slots + u.
+    def _verify(self, tokens, start_pos, kv_cache, page_tables_per_layer, sampling_params, num_valid_drafts=None):
+        """Verify a [slots, 1 + K] candidate block as one decode step: column j of user u is row j * users + u.
 
-        Every row writes its K/V at its own position before attention reads, so a draft attends to the drafts before
-        it exactly as sequential decode steps would. Each row samples with its slot's parameters and seed + position,
-        the draw a plain decode at that position makes, so accepted tokens are the plain decode's tokens.
+        The block holds the live requests in its first rows; the trace of decode_rows.VERIFY_K_BY_USERS that covers
+        them verifies the columns up to its draft length (the plugin caps a request's drafts to the same table). Every
+        row writes its K/V at its own position before attention reads, so a draft attends to the drafts before it
+        exactly as sequential decode steps would. Each row samples with its slot's parameters and seed + position, the
+        draw a plain decode at that position makes, so accepted tokens are the plain decode's tokens. The plugin caps
+        the drafts of a step with more live requests than the table covers at 0; such a block carries no draft.
         """
         from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, VerifyOutput
 
         slots, width = tokens.shape
         if slots != self.max_batch_size or width != 1 + self.spec_k:
             raise ValueError(f"Expected a [{self.max_batch_size}, {1 + self.spec_k}] candidate block")
-        positions = start_pos.t().reshape(-1)
-        flat_tokens = torch.where(positions >= 0, tokens.t().reshape(-1), 0).reshape(-1, 1)
-        self.entry = self.generator.prepare_decode(
-            flat_tokens, positions, page_table=self._tables(kv_cache, page_tables_per_layer), kv_cache=kv_cache
-        )
+        live = int((start_pos[:, 0] >= 0).nonzero().max()) + 1 if bool((start_pos[:, 0] >= 0).any()) else 1
+        ids = torch.full((slots, width), -1, dtype=torch.int32)
+        users = verify_users(live, self.verify_shapes)
+        if users is None:
+            # More live requests than any verify trace covers: the plan's draft cap is 0, so no row carries a draft. The
+            # plugin still sends a verify block when a row committed several tokens on its last step (a model with
+            # candidate state resolves it then); this model has none, so the step is a plain decode.
+            if num_valid_drafts is None or bool((num_valid_drafts > 0).any()):
+                raise ValueError(f"No verify trace covers {live} live requests and the block carries drafts")
+            ids[:, 0] = self._decode_plain_ids(
+                tokens[:, 0], start_pos[:, 0], kv_cache, page_tables_per_layer, sampling_params
+            )
+            return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
+        state = self.verify_caches[users]
+        columns = state.columns
+        block_tokens, block_positions = tokens[:users, :columns], start_pos[:users, :columns]
+        positions = block_positions.t().reshape(-1)
+        flat_tokens = torch.where(positions >= 0, block_tokens.t().reshape(-1), 0).reshape(-1, 1)
+        tables = self._tables(state, [table[:users] for table in page_tables_per_layer])
+        self.entry = self.generator.prepare_decode(flat_tokens, positions, page_table=tables, kv_cache=state)
+        self.cur_state = state
+        if sampling_params is None:
+            self.generator.configure_sampling(batch=state.batch, temperature=0)
+        else:
+            self.generator.configure_sampling(
+                batch=state.batch, **self._sampling(sampling_params, positions, batch=users)
+            )
+        self.generator.replay(self.entry)
+        out = self.read_decode_output(self.entry["tokens"])
+        out = ttnn.to_torch(out).reshape(-1)[: state.batch].to(torch.int32)
+        ids[:users, :columns] = out.reshape(columns, users).t()
+        return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids)
+
+    def _decode_plain_ids(self, tokens, start_pos, kv_cache, page_tables_per_layer, sampling_params):
+        """One plain decode step from host inputs (the column-0 tokens of a draftless block); returns each slot's next token."""
+        live = int((start_pos >= 0).nonzero().max()) + 1 if bool((start_pos >= 0).any()) else 1
+        rows = rows_covering(live, self.row_sizes, self.rows)
+        state = self.sub_caches.get(rows, kv_cache)
+        tokens = self._pad_rows(tokens.reshape(-1, 1), 0)[:rows]
+        start_pos = self._pad_rows(start_pos.reshape(-1), -1)
+        tables = self._tables(state, [table[:rows] for table in page_tables_per_layer])
+        self.entry = self.generator.prepare_decode(tokens, start_pos[:rows], page_table=tables, kv_cache=state)
+        self.cur_state = state
         if sampling_params is None:
             self.generator.configure_sampling(batch=self.rows, temperature=0)
         else:
-            self.generator.configure_sampling(batch=self.rows, **self._sampling(sampling_params, positions))
+            self.generator.configure_sampling(batch=self.rows, **self._sampling(sampling_params, start_pos))
         self.generator.replay(self.entry)
-        ids = self.read_decode_output(self.entry["tokens"])
-        ids = ttnn.to_torch(ids).reshape(-1)[: self.rows].to(torch.int32)
-        return VerifyOutput(spec_mode=ACCEPT_MODE_ARGMAX_IDS, argmax_ids=ids.reshape(width, slots).t().contiguous())
+        out = self.read_decode_output(self.entry["tokens"])
+        return ttnn.to_torch(out).reshape(-1)[: self.max_batch_size].to(torch.int32)
 
     def read_decode_output(self, output, async_read=False):
         if isinstance(output, torch.Tensor):
