@@ -20,12 +20,14 @@ look though it cannot by itself say whether the device's math or its pack
 diverged. ``passed_test`` already prints the failing tiles with the bad datums
 highlighted, so use the two together.
 
-Writing a test touches only the first. Pick the golden for your architecture and
-hand it tensors::
+Writing a test touches only the first. Name the operation and the architecture,
+then hand it tensors::
 
     from helpers.golden_generator.heavyweight.operations import (
-        get_data_copy_golden,
+        QUASAR,
+        Op,
+        get_golden,
     )
 
-    result = get_data_copy_golden(QUASAR, ).run(stimuli, in_format, out_format)
+    result = get_golden(Op.DataCopy, QUASAR).run(stimuli, in_format, out_format)
 """

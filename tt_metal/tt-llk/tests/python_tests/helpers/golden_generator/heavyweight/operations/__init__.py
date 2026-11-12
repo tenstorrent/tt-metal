@@ -6,26 +6,18 @@
 The operations live in :mod:`.pipelines`. Everything here is the machinery
 that builds and runs them.
 
-Ask a factory for the golden you want, naming the architecture first::
+Ask the factory for the golden you want, naming the operation and the
+architecture::
 
-    get_matmul_golden(QUASAR, MathFidelity.HiFi4)
+    get_golden(Op.Matmul, QUASAR, MathFidelity.HiFi4)
 
-There is one factory per operation, not one per operation and architecture, so
-a test that resolves its own architecture at run time hands the profile over
-rather than picking a name. The pipeline classes are exported too, for a caller
-that wants to subclass one or to pass ``blocks=`` directly.
+One function, not one per operation and not one per operation and architecture
+pair, so a test that resolves either at run time hands it straight over. The
+pipeline classes are exported too, for a caller that wants to subclass one or
+to pass ``blocks=`` directly.
 """
 
-from .arch import (
-    BLACKHOLE,
-    QUASAR,
-    WORMHOLE,
-    ArchProfile,
-    get_data_copy_golden,
-    get_eltwise_binary_golden,
-    get_eltwise_binary_reuse_dest_golden,
-    get_matmul_golden,
-)
+from .arch import BLACKHOLE, QUASAR, WORMHOLE, ArchProfile, Op, get_golden
 from .chain import Chain, Registers, StageRecord, Step
 from .golden import Golden, OpConfig
 from .pipelines.datacopy import DataCopyGolden
@@ -46,10 +38,8 @@ __all__ = [
     "MatmulGolden",
     "OpConfig",
     "Registers",
+    "Op",
     "StageRecord",
     "Step",
-    "get_data_copy_golden",
-    "get_eltwise_binary_golden",
-    "get_eltwise_binary_reuse_dest_golden",
-    "get_matmul_golden",
+    "get_golden",
 ]
