@@ -167,7 +167,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
-        uses: tenstorrent/.github/actions/docker-bake-publish@afebb429d7751ccdd0e00d4e7d8121291044b961 # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-bake-publish@bfc76007d6ca21678600b5176143b50c2295c8da # nsexton/docker-sbom
         with:
           bake-file: dockerfile/docker-bake.hcl
           targets: ${{ inputs.image }}
