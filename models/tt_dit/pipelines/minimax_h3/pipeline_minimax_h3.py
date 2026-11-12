@@ -685,6 +685,15 @@ class MiniMaxH3Pipeline:
         # of FSDP-sharding them over the other mesh axis and all-gathering every layer on every encode. Same weights,
         # same matmuls. Its weight cache has its own subfolder (no `_FSDP` suffix), so the first run builds it.
         self.encoder_resident = os.environ.get("MINIMAX_H3_ENCODER_RESIDENT", "0") == "1"
+        # MINIMAX_H3_ENCODER_TP8=1: the text encoder swaps the DiT's mesh axes, tensor-parallel over the SP axis (TP8 on
+        # a 4x8 mesh) and sequence-parallel over the TP axis (SP4), with resident weights (no FSDP): half the per-chip
+        # weights of MINIMAX_H3_ENCODER_RESIDENT, and half the per-chip weight read per encode. The output is gathered
+        # to the same replicated [1, L, 5120]. The vision tower keeps its own TP/SP config: its merged and deepstack
+        # rows are gathered to every chip, and `merge_vision` shards only its own indices on the text encoder's SP
+        # axis. Reassociation: row-parallel partial sums over 8 chips instead of 4, and 4 ring-attention chunks
+        # instead of 8. Its weight cache has its own subfolder, so the first run builds it.
+        self.encoder_tp_swap = os.environ.get("MINIMAX_H3_ENCODER_TP8", "0") == "1"
+        self.encoder_fsdp = not (self.encoder_resident or self.encoder_tp_swap)
         self.audio_beside_video = os.environ.get("MINIMAX_H3_AUDIO_BESIDE_VIDEO", "0") == "1"
         # MINIMAX_H3_STEP_SYNC=0: skip the device sync after each denoise step. Every op of the request runs on one
         # command queue, so the order (and every value) is unchanged; only the host stops waiting between steps. The
@@ -841,10 +850,16 @@ class MiniMaxH3Pipeline:
             cfg_parallel=None,
         )
 
+        encoder_tp_axis, encoder_tp, encoder_sp_axis, encoder_sp = tp_axis, self.tp_factor, sp_axis, self.sp_factor
+        if self.encoder_tp_swap and not (self.tp_factor > 1 and self.sp_factor > 1):
+            self._host_log("MINIMAX_H3_ENCODER_TP8 ignored: it needs both mesh axes > 1 (encoder keeps the DiT axes)")
+            self.encoder_tp_swap = False
+        elif self.encoder_tp_swap:
+            encoder_tp_axis, encoder_tp, encoder_sp_axis, encoder_sp = sp_axis, self.sp_factor, tp_axis, self.tp_factor
         self.encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=self.tp_factor),
+            tensor_parallel=ParallelFactor(mesh_axis=encoder_tp_axis, factor=encoder_tp),
             sequence_parallel=(
-                ParallelFactor(mesh_axis=sp_axis, factor=self.sp_factor) if self.sp_factor > 1 else None
+                ParallelFactor(mesh_axis=encoder_sp_axis, factor=encoder_sp) if encoder_sp > 1 else None
             ),
         )
 
@@ -884,7 +899,13 @@ class MiniMaxH3Pipeline:
 
         self._host_log(
             "building the Qwen3-VL text encoder"
-            + (" with resident weights (MINIMAX_H3_ENCODER_RESIDENT, no FSDP)" if self.encoder_resident else "")
+            + (
+                f" with TP{self.encoder_parallel_config.tensor_parallel.factor} / "
+                f"SP{self.encoder_parallel_config.sequence_parallel.factor} on swapped mesh axes and resident weights "
+                "(MINIMAX_H3_ENCODER_TP8, no FSDP)"
+                if self.encoder_tp_swap
+                else " with resident weights (MINIMAX_H3_ENCODER_RESIDENT, no FSDP)" if self.encoder_resident else ""
+            )
         )
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
@@ -892,7 +913,7 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             parallel_config=self.encoder_parallel_config,
             ccl_manager=self.encoder_ccl_manager,
-            is_fsdp=not self.encoder_resident,
+            is_fsdp=self.encoder_fsdp,
             load_weights=False,
             kv_gather_capacity=padded_sequence_length(self.arena_caps.prompt, self.sp_factor),
             use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
@@ -1279,7 +1300,7 @@ class MiniMaxH3Pipeline:
             self.weights_dir / "text_encoder",
             parallel_config=self.encoder_parallel_config,
             mesh_device=self.mesh_device,
-            is_fsdp=not self.encoder_resident,
+            is_fsdp=self.encoder_fsdp,
         )
         return self._text_encoder
 
