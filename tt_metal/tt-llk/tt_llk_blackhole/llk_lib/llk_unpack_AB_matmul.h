@@ -590,7 +590,8 @@ inline void _llk_unpack_AB_matmul_(
     const bool unpB_partial_face = false,
     std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim   = 1,
-    const std::uint32_t kt_dim   = 1)
+    const std::uint32_t kt_dim   = 1,
+    const std::uint32_t held_a   = matmul_held_a_init)
 {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
@@ -598,7 +599,7 @@ inline void _llk_unpack_AB_matmul_(
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     static_assert(reuse_dir == 0 || (!auto_ttsync && stream_z == 0), "a forced reuse direction runs on the per-row unpack with the default stream");
-    const bool reuse_a        = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+    const bool reuse_a        = matmul_call_reuse_a<reuse_dir>(ct_dim, rt_dim, held_a);
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
     LLK_ASSERT((reuse_a ? ct_dim : rt_dim) <= dest_max_tiles, "matmul: a row has more tiles than DEST holds");
@@ -616,6 +617,86 @@ inline void _llk_unpack_AB_matmul_(
     std::uint32_t address_b    = base_address_b + tile_size_b * tile_index_b;
     const std::uint32_t mop_0  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, 0);
     const std::uint32_t mop_1  = mop_0 | context_1_zmask;
+
+    if constexpr (matmul_two_row<reuse_dir>())
+    {
+        static_assert(kernel_broadcast_a == 0 && kernel_broadcast_b == 0, "the two-row scheme has no kernel broadcast");
+        LLK_ASSERT(!unpA_partial_face && !unpB_partial_face, "matmul: the two-row scheme needs whole faces");
+        // Two held tiles (rows of in0 in SrcB for reuse_dir 4, columns of in1 in SrcA for 6) go to the two banks of their source, then the
+        // streamed tiles are unpacked once for both; an odd held dimension ends on one held tile.
+        constexpr bool held_b      = reuse_dir == 4;
+        const std::uint32_t t_even = t_dim & ~1u;
+        for (std::uint32_t t = 0; t < t_even; t += 2)
+        {
+            const std::uint32_t row_a     = base_address_a + tile_size_a * (tile_index_a + (held_b ? t * kt_dim : 0));
+            const std::uint32_t row_b     = base_address_b + tile_size_b * (tile_index_b + (held_b ? 0 : t));
+            const std::uint32_t next_held = held_b ? row_a + tile_size_a * kt_dim : row_b + tile_size_b;
+
+            wait_for_next_context(2);
+            _llk_unpack_configure_addresses_(row_b, row_a, cfg);
+            semaphore_post(semaphore::UNPACK_SYNC);
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+            if constexpr (held_b)
+            {
+                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TT_SETDMAREG(0, LOWER_HALFWORD(next_held), 0, LO_16(p_gpr_unpack::TMP1));
+                TT_SETDMAREG(0, UPPER_HALFWORD(next_held), 0, HI_16(p_gpr_unpack::TMP1));
+                if (unp_cfg_context == 0)
+                {
+                    TTI_WRCFG(p_gpr_unpack::TMP1, 0, THCON_SEC1_REG3_Base_address_ADDR32);
+                }
+                else
+                {
+                    TTI_WRCFG(p_gpr_unpack::TMP1, 0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+                }
+                TTI_NOP;
+                TTI_NOP;
+                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            }
+            else
+            {
+                TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TT_SETDMAREG(0, LOWER_HALFWORD(next_held), 0, LO_16(p_gpr_unpack::TMP1));
+                TT_SETDMAREG(0, UPPER_HALFWORD(next_held), 0, HI_16(p_gpr_unpack::TMP1));
+                if (unp_cfg_context == 0)
+                {
+                    TTI_WRCFG(p_gpr_unpack::TMP1, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+                }
+                else
+                {
+                    TTI_WRCFG(p_gpr_unpack::TMP1, 0, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+                }
+                TTI_NOP;
+                TTI_NOP;
+                TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            }
+            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+            switch_config_context(unp_cfg_context);
+        }
+        if (t_even != t_dim)
+        {
+            wait_for_next_context(2);
+            _llk_unpack_configure_addresses_(
+                base_address_b + tile_size_b * (tile_index_b + (held_b ? 0 : t_even)),
+                base_address_a + tile_size_a * (tile_index_a + (held_b ? t_even * kt_dim : 0)),
+                cfg);
+            semaphore_post(semaphore::UNPACK_SYNC);
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+            if constexpr (held_b)
+            {
+                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            }
+            else
+            {
+                TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+            }
+            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+            switch_config_context(unp_cfg_context);
+        }
+        return;
+    }
 
     for (std::uint32_t t = 0; t < t_dim; t++)
     {

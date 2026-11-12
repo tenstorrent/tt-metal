@@ -101,6 +101,7 @@
 #define PACK(...)
 #endif
 #include "api/compute/pack_math_context.h"
+PACK_SFPU_API(1)
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"

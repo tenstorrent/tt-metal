@@ -15,6 +15,7 @@
 #ifdef TRISC_UNPACK
 #include "experimental/2_0/llk_unpack_AB_matmul.h"
 #endif
+PACK_MATMUL_API(2)
 
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0

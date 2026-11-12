@@ -508,7 +508,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "matmul_pack_production.h"
+
+// The pack is production's. Compile-time formats (as every JIT kernel has them): the compute API's pack_block through
+// pack_api_shim.h over a CB of the result buffer, built with production's -flto=1 -flto-partition=one (python kernel_flags):
+// llk_pack_block<n> for a constant count on the PR's LLK, llk_matmul_pack's per-tile loop for a run-time count, main's
+// per-tile loop on main's LLK. Run-time formats (no descriptor arrays, so no block forms): both arms pack per tile; the PR
+// arm makes llk_pack_tile_of_output's choice on the run-time output format (that format test is the harness's own, see
+// matmul_pack_tile_rt).
+#if defined(ARCH_BLACKHOLE) && !defined(RUNTIME_FORMATS)
+#if __has_include("llk_pack_block.h")
+// the API traits of a ttnn matmul kernel (the PR's pack contexts; main has none): a matmul header, and compute_kernel_api.h's pack-thread SFPU init
+#define PACK_API_SHIM_MATMUL
+#define PACK_API_SHIM_SFPU
+#endif
+#include "pack_api_shim.h"
+#define MATMUL_PACK_SHIM 1
+#define MATMUL_PR_LLK    PACK_API_SHIM_PR
+#else
+#define MATMUL_PACK_SHIM 0
+#if defined(ARCH_BLACKHOLE) && __has_include("llk_pack_block.h")
+#define MATMUL_PR_LLK 1
+#else
+#define MATMUL_PR_LLK 0
+#endif
+#endif
 
 #ifndef MATMUL_PACK_FORM
 #define MATMUL_PACK_FORM 0
@@ -532,34 +555,87 @@ constexpr DataFormat matmul_pack_out_format = MATMUL_PK_OUT;
 #else
 constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
 #endif
-#if defined(ARCH_BLACKHOLE) && defined(MATMUL_PACK_PROD) && !defined(LLK_MAIN_ARM)
-// main's ttnn kernels: pack_block on every output block, without the K; 3 is the closed block of llk_pack_block (not prepared)
-constexpr int matmul_pack_form_v = matmul_pack_production::prod_form<matmul_pack_out_format>();
-#elif defined(ARCH_BLACKHOLE)
-// a block whose every form is per tile packs per tile (llk_matmul_block_pack); the full sync closed block runs prepared (pack_block_prepare) and takes no form
-constexpr int matmul_pack_form_v = (matmul_pack_form_key == 2 && dest_sync == DstSync::SyncFull) ||
-                                           !matmul_pack_production::always_per_tile<dest_sync, is_fp32_dest_acc_en, matmul_pack_out_format>()
-                                       ? matmul_pack_form_key
-                                       : 0;
-#else
+// the python mirror's form of the block (MATMUL_PACK_FORM), checked against the LLK above; the pack itself is production's (below)
 constexpr int matmul_pack_form_v = matmul_pack_form_key;
-#endif
 #line 271
 
 #ifndef MATMUL_L1_ACC
 #define MATMUL_L1_ACC 0
 #endif
-
-#if defined(ARCH_BLACKHOLE)
-#if defined(MATMUL_PACK_CONST)
-// a constant block that packs per tile from every state runs main's loop in llk_pack_block: the main arm's loop here
-#define MATMUL_PACK_MAIN_LOOP(n) (matmul_pack_production::forms_const<dest_sync, is_fp32_dest_acc_en, matmul_pack_out_format>(n) == 1)
-#else
-#define MATMUL_PACK_MAIN_LOOP(n) false
+// arm of the shim's pack_block: 0 the form tables (production), 'T', 'B' or 'W' one form
+#ifndef MATMUL_PACK_ARM
+#define MATMUL_PACK_ARM 0
 #endif
-template <typename TileAddr = std::nullptr_t> __attribute__((always_inline)) inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4, TileAddr tile_addr = nullptr)
+
+#if MATMUL_PACK_SHIM
+constexpr std::uint32_t matmul_pack_out = PACK_API_SHIM_OUT;
+#if defined(MATMUL_PACK_KEYS) && !(defined(MATMUL_PACK_NOK) && MATMUL_PACK_NOK)
+constexpr std::uint32_t matmul_pack_kt = MATMUL_PK_KT;
+#else
+constexpr std::uint32_t matmul_pack_kt = 0;
+#endif
+
+// The perf CB: the whole blocks that fit the 64 KB PERF_OUTPUT ring, so a block continues the last one's W offset except
+// at the wrap, as in production's output CB. Python gives the pages with constant dims (MATMUL_PERF_CB_PAGES in build.h).
+inline std::uint32_t matmul_ring_pages([[maybe_unused]] const std::uint32_t block_tiles, [[maybe_unused]] const std::uint32_t page_words)
 {
-    matmul_pack_production::block<dest_sync, is_fp32_dest_acc_en, matmul_pack_form_v, matmul_pack_out_format, TileAddr>(tile_index, address, num_tiles, tile_stride, num_faces, tile_addr);
+#ifdef MATMUL_PERF_CB_PAGES
+    return MATMUL_PERF_CB_PAGES;
+#else
+    const std::uint32_t blocks = PERF_RING_TILES * 4096 / 16 / (block_tiles * page_words);
+    return block_tiles * (blocks > 0 ? blocks : 1);
+#endif
+}
+
+// production's pack_block(dst, cb, n) with a run-time count: llk_matmul_pack's per-tile loop
+template <bool is_fp32_dest_acc_en>
+inline void matmul_pack_runtime_count(const std::uint32_t start_tile_index, const std::uint32_t output, const std::uint32_t ntiles)
+{
+#if MATMUL_PR_LLK
+    const std::uint8_t output_id = get_output_id(output);
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++)
+    {
+        const std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+        llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr, output_id);
+    }
+#else
+    pack_api_shim::main_pack_block<is_fp32_dest_acc_en>(start_tile_index, output, ntiles);
+#endif
+}
+
+// one DEST block of the output: pack_block<n> (constant count) or pack_block(dst, cb, n)
+template <bool constant_count, std::uint32_t ntiles>
+__attribute__((always_inline)) inline void matmul_pack_block(const std::uint32_t num_tiles)
+{
+#if MATMUL_PR_LLK
+    if constexpr (constant_count)
+    {
+        pack_api_shim::pack_block<ntiles, is_fp32_dest_acc_en, matmul_pack_kt, MATMUL_PACK_ARM>(0, matmul_pack_out);
+    }
+    else
+#endif
+    {
+        matmul_pack_runtime_count<is_fp32_dest_acc_en>(0, matmul_pack_out, num_tiles);
+    }
+}
+#else
+// run-time formats: one tile; the PR arm as llk_pack_tile_of_output, whose Float32-output test reads the run-time format here
+template <bool is_fp32_dest_acc_en>
+__attribute__((always_inline)) inline void matmul_pack_tile_rt(const std::uint32_t tile_index, const std::uint32_t address, [[maybe_unused]] const std::uint32_t pack_dst)
+{
+#if MATMUL_PR_LLK
+    if constexpr (dest_sync == DstSync::SyncFull && !is_fp32_dest_acc_en)
+    {
+        if (pack_dst == static_cast<std::uint32_t>(DataFormat::Float32))
+        {
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default, false, false, true>(tile_index, address);
+            return;
+        }
+    }
+    _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default, false, dest_sync == DstSync::SyncFull, true>(tile_index, address);
+#else
+    _llk_pack_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tile_index, address);
+#endif
 }
 #endif
 
@@ -590,15 +666,38 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #line 318
     const Operand& buffer_Res          = params.buffer_Res;
 #endif
+#if defined(MATMUL_PACK_CONST)
+    [[maybe_unused]] constexpr bool matmul_const_count = true;
+    [[maybe_unused]] constexpr std::uint32_t matmul_ntiles = MATMUL_CONST_CT * MATMUL_CONST_RT;
+#else
+    [[maybe_unused]] constexpr bool matmul_const_count = false;
+    [[maybe_unused]] constexpr std::uint32_t matmul_ntiles = 0;
+#endif
+    // perf runs pack every block to the same place (the PERF_OUTPUT ring), golden runs to consecutive result tiles
+    [[maybe_unused]] const bool perf_ring = LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS;
 
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
+#if MATMUL_PR_LLK
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en, !matmul_true_main_key>();
-        // the W base of the block pack is programmed by its second call, as in llk_pack_block
-        //
-        //
+#else
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+#endif
+#if MATMUL_PACK_SHIM
+#if MATMUL_PR_LLK
+        // as matmul_block_init marks the pack thread
+        ckernel::packer::llk_pack_math_context(1);
+#endif
+        // the output CB over the result tiles, in the 16 byte words of the metal CB pointers: the perf ring, or every block (golden)
+        {
+            const std::uint32_t base  = (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || perf_ring) ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[0]);
+            const std::uint32_t pages = (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || perf_ring) ? matmul_ring_pages(CT_DIM * RT_DIM, TILE_SIZE_PACK)
+                                                                                                      : CT_DIM * RT_DIM * (MATMUL_FUNC_BLOCKS ? LOOP_FACTOR : 1);
+            pack_api_shim::cb_bind(matmul_pack_out, base + 1, TILE_SIZE_PACK, pages);
+        }
+#endif
         PROFILER_SYNC();
     }
     {
@@ -607,100 +706,69 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
-        {
-#if defined(ARCH_BLACKHOLE) && MATMUL_L1_ACC == 1
-            reconfigure_packer_l1_acc(1);
-#endif
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
-                {
-                    const std::uint32_t tile_index = tile % MAX_TILES_DEST;
-#if defined(ARCH_BLACKHOLE)
-                    if constexpr (matmul_pack_form_v != 0 && !MATMUL_PACK_MAIN_LOOP(CT_DIM * RT_DIM))
-                    {
-                        matmul_pack_out(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4, [&](std::uint32_t j) { return PERF_ADDRESS(PERF_OUTPUT, (tile_index + j) % MAX_TILES_DEST); });
-                        break;
-                    }
-#endif
-                    LLK_ASSERT(
-                        (tile_index < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                        "Block tile index exceeds maximum destination tiles for matmul");
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, (dest_sync == DstSync::SyncFull && !matmul_true_main_key)>(
-                        tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
-                }
-            }
-        }
         else
         {
+#if defined(ARCH_BLACKHOLE) && MATMUL_L1_ACC == 1
+            if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+            {
+                reconfigure_packer_l1_acc(1);
+            }
+#endif
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
 #if defined(MATMUL_PACK_STATE) && MATMUL_PACK_STATE == 1
-                // a pack reconfigure before every block, as between the partials and the output of a spilled matmul
+                // every block the first of its output behind a pack reconfigure: production's reconfigure sets the state
                 _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
+#elif defined(MATMUL_PACK_STATE) && MATMUL_PACK_STATE == 2 && MATMUL_PACK_SHIM
+                // every block the first of its output behind a pack init: the state a set_packer_strides leaves (one store the harness adds)
+                ckernel::packer::llk_pack_state_set_half(0);
 #endif
-#line 366
-#if defined(ARCH_BLACKHOLE)
-                if constexpr (matmul_pack_form_v == 2 && dest_sync == DstSync::SyncFull)
+                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                 {
-                    _llk_pack_block_closed_pre_(0, (LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS) ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[MATMUL_FUNC_BLOCKS ? loop * CT_DIM * RT_DIM : 0]));
+                    _llk_packer_wait_for_math_done_();
                 }
-#endif
-                _llk_packer_wait_for_math_done_();
 #if defined(ARCH_BLACKHOLE) && MATMUL_L1_ACC == 1
+                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+                {
 #if defined(MATMUL_NB) && MATMUL_NB > 1
-                // the first of every MATMUL_NB inner blocks writes its partials, the later ones accumulate onto them
-                if (loop % MATMUL_NB == 0)
-                {
-                    reconfigure_packer_l1_acc(0);
-                }
-                else if (loop % MATMUL_NB == 1)
-                {
-                    reconfigure_packer_l1_acc(1);
-                }
+                    // one output over MATMUL_NB k blocks: the first block packs without, the next ones with L1 accumulation
+                    if (loop % MATMUL_NB == 0)
+                    {
+                        reconfigure_packer_l1_acc(0);
+                    }
+                    else if (loop % MATMUL_NB == 1)
+                    {
+                        reconfigure_packer_l1_acc(1);
+                    }
 #else
-#line 483
-                if (loop == 0)
-                {
-                    reconfigure_packer_l1_acc(1);
+                    if (loop == 0)
+                    {
+                        reconfigure_packer_l1_acc(1);
+                    }
+#endif
                 }
 #endif
-#line 487
-#endif
-                // Pack dest occupancy (RT×CT).
+#if MATMUL_PACK_SHIM
+                matmul_pack_block<matmul_const_count, matmul_ntiles>(CT_DIM * RT_DIM);
+#else
                 for (std::uint32_t i = 0; i < CT_DIM * RT_DIM; i++)
                 {
                     LLK_ASSERT((i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "i exceeds max dest tiles");
-                    // Golden packs unique result tiles. Perf K=32 dest-fill Float32
-                    // places buffer_Res past L1; use the PERF_ADDRESS ring like matmul_perf.
-                    const std::uint32_t addr = (LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS) ? PERF_ADDRESS(PERF_OUTPUT, i) : L1_ADDRESS(buffer_Res[(MATMUL_FUNC_BLOCKS ? loop * CT_DIM * RT_DIM : 0) + i]);
-                    if (LOOP_FACTOR == 1)
-                    {
-                        LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
-                    }
-#if defined(ARCH_BLACKHOLE)
-                    if constexpr (matmul_pack_form_v != 0 && !MATMUL_PACK_MAIN_LOOP(CT_DIM * RT_DIM))
-                    {
-                        if (LOOP_FACTOR == 1)
-                        {
-                            LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
-                        }
-#if defined(ARCH_BLACKHOLE)
-                        if constexpr (matmul_pack_form_v == 2 && dest_sync == DstSync::SyncFull)
-                        {
-                            _llk_pack_block_closed_run_(CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4);
-                            break;
-                        }
-#endif
-                        matmul_pack_out(i, addr, CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4, [&](std::uint32_t j) { return (LOOP_FACTOR > 1 && !MATMUL_FUNC_BLOCKS) ? PERF_ADDRESS(PERF_OUTPUT, i + j) : L1_ADDRESS(buffer_Res[(MATMUL_FUNC_BLOCKS ? loop * CT_DIM * RT_DIM : 0) + i + j]); });
-                        break;
-                    }
-#endif
-                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, (dest_sync == DstSync::SyncFull && !matmul_true_main_key)>(
-                        i, addr);
+                    const std::uint32_t tile_index = PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE ? i % MAX_TILES_DEST : i;
+                    const std::uint32_t addr       = (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || perf_ring)
+                                                         ? PERF_ADDRESS(PERF_OUTPUT, tile_index)
+                                                         : L1_ADDRESS(buffer_Res[(MATMUL_FUNC_BLOCKS ? loop * CT_DIM * RT_DIM : 0) + i]);
+                    matmul_pack_tile_rt<is_fp32_dest_acc_en>(tile_index, addr, formats.pack_dst);
                 }
-                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+#endif
+                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+                {
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+#if MATMUL_PACK_SHIM
+                // as a ttnn kernel: tile_regs_release, then cb_push_back
+                pack_api_shim::cb_push_back(matmul_pack_out, CT_DIM * RT_DIM);
+#endif
             }
         }
         PROFILER_SYNC();

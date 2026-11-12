@@ -18,6 +18,7 @@ from helpers.matmul_prod_keys import (
     grid_main_cell,
     grid_main_flip_cell,
     grid_unfused_post_cell,
+    row_mop_off,
     tiny_main_cell,
 )
 from helpers.matmul_sweep import matmul_pack_form
@@ -586,6 +587,73 @@ def check_stream() -> int:
     return bad or len(cpp) != len(py)
 
 
+def check_row_mop_off() -> int:
+    """python row_mop_off against matmul_row_mop_off over every fidelity, sync, DEST width, in1, in0 and output format, block up to 8 x 8, K 1, 2 and 4
+    and throttle 0 and 2."""
+    fids = ["LoFi", "HiFi2", "HiFi3", "HiFi4"]
+    fmts = [
+        "Float32",
+        "Float16",
+        "Float16_b",
+        "Bfp8",
+        "Bfp8_b",
+        "Bfp4_b",
+        "Bfp2_b",
+        "Int8",
+        "Int32",
+    ]
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "llk_defs.h").write_text(STUB)
+        (Path(d) / "llk_matmul_forms.h").write_text(HEADER.read_text())
+        fl = ",".join(f"MathFidelity::{f}" for f in fids)
+        dl = ",".join(f"DataFormat::{f}" for f in fmts)
+        (Path(d) / "t.cpp").write_text(
+            '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\n'
+            f"static const MathFidelity F[]={{{fl}}};static const DataFormat D[]={{{dl}}};static const unsigned K[]={{1,2,4}},TH[]={{0,2}};\n"
+            "int main(){for(auto f:F)for(int h=0;h<2;h++)for(int a=0;a<2;a++)for(auto i:D)for(auto j:D)for(auto o:D)for(unsigned rt=1;rt<=8;rt++)for(unsigned ct=1;ct<=8;ct++)"
+            "for(auto k:K)for(auto t:TH)putchar(matmul_row_mop_off(f,h,a,i,j,o,rt,ct,k,t)?'1':'0');}\n"
+        )
+        subprocess.run(
+            [
+                "g++",
+                "-std=c++20",
+                "-O1",
+                f"-I{d}",
+                str(Path(d) / "t.cpp"),
+                "-o",
+                str(Path(d) / "t"),
+            ],
+            check=True,
+        )
+        cpp = subprocess.run(
+            [str(Path(d) / "t")], check=True, capture_output=True, text=True
+        ).stdout
+    F = {f: getattr(MathFidelity, f) for f in fids}
+    D = {f: getattr(DataFormat, f) for f in fmts}
+    py = "".join(
+        (
+            "1"
+            if row_mop_off(F[f], bool(h), bool(a), D[i], D[j], D[o], rt, ct, k, t)
+            else "0"
+        )
+        for f in fids
+        for h in range(2)
+        for a in range(2)
+        for i in fmts
+        for j in fmts
+        for o in fmts
+        for rt in range(1, 9)
+        for ct in range(1, 9)
+        for k in (1, 2, 4)
+        for t in (0, 2)
+    )
+    bad = sum(x != y for x, y in zip(cpp, py)) + (len(cpp) != len(py))
+    print(
+        f"row MOP off: {len(py)} cases, C++ keeps the tile MOP on {cpp.count('1')}, python {py.count('1')}, {bad} differ"
+    )
+    return bad
+
+
 def main() -> int:
     rows = [(*r, 1) for r in grid._grid()] + list(grid2._grid2())
     with tempfile.TemporaryDirectory() as d:
@@ -682,6 +750,7 @@ def main() -> int:
             "matmul_keep_flip_off_cells",
         )
         or check_forced()
+        or check_row_mop_off()
         or check_dense_pack()
         else 0
     )

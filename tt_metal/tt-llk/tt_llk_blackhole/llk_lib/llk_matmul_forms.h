@@ -32,17 +32,53 @@ inline constexpr const char* matmul_forms_table[48] = {
 };
 
 // Reuse direction of a block: reuse_dir 0 holds in0 in SrcB and streams in1 through SrcA when ct_dim >= rt_dim (main's rule), 1 forces that
-// direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). A kernel fixes it at compile time with matmul_reuse_dir.
+// direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). 4 is the two-row scheme: two rows of in0 sit in the two banks
+// of SrcB and every streamed in1 tile is multiplied with both (in0 held whatever the block); 6 the same with two columns of in1 in the two
+// banks of SrcA. An odd held dimension ends on one held tile. A kernel fixes it at compile time with matmul_reuse_dir.
+template <std::uint32_t reuse_dir>
+constexpr bool matmul_two_row()
+{
+    return reuse_dir == 4 || reuse_dir == 6;
+}
+
+// reuse_dir 3 runs the default body with the held operand the matmul init chose at run time: true holds in0 (as ct_dim >= rt_dim does),
+// false in1; set before the unpack and math inits, read by them and by every call
+inline bool matmul_runtime_reuse_a = true;
+
 template <std::uint32_t reuse_dir>
 constexpr bool matmul_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
-    return reuse_dir == 0 ? ct_dim >= rt_dim : reuse_dir == 1;
+    if constexpr (reuse_dir == 3)
+    {
+        return matmul_runtime_reuse_a;
+    }
+    else
+    {
+        return reuse_dir == 0 ? ct_dim >= rt_dim : (reuse_dir == 1 || reuse_dir == 4);
+    }
 }
 
-// A 32-bit tile takes twice the unpacker cycles of a 16-bit one (32 against 64 datums per cycle), and the streamed operand is unpacked once per
-// output tile, the held one once per row: with one operand of 32 bits and the other of 16 bits at LoFi the block holds the 32-bit operand and
-// streams the 16-bit one, which halves the unpack stream of a block of 4 tiles or more where the held operand is reused (>= 2 rows or columns).
-// The default direction already does it when the 32-bit operand is in0 and ct_dim >= rt_dim, or in1 and ct_dim < rt_dim.
+// The held operand of a matmul call: held_a 0 holds in1, 1 in0, matmul_held_a_init the one the reuse_dir 3 init kept (read only for
+// reuse_dir 3, so other directions fold it away)
+constexpr std::uint32_t matmul_held_a_init = 2;
+template <std::uint32_t reuse_dir>
+inline bool matmul_call_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t held_a)
+{
+    if constexpr (reuse_dir == 3)
+    {
+        return held_a == matmul_held_a_init ? matmul_runtime_reuse_a : held_a != 0;
+    }
+    else
+    {
+        return matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+    }
+}
+
+// A 32-bit tile takes twice the unpacker cycles of a 16-bit or Bfp8_b / Bfp4_b one (32 against 64 datums per cycle), and the streamed operand
+// is unpacked once per output tile, the held one once per row: with one operand of 32 bits and the other of 16 bits or Bfp8_b / Bfp4_b at LoFi
+// the block holds the 32-bit operand and streams the other, which halves the unpack stream of a block of 4 tiles or more where the held operand
+// is reused (>= 2 rows or columns). The default direction already does it when the 32-bit operand is in0 and ct_dim >= rt_dim, or in1 and
+// ct_dim < rt_dim.
 constexpr bool matmul_format_is_32bit(const DataFormat f)
 {
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
@@ -51,19 +87,50 @@ constexpr bool matmul_format_is_16bit(const DataFormat f)
 {
     return f == DataFormat::Float16 || f == DataFormat::Float16_b;
 }
-// pack_bound: half sync with a Float32 output, where the pack is the bound and the cell measured up to 1.7 percent slower
-constexpr std::uint32_t matmul_reuse_dir(
-    const MathFidelity fidelity, const DataFormat in0, const DataFormat in1, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool pack_bound = false)
+
+// Under a static throttle the math is the bound and a held 32-bit operand against Bfp8_b or Bfp4_b reads slower (up to 4 percent)
+constexpr bool matmul_format_streams_fast(const DataFormat f, const bool throttled = false)
 {
+    return matmul_format_is_16bit(f) || (!throttled && (f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b));
+}
+
+// A Float32 x Float32 LoFi block is bound by the unpack of its 32-bit tiles; with two rows of in0 in the two SrcB banks each in1 tile is
+// unpacked once for two rows (rt_dim + rt_dim * ct_dim / 2 tiles a block instead of the default direction's).
+// pack_bound: half sync with a Float32 output, where the pack is the bound and the cell measured up to 1.7 percent slower
+// two_row_off: the blocks the two-row scheme does not serve or reads slower on: a static throttle, tiles other than 32x32, half sync with
+// a Float32 output and one k step
+// throttled: a static throttle, which keeps the default direction against a block float operand
+constexpr std::uint32_t matmul_reuse_dir(
+    const MathFidelity fidelity,
+    const DataFormat in0,
+    const DataFormat in1,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const bool pack_bound  = false,
+    const bool two_row_off = true,
+    const bool throttled   = false)
+{
+    if (fidelity == MathFidelity::LoFi && !two_row_off && in0 == DataFormat::Float32 && in1 == DataFormat::Float32 && ct_dim >= 2 && rt_dim >= 2)
+    {
+        // two columns of in1 held where the block is narrower than tall, else two rows of in0 (even held dimension: the measured blocks)
+        if (ct_dim < rt_dim && (ct_dim % 2) == 0)
+        {
+            return 6;
+        }
+        if ((rt_dim % 2) == 0)
+        {
+            return 4;
+        }
+    }
     if (fidelity != MathFidelity::LoFi || pack_bound || ct_dim * rt_dim < 4)
     {
         return 0;
     }
-    if (matmul_format_is_32bit(in1) && matmul_format_is_16bit(in0) && ct_dim >= rt_dim && rt_dim >= 2)
+    if (matmul_format_is_32bit(in1) && matmul_format_streams_fast(in0, throttled) && ct_dim >= rt_dim && rt_dim >= 2)
     {
         return 2;
     }
-    if (matmul_format_is_32bit(in0) && matmul_format_is_16bit(in1) && ct_dim < rt_dim && ct_dim >= 2)
+    if (matmul_format_is_32bit(in0) && matmul_format_streams_fast(in1, throttled) && ct_dim < rt_dim && ct_dim >= 2)
     {
         return 1;
     }
@@ -710,6 +777,7 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 1, 3, false, 1},
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Bfp8_b, 3, 1, 2, 0, false, 1},
     {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float16, 1, 2, 1, 0, false, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 1, 1, 1, 0, false, 1},
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 2, 1, 1, 0, true, 2},
     {MathFidelity::HiFi2, true, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 4, 2, 4, 0, false, 1},
     {MathFidelity::HiFi2, true, true, DataFormat::Bfp8_b, DataFormat::Float16_b, DataFormat::Float32, 3, 1, 1, 1, false, 1},
@@ -944,6 +1012,7 @@ inline constexpr matmul_grid_main_cell matmul_grid_main_cells[] = {
     {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 8, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 8, 1, 32, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Bfp8, 2, 1, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Bfp8, DataFormat::Bfp8, DataFormat::Float32, 6, 1, 3, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp2_b, DataFormat::Float16_b, 2, 1, 1, 0, false, 1},
     {MathFidelity::LoFi, true, false, DataFormat::Bfp8_b, DataFormat::Bfp2_b, DataFormat::Float32, 6, 1, 3, 0, false, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Bfp8_b, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 1, 0, true, 4},
@@ -1520,7 +1589,7 @@ constexpr bool matmul_pack_full_l1_per_tile(const MathFidelity fidelity, const D
 
 constexpr bool matmul_format_block_float(const DataFormat f)
 {
-    return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b;
+    return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4 || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2 || f == DataFormat::Bfp2_b;
 }
 
 // Two and three tile blocks of one K tile at LoFi and HiFi2 (cells below): the closed block through llk_pack_block (first block closed, then the W form) reads 4 to 10 cycles behind
@@ -1528,7 +1597,9 @@ constexpr bool matmul_format_block_float(const DataFormat f)
 constexpr bool matmul_pack_two_tile_per_tile(const MathFidelity fidelity, const DataFormat out, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
 {
     return kt == 1 &&
-           ((rt * ct == 2 && matmul_format_block_float(out) && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2)) ||
+           // the block float outputs measured: not Bfp4 or Bfp2 (5 bit exponent)
+           ((rt * ct == 2 && (out == DataFormat::Bfp8 || out == DataFormat::Bfp8_b || out == DataFormat::Bfp4_b || out == DataFormat::Bfp2_b) &&
+             (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2)) ||
             // LoFi blocks of two tiles to Float16 or Float16_b read 5 cycles behind main with the plain block (48 of 52 rows), to Float32 6 ahead; a three tile Bfp8_b block 12 behind
             (rt * ct == 2 && fidelity == MathFidelity::LoFi && (out == DataFormat::Float16 || out == DataFormat::Float16_b)) ||
             (rt * ct == 3 && fidelity == MathFidelity::LoFi && out == DataFormat::Bfp8_b));
@@ -2104,7 +2175,7 @@ constexpr bool matmul_pack_llkx_per_tile(const MathFidelity fidelity, const Data
 }
 
 // Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages and small tiles). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
-// harness (matmul_pack_form of matmul_sweep.py mirrors it) and of the keyed llk_matmul_block_pack.
+// harness (matmul_pack_form of matmul_sweep.py mirrors it).
 constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
                                  const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, [[maybe_unused]] const bool dense_pages = false,
                                  const bool l1_acc = false)
@@ -2714,6 +2785,75 @@ constexpr char matmul_forced_form()
 constexpr DataFormat matmul_forced_form_key(const char form)
 {
     return form == 'R' ? DataFormat::Bfp2 : (form == 'h' ? DataFormat::Bfp2_b : (form == 'r' ? DataFormat::Bfp4 : DataFormat::Invalid));
+}
+
+// LoFi half sync rows of 8 tiles, one K tile, a narrow in1 into Bfp8 or Float16_b: the row MOP stretches the SrcA unpack, 1.7 to 2.7 cycles per block
+constexpr bool matmul_lofi_row8_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    const bool narrow_in1 = in1 == DataFormat::Bfp8 || in1 == DataFormat::Bfp8_b || in1 == DataFormat::Bfp4_b;
+    const bool out_8_16   = out == DataFormat::Bfp8 || out == DataFormat::Bfp8_b || out == DataFormat::Float16_b;
+    return fidelity == MathFidelity::LoFi && half_sync && !fp32_dest && throttle == 0 && kt == 1 && rt == 1 && ct == 8 && narrow_in1 && out_8_16;
+}
+
+// HiFi2 half sync 32-bit DEST blocks of one K tile into Float32 where the row MOP reads 0.6 to 2.3 cycles per block behind the tile MOP
+struct matmul_row_mop_off_cell
+{
+    MathFidelity fidelity;
+    bool half_sync;
+    bool fp32_dest;
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint8_t rt, ct;
+};
+
+inline constexpr matmul_row_mop_off_cell matmul_row_mop_off_cells[] = {
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp2_b, DataFormat::Float32, DataFormat::Float32, 4, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 2},
+    {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Float16_b, DataFormat::Float32, 1, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Bfp8, DataFormat::Float32, 1, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float16, DataFormat::Float16, DataFormat::Float32, 1, 4},
+};
+
+// The blocks that keep the tile MOP of their keyed form though the caller opts into the row MOP
+constexpr bool matmul_row_mop_off(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_dest,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle)
+{
+    if (matmul_lofi_row8_row_mop_off(fidelity, half_sync, fp32_dest, in1, out, rt, ct, kt, throttle))
+    {
+        return true;
+    }
+    if (throttle != 0 || kt != 1)
+    {
+        return false;
+    }
+    for (const matmul_row_mop_off_cell& c : matmul_row_mop_off_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_dest == fp32_dest && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt &&
+            c.ct == ct)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The forced form that replaces the row MOP a caller opts into (the row_mop argument of the math calls), as the harness runs it: 0 where the row MOP stays. At half sync every

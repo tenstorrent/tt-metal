@@ -137,6 +137,7 @@ def test_pack(
     allow_int32_mix: bool = False,
     res_page_bytes: int | None = None,
     equiv_out: dict | None = None,
+    make_config=None,
 ):
     if not allow_int32_mix and (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -318,11 +319,25 @@ def test_pack(
         "unpack_to_dest": unpack_to_dest,
     }
 
-    configuration = create_test_or_perf_config(
-        is_perf=is_perf,
-        run_types=run_types,
-        test_config_kwargs=test_config_kwargs,
-    )
+    if make_config is not None:
+        # another kernel on this test's stimuli and golden (test_pack_api.py)
+        configuration = make_config(
+            test_config_kwargs,
+            dict(
+                tile_cnt=tile_cnt_A,
+                dest_index=dest_index,
+                relu_config=relu_config,
+                num_blocks=num_blocks,
+                num_tiles_in_block=num_tiles_in_block,
+                loop_factor=loop_factor,
+            ),
+        )
+    else:
+        configuration = create_test_or_perf_config(
+            is_perf=is_perf,
+            run_types=run_types,
+            test_config_kwargs=test_config_kwargs,
+        )
     if is_perf:
         configuration.run(perf_report)
         return
@@ -331,10 +346,20 @@ def test_pack(
         # the raw L1 bytes of the result tiles, for the form equivalence check
         raw_bytes = tile_cnt_A * EQUIV_TILE_BYTES[formats.output_format]
         if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-            write_to_device(TestConfig.TENSIX_LOCATION, configuration.variant_stimuli.buf_res_addr, [0xA5] * raw_bytes)
+            write_to_device(
+                TestConfig.TENSIX_LOCATION,
+                configuration.variant_stimuli.buf_res_addr,
+                [0xA5] * raw_bytes,
+            )
         configuration.run()
         equiv_out[pack_block] = (
-            bytes(read_from_device(TestConfig.TENSIX_LOCATION, configuration.variant_stimuli.buf_res_addr, num_bytes=raw_bytes))
+            bytes(
+                read_from_device(
+                    TestConfig.TENSIX_LOCATION,
+                    configuration.variant_stimuli.buf_res_addr,
+                    num_bytes=raw_bytes,
+                )
+            )
             if TestConfig.BUILD_MODE != BuildMode.PRODUCE
             else b""
         )
@@ -468,7 +493,7 @@ def test_pack_block_plain(
     dest_sync,
     dest_index,
 ):
-    """The plain block and the closed block of llk_pack_block that program the output on every call (the first block of an output, LLK_PACK_W_OFFSET_OFF)."""
+    """The plain block and the closed block of llk_pack_block that program the output on every call (the first block of an output)."""
     test_pack(
         formats,
         dest_acc,
@@ -673,7 +698,11 @@ def test_pack_block_other_formats(
     allow_int32_mix,
 ):
     """Plain output formats beyond Float16_b, Float32 and Int32: blocks of 2 to 4 tiles in the default W offset forms (2), the W offset forms (3) and the plain blocks (5)."""
-    if (formats.input_format, formats.output_format, dest_acc) in PACK_BLOCK_GOLDEN_GAPS:
+    if (
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+    ) in PACK_BLOCK_GOLDEN_GAPS:
         pytest.skip("The golden does not model this conversion.")
     test_pack(
         formats,
@@ -715,8 +744,13 @@ def test_pack_block_equivalence(
     allow_int32_mix,
 ):
     """The default W offset (2), W offset (3) and plain (5) block forms write the same L1 bytes as the per-tile packs (0, the first of the four runs of a cell), for the formats the golden cannot judge too."""
-    if formats.output_format in (DataFormat.Int8, DataFormat.UInt8) and dest_acc == DestAccumulation.No:
-        pytest.skip("llk_pack_block keeps these per tile: from a 16 bit DEST the per-tile pack writes two faces, the block forms four.")
+    if (
+        formats.output_format in (DataFormat.Int8, DataFormat.UInt8)
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "llk_pack_block keeps these per tile: from a 16 bit DEST the per-tile pack writes two faces, the block forms four."
+        )
     raw = {}
     test_pack(
         formats,
@@ -730,10 +764,18 @@ def test_pack_block_equivalence(
         allow_int32_mix=allow_int32_mix,
         equiv_out=raw,
     )
-    cell = (formats.input_format, formats.output_format, dest_acc, dest_sync, block_tiles)
+    cell = (
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        dest_sync,
+        block_tiles,
+    )
     if pack_block == 0:
         _EQUIV_PER_TILE[cell] = raw[0]
     elif TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         ref = _EQUIV_PER_TILE[cell]
         diff = [i for i in range(len(ref)) if ref[i] != raw[pack_block][i]]
-        assert not diff, f"pack_block form {pack_block} differs from the per-tile packs in {len(diff)} of {len(ref)} bytes, from byte {diff[0]} ref {ref[diff[0]:diff[0]+24].hex()} form {raw[pack_block][diff[0]:diff[0]+24].hex()} last diff {diff[-1]} (tile bytes {len(ref) // (96 * 128 // 1024)})"
+        assert (
+            not diff
+        ), f"pack_block form {pack_block} differs from the per-tile packs in {len(diff)} of {len(ref)} bytes, from byte {diff[0]} ref {ref[diff[0]:diff[0]+24].hex()} form {raw[pack_block][diff[0]:diff[0]+24].hex()} last diff {diff[-1]} (tile bytes {len(ref) // (96 * 128 // 1024)})"

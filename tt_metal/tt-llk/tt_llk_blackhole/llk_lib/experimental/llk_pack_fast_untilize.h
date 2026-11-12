@@ -65,6 +65,15 @@
 #include "experimental/llk_fast_untilize_common.h"
 #include "llk_pack.h"
 
+namespace ckernel::packer
+{
+// The block packs of a kernel that includes this header close a fast untilize left open (_llk_pack_close_fast_untilize_).
+template <>
+inline constexpr bool pack_fast_untilize_linked<DstSync::SyncHalf> = true;
+template <>
+inline constexpr bool pack_fast_untilize_linked<DstSync::SyncFull> = true;
+} // namespace ckernel::packer
+
 namespace ckernel
 {
 

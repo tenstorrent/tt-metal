@@ -94,9 +94,13 @@ def test_perf_pack_dest_bank(
     num_tiles_in_block,
     loop_factor,
 ):
-    if (num_blocks, num_tiles_in_block) not in {(1, 1), (1, 2), (1, 4), (2, 4), (1, 8)}:
+    patterns = {(1, 4), (2, 4), (1, 8)}
+    # The short blocks of the Blackhole block pack.
+    if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+        patterns |= {(1, 1), (1, 2)}
+    if (num_blocks, num_tiles_in_block) not in patterns:
         pytest.skip(
-            "Local perf sweep only uses 1x1, 1x2, 1x4, 2x4, and 1x8 blocked-pack patterns"
+            "Local perf sweep only uses 1x4, 2x4 and 1x8 blocked-pack patterns (Blackhole also 1x1 and 1x2)"
         )
 
     tile_cnt = num_blocks * num_tiles_in_block

@@ -87,7 +87,14 @@ def generate_format_aware_matmul_combinations(
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 # Local mixed-format functional test (not committed): input_format feeds SrcA (matmul in1), input_format_B SrcB (matmul in0), buffer A is in0.
 F = DataFormat
-PAIRS = [(F.Float32, F.Float16_b), (F.Float16_b, F.Float32)]
+PAIRS = [
+    (F.Float32, F.Float16_b),
+    (F.Float16_b, F.Float32),
+    (F.Float32, F.Bfp8_b),
+    (F.Bfp8_b, F.Float32),
+    (F.Float32, F.Bfp4_b),
+    (F.Bfp4_b, F.Float32),
+]
 MIX_FORMATS = [
     InputOutputFormat(a, o, input_format_B=b)
     for a, b in PAIRS

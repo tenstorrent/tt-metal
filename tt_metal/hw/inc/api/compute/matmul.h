@@ -16,11 +16,15 @@
 #include "llk_unpack_AB_matmul_api.h"
 #include "llk_unpack_common_api.h"
 #endif
+PACK_MATMUL_API(1)
 // defines the default throttle level for matmul kernels (default 0)
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0
 #endif
 namespace ckernel {
+
+// reuse_dir of matmul_block_init and matmul_block when the kernel names none: on Blackhole the direction matmul_api_reuse_dir picks
+constexpr std::uint32_t MATMUL_REUSE_DIR_AUTO = 0xFF;
 
 #ifdef ARCH_BLACKHOLE
 // The forms key of a kernel's matmul block: 0, main's form, where the block (block_rt, block_ct, block_kt: optional keys of the caller) is one of the cells
@@ -101,6 +105,33 @@ constexpr bool llk_matmul_main_cell() {
     return false;
 }
 
+// A block that keeps its tile MOP though the caller opts into the row MOP (llk_matmul_forms.h matmul_row_mop_off).
+template <
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt,
+    DataFormat in0,
+    DataFormat in1,
+    DataFormat out_format>
+constexpr bool llk_matmul_row_mop_off() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (block_rt != 0 && block_ct != 0 && block_kt != 0 && in1 != DataFormat::Invalid) {
+        return matmul_row_mop_off(
+            MATH_FIDELITY,
+            DST_SYNC_MODE == DstSync::SyncHalf,
+            DST_ACCUM_MODE,
+            in1,
+            in0,
+            out_format,
+            block_rt,
+            block_ct,
+            block_kt,
+            MM_THROTTLE);
+    }
+#endif
+    return false;
+}
+
 // The unpack_auto_ttsync the unpack calls run: the caller's, except on a block (keys given) that is a main form cell or
 // where the ttsync unpack measured slower than the default unpack (matmul_unpack_ttsync_cell). Decided at compile time,
 // so the unpack code of every other block is unchanged.
@@ -148,8 +179,97 @@ constexpr MathFidelity matmul_elided_fidelity() {
     return MathFidelity::LoFi;  // the pack thread has no MATH_FIDELITY and never reads this
 #endif
 }
-#endif
 
+// True when the kernel's unpack formats hold a 32-bit one and one that unpacks twice as fast (matmul_format_streams_fast): only such a
+// kernel can hold in1 where main holds in0 (or the reverse), so the others fold to main's code.
+template <bool throttled>
+constexpr bool llk_matmul_kernel_mixes_32bit() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    bool wide = false, fast = false;
+    for (const std::uint8_t f : unpack_src_format) {
+        wide = wide || matmul_format_is_32bit(static_cast<DataFormat>(f));
+        fast = fast || matmul_format_streams_fast(static_cast<DataFormat>(f), throttled);
+    }
+    return wide && fast;
+#else
+    return false;
+#endif
+}
+
+// True when every CB of the kernel with a format holds whole 32x32 tiles of four faces (the two-row schemes need them)
+constexpr bool llk_matmul_kernel_full_tiles() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    for (std::uint32_t cb = 0; cb < sizeof(unpack_src_format); cb++) {
+        if (unpack_src_format[cb] != static_cast<std::uint8_t>(DataFormat::Invalid) &&
+            (unpack_tile_r_dim[cb] != 32 || unpack_tile_c_dim[cb] != 32 || unpack_tile_num_faces[cb] != 4 || unpack_partial_face[cb] != 0)) {
+            return false;
+        }
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
+// The reuse direction a matmul call runs. MATMUL_REUSE_DIR_AUTO: with the operand formats and the block (block_rt, block_ct) as template
+// arguments matmul_reuse_dir picks it at compile time, the two-row schemes included (whole tiles, no static throttle, and not a half sync
+// Float32 output over one k step, which is pack bound); a kernel that passes neither runs 3, the init picking the held operand from the CB
+// formats and its ct_dim and rt_dim (matmul_api_set_reuse_a), when it is LoFi, may pair a 32-bit operand with a fast one, keeps main's
+// form (no row MOP, k key, Auto TTSync or stream_z opt-in) and has a known non-Float32 output at half sync. 3 has no two-row scheme: that
+// is another unpack and math body, which a run-time choice would branch to on every call. A direction other than 0 and 3 runs main's tile
+// form and per-row unpack (the forms the cells were measured on).
+template <
+    std::uint32_t reuse_dir,
+    DataFormat in0,
+    DataFormat in1,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t kt_per_section,
+    bool row_mop,
+    std::uint32_t unpack_auto_ttsync,
+    std::uint32_t stream_z>
+constexpr std::uint32_t matmul_api_reuse_dir() {
+    if constexpr (reuse_dir != MATMUL_REUSE_DIR_AUTO) {
+        return reuse_dir;
+    } else {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+        constexpr bool half_f32 =
+            DST_SYNC_MODE == DstSync::SyncHalf && (out_format == DataFormat::Float32 || out_format == DataFormat::Invalid);
+        if constexpr (MATH_FIDELITY != MathFidelity::LoFi) {
+            return 0;
+        } else if constexpr (in0 != DataFormat::Invalid && in1 != DataFormat::Invalid && block_rt != 0 && block_ct != 0) {
+            constexpr bool two_row_off = MM_THROTTLE != 0 || !llk_matmul_kernel_full_tiles() || (half_f32 && kt_per_section <= 1);
+            return matmul_reuse_dir(MATH_FIDELITY, in0, in1, block_ct, block_rt, half_f32, two_row_off, MM_THROTTLE != 0);
+        } else if constexpr (half_f32 || row_mop || unpack_auto_ttsync != 0 || stream_z != 0 || kt_per_section != 0) {
+            return 0;
+        } else {
+            return llk_matmul_kernel_mixes_32bit<MM_THROTTLE != 0>() ? 3 : 0;
+        }
+#else
+        return 0;
+#endif
+    }
+}
+
+// reuse_dir 3: the direction matmul_reuse_dir picks for the operand formats of the CBs and the block
+ALWI std::uint32_t matmul_api_runtime_dir(
+    const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    return matmul_reuse_dir(
+        MathFidelity::LoFi,
+        static_cast<DataFormat>(unpack_src_format[get_operand_id(in0_cb_id)]),
+        static_cast<DataFormat>(unpack_src_format[get_operand_id(in1_cb_id)]),
+        ct_dim,
+        rt_dim,
+        false,
+        true,
+        MM_THROTTLE != 0);
+#else
+    return 0;
+#endif
+}
+#endif
 
 #ifdef ARCH_BLACKHOLE
 // defines the FW-controlled throttle level for block matmul kernels on Blackhole
@@ -200,7 +320,8 @@ ALWI void matmul_block_math_dynamic_throttle(
     const std::uint32_t transpose,
     std::uint32_t ct_dim,
     std::uint32_t rt_dim,
-    std::uint32_t num_k = 1) {
+    std::uint32_t num_k = 1,
+    const std::uint32_t held_a = matmul_held_a_init) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
@@ -208,19 +329,31 @@ ALWI void matmul_block_math_dynamic_throttle(
     const std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
+            // the held operand of a reuse_dir 3 MOP
+            if constexpr (reuse_dir == 3) {
+                if (held_a != matmul_held_a_init) {
+                    matmul_runtime_reuse_a = held_a != 0;
+                }
+            }
             MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, false, true, in1_order, reuse_dir, false, false, key_ct, key_rt>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
         if constexpr (multi_k) {
             for (std::uint32_t k = 0; k < num_k; k++) {
-                MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim)));
+                MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim, held_a)));
             }
         } else {
-            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim)));
+            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim, held_a)));
         }
     } else {
         if (throttled_mop_status != 0) {
+            // the held operand of a reuse_dir 3 MOP
+            if constexpr (reuse_dir == 3) {
+                if (held_a != matmul_held_a_init) {
+                    matmul_runtime_reuse_a = held_a != 0;
+                }
+            }
             MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
@@ -228,12 +361,169 @@ ALWI void matmul_block_math_dynamic_throttle(
         if constexpr (multi_k) {
             for (std::uint32_t k = 0; k < num_k; k++) {
                 MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir, row_end_fold>(
-                    idst, ct_dim, rt_dim)));
+                    idst, ct_dim, rt_dim, held_a)));
             }
         } else {
-            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir, row_end_fold>(idst, ct_dim, rt_dim)));
+            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir, row_end_fold>(idst, ct_dim, rt_dim, held_a)));
         }
     }
+#endif
+}
+#endif
+
+#ifdef ARCH_BLACKHOLE
+// The unpack and math inits of matmul_block_init for the reuse direction the LLK runs
+template <
+    std::uint32_t llk_dir,
+    std::uint32_t unpack_ttsync,
+    std::uint32_t stream_z,
+    bool row_mop_on,
+    std::uint32_t kt_key,
+    DataFormat form_out,
+    int in1_order,
+    bool row_end_fold,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt>
+ALWI void matmul_block_init_llk(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync, llk_dir, stream_z>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<
+          matmul_elided_fidelity<in0_format, in1_format, out_format>(),
+          MM_THROTTLE,
+          row_mop_on,
+          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
+          in1_order,
+          llk_dir,
+          row_end_fold,
+          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
+          block_ct,
+          block_rt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+}
+
+// reuse_dir 3 at the init: keeps the held operand for the calls; where the CBs and the block are compile-time constants the direction
+// folds and the init runs as 0, 1 or 2
+template <
+    std::uint32_t unpack_ttsync,
+    std::uint32_t stream_z,
+    bool row_mop_on,
+    std::uint32_t kt_key,
+    DataFormat form_out,
+    int in1_order,
+    bool row_end_fold,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt>
+ALWI void matmul_block_init_llk_runtime(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    const std::uint32_t d = matmul_api_runtime_dir(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
+    if (__builtin_constant_p(d)) {
+        if (d == 1) {
+            matmul_block_init_llk<1, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+        } else if (d == 2) {
+            matmul_block_init_llk<2, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+        } else {
+            matmul_block_init_llk<0, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+        }
+    } else {
+        matmul_runtime_reuse_a = d == 0 ? ct_dim >= rt_dim : d == 1;
+        matmul_block_init_llk<3, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+    }
+#endif
+}
+
+// The unpack and math calls of matmul_block for the reuse direction the LLK runs
+template <
+    std::uint32_t llk_dir,
+    std::uint32_t unpack_ttsync,
+    std::uint32_t stream_z,
+    bool row_mop_on,
+    std::uint32_t kt_key,
+    DataFormat form_out,
+    int in1_order,
+    bool row_end_fold,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt>
+ALWI void matmul_block_llk(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t in0_tile_index,
+    const std::uint32_t in1_tile_index,
+    const std::uint32_t idst,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t held_a = matmul_held_a_init) {
+    UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, llk_dir, stream_z>(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
+    // Dynamic throttling is only available on Blackhole architecture
+    MATH((matmul_block_math_dynamic_throttle<
+          row_mop_on,
+          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
+          in1_order,
+          false,
+          in0_format,
+          in1_format,
+          out_format,
+          llk_dir,
+          row_end_fold,
+          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
+          block_ct,
+          block_rt>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, 1, held_a)));
+}
+
+// reuse_dir 3 at a call: the held operand the init kept; where the CBs and the block are compile-time constants the direction folds
+// and the call runs as 0, 1 or 2
+template <
+    std::uint32_t unpack_ttsync,
+    std::uint32_t stream_z,
+    bool row_mop_on,
+    std::uint32_t kt_key,
+    DataFormat form_out,
+    int in1_order,
+    bool row_end_fold,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt>
+ALWI void matmul_block_llk_runtime(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t in0_tile_index,
+    const std::uint32_t in1_tile_index,
+    const std::uint32_t idst,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    const std::uint32_t d = matmul_api_runtime_dir(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
+    const bool reuse_a = d == 0 ? ct_dim >= rt_dim : d == 1;
+    matmul_block_llk<3, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim, reuse_a);
 #endif
 }
 #endif
@@ -400,7 +690,7 @@ template <
     int in1_order = 0,
     DataFormat in0_format = DataFormat::Invalid,
     DataFormat in1_format = DataFormat::Invalid,
-    std::uint32_t reuse_dir = 0,
+    std::uint32_t reuse_dir = MATMUL_REUSE_DIR_AUTO,
     bool row_end_fold = false,
     std::uint32_t stream_z = 0,
     std::uint32_t block_rt = 0,
@@ -415,20 +705,31 @@ ALWI void matmul_block_init(
     std::uint32_t kt_dim = 1,
     std::uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
-    constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
-    constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
-    constexpr bool row_mop_on =
-        row_mop && row_mop_form == 0 &&
-        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
-    constexpr std::uint32_t unpack_ttsync = llk_matmul_unpack_ttsync<
-        unpack_auto_ttsync,
-        block_rt,
-        block_ct,
-        block_kt,
+    constexpr std::uint32_t dir = matmul_api_reuse_dir<
+        reuse_dir,
         in0_format,
         in1_format,
-        out_format>();
-    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
+        out_format,
+        block_rt,
+        block_ct,
+        kt_per_section,
+        row_mop,
+        unpack_auto_ttsync,
+        stream_z>();
+    // a held operand other than main's runs main's tile form and per-row unpack with the default stream
+    constexpr bool keyed = dir == 0 || dir == 3;
+    constexpr std::uint32_t kt_key =
+        keyed ? llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>() : 0;
+    constexpr char row_mop_form =
+        keyed ? llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
+    constexpr bool row_mop_on =
+        keyed && row_mop && row_mop_form == 0 &&
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() &&
+        !llk_matmul_row_mop_off<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+    constexpr std::uint32_t unpack_ttsync =
+        keyed ? llk_matmul_unpack_ttsync<unpack_auto_ttsync, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
+    constexpr std::uint32_t stream_z_on = keyed ? stream_z : 0;
+    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : (keyed ? out_format : DataFormat::Invalid);
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
 #endif
@@ -436,17 +737,11 @@ ALWI void matmul_block_init(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync, reuse_dir, stream_z>(
-        in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<
-          matmul_elided_fidelity<in0_format, in1_format, out_format>(),
-          MM_THROTTLE,
-          row_mop_on,
-          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
-          in1_order,
-          reuse_dir,
-          row_end_fold,
-          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(), block_ct, block_rt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+    if constexpr (dir == 3) {
+        matmul_block_init_llk_runtime<unpack_ttsync, stream_z_on, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+    } else {
+        matmul_block_init_llk<dir, unpack_ttsync, stream_z_on, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+    }
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #else
@@ -497,7 +792,7 @@ template <
     int in1_order = 0,
     DataFormat in0_format = DataFormat::Invalid,
     DataFormat in1_format = DataFormat::Invalid,
-    std::uint32_t reuse_dir = 0,
+    std::uint32_t reuse_dir = MATMUL_REUSE_DIR_AUTO,
     bool row_end_fold = false,
     std::uint32_t stream_z = 0,
     std::uint32_t block_rt = 0,
@@ -515,20 +810,31 @@ ALWI void matmul_block(
     std::uint32_t kt_dim,
     std::uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
-    constexpr std::uint32_t kt_key = llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>();
-    constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
-    constexpr bool row_mop_on =
-        row_mop && row_mop_form == 0 &&
-        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
-    constexpr std::uint32_t unpack_ttsync = llk_matmul_unpack_ttsync<
-        unpack_auto_ttsync,
-        block_rt,
-        block_ct,
-        block_kt,
+    constexpr std::uint32_t dir = matmul_api_reuse_dir<
+        reuse_dir,
         in0_format,
         in1_format,
-        out_format>();
-    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
+        out_format,
+        block_rt,
+        block_ct,
+        kt_per_section,
+        row_mop,
+        unpack_auto_ttsync,
+        stream_z>();
+    // a held operand other than main's runs main's tile form and per-row unpack with the default stream
+    constexpr bool keyed = dir == 0 || dir == 3;
+    constexpr std::uint32_t kt_key =
+        keyed ? llk_matmul_form_key<kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format, MM_THROTTLE>() : 0;
+    constexpr char row_mop_form =
+        keyed ? llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
+    constexpr bool row_mop_on =
+        keyed && row_mop && row_mop_form == 0 &&
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() &&
+        !llk_matmul_row_mop_off<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+    constexpr std::uint32_t unpack_ttsync =
+        keyed ? llk_matmul_unpack_ttsync<unpack_auto_ttsync, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
+    constexpr std::uint32_t stream_z_on = keyed ? stream_z : 0;
+    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : (keyed ? out_format : DataFormat::Invalid);
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
 #endif
@@ -536,20 +842,11 @@ ALWI void matmul_block(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, reuse_dir, stream_z>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    // Dynamic throttling is only available on Blackhole architecture
-    MATH((matmul_block_math_dynamic_throttle<
-          row_mop_on,
-          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
-          in1_order,
-          false,
-          in0_format,
-          in1_format,
-          out_format,
-          reuse_dir,
-          row_end_fold,
-          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(), block_ct, block_rt>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+    if constexpr (dir == 3) {
+        matmul_block_llk_runtime<unpack_ttsync, stream_z_on, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+    } else {
+        matmul_block_llk<dir, unpack_ttsync, stream_z_on, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+    }
 #else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
@@ -579,7 +876,7 @@ template <
     int in1_order = 0,
     DataFormat in0_format = DataFormat::Invalid,
     DataFormat in1_format = DataFormat::Invalid,
-    std::uint32_t reuse_dir = 0,
+    std::uint32_t reuse_dir = MATMUL_REUSE_DIR_AUTO,
     bool row_end_fold = false,
     std::uint32_t stream_z = 0,
     std::uint32_t block_rt = 0,
@@ -603,14 +900,18 @@ ALWI void matmul_block_k(
     constexpr char row_mop_form = llk_matmul_row_mop_form<row_mop, kt_per_section, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
     constexpr bool row_mop_on =
         row_mop && row_mop_form == 0 &&
-        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
+        !llk_matmul_main_cell<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() &&
+        !llk_matmul_row_mop_off<block_rt, block_ct, block_kt, in0_format, in1_format, out_format>();
     constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : out_format;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
 #endif
 #ifdef ARCH_BLACKHOLE
     static_assert(!unpack_auto_ttsync, "matmul_block_k: Auto TTSync rows are not supported");
-    static_assert(reuse_dir == 0, "matmul_block_k: a forced reuse direction is not supported");
+    // the k loop runs main's direction, so the init with the same template arguments must resolve to it
+    static_assert(
+        matmul_api_reuse_dir<reuse_dir, in0_format, in1_format, out_format, block_rt, block_ct, kt_per_section, row_mop, unpack_auto_ttsync, stream_z>() == 0,
+        "matmul_block_k: init and call with reuse_dir 0");
     LLK_SAN_FUNCTION();
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul_k<stream_z>(

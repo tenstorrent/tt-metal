@@ -192,16 +192,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-// pack_block on output A alternating with pack_block on output B, the two outputs of different format and page size (the gathered bmm kernels pack the output
-// and the partials this way). Every block is the first block of its output (another output was packed in between), so llk_pack_block never takes the W offset
-// here: it takes the per-tile pack, the plain block or the closed block. alt_head_form 0: main's form, every tile packed one by one.
+// pack_block alternating between two outputs of different format and page size, as the gathered bmm kernels pack the
+// output and the partials: every block is a first block, so never W. alt_head_form 0: main's per-tile form.
 #if defined(ARCH_BLACKHOLE)
 static inline std::uint32_t alt_page_bytes(const std::uint32_t fmt)
 {
     return fmt == static_cast<std::uint32_t>(DataFormat::Float32) ? 4096 : (fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ? 1088 : 2048);
 }
 
-// llk_pack_block writes the destination by bytes under full sync (llk_pack_rmw_gate)
+// llk_pack_block writes the destination by bytes under full sync (llk_pack_rmw_tile)
 constexpr bool alt_rmw = dest_sync == DstSync::SyncFull;
 
 template <bool fp32>
@@ -217,18 +216,18 @@ inline void alt_pack_tile(const std::uint32_t fmt, const std::uint32_t tile, con
     }
 }
 
-// The form llk_pack_block takes for the first block of an output after a packer reconfigure: the rows of llk_pack_reconf_form (tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h,
-// mirrored in hardware_free/kernels/test_pack_block_form.py) for the three formats of the pairs. Columns: half sync 16 bit DEST, half 32 bit, full 16 bit, full 32 bit.
+// llk_pack_block's form for the first block after a reconfigure: llk_pack_reconf_form's rows for the pair formats
+// (mirrored in test_pack_block_form.py). Columns: half sync 16 and 32 bit DEST, full sync 16 and 32 bit.
 constexpr char alt_reconf_form[2][3][4][17] = {
     {
-        {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"}, // Bfp8_b
-        {"TBBBBBBBBBBBBBBB", "TBBTBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float32
-        {"TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float16_b
+        {"TTBTBTBTBBBBBBBB", "TTBTBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB"}, // Bfp8_b
+        {"TBBTBBBTBBBBBBBB", "TBBTBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float32
+        {"TBBBBTBTBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float16_b
     },
     {
-        {"TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTTTBBBBBBBBBBBB"}, // Bfp8_b
-        {"TBBBBBBBBBBBBBBB", "TBBTBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB"}, // Float32
-        {"TBBBBBBBBBBBBBBB", "TBTBBBBBBBBBBBBB", "BBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float16_b
+        {"TTBTBTBTBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TTTTBBBBBBBBBBBB"}, // Bfp8_b
+        {"TBBTBBBTBBBBBBBB", "TBBTBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float32
+        {"TBBBBTBTBBBBBBBB", "TBTBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"}, // Float16_b
     },
 };
 
@@ -280,9 +279,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    // the form of each output is decided once, as a kernel with constant tile counts has it folded
-    // read through a volatile so the main arm compiles to the same loop as the head arm and the two differ in data only
-    // a 32 bit output CB next to a 32 bit DEST is the family llk_pack_block takes the forms no sweep read slower for
+    // each output's form is decided once, as with constant counts; read through a volatile so the main arm compiles to
+    // the same loop and the arms differ in data only. A 32 bit CB with a 32 bit DEST takes the src32 family.
     const bool alt_src32 = is_fp32_dest_acc_en && (fmt_a == static_cast<std::uint32_t>(DataFormat::Float32) || fmt_b == static_cast<std::uint32_t>(DataFormat::Float32));
     const volatile std::uint32_t head_v = alt_head_form ? 1 : 0;
     const std::uint32_t form_a          = alt_form(fmt_a, NUM_TILES_IN_BLOCK, 1, alt_src32) & (0u - head_v);

@@ -96,11 +96,42 @@ class THROTTLE_LEVEL(TemplateParameter):
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
 
 
+def matmul_two_row_off(
+    formats,
+    dest_sync,
+    kt_dim: int,
+    throttle: int = 0,
+    tiles=(32, 32, 32, 32),
+    k_loop=False,
+) -> bool:
+    """two_row_off of llk_matmul_forms.h matmul_reuse_dir: the two-row scheme runs on 32x32 tiles (in0 r, c, in1 r, c) without a static
+    throttle, where the k loop does not take the block, and not at half sync with a Float32 output on one k step (pack bound).
+    """
+    return (
+        throttle != 0
+        or tuple(tiles) != (32, 32, 32, 32)
+        or bool(k_loop)
+        or (
+            dest_sync == DestSync.Half
+            and formats.output_format == DataFormat.Float32
+            and kt_dim == 1
+        )
+    )
+
+
 def matmul_reuse_dir_for(
-    formats, math_fidelity, ct_dim: int, rt_dim: int, dest_sync=None
+    formats,
+    math_fidelity,
+    ct_dim: int,
+    rt_dim: int,
+    dest_sync=None,
+    two_row_off=True,
+    throttle: int = 0,
 ) -> int:
-    """The reuse direction llk_matmul_forms.h matmul_reuse_dir picks (0 default, 1 hold in0, 2 hold in1): at LoFi a block of 4 or more
-    tiles with one 32-bit and one 16-bit operand holds the 32-bit one when it is reused (input_format feeds SrcA = in1, input_format_B SrcB = in0).
+    """The reuse direction llk_matmul_forms.h matmul_reuse_dir picks (0 default, 1 hold in0, 2 hold in1, 4 two rows of in0, 6 two columns of in1): at LoFi a block of 4 or more
+    tiles with one 32-bit and one 16-bit, Bfp8_b or Bfp4_b operand holds the 32-bit one when it is reused (input_format feeds SrcA = in1, input_format_B SrcB = in0);
+    a Float32 x Float32 block of 2 or more rows and columns holds two columns of in1 when it is narrower than tall with an even ct_dim, else
+    two rows of in0 with an even rt_dim (see matmul_two_row_off).
     """
     if (
         get_chip_architecture() != ChipArchitecture.BLACKHOLE
@@ -108,15 +139,29 @@ def matmul_reuse_dir_for(
         or ct_dim * rt_dim < 4
     ):
         return 0
+    if (
+        not two_row_off
+        and formats.input_format == formats.input_format_B == DataFormat.Float32
+        and ct_dim >= 2
+        and rt_dim >= 2
+    ):
+        if ct_dim < rt_dim and ct_dim % 2 == 0:
+            return 6
+        if rt_dim % 2 == 0:
+            return 4
     # half sync with a Float32 output is pack bound and measured up to 1.7 percent slower
     if dest_sync == DestSync.Half and formats.output_format == DataFormat.Float32:
         return 0
     wide = (DataFormat.Float32, DataFormat.Tf32)
-    half = (DataFormat.Float16, DataFormat.Float16_b)
+    # llk_matmul_forms.h matmul_format_streams_fast: 16-bit and Bfp8_b / Bfp4_b tiles unpack at twice the rate of 32-bit ones; under a static
+    # throttle the block float pairs keep the default direction
+    fast = (DataFormat.Float16, DataFormat.Float16_b) + (
+        () if throttle else (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+    )
     in0, in1 = formats.input_format_B, formats.input_format
-    if in1 in wide and in0 in half and ct_dim >= rt_dim and rt_dim >= 2:
+    if in1 in wide and in0 in fast and ct_dim >= rt_dim and rt_dim >= 2:
         return 2
-    if in0 in wide and in1 in half and ct_dim < rt_dim and ct_dim >= 2:
+    if in0 in wide and in1 in fast and ct_dim < rt_dim and ct_dim >= 2:
         return 1
     return 0
 
@@ -139,10 +184,18 @@ class MATMUL_REUSE_DIR(TemplateParameter):
 
     @staticmethod
     def for_block(
-        formats, math_fidelity, ct_dim: int, rt_dim: int, dest_sync=None
+        formats,
+        math_fidelity,
+        ct_dim: int,
+        rt_dim: int,
+        dest_sync=None,
+        two_row_off=True,
+        throttle: int = 0,
     ) -> list:
         """[MATMUL_REUSE_DIR(n)] where matmul_reuse_dir is not 0, else []."""
-        d = matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync)
+        d = matmul_reuse_dir_for(
+            formats, math_fidelity, ct_dim, rt_dim, dest_sync, two_row_off, throttle
+        )
         return [MATMUL_REUSE_DIR(d)] if d else []
 
 
@@ -188,20 +241,43 @@ class MATMUL_ROW_MOP(TemplateParameter):
         kt_dim: int,
         sections: int = 1,
         several_blocks: bool = False,
+        two_row_off=True,
+        throttle: int = 0,
     ) -> list:
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form.
         """
-        from helpers.matmul_prod_keys import m2_row_mop, main_form_cell, row_mop_form
+        from helpers.matmul_prod_keys import (
+            m2_row_mop,
+            main_form_cell,
+            row_mop_form,
+            row_mop_off,
+        )
 
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (
             dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi
         ):
             return []
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
+        if matmul_reuse_dir_for(
+            formats, math_fidelity, ct_dim, rt_dim, dest_sync, two_row_off, throttle
+        ):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
+        # matmul_row_mop_off of llk_matmul_forms.h
+        if row_mop_off(
+            math_fidelity,
+            dest_sync == DestSync.Half,
+            fp32_dest,
+            formats.input_format,
+            formats.input_format_B,
+            out_format,
+            rt_dim,
+            ct_dim,
+            kt_dim,
+            throttle,
+        ):
+            return []
         # Float16_b against Bfp8_b at LoFi, full sync and a 32-bit DEST: the row MOP reads slower than the tile MOP on the 7 tile row at K 32 (+188 cycles)
         if (
             math_fidelity == MathFidelity.LoFi
@@ -393,6 +469,7 @@ class MATMUL_STREAM_Z(TemplateParameter):
         in1_partial: bool = False,
         kt_dim: int = 0,
         throttle: int = 0,
+        two_row_off=True,
     ) -> list:
         """[MATMUL_STREAM_Z()] at LoFi where in1 streams (ct_dim >= rt_dim, 4 or more output tiles), is a dense 4-face format and the narrow stream is off, else []."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
@@ -402,7 +479,9 @@ class MATMUL_STREAM_Z(TemplateParameter):
         # llk_matmul_forms.h matmul_stream_z streams only two equal operand formats
         if formats.input_format != formats.input_format_B:
             return []
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
+        if matmul_reuse_dir_for(
+            formats, math_fidelity, ct_dim, rt_dim, dest_sync, two_row_off, throttle
+        ):
             return []
         # measured: only LoFi rows of 4 or more output tiles never lose; the fidelities above it, 1x1 and 1x2 are pack or hand-off bound
         if math_fidelity != MathFidelity.LoFi or ct_dim * rt_dim < 4:
@@ -763,6 +842,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         in0_r_dim: int = 32,
         unfuse_cells: bool = False,
         several_blocks: bool = False,
+        two_row_off=True,
     ) -> list:
         keys = MATMUL_FORM_KEYS._for_block(
             formats,
@@ -778,6 +858,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             in0_r_dim,
             unfuse_cells,
             several_blocks,
+            two_row_off,
         )
         # a Bfp8_b pack below HiFi3 (the unfused post cells) reads slower without the half-sync flip's base write (the bound phase moves): the kernels keep it
         from helpers.matmul_prod_keys import keep_flip_write
@@ -814,6 +895,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         in0_r_dim: int = 32,
         unfuse_cells: bool = False,
         several_blocks: bool = False,
+        two_row_off=True,
     ) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
@@ -871,7 +953,9 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # a block that changes the reuse direction runs main's tile form and per-row unpack: the unknown-k key
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
+        if matmul_reuse_dir_for(
+            formats, math_fidelity, ct_dim, rt_dim, dest_sync, two_row_off, throttle
+        ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # 32-bit input at LoFi and full sync with four k steps: the 1x2 block with a 32-bit DEST and 16-bit or bfp8 output, and the 2x1 block
         # with a Float16_b output and a 16-bit DEST, read slower with the row forms: the unknown-k key, which is the tile form
@@ -1176,6 +1260,8 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
         rt_dim: int,
         kt_dim: int,
         dest_sync=None,
+        two_row_off=True,
+        throttle: int = 0,
     ) -> list:
         """[MATMUL_UNPACK_TTSYNC()] for the blocks of up to 2x2 tiles that the K loop entry does not take and where the GPR form measured 0 slower than the context poll."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
@@ -1201,7 +1287,9 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
             formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim
         ):
             return []
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
+        if matmul_reuse_dir_for(
+            formats, math_fidelity, ct_dim, rt_dim, dest_sync, two_row_off, throttle
+        ):
             return []
         if not matmul_unpack_ttsync_cell(
             math_fidelity,
@@ -2158,7 +2246,7 @@ class PACK_BLOCK(TemplateParameter):
     """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
 
     pack_block: bool = (
-        False  # True and 2: the block calls llk_pack_block makes (W offset); 3 and 4 are library forms on purpose: 3 the W offset forms behind the fast init, 4 the fast forms of the matmul harness, 5 the plain and closed blocks that program the output (the first block of an output, LLK_PACK_W_OFFSET_OFF), 6 the calls of True with the W base programmed again before the W offset passes its 256 KB reach
+        False  # True and 2: the block calls llk_pack_block makes (W offset); 3 and 4 are library forms on purpose: 3 the W offset forms behind the fast init, 4 the fast forms of the matmul harness, 5 the plain and closed blocks that program the output (the first block of an output), 6 the calls of True with the W base programmed again before the W offset passes its 256 KB reach
     )
 
     def convert_to_cpp(self) -> str:
@@ -2171,6 +2259,123 @@ class PACK_BLOCK(TemplateParameter):
             f"constexpr bool pack_block_plain = {str(en and self.pack_block == 5).lower()};\n"
             f"constexpr bool pack_block_far = {str(en and self.pack_block == 6).lower()};"
         )
+
+
+@dataclass
+class PACK_API(TemplateParameter):
+    """The compute API's pack_block through pack_api_shim.h (Blackhole): arm "0" the form tables, "T", "B" or "W" one form, "M" main's per-tile loop; tiles per block and the matmul K as pack_block<tiles, acc, kt>; the output CB, the kernel's matmul and pack-thread SFPU API traits, and a compile-time DEST start (dst) as a constant tile loop passes."""
+
+    api_arm: str = "0"
+    api_tiles: int = 1
+    api_kt: int = 0
+    api_out: int = 16
+    api_matmul: bool = False
+    api_sfpu: bool = False
+    api_dst: int = -1
+    api_partial_face: bool = False
+
+    def convert_to_cpp(self) -> str:
+        arm = "0" if self.api_arm == "0" else f"'{self.api_arm}'"
+        lines = [
+            f"constexpr char pack_api_arm = {arm};",
+            f"constexpr std::uint32_t pack_api_tiles = {self.api_tiles};",
+            f"constexpr std::uint32_t pack_api_kt = {self.api_kt};",
+            f"#define PACK_API_SHIM_OUT {self.api_out}",
+        ]
+        if self.api_matmul:
+            lines.append("#define PACK_API_SHIM_MATMUL")
+        if self.api_sfpu:
+            lines.append("#define PACK_API_SHIM_SFPU")
+        if self.api_dst >= 0:
+            lines.append(f"#define PACK_API_DST {self.api_dst}")
+        if self.api_partial_face:
+            lines.append("#define PACK_API_SHIM_PARTIAL_FACE 1")
+        return "\n".join(lines)
+
+
+@dataclass
+class PACK_API_GEOMETRY(TemplateParameter):
+    """pack_api_shim.h's output tile geometry for a test whose geometry is a run-time parameter: faces, rows per face, partial faces."""
+
+    num_faces: int = 4
+    face_r_dim: int = 16
+    partial_face: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"#define PACK_API_SHIM_NUM_FACES {self.num_faces}",
+            f"#define PACK_API_SHIM_FACE_R_DIM {self.face_r_dim}",
+        ]
+        if self.partial_face:
+            lines.append("#define PACK_API_SHIM_PARTIAL_FACE 1")
+        return "\n".join(lines)
+
+
+class PACK_API_SWEEP(TemplateParameter):
+    """A pack sweep arm through pack_api_shim.h and pack_api_sweep.h: PACK_API's arm, tiles, K, traits and compile-time DEST start, the
+    block loop's state (0 steady, 1 a pack init before every block, 2 outputs A and B alternating with a reconfigure), B's form (arm_b),
+    output 17 of format_b, A's CB depth in blocks (cbd, 0 every block of a run), the output tile (faces, face_r; a tile under 32 rows has
+    partial faces, as the JIT's Tile), and MATH_FIDELITY where the test has no MATH_FIDELITY of its own. Not a dataclass: it adds no
+    CSV column, the sweeps keep their arm in dst_index."""
+
+    def __init__(
+        self,
+        arm,
+        tiles,
+        kt=0,
+        matmul=False,
+        sfpu=False,
+        dst=0,
+        state=0,
+        arm_b="T",
+        cbd=0,
+        format_b=DataFormat.Float16_b,
+        faces=4,
+        face_r=16,
+        fidelity=None,
+    ):
+        tile_r = face_r * (2 if faces > 2 else 1)
+        self.api = PACK_API(arm, tiles, kt, 16, matmul, sfpu, dst, tile_r < 32)
+        (
+            self.state,
+            self.arm_b,
+            self.cbd,
+            self.format_b,
+            self.faces,
+            self.face_r,
+            self.fidelity,
+        ) = (state, arm_b, cbd, format_b, faces, face_r, fidelity)
+        self.pack_src_b = None  # B's packer input, set by pack_sweep.bind_pack_src_b
+
+    def convert_to_cpp(self) -> str:
+        arm_b = "0" if self.arm_b == "0" else f"'{self.arm_b}'"
+        lines = [
+            self.api.convert_to_cpp(),
+            f"constexpr std::uint32_t pack_sweep_state = {self.state};",
+            f"constexpr char pack_sweep_arm_b = {arm_b};",
+            f"constexpr std::uint32_t pack_sweep_cbd = {self.cbd};",
+            f"#define PACK_API_SHIM_NUM_FACES {self.faces}",
+            f"#define PACK_API_SHIM_FACE_R_DIM {self.face_r}",
+        ]
+        if self.state == 2:
+            # output B only where it is packed: the other arms keep production's one-output arrays
+            lines += [
+                "#define PACK_API_SHIM_OUT2 17",
+                f"#define PACK_API_SHIM_OUT2_FORMAT ckernel::to_underlying(DataFormat::{self.format_b.name})",
+            ]
+            if self.pack_src_b is not None:
+                lines.append(
+                    f"#define PACK_API_SHIM_OUT2_SRC ckernel::to_underlying(DataFormat::{self.pack_src_b.name})"
+                )
+        if self.fidelity is not None:
+            lines.append(
+                f"constexpr ckernel::MathFidelity MATH_FIDELITY = ckernel::MathFidelity::{self.fidelity};"
+            )
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        # The variant hash reads the templates' repr: the dataclass repr of TemplateParameter shows no field of this class.
+        return f"PACK_API_SWEEP({self.convert_to_cpp()!r})"
 
 
 class PACK_RMW_DEST(TemplateParameter):
@@ -2221,7 +2426,10 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
         # LLK_MATMUL_PACK_PROD=1: every block goes through the block pack without the K, as main's ttnn matmul kernels call pack_block
         if os.environ.get("LLK_MATMUL_PACK_PROD") == "1":
             out += "\n#define MATMUL_PACK_PROD 1"
-        if os.environ.get("LLK_MATMUL_PACK_NOK") == "1" or os.environ.get("LLK_MATMUL_PACK_PROD") == "1":
+        if (
+            os.environ.get("LLK_MATMUL_PACK_NOK") == "1"
+            or os.environ.get("LLK_MATMUL_PACK_PROD") == "1"
+        ):
             out += "\n#define MATMUL_PACK_NOK 1"
         # LLK_MATMUL_PACK_CONST=1: the pack thread takes the tile count as a compile-time constant, as ttnn's matmul kernels call pack_block
         if os.environ.get("LLK_MATMUL_PACK_CONST") == "1":

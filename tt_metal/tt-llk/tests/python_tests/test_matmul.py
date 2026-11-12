@@ -51,6 +51,7 @@ from helpers.test_variant_parameters import (
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    matmul_two_row_off,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -168,6 +169,26 @@ def test_matmul(
         tilized_A = src_A
         tilized_B = src_B
 
+    # the two-row scheme runs on the plain block of matmul_test.cpp only
+    two_row_off = (
+        row_mop
+        or unpack_ttsync
+        or transpose
+        or source != "sources/matmul_test.cpp"
+        or matmul_two_row_off(
+            formats,
+            dest_sync,
+            matmul_dims.kt_dim,
+            k_loop=MATMUL_K_LOOP.for_block(
+                formats,
+                dest_acc,
+                math_fidelity,
+                matmul_dims.ct_dim,
+                matmul_dims.rt_dim,
+                matmul_dims.kt_dim,
+            ),
+        )
+    )
     configuration = TestConfig(
         source,
         formats,
@@ -193,6 +214,7 @@ def test_matmul(
                     matmul_dims.rt_dim,
                     matmul_dims.kt_dim,
                     dest_sync,
+                    two_row_off,
                 )
             ),
             *MATMUL_STREAM_NARROW.for_block(
@@ -209,6 +231,7 @@ def test_matmul(
                 matmul_dims.ct_dim,
                 matmul_dims.rt_dim,
                 dest_sync,
+                two_row_off,
             ),
             *MATMUL_STREAM_Z.for_block(
                 formats,
@@ -218,6 +241,7 @@ def test_matmul(
                 matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,
                 kt_dim=matmul_dims.kt_dim,
+                two_row_off=two_row_off,
             ),
             *MATMUL_K_LOOP.for_block(
                 formats,
@@ -237,6 +261,7 @@ def test_matmul(
                 dest_sync=dest_sync,
                 dest_acc=dest_acc,
                 unfuse_one_tile=True,
+                two_row_off=two_row_off,
             ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(

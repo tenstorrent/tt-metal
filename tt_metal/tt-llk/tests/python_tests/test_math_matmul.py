@@ -64,6 +64,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    matmul_two_row_off,
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
@@ -327,6 +328,31 @@ def test_math_matmul(
             num_tiles_in_block,
         )
     num_blocks = 1 if dest_straddles_half else 4
+    k_loop = MATMUL_K_LOOP.for_block(
+        formats,
+        matmul_config.dest_acc,
+        math_fidelity,
+        matmul_config.tile_dimensions.ct_dim,
+        matmul_config.tile_dimensions.rt_dim,
+        matmul_config.tile_dimensions.kt_dim,
+        matmul_config.tile_dimensions.in0_tile_r_dim,
+        matmul_config.tile_dimensions.in0_tile_c_dim,
+        matmul_config.tile_dimensions.in1_tile_r_dim,
+        matmul_config.tile_dimensions.in1_tile_c_dim,
+    )
+    two_row_off = matmul_two_row_off(
+        formats,
+        matmul_config.dest_sync,
+        matmul_config.tile_dimensions.kt_dim,
+        throttle,
+        (
+            matmul_config.tile_dimensions.in0_tile_r_dim,
+            matmul_config.tile_dimensions.in0_tile_c_dim,
+            matmul_config.tile_dimensions.in1_tile_r_dim,
+            matmul_config.tile_dimensions.in1_tile_c_dim,
+        ),
+        k_loop,
+    )
 
     configuration = TestConfig(
         "sources/math_matmul_test.cpp",
@@ -364,6 +390,7 @@ def test_math_matmul(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
                 matmul_config.dest_sync,
+                two_row_off,
             ),
             *MATMUL_STREAM_Z.for_block(
                 formats,
@@ -377,19 +404,9 @@ def test_math_matmul(
                 in1_partial=matmul_config.face_layout_config.partial_face_in1,
                 kt_dim=matmul_config.tile_dimensions.kt_dim,
                 throttle=throttle,
+                two_row_off=two_row_off,
             ),
-            *MATMUL_K_LOOP.for_block(
-                formats,
-                matmul_config.dest_acc,
-                math_fidelity,
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                matmul_config.tile_dimensions.kt_dim,
-                matmul_config.tile_dimensions.in0_tile_r_dim,
-                matmul_config.tile_dimensions.in0_tile_c_dim,
-                matmul_config.tile_dimensions.in1_tile_r_dim,
-                matmul_config.tile_dimensions.in1_tile_c_dim,
-            ),
+            *k_loop,
             *MATMUL_ROW_END_FOLD.for_block(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
@@ -402,6 +419,7 @@ def test_math_matmul(
                 math_fidelity=math_fidelity,
                 dest_sync=matmul_config.dest_sync,
                 dest_acc=matmul_config.dest_acc,
+                two_row_off=two_row_off,
             ),
             *MATMUL_IN1_ALT.for_tiles(
                 formats,

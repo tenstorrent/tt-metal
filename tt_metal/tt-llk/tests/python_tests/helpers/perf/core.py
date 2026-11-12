@@ -945,6 +945,7 @@ class PerfConfig(TestConfig):
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_vector_ext: bool = False,
+        kernel_flags: list = None,
     ):
 
         # the report keeps the columns of the templates the module passed, so a main row of the table does not change the CSV schema
@@ -985,6 +986,7 @@ class PerfConfig(TestConfig):
             skip_build_header,
             compile_time_formats,
             requires_vector_ext=requires_vector_ext,
+            kernel_flags=kernel_flags,
         )
 
     @staticmethod

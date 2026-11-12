@@ -2,18 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional chain of pack programs in one kernel (Blackhole): each step packs its own four tiles of the input to its own four result tiles, then the next
-// step runs with whatever pack state the previous one left, the way a fused kernel does. CHAIN_STEPS (pack_state_chain.py) lists the steps:
-//   0 PT   per-tile _llk_pack_ (the default write: the byte-wise destination write under SyncFull)
-//   1 PB1  _llk_pack_block_ (the plain block of llk_pack_block, programs the output)
-//   2 PBW  W offset block: the output programmed as llk_pack_w_take does, then _llk_pack_block_w_
-//   3 PBC  _llk_pack_block_closed_ (block float and padded pages)
-//   4 PBCW closed block with the W offset: programmed as llk_pack_w_take does, then _llk_pack_block_closed_w_mop_
-//   5 ROWS pack_rows of ROWS_R rows per tile, then the default pack init (pack_rows has no program restore, as on main)
-//   6 UNT  pack_untilize of the four tiles as one row (init, block, uninit, the default pack init: the sequence pack_untilize_init/uninit make)
-//   7 FU   fast untilize of the four tiles as one row; the pack uninit is skipped with FU_PACK_UNINIT off, the block packs of llk_pack_block close it
-//   8 PTC  per-tile pack after the close (the per-tile fallback of llk_pack_block)
-// The block steps run _llk_pack_close_fast_untilize_ where llk_pack_block runs it: before it programs the output, once per output, not on the W offset continuation.
+// Pack programs chained in one kernel (Blackhole), each step on its own four tiles with the state the last one left,
+// as in a fused kernel; the steps (CHAIN_STEPS) are named in test_pack_state_chain.py.
 
 #include <cstdint>
 

@@ -339,6 +339,94 @@ def forced_form(
     return ""
 
 
+def lofi_row8_row_mop_off(
+    fidelity, half_sync, fp32_dest, in1, out, rt, ct, kb, throttle=0
+) -> bool:
+    """llk_matmul_forms.h matmul_lofi_row8_row_mop_off."""
+    return (
+        fidelity.name == "LoFi"
+        and half_sync
+        and not fp32_dest
+        and throttle == 0
+        and kb == 1
+        and rt == 1
+        and ct == 8
+        and in1 in (DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+        and out in (DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Float16_b)
+    )
+
+
+# matmul_row_mop_off_cells of llk_matmul_forms.h: (fidelity, half sync, 32-bit DEST, in1, in0, output, rt, ct)
+_ROW_MOP_OFF_CELLS = {
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Bfp2_b,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        4,
+        1,
+    ),
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp8_b,
+        DataFormat.Float32,
+        1,
+        2,
+    ),
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Bfp4_b,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+        1,
+        4,
+    ),
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Float16,
+        DataFormat.Bfp8,
+        DataFormat.Float32,
+        1,
+        4,
+    ),
+    (
+        "HiFi2",
+        True,
+        True,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        1,
+        4,
+    ),
+}
+
+
+def row_mop_off(
+    fidelity, half_sync, fp32_dest, in1, in0, out, rt, ct, kb, throttle=0
+) -> bool:
+    """llk_matmul_forms.h matmul_row_mop_off."""
+    if lofi_row8_row_mop_off(
+        fidelity, half_sync, fp32_dest, in1, out, rt, ct, kb, throttle
+    ):
+        return True
+    return (
+        throttle == 0
+        and kb == 1
+        and (fidelity.name, bool(half_sync), bool(fp32_dest), in1, in0, out, rt, ct)
+        in _ROW_MOP_OFF_CELLS
+    )
+
+
 def row_mop_form(
     fidelity,
     kb,
@@ -890,6 +978,7 @@ _GRID_MAIN_ROWS = (
     ("HiFi2", True, False, "B4", "F16b", "F16b", 1, 1, 1, 3, False, 1),
     ("HiFi2", True, False, "B4", "F32", "B8", 3, 1, 2, 0, False, 1),
     ("HiFi2", True, True, "B4", "F32", "F16", 1, 2, 1, 0, False, 1),
+    ("HiFi2", True, False, "B8x", "B8x", "F32", 1, 1, 1, 0, False, 1),
     ("HiFi2", True, False, "B8", "B4", "B4", 2, 1, 1, 0, True, 2),
     ("HiFi2", True, False, "B8", "B8", "B8", 4, 2, 4, 0, False, 1),
     ("HiFi2", True, True, "B8", "F16b", "F32", 3, 1, 1, 1, False, 1),
@@ -1124,6 +1213,7 @@ _GRID_MAIN_ROWS = (
     ("LoFi", True, False, "B4", "F32", "F32", 8, 1, 8, 0, False, 1),
     ("LoFi", True, False, "B4", "F32", "F32", 8, 1, 32, 0, False, 1),
     ("LoFi", True, False, "B8x", "B8x", "B8x", 2, 1, 8, 0, False, 1),
+    ("LoFi", True, False, "B8x", "B8x", "F32", 6, 1, 3, 0, False, 1),
     ("LoFi", True, True, "B8", "B2", "F16b", 2, 1, 1, 0, False, 1),
     ("LoFi", True, False, "B8", "B2", "F32", 6, 1, 3, 0, False, 1),
     ("LoFi", True, True, "B8", "B4", "F16b", 1, 2, 1, 0, True, 4),

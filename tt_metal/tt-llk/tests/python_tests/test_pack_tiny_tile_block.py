@@ -17,6 +17,7 @@ from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     L1Accumulation,
     format_dict,
     format_tile_sizes,
@@ -28,6 +29,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
+    DEST_SYNC,
     IN_TILE_DIMS,
     L1_ACC,
     LOOP_FACTOR,
@@ -56,6 +58,7 @@ def _make_config(
     is_perf=False,
     run_types=None,
     block_tiles=None,
+    dest_sync=DestSync.Half,
     dest_index=0,
 ):
     """Build TestConfig for a given tile shape and tile count (block_tiles: tiles per block, which must divide num_tiles; dest_index: first DEST tile)."""
@@ -103,7 +106,7 @@ def _make_config(
     test_config_kwargs = {
         "test_name": "sources/pack_tiny_tile_block_test.cpp",
         "formats": formats,
-        "templates": [TINY_PACK_MODE(pack_mode)],
+        "templates": [TINY_PACK_MODE(pack_mode), DEST_SYNC(dest_sync)],
         "runtimes": [
             DEST_INDEX(dest_index),
             TILE_COUNT(tile_cnt_A),
@@ -174,6 +177,32 @@ def test_pack_tiny_tile_block(
 ):
     configuration, golden_tensor, _ = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
+    )
+
+    res_from_L1 = configuration.run().result
+
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No],
+    tile_dims=[(8, 32), (16, 32)],
+    num_tiles=[3],
+    pack_mode=[1, 2],
+)
+def test_pack_tiny_tile_block_full(
+    formats,
+    dest_acc,
+    tile_dims,
+    num_tiles,
+    pack_mode,
+):
+    """Full sync from a 16 bit DEST: the closed MOP run with the byte-wise destination write, as llk_pack_block's block form there, and per tile."""
+    configuration, golden_tensor, _ = _make_config(
+        tile_dims, num_tiles, formats, dest_acc, pack_mode, dest_sync=DestSync.Full
     )
 
     res_from_L1 = configuration.run().result

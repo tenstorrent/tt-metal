@@ -55,7 +55,8 @@ inline void llk_unpack_AB_matmul_impl(
     const bool partial_face_b,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
-    const std::uint32_t kt_dim) {
+    const std::uint32_t kt_dim,
+    const std::uint32_t held_a = matmul_held_a_init) {
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_<
         0,
@@ -77,7 +78,8 @@ inline void llk_unpack_AB_matmul_impl(
         partial_face_b,
         ct_dim,
         rt_dim,
-        kt_dim);
+        kt_dim,
+        held_a);
     WAYPOINT("UPMD");
 }
 
@@ -152,16 +154,17 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
-    static_assert(reuse_dir == 0 || !may_stream_narrow, "a forced reuse direction does not stream 8-bit operands");
-    if (may_stream_narrow && _llk_unpack_AB_matmul_stream_narrow_(
-                                 ct_dim,
-                                 rt_dim,
-                                 unpack_src_format[operandA_id],
-                                 unpack_src_format[operandB_id],
-                                 dest_max_tiles,
-                                 unpB_face_r_dim,
-                                 MATH_FIDELITY == ckernel::MathFidelity::HiFi4,
-                                 MATH_FIDELITY == ckernel::MathFidelity::LoFi)) {
+    // a forced reuse direction streams on the default body; reuse_dir 3 streams narrow when the init kept ct_dim >= rt_dim
+    if ((reuse_dir == 0 || (reuse_dir == 3 && matmul_runtime_reuse_a == (ct_dim >= rt_dim))) && may_stream_narrow &&
+        _llk_unpack_AB_matmul_stream_narrow_(
+            ct_dim,
+            rt_dim,
+            unpack_src_format[operandA_id],
+            unpack_src_format[operandB_id],
+            dest_max_tiles,
+            unpB_face_r_dim,
+            MATH_FIDELITY == ckernel::MathFidelity::HiFi4,
+            MATH_FIDELITY == ckernel::MathFidelity::LoFi)) {
         llk_unpack_AB_matmul_init_impl<auto_ttsync, true>(
             transpose,
             ct_dim,
@@ -196,7 +199,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t tile_index_b,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t kt_dim = 1,
+    const std::uint32_t held_a = matmul_held_a_init) {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
@@ -251,7 +255,8 @@ inline void llk_unpack_AB_matmul(
         partial_face_b,
         ct_dim,
         rt_dim,
-        kt_dim);
+        kt_dim,
+        held_a);
 }
 
 // llk_unpack_AB_matmul for num_k k steps in one call: in0 advances one tile and in1 in1_k_stride tiles per step.
