@@ -20,6 +20,8 @@ proves they fit. The tower's output is in DRAM.
 """
 from __future__ import annotations
 
+import re
+import traceback
 from collections import OrderedDict
 from typing import Dict, List, Mapping, Optional, Tuple
 
@@ -48,6 +50,9 @@ from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 
 # How many recent image grids keep their RoPE tables in DRAM, at least 1. Not tuned, as the tables are small.
 ROPE_CACHE_GRIDS = 16
+# tt-metal's error for an op whose circular buffers would overlap a tensor in L1 (ProgramImpl's check of the circular
+# buffer region). It reaches Python as a RuntimeError with this line in its message.
+L1_CLASH = re.compile(r"Statically allocated circular buffers in program \d+ clash with L1 buffers[^\n]*")
 
 # Weight names: transformers 5.12's MiniMaxM3VLModel names, as loader.load_vision_state_dict gives them.
 _TOWER = "vision_tower."
@@ -311,9 +316,26 @@ class M3VLVisionModel(LightweightModule):
     def _tower_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
         """Run forward_tower's device ops on pixel values from push_pixel_values, leaving x_tt allocated.
 
-        The blocks get placement(x_tt). The last block writes the tower's output to DRAM.
+        The blocks get placement(x_tt). The last block writes the tower's output to DRAM. If an op's circular buffers
+        clash with the blocks' L1 tensors, the image runs again with DRAM_PLACEMENT, once.
         """
         placement = self.placement(x_tt)
+        if placement is DRAM_PLACEMENT:
+            return self._run_tower(x_tt, image_grid_thw, placement)
+        try:
+            return self._run_tower(x_tt, image_grid_thw, placement)
+        except RuntimeError as error:
+            clash = L1_CLASH.search(str(error))
+            if clash is None:
+                raise
+            # The failed run's frames hold the tensors it made: clearing them frees those tensors before the rerun.
+            traceback.clear_frames(error.__traceback__)
+            reason = f"placement {placement.name} at {x_tt.padded_shape[-2]} rows failed: {clash.group(0)}"
+        logger.warning(f"the vision blocks keep their activations in DRAM for this image: {reason}")
+        return self._run_tower(x_tt, image_grid_thw, DRAM_PLACEMENT)
+
+    def _run_tower(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor, placement: BlockPlacement) -> ttnn.Tensor:
+        """Run patch_embed, pre_layrnorm and the blocks with placement; the last block writes to DRAM."""
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt, memory_config=placement.block_input)
         cos_tt, sin_tt = self._rope_to_l1(*self._cached_rope(image_grid_thw))

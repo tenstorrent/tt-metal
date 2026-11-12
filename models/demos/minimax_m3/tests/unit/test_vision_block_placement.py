@@ -235,6 +235,12 @@ LEAST_MARGIN = {
 # activations in L1, those where some op's circular buffers would overlap a tensor, and the least margin, (bytes, op,
 # patches).
 UNCAPPED_12X10 = dict(l1_patches=((2308, 3200),), overlap_patches=((3076, 3200),), least=(-39424, "fc1", 3172))
+# The message of the RuntimeError that tt-metal raises when an op's circular buffers would overlap an L1 tensor.
+CLASH_MESSAGE = (
+    "TT_THROW @ tt_metal/impl/program/program.cpp:2618: tt::exception\ninfo:\nStatically allocated circular buffers in"
+    " program 7 clash with L1 buffers on core range [(x=0,y=0) - (x=11,y=9)]. L1 buffer allocated at 1220608 and"
+    " static circular buffer region ends at 1236992\nbacktrace:\n --- tt::tt_metal::detail::ProgramImpl::validate"
+)
 
 
 def _ranges(values, step=4):
@@ -318,11 +324,16 @@ def _layernorm_keeps_plan(margin):
 
 
 class _Tensor:
-    """A device tensor stand-in: its logical and padded shapes, memory config and device, and an id."""
+    """A device tensor stand-in: its logical and padded shapes, memory config and device, and an id.
+
+    With the recorder's track_values, value numbers what the tensor holds. The same op on the same values with the same
+    arguments gives the same value, wherever the tensors lie.
+    """
 
     def __init__(self, tensor_id, shape, padded_shape, memory_config, device):
         self.id, self.shape, self.padded_shape = tensor_id, tuple(shape), tuple(padded_shape)
         self._memory_config, self._device = memory_config, device
+        self.value = None
 
     def memory_config(self):
         return self._memory_config
@@ -344,6 +355,10 @@ class _Recorder:
         self.events = []  # ("alloc", id, bytes per bank) | ("free", id) | ("call", op, args, kwargs)
         self._ids = itertools.count()
         self._live = set()
+        # With track_values, each tensor gets its value and made a weak reference to it.
+        self.track_values, self.made, self._values = False, [], {}
+        # The error to raise at a call, by the number of calls recorded before it, each raised once.
+        self.raise_at = {}
         monkeypatch.setattr(ttnn, "from_torch", self._from_torch)
         monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
         monkeypatch.setattr(ttnn, "deallocate", lambda t: self._release(t.id))
@@ -373,14 +388,23 @@ class _Recorder:
             self.events.append(("alloc", t.id, size))
             self._live.add(t.id)
             weakref.finalize(t, self._release, t.id)
+        if self.track_values:
+            self.made.append(weakref.ref(t))
         return t
 
+    def _value(self, key):
+        return self._values.setdefault(key, len(self._values)) if self.track_values else None
+
     def _dram(self, shape, device):
-        return self._tensor(shape, ttnn.DRAM_MEMORY_CONFIG, device)
+        t = self._tensor(shape, ttnn.DRAM_MEMORY_CONFIG, device)
+        t.value = self._value(("upload", t.id))
+        return t
 
     def _from_torch(self, t, **kwargs):
         # Default: DRAM (ttnn.from_torch).
-        return self._tensor(t.shape, kwargs.get("memory_config", ttnn.DRAM_MEMORY_CONFIG), kwargs["device"])
+        out = self._tensor(t.shape, kwargs.get("memory_config", ttnn.DRAM_MEMORY_CONFIG), kwargs["device"])
+        out.value = self._value(("upload", out.id))
+        return out
 
     def _release(self, tensor_id):
         if tensor_id in self._live:
@@ -388,6 +412,11 @@ class _Recorder:
             self.events.append(("free", tensor_id))
 
     def _call(self, op, args, kwargs, outputs):
+        if self.raise_at:
+            error = self.raise_at.pop(sum(event[0] == "call" for event in self.events), None)
+            if error is not None:
+                raise error  # as a device op does, after its outputs are allocated
+
         def ref(v):
             if not isinstance(v, _Tensor):
                 return v
@@ -399,6 +428,15 @@ class _Recorder:
                 memory_config=v.memory_config(),
             )
 
+        def held(v):
+            return v.value if isinstance(v, _Tensor) else repr(v)
+
+        if self.track_values:
+            # What each output holds: the op, its inputs' values and its arguments, not where any of them lie.
+            kept = tuple((k, held(v)) for k, v in sorted(kwargs.items()) if k != "memory_config")
+            for i, out in enumerate(outputs if isinstance(outputs, tuple) else (outputs,)):
+                same = op == "to_memory_config"  # a copy
+                out.value = args[0].value if same else self._value((op, tuple(map(held, args)), kept, i))
         self.events.append(("call", op, tuple(map(ref, args)), {k: ref(v) for k, v in kwargs.items()}))
         return outputs
 
@@ -872,6 +910,85 @@ def test_vision_block_placement_calls(monkeypatch, patches):
                 assert repr(kwargs["program_config"]) == repr(want), case
         if activations == "dram":
             assert sum(event[0] == "alloc" for event in events) == 2, events
+
+
+def _clash_model(monkeypatch):
+    """Build the 4-block model on 12x10 for the clash tests, with values tracked and an empty L1.
+
+    Returns the recorder, the model, a 48 x 48 image's upload and grid, and the value of its DRAM forward. That forward
+    also stages the grid's RoPE tables.
+    """
+    recorder = _Recorder(monkeypatch)
+    recorder.track_values = True
+    model = _model(recorder, (12, 10))
+    _empty_l1(monkeypatch, (12, 10))
+    x_tt, grid_thw = recorder._dram((1, 1, 2304, CONFIG.patch_dim), model.device), torch.tensor([[1, 48, 48]])
+    model.activations = "dram"
+    want = model.forward_device(x_tt, grid_thw).value
+    return recorder, model, x_tt, grid_thw, want
+
+
+@pytest.mark.parametrize("activations", ["l1", "l1_interleaved"])
+def test_vision_l1_clash_falls_back_to_dram(monkeypatch, activations):
+    """A circular-buffer clash at any op of an L1 forward makes the forward run the image again in DRAM.
+
+    The clash is raised once, at each op in turn. The output must hold what the DRAM forward's holds, and a warning must
+    name the clash. The failed run's tensors must be freed before the rerun, and only the output may outlive the call.
+    """
+    recorder, model, x_tt, grid_thw, want = _clash_model(monkeypatch)
+    model.activations = activations
+    placement = model.placement(x_tt)
+    assert placement is not DRAM_PLACEMENT
+    warnings = []
+    sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        for failing in range(len(TOWER_ROLES)):
+            case = (activations, TOWER_ROLES[failing])
+            recorder.events.clear()
+            made = len(recorder.made)
+            recorder.raise_at = {failing: RuntimeError(CLASH_MESSAGE)}
+            out = model.forward_device(x_tt, grid_thw)
+            assert out.value == want and not _in_l1(out.memory_config()), case
+            ops = [event[1] for event in recorder.events if event[0] == "call"]
+            assert ops == [OPS[role] for role, _ in TOWER_ROLES[:failing] + TOWER_ROLES], case
+            rerun = [i for i, event in enumerate(recorder.events) if event[0] == "call"][failing]
+            failed_run = recorder.events[:rerun]
+            allocated = {event[1] for event in failed_run if event[0] == "alloc"}
+            assert allocated <= {event[1] for event in failed_run if event[0] == "free"}, case
+            rerun_l1 = sum(event[0] == "alloc" for event in recorder.events[rerun:])
+            assert rerun_l1 == 2, case  # the rerun keeps its activations in DRAM: only the RoPE copies are in L1
+            assert not recorder._live, case
+            assert [ref() for ref in recorder.made[made:] if ref() is not None] == [out], case
+            assert len(warnings) == failing + 1, case
+            assert f"placement {placement.name} at 2304 rows failed: Statically allocated" in warnings[-1], case
+            assert "clash with L1 buffers on core range" in warnings[-1], case
+    finally:
+        logger.remove(sink)
+
+
+def test_vision_l1_clash_other_errors_raise(monkeypatch, expect_error):
+    """Only a clash in an L1 forward makes the image run again, and only once.
+
+    Another error, a clash in a DRAM forward and a second clash in the rerun all reach the caller.
+    """
+    recorder, model, x_tt, grid_thw, _ = _clash_model(monkeypatch)
+    fc1 = TOWER_ROLES.index(("fc1", 1))
+    cases = (
+        ("l1", {fc1: RuntimeError("TT_THROW @ program.cpp: tt::exception\ninfo:\nanother failure")}, "another failure"),
+        ("l1", {fc1: ValueError(CLASH_MESSAGE)}, "clash with L1 buffers"),
+        ("dram", {fc1: RuntimeError(CLASH_MESSAGE)}, "clash with L1 buffers"),
+        ("l1", {fc1: RuntimeError(CLASH_MESSAGE), 2 * fc1: RuntimeError(CLASH_MESSAGE)}, "clash with L1 buffers"),
+    )
+    for activations, raise_at, message in cases:
+        model.activations = activations
+        recorder.events.clear()
+        recorder.raise_at = dict(raise_at)
+        error = type(next(iter(raise_at.values())))
+        with expect_error(error, message):
+            model.forward_device(x_tt, grid_thw)
+        assert not recorder.raise_at, (activations, raise_at)
+        calls = sum(event[0] == "call" for event in recorder.events)
+        assert calls == max(raise_at), (activations, raise_at, calls)
 
 
 def test_vision_l1_free_for_activations_hybrid_allocator(monkeypatch):
