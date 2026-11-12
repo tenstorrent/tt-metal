@@ -2,16 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ttnn::merge_per_device_program_descriptors: host-only, plain TEST(...), no device.
+// ttnn::merge_per_device_program_descriptors on the host (plain TEST), and an op that opts into the merge, run through
+// the device-operation framework on a mesh (PerDeviceProgramMergeOp).
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <optional>
+#include <string>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/per_device_program_merge.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace {
 
@@ -21,6 +32,7 @@ using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::ProgramDescriptor;
 using tt::tt_metal::SemaphoreDescriptor;
+using ttnn::Tensor;
 
 // One data-movement kernel on `cores` with `args` on every core and `common` common args.
 ProgramDescriptor program(
@@ -251,6 +263,211 @@ TEST(PerDeviceProgramMerge, DeclaredWordsKeepTheirBounds) {
     EXPECT_EQ(merged->per_device_runtime_args[0].num_words, 1u);
     EXPECT_EQ(merged->per_device_runtime_args[1].first_word, 2u);
     EXPECT_EQ(merged->per_device_runtime_args[1].values_in_range_order, (std::vector<uint32_t>{7, 8}));
+}
+
+TEST(PerDeviceProgramMerge, SemaphoresOnDifferentCoresAreUnioned) {
+    // Same kernel cores, but each device has the semaphore on a different core: the merged program places it on both.
+    auto with_semaphore_on = [](const CoreCoord& core) {
+        ProgramDescriptor desc = program({{0, 0}}, {1}, {});
+        desc.semaphores = {
+            SemaphoreDescriptor{.id = 0, .core_ranges = CoreRangeSet(CoreRange(core, core)), .initial_value = 0}};
+        return desc;
+    };
+    const auto merged =
+        ttnn::merge_per_device_program_descriptors({with_semaphore_on({0, 0}), with_semaphore_on({1, 0})});
+    ASSERT_TRUE(merged.has_value());
+    ASSERT_EQ(merged->descriptor.semaphores.size(), 1u);
+    EXPECT_TRUE(merged->descriptor.semaphores[0].core_ranges.contains(CoreCoord(0, 0)));
+    EXPECT_TRUE(merged->descriptor.semaphores[0].core_ranges.contains(CoreCoord(1, 0)));
+}
+
+TEST(PerDeviceProgramMerge, RefusesSemaphoreWithTwoInitialValuesOnOneCore) {
+    auto with_initial_value = [](uint32_t initial_value) {
+        ProgramDescriptor desc = program({{0, 0}}, {1}, {});
+        desc.semaphores[0].initial_value = initial_value;
+        return desc;
+    };
+    EXPECT_FALSE(
+        ttnn::merge_per_device_program_descriptors({with_initial_value(0), with_initial_value(1)}).has_value());
+}
+
+// ---- an op that opts into the merge, on a mesh ----
+
+constexpr uint32_t kWords = 64;
+
+// Reads the input page, adds this device's value (runtime arg 2, a per-device field once merged) to every word and
+// writes the output page. Runtime args 0 and 1 are buffer bindings, patched on a cache hit.
+constexpr const char* kAddDeviceValueKernel = R"(
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    const uint32_t input_address = get_arg_val<uint32_t>(0);
+    const uint32_t output_address = get_arg_val<uint32_t>(1);
+    const uint32_t value = get_arg_val<uint32_t>(2);
+    constexpr uint32_t cb = get_compile_time_arg_val(0);
+    constexpr uint32_t num_words = get_compile_time_arg_val(1);
+    constexpr auto input_args = TensorAccessorArgs<2>();
+    constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input = TensorAccessor(input_args, input_address, num_words * sizeof(uint32_t));
+    const auto output = TensorAccessor(output_args, output_address, num_words * sizeof(uint32_t));
+    const uint32_t l1 = get_write_ptr(cb);
+    noc_async_read_page(0, input, l1);
+    noc_async_read_barrier();
+    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
+    for (uint32_t i = 0; i < num_words; ++i) {
+        words[i] += value;
+    }
+    noc_async_write_page(0, output, l1);
+    noc_async_write_barrier();
+}
+)";
+
+uint32_t device_value(const ttnn::MeshCoordinate& coord, const ttnn::MeshShape& shape) {
+    return 1000 * static_cast<uint32_t>(coord.to_linear_index(shape) + 1);
+}
+
+struct PerDeviceProgramMergeOp {
+    struct operation_attributes_t {
+        uint32_t unused = 0;
+    };
+    struct tensor_args_t {
+        Tensor input;
+    };
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+
+    struct Factory {
+        static constexpr bool merge_per_device_programs = true;
+
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+            const operation_attributes_t& /*attrs*/,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+            const CoreCoord core(0, 0);
+            const auto mesh_shape = tensor_args.input.device()->shape();
+            tt::tt_metal::WorkloadDescriptor workload;
+            for (const auto& coord : tensor_coords.coords()) {
+                ProgramDescriptor desc;
+                desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                    .total_size = kWords * sizeof(uint32_t),
+                    .core_ranges = CoreRangeSet(CoreRange(core, core)),
+                    .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
+                        .buffer_index = 0,
+                        .data_format = tt::DataFormat::UInt32,
+                        .page_size = kWords * sizeof(uint32_t)}},
+                });
+                KernelDescriptor kernel;
+                kernel.kernel_source = kAddDeviceValueKernel;
+                kernel.source_type = KernelDescriptor::SourceType::SOURCE_CODE;
+                kernel.core_ranges = CoreRangeSet(CoreRange(core, core));
+                kernel.compile_time_args = {0, kWords};
+                tt::tt_metal::TensorAccessorArgs(tensor_args.input.buffer()).append_to(kernel.compile_time_args);
+                tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(kernel.compile_time_args);
+                kernel.emplace_runtime_args(
+                    core, {tensor_args.input.buffer(), output.buffer(), device_value(coord, mesh_shape)});
+                kernel.config = tt::tt_metal::ReaderConfigDescriptor{};
+                desc.kernels.push_back(std::move(kernel));
+                workload.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+            }
+            return workload;
+        }
+    };
+    using program_factory_t = std::variant<Factory>;
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {}
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t& tensor_args) {
+        return tensor_args.input.tensor_spec();
+    }
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+        return ttnn::create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input.device());
+    }
+};
+
+using MergeAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<
+    PerDeviceProgramMergeOp>::DescriptorMeshWorkloadAdapter<PerDeviceProgramMergeOp::Factory>;
+
+Tensor replicated_input(ttnn::MeshDevice* mesh_device, uint32_t first) {
+    const tt::tt_metal::TensorSpec spec(
+        ttnn::Shape({1, 1, 1, kWords}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig{}));
+    std::vector<uint32_t> values(kWords);
+    for (uint32_t i = 0; i < kWords; ++i) {
+        values[i] = first + i;
+    }
+    return Tensor::from_vector(values, spec, mesh_device);
+}
+
+void expect_input_plus_device_value(const Tensor& output, uint32_t first, const ttnn::MeshShape& shape) {
+    const auto shards = ttnn::distributed::get_device_tensors(output.cpu());
+    ASSERT_EQ(shards.size(), shape.mesh_size());
+    size_t index = 0;
+    for (const auto& coord : ttnn::MeshCoordinateRange(shape)) {
+        const auto words = shards[index++].to_vector<uint32_t>();
+        ASSERT_EQ(words.size(), kWords);
+        for (uint32_t i = 0; i < kWords; ++i) {
+            ASSERT_EQ(words[i], first + i + device_value(coord, shape)) << "device " << coord << ", word " << i;
+        }
+    }
+}
+
+using PerDeviceProgramMergeMeshTest = tt::tt_metal::GenericMeshDeviceFixture;
+
+TEST_F(PerDeviceProgramMergeMeshTest, OpRunsAsOneProgramWithPerDeviceValues) {
+    auto* mesh_device = mesh_device_.get();
+    const auto shape = mesh_device->shape();
+    if (shape.mesh_size() < 2) {
+        GTEST_SKIP() << "needs at least two devices";
+    }
+    const ttnn::MeshCoordinateRangeSet coords{ttnn::MeshCoordinateRange(shape)};
+    if (!tt::tt_metal::distributed::PerDeviceRuntimeArgsSupported(*mesh_device, ttnn::MeshCoordinateRange(shape))) {
+        GTEST_SKIP() << "per-device runtime args are not supported on this mesh";
+    }
+
+    // The framework passes MergePerDevicePrograms: one program for the whole mesh. A wrapping factory that calls
+    // create_mesh_workload without it keeps one program per device.
+    {
+        const PerDeviceProgramMergeOp::tensor_args_t args{.input = replicated_input(mesh_device, 0)};
+        auto output = PerDeviceProgramMergeOp::create_output_tensors({}, args);
+        auto merged = MergeAdapter::create_mesh_workload({}, coords, args, output, ttnn::MergePerDevicePrograms{});
+        EXPECT_EQ(merged.workload.get_programs().size(), 1u);
+        auto unmerged = MergeAdapter::create_mesh_workload({}, coords, args, output);
+        EXPECT_EQ(unmerged.workload.get_programs().size(), shape.mesh_size());
+    }
+
+    mesh_device->clear_program_cache();
+    using MeshOp = ttnn::device_operation::MeshDeviceOperationAdapter<PerDeviceProgramMergeOp>;
+    // The workload `launch` cached for these tensors.
+    const auto cached_programs = [&](const PerDeviceProgramMergeOp::tensor_args_t& args) {
+        const auto lookup = ttnn::device_operation::detail::look_up_program_cache<MeshOp>({}, args, mesh_device);
+        EXPECT_TRUE(lookup.hit);
+        return mesh_device->get_program_cache()
+            .get(lookup.key)
+            .cached_program.template get<MergeAdapter::cached_mesh_workload_t>()
+            .workload.get_programs()
+            .size();
+    };
+
+    const PerDeviceProgramMergeOp::tensor_args_t first{.input = replicated_input(mesh_device, 7)};
+    const auto first_output = ttnn::device_operation::launch<PerDeviceProgramMergeOp>({}, first);
+    EXPECT_EQ(mesh_device->get_program_cache().num_entries(), 1u);
+    EXPECT_EQ(cached_programs(first), 1u);
+    expect_input_plus_device_value(first_output, 7, shape);
+
+    // Cache hit with new buffers (the first input and output are still alive, so the new tensors get other
+    // addresses): the bindings are patched on the merged program and the per-device values stay.
+    const PerDeviceProgramMergeOp::tensor_args_t second{.input = replicated_input(mesh_device, 100)};
+    const auto second_output = ttnn::device_operation::launch<PerDeviceProgramMergeOp>({}, second);
+    EXPECT_EQ(mesh_device->get_program_cache().num_entries(), 1u);
+    EXPECT_EQ(cached_programs(second), 1u);
+    EXPECT_NE(second.input.buffer()->address(), first.input.buffer()->address());
+    EXPECT_NE(second_output.buffer()->address(), first_output.buffer()->address());
+    expect_input_plus_device_value(second_output, 100, shape);
+    expect_input_plus_device_value(first_output, 7, shape);
 }
 
 }  // namespace

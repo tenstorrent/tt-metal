@@ -575,7 +575,30 @@ public:
             }
         }
 
+        // One program per coordinate (or per range), as the factory describes them. A wrapping MeshWorkloadFactory
+        // calls this unless its cache-hit code handles merged ranges (see ttnn::MergePerDevicePrograms).
         static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            return create_mesh_workload_impl<false>(attrs, tensor_coords, tensor_args, tensor_return_value);
+        }
+
+        // Also merges each range's per-coordinate programs into one when the factory sets merge_per_device_programs.
+        // The framework calls this when the adapter runs the op itself.
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            ttnn::MergePerDevicePrograms /*caller_handles_merged_ranges*/) {
+            return create_mesh_workload_impl<merges_per_device_programs()>(
+                attrs, tensor_coords, tensor_args, tensor_return_value);
+        }
+
+        template <bool merge>
+        static auto create_mesh_workload_impl(
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
@@ -600,7 +623,7 @@ public:
                 auto programs = std::move(workload_descriptor.programs);
                 std::unordered_map<ttnn::MeshCoordinateRange, std::vector<ttnn::PerDeviceRuntimeArgsField>>
                     per_device_runtime_args;
-                if constexpr (merges_per_device_programs()) {
+                if constexpr (merge) {
                     static_assert(
                         !has_override_runtime_arguments() &&
                             !requires {
@@ -709,6 +732,8 @@ public:
         // `static std::vector<ttnn::PerDeviceRuntimeArgsWords> per_device_runtime_args_words()` for words a wrapping
         // factory updates per device on a cache hit. The cache-hit path then sees one program per range, so the
         // factory must not re-derive per-coordinate state on a hit (no override_runtime_arguments, no dynamic args).
+        // A wrapping MeshWorkloadFactory gets merged programs only by passing ttnn::MergePerDevicePrograms to
+        // create_mesh_workload, since its own override then sees ranges of several devices.
         static consteval bool merges_per_device_programs() {
             if constexpr (requires { DescriptorFactory::merge_per_device_programs; }) {
                 return DescriptorFactory::merge_per_device_programs;

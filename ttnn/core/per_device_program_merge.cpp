@@ -25,6 +25,7 @@ using tt::tt_metal::ProgramDescriptor;
 
 std::vector<CoreCoord> cores_of(const CoreRangeSet& set) {
     std::vector<CoreCoord> cores;
+    cores.reserve(set.num_cores());
     for (const CoreRange& range : set.ranges()) {
         for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
             for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
