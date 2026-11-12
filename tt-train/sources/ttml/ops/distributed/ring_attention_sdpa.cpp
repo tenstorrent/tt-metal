@@ -57,7 +57,8 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    const ttml::metal::AttentionMaskType mask_type) {
+    const ttml::metal::AttentionMaskType mask_type,
+    const bool reuse_forward_kv) {
     if (!autograd::ctx().is_parallelism_context_initialized() ||
         !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
@@ -81,6 +82,14 @@ autograd::TensorPtr ring_attention_sdpa(
     // Use raw ttnn::Tensor since we define backward manually
     ttnn::Tensor k_current = key->get_value();
     ttnn::Tensor v_current = value->get_value();
+
+    // Backward at ring step s needs exactly the K/V the forward used at step s. Keeping those handles saves
+    // backward its 2 * (ring_size - 1) K/V shifts, at the cost of 2 * (ring_size - 2) extra K-sized tensors
+    // per device staying alive until this node's backward has run, or until this op returns when no backward
+    // node is registered.
+    // k_steps[s] = K used at ring step s, for s < ring_size - 1; the last step's K/V stay in k_current/v_current
+    std::vector<ttnn::Tensor> k_steps(reuse_forward_kv ? ring_size - 1U : 0U);
+    std::vector<ttnn::Tensor> v_steps(reuse_forward_kv ? ring_size - 1U : 0U);
 
     // Initialize accumulators for online softmax.
     // output_accum: weighted sum of outputs from all steps. Kept FP32: the online-softmax
@@ -172,6 +181,10 @@ autograd::TensorPtr ring_attention_sdpa(
         global_lse = new_lse;
 
         if (step < ring_size - 1) {
+            if (reuse_forward_kv) {
+                k_steps[step] = k_current;
+                v_steps[step] = v_current;
+            }
             k_current = ttnn_fixed::distributed::ring_shift(
                 k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward);
             v_current = ttnn_fixed::distributed::ring_shift(
@@ -191,6 +204,8 @@ autograd::TensorPtr ring_attention_sdpa(
                                       final_lse,
                                       k_current,  // K at end of forward (position k1)
                                       v_current,  // V at end of forward (position v1)
+                                      k_steps,
+                                      v_steps,
                                       ring_size,
                                       cp_axis_value,
                                       mask_type]() mutable {
@@ -256,15 +271,19 @@ autograd::TensorPtr ring_attention_sdpa(
             grad_K_accum = ttnn::add(grad_K_accum, ttnn::typecast(grad_K_result, ttnn::DataType::FLOAT32));
             grad_V_accum = ttnn::add(grad_V_accum, ttnn::typecast(grad_V_result, ttnn::DataType::FLOAT32));
 
-            // Ring shift K/V and grad accumulators in FORWARD direction
-            // K/V: replays the forward pass in reverse (gets K/V for previous step)
-            // grad_K/V: routes accumulated gradients back to correct device
+            // Move to the previous ring step.
+            // K/V: the forward's kept handles, or shifted in FORWARD direction when none were kept
+            // grad_K/V: always shifted in FORWARD direction, routes accumulated gradients back to correct device
             if (step > 0) {
-                // Shift K/V forward to get position for next backward iteration
-                k_current = ttnn_fixed::distributed::ring_shift(
-                    k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
-                v_current = ttnn_fixed::distributed::ring_shift(
-                    v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                if (k_steps.empty()) {
+                    k_current = ttnn_fixed::distributed::ring_shift(
+                        k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                    v_current = ttnn_fixed::distributed::ring_shift(
+                        v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                } else {
+                    k_current = k_steps[step - 1];
+                    v_current = v_steps[step - 1];
+                }
 
                 // Shift grad accumulators
                 grad_K_accum = ttnn_fixed::distributed::ring_shift(

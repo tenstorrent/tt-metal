@@ -40,6 +40,10 @@ namespace ttml::ops::distributed {
  *             - Step 0: causal mask (local K/V)
  *             - Steps where source device < current device: full attention
  *             - Steps where source device > current device: skip (no computation)
+ * @param reuse_forward_kv Backward reads the forward's per-step K/V instead of ring-shifting them again.
+ *             Costs 2 * (cp_size - 2) K-sized tensors per device, held until this node's backward has run.
+ *             Pass false when those copies, summed over all layers, do not fit; the memory-efficient runner
+ *             already limits them to one block at a time.
  * @return Attention output tensor (B, H, S_local, D)
  *
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups << num_heads,
@@ -50,6 +54,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
+    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    bool reuse_forward_kv = true);
 
 }  // namespace ttml::ops::distributed

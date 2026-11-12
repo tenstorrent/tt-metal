@@ -488,3 +488,44 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*head_dim=*/64,
         /*test_backward=*/true);
 }
+
+// Backward with the forward's K/V handles must give the very same bits as re-shifting K/V:
+// a ring shift only moves data, so both paths feed identical tensors to the kernels.
+TEST_F(GalaxyRingSDPATest, ReuseMatchesReshiftBitExact) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+
+    auto& rng = autograd::ctx().get_generator();
+    const std::array<std::size_t, 4> shape{2, 4, 256, 64};
+    std::array<xt::xarray<float>, 4> inputs;  // Q, K, V, dO
+    for (auto& input : inputs) {
+        input = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng());
+    }
+    const auto to_device = [&](const xt::xarray<float>& data) {
+        return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, device, ttnn::Layout::TILE, mapper.get());
+    };
+
+    // Per-device dQ, dK, dV
+    const auto run = [&](const bool reuse_forward_kv) {
+        auto query = autograd::create_tensor(to_device(inputs[0]), /* requires_grad */ true);
+        auto key = autograd::create_tensor(to_device(inputs[1]), /* requires_grad */ true);
+        auto value = autograd::create_tensor(to_device(inputs[2]), /* requires_grad */ true);
+        auto output = ops::distributed::ring_attention_sdpa(
+            query, key, value, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal, reuse_forward_kv);
+        output->set_grad(to_device(inputs[3]));
+        output->backward();
+        return std::array{
+            core::to_xtensor<float>(query->get_grad(), core::IdentityComposer{}),
+            core::to_xtensor<float>(key->get_grad(), core::IdentityComposer{}),
+            core::to_xtensor<float>(value->get_grad(), core::IdentityComposer{})};
+    };
+
+    const auto reused = run(/*reuse_forward_kv=*/true);
+    const auto reshifted = run(/*reuse_forward_kv=*/false);
+    EXPECT_TRUE(reused[0] == reshifted[0]) << "dQ differs";
+    EXPECT_TRUE(reused[1] == reshifted[1]) << "dK differs";
+    EXPECT_TRUE(reused[2] == reshifted[2]) << "dV differs";
+}
