@@ -886,7 +886,8 @@ inline void program_packer_destination(std::uint32_t addr)
         // so the init runs again before the next one.
         TT_RMWCIB0(0xff, addr & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
         TT_RMWCIB1(0xff, (addr >> 8) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-        TT_RMWCIB2(0xff, (addr >> 16) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+        // Same word as Data = (addr >> 16) & 0xff, reusing byte 1's 0xff00 mask.
+        TT_INSN(TT_OP_RMWCIB2(0xff, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32) + ((addr >> 8) & 0xff00));
         return;
     }
     std::uint32_t new_l1_addr = (1 << 31) | addr;
