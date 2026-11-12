@@ -121,6 +121,8 @@ void kernel_main() {
         get_compile_time_arg_val(WIN_N);  // W window row stride (tiles): one wave's nominal width
     constexpr uint32_t kb = get_compile_time_arg_val(KB);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(NUM_K_BLOCKS);
+    // Blackhole row MOP (api/compute/matmul.h): one MOP per inner-dim step instead of one per tile; bit-identical.
+    constexpr bool row_mop = true;
     constexpr uint32_t P = get_compile_time_arg_val(mrs::compute_ct::P);     // slot tiles (the largest wave)
     constexpr uint32_t num_entries = get_compile_time_arg_val(NUM_ENTRIES);  // G x num_waves
     constexpr uint32_t num_waves = get_compile_time_arg_val(NUM_WAVES);
@@ -205,7 +207,7 @@ void kernel_main() {
             }
             if (any) {
                 reconfig_data_format(cb_partial_hold, cb_weight_k_window, srcb, cb_act_k_window);
-                ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, w, h, kb);
+                ckernel::matmul_block_init<row_mop>(cb_act_k_window, cb_weight_k_window, false, w, h, kb);
             }
         };
 
@@ -220,7 +222,7 @@ void kernel_main() {
         const uint32_t row_group = sb_h * cols;
         reconfig_data_format(cb_weight_k_window, cb_act_k_window);  // matmul: srcA = in1, srcB = in0
         PACK((pack_reconfig_data_format(cb_partial_hold)));
-        ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
+        ckernel::matmul_block_init<row_mop>(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
         const uint32_t S = fill ? 1 : super_block;  // an operand fill arrives at DRAM pace: pack per window
         const uint32_t n_super = num_k_blocks / S;
         const bool has_arrival = role != mrs::role::COPY;
@@ -277,14 +279,19 @@ void kernel_main() {
                             ca.fifo_rd_ptr = pa;
                             cw.fifo_rd_ptr = pw;
                         }));
-                        uint32_t in0_index = sr * sb_h * kb;
-                        uint32_t in1_index = sc * sb_w;
-                        for (uint32_t kk = 0; kk < kb; ++kk) {
-                            ckernel::matmul_block(
-                                cb_act_k_window, cb_weight_k_window, in0_index, in1_index, 0, false, sb_w, sb_h, kb);
-                            ++in0_index;
-                            in1_index += win_n;
-                        }
+                        // All kb inner-dim steps of the window in one call (one MOP per step with the row MOP).
+                        ckernel::matmul_block_k<row_mop>(
+                            cb_act_k_window,
+                            cb_weight_k_window,
+                            sr * sb_h * kb /*in0_tile_index*/,
+                            sc * sb_w /*in1_tile_index*/,
+                            0 /*idst*/,
+                            false /*transpose*/,
+                            sb_w /*ct_dim*/,
+                            sb_h /*rt_dim*/,
+                            kb /*kt_dim*/,
+                            kb /*k_steps*/,
+                            win_n /*in1_k_stride*/);
                         if (last_sb) {  // frees each window as soon as it is consumed (fifo_rd_ptr is exact here)
                             act_buf.pop_front(a_win);
                             weight_buf.pop_front(w_win);
