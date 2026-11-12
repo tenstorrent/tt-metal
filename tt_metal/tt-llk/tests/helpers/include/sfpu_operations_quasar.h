@@ -286,6 +286,10 @@ void init_unary_sfpu_operation_quasar()
     {
         init_signbit();
     }
+    else if constexpr (is_isinf_isnan_op(OPERATION))
+    {
+        isinf_isnan_init();
+    }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         init_typecast();
