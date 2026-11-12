@@ -9,6 +9,7 @@ HC2_CORE names another core (a core/ copy or a tray-test checkout); the stub run
 
 import hashlib
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -109,7 +110,10 @@ def run_core():
 
 def test_stub_run_through_glue(tmp_path):
     c = run_core()
+    # max-util is skipped on purpose, whatever this tt-metal build holds, so the core's skip WARNING is always expected
     env = dict(os.environ, HC2_CORE=str(c), HC2_OUT_DIR=str(tmp_path / "out"), TMPDIR=str(tmp_path))
+    env.pop("TRAY_MAXUTIL_BIN", None)
+    env["FLEET_MAXUTIL_SKIP"] = "hc2 stub test"
     t = time.monotonic()
     r = subprocess.run(
         ["bash", str(GLUE), "--stub", "--mode=smoke"],
@@ -122,7 +126,7 @@ def test_stub_run_through_glue(tmp_path):
     out = r.stdout.decode(errors="replace")
     assert r.returncode == 0, out[-3000:]
     assert "VERDICT: STUB" in out and "Final verdict: PASS" in out, out[-3000:]
-    assert "WARNING: max-util skipped" in out, "max-util must be skipped with the core's WARNING when not built"
+    assert "WARNING: max-util skipped" in out, "FLEET_MAXUTIL_SKIP must make the core skip max-util with its WARNING"
     assert "tt-smi -r " not in out
     assert took < STUB_LIMIT_S, f"stub run took {took:.0f} s (limit {STUB_LIMIT_S} s)"
     assert any((tmp_path / "out").glob("run_*")), "run folder not under HC2_OUT_DIR"
@@ -192,11 +196,15 @@ def test_glue_refuses_missing_core(tmp_path):
     assert rc == 2 and "no hc2 core" in err
 
 
-def fake_env(tmp_path, ttnn_file):
+def fake_env(tmp_path, ttnn_file, noise=False):
+    """a python_env whose python prints check_env.sh's HC2_TTNN= line; noise adds warnings on stdout and stderr"""
     home = tmp_path / "tt-metal"
     py = home / "python_env" / "bin" / "python"
     py.parent.mkdir(parents=True)
-    py.write_text(f'#!/usr/bin/env bash\necho "{ttnn_file}"\n' if ttnn_file else "#!/usr/bin/env bash\nexit 1\n")
+    body = f'echo "HC2_TTNN={ttnn_file}"\n'
+    if noise:
+        body = f'echo "UserWarning: stdout noise"\n{body}echo "/usr/lib/python3/warnings.py: stderr noise" >&2\n'
+    py.write_text("#!/usr/bin/env bash\n" + (body if ttnn_file else "exit 1\n"))
     py.chmod(0o755)
     return home
 
@@ -219,6 +227,12 @@ def test_check_env_fails_outside_tt_metal_home(tmp_path):
     assert r.returncode == 3 and b"not from TT_METAL_HOME" in r.stderr
 
 
+def test_check_env_ignores_import_noise(tmp_path):
+    home = fake_env(tmp_path, tmp_path / "tt-metal" / "ttnn" / "ttnn" / "__init__.py", noise=True)
+    r = run_check(home)
+    assert r.returncode == 0 and b"ttnn from " + str(tmp_path / "tt-metal" / "ttnn").encode() in r.stdout, r.stderr
+
+
 def test_check_env_fails_without_ttnn_or_python(tmp_path):
     home = fake_env(tmp_path, None)
     assert run_check(home).returncode == 3
@@ -226,11 +240,19 @@ def test_check_env_fails_without_ttnn_or_python(tmp_path):
     assert r.returncode == 3 and b"no python" in r.stderr
 
 
+TT_SMI_R = re.compile(r"tt-smi\s+(-r|--reset)\b")
+
+
 def test_no_tt_smi_r_in_glue():
-    for p in (HC2 / "glue").iterdir():
-        for ln in p.read_text().splitlines():
-            if "tt-smi" in ln and not ln.lstrip().startswith("#"):
-                assert " -r" not in ln.split("tt-smi", 1)[1].split()[:1], f"{p}: {ln}"
+    """never tt-smi -r (a galaxy reset is tt-smi -glx_reset); the regex is checked on planted lines first"""
+    assert TT_SMI_R.search("    tt-smi -r 0,1") and TT_SMI_R.search("tt-smi  --reset")
+    assert not TT_SMI_R.search("tt-smi -glx_reset") and not TT_SMI_R.search("tt-smi -ls")
+    bad = []
+    for p in sorted((HC2 / "glue").iterdir()):
+        for n, ln in enumerate(p.read_text().splitlines(), 1):
+            if not ln.lstrip().startswith("#") and TT_SMI_R.search(ln):
+                bad.append(f"{p.name}:{n}: {ln}")
+    assert not bad, bad
 
 
 def test_every_hc2_file_has_spdx():

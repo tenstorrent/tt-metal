@@ -19,10 +19,14 @@ fail() {
 }
 
 [ -x "$py" ] || fail "no python at $py: build tt-metal and its python_env first ($build)"
-# PYTHONPATH and the working dir are cleared so the import shows where the env itself takes ttnn from
-f=$(cd / && env -u PYTHONPATH "$py" -c 'import os, ttnn; print(os.path.realpath(ttnn.__file__))' 2>&1) \
-    || fail "import ttnn fails in $py: $(tail -n 1 <<< "$f")"
-f=$(tail -n 1 <<< "$f")
+# PYTHONPATH and the working dir are cleared so the import shows where the env itself takes ttnn from. The path comes
+# only from the HC2_TTNN= line on stdout: warnings ttnn's import prints (stderr or stdout) never stand in for it
+err=$(mktemp)
+trap 'rm -f "$err"' EXIT
+out=$(cd / && env -u PYTHONPATH "$py" -c 'import os, ttnn; print("HC2_TTNN=" + os.path.realpath(ttnn.__file__))' 2> "$err") \
+    || fail "import ttnn fails in $py: $(tail -n 1 "$err")"
+f=$(sed -n 's/^HC2_TTNN=//p' <<< "$out" | tail -n 1)
+[ -n "$f" ] || fail "import ttnn in $py printed no HC2_TTNN= line"
 home=$(cd "$TT_METAL_HOME" && pwd -P)
 case $f in
     "$home"/*) echo "hc2 env check: ttnn from $f (python $py)" ;;
