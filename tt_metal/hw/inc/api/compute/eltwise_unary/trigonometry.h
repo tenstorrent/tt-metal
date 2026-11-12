@@ -108,7 +108,17 @@ ALWI void acosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// Quasar's SfpuType (tt_llk_quasar/llk_lib/llk_defs.h:75) has no `tan`, `asin`, `acos`,
+// `atan`, `cosh` or `sinh` enumerator. SFPU_UNARY_INIT_FN names SfpuType::<OP>
+// non-dependently, so each of the six *_tile_init bodies below is a hard error on
+// Quasar whether or not it is ever instantiated -- which made the whole of this header
+// uncompilable on Quasar, and took sin_tile/cos_tile down with it even though
+// SfpuType::sine and SfpuType::cosine exist and have working Quasar LLKs. Guarding the
+// six broken inits is strictly additive on Quasar (nothing could ever have compiled
+// against them) and a no-op on every other architecture.
 ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_init, (APPROX))); }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -227,8 +237,11 @@ ALWI void asin_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR -- see the note on tan_tile_init above.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init, (is_fp32_dest_acc_en))); }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -258,10 +271,13 @@ ALWI void atan_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR -- see the note on tan_tile_init above.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en)));
 }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -291,14 +307,20 @@ ALWI void acos_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR -- see the note on tan_tile_init above.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acos_tile_init() { MATH(SFPU_UNARY_INIT_FN(acos, sfpu::asin_acos_init, (is_fp32_dest_acc_en))); }
+#endif  // ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR -- see the note on tan_tile_init above.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_init, (APPROX, is_fp32_dest_acc_en))); }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**
@@ -328,8 +350,11 @@ ALWI void cosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+#ifndef ARCH_QUASAR
+// ABSENT ON QUASAR -- see the note on tan_tile_init above.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(sinh, ckernel::sfpu::sinh_init, (APPROX, is_fp32_dest_acc_en))); }
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**

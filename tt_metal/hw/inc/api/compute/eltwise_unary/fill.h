@@ -6,7 +6,14 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifdef ARCH_QUASAR
+// Quasar's fill LLK lives in tt_llk_quasar/common/inc/experimental/, not in a
+// common/inc/sfpu/ directory -- Quasar has no such directory, so the unqualified
+// include below does not resolve on Quasar.
+#include "experimental/ckernel_sfpu_fill.h"
+#else
 #include "ckernel_sfpu_fill.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
@@ -27,8 +34,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void fill_tile(uint32_t idst, float param0) {
+#if defined(ARCH_QUASAR)
+    // Quasar's _calculate_fill_ is templated on ITERATIONS only; it takes no APPROX
+    // parameter (tt_llk_quasar/common/inc/experimental/ckernel_sfpu_fill.h).
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+#endif
 }
 
 // clang-format off
@@ -49,6 +63,18 @@ ALWI void fill_tile(uint32_t idst, float param0) {
  */
 template <DataFormat DATA_FORMAT>
 ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
+#if defined(ARCH_QUASAR)
+    // Quasar's _calculate_fill_int_ is templated on <DataFormat, ITERATIONS>: it picks
+    // the SFPMEM store mode from the DataFormat itself rather than taking an
+    // InstrModLoadStore, and its own static_assert accepts exactly these four formats.
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::Int16 || DATA_FORMAT == DataFormat::Int8 ||
+            DATA_FORMAT == DataFormat::UInt8,
+        "Unsupported data format for fill_tile_int on Quasar. Supported: Int32, Int16, Int8, UInt8");
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_int_, (DATA_FORMAT, 8 /*ITERATIONS*/), idst, VectorMode::RC,
+        param0));
+#else
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || is_uint32_format(DATA_FORMAT) || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for fill_tile_int. Supported: Int32, UInt32, UInt16");
@@ -62,6 +88,7 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 // clang-format off
@@ -79,6 +106,11 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
+#if defined(ARCH_QUASAR)
+    // Quasar's _calculate_fill_bitcast_ is templated on ITERATIONS only.
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_bitcast_, (8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -87,6 +119,7 @@ ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 /**
  * Please refer to documentation for any_init.
