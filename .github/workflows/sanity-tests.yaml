@@ -217,11 +217,13 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
-  push:
-    branches: ["main"]
+  # TEMPORARY: the push-on-main trigger is off and the cron is slowed from every
+  # two hours to every four. Scheduled runs are now the only automatic trigger,
+  # so one run covers what push and the 2-hourly cron covered between them:
+  # Wormhole + Blackhole + Sim (see generate-sku-matrix below).
+  # Revert together with the CIv1 SKU block in generate-sku-matrix.
   schedule:
-    # Scheduled (cron) runs fire the Blackhole suite (Wormhole + Sim excluded).
-    - cron: "0 */2 * * *"
+    - cron: "0 */4 * * *"
 
 permissions:
   actions: read
@@ -234,14 +236,13 @@ permissions:
 
 run-name: >-
   Sanity tests${{ (github.event_name == 'schedule' && ' (scheduled)')
-  || (github.event_name == 'push' && ' (push)')
   || '' }}${{ inputs.with-retries && ' (with retries)' || '' }}${{
   format(' SKUs[{0}{1}{2}{3}{4}]',
-  (inputs.run-wormhole || github.event_name == 'push') && 'WH' || '',
-  (inputs.run-wormhole || github.event_name == 'push') && (inputs.run-blackhole || github.event_name == 'schedule') && ',' || '',
+  (inputs.run-wormhole || github.event_name == 'schedule') && 'WH' || '',
+  (inputs.run-wormhole || github.event_name == 'schedule') && (inputs.run-blackhole || github.event_name == 'schedule') && ',' || '',
   (inputs.run-blackhole || github.event_name == 'schedule') && 'BH' || '',
-  (inputs.run-wormhole || inputs.run-blackhole || github.event_name == 'push' || github.event_name == 'schedule') && (inputs.run-sim || github.event_name == 'push') && ',' || '',
-  (inputs.run-sim || github.event_name == 'push') && 'Sim' || '') }}
+  (inputs.run-wormhole || inputs.run-blackhole || github.event_name == 'schedule') && (inputs.run-sim || github.event_name == 'schedule') && ',' || '',
+  (inputs.run-sim || github.event_name == 'schedule') && 'Sim' || '') }}
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
@@ -321,9 +322,9 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       # In-place wheel by default; nightly canary passes build-inplace-wheel:false for the real manylinux wheel.
-      # Direct push has no inputs, so treat it as in-place too.
-      build-inplace-wheel: ${{ inputs.build-inplace-wheel || github.event_name == 'push' || github.event_name == 'schedule'}}
-      build-wheel: ${{ !inputs.build-inplace-wheel && github.event_name != 'push' && github.event_name != 'schedule' }}
+      # The cron trigger has no inputs, so treat it as in-place too.
+      build-inplace-wheel: ${{ inputs.build-inplace-wheel || github.event_name == 'schedule'}}
+      build-wheel: ${{ !inputs.build-inplace-wheel && github.event_name != 'schedule' }}
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
@@ -409,17 +410,13 @@ jobs:
           run_sim='${{ inputs.run-sim }}'
 
           if [[ -z "$run_wormhole" && -z "$run_blackhole" && -z "$run_sim" ]]; then
-            if [[ "${{ github.event_name }}" == "schedule" ]]; then
-              # Scheduled (cron) runs of this workflow cover Blackhole.
-              run_wormhole=false
-              run_blackhole=true
-              run_sim=false
-            else
-              # Direct push to main covers Wormhole + sim.
-              run_wormhole=true
-              run_blackhole=false
-              run_sim=true
-            fi
+            # TEMPORARY: the 4-hourly cron is the only automatic trigger left (the
+            # push-on-main trigger is off), so it has to cover every architecture --
+            # Blackhole as before, plus the Wormhole + Sim coverage that push used to
+            # provide. Restore the schedule/push split when push comes back.
+            run_wormhole=true
+            run_blackhole=true
+            run_sim=true
           fi
 
           if [[ "$run_wormhole" != "true" && "$run_blackhole" != "true" && "$run_sim" != "true" ]]; then
@@ -446,30 +443,41 @@ jobs:
           #   - cpu_medium -- not a wh/bh hardware SKU.
           #   - *_prio SKUs -- merge_group-only aliases; sku_config.yaml itself says not to
           #     list these in a tests yaml's skus map.
+          #
+          # TEMPORARY: every CIv1 SKU is commented out below, which is how this pipeline
+          # disables CIv1 tests. A CIv1 SKU is one whose sku_config.yaml `runs_on` is the
+          # multi-label bare-metal/VM pool (in-service + arch-* / pipeline-* / box label);
+          # a CIv2 SKU is one single `tt-ubuntu-2204-*` label. prepare_test_matrix.py
+          # intersects this list against each tests yaml's own `skus:` map, so dropping a
+          # SKU here removes exactly its matrix rows from every impl this workflow calls
+          # (ttnn, t3000, fabric, umd, runtime-sim, blackhole-multi-card), with no change
+          # needed in the impls or the tests yamls. Uncomment to restore.
           if [[ "$run_wormhole" == "true" ]]; then
             wh_skus+=(
-              "wh_llmbox"
-              "wh_llmbox_perf"
-              "wh_n150"
-              "wh_n300"
+              # CIv1 -- temporarily disabled
+              # "wh_llmbox"
+              # "wh_llmbox_perf"
+              # "wh_n150"
+              # "wh_n300"
+              # "wh_n300_perf"
               "wh_n150_civ2"
               "wh_n300_civ2"
               "wh_llmbox_civ2"
               "wh_llmbox_civ2_viommu"
-              "wh_n300_perf"
             )
             sanity_skus+=("${wh_skus[@]}")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
             bh_skus+=(
+              # CIv1 -- temporarily disabled
+              # "bh_p150"
+              # "bh_p150_perf"
+              # "bh_loudbox"
+              # "bh_p300"
+              # "bh_p300_viommu"
+              # "bh_quietbox_2"
               "bh_p150b_civ2_viommu"
               "bh_p150b_civ2"
-              "bh_p150"
-              "bh_p150_perf"
-              "bh_loudbox"
-              "bh_p300"
-              "bh_p300_viommu"
-              "bh_quietbox_2"
             )
             sanity_skus+=("${bh_skus[@]}")
           fi
