@@ -384,17 +384,18 @@ def qwen36_kv_cache_spec(
     from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
 
     tp = int(tp)
-    if tp < 2:
-        raise ValueError(
-            f"Qwen36ForCausalLM runs the tensor-parallel GDN decode, which needs a mesh of 2 or more devices; "
-            f"MESH_DEVICE gives {tp}. Use a P150x4 or P150x8 mesh"
-        )
     dims = GdnDims.from_text_config(text_config, tp)
     problems = dims.decode_step_problems()
     if problems:
         raise ValueError(
-            f"Qwen36ForCausalLM keeps the GDN state in KV cache blocks through gdn_decode_step, which does not serve "
-            f"this checkpoint at TP={tp}: " + "; ".join(problems)
+            f"Qwen36ForCausalLM decodes the GDN state in KV cache blocks with gdn_decode_step, which cannot run this "
+            f"checkpoint at TP={tp} (MESH_DEVICE): " + "; ".join(problems) + ". Use a mesh with more devices"
+        )
+    if tp < 2:
+        raise ValueError(
+            "Qwen36ForCausalLM keeps the GDN state in KV cache blocks only on the tensor-parallel path; the "
+            "single-device GDN layer has no decode on KV cache blocks (not implemented). Use a mesh of 2 or more "
+            "devices"
         )
     dim = int(_cfg(text_config, "hidden_size"))
     n_heads = int(_cfg(text_config, "num_attention_heads"))

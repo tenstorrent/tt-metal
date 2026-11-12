@@ -264,10 +264,15 @@ def test_specs(vllm_kv, tc, tp, bf8, block):
 def test_specs_reject_unsupported_meshes(vllm_kv):
     from models.demos.blackhole.qwen36.tt.kv_cache_spec import qwen36_kv_cache_spec
 
-    with pytest.raises(ValueError, match="needs a mesh of 2 or more devices"):  # allow-pytest.raises: no repo conftest
+    with pytest.raises(ValueError, match="48 value heads per device > 16"):  # allow-pytest.raises: no repo conftest
         qwen36_kv_cache_spec(QWEN_27B, 1, kv_bf8=False, mamba_block_size=4096)
     with pytest.raises(ValueError, match="24 value heads per device > 16"):  # allow-pytest.raises: see above
         qwen36_kv_cache_spec(QWEN_27B, 2, kv_bf8=False, mamba_block_size=4096)
+    # Qwen3.6-35B-A3B at TP=2 fits the operator (16 value heads per device); it is untested, not refused.
+    qwen36_kv_cache_spec(QWEN_35B, 2, kv_bf8=False, mamba_block_size=4096)
+    tiny = {**QWEN_35B, "linear_num_key_heads": 2, "linear_num_value_heads": 4}
+    with pytest.raises(ValueError, match="single-device GDN layer"):  # allow-pytest.raises: see above
+        qwen36_kv_cache_spec(tiny, 1, kv_bf8=False, mamba_block_size=4096)
 
 
 @pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED[:4], ids=IDS[:4])
