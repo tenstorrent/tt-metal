@@ -7,7 +7,7 @@ import ttnn
 from models.demos.bge_large_en.ttnn.ttnn_bge_embeddings import TtnnBGEEmbeddings
 from models.demos.bge_large_en.ttnn.ttnn_bge_encoder import TtnnBGEEncoder
 from models.demos.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
-from models.demos.wormhole.bge_large_en.ttnn.common import ttnn_mean_pooling
+from models.demos.wormhole.bge_large_en.ttnn.common import ttnn_cls_pooling_normalize
 
 
 class TtnnBGEModel:
@@ -30,5 +30,5 @@ class TtnnBGEModel:
         sequence_output = self.encoder(embedding_output, extended_attention_mask, device=device)
         ttnn.deallocate(embedding_output)
         if apply_post_process:
-            sequence_output = ttnn_mean_pooling(sequence_output, attention_mask)
+            sequence_output = ttnn_cls_pooling_normalize(sequence_output)
         return (sequence_output,)

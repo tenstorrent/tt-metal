@@ -44,6 +44,7 @@ def test_ttnn_bge_model(device, inputs, model_location_generator):
         token_type_ids=token_type_ids,
         position_ids=position_ids,
         attention_mask=attention_mask,
+        pooling="cls",
     )
 
     # Preprocess model parameters for TTNN
