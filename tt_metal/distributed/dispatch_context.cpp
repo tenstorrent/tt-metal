@@ -298,7 +298,7 @@ void DispatchContext::initialize_fast_dispatch(
     // dispatch cores/command queues that are never created for these targets (init_command_queue_host
     // leaves command_queues_ empty on mock/emulated), which otherwise segfaults on teardown.
     // See https://github.com/tenstorrent/tt-metal/issues/50634.
-    if (cluster.is_mock_or_emulated()) {
+    if (!cluster.runs_dispatch_firmware()) {
         return;
     }
 
@@ -409,7 +409,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     // Mirror initialize_fast_dispatch: the FD/SD toggle is a no-op on mock/emulated targets, so
     // there is nothing to tear down. See https://github.com/tenstorrent/tt-metal/issues/50634.
-    if (cluster.is_mock_or_emulated()) {
+    if (!cluster.runs_dispatch_firmware()) {
         return;
     }
 

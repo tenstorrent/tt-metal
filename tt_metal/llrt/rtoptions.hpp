@@ -403,6 +403,7 @@ class RunTimeOptions {
 
     // SoC descriptor of the emulated chip; empty means the architecture's default descriptor
     std::string emule_soc_desc_path;
+    bool emule_real_fast_dispatch = false;
 
     // Cluster id handed to UMD topology discovery; unset means UMD uses the OS hostname
     std::optional<std::string> cluster_id;
@@ -993,6 +994,7 @@ public:
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
     const std::string& get_emule_soc_desc_path() const { return emule_soc_desc_path; }
+    bool get_emule_real_fast_dispatch() const { return emule_real_fast_dispatch; }
     // Set mock cluster descriptor from a filename.
     // Searches the tt-cluster-descriptors submodule first (these take precedence when
     // the same filename exists in both locations), then falls back to the UMD

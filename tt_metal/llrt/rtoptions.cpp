@@ -59,6 +59,7 @@ enum class EnvVarID {
     TT_METAL_CLUSTER_ID,                      // Cluster id to stamp on the discovered cluster descriptor
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_EMULE_SOC_DESC_PATH,             // SoC descriptor of the emulated chip
+    TT_METAL_EMULE_REAL_FAST_DISPATCH,        // Emulated chips run the fast-dispatch kernels and command queues
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
@@ -582,6 +583,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // carries. Requires TT_METAL_EMULE_MODE=1. Default: the architecture's descriptor under
         // tt_metal/soc_descriptors/ Usage: export TT_METAL_EMULE_SOC_DESC_PATH=/path/to/soc_descriptor.yaml
         case EnvVarID::TT_METAL_EMULE_SOC_DESC_PATH: this->emule_soc_desc_path = std::string(value); break;
+
+        // TT_METAL_EMULE_REAL_FAST_DISPATCH
+        // In fast dispatch, emulated chips run metal's own fast-dispatch stack (command queues, prefetcher and
+        // dispatcher kernels) instead of the emulator's command queue. Requires TT_METAL_EMULE_MODE=1.
+        // Usage: export TT_METAL_EMULE_REAL_FAST_DISPATCH=1
+        case EnvVarID::TT_METAL_EMULE_REAL_FAST_DISPATCH: this->emule_real_fast_dispatch = is_env_enabled(value); break;
 
         // TT_METAL_VISIBLE_DEVICES
         // Comma-separated list of device IDs to make visible to the runtime.
@@ -2118,6 +2125,11 @@ void RunTimeOptions::InitializeFromEnvVars() {
     }
     if (this->runtime_target_device_ != tt::TargetDevice::Emule && !this->emule_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_SOC_DESC_PATH requires TT_METAL_EMULE_MODE=1");
+    }
+    if (this->emule_real_fast_dispatch) {
+        TT_FATAL(
+            this->runtime_target_device_ == tt::TargetDevice::Emule && this->fast_dispatch,
+            "TT_METAL_EMULE_REAL_FAST_DISPATCH requires TT_METAL_EMULE_MODE=1 and fast dispatch");
     }
 
     // On a simulator TT_METAL_SIMULATOR_DRAM_UNCAPPED and the quasar_aether_2x3_uncapped map imply each

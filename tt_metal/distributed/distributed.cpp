@@ -126,7 +126,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     auto& env = mesh_impl.metal_env();
     // Emulated devices have no dispatch firmware: tt-emule's queue compiles and launches each program itself
     // through the slow-dispatch path, so the fast-dispatch compile, binary upload and command generation are skipped.
-    const bool emulated = env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+    const bool emulated = env.get_cluster().emulates_dispatch();
     if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
@@ -149,7 +149,7 @@ void EventSynchronize(const MeshEvent& event) {
     }
 #ifdef TT_METAL_USE_EMULE
     // tt-emule's queue tracks its events itself; there are no sysmem completion counters to poll.
-    if (event.device()->impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+    if (event.device()->impl().metal_env().get_cluster().emulates_dispatch()) {
         emule::event_synchronize(event);
         return;
     }
@@ -171,7 +171,7 @@ bool EventQuery(const MeshEvent& event) {
         return true;
     }
 #ifdef TT_METAL_USE_EMULE
-    if (event.device()->impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+    if (event.device()->impl().metal_env().get_cluster().emulates_dispatch()) {
         return emule::event_query(event);
     }
 #endif

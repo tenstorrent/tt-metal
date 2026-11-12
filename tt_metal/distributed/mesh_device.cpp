@@ -1886,7 +1886,7 @@ bool MeshDeviceImpl::initialize_impl(
 #ifdef TT_METAL_USE_EMULE
             // Emulated devices have no dispatch firmware or sysmem command rings; tt-emule's queue gives the
             // fast-dispatch semantics instead.
-            if (metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+            if (metal_env().get_cluster().emulates_dispatch()) {
                 mesh_command_queues_.push_back(emule::create_mesh_command_queue(
                     pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
                 continue;

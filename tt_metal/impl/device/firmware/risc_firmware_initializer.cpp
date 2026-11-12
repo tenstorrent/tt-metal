@@ -4,6 +4,10 @@
 
 #include "risc_firmware_initializer.hpp"
 
+#ifdef TT_METAL_USE_EMULE
+#include "emulated_program_runner.hpp"
+#endif
+
 #include <algorithm>
 #include <cstdint>
 #include <chrono>
@@ -330,6 +334,13 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             }
         }
     }
+
+#ifdef TT_METAL_USE_EMULE
+    if (cluster_.get_target_device_type() == tt::TargetDevice::Emule) {
+        // Resets the emulated cores, stopping the firmware boot_core_firmware started.
+        emule::reset_core_firmware(std::vector<int>(all_devices.begin(), all_devices.end()));
+    }
+#endif
 
     // Keep simulator routing firmware alive until all cleanup that may access remote chips is done.
     teardown_simulator_ethernet_cores();
@@ -1525,6 +1536,11 @@ void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId devi
             sizeof(uint32_t),
             {static_cast<size_t>(device_id), virtual_core},
             jit_build_config.fw_launch_addr);
+#ifdef TT_METAL_USE_EMULE
+        // Under TT_METAL_EMULE_REAL_FAST_DISPATCH the emulated core runs its firmware loop from here on.
+        emule::boot_core_firmware(
+            static_cast<int>(device_id), core_type, logical_core.x, logical_core.y, virtual_core.x, virtual_core.y);
+#endif
     };
     const CoreCoord grid = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t y = 0; y < grid.y; y++) {

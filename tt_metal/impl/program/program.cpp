@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#ifdef TT_METAL_USE_EMULE
+#include "emulated_program_runner.hpp"
+#endif
 #include <allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
@@ -2992,8 +2995,8 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
-    // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
+    // Devices without dispatch firmware take no dispatch commands
+    if (!tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().runs_dispatch_firmware()) {
         return;
     }
 
@@ -3404,6 +3407,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
             }
         }
+#ifdef TT_METAL_USE_EMULE
+        if (cluster.runs_dispatch_firmware()) {
+            Program program(shared_from_this());
+            emule::prepare_fd_program(device, program, build_env.build_key());
+        }
+#endif
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());
         return;

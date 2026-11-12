@@ -67,7 +67,7 @@ void DispatchKernelInitializer::init(
     devices_ = devices;
 
     // Mock and emulated devices run no dispatch firmware (tt-emule's command queue stands in for it)
-    if (cluster_.is_mock_or_emulated()) {
+    if (!cluster_.runs_dispatch_firmware()) {
         log_info(tt::LogMetal, "Skipping dispatch firmware initialization for mock/emulated devices");
         return;
     }
@@ -100,7 +100,7 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
     }
 
     // Mock and emulated devices have no dispatch firmware to tear down
-    if (cluster_.is_mock_or_emulated()) {
+    if (!cluster_.runs_dispatch_firmware()) {
         init_done.erase(key);
         return;
     }
@@ -128,7 +128,7 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
 bool DispatchKernelInitializer::is_initialized() const { return initialized_; }
 
 void DispatchKernelInitializer::compile_dispatch_kernels() {
-    if (cluster_.is_mock_or_emulated()) {
+    if (!cluster_.runs_dispatch_firmware()) {
         return;
     }
 
@@ -179,7 +179,7 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
 void DispatchKernelInitializer::init_device_command_queues() {
     // Initialize device-side command queues (parallelized per MMIO device).
 
-    if (cluster_.is_mock_or_emulated()) {
+    if (!cluster_.runs_dispatch_firmware()) {
         return;
     }
 

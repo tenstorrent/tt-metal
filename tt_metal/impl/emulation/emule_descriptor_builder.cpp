@@ -21,6 +21,8 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
@@ -333,6 +335,15 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
+            // jit_build adds these to every kernel build (build.cpp, JitBuildState).
+            {
+                auto& kctx = MetalContext::instance(impl.get_context_id());
+                kd.defines["DISPATCH_MESSAGE_ADDR"] =
+                    std::to_string(kctx.dispatch_mem_map().get_dispatch_message_addr_start());
+                if (kctx.get_dispatch_query_manager().fds_signalling_enabled()) {
+                    kd.defines["FDS_SIGNALLING"] = "1";
+                }
+            }
             if (!k.get_full_kernel_name().empty()) {
                 kd.elf_paths = k.elf_paths_by_processor_index(
                     *device,
@@ -368,17 +379,25 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 // kernel is data movement on its own core type (EthernetKernel is not a DataMovementKernel).
                 auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
                 auto* eth_kernel = dynamic_cast<EthernetKernel*>(&k);
-                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr);
+                auto* de_kernel = dynamic_cast<experimental::quasar::DispatchEngineKernel*>(&k);
+                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr || de_kernel != nullptr);
                 uint32_t proc_type_idx = 0;
                 if (dm_kernel != nullptr &&
                     std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
                     proc_type_idx = 1;
                 }
+                if (de_kernel != nullptr) {
+                    proc_type_idx = de_kernel->get_kernel_processor_type(0);
+                    kd.dm_processor = proc_type_idx;
+                }
                 if (eth_kernel != nullptr) {
                     const auto processor = std::get<EthernetConfig>(eth_kernel->config()).processor;
                     kd.dm_processor = static_cast<uint32_t>(processor);
                     proc_type_idx = static_cast<uint32_t>(processor);
-                    // Silicon's JIT takes an ethernet build's per-RISC macros (COMPILE_FOR_ERISC, ...) from HAL.
+                }
+                if (eth_kernel != nullptr || de_kernel != nullptr) {
+                    // Silicon's JIT takes an ethernet or dispatch-engine build's per-RISC macros (COMPILE_FOR_ERISC,
+                    // COMPILE_FOR_DISPATCH_ENGINE, ...) from HAL.
                     const auto& rtoptions = MetalContext::instance().rtoptions();
                     for (const auto& define : hw.get_jit_build_query().defines(
                              {false,

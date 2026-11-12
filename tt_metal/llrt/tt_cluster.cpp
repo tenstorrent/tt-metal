@@ -298,6 +298,13 @@ bool Cluster::is_galaxy_cluster() const { return false; }
 
 bool Cluster::is_ubb_galaxy() const { return Cluster::is_ubb_galaxy(this->cluster_type_); }
 
+bool Cluster::runs_dispatch_firmware() const {
+    if (this->target_type_ == tt::TargetDevice::Mock) {
+        return false;
+    }
+    return this->target_type_ != tt::TargetDevice::Emule || this->rtoptions_.get_emule_real_fast_dispatch();
+}
+
 tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
 BoardType Cluster::get_board_type(ChipId chip_id) const { return this->get_cluster_desc()->get_board_type(chip_id); }

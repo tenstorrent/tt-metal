@@ -122,7 +122,7 @@ void loop_and_wait_with_timeout(
 SystemMemoryManager::SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs) :
     env_(env),
     ctx_(ctx),
-    is_mock_device_(env.get_cluster().is_mock_or_emulated()),
+    is_mock_device_(!env.get_cluster().runs_dispatch_firmware()),
     is_dram_backed_(env.get_rtoptions().get_dram_backed_cq()),
     cq_alignment_(env.get_hal().get_alignment(is_dram_backed_ ? HalMemType::DRAM : HalMemType::HOST)),
     device_id(device_id),

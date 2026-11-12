@@ -942,7 +942,7 @@ namespace {
 // so their workloads carry per-program configs rather than the FD workload finalization.
 bool uses_fd_program_configs(MetalEnvImpl& env) {
     return env.get_rtoptions().get_fast_dispatch() &&
-           env.get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
+           !env.get_cluster().emulates_dispatch();
 }
 }  // namespace
 
