@@ -1918,6 +1918,12 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
+                # As the JIT's descriptors, the pack thread knows whether an operand unpacks to DEST.
+                if name == "pack":
+                    optional_kernel_flags += (
+                        f" -DLLK_UNPACK_TO_DEST_ANY={int(bool(self.unpack_to_dest))}"
+                    )
+
                 # Only TRISC0 has the vector unit on Quasar. The flag is after
                 # ARCH_COMPUTE so it overrides the march implied by -mcpu.
                 if self.requires_vector_ext and name == "unpack":
