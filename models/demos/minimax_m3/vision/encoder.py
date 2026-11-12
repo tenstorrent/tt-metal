@@ -194,5 +194,7 @@ def read_embeddings(tokens: ttnn.Tensor, out: np.ndarray) -> None:
             f" C-contiguous {out.flags.c_contiguous}, writable {out.flags.writeable}"
         )
     (chip_tokens,) = ttnn.get_device_tensors(tokens)
+    # TODO: read the tokens straight into out: copy_device_to_host_tensor into a host tensor that borrows out's memory.
+    # That saves about 1.2 ms per 672x672 image on a P150, but the watcher's NOC check then aborts the run.
     rows = chip_tokens.cpu().to_torch()
     np.copyto(out.view(np.uint16), rows.view(torch.uint16).numpy())
