@@ -14,18 +14,18 @@ There are two files, one per device family. They share all plotting and statisti
 Run from the `tests/` directory.
 
 ```bash
-# Wormhole / Blackhole (CHIP_ARCH is auto-detected from the device)
+# Wormhole / Blackhole (architecture is read from the card; CHIP_ARCH overrides it)
 pytest python_tests/test_sfpu_plot.py -k Log -s      # one op
 pytest python_tests/test_sfpu_plot.py -s             # every configured op
 
-# Quasar (simulator only — both CHIP_ARCH and --run-simulator are required)
-CHIP_ARCH=quasar pytest --run-simulator python_tests/quasar/test_sfpu_plot_quasar.py -k Exp -s
-CHIP_ARCH=quasar pytest --run-simulator python_tests/quasar/test_sfpu_plot_quasar.py -s
+# Quasar (simulator). --run-simulator is enough when soc_descriptor.yaml sits next to it.
+pytest --run-simulator python_tests/quasar/test_sfpu_plot_quasar.py -k Exp -s
+pytest --run-simulator python_tests/quasar/test_sfpu_plot_quasar.py -s
 ```
 
 - `-k <Op>` selects cases by name, for example `Log`, `Sqrt`, or `Reciprocal`. It matches every case whose id contains the text, so `-k Exp` also runs `Exp-fp32-approx`.
 - `-s` lets the stats summary print to your terminal.
-- `CHIP_ARCH` (`blackhole`, `wormhole`, or `quasar`) selects the target device.
+- `CHIP_ARCH` (`blackhole`, `wormhole`, or `quasar`) overrides detection. Quasar needs it only when the simulator descriptor is missing, or when a card is present and `--run-simulator` is not passed.
 
 Each case writes its plot to `python_tests/_plot_output/<arch>/sfpu_<id>.png`, where `<arch>` is `wh`, `bh`, or `qsr`, and asserts that the hardware result matches golden. The folder is next to the test files regardless of where you launch pytest from, and it is git-ignored. Keeping one folder per arch means a Wormhole run and a Blackhole run of the same case do not overwrite each other.
 

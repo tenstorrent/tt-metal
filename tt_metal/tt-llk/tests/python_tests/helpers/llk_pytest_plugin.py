@@ -43,18 +43,14 @@ from pathlib import Path
 from typing import NoReturn, Optional
 
 from helpers.chip_architecture import cli_flag_given
-from helpers.target_config import is_ttsim
+from helpers.target_config import is_ttsim, simulator_path
 from ttsim_error import parse_ttsim_error
 
-# TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
-# TT_UMD_SIMULATOR_PATH is kept as an alias for the existing RTL-simulator workflow.
-# Gate on --run-simulator so the env var being set doesn't force a ttsim init on silicon runs,
+# Gate on --run-simulator so a set simulator path doesn't force a ttsim init on silicon runs,
 # and skip --compile-producer (it only compiles ELFs and never talks to a device). xdist workers
 # inherit env vars but not the controller's argv, so trust the env var when PYTEST_XDIST_WORKER
-# is set.
-_SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
-    "TT_UMD_SIMULATOR_PATH"
-)
+# is set. simulator_path() reads TT_METAL_SIMULATOR, then TT_UMD_SIMULATOR_PATH.
+_SIMULATOR_PATH = simulator_path() or None
 _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
 # Skips ttexalens after setup_build fills the paths, and the session-end perf combine.
 _HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
