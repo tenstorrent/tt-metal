@@ -869,7 +869,7 @@ class TestTriage:
                         f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
 
-        def named(kernel_args):
+        def names_and_values(kernel_args):
             return [(arg.name, arg.value) for arg in kernel_args]
 
         incremented_semaphore = next(
@@ -877,15 +877,15 @@ class TestTriage:
         )
         args = {check.result.dispatcher_core_data.kernel_name: check.result.kernel_args for check in filtered_results}
         writer, reader, compute = args["writer_1_tile"], args["reader_binary_1_tile"], args["add_2_tiles_hang"]
-        assert named(writer.compile_time_args) == [
+        assert names_and_values(writer.compile_time_args) == [
             ("tensor::out[0]", 2),
             ("tensor::out[1]", 2048),
             ("ct_marker", 0x5678),
         ]
-        assert named(writer.runtime_args) == [("rt_marker", 0x9ABC), (None, 0x1234)]
+        assert names_and_values(writer.runtime_args) == [("rt_marker", 0x9ABC), (None, 0x1234)]
         assert [arg.name for arg in writer.common_runtime_args] == ["incremented_semaphore", "tensor::out"]
         assert writer.common_runtime_args[0].value == incremented_semaphore
-        assert named(reader.compile_time_args) == [
+        assert names_and_values(reader.compile_time_args) == [
             ("tensor::in0[0]", 2),
             ("tensor::in0[1]", 2048),
             ("tensor::in1[0]", 2),

@@ -24,7 +24,7 @@ struct RuntimeArgCount {
 # Values live in L1 at kernel_config_base + rta_offset.
 struct RuntimeArgs {
     names @0 :List(Text);  # names[i] names word i, empty if unnamed; words past the end, like varargs, are unnamed
-    counts @1 :List(RuntimeArgCount);  # one entry per core with args
+    counts @1 :List(RuntimeArgCount);  # kernel cores not listed have no args
 }
 
 # Values live in L1 at kernel_config_base + crta_offset.

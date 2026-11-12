@@ -435,8 +435,6 @@ class DispatcherData:
             rta_offsets = mailboxes.launch[launch_msg_rd_ptr].kernel_config.rta_offset[proc_type]
             rta_offset = int(rta_offsets.rta_offset)
             crta_offset = int(rta_offsets.crta_offset)
-        except TimeoutDeviceRegisterError:
-            raise
         except Exception:
             pass
         try:

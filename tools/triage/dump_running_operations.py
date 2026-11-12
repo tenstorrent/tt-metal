@@ -38,7 +38,7 @@ Owner:
 
 from dataclasses import dataclass
 
-from kernel_args_provider import run as get_kernel_args_provider, KernelArgsProvider, serialize_kernel_args
+from kernel_args_provider import run as get_kernel_args_provider, KernelArgsProvider, kernel_args_serializer
 from operation_param_parser import ParameterParser
 from operation_provider import (
     run as get_operation_provider,
@@ -90,8 +90,8 @@ def _to_summary(
     common_runtime_args = []
     for _, kernel in sorted(agg.kernels.items()):
         kernel_args = kernel_args_provider.get_cached_kernel_args(kernel.risc_location)
-        compile_time_args.append(f"{kernel.name}: {serialize_kernel_args(kernel_args.compile_time_args)}")
-        common_runtime_args.append(f"{kernel.name}: {serialize_kernel_args(kernel_args.common_runtime_args)}")
+        compile_time_args.append(f"{kernel.name}: {kernel_args_serializer(kernel_args.compile_time_args)}")
+        common_runtime_args.append(f"{kernel.name}: {kernel_args_serializer(kernel_args.common_runtime_args)}")
 
     unique_cores = sorted(agg.core_locations)
     cores_to_display = (

@@ -51,7 +51,7 @@ class KernelArg:
     value: int
 
 
-def serialize_kernel_args(args: list[KernelArg] | None) -> str:
+def kernel_args_serializer(args: list[KernelArg] | None) -> str:
     """Values in word order, in hex, as name=value, or [i]=value for word i when it has no name."""
     if args is None:
         return "N/A"
@@ -62,9 +62,9 @@ def serialize_kernel_args(args: list[KernelArg] | None) -> str:
 
 @dataclass
 class KernelArgsData:
-    compile_time_args: list[KernelArg] | None = triage_field("CT Args", serialize_kernel_args, verbose=1)
-    runtime_args: list[KernelArg] | None = triage_field("RT Args", serialize_kernel_args, verbose=1)
-    common_runtime_args: list[KernelArg] | None = triage_field("Common RT Args", serialize_kernel_args, verbose=1)
+    compile_time_args: list[KernelArg] | None = triage_field("CT Args", kernel_args_serializer, verbose=1)
+    runtime_args: list[KernelArg] | None = triage_field("RT Args", kernel_args_serializer, verbose=1)
+    common_runtime_args: list[KernelArg] | None = triage_field("Common RT Args", kernel_args_serializer, verbose=1)
 
 
 class KernelArgsProvider:
