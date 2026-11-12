@@ -477,10 +477,22 @@ def window_keep() -> str:
 
 
 def snapshot_cap(end: int, block: int | None = None) -> int:
-    """P.42: the decode handoff's cap of a prompt ending at ``end`` (tt-d-gen prefix_indexer.hpp reusable_prefix_cap):
-    the last kv_block boundary strictly below ``end`` (KV_BLOCK_SIZE; 0 for an empty prompt)."""
+    """Decode's cap of a chunk ending at ``end`` = the engine's actual_end (P.42; P.49, DS41-219). Decode's cap is
+    reusable_prefix_cap(kv_block, prompt_len) = (prompt_len - 1) // kv_block x kv_block (tt-d-gen 48b79127fb1
+    prefix_indexer.hpp:78-81), and under PD_DISAGG the engine hands prefill actual_end = prompt_compute_end =
+    prompt_len - 1 (types.hpp:101-110; prefill_writer.cpp:125-131 ends the last chunk there), so cap = end // kv_block
+    x kv_block: the last kv_block boundary at or below ``end`` (KV_BLOCK_SIZE). A one-token prompt (actual_end 1,
+    types.hpp:109) gives 0 both ways. A non-last chunk ends on a block (cold starts, a multiple of the block size per
+    chunk), so its cap is its end. (P.42 used (end - 1) // kv_block x kv_block, 64 positions early when prompt_len % 64
+    == 1.)"""
     b = int(settings.get("KV_BLOCK_SIZE")) if block is None else int(block)
-    return (int(end) - 1) // b * b if end > 0 else 0
+    return int(end) // b * b if end > 0 else 0
+
+
+def prefill_end(end: int) -> int:
+    """PREFILL_END (P.49): where the serving runtime stops computing a chunk the engine ends at ``end``: cap =
+    snapshot_cap(end) (decode's cap; positions at or past it are pad), end = ``end`` (P.42's path)."""
+    return snapshot_cap(end) if settings.get("PREFILL_END") == "cap" else int(end)
 
 
 def ring_cores() -> tuple:

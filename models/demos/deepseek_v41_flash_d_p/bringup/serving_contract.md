@@ -113,6 +113,35 @@ tt-d-gen jazpur/dsv4-replay-window 48b79127fb1).** Two settings (tt/settings.py)
   20 MiB (40 x (192 ring + 192 pin + 128 snapshot) KiB) at any length, plus one 6 MiB gather buffer a model.
   Re-index copies: 96 MiB at 1M -> 0.
 
+**P.49 (OWNER-AUTHORIZED CONTRACT CHANGE 2026-11-12, decode's review: Brian Liu, #blaze-deepseek-v4 2026-11-06
+21:38, "stop prefill at the 64 boundary if you are only storing 128 SWA"; Kartik 2026-11-11). Replaces P.42's "prefill
+computes and attends every position up to prompt_len" and its cap formula.** tt-d-gen jazpur/dsv4-replay-window
+48b79127fb1:
+- **What the engine passes.** Under PD_DISAGG a prefill node computes [0, prompt_compute_end), prompt_compute_end =
+  max(prompt_len - 1, 1) (engine/include/engine/runtime/types.hpp:101-110: decode forwards the last prompt token
+  itself); the request's last chunk ends there (engine/src/runtime/prefill_writer.cpp:125-131, `hi == prefill_end`),
+  so the model's actual_end is prompt_len - 1. Decode asks for [0, prompt_len - 1) (backend_runtime.cpp:817,
+  decode_prompt_start) and its cap is reusable_prefix_cap(kv_block, prompt_len) = (prompt_len - 1) // kv_block x
+  kv_block (engine/include/engine/control/prefix_indexer.hpp:78-81).
+- **The cap (DS41-219).** cap = actual_end // KV_BLOCK_SIZE x KV_BLOCK_SIZE (tt/attention.snapshot_cap) = decode's cap
+  for every prompt length (a one-token prompt: actual_end 1, cap 0 both ways). P.42's (actual_end - 1) // 64 x 64 was
+  64 positions early when prompt_len % 64 == 1 (2,945 tokens: 2,880 instead of 2,944). server_rules.self_check checks
+  the identity for every length 1..258 at blocks 32 and 64.
+- **Prefill stops at cap (`PREFILL_END=cap`, default; `end` = P.42's path kept).** The serving runtime
+  (tt/runners/adapter.py) runs each chunk with the model's end = cap of its actual_end: positions >= cap are pad (not
+  attended, not in any cache, not in the window ring or the snapshot, not hashed for Engram, not in the slot's id
+  history). The chunk keeps its fixed padded size, and its acks still name the engine's (actual_start, actual_end): the
+  engine counts layers_per_chunk acks a chunk. A chunk with cap <= actual_start (the last chunk, wholly in
+  [cap, actual_end)) computes nothing: each layer's snapshot is rewritten at cap from its ring, then the layer acks.
+  History records in [cap, actual_end) are not written (they keep the slot's earlier bytes; decode replays those
+  positions); "Write only [actual_start, actual_end)" and the pad-row rule below apply with cap in place of actual_end.
+  A non-last chunk ends on a kv block (a recurrent slot always starts cold, backend_runtime.cpp:1063-1064, so chunks
+  start at multiples of the chunk size, itself a multiple of 64), so its cap is its end and nothing changes there.
+- **Bit-identity.** For the same prompt, every served byte below cap (each layer's 4 snapshot records, every history
+  record of [0, cap)) is the same under end and cap: tests/test_prefill_end.py (metric served_bytes_differ == 0, also
+  past_cap_written == 0). The contract / acks / runner tests compare [lo, cap) and [0, cap) under cap
+  (caches.served_end); under end every range is as before.
+
 **Index keys (P.39, owner 2026-11-06, PD migration first cut: compatibility with Blaze decode for now; P.42 replaced
 the re-index copies with aliases, above).** Setting
 `INDEX_K_SERVED` (tt/settings.py): `fp8_row192` (default) or `bf16` (the earlier contract: bf16 rows of 128, 256 B,
@@ -285,7 +314,7 @@ Table rules (`ttnn.experimental.disaggregation.KvChunkAddressTable`):
 
 The server's KV checks (tools/launch_harness/validation.py:18-22, 55-61; README 380-396):
 - Prefill KV vs golden PCC >= 0.93. Ours is max(0.93, the spec's state threshold 0.97).
-- Decode receives [0, cap), cap = (prompt_len - 1) // 64 * 64, compared byte for byte. It recomputes
+- Decode receives [0, cap), cap = (prompt_len - 1) // 64 * 64 (= actual_end // 64 * 64 under PD, P.49), compared byte for byte. It recomputes
   [cap, prompt_len), the last block, compared by PCC >= 0.99. Deploy: a 3000-token prompt gives cap 2944.
 
 Tests:

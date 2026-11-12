@@ -34,7 +34,8 @@ WINDOW_KV_KEEP=snapshot128 (P.42, the default; owner 2026-11-07, decode's review
 max_sequence_length is 128, decode's table (P.43; tt-metal's table refuses a lookup at or past it,
 kv_chunk_address_table.cpp:138, so every reader stops at 128: testing/contract.py reads a Snapshot config at the
 request's last chunk only, its 4 records): per (slot, layer) 128 rows, position p at row p % 128 for
-p < cap = (prompt_len - 1) // kv_block_size x kv_block_size (decode receives [0, cap) and replays [cap, prompt_len)),
+p < cap = (prompt_len - 1) // kv_block_size x kv_block_size = actual_end // kv_block_size x kv_block_size under PD
+(P.49, DS41-219; decode receives [0, cap) and replays [cap, prompt_len)),
 4 records of 32 rows (32 KiB each, one bank), the same bytes on every chip (device group: the whole mesh); tensor
 [slots x L, 1, 128, 512], replicated. REINDEX_SERVE=alias (P.42, the default): 4_index_k_r1's entries of the re-index
 layers are their key source's records (the same noc_addr, size and device group at the same (slot, position)); the
@@ -340,7 +341,7 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id: int, real_len: int, t
     names = [table.config_name(i) for i in range(table.num_configs())]
     mins, modes = {}, {}
     # P.42 snapshot: the cap of the request's real end (the runtime's last chunk end in this process; else the
-    # caller's 32-aligned length, whose cap is the same unless that length is a multiple of 64 and the prompt longer)
+    # caller's 32-aligned length, whose cap end // 64 x 64 is the same, P.49)
     cap = snapshot_cap(SNAPSHOT_ENDS.get(int(slot_id), real_len))
     for c in served_configs(cfg, list(layer_ids)):
         cid = names.index(c["name"])

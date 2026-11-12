@@ -3745,3 +3745,50 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   one of 102 limits held (largest share err_state_window_kv_L25 0.746), host_transfers_per_layer 0, clean chunk wall
   184.3 ms (spread 23.0); at 51200: chunk wall 206.2 ms (spread 46.8), device total 185.85 ms, experts 104.35 ms.
   The off side and the combine op's own time: the orchestrator's A/B (I did not profile, per the brief).
+
+## P.49 (perf, attempt 1): PREFILL_END=cap, prefill stops at decode's cap; the cap rule equals decode's (DS41-219)
+
+- Expected per chunk (written before measuring; perf_guide section 1: a contract change, not a speed pick): a
+  non-last chunk ends on a 64 block (cold starts, chunk 5120), so its cap is its end: device 0, host 0 (no op added,
+  removed or resized; the same programs). The A/B (quick rung, 51,200) times full non-last chunks: expected flat, within
+  the noise. The request's last chunk: the model still runs the chunk at its fixed padded size (rows past the end are
+  pad, masked), so device about 0 there too; only a last chunk wholly past cap (prompt ends < 64 tokens into a chunk)
+  skips every layer's compute (saves one whole chunk, ~185 ms device) and only rewrites the 40 snapshots and acks.
+- Cap rule (DS41-219, tt-d-gen 48b79127fb1): PD prefill gets actual_end = prompt_compute_end = max(prompt_len - 1, 1)
+  (engine/include/engine/runtime/types.hpp:101-110; the last chunk ends there, engine/src/runtime/prefill_writer.cpp:
+  125-131); decode asks for [0, prompt_len - 1) (backend_runtime.cpp:817) and its cap is reusable_prefix_cap(64,
+  prompt_len) = (prompt_len - 1) // 64 x 64 (engine/include/engine/control/prefix_indexer.hpp:78-81). So cap =
+  actual_end // 64 x 64 (tt/attention.py snapshot_cap; was (actual_end - 1) // 64 x 64). Same for every length:
+  server_rules.self_check checks lengths 1..258 at blocks 32 and 64. Non-last chunks end on a block because a
+  recurrent slot always starts cold (backend_runtime.cpp:1063-1064), so their cap is their end.
+- Change: setting PREFILL_END (cap default | end). tt/runners/adapter.py _run runs the chunk with the model's end =
+  attention.prefill_end(actual_end); positions >= cap become PAD in the host ids (engram hash, id history) and pad rows
+  in the model (no window ring, snapshot, compressed KV, index key writes). Acks still name the engine's range. A chunk
+  with cap <= start computes nothing: _acks_only rewrites each layer's snapshot at cap, syncs, acks (K-71). Only the
+  serving runtime reads the switch; the ladder / profile call model.layer directly, so the A/B rungs are unchanged.
+- Tests updated to the new rule (caches.served_end): test_adapter_acks, test_runner_contract (ranges [lo, cap),
+  [0, cap)), test_window_snapshot (test_snapshot_cap values), server_rules (prompt_compute_end, decode_cap). New
+  tests/test_prefill_end.py (served_bytes_differ, past_cap_written, end_past_written).
+- Bit-identity (test_prefill_end, 40 layers, end -> slot 0, cap -> slot 1, read through the table over UMD):
+  prompt_len (mod 64, actual_end, cap, chunks): 191 (63, 190, 128, 1), 4097 (1, 4096, 4096, 1), 4098 (2, 4097, 4096,
+  1), 5122 (2, 5121, 5120, 2; last chunk computes nothing), 7231 (63, 7230, 7168, 2), 10176 (0, 10175, 10112, 2);
+  both prompts: 0 of 24,960 served records differ; the cap run wrote 0 records in [cap, actual_end); the end run wrote
+  some there in every case that has such records (proves the two sides differ).
+- Gate units: test_prefill_end PASS, test_adapter_acks PASS (the slot-0 last-block check [2496, 2536) is empty
+  under cap: printed, not run), test_determinism PASS (max |diff| 0, both prompts, cold and warm).
+- test_contract FAILS under PREFILL_END=cap (DS41-236), checks that measure positions the cap path no longer computes
+  (request actual_end 10208 = seq 10240 - contract_tail_pad 32; cap 10176):
+    FAIL pcc_contract_state_window_kv: 0.8525 (layer 38; every layer 0.853-0.868) < limit 0.9434 (P.43's limit; this
+      run's hook raised before recording it): the window ring state at 10208 vs the device ring, which stops at 10176
+    FAIL contract_state_exact_engram_tail: layers 1, 14 [5306, 14, 237] != golden [16, 43, 783] (ids before 10208 vs
+      before 10176)
+  Not failing: producer KV over [0, 10208) compress_kv 0.98722 (limit 0.9370; P.43 end 0.98714), index_k 0.99175
+  (0.9465; P.43 0.99230), window_kv snapshot at cap 10176 min 0.98705 (P.43 0.98686). Per the brief I did not change
+  the check, did not run measure / the profile, and stopped. The owner decides; proposals:
+    (a) run test_contract with DS41_PREFILL_END=end in the gate (the full-prompt path is kept), and let
+        test_prefill_end carry its verdict to cap: every served byte below cap is identical between the two;
+    (b) or judge the cap path at the handoff point: KV over [0, cap) and the fixed state at cap, which needs a golden
+        state snapshot at 10176 (or contract_tail_pad 64 with that snapshot): a golden / spec change.
+- Perf: not measured (stopped before measure, as the brief says). Expected: 0 on the A/B chunks (full, non-last).
+- Re-run: `gate P.49 --spec <spec> --check --unit 'P.49#test_prefill_end'` (~8 min);
+  `DS41_PREFILL_END=end|cap` selects the side.

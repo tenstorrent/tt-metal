@@ -8,8 +8,8 @@ One window cache (tt/attention.TtWindowCache, keep snapshot128, its own snapshot
 [1, 1, 128, 512] bf16 ROW_MAJOR, 32-row records ROUND_ROBIN_1D over the DRAM banks) takes random window rows through
 both ring write paths (``write``: the chunk's natural rows on every chip; ``write_own``: each chip its own query rows,
 the ring blocks owned by one chip, so the snapshot must gather them), then ``write_snapshot(end)``. After every write,
-on every chip: snapshot row p % 128 == the row of position p for p in [cap - 128, cap), cap = (end - 1) // 64 x 64
-(KV_BLOCK_SIZE 64), and every row of no position < cap zero, byte for byte. Ends: 100 (cap 64 < 128), a whole chunk,
+on every chip: snapshot row p % 128 == the row of position p for p in [cap - 128, cap), cap = end // 64 x 64
+(KV_BLOCK_SIZE 64; P.49, DS41-219: decode's cap of actual_end = prompt_len - 1), and every row of no position < cap zero, byte for byte. Ends: 100 (cap 64 < 128), a whole chunk,
 a mid-chunk end, a follow-up off the chunk period (start 32 mod 64) whose window spans two chunks, an end mid-record
 over owned blocks, the server's pulled-back last chunk (its carry from the pin: TtWindowCache.pin), 40 (cap 0: all
 zero). 8x4: ~10 s.
@@ -18,7 +18,7 @@ test_skip_snapshot (P.43, OWNER 2026-11-07; runs only under DECODER_SKIP=exact /
 gate sets them): the whole model (every layer, lm_head off), rung s10240's tokens, a fresh state per prompt. The
 request's last chunk starts where the caller rule puts it, TtDS41Model.last_start(end) (SKIP_TAIL_START), the chunk
 before it (last=False: the decoder skipped) ending there:
-    5184   a multiple of 64: cap 5120 (exact: [0, 2432) + [2432, 5184); replay128: [0, 4992) + [4992, 5184))
+    5184   a multiple of 64: cap 5120 before P.49, 5184 since (DS41-219: end // 64 x 64) (exact: [0, 2432) + [2432, 5184); replay128: [0, 4992) + [4992, 5184))
     5150   not a multiple of 64: cap 5120 (exact: [0, 2432) + [2432, 5150); replay128: [0, 4992) + [4992, 5150))
     100    shorter than either mode's last-chunk minimum: cap 64, one chunk [0, 100), the request's last
 After the last chunk every layer's served snapshot (chip (0, 0)'s rows; every chip the same bytes) is checked:
@@ -56,15 +56,18 @@ def _set(monkeypatch, **kw):
 def test_snapshot_cap():
     from models.demos.deepseek_v41_flash_d_p.tt.attention import snapshot_cap
 
-    assert [snapshot_cap(e, 64) for e in (1, 64, 65, 100, 128, 129, 3000, 5120, 5121)] == [
-        0,
+    # P.49 (DS41-219): ``e`` is the engine's actual_end = prompt_len - 1 under PD_DISAGG, so decode's cap
+    # (prompt_len - 1) // 64 x 64 = e // 64 x 64 (2944: a 2945-token prompt, decode's cap 2944)
+    assert [snapshot_cap(e, 64) for e in (1, 64, 65, 100, 128, 129, 2944, 3000, 5120, 5121)] == [
         0,
         64,
         64,
         64,
         128,
+        128,
         2944,
-        5056,
+        2944,
+        5120,
         5120,
     ]
 

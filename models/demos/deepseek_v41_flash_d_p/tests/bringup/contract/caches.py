@@ -120,8 +120,18 @@ SNAP = 128  # P.42: the snapshot's rows (positions 0..127 of the table config)
 
 
 def snapshot_cap(end: int) -> int:
-    """P.42: the cap of a request ending at ``end`` (tt-d-gen reusable_prefix_cap at the server's kv_block_size)."""
-    return R.reusable_prefix_cap(R.KV_BLOCK, end)
+    """Decode's cap of a prefill chunk the engine ends at ``end`` (P.42; P.49, DS41-219): under PD_DISAGG
+    actual_end = prompt_compute_end(prompt_len) = prompt_len - 1, so cap = reusable_prefix_cap(kv_block, end + 1)
+    (server_rules.decode_cap)."""
+    return R.decode_cap(end)
+
+
+def served_end(end: int) -> int:
+    """P.49: the end of what the runtime computes and writes for a chunk the engine ends at ``end``: decode's cap under
+    PREFILL_END=cap (the model's setting, the default), ``end`` under PREFILL_END=end."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    return snapshot_cap(end) if settings.get("PREFILL_END") == "cap" else int(end)
 
 
 def served_prefix() -> list[int]:

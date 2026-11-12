@@ -20,7 +20,7 @@ the re-index aliases and the 128-row window snapshot real (both were "to do" in 
 | History tensor | `tensor_type` KV: a record per 32 positions, decode pulls the records it lacks |
 | Snapshot tensor | `tensor_type` Snapshot (tt-d-gen#1955): a fixed-size state moved whole, once, with the last chunk |
 | `KV_BLOCK_SIZE` | The serving engine's `kv_block_size`: 64 in every shipped tt-d-gen worker config (32 is legal) |
-| cap | The last migrated position: `cap = (prompt_len - 1) // KV_BLOCK_SIZE * KV_BLOCK_SIZE`. Decode receives rows [0, cap) and replays [cap, prompt_len) itself. Examples: 100 → 64, 128 → 64, 129 → 128, 56,320 → 56,256, 1,048,576 → 1,048,512, 64 → 0 |
+| cap | The last migrated position, decode's `reusable_prefix_cap`: `cap = (prompt_len - 1) // KV_BLOCK_SIZE * KV_BLOCK_SIZE`. Under PD tt-d-gen hands prefill `actual_end = prompt_len - 1`, so prefill computes it as `actual_end // KV_BLOCK_SIZE * KV_BLOCK_SIZE` (P.49, DS41-219). Decode receives rows [0, cap) and replays [cap, prompt_len) itself; since P.49 prefill computes nothing at or past cap. Examples (prompt_len → cap): 100 → 64, 128 → 64, 129 → 128, 2,945 → 2,944, 56,320 → 56,256, 1,048,576 → 1,048,512, 64 → 0 |
 | Alias entry | A table entry that points at another layer's record (same address, size, device group, slot and position). No bytes of its own |
 | Device group | The chips that hold the same bytes of a record. Decode may read any one of them |
 | TP-dedup / TP-replicated | 8x4 mesh = 8 SP rows (sequence split) x 4 TP columns. TP-dedup: each record on one chip. TP-replicated: on the 4 chips of a mesh row |
@@ -91,7 +91,29 @@ All in `tt/settings.py` (environment variable `DS41_<NAME>`). Verified by callin
 | `REINDEX_SERVE` | `alias` | `copy`: layers 24-36 in `4_index_k_r1` get slabs of their own, written with layer 20's rows (same entry counts, ~96 MiB more a chip a slot at 1M) |
 | `INDEX_K_SERVED` | `fp8_row192` | `bf16`: index rows are bf16 x 128 (256 B), records 4,096 / 8,192 B, and `4_index_k_r1` covers layer 20 only (no re-index entries) |
 | `CKV_FORMAT` | `bf16` | `bfp4_rows`: changes what attention reads and the values' precision, **not the table**. The served records stay bf16 rows (holding 4-bit-rounded values). Checked: `served_configs` gives the same table |
+| `PREFILL_END` | `cap` | `end`: prefill computes and writes every position up to the engine's actual_end (P.42's path); the served bytes below cap are the same (P.49 test), the table is the same |
 | `KV_BLOCK_SIZE` | 64 | Changes only cap (and so which window rows the snapshot holds and how many history records decode reads). Set it to the deployed worker's value |
+
+## Changed in P.49 (2026-11-12, owner-authorized contract change; pending the owner's acceptance)
+
+- **Prefill stops at cap** (`PREFILL_END=cap`, the new default; `end` keeps the old path). Prefill computes only
+  positions [0, cap) of a request: in the chunk the engine ends at `actual_end`, positions at or past cap are treated
+  as padding (not attended, not written to any cache, not hashed for Engram). The chunk still runs at its fixed size and
+  still sends one ack per layer naming the engine's `(actual_start, actual_end)`. A last chunk with no position below
+  cap computes nothing: it rewrites each layer's snapshot at cap and acks. History records in [cap, actual_end) are no
+  longer written (they hold whatever the slot held before); decode replays those positions anyway.
+- **cap equals decode's for every prompt length (DS41-219).** tt-d-gen at `48b79127fb1`: under PD_DISAGG a prefill
+  node's prompt ends at `prompt_compute_end = max(prompt_len - 1, 1)` (`engine/include/engine/runtime/types.hpp:
+  101-110`), the last chunk ends there (`engine/src/runtime/prefill_writer.cpp:125-131`, `hi == prefill_end`), decode
+  asks for `[0, prompt_len - 1)` (`backend_runtime.cpp:817`, `decode_prompt_start`) and decode's cap is
+  `reusable_prefix_cap(kv_block, prompt_len) = (prompt_len - 1) // kv_block * kv_block`
+  (`engine/include/engine/control/prefix_indexer.hpp:78-81`). So prefill's cap = `actual_end // kv_block * kv_block`.
+  P.42 used `(actual_end - 1) // 64 * 64`, 64 positions early when prompt_len % 64 == 1 (2,945 tokens: 2,880 instead
+  of 2,944). Checked for every prompt length 1..258 at blocks 32 and 64 (`server_rules.self_check`).
+- **Non-last chunks are unchanged.** A recurrent (snapshot) slot always starts cold (`backend_runtime.cpp:1063-1064`),
+  so chunks start at multiples of the chunk size (5120, a multiple of 64) and a non-last chunk's cap is its end.
+- **Bit-identity.** Every served byte below cap (the 4 snapshot records of every layer, every history record of
+  [0, cap)) is the same under `end` and `cap` (`tests/test_prefill_end.py`, both prompts, 6 prompt lengths).
 
 ## Changed in P.43 (committed 2026-11-07)
 
@@ -107,7 +129,7 @@ All in `tt/settings.py` (environment variable `DS41_<NAME>`). Verified by callin
 | # | Point | State |
 |---|---|---|
 | 1 | **fp8 quantizer rounding.** Brian's review asks for a byte-for-byte match with decode's `pack_index_keys` (`tests/blaze/deepseekv4_1/csa2_harness.py:402`), "round-to-nearest-even". The served rows are the stock cast of the bf16 key (P.44: fp8(key), no bfp8 rounding first), which is what tt-blaze's writer test (`test_dsa_indexer_direct_k_cache_update.py:300`, bytes 0..131, atol 0) compares Blaze's writer `DsaIndexerDirectKCacheUpdate` with. `pack_index_keys` is a different recipe from both the writer and the stock cast: it rounds to nearest even and divides by 448; about half of the e4m3 values and the scale bytes differ from the writer's recipe on random keys (CPU, 2026-11-10). We do not change the cast to match it. | Open: decode to confirm `pack_index_keys` is a test helper, not the writer's contract |
-| 2 | **cap from prompt length vs where prefill stops (DS41-219).** At tt-d-gen 48b79127fb1 a PD prefill stops at prompt_len - 1. Our cap uses the end of the last chunk prefill ran; decode's may use the full prompt length. They differ only when prompt_len % 64 == 1 (e.g. 2,945: ours 2,880, decode's 2,944, so our snapshot rows sit 64 positions early). | Open: confirm with decode |
+| 2 | **cap from prompt length vs where prefill stops (DS41-219).** At tt-d-gen 48b79127fb1 a PD prefill stops at prompt_len - 1. P.42's cap used that end as if it were the prompt length, 64 positions early when prompt_len % 64 == 1. | Closed in P.49: cap = actual_end // 64 x 64 = decode's (see Changed in P.49) |
 | 3 | **No last-chunk flag.** tt-d-gen's chunk header `{slot_id, actual_start, actual_end}` has no "last chunk" bit, so prefill rewrites the snapshot on every chunk (+4.6 ms device a chunk at 51,200, P.42 A/B). The last chunk's version is the one shipped. | Owner raising the flag with tt-d-gen |
 | 4 | **Single-turn only.** A 128-row snapshot clamped at cap cannot serve a follow-up turn that starts past cap. | Open: agree single-turn with tt-d-gen, or recompute on follow-up |
 | 5 | **Engram at resume.** Decode's first tail step at cap hashes token ids before cap (Engram layers 1 and 14); the hand-off does not carry them. | Open: is Engram in the first serving version? |
@@ -130,7 +152,7 @@ from models.demos.deepseek_v41_flash_d_p.tt.attention import snapshot_cap
 cfg = Config.from_dir("/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf_full")
 for c in served_configs(cfg, list(range(40))):
     print(c["name"], c["layers"], c["alloc"], c["rows"], c["row_bytes"], c["record_bytes"], c["dedup"], c.get("snapshot"), c.get("alias"))
-print([snapshot_cap(n) for n in (100, 128, 129, 56320, 1048576)])
+print([snapshot_cap(n - 1) for n in (100, 128, 129, 2945, 56320, 1048576)])  # actual_end = prompt_len - 1 (P.49)
 EOF
 ```
 

@@ -33,11 +33,14 @@ own code (tt-d-gen tools/launch_harness/tables.py, kv_manager/tools/kv_dump_comp
   - the pulled-back chunk: rows below its start unchanged, layer 0's window_kv rewritten with the same bytes
   - WINDOW_KV_KEEP=snapshot128 (P.42, owner-authorized contract change 2026-11-07): 0_window_kv is the 128-row
     snapshot; each slot's final one and slot A's after turn 1 hold the golden window KV of [cap - 128, cap) at row
-    p % 128, cap = (end - 1) // 64 x 64 (caches.snapshot_failures; rows of no position < cap zero). Ends: 2536 / 3036
+    p % 128, cap = end // 64 x 64 (P.49; caches.snapshot_failures; rows of no position < cap zero). Ends: 2536 / 3036
     (not multiples of 64), 10240. The snapshot is rewritten every chunk by design: the reused-prefix byte rule, the
     last-block rule, kv_dump_compare's bytecmp / reassemble and the pulled-back rewrite rule (layer 0's per-position
     window KV) apply to per-position caches only; under snapshot128 the pulled-back rule has no per-position window
     cache to check (reported in the log)
+  - PREFILL_END=cap (P.49, owner-authorized contract change 2026-11-12; DS41-219): the runtime computes and writes
+    only below decode's cap of a chunk's actual_end (caches.served_end), so every per-position range above ends at
+    that cap; the last-block rule covers [resident, cap(turn 1)), skipped when empty. PREFILL_END=end: as before
 Fail fast (run_child): the run is killed ~3 s after the feeder exits non-zero, after AFTER_FEEDER_S without progress
 once it exits 0, when no log grows for STALL_S, or after CHILD_TIMEOUT_S. The precompile pass (UP_FRONT_COLLECT=1)
 skips the body.
@@ -301,19 +304,20 @@ def kv_checks(
                         kvc, gk, cfg, mine, layer, C.snapshot_cap(e), thr, f"slot {s} [0, {e})"
                     )
                 continue
-            for layer in cfg["layers"]:
-                got, pad = C.valid_and_pad(d, cfg, layer, 0, e)
+            es = C.served_end(e)  # (P.49: PREFILL_END=cap computes and writes [0, cap(e)) only)
+            for layer in cfg["layers"] if es > 0 else []:
+                got, pad = C.valid_and_pad(d, cfg, layer, 0, es)
                 if cfg["rows"] == 32 and not cfg.get("fp8"):  # the server's own reassembly agrees with ours on a
                     # 32-row bf16 record (P.39: kv_dump_compare has no fp8 192-byte rows)
-                    ref = kvc.reassemble(d, layer, 0, e, dtype="bf16", width=cfg["width"], storage="row-major")
+                    ref = kvc.reassemble(d, layer, 0, es, dtype="bf16", width=cfg["width"], storage="row-major")
                     if not np.array_equal(ref, got):
                         fails.append(f"{cfg['name']} slot {s} layer {layer}: kv_dump_compare.reassemble disagrees")
-                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, e, thr, f"slot {s} [0, {e})")
+                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, es, thr, f"slot {s} [0, {es})")
                 if cfg.get("fp8"):  # P.39: Blaze's 192-byte rows (caches.fp8_row_failures)
-                    rb, pb = C.valid_and_pad(d, cfg, layer, 0, e, raw_rows=True)
-                    fails += C.fp8_row_failures(rb, pb, cfg, layer, f"slot {s} [0, {e})")
+                    rb, pb = C.valid_and_pad(d, cfg, layer, 0, es, raw_rows=True)
+                    fails += C.fp8_row_failures(rb, pb, cfg, layer, f"slot {s} [0, {es})")
                 if pad.size and not (pad == 0).all():
-                    fails.append(f"{cfg['name']} slot {s} layer {layer}: pad rows after {e} not zero")
+                    fails.append(f"{cfg['name']} slot {s} layer {layer}: pad rows after {es} not zero")
     if snaps.get("snap_s0_t0", {}).get("taken"):
         prefix = R.follow_up_resident(t1, follow)
         for cfg in C.served_configs(layers):
@@ -325,11 +329,14 @@ def kv_checks(
                         kvc, gk, cfg, mine, layer, C.snapshot_cap(t1), thr, f"slot {slot_a} turn 1"
                     )
                 continue
+            t1s = C.served_end(t1)  # (P.49: turn 1 wrote [0, cap(t1)) under PREFILL_END=cap)
             for layer in cfg["layers"]:
-                got, _ = C.valid_and_pad(a, cfg, layer, 0, t1)
-                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, t1, thr, f"slot {slot_a} turn 1")
-                x, _ = C.valid_and_pad(a, cfg, layer, prefix, t1)
-                y, _ = C.valid_and_pad(finals[(slot_a, cfg["name"])], cfg, layer, prefix, t1)
+                got, _ = C.valid_and_pad(a, cfg, layer, 0, t1s)
+                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, t1s, thr, f"slot {slot_a} turn 1")
+                if t1s <= prefix:  # (P.49: the last block [prefix, cap(t1)) is empty: turn 1 computed nothing there)
+                    continue
+                x, _ = C.valid_and_pad(a, cfg, layer, prefix, t1s)
+                y, _ = C.valid_and_pad(finals[(slot_a, cfg["name"])], cfg, layer, prefix, t1s)
                 fails += C.pcc_failures(kvc, cfg, y, x, layer, R.LAST_BLOCK_PCC, f"slot {slot_a} last block")
                 gk.note_err("lastblock", cfg, layer, y, x, f"slot {slot_a} last block")  # P.26, never gated
             f = C.bytes_equal(a, finals[(slot_a, cfg["name"])], cfg, cfg["layers"], 0, prefix)
