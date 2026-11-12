@@ -2165,7 +2165,7 @@
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
-      timeout: 80
+      timeout: 40
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
