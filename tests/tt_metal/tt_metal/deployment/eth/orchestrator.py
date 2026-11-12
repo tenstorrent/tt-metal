@@ -97,7 +97,7 @@ ORDER BY ENDPOINT_A, ENDPOINT_B;
 """
 
 
-def getlinks(db, h1: str, h2: str) -> list[str]:
+def getlinks(db: sqlite3.Connection, h1: str, h2: str) -> list[str]:
     cur = db.cursor()
 
     cur.execute(asicsquery, (h1, h2))
@@ -105,11 +105,11 @@ def getlinks(db, h1: str, h2: str) -> list[str]:
     return [",".join(l) for l in links]
 
 
-def envtostr(e: dict[str, str]) -> str:
+def envtostr(e: dict[str, str | int]) -> str:
     return " ".join(f"{k}={shlex.quote(str(e[k]))}" for k in e)
 
 
-def run_single(host: HostSettings, argv: str, env: dict) -> int:
+def run_single(host: HostSettings, argv: str, env: dict[str, str | int]) -> tuple[int]:
     hostnames = [host.hostname]
     hostconfigs = [host.host_config]
 
@@ -136,7 +136,7 @@ def run_single(host: HostSettings, argv: str, env: dict) -> int:
     return tuple(host_output.exit_code for host_output in outputs)
 
 
-def run_pair(hosts: tuple[HostSettings, HostSettings], argv: str, env: dict, sync: bool = True) -> tuple[int, int]:
+def run_pair(hosts: tuple[HostSettings, HostSettings], argv: str, env: dict[str, str | int], sync: bool = True) -> tuple[int, int]:
     hostnames = [h.hostname for h in hosts]
     hostconfigs = [h.host_config for h in hosts]
 
@@ -178,7 +178,7 @@ def test_one(
     f = prepare_filter([test])
     cmd = f"sh -c '. ./run2.sh && ./build/test/tt_metal/unit_tests_deployment --gtest_filter={f}'"
 
-    env = {
+    env: dict[str, str | int] = {
         "TT_METAL_SLOW_DISPATCH_MODE": 1,
     }
     if links:
@@ -215,8 +215,8 @@ def test_pair(
     # cmd = "sh run2.sh"
 
     bw = 200  # TODO
-    env = {
-        "ETH_TEST_EXPECTED_BW": str(bw),
+    env: dict[str, str | int] = {
+        "ETH_TEST_EXPECTED_BW": bw,
         "ETH_TEST_ENDPOINTS": links,
         "TT_METAL_SLOW_DISPATCH_MODE": 1,
     }
