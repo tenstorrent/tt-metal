@@ -1,9 +1,0 @@
-# AutoFix: restore complete ranking objects
-
-Repaired only rankings in efforts.json. Inline40..44 now carry the previous full dict-row snapshot, promote their recorded foreground within the validity tier, and preserve original foreground_order, reason and timestamp. Existing carried row fields remain exact; the newly referenced release-dispatch-preparation row uses its existing prediction. Inline0..39 are unchanged.
-
-Appended a separate current snapshot covering all125registered efforts, including this repair, plus the preserved legacy unregistered label. This avoids applying today's statuses retroactively to past boundaries. Active validity repair ranks first; other validity entries precede speed entries. Closed effort rows retain original device forecasts and explicit forecast_* values separately from zero prospective additional credit/work. Zero is not measured zero impact, and an open problem_status does not reopen a closed effort. Legacy-label current prices remain null. Within tied closed tiers the prior ordering is preserved, then original registration order; no speed work is admitted.
-
-Checks: all46rankings have dict rows; every ranking is validity-before-speed; latest membership includes all125unique registered problems. All non-ranking top-level fields and all125effort records have identical canonical pre/post hashes. All original foreground lists/reasons/times and carried historical rows are preserved. A concurrent-write guard passed before mutation.
-
-Compact size is470483bytes, below512000 by41517bytes. scripts/check_file_size.py and actual pre-commit check-large-files both pass. No archive, data deletion, staging, commit, device/CI action or other central-file edit. Device cost0h, host box0.15h. A further full ranking snapshot may exceed current headroom; coordinator must check size on subsequent writes. Exact checks and hashes are in RESULT.json and private check.json.

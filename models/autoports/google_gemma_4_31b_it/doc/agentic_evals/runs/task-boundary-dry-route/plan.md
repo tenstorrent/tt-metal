@@ -1,3 +1,0 @@
-# Task-boundary partition dry-route hypothesis
-
-Host-only validity investigation; forecast/box0device hours. Examine operator decision8 and unchanged stock CI/Harbor to determine whether frozen partitions of a suite into jobs with at most planned_clients tasks can satisfy the exact no-score dry condition. Check authorization, one-suite/one-machine timing semantics, identity/environment/reply observability, batching and acceptance implications. No devices, dispatch, source edits, external messages, central-doc edits or silent cohort changes. Produce one final RESULT with concrete viable route or explicit unresolved proof requirements.

@@ -1,9 +1,0 @@
-{
-  "production_ast_equality_except": [
-    "one GPQA doc_ids20to40",
-    "one GPQA nightly limit20to40"
-  ],
-  "all_other_configuration_unchanged": true,
-  "focused_tests": "34 passed",
-  "hash_rule_nested": true
-}

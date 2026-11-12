@@ -17,28 +17,13 @@ TTNN operations/utilities. Do not copy Gemma-specific implementation branches
 from the generic tt_transformers framework into the autoport. Validate that serving
 registers and imports this run's autoport adapter, rather than a stock adapter.
 
-Use this machine for local TT work; it is the primary device. Serialize all local
-device commands and check for device owners before reset. Up to six QB2 CI machines
-are granted as a secondary device (`qb2-ci` in `bringup/agentic_evals/inputs.json`):
-dispatch, track and collect those runs yourself, following its instructions file, and
-balance work between the local device and CI as the agentic-serving skill says. Use
-default batches and evals from the selected skills, with the goal-12 inputs in
-`bringup/agentic_evals/inputs.json`. Read current release eval names, versions,
-timeouts and output limits from the pinned release spec and its harness sources; the
-model spec alone may not contain the eval limits. Do not reuse the old
-implementation's layout/precision/serving settings as evidence.
+Use this machine for local TT work; it is the only device for this run. Serialize all local
+device commands and check for device owners before reset. No CI, no GitHub, no pushes: commit
+locally on branch v4-agentic-rehearsal.
 
-The operator authorizes pushing the dedicated branches `mvasiljevic/gemma4-31b-goal12-v3`
-in tt-metal and tt-inference-server for CI. Publish from separate checkouts with
-remotes; keep this execution checkout without a remote. Use source-only commits,
-dispatch immutable SHAs, and keep weights, credentials, private logs, profiler dumps
-and collected results out of publication commits. Never update main or stable. Do not
-create issue comments or send messages.
-
-Pipeline worker: gpt-6-astra, medium effort, personal ChatGPT login in
-/home/mvasiljevic/.codex-gemma4-v3. Do not substitute enterprise credentials or
-ambient OpenAI/Codex API keys. Use enabled workflow skills from the requested skills
-branch. Stage templates authorize subagents where the selected skill requests them.
+Pipeline worker: gpt-6-astra, medium effort, ChatGPT login in /home/mvasiljevic/v4-agentic/codex-home.
+Do not substitute other credentials or ambient OpenAI/Codex API keys. Use the enabled workflow skills.
+Stage templates authorize subagents where the selected skill requests them.
 
 ## Operator decisions (stage 9, 2026-11-05)
 
@@ -86,52 +71,11 @@ Mark `blocked.json` resolved by these decisions and continue the stage.
    idle gaps fall inside the intervals and are counted, not separately observed. State that
    attribution in the report. Derive prefill FLOPs and decode DRAM bytes from the executed
    shapes, precision and parallelism. This counts as the stage's full-phase accounting.
-5. GPQA: this host has no Hugging Face credential for the gated dataset, and none will be
-   added. Record GPQA as not covered locally for that reason, keep the frozen subset
-   definition, and complete stage 11 without it. Accuracy for gated suites can run in stage 12
-   on the operator-defined devices that have dataset access. Do not substitute an unofficial
-   mirror.
-6. Rerun whatever the stage needs (fresh profiles with the collector, inside the client-stage
-   budget); keep the earlier incomplete attempt as evidence.
+## Operator decisions (v4 rehearsal, 2026-11-12)
 
-## Operator decisions (stage 11 closure, 2026-11-06, 04:40 UTC)
-
-7. Stage 11 is **accepted by the operator as complete** with the evidence in
-   `models/autoports/google_gemma_4_31b_it/doc/benchmark/` (report, four profiles with both
-   roofline estimates, GPQA/SWE-bench/Terminal-Bench recorded as not covered). The installed
-   `benchmark_stage/check.py` rejects empty accuracy and caps elapsed time at 3600 s; that is a
-   known defect of the skills under test. The installed plugin package stays read-only: do not
-   apply the prepared checker patch. Stage 12 starts from this stage-11 state.
-
-## Operator decisions (stage 12, 2026-11-06, 05:40 UTC)
-
-8. Release route: this host's pipeline container gets **no Docker access**; that will not
-   change. The operator **authorizes the granted `qb2-ci` device (same p300x2 device type) for
-   all work that needs Docker task containers, including the dry run and the release run**.
-   Keep using the local device for serving measurements that need no task containers
-   (growing contexts, prefill by length, host contention, server bring-up checks). Plan the CI
-   release around shared-pool queueing: dispatch the dry run early enough to fix and re-check,
-   dispatch every release job well before the stage limit with queue time in the projection,
-   split release work on task boundaries so each job fits the CI job limit, and keep the release
-   on the same SHAs the dry run proved. GPQA, which needs gated dataset access, also runs on
-   `qb2-ci`.
-
-## Operator decisions (stage 12, 2026-11-07, 02:40 UTC)
-
-9. CI image builds for TT `f57978407eaacf09587f5793b8ae46ca7af839ea` (EPEL HTTP 403 at the
-   runners' proxy): the operator **cannot restore that build access and has no image digest for
-   that commit**. This is an infrastructure failure: it is not scored and is not a model result.
-   - You may retry the unchanged build through the stock workflow, at most once every 90 minutes
-     and only while a slot is free; record each attempt in `compute.json` (zero device time).
-   - You may use the workflow's `docker-image` input with an image an earlier successful run
-     built, but only if you show that every file the logging candidate changes reaches the test
-     job from the dispatched commits rather than from the image. Otherwise it is not the frozen
-     source; do not use it.
-   - Do not change the workflow, mirrors or dependency routes.
-   - The logging candidate is optional for the release. If no build of the new commit succeeds
-     in time for the dry run, run the dry run and the release on the last SHAs and image already
-     proven on CI (for example the published `eef534...` route), and record the logging candidate
-     as locally verified and unverified on CI. Do not hold the dry run for it.
-   - Also record in `compute.json` the earlier failed benchmark-workflow runs (42239308813,
-     42252352037, 42264721517) and these two build failures (42326665396, 42327188063); every run
-     counts there.
+5. Mode agentic, local only. The pipeline container now has Docker (host socket) for SWE-bench task
+   containers, and a Hugging Face credential with access to the gated GPQA dataset. Earlier decisions that
+   routed GPQA or task-container work to CI no longer apply.
+6. The v3 stage 11 and 12 outputs were removed from this branch (they are in its first commit and in
+   /home/mvasiljevic/v4-agentic/v3-leftovers). Do not reuse them as results.
+7. Rehearsal limits are in bringup/agentic_evals/inputs.json: stage budget 10 h, phase 2 on 4 SWE tasks.

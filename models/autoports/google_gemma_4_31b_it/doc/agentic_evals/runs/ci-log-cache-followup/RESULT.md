@@ -1,7 +1,0 @@
-# REST log freshness follow-up
-
-A unique benign query did **not** improve freshness for active SWE job128021896449. Standard fetch completed19:04:27.870UTC with newest event18:57:14.116UTC (**433.754s old**); unique-query fetch completed19:04:29.255UTC with the same event (**435.138s old**). Both returned37,900,541 content bytes, identical ETag and Last-Modified18:57:15. Response Date advanced19:03:58→19:04:27. No Age or X-Cache header was supplied. Sanitized metadata is in RESULT.json.
-
-Prior evidence already tested Cache-Control:no-cache plus Range and found an unchanged snapshot, so that test was not repeated. The new result is consistent with an unchanged upstream archive rather than a stale API response fixed by query busting. It does not prove every intermediary's behavior or directly observe the origin's state: the query was on the REST endpoint, not the signed download target. Existing official runner source separately uploads job-log files and publishes live console feed; those are distinct channels.
-
-No exact pre-grade observation mechanism was found. The measured435s lag exceeds the prior Requests agent's151.802s total duration. Neither header intent nor a couple of observations provides a future latency bound. The two reads took30.62s; no further polling, device use, new authentication, dispatch or workflow/runner changes occurred. Signed URLs, raw logs and credentials were neither stored nor reported.

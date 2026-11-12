@@ -1,3 +1,0 @@
-# Observer timestamp AutoFix
-
-Coordinator goal: restore freshness parsing for existing CI timestamps with seven fractional digits on host Python3.10, without changing stored timestamps, request identities, run control, or no-score/dry verdict semantics. Host-only box0.25h/device0. Diagnose existing date() conversion, make minimal private observer/test change, run focused existing tests and actual saved42296943044 snapshot through fresh temporary state. Preserve prior errors/state/artifacts; wrappers reload source naturally. Final diagnosis/repair evidence once; no harness/server/central edits or new network/device requests.

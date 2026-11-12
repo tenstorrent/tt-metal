@@ -1,7 +1,0 @@
-# SWE5 C1/B1 source preparation
-
-Coordinator goal: prepare an ordinary main-harness same-frozen-five SWE comparison with one agent and supported B1, for possible use after current C2 retained rung is valid. Preparation only; zero device forecast/box. No dispatch, publishing or acceptance. Live-log validity blocker remains independent.
-
-Create a new isolated TTI worktree based on published bb16e00 (or newer accepted37ee only if needed). Change only SWE concurrent trials2→1 and model serving max_num_seqs8→1, plus matching model-specific tests. Preserve exact five IDs/order, seeds, release limits/caps, CPU/memory/network/tool/native agent settings, token/phase retention and all other runtime pins. Compare parsed configuration against base, run focused affected tests and repository hooks. No edits to publication checkout, central docs or execution-checkout remotes. Local source-only candidate commit is for coordinator handoff, not authorization to publish.
-
-A same-five single-job C1/B1 scored comparison controls cohort and sequential agent concurrency and can measure that route against valid C2/B8. It does not validate five separately launched singleton partitions: each partition has independent cold setup/compile/cache and sandbox/network state, queue cost and tail. Later frozen release partition configuration requires an actual matching dry run and measured projection including repeated setup/shared-pool queueing. No savings or validity inferred from host tests. Final evidence written once after source checks; no hardware work.

@@ -1,3 +1,0 @@
-Held C4/40 fallback `0b3f934eaf8da405a74486c37e3014aa736b25f8` directly follows published `e5a9a7638a1f46f22c0d89acf2ac333da5d53c02` and can fast-forward that base. Exact registered40 is unchanged. Production changes only concurrency8→4 and removal of the expanded pool override, restoring the accepted default10248 pool at B8/maxseq8. Native hex logging, caps/sampling, matrix, stopped peers, runtime/image/plugin are unchanged.
-
-37 focused tests and full hooks passed; structural source guards and diff check passed, worktree clean. Source-only commit contains two production configuration files and two focused expectation files. No devices, publication or dispatch. Not selected; normal80 candidate9b4 remains available. See RESULT.json for compact evidence references.

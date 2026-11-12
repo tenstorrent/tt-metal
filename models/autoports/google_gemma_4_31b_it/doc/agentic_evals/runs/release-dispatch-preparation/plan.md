@@ -1,1 +1,0 @@
-Prepare exact80 fallback and160 candidate release argv from existing freezes, plus unresolved data checklist and stock route drift checks. No selection, final audit, dispatch, API/device probe, source change or central edits. Budget0device hours,0.25host hours. Root owns schedule/dispatch and supplies final scored-rung/dry evidence.

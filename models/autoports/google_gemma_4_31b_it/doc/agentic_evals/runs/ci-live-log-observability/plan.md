@@ -1,3 +1,0 @@
-# CI live log observability
-
-Zero-device host/network read-only investigation of official GitHub/runner live log mechanisms. Determine whether existing personal gh authorization can expose ongoing singleton model requests before short tasks finish, with measured latency. Inspect official source and authorized active run42234274300 only. Do not dispatch/cancel, change workflow/runner/harness, request credentials, or emit tokens/signed URLs. Preserve compact status/timestamp/source evidence and produce one RESULT. A hypothetical endpoint without actual authorized evidence or latency bound is not a proved route.
