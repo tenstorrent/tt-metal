@@ -2,9 +2,13 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Translate vLLM scheduler updates into the Gemma4 TP4 generator's inputs."""
 
+import time
+
 import torch
+from loguru import logger
 
 import ttnn
+from models.demos.gemma4_31b_qb2.tt.decode_rows import decode_row_sizes, rows_covering
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.generator import CacheState, build_generator
 
@@ -47,6 +51,10 @@ class Gemma4ForCausalLM:
         generator.update_columns = 1 + self.spec_k
         self.entry = None
         self.cache = None
+        # Decode traces of fewer rows over the same KV pool; a step runs the smallest one that covers its live rows.
+        self.row_sizes = decode_row_sizes(max_batch_size, self.spec_k)
+        self.sub_caches = {}
+        self.cur_state = None
         self.prefill_slot_keys = {}
         self.next_prefill_key = 0
 
@@ -156,10 +164,21 @@ class Gemma4ForCausalLM:
             raise ValueError("The allocator must supply one spec per layer")
         tables = {i: torch.zeros(self.rows, self.max_seq_len // 128, dtype=torch.int32) for i in range(len(kv))}
         self.cache = CacheState(kv, tables, self.rows, self.max_seq_len, scratch_pages=scratch, vllm_owned=True)
+        self.sub_caches = {
+            n: CacheState(
+                kv,
+                {i: torch.zeros(n, self.max_seq_len // 128, dtype=torch.int32) for i in range(len(kv))},
+                n,
+                self.max_seq_len,
+                scratch_pages={i: scratch[i][:n] for i in scratch},
+                vllm_owned=True,
+            )
+            for n in self.row_sizes
+        }
         return self.cache
 
     def _tables(self, cache, page_tables_per_layer, *, slots=None):
-        if cache is not self.cache:
+        if cache is not self.cache and all(cache is not sub for sub in self.sub_caches.values()):
             raise ValueError("Serving must use the cache allocated by vLLM")
         if page_tables_per_layer is None or len(page_tables_per_layer) != len(cache.kv):
             raise ValueError("Hybrid attention requires a page table for every layer")
@@ -293,8 +312,13 @@ class Gemma4ForCausalLM:
         slot_positions = start_pos
         tokens = self._pad_rows(tokens.reshape(-1, 1), 0)
         start_pos = self._pad_rows(start_pos.reshape(-1), -1)
+        # The batch is front-packed, so the live rows are 0..n-1 and the smallest trace covering row n-1 runs the step.
+        # A change of n is a layout change, which always reloads the inputs, so a trace switch needs no state moved.
+        live = int((start_pos >= 0).nonzero().max()) + 1 if bool((start_pos >= 0).any()) else 1
+        rows = rows_covering(live, self.row_sizes, self.rows)
+        state = self.sub_caches.get(rows, kv_cache)
         if reload_inputs:
-            tables = self._tables(kv_cache, page_tables_per_layer)
+            tables = self._tables(state, [table[:rows] for table in page_tables_per_layer])
             # A row entering decode no longer needs its private prefill tail.
             # The plugin notifies slot moves after submission succeeds, so
             # histories still use source slots when a decode row is gathered.
@@ -302,12 +326,17 @@ class Gemma4ForCausalLM:
                 if int(position) >= 0:
                     slot = row if slot_remap is None else int(slot_remap[row])
                     self.release_request(slot)
-            self.entry = self.generator.prepare_decode(tokens, start_pos, page_table=tables, kv_cache=kv_cache)
-        elif self.entry is None or self.generator.traces.get(id(kv_cache)) is not self.entry:
+            self.entry = self.generator.prepare_decode(
+                tokens[:rows], start_pos[:rows], page_table=tables, kv_cache=state
+            )
+            self.cur_state = state
+        elif (
+            self.entry is None or state is not self.cur_state or self.generator.traces.get(id(state)) is not self.entry
+        ):
             raise ValueError("A retired decode trace requires current scheduler inputs")
         elif reload_page_table:
-            tables = self._tables(kv_cache, page_tables_per_layer)
-            self.generator._tables(kv_cache, tables)
+            tables = self._tables(state, [table[:rows] for table in page_tables_per_layer])
+            self.generator._tables(state, tables)
         if sample and (reload_sampling_params or reset_sampling_state):
             params = self._sampling(sampling_params, start_pos, reset_seed=reset_sampling_state)
             self.generator.configure_sampling(batch=self.rows, **params)
@@ -374,9 +403,22 @@ class Gemma4ForCausalLM:
         self.generator.warm_prefill_shapes(kv_cache, tables, self.MAX_PREFILL_TOKENS)
 
     def warmup_model_decode(self, kv_cache, enable_trace, **kwargs):
-        self.generator._tables(kv_cache, kv_cache.page_tables)
+        states = [kv_cache, *self.sub_caches.values()]
+        for state in states:
+            self.generator._tables(state, state.page_tables)
         self.generator.configure_sampling(batch=self.rows, temperature=0)
-        self.entry = self.generator._entry(kv_cache)
+        # The full trace first: the speculative verify and a full batch use it.
+        start = time.perf_counter()
+        self.entry = self.generator.prepare_entries(states)[0]
+        self.cur_state = kv_cache
+        used = ttnn.get_memory_view(self.mesh, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank
+        logger.info(
+            "Captured {} decode traces ({} rows) in {:.1f} s; DRAM allocated per bank {} MiB",
+            len(states),
+            [state.batch for state in states],
+            time.perf_counter() - start,
+            used >> 20,
+        )
 
     def note_state_slots_moved(self, moves):
         self.prefill_slot_keys = {moves.get(slot, slot): key for slot, key in self.prefill_slot_keys.items()}
