@@ -353,6 +353,10 @@ class StackPrefixCache:
             for key, n, pages, ent in self._pending:
                 self.store.register(key, n_tokens=n, pages=pages, kind="P", device_entry=ent)
                 self.stats["snapshots"] += 1
+                logger.info(
+                    f"GLM53 stack prefix: snapshot of tokens [0, {n}) in entry {ent} "
+                    f"({len(self.store.entries)} of {self.store.device_entries} entries registered)"
+                )
             self._pending = []
 
     def abort(self) -> None:
