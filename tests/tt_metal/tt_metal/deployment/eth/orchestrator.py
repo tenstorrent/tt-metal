@@ -25,7 +25,6 @@ from testenums import TestCase, DistTestCase, prepare_filter
 class GeneralSettings:
     hosts: list[str]
     syseng: str
-    dbpath: str = "cluster.db"
 
 
 @dataclass
@@ -259,6 +258,7 @@ def test_dist(db: sqlite3.Connection, tests: list[DistTestCase], hosts: list[Hos
 
 def main() -> None:
     parser = ArgumentParser()
+    parser.add_argument("-d", type=str, help="Path to the sqlite3 db with hardware info")
     parser.add_argument("-c", type=str, help="INI host config file")
     parser.add_argument("-l", type=str, help="List of links to test")
     parser.add_argument("-t", type=str, help="Test to run")
@@ -268,9 +268,8 @@ def main() -> None:
     hostsini = opts.c if opts.c else "hosts.ini"
     general, hosts = parse_config(hostsini)
 
-    links = opts.l
-
-    db: sqlite3.Connection = sqlite3.connect(general.dbpath)
+    dbpath = opts.d if opts.d else "cluster.db"
+    db: sqlite3.Connection = sqlite3.connect(dbpath)
 
     hostnames = opts.m.split(",")  # TODO validation
     hs = []
@@ -279,6 +278,8 @@ def main() -> None:
             if h == hc.hostname:
                 hs.append(hc)
                 break
+
+    links = opts.l
 
     if opts.t in [t.value for t in TestCase]:
         test_single(db, [TestCase.LINK_UP], hs, links)
