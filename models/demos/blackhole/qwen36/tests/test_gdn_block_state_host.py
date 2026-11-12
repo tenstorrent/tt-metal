@@ -131,8 +131,9 @@ def test_mamba_state_must_name_the_models_gdn_layers(ttnn_calls, expect_error):
 
 def test_prefill_writes_each_rows_blocks(monkeypatch, expect_error):
     st, plugin = _state(), _plugin()
-    writes = []
-    monkeypatch.setattr(st, "_write_state", lambda dn, block: writes.append((dn.name, block)))
+    writes, target = [], []
+    monkeypatch.setattr(st, "_set_write_tables", target.append)
+    monkeypatch.setattr(st, "_write_state", lambda dn: writes.append((dn.name, target[-1])))
     state = plugin.step_state([(10, 11, 12), (20, 21, 22)], BMAX)
     st.write_prefill_state(state, 1)
     want = [(i, 20 + g) for g, layers in enumerate(plugin.gdn_groups) for i in layers]

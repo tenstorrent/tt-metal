@@ -8,7 +8,9 @@ request's recurrent state and convolution history in the K and V buffers of its 
 slot's buffers and to a persistent ``state_page_idx`` tensor, which names the pages of the block of each decode row.
 
 * Prefill runs on the layer's batch-1 workspace (``rec_state``, ``conv_carry``) from zero state and then copies the
-  end state into the request's block (write_prefill_state).
+  end state into the request's block with paged_fill_cache (write_prefill_state). The views have one page or one
+  half value head per dim-0 slice, so a persistent page table names the destination; the block id never reaches a
+  program hash, and no request compiles a program.
 * Decode runs gdn_decode_step on the blocks directly. The adapter rewrites the page index whenever vLLM moves a row
   or gives a row another request (set_decode_blocks), so moving a row moves no state. The index tensors keep their
   addresses, so a captured decode trace reads the new index on its next replay.
@@ -56,23 +58,6 @@ def _free_copy(view, source):
 def _dram_banks(mesh):
     grid = mesh.dram_grid_size()
     return int(grid.x * grid.y)
-
-
-def _height_sharded(mesh, rows, width):
-    """L1 height-sharded TILE config for a [rows, width] tensor on the most cores (at most 48) that divide its tile
-    rows. slice_write writes in place into an interleaved TILE output only from a sharded input."""
-    grid = mesh.compute_with_storage_grid_size()
-    n_tiles = rows // ttnn.TILE_SIZE
-    cores = max(c for c in range(1, min(48, grid.x * grid.y) + 1) if n_tiles % c == 0)
-    return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True),
-            (rows // cores, width),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
 
 
 class GdnBlockState:
@@ -178,9 +163,17 @@ class GdnBlockState:
             device=self.mesh,
             mesh_mapper=rep,
         )
-        hist_tiles = self.dims.nv * HIST_SLOTS
-        self._hist_cfg = _height_sharded(self.mesh, hist_tiles * 32, 32)
-        self._halves_cfgs = {}
+        self._write_tables = [
+            ttnn.from_torch(
+                torch.zeros(1, len(t), dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=rep,
+            )
+            for t in self.layout.write_tables(0)
+        ]
+        self._write_refs = []
         zero_blocks = max(1, _ZERO_TOKENS // block_size)
         self._zero = ttnn.from_torch(
             torch.zeros(1, kv_heads, zero_blocks * block_size, head_dim, dtype=torch.bfloat16),
@@ -213,11 +206,6 @@ class GdnBlockState:
             rec_v = ttnn.experimental.alias_view(v, lay.fp32_view_shape(n), ttnn.float32, check_slices=check)
         hist = ttnn.experimental.alias_view(v, lay.hist_view_shape(n), ttnn.bfloat16)
         return rec_k, rec_v, hist
-
-    def _halves_cfg(self, halves):
-        if halves not in self._halves_cfgs:
-            self._halves_cfgs[halves] = _height_sharded(self.mesh, halves * self.dims.dk // 2, self.dims.dv)
-        return self._halves_cfgs[halves]
 
     def groups(self, mamba_state):
         """[(GDN layers of the group, windows)] per MambaSpec group of ``mamba_state``, in group order."""
@@ -266,34 +254,47 @@ class GdnBlockState:
     def write_prefill_state(self, mamba_state, row):
         """Copy the end state of the request that prefill row ``row`` just prefilled (each GDN layer's batch-1
         workspace) into the request's block in every MambaSpec group."""
+        # The copies of the previous call have run: a host readback (prefill logits) came in between.
+        self._write_refs = []
         for layers, windows in self.groups(mamba_state):
             block = int(windows[row, 0])
             if block <= 0:
                 raise ValueError(f"prefill row {row} has the null block {block} as its GDN state block")
+            self._set_write_tables(block)
             for dn in layers:
-                self._write_state(dn, block)
+                self._write_state(dn)
 
-    def _write_state(self, dn, block):
+    def _set_write_tables(self, block):
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        for table, ids in zip(self._write_tables, self.layout.write_tables(block)):
+            host = ttnn.from_torch(
+                torch.tensor([ids], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
+            )
+            ttnn.copy_host_to_device_tensor(host, table)
+            self._write_refs.append(host)
+
+    def _write_state(self, dn):
+        """Write ``dn``'s batch-1 workspace into the block that the write tables name."""
         lay, nv, dk, dv = self.layout, self.dims.nv, self.dims.dk, self.dims.dv
         sb = dn.state_blocks
-        # [1, Nv, Dk, Dv] as half-head slices; the tiles keep their order.
-        rec = ttnn.reshape(dn.rec_state, (2 * nv, 1, dk // 2, dv))
-        for pool, s0, lo, hi in lay.state_writes(block):
-            src = ttnn.slice(rec, (lo, 0, 0, 0), (hi, 1, dk // 2, dv), memory_config=self._halves_cfg(hi - lo))
-            view = sb.rec_k if pool == 0 else sb.rec_v
-            ttnn.experimental.slice_write(src, view, [s0, 0, 0, 0], [s0 + hi - lo, 1, dk // 2, dv], [1, 1, 1, 1])
-            ttnn.deallocate(src)
+        # [1, Nv, Dk, Dv] as rows of half heads; the tiles keep their order.
+        rec = ttnn.reshape(dn.rec_state, (1, 1, nv * dk, dv))
+        for (pool, _, lo, hi), table in zip(lay.state_writes(0), self._write_tables):
+            whole = lo == 0 and hi == 2 * nv
+            src = rec if whole else ttnn.slice(rec, (0, 0, lo * dk // 2, 0), (1, 1, hi * dk // 2, dv))
+            ttnn.experimental.paged_fill_cache(sb.rec_k if pool == 0 else sb.rec_v, src, table, batch_idx=0)
+            if not whole:
+                ttnn.deallocate(src)
         _free_copy(rec, dn.rec_state)
         carry = ttnn.to_layout(dn.conv_carry, ttnn.ROW_MAJOR_LAYOUT)  # [1, K - 1, C]
         rows = ttnn.reshape(carry, ((self.dims.kconv - 1) * self.dims.conv_dim // 32, 32))
-        packed = ttnn.embedding(self._pack_table, rows, layout=ttnn.TILE_LAYOUT, memory_config=self._hist_cfg)
+        packed = ttnn.embedding(
+            self._pack_table, rows, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [1, Nv * 4 * 32, 32]
         _free_copy(rows, carry)
         ttnn.deallocate(carry)
-        tiles = ttnn.reshape(packed, (1, nv * HIST_SLOTS, 32, 32))
-        t0 = lay.hist_first
-        ttnn.experimental.slice_write(
-            tiles, sb.hist, [block, t0, 0, 0], [block + 1, t0 + nv * HIST_SLOTS, 32, 32], [1, 1, 1, 1]
-        )
+        tiles = ttnn.reshape(packed, (1, 1, nv * HIST_SLOTS * 32, 32))
+        ttnn.experimental.paged_fill_cache(sb.hist, tiles, self._write_tables[-1], batch_idx=0)
         _free_copy(tiles, packed)
         ttnn.deallocate(packed)
 
@@ -330,8 +331,9 @@ class GdnBlockState:
         """Compile the block write and zero programs on the null block 0, before any trace is captured."""
         if self._warmed:
             return
+        self._set_write_tables(0)
         for dn in self.layers.values():
-            self._write_state(dn, 0)
+            self._write_state(dn)
         self.zero_blocks([0])
         ttnn.synchronize_device(self.mesh)
         self._warmed = True

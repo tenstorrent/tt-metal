@@ -143,6 +143,25 @@ def test_index_follows_the_rows_blocks(tc, tp, bf8, block):
     assert torch.equal(moved[:, 0], idx[:, 2]) and torch.equal(moved[:, 1], idx[:, 0])
 
 
+@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
+def test_write_tables_name_the_pages_the_index_reads(tc, tp, bf8, block):
+    """The paged_fill_cache tables that write a block's state address the same pages that gdn_decode_step's index
+    reads: half-head slices of 8 float32 pages of the K (then V) view, one history page per table entry."""
+    _, lay = _layout(tc, tp, bf8)
+    num_blocks, nv, hp = 40, lay.dims.nv, lay.dims.head_pages
+    for b in (1, 2, 7):
+        idx = lay.index_host([b], num_blocks)[:, 0].tolist()
+        tables = lay.write_tables(b)
+        k_pages = [8 * s for s in tables[0]]
+        assert k_pages == [idx[h] + 8 * j for h in range(lay.heads_k) for j in range(2)]
+        if lay.heads_v:
+            p_k = lay.fp32_pages(num_blocks)
+            v_pages = [8 * s + p_k for s in tables[1]]
+            assert v_pages == [idx[h] + 8 * j for h in range(lay.heads_k, nv) for j in range(2)]
+        assert tables[-1] == [idx[nv + h] + s for h in range(nv) for s in range(HIST_SLOTS)]
+        assert len(tables) == (3 if lay.heads_v else 2) and hp == 16
+
+
 def test_page_index_values_fit_the_views():
     """The largest index value addresses the last pages of the float32 views (K view then V view, gdn_decode_step's
     two pools) and of the history view."""

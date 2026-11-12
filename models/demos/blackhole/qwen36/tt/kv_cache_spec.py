@@ -160,7 +160,8 @@ class GdnBlockLayout:
         return [self.fp32_pages(num_blocks) // HALF_HEAD_PAGES, 1, self.dims.dk // 2, self.dims.dv]
 
     def hist_view_shape(self, num_blocks):
-        return [num_blocks, self.hist_tiles, 32, 32]
+        """Shape of the bfloat16 history view: one dim-0 slice per page."""
+        return [num_blocks * self.hist_tiles, 1, 32, 32]
 
     def first_fp32_page(self, block):
         """First whole float32 page of ``block`` in the float32 view of K (and of V)."""
@@ -192,6 +193,13 @@ class GdnBlockLayout:
         if self.heads_v:
             parts.append((1, s0, 2 * self.heads_k, 2 * self.dims.nv))
         return parts
+
+    def write_tables(self, block):
+        """paged_fill_cache page tables that put one request's state into ``block``: per state_writes part the
+        half-head slices of its view, then the history pages."""
+        tables = [list(range(s0, s0 + hi - lo)) for _, s0, lo, hi in self.state_writes(block)]
+        first = self.hist_page(block, 0)
+        return tables + [list(range(first, first + HIST_SLOTS * self.dims.nv))]
 
 
 def plan_gdn_block_layout(*, block_size, kv_heads, head_dim, kv_bf8, dims, banks=DRAM_BANKS):
