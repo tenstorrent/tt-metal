@@ -273,10 +273,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.pack_src, fmt_a, page_a, FACE_R_DIM, TILE_C_DIM, num_faces, false, false, RELU_CONFIG);
         _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false>(fmt_a, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-        if constexpr (alt_rmw)
-        {
-            _llk_pack_rmw_dest_init_<true>();
-        }
         PROFILER_SYNC();
     }
     // each output's form is decided once, as with constant counts; read through a volatile so the main arm compiles to

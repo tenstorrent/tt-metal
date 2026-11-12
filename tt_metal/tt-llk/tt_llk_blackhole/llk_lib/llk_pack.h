@@ -691,7 +691,7 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
     TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
 
-    // The byte-wise destination write leaves the Z counters to the last PACR's ADDR_MOD (_llk_pack_rmw_dest_init_).
+    // The byte-wise destination write leaves the Z counters to the last PACR's ADDR_MOD, which ends every pack at Z 0.
     if constexpr (!rmw_dest)
     {
         TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
@@ -744,18 +744,6 @@ inline void _llk_pack_block_closed_(
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
 
-// Byte-wise destination write (rmw_dest): three RMWCIB instead of SETDMAREG, STALLWAIT, WRCFG, SETDMAREG, DMANOP.
-// Sets bit 31 once; no Z reset, every pack leaves Z at 0 (per tile and closed by SETADCZW, the plain block by its ADDR_MOD).
-template <bool bit31_set = false>
-inline void _llk_pack_rmw_dest_init_()
-{
-    // bit31_set: the full-sync _llk_pack_dest_init_ already set bit 31 and no pack program clears it.
-    if constexpr (!bit31_set)
-    {
-        TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-    }
-}
-
 template <bool zero_output, std::uint32_t addr_mod, std::uint32_t last>
 TT_ALWAYS_INLINE void pack_block_fast_pacr_()
 {
@@ -775,12 +763,11 @@ TT_ALWAYS_INLINE void pack_block_fast_pacr_()
         last);
 }
 
-// Fast block packs for four-face 16-row outputs: sets bit 31 once and records one closed tile (16 PACRs, the W step).
+// Fast block packs for four-face 16-row outputs: records one closed tile (16 PACRs, the W step).
 // Call after the default pack init and after any program that replaces the pack MOP or the replay buffer.
 template <bool zero_output = false>
 inline void _llk_pack_block_fast_init_()
 {
-    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
     // The default init leaves the replay buffer alone, so a re-init before every block records the tile only once.
     if (pack_fast_replay_valid)
     {

@@ -235,10 +235,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
         _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_src, formats.pack_dst);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-        if constexpr (sw_rmw)
-        {
-            _llk_pack_rmw_dest_init_<true>();
-        }
         if (form == 2)
         {
             _llk_pack_block_w_init_(base, TILE_SIZE_PACK << 4);

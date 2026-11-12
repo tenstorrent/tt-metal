@@ -1129,7 +1129,7 @@ class PACK_API_SWEEP(TemplateParameter):
 
 
 class PACK_RMW_DEST(TemplateParameter):
-    """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_; on when LLK_PACK_RMW=1."""
+    """Opt-in byte-wise destination write of the default packs (Blackhole), on when LLK_PACK_RMW=1."""
 
     def convert_to_cpp(self) -> str:
         return "#define PACK_RMW_DEST" if os.environ.get("LLK_PACK_RMW") == "1" else ""

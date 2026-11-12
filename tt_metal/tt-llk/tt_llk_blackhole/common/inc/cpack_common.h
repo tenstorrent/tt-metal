@@ -885,8 +885,7 @@ inline void program_packer_destination(std::uint32_t addr)
     // write stays after it, as its STALLWAIT would hold SETADC.
     if constexpr (!keep_output_addr)
     {
-        // Byte 3 (bit 31) is the row pack init's; another pack program between two row packs replaces the row pack's MOP,
-        // so the init runs again before the next one.
+        // Byte 3 stays as it is: the Blackhole packer reads only L1_Dest_addr[16:0] (bit 31 is Wormhole's packer-0 offset).
         TT_RMWCIB0(0xff, addr & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
         TT_RMWCIB1(0xff, (addr >> 8) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
         // Same word as Data = (addr >> 16) & 0xff, reusing byte 1's 0xff00 mask.

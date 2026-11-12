@@ -191,13 +191,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
-// PACK_RMW_DEST: the byte-wise destination write in every default pack (_llk_pack_rmw_dest_init_); off, main's calls.
+// PACK_RMW_DEST: the byte-wise destination write in every default pack; off, main's calls.
 #if defined(ARCH_BLACKHOLE) && defined(PACK_RMW_DEST)
 #define PACK_RMW_TAIL , false, true
-#define PACK_RMW_INIT _llk_pack_rmw_dest_init_();
 #else
 #define PACK_RMW_TAIL
-#define PACK_RMW_INIT
 #endif
 // Per tile, a Float32 output from a 16 bit DEST keeps main's write (llk_pack_tile_of_output) unless PACK_RMW_DEST.
 #if defined(ARCH_BLACKHOLE) && !defined(PACK_RMW_DEST)
@@ -321,7 +319,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             false /* narrow_tile */,
             RELU_CONFIG /* relu_config */);
         _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
-        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>(); PACK_RMW_INIT
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 #if defined(ARCH_BLACKHOLE)
         if constexpr (pack_block_en)
         {
