@@ -353,22 +353,9 @@ constexpr bool topk_xl_blaze_compat = false;
 //
 // Nothing else on the math thread touches the MOP Expander, so this
 // programming survives across every merge call.
-#if TOPK_XL_UNFUSED_MACRO
-namespace topk_xl_unfused_macro
-{
-inline void configure_sequences();
-}
-#endif
-
 template <bool fused>
 inline void topk_mop_config()
 {
-#if TOPK_XL_UNFUSED_MACRO
-    if constexpr (!fused)
-    {
-        topk_xl_unfused_macro::configure_sequences();
-    }
-#endif
     // Unfused: the SFPLOADMACRO body is 16 instructions (the two SFPSWAPs and
     // two of the eight stores ride the macros); the plain body is 18. The fused
     // body is 16 either way. Must match what `_topk_xl_merge_` records.
@@ -495,11 +482,10 @@ inline void topk_rebuild_build2048_mop_config()
 //   descending (sort_k DESC: SWAP(VC=LREG0, VD=LREG2)) -> macroVD = LREG2/3,
 //              templates' VC = LREG0/1
 // The merge always takes the descending form (it calls sort_k with false).
-// Merge and rebuild program their own two InstructionTemplates at entry
-// (2 backdoor writes — self-contained, no cross-call template contract, and
-// no collision with the FUSED macro users' templates). The Sequence words and
-// Misc are direction- and caller-invariant and are programmed by
-// `topk_mop_config<false>`, since fused phases reprogram the Sequence registers.
+// Merge and rebuild run `loadmacro_configure` at entry: the two
+// InstructionTemplates for their direction plus Sequence[0/1] and Misc, so they
+// carry no cross-call contract with the fused phases, which reprogram the same
+// registers.
 //
 // Index loads/stores stay in software: only 4 macro slots exist, the 2-bit
 // Store delay field cannot reach past the swap-macros' store cycles in a
@@ -517,7 +503,7 @@ inline void topk_rebuild_build2048_mop_config()
 #if TOPK_XL_UNFUSED_MACRO || TOPK_XL_FUSED_MACRO
 
 // Sequence and Misc encodings shared by the unfused and the fused macros.
-namespace topk_xl_macro
+namespace detail
 {
 
 // Simple byte: selector 4+m -> InstructionTemplate[m], delay 0. 0x80 SET ->
@@ -559,10 +545,112 @@ constexpr std::uint32_t MISC_WORD = 0xB00u | 0xF0u;
 //           SFPCFG_IMM16_IS_VALUE (1): write imm16 directly (:108).
 constexpr std::uint32_t SFPCFG_DEST_SEQUENCE_BASE = 4; // dest of SequenceReg[0]; [1] at +1
 constexpr std::uint32_t SFPCFG_DEST_MISC          = 8;
-constexpr std::uint32_t SFPCFG_LOAD_FROM_LREG0    = 0;
 constexpr std::uint32_t SFPCFG_IMM16_IS_VALUE     = 1; // SFPCONFIG.md:108
 
-} // namespace topk_xl_macro
+/**
+ * @brief Sequence word of SFPLOADMACRO m.
+ *
+ * Schedules InstructionTemplate[m] on Simple, an SFPNOP on MAD at the same delay, and a store of macroVD back to its
+ * load address. Fused: swap delay m and store delays {2, 4, 5, 6}, so four back-to-back macros swap one per two slots
+ * and each store lands after its swap has written. Unfused: swap delay 0 and store delay 2.
+ *
+ * @tparam FUSED: Four fused macros or two unfused ones, values = <Yes/No>
+ * @param m: Macro index, 0-3 fused, 0-1 unfused
+ * @return The 32-bit word for SequenceReg[m]; 0 (schedule nothing) under the test-only mutation hooks.
+ */
+template <Fused FUSED>
+constexpr std::uint32_t sequence_word([[maybe_unused]] std::uint32_t m)
+{
+    if constexpr (FUSED == Fused::Yes)
+    {
+#if defined(TOPK_XL_FUSED_MACRO_MUTATE)
+        return 0u;
+#else
+        return (seq_store(m == 0 ? 2 : m + 3) << 24) | (seq_mad_nop(m) << 8) | seq_simple(m, m);
+#endif
+    }
+    else
+    {
+#if defined(TOPK_XL_MACRO_MUTATE)
+        return 0u;
+#else
+        return (seq_store() << 24) | (seq_mad_nop() << 8) | seq_simple(m);
+#endif
+    }
+}
+
+/**
+ * @brief Write SequenceReg[M...] from @ref sequence_word.
+ *
+ * Each word is staged through LREG0, since the Store byte does not fit the imm16 path.
+ *
+ * @tparam FUSED: Four fused macros or two unfused ones, values = <Yes/No>
+ * @tparam M: Macro indices to program
+ */
+template <Fused FUSED, std::uint32_t... M>
+inline void program_sequences(std::integer_sequence<std::uint32_t, M...>)
+{
+    (_sfpu_load_config32_(SFPCFG_DEST_SEQUENCE_BASE + M, upper16(sequence_word<FUSED>(M)), lower16(sequence_word<FUSED>(M))), ...);
+}
+
+/**
+ * @brief Write every Sequence word and Misc, then wait until an SFPLOADMACRO can read them.
+ *
+ * @tparam FUSED: Four fused macros or two unfused ones, values = <Yes/No>
+ * @note Clobbers LREG0.
+ */
+template <Fused FUSED>
+inline void program_sequences_and_misc()
+{
+    constexpr std::uint32_t macros = FUSED == Fused::Yes ? 4 : 2;
+    program_sequences<FUSED>(std::make_integer_sequence<std::uint32_t, macros> {});
+    TTI_SFPCONFIG(MISC_WORD, SFPCFG_DEST_MISC, SFPCFG_IMM16_IS_VALUE);
+    // An SFPLOADMACRO issued sooner reads the stale Sequence/Misc. Two NOPs is the measured minimum on BH silicon:
+    // the mutation-control suite diverges with either one removed.
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+} // namespace detail
+
+/**
+ * @brief Program SFPLOADMACRO to host one compare-exchange layer: its swap templates, the Sequence words and Misc.
+ *
+ * Template m holds pair m of the layer with only VC; macro m loads the pair's other LREG, which becomes VD and
+ * receives the max.
+ *
+ * @tparam STRIDE: Distance between compared elements, values = <FOUR/EIGHT/SIXTEEN>
+ * @tparam WINDOW_SIZE: Length of one sorted window, values = <EIGHT/SIXTEEN/THIRTY_TWO>
+ * @tparam ORDER: Direction of the first window, values = <ASCENDING/DESCENDING>
+ * @tparam FUSED: Four macros over LREG0-7, or two over LREG0-3 with indices in LREG4-7, values = <Yes/No>
+ * @note Clobbers LREG0. Templates and Sequence words are shared by the three Tensix threads: no other thread may
+ *       issue SFPLOADMACRO while they are reprogrammed.
+ */
+template <detail::Stride STRIDE, detail::WindowSize WINDOW_SIZE, detail::Order ORDER, detail::Fused FUSED>
+inline void loadmacro_configure()
+{
+    detail::element_swap<STRIDE, WINDOW_SIZE, ORDER, FUSED, detail::UseLoadMacro::Yes>();
+    detail::program_sequences_and_misc<FUSED>();
+}
+
+/**
+ * @brief @ref loadmacro_configure with ORDER chosen at runtime; only the templates depend on it.
+ *
+ * @param ascending: ORDER as a runtime value, true = ASCENDING
+ */
+template <detail::Stride STRIDE, detail::WindowSize WINDOW_SIZE, detail::Fused FUSED>
+inline void loadmacro_configure(const bool ascending)
+{
+    if (ascending)
+    {
+        detail::element_swap<STRIDE, WINDOW_SIZE, detail::Order::ASCENDING, FUSED, detail::UseLoadMacro::Yes>();
+    }
+    else
+    {
+        detail::element_swap<STRIDE, WINDOW_SIZE, detail::Order::DESCENDING, FUSED, detail::UseLoadMacro::Yes>();
+    }
+    detail::program_sequences_and_misc<FUSED>();
+}
 
 #endif
 
@@ -571,58 +659,12 @@ constexpr std::uint32_t SFPCFG_IMM16_IS_VALUE     = 1; // SFPCONFIG.md:108
 namespace topk_xl_unfused_macro
 {
 
-using namespace topk_xl_macro;
-
-#if defined(TOPK_XL_MACRO_MUTATE)
-// Mutation control (test-only): schedule nothing.
-constexpr std::uint32_t sequence_word(std::uint32_t)
-{
-    return 0u;
-}
-#else
-constexpr std::uint32_t sequence_word(std::uint32_t m)
-{
-    return (seq_store() << 24) | (seq_mad_nop() << 8) | seq_simple(m);
-}
-#endif
-
 // SFPLOADMACRO field packing (ckernel_ops.h:689, SFPLOADMACRO.md:20-26,45):
 //   lreg_ind = (MacroIndex << 2) | (VD & 3), dest_reg_addr = (Imm9 << 1) | (VD >> 2).
 // VD is u3 and the address low bit is unused (SFPLOAD.md:83), so VD in 0..7
 // never perturbs the address.
 #define TOPK_XL_UNFUSED_LOADMACRO(macro_idx, vd, off) \
     TTI_SFPLOADMACRO(((macro_idx) << 2) | ((vd) & 3u), InstrModLoadStore::FP32, ADDR_MOD_7, (off) | ((vd) >> 2))
-
-// Program Sequence[0/1] + Misc. Stages each 32-bit word through LReg[0] (the
-// _init_mul_int_ idiom — the Store byte does not fit the imm16 path).
-// Runs from `topk_mop_config<false>`: every unfused init and post-copy reinit.
-// Clobbers LReg[0], which every body reloads.
-inline void configure_sequences()
-{
-    _sfpu_load_config32_(SFPCFG_DEST_SEQUENCE_BASE + 0, detail::upper16(sequence_word(0)), detail::lower16(sequence_word(0)));
-    _sfpu_load_config32_(SFPCFG_DEST_SEQUENCE_BASE + 1, detail::upper16(sequence_word(1)), detail::lower16(sequence_word(1)));
-
-    TTI_SFPCONFIG(MISC_WORD, SFPCFG_DEST_MISC, SFPCFG_IMM16_IS_VALUE);
-    // SFPCONFIG writes to the Sequence/Misc registers take two cycles to
-    // land before an SFPLOADMACRO may consume them; issuing a macro sooner
-    // reads the stale configuration. Two NOPs is the measured minimum on
-    // BH silicon (validated by the mutation-control suite: removing either
-    // NOP flips the macro-vs-optout differential from bit-identical to
-    // divergent).
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-}
-
-// Install InstructionTemplate[0/1] for one direction via the VD >= 12
-// backdoor (open: the unfused LaneConfig is 0x4, DISABLE_BACKDOOR_LOAD clear).
-// Mod1 stays ALL_ROWS_MAX — both halves are kept and the shipping operand
-// order already puts the macro-reachable half in macroVD.
-template <bool ascending>
-inline void program_templates()
-{
-    constexpr detail::Order order = static_cast<detail::Order>(ascending);
-    detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, order, detail::Fused::No, detail::UseLoadMacro::Yes>();
-}
 
 // The body minus the LREG7 tail — 15 issues (see the section comment's
 // timeline). Kept separate so the split-record loops can emit a per-iter
@@ -737,43 +779,6 @@ inline void record_ce_full(const bool dir)
 namespace topk_xl_fused_macro
 {
 
-using namespace topk_xl_macro;
-
-#if defined(TOPK_XL_FUSED_MACRO_MUTATE)
-// Mutation control (test-only): schedule nothing.
-constexpr std::uint32_t sequence_word(std::uint32_t)
-{
-    return 0u;
-}
-#else
-constexpr std::uint32_t sequence_word(std::uint32_t i)
-{
-    return (seq_store(i == 0 ? 2 : i + 3) << 24) | (seq_mad_nop(i) << 8) | seq_simple(i, i);
-}
-#endif
-
-template <std::uint32_t M>
-inline void set_sequence()
-{
-    _sfpu_load_config32_(SFPCFG_DEST_SEQUENCE_BASE + M, detail::upper16(sequence_word(M)), detail::lower16(sequence_word(M)));
-}
-
-// Programs templates and macros 0 to 3; each fused entry point runs it first.
-inline void configure()
-{
-    // Templates 0 to 3 keep VC = LREG0..3; macro m's load into LREG4+m supplies VD.
-    detail::element_swap<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes, detail::UseLoadMacro::Yes>();
-
-    set_sequence<0>();
-    set_sequence<1>();
-    set_sequence<2>();
-    set_sequence<3>();
-
-    TTI_SFPCONFIG(MISC_WORD, SFPCFG_DEST_MISC, SFPCFG_IMM16_IS_VALUE);
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-}
-
 // load16_rows_x2, bitonic_sort_len_k and store16_rows_x2 in 15 instructions. The macro swaps have a fixed operand
 // order, so an ascending group loads the second strip into LREG0..3 instead.
 template <int group_2_offset, int inc_dst_addr, bool ascending>
@@ -884,34 +889,13 @@ constexpr int pipelined_group_len = 12;
 // Two encoding facts make this work:
 //   * A template is "an arbitrary Vector Unit instruction" (`SFPLOADMACRO.md:59`) written by issuing
 //     that instruction with `VD >= 12` (`SFPCONFIG.md:118`), so a template's `VC` is not confined to
-//     LREG0..3 the way `configure()` happens to leave it.
+//     LREG0..3 the way the step-group configuration leaves it.
 //   * `VD = (VDHi << 2) | VDLo` with `Imm10 = (Imm9 << 1) | VDHi`, and the address's low bit "goes
 //     unused" (`SFPLOAD.md:83`). So `VDHi` rides a bit that does not affect addressing: dropping the
 //     `| 1` gives `VDHi = 0`, which lets a macro load LREG0..3 without changing the address.
 //
 // Step 3 of `bitonic_sort_len_8` is `(VC,VD)` = (L1,L0) (L2,L3) (L5,L4) (L6,L7) ascending, and
 // (L0,L1) (L3,L2) (L4,L5) (L7,L6) descending, so all four pairs are hostable once both facts hold.
-template <bool ascending>
-inline void stride2_len8_templates()
-{
-    // Macro m's template supplies VC; the macro's own load supplies VD.
-    constexpr detail::Order order = static_cast<detail::Order>(ascending);
-    detail::element_swap<detail::Stride::FOUR, detail::WindowSize::EIGHT, order, detail::Fused::Yes, detail::UseLoadMacro::Yes>();
-}
-
-// Restores what `configure()` leaves in place, so every later `step_group` still finds its own
-// templates. The Sequence words are untouched throughout, only the four templates move.
-//
-// Two invariants this relies on. `InstructionTemplate[]` lives in `LoadMacroConfig[Lane]`, which is
-// SFPU state shared by all three Tensix threads rather than per-thread; mutating it for the duration
-// of a stage is safe only because MATH issues no `SFPLOADMACRO` in the split schedule (it runs
-// `_topk_xl_split_transpose_`). And the templates are sampled when a macro is ISSUED, not when its
-// scheduled instruction executes, so restoring them with scheduled stores still in flight is safe.
-inline void restore_step_group_templates()
-{
-    detail::element_swap<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes, detail::UseLoadMacro::Yes>();
-}
-
 constexpr int stride2_len8_loads_len = 13;
 
 // `load16_rows_x2<2>` in macro form: the four VC rows load plainly first, then the four VD rows load
@@ -970,13 +954,6 @@ inline NOINLINE void record_stride2_len8_loads(const bool ascending)
 // `bitonic_sort_len_4`, so the first thing after the load is a transpose. Scheduling that transpose
 // on a macro costs all four Sequence words (three suppressed, one re-delayed) to save one
 // instruction.
-template <bool ascending>
-inline void stride2_len16_templates()
-{
-    constexpr detail::Order order = static_cast<detail::Order>(ascending);
-    detail::element_swap<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, order, detail::Fused::Yes, detail::UseLoadMacro::Yes>();
-}
-
 constexpr int stride2_len16_loads_len = 13;
 
 // Slot layout as `stride2_len8_loads`, with one difference worth stating: this tail opens with step
@@ -2123,7 +2100,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         return;
     }
 #if TOPK_XL_FUSED_MACRO
-    topk_xl_fused_macro::configure();
+    loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
 #endif
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2410,7 +2387,7 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     // K = 512 runs two step groups only, too few to repay the macro programming.
     if constexpr (K >= 1024)
     {
-        topk_xl_fused_macro::configure();
+        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
 #endif
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2737,7 +2714,7 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
         // K = 512 runs four groups only, too few to repay the macro programming.
         if constexpr (K >= 1024)
         {
-            topk_xl_fused_macro::configure();
+            loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
             load_replay_buf<Exec>(
                 0,
                 body_len,
@@ -2769,7 +2746,7 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
         // sorts with `descending` (= the ascending=false operand order), so
         // macroVD = LREG2/3 and the templates' VC = LREG0/1. Every scheduled
         // store retires inside the body — no trailing SFPNOPs needed.
-        topk_xl_unfused_macro::program_templates<false>();
+        loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::No>();
         load_replay_buf<Exec>(0, body_len, [] { topk_xl_unfused_macro::ce_full<indices_offset, distance, 8 /* inc_dst_addr */, false>(); });
 #else
         load_replay_buf<Exec>(
@@ -2826,7 +2803,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 #if TOPK_XL_FUSED_MACRO
     if constexpr (fused)
     {
-        topk_xl_fused_macro::configure();
+        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
 #endif
 
@@ -2922,17 +2899,8 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         leave_transpose_cfg_block();
 
 #if TOPK_XL_UNFUSED_MACRO
-        // Install the direction's InstructionTemplates once for all three
-        // stride phases below (2 backdoor writes; Sequence/Misc were
-        // programmed by `_topk_xl_init_<K, false>`).
-        if (dir)
-        {
-            topk_xl_unfused_macro::program_templates<true>();
-        }
-        else
-        {
-            topk_xl_unfused_macro::program_templates<false>();
-        }
+        // Program the direction's macros once for all three stride phases below.
+        loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::No>(dir);
 #endif
         for (int col = 0; col < 2; col++)
         {
@@ -3143,7 +3111,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
     // The K = 512 rebuild has no step groups.
     if constexpr (fused && K >= 1024)
     {
-        topk_xl_fused_macro::configure();
+        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
 #endif
 
@@ -3240,17 +3208,8 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         leave_transpose_cfg_block();
 
 #if TOPK_XL_UNFUSED_MACRO
-        // Install the direction's InstructionTemplates once for the stride-32
-        // and stride-16 phases below (2 backdoor writes; Sequence/Misc were
-        // programmed by `_topk_xl_init_<K, false>`).
-        if (dir)
-        {
-            topk_xl_unfused_macro::program_templates<true>();
-        }
-        else
-        {
-            topk_xl_unfused_macro::program_templates<false>();
-        }
+        // Program the direction's macros once for the stride-32 and stride-16 phases below.
+        loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::No>(dir);
 #endif
         for (int col = 0; col < 2; col++)
         {
@@ -4069,8 +4028,8 @@ constexpr int split_n_iters = 2 * split_row_scale<K>;
 
 // PACK, once per row: ADDR_MOD_3 takes the stamp's +4 so ADDR_MOD_6 keeps the sort's +32; ADDR_MOD_4 is the K >= 1024
 // stamp's face skip. With `macros` (default K >= 1024) the row's segments share one fused macro configuration,
-// programmed here. The stride-2 len 8 and len 16 passes swap the four SFPLOADMACRO templates for their own and
-// put these back through restore_step_group_templates; MATH must issue no SFPLOADMACRO while they are swapped.
+// programmed here. The stride-2 len 8 and len 16 passes program their own swap layer and put the step-group one
+// back; MATH must issue no SFPLOADMACRO while theirs is installed.
 template <std::uint32_t K, bool macros = (K >= 1024)>
 inline void _topk_xl_split_sfpu_init_()
 {
@@ -4090,7 +4049,7 @@ inline void _topk_xl_split_sfpu_init_()
 #if TOPK_XL_FUSED_MACRO
     if constexpr (macros)
     {
-        topk_xl_fused_macro::configure();
+        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
 #endif
 }
@@ -4397,10 +4356,9 @@ inline void _topk_xl_split_stride2_sort_(const bool dir)
 // The stride-2 pass between two transposes.
 //
 // `macros` must match what `_topk_xl_split_sfpu_init_` was given: the sort_len 8 and 16 paths below
-// host their first swap layer on `SFPLOADMACRO`, so they need the Sequence words programmed. With
-// them unprogrammed a macro schedules nothing at all (`SFPLOADMACRO.md:79`), which would silently
-// drop that layer and corrupt the sort without hanging -- so the default is OFF and a caller that
-// has initialised with macros opts in, as `_topk_xl_split_sort_head_512_<macros>` already does.
+// host their first swap layer on `SFPLOADMACRO` and finish by putting the step-group configuration
+// back, which only a caller initialised with macros expects. The default is OFF and such a caller
+// opts in, as `_topk_xl_split_sort_head_512_<macros>` already does.
 template <std::uint32_t K, int sort_len, bool macros = false>
 inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool dir)
 {
@@ -4413,14 +4371,7 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         // sort_len == 4 is deliberately absent: its dispatch issues an SFPTRANSP before the sort, so
         // the first thing after the load is a transpose and there is no swap for a macro to host.
         constexpr int stores_at = topk_xl_fused_macro::stride2_len16_loads_len;
-        if (dir)
-        {
-            topk_xl_fused_macro::stride2_len16_templates<true>();
-        }
-        else
-        {
-            topk_xl_fused_macro::stride2_len16_templates<false>();
-        }
+        loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::Yes>(dir);
         topk_xl_fused_macro::record_stride2_len16_loads(dir);
         bitonic_sort_len_16_alt_tail(dir);
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
@@ -4430,7 +4381,8 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
             bitonic_sort_len_16_alt_tail(dir);
             lltt::replay(stores_at, 8);
         }
-        topk_xl_fused_macro::restore_step_group_templates();
+        // Put the step-group configuration back for the later step groups.
+        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
     else if constexpr (macros && sort_len == 8)
     {
@@ -4439,14 +4391,7 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         // load left to attach a macro to. See `stride2_len8_loads` for the two encoding facts it
         // needs, and note the templates must be put back before the next `step_group` runs.
         constexpr int stores_at = topk_xl_fused_macro::stride2_len8_loads_len;
-        if (dir)
-        {
-            topk_xl_fused_macro::stride2_len8_templates<true>();
-        }
-        else
-        {
-            topk_xl_fused_macro::stride2_len8_templates<false>();
-        }
+        loadmacro_configure<detail::Stride::FOUR, detail::WindowSize::EIGHT, detail::Fused::Yes>(dir);
         topk_xl_fused_macro::record_stride2_len8_loads(dir);
         bitonic_sort_len_8_tail(dir);
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
@@ -4456,7 +4401,8 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
             bitonic_sort_len_8_tail(dir);
             lltt::replay(stores_at, 8);
         }
-        topk_xl_fused_macro::restore_step_group_templates();
+        // Put the step-group configuration back for the later step groups.
+        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
     else
 #endif
