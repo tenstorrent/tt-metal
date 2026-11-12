@@ -157,7 +157,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         topk_xl_split::pack_row<TOPK_XL_K>(
             TOPK_XL_NUM_CHUNKS, TOPK_XL_ASCENDING /*mirror_last*/, [] { topk_xl_split::split_indices<TOPK_XL_K, true /*stall_after*/>(TOPK_XL_SEG_BASE); });
         _llk_packer_wait_for_math_done_();
-        _llk_pack_mop_config_<PackMode::Default, false /* zero_output */>(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */);
+        _llk_pack_mop_config_<PackMode::Default, false /* zero_output */>(
+            ckernel::tensor_shape_from_legacy_pack_geometry(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES), 1 /* num_tiles */);
         for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
         {
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(params.buffer_Res[2 * TILES_PER_SEQ * r + t]));
