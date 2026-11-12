@@ -28,8 +28,7 @@ from models.demos.minimax_m3.tt.vision.common import (
 
 
 def accurate_gelu(x: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
-    """The accurate (erf) GELU of HF's `gelu`, into memory_config, or, when None, where x is (ttnn.gelu gets no
-    memory_config)."""
+    """Run the accurate (erf) GELU of HF's `gelu` into memory_config, or where x is when that is None."""
     return ttnn.gelu(x, fast_and_approximate_mode=False, **memory_config_kwargs(memory_config))
 
 
@@ -99,9 +98,11 @@ class M3VLMLP(LightweightModule):
         return cls.from_linears(mesh_device, ref.fc1, ref.fc2, dtype=dtype)
 
     def forward(self, x: ttnn.Tensor, placement: BlockPlacement = DRAM_PLACEMENT) -> ttnn.Tensor:
-        """fc2(gelu(fc1(x))), with fc1's, GELU's and fc2's outputs where placement's fc1_out, gelu_out and residual
-        put them; linear() picks fc1's and fc2's program configs for where their inputs and outputs are, block shards
-        included. The projector's MLPs take the default, every output in DRAM."""
+        """Return fc2(gelu(fc1(x))), with fc1, GELU and fc2 writing placement's fc1_out, gelu_out and residual.
+
+        A gelu_out of None keeps GELU's output where fc1's is.
+        The projector's MLPs use the default placement, every output in DRAM.
+        """
         hidden = linear(
             x,
             self.fc1_weight,

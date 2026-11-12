@@ -70,7 +70,7 @@ class M3VLLayerNorm(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
-        """LayerNorm of x into memory_config, or, when None, where x is (ttnn.layer_norm gets no memory_config)."""
+        """Run LayerNorm on x into memory_config, or where x is when that is None."""
         return ttnn.layer_norm(
             x,
             weight=self.weight,

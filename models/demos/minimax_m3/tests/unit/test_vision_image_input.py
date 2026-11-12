@@ -167,7 +167,7 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
 
     This holds for a grid's first image, which stages its RoPE tables, and for the next one. forward_device leaves its
     input allocated, and forward_tower makes forward's calls up to the last block. The stand-in blocks have no weights
-    to place activations by, so the model keeps them in DRAM.
+    to place activations by, so the test runs the model with activations "dram".
     """
     calls = []  # (kind, inputs) of each call since the log was cleared
 

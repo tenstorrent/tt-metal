@@ -193,8 +193,11 @@ class M3VLAttention(LightweightModule):
         sin: ttnn.Tensor,
         placement: BlockPlacement = DRAM_PLACEMENT,
     ) -> ttnn.Tensor:
-        """Self-attention of x. QKV and the heads split from it write placement.qkv, RoPE where its input is, SDPA to
-        DRAM and the output projection placement.residual."""
+        """Run self-attention on x, writing each output where placement says.
+
+        QKV and the heads write placement.qkv, the RoPE ops write where their input is, SDPA writes DRAM and the output
+        projection writes placement.residual.
+        """
         xqkv = linear(x, self.wqkv, self.wqkv_bias, self.compute_kernel_config, memory_config=placement.qkv)
 
         q_heads, k_heads, v_heads = ttnn.experimental.nlp_create_qkv_heads(

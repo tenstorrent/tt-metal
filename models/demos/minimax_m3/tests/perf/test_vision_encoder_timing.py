@@ -87,8 +87,8 @@ def test_vision_encoder_timing(mesh_device, device_params):
         "device forward": _time_calls(lambda: model.forward_device(x_tt, grid_thw), mesh_device),
         "end-to-end forward": _time_calls(lambda: model(pixel_values, grid_thw), mesh_device),
     }
-    # The check of L1 before each forward still keeps the activations where the first call had them: no call left an
-    # L1 tensor behind that would send the later calls, and the times printed for them, to DRAM.
+    # The L1 check must still give the same placement after the timed calls. A tensor left in L1 would have sent
+    # them, and the times printed for them, to DRAM.
     after = model.placement(x_tt)
     assert after is placement, f"after the timed calls the forward takes placement {after.name}, not {placement.name}"
     print()

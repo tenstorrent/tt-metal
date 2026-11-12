@@ -45,17 +45,13 @@ VISION_GRIDS = {
 # The grids that the CI entry "MiniMax-M3 vision unit tests (1-card)" runs. h40w54 covers partial row tiles and the RoPE
 # op's reload kernels, which h16w16 does not. M3_VISION_ALL_GRIDS=1 adds the other grids, left out rather than skipped.
 CI_GRIDS = ("h16w16", "h40w54")
-# The attention test also runs h18w18 in CI. SDPA pads the keys to a multiple of its 256-key chunk and masks the padded
-# ones: 144 of 2304 at 2160 patches, and 188 of 512 at 324, the largest share of any grid the attention runs in CI.
+# The attention test also runs h18w18 in CI, where SDPA masks 188 of its 512 padded keys, the largest share in CI.
 ATTENTION_CI_GRIDS = CI_GRIDS + ("h18w18",)
-# The tower test of activations in L1 against DRAM runs h16w16 and h36w36 in CI: both keep the activations in L1 on
-# 11x10, 12x10 and 13x10, and h36w36 also the MLP's hidden activations in block shards. h36w36 adds a partial tile row,
-# one tile row on the last core of every block linear's split, so a partial last shard, and on 12x10 and 13x10 splits
-# that leave cores out.
+# The CI grids of the tower test of L1 against DRAM. Both use L1 on 11x10, 12x10 and 13x10, and h36w36 shards the MLP.
+# h36w36 also adds a partial tile row, a partial last shard, and splits that leave cores out on 12x10 and 13x10.
 L1_VS_DRAM_CI_GRIDS = ("h16w16", "h36w36")
-# With M3_VISION_ALL_GRIDS=1 that test also runs these, so that on 11x10, 12x10 and 13x10 its images take every layout of
-# the MLP's block shards the rule admits: whole shards on 11 columns (1408 patches), whole shards on 13 columns of 13x10
-# (1664) and a partial last shard on 12 columns of 12x10 and 13x10 (1440).
+# The grids of that test with M3_VISION_ALL_GRIDS=1: VISION_GRIDS and three more for the MLP's other shard layouts,
+# whole shards on 11 columns, whole shards on 13 columns of 13x10, and a partial last shard on 12 columns.
 L1_VS_DRAM_ALL_GRIDS = {
     **VISION_GRIDS,
     "h32w44": (1, 32, 44),  # 448x616
@@ -97,8 +93,7 @@ def grid_name(grid_thw) -> str:
 
 
 # Looser bounds for a check at one grid, where its error exceeds MAX_REL_L2. At h4w4 SDPA attends over only 16 keys,
-# 240 of its one 256-key chunk masked, so each output row averages few bf16 products and the attention's error is
-# larger. The bound was measured with 128-key chunks.
+# so each output row averages few bf16 products and the attention's error is larger.
 MAX_REL_L2_AT_GRID = {("attention", "h4w4"): 0.027}
 
 
@@ -199,12 +194,13 @@ def assert_close(name: str, ref: torch.Tensor, out: torch.Tensor, min_pcc: float
 
 
 def matmul_cb_bytes(config, k_tiles: int, fp32_dest_acc: bool, bias: bool = True, out_sharded: bool = False) -> int:
-    """The circular buffers per core of the 2D multicast matmul factory for a linear_program_config config, bf16 tiles
-    of 2 KB (matmul_multicore_reuse_mcast_2d_program_factory.cpp): the in0 and in1 K blocks, double-buffered when K
-    takes more than one, the output block, a bias row, and the output block's partial sums, which with fp32
-    accumulation are fp32 tiles in a buffer of their own. A block-sharded input keeps its K-block buffers (the shard is
-    a buffer of its own, on the tensor). A block-sharded output is the output block's buffer, so that block takes no
-    room; the partial sums keep theirs with fp32 accumulation and share the shard without."""
+    """Return the circular-buffer bytes per core of the 2D multicast matmul for a linear_program_config config.
+
+    As matmul_multicore_reuse_mcast_2d_program_factory.cpp sizes them, in 2 KB bf16 tiles: the in0 and in1 K blocks,
+    doubled when K has more than one block, the output block and a bias row. With fp32 accumulation the partial sums
+    get their own 4 KB tiles. A block-sharded output's buffer is the output tensor itself, so the output block then
+    takes no room. A block-sharded input keeps its K-block buffers.
+    """
     depth = 2 if k_tiles > config.in0_block_w else 1
     block = config.out_block_h * config.out_block_w
     tiles = depth * config.in0_block_w * (config.out_block_h + config.out_block_w)
@@ -216,9 +212,10 @@ def matmul_cb_bytes(config, k_tiles: int, fp32_dest_acc: bool, bias: bool = True
 
 
 def matmul_sharded_output(config, m_tiles: int, n_tiles: int):
-    """The memory config ttnn gives a matmul's output in L1 block shards for this config, as it derives it
-    (matmul_device_operation.cpp, the output spec of a 2D multicast config): blocks of per_core_M x per_core_N tiles
-    from core (0, 0), M along the grid's columns with transpose_mcast (COL_MAJOR), along its rows without (ROW_MAJOR).
+    """Return the memory config that ttnn gives a matmul's output in L1 block shards for this config.
+
+    Blocks of per_core_M x per_core_N tiles start at core (0, 0). M runs along the grid's columns with transpose_mcast
+    (COL_MAJOR), and along its rows without (ROW_MAJOR), as matmul_device_operation.cpp derives it.
     """
     blocks_m, blocks_n = math.ceil(m_tiles / config.per_core_M), math.ceil(n_tiles / config.per_core_N)
     columns, rows = (blocks_m, blocks_n) if config.transpose_mcast else (blocks_n, blocks_m)
@@ -233,13 +230,13 @@ def matmul_sharded_output(config, m_tiles: int, n_tiles: int):
 def matmul_config_problems(
     config, rows, in_features, out_features, grid, fp32_dest_acc, in0_shards=None, out_sharded=False
 ) -> list[str]:
-    """The checks the matmul device op and its 2D multicast factory make on this config (matmul_device_operation.cpp,
-    matmul_multicore_reuse_mcast_2d_program_factory.cpp), and that its circular buffers fit in LINEAR_L1_BYTES: the
-    ones it fails, by name, none where it passes them all. The input and the output are interleaved, in DRAM or L1,
-    which those checks do not tell apart, or in L1 block shards: in0_shards is the input's memory config then (with its
-    shard spec, as ttnn gave it), and out_sharded is true for an output in block shards. For a sharded input it also
-    checks what matmul_cb_bytes takes: the input's shards are whole along K and hold exactly the split's blocks, so no
-    core holds a slice of K without an output block, which would take a relay buffer of its own."""
+    """Return the names of the checks that the matmul config fails, or [] if it passes them all.
+
+    The checks are those of the matmul device op and its 2D multicast factory, and that the circular buffers fit in
+    LINEAR_L1_BYTES. The input and output are interleaved, in DRAM or L1, unless in0_shards gives the input's
+    block-sharded memory config or out_sharded is True. A sharded input must also hold exactly the split's blocks,
+    whole along K, so that no core needs a relay buffer.
+    """
     m_tiles, k_tiles, n_tiles = (math.ceil(d / ttnn.TILE_SIZE) for d in (rows, in_features, out_features))
     blocks_m, blocks_n = math.ceil(m_tiles / config.per_core_M), math.ceil(n_tiles / config.per_core_N)
     blocks_x, blocks_y = (blocks_m, blocks_n) if config.transpose_mcast else (blocks_n, blocks_m)
@@ -306,7 +303,7 @@ def matmul_config_problems(
 def assert_matmul_config_valid(
     config, rows, in_features, out_features, grid, fp32_dest_acc, in0_shards=None, out_sharded=False
 ):
-    """Asserts that the config passes matmul_config_problems's checks."""
+    """Assert that the config passes every check of matmul_config_problems."""
     problems = matmul_config_problems(
         config, rows, in_features, out_features, grid, fp32_dest_acc, in0_shards=in0_shards, out_sharded=out_sharded
     )

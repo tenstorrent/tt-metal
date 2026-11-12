@@ -8,7 +8,8 @@ images of several grids with the same patch count, which must reuse the first im
 seeded random weights (tests/conftest.py); test_vision_accuracy.py runs all 32 with real weights.
 test_vision_tower_l1_vs_dram runs a 3-layer tower with its activations in L1, with and without the MLP's hidden
 activations in block shards, and in DRAM. The outputs must be equal bit for bit.
-M3_VISION_ALL_GRIDS=1 adds the other grids of VISION_GRIDS, and of L1_VS_DRAM_ALL_GRIDS for the L1 test.
+M3_VISION_ALL_GRIDS=1 adds the other grids of VISION_GRIDS, and of L1_VS_DRAM_ALL_GRIDS for the L1 test. It also adds
+test_vision_tower_l1_clash_falls_back_to_dram, which forces a circular-buffer clash in L1 on the chip.
 """
 from __future__ import annotations
 
@@ -42,9 +43,8 @@ from .vision_helpers import (
 )
 
 NUM_LAYERS = 2  # of the checkpoint's 32
-# Bytes per L1 bank of the tensor that the clash test keeps at the top of L1. At 2304 patches, by the walk of
-# test_vision_block_placement.py, some op of the L1 placement then lacks over 100 KB for its circular buffers on 11x10,
-# 12x10 and 13x10. The DRAM placement keeps over 50 KB to spare.
+# Bytes per L1 bank of the tensor that the clash test keeps at the top of L1. With it, an op of the L1 placement at
+# 2304 patches lacks over 100 KB for its circular buffers on every grid of L1_GRIDS, and the DRAM placement still fits.
 CLASH_FOREIGN_BYTES = 384 * 1024
 
 
@@ -111,7 +111,7 @@ def test_vision_tower_new_grid_on_cached_programs(
 
 
 def _l1_state(mesh_device):
-    """The L1 bytes allocated per bank and the largest free block, as ttnn's memory view gives them."""
+    """Return the L1 bytes allocated per bank and the largest free block, from ttnn's memory view."""
     view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
     return view.total_bytes_allocated_per_bank, view.largest_contiguous_bytes_free_per_bank
 
@@ -120,15 +120,12 @@ def _l1_state(mesh_device):
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @parametrize_vision_grids(L1_VS_DRAM_CI_GRIDS, L1_VS_DRAM_ALL_GRIDS)
 def test_vision_tower_l1_vs_dram(mesh_device, device_params, grid_thw, vision_reference):
-    """A 3-block tower, run on one upload with each of ACTIVATIONS, gives the same output bit for bit with "l1" and
-    "l1_interleaved" as with "dram": block 0 and both layouts the later blocks take in L1, as their input alternates
-    between two addresses. Each forward takes block_placement's placement, which it logs, and not the DRAM fallback of
-    the check of L1 before each forward, so a smaller L1 bank fails here rather than slowing the encoder. At the grids
-    of L1_VS_DRAM_CI_GRIDS both L1 placements keep the activations in L1, and at h36w36 "l1" keeps the MLP's hidden
-    activations in block shards. Of the other grids of L1_VS_DRAM_ALL_GRIDS, which M3_VISION_ALL_GRIDS=1 adds, h18w18
-    keeps them in DRAM, and the rest put the MLP's shards in every layout the rule admits on 11x10, 12x10 and 13x10.
-    Each forward leaves L1 as it found it, so the ops after the tower, the projector's, see the free L1 they saw
-    before."""
+    """A 3-block tower gives the same output bit for bit with "l1" and "l1_interleaved" as with "dram".
+
+    Three blocks cover both L1 addresses that the later blocks' inputs alternate between. Each forward must take
+    block_placement's placement, and at the CI grids that placement must use L1. So a smaller L1 bank fails here instead
+    of slowing the encoder. Each forward must also leave L1 as it found it.
+    """
     reference = vision_reference()
     model = M3VLVisionModel.from_state_dict(
         mesh_device, reference.weights, reference.config, with_projector=False, dtype=ttnn.bfloat16

@@ -60,8 +60,11 @@ class M3VLBlock(LightweightModule):
         placement: BlockPlacement = DRAM_PLACEMENT,
         out_memory_config: Optional[ttnn.MemoryConfig] = None,
     ) -> ttnn.Tensor:
-        """The block on x, with its activations where placement puts them (the LayerNorms write where their input
-        is) and its output in out_memory_config, or, when None, in placement.residual."""
+        """Run the block on x, with its activations where placement puts them.
+
+        The LayerNorms write where their input is. The output goes to out_memory_config, or to placement.residual
+        when that is None.
+        """
         # Sublayer 1: pre-norm attention with residual.
         residual = x
         normed = self.layer_norm1(x)

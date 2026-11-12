@@ -81,8 +81,10 @@ CONFIGS_MID = {
 
 
 def _config(name, patches, grid=(12, 10), compute_kernel_config=None, **sharded):
-    """linear_program_config for one of LINEARS in the forward of an image of `patches` patches; sharded holds its
-    in0_sharded and out_sharded."""
+    """Return linear_program_config's config for one of LINEARS in an image of `patches` patches.
+
+    sharded may hold in0_sharded and out_sharded.
+    """
     in_features, out_features, patches_per_row = LINEARS[name]
     if compute_kernel_config is None:
         compute_kernel_config = linear_compute_config()

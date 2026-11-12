@@ -164,7 +164,7 @@ def test_vision_rope_tables_kept_per_grid(monkeypatch):
     """The model stages a grid's tables with its first image and reuses them for later images of that grid.
 
     Each image gets its own grid's tables. Dropping the least recently used grid frees exactly its two tables. The
-    stand-in blocks have no weights to place activations by, so the model keeps them in DRAM.
+    stand-in blocks have no weights to place activations by, so the test runs the model with activations "dram".
     """
     tables, freed = [], []  # the cached (cos, sin) whose copies each forward gives the blocks; the cached tables freed
     copies = {}  # id of each L1 copy not freed yet -> the table it copies
@@ -227,7 +227,7 @@ def test_vision_rope_tables_copied_to_l1(monkeypatch):
     """Each forward copies its grid's cached tables to L1 once for all the blocks, and frees the copies after them.
 
     The cached tables stay in DRAM for the next image. The stand-in blocks have no weights to place activations by, so
-    the model keeps them in DRAM.
+    the test runs the model with activations "dram".
     """
     uploads, calls = [], []  # (tensor, memory config) of each upload; the copies, blocks and frees in call order
 

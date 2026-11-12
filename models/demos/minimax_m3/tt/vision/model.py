@@ -172,9 +172,8 @@ class M3VLVisionModel(LightweightModule):
         self.blocks = blocks
         self.projector = projector
         self._rope_cache = OrderedDict()  # (t, h, w) -> (cos, sin) on device, the least recently used first
-        # Where the blocks keep their activations (common.ACTIVATIONS), read at each forward: "l1" in L1 where
-        # block_placement proves they fit, the MLP's hidden activations in block shards where those fit;
-        # "l1_interleaved" the same without the shards and "dram" every activation in DRAM, both for comparison.
+        # Where the blocks keep their activations, one of common.ACTIVATIONS, read at each forward. "l1" is the
+        # default; "l1_interleaved" and "dram" are for comparison.
         self.activations = "l1"
         self._dram_fallbacks = 0  # fallbacks to DRAM_PLACEMENT so far
         self._warned_fallback = None  # the reason of the last fallback logged as a warning
@@ -299,10 +298,11 @@ class M3VLVisionModel(LightweightModule):
         return self._tower_device(self.push_pixel_values(pixel_values, image_grid_thw), image_grid_thw)
 
     def placement(self, x_tt: ttnn.Tensor) -> BlockPlacement:
-        """The BlockPlacement a forward gives the blocks for the pixel values x_tt (push_pixel_values):
-        DRAM_PLACEMENT with activations "dram", else block_placement's. Where that keeps activations in L1 and
-        l1_free_for_activations finds the device's L1 not as the placement's proof takes it, DRAM_PLACEMENT, logged
-        by _log_dram_fallback."""
+        """Return the BlockPlacement that a forward gives the blocks for pixel values x_tt from push_pixel_values.
+
+        That is block_placement's, or DRAM_PLACEMENT with activations "dram". An L1 placement also needs
+        l1_free_for_activations to pass. Otherwise it is DRAM_PLACEMENT, and _log_dram_fallback logs why.
+        """
         if self.activations == "dram" or not self.blocks:
             return DRAM_PLACEMENT
         placement = block_placement(self.blocks[0], x_tt.padded_shape[-2], self.activations)
