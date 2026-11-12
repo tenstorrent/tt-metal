@@ -57,6 +57,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_waves import (
     cont_first_on,
     protect_partial_on,
     resume_record_on,
+    sliver_extend_on,
 )
 
 _PAD_TOKEN = 0
@@ -836,6 +837,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             "record_misses": 0,
         }
         self.resume_record = resume_record_on()
+        self.sliver = sliver_extend_on()
         self.final_seen = False  # the plugin sent prefill_final flags at least once
         self.pf_done = (
             set()
@@ -1219,7 +1221,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             end = self.inprog.users[p][0]
             if r == end < st == self.inprog.reported.get(p, end):
                 return end
-            if getattr(self, "protect", False) and r == end > st == self.inprog.reported.get(p, end):
+            if (
+                getattr(self, "protect", False) or getattr(self, "sliver", False)
+            ) and r == end > st == self.inprog.reported.get(p, end):
                 self.protect_stats["ahead_resumes"] += 1
                 return end  # (the model is one chunk ahead of vLLM's piece start: a prefix hit extended to a chunk; the piece may end before ``end``: skipped by the caller)
         return None
@@ -1283,7 +1287,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 toks[i, :st],
                 exclude=[c for c in chosen if c is not None],
                 lag=self.piece_lag,
-                ahead=getattr(self, "protect", False),
+                ahead=(getattr(self, "protect", False) or getattr(self, "sliver", False)),
             )
             r_ = None if p is None else self._lag_start(p, st)
             if p is not None:
@@ -1397,6 +1401,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         N = len(ends)
         self.protect = protect_partial_on()
         self.resume_record = resume_record_on()
+        self.sliver = sliver_extend_on()
         _pf = os.environ.get(
             "DSV41_PIECE_LAG_FILE"
         )  # live switch (A/B in one boot): the file holds 0 or 1; absent file = the env default
@@ -1476,7 +1481,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     hit_rows.add(i)
             if st > 0 and p is None:
                 p = self.inprog.find(
-                    st, toks[i, :st], exclude=phys, lag=self.piece_lag, ahead=getattr(self, "protect", False)
+                    st,
+                    toks[i, :st],
+                    exclude=phys,
+                    lag=self.piece_lag,
+                    ahead=(getattr(self, "protect", False) or getattr(self, "sliver", False)),
                 )  # (prompts with the same prefix have the same carried state: each continuation takes a distinct one)
                 r_ = None if p is None else self._lag_start(p, st)
                 p_old = p
@@ -1554,17 +1563,16 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 if prefill_final[i]:
                     continue
                 if (
-                    getattr(self, "protect", False) and e <= st
-                ):  # (the model is already ahead of this piece: the one-chunk extension of a prefix hit below)
+                    getattr(self, "protect", False) or getattr(self, "sliver", False)
+                ) and e <= st:  # (the model is already ahead of this piece: the one-chunk extension of a prefix hit below)
                     skipped.add(i)
                     continue
                 if a_ >= e:
                     continue
                 tot_i = int(prefill_total[i]) if prefill_total is not None and len(prefill_total) == N else None
                 if (
-                    getattr(self, "protect", False)
+                    (getattr(self, "sliver", False) or (getattr(self, "protect", False) and i in hit_rows))
                     and a_ <= st
-                    and i in hit_rows
                     and st % C_ == 0
                     and tot_i is not None
                     and st + C_ < tot_i
@@ -1622,6 +1630,19 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             f"DSV4.1 prefill (interleave): chunks {[(it[2], it[3]) for it in items]} in slots {empty_slots} (users {phys}), chunk {chunk}, "
             f"S_pad {self.s_pad_cur}, {'host sampling' if want_logits else 'device sampling'}"
         )
+        if (
+            os.environ.get("DSV41_STATE_DEBUG", "0") == "1"
+        ):  # one line per call: what vLLM asked, what the tracker / model hold for every user of the call (T24, state-loss hunt)
+            res_ = self.m.__dict__.get("pf_resume", {})
+            logger.info(
+                "DSV4.1 state debug call: "
+                + "; ".join(
+                    f"row {i} user {phys[i]} vllm [{starts[i]}, {rep_ends[i]}) planned [{items[i][2]}, {items[i][3]}){' SKIPPED' if i in skipped else ''}{' HIT' if i in hit_rows else ''}"
+                    f" tracker {self.inprog.users.get(phys[i], (None,))[0]}/{self.inprog.reported.get(phys[i])} pf_resume {res_.get(phys[i])} reserved {self.paged.idx.reservation(request_ids[i]) is not None if self.paged is not None and request_ids is not None and i < len(request_ids) else None}"
+                    for i in range(N)
+                )
+                + f" | bucket {getattr(self.m, 'slot_buckets_active', lambda: None)()} final {list(prefill_final) if prefill_final is not None else None} total {list(prefill_total) if prefill_total is not None else None}"
+            )
         vis = None
         rows_mm = [self._mm_row(mm, i) for i in range(N)]
         if any(pv is not None for pv, _ in rows_mm) and self.vbook is None:

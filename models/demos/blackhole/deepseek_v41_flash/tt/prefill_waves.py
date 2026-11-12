@@ -70,6 +70,21 @@ def cont_first_on():
     return os.environ.get("DSV41_CONT_FIRST", "0") == "1"
 
 
+def sliver_extend_on():
+    """DSV41_SLIVER_EXTEND=1 (default off; live file DSV41_SLIVER_EXTEND_FILE 0 / 1): a non-final prefill piece shorter than a chunk (the step budget ran out: 'piece [a, P) ends inside a chunk: nothing to compute')
+    is computed for ONE chunk instead of being skipped, whatever the request (image 2 B=16: every such skipped piece was followed by a recompute of the whole prompt from 0, 29 events / 5.2 M tokens per hour).
+    """
+    import os
+
+    f = os.environ.get("DSV41_SLIVER_EXTEND_FILE")
+    if f and os.path.exists(f):
+        try:
+            return open(f).read().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("DSV41_SLIVER_EXTEND", "0") == "1"
+
+
 def needs_slot(item, pending_hits):
     """True for a user that will be allocated a slot in the wave it runs in: a new prompt (start 0) or a prefix hit whose restore has not been done (it owns no slot yet)."""
     return item[2] == 0 or item[0] in pending_hits
