@@ -92,6 +92,8 @@
     <div class="panel"><h2>KV page pool used</h2><div class="chart" id="c-kv"></div></div>
     <div class="panel"><h2>Free KV cache (tokens)</h2><div class="chart" id="c-free"></div></div>
     <div class="panel"><h2>Users</h2><div class="chart" id="c-slots"></div></div>
+    <div class="panel" id="drafts-panel" style="display:none"><h2>DSpark drafts per round
+      <span class="dim">(0: plain decode)</span></h2><div class="chart" id="c-drafts"></div></div>
     <div class="panel"><h2>Device steps/s</h2><div class="chart" id="c-steps"></div></div>
     <div class="panel"><h2>Host runtime, mean µs per call</h2><div class="chart" id="c-timers"></div></div>
   </div>
@@ -218,6 +220,7 @@ const charts = {
   free: new Chart($("c-free"), { format: axisLabel }),
   slots: new Chart($("c-slots"), { format: (v) => fmt(v, 0) }),
   steps: new Chart($("c-steps"), { unit: " steps/s" }),
+  drafts: new Chart($("c-drafts"), { format: (v) => fmt(v, 0) }),
   timers: new Chart($("c-timers"), { unit: " µs" }),
 };
 
@@ -232,6 +235,13 @@ function drawCharts() {
   ], t0, t1);
   // Steps are not tokens: on a shared axis a step rate of ~100 flattens decode to nothing, so they get their own.
   charts.steps.set([{ name: "device steps/s", color: "#5aa9e6", points: smooth(line("steps"), 5), width: 2 }], t0, t1);
+  $("drafts-panel").style.display = state && state.dspark ? "" : "none";
+  if (state && state.dspark) {
+    charts.drafts.set([
+      { name: "drafts per round", color: "#c58af9", points: line("drafts"), width: 2 },
+      { name: "running", color: "#4cc38a55", points: line("running"), dash: [4, 3] },
+    ], t0, t1);
+  }
   const users = new Set(); for (const p of pts) for (const u in p.users) users.add(u);
   charts.users.set([...users].sort().map((u) => ({
     name: u, color: colorOf(u), points: smooth(pts.map((p) => [p.t, p.users[u] ?? null]), 5) })), t0, t1);
@@ -278,6 +288,9 @@ function drawCards() {
     card("Prefill", fmt(avg("prefill", 30), 0) + " <small>tok/s</small>",
       lastPrefill ? `last: ${int(lastPrefill.prompt_tokens)} tok at ${fmt(lastPrefill.prefill_tps, 0)} tok/s` : "30 s average"),
     card("Device steps", fmt(avg("steps", 5)) + " <small>/s</small>", `${int(state.inflight)} in flight`),
+    ...(state.dspark ? [card("DSpark drafts",
+      state.dspark.drafts ? `${int(state.dspark.drafts)} <small>per round</small>` : "plain",
+      `${int(state.dspark.speculating)} speculating · by users ${state.dspark.schedule.join(" / ")}`)] : []),
     card("Active users", int(st.running), `of ${int(st.max_running || state.slots)} seats`),
     card("Queued", int(st.queued), "waiting for a seat"),
     card("Parked", int(st.parked), `${int(host.users)} in host RAM, ${int(st.empty)} empty`),
@@ -305,10 +318,15 @@ function drawSlots() {
   $("slot-summary").textContent = `${int(st.running)} active · ${int(st.queued)} queued · ${int(st.parked)} parked · ` +
     `${int((state.host || {}).users)} in host RAM · ${int(st.empty)} empty slots`;
   $("slots").innerHTML = `<tr><th class="r">slot</th><th>user</th><th>state</th><th class="r">context</th><th></th>
-    <th class="r">msgs</th><th>progress</th><th class="r">prefill tok/s</th><th class="r">decode tok/s</th><th class="r">turn age</th></tr>` +
+    <th class="r">msgs</th><th>progress</th><th class="r">prefill tok/s</th><th class="r">decode tok/s</th>${state.dspark ? `<th class="r">drafts</th>` : ""}<th class="r">turn age</th></tr>` +
     (rows.length ? rows.map((r) => {
     const turn = r.index != null ? turns.get(r.index) : null;
-    let phase = r.tier, progress = "", prefill = "", decode = "", age = "";
+    let phase = r.tier, progress = "", prefill = "", decode = "", age = "", drafts = "";
+    if (turn && turn.phase === "decode") {
+      drafts = turn.drafts == null ? `<span class="dim">plain</span>`
+        : `${int(turn.drafts)}` + (turn.tokens_per_round != null
+          ? ` <span class="dim" title="tokens per verify round, this reply">${fmt(turn.tokens_per_round, 2)}/rd</span>` : "");
+    }
     if (r.tier === "host") progress = `${fmt((r.bytes || 0) / 2 ** 20, 0)} MiB in host RAM`;
     else if (r.tier === "queued" && r.queue != null) progress = `#${r.queue + 1} in queue`;
     if (turn) {
@@ -329,8 +347,8 @@ function drawSlots() {
     return `<tr class="${esc(r.tier)}"><td class="r">${r.index ?? "h" + (r.host ?? "")}</td><td>${esc(r.id || "–")}</td><td>${esc(phase)}</td>
       <td class="r">${int(r.tokens)} / ${int(state.max_seq)}</td>
       <td><div class="bar" title="${fmt(100 * share, 1)}% of the context"><div style="width:${100 * share}%;background:var(--blue)"></div></div></td>
-      <td class="r">${int(r.messages)}</td><td>${progress}</td><td class="r">${prefill}</td><td class="r">${decode}</td><td class="r">${age}</td></tr>`;
-  }).join("") : `<tr><td colspan="10" class="dim">no users yet</td></tr>`);
+      <td class="r">${int(r.messages)}</td><td>${progress}</td><td class="r">${prefill}</td><td class="r">${decode}</td>${state.dspark ? `<td class="r">${drafts}</td>` : ""}<td class="r">${age}</td></tr>`;
+  }).join("") : `<tr><td colspan="${state.dspark ? 11 : 10}" class="dim">no users yet</td></tr>`);
 }
 
 // What each stage of an image in flight is doing, in the words of the server's _ImageStatus.

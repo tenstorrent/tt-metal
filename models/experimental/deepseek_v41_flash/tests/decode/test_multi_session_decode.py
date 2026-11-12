@@ -16,10 +16,20 @@ A session's next token depends only on its own previous step, so the eight sessi
 in flight, one per pipeline stage. Tokens/s per user and in total are logged with every user's text.
 Two sessions are then rewound and decoded alone with the same tokens: every position's logits must
 match the interleaved run's, since the sessions share the block pools and the traces but none reads
-another's rows.
+another's rows (with ``DEEPSEEK_V4_DEVICE_SAMPLING=1``, whose steps send back only the greedy pick, the picks
+must match instead).
+
+The build and the step are ``test_full_model_decode_demo.py``'s: the same model, prefetcher and layout (pinned by
+that demo's asserts), Engram tables staged in tmpfs, every session's blocks grown for the whole run before the
+first replay (a later growth rewrites the page tables, which drains the pipeline), and on-device sampling with
+``DEEPSEEK_V4_DEVICE_SAMPLING=1``. Like ``demo/server.py`` it then runs on the Rust host runtime (trace replays,
+packets, Engram rows and output reads on native threads; ``DEEPSEEK_V41_RUST_HOST=0`` keeps the Python ones) with
+the server's GIL switch interval, so its total tok/s is what the device gives the server's eight decoding users
+without the server's scheduler or HTTP layer.
 
 Run (32-chip Galaxy, ttnn venv, from the repo root)::
 
+    DEEPSEEK_V4_DEVICE_SAMPLING=1 DEEPSEEK_V4_MAX_NEW_TOKENS=256 \\
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_multi_session_decode.py
 
 ``DEEPSEEK_V4_MAX_NEW_TOKENS`` sets the tokens generated per user (default 64).
@@ -30,6 +40,7 @@ from __future__ import annotations
 import contextlib
 import os
 import queue
+import sys
 import threading
 import time
 
@@ -41,13 +52,20 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_demo import (
     _DEFAULT_TEXT,
+    _DEVICE_SAMPLING,
+    _L1_SMALL_SIZE,
     _PAGE_BLOCK_SIZE,
+    _SEED,
+    _assert_decode_parallelism,
+    _assert_prefetch_rings,
     _build_rope,
     _checkpoint_available,
     _construct_model,
+    _stage_engram_or_skip,
     _tokenize_chat,
     _traced_max_seq,
 )
+from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, load_config
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
@@ -69,10 +87,16 @@ _MAX_IN_FLIGHT = 2 * _NUM_SESSIONS
 _PCC = 0.9999
 
 
+def _pick(out: torch.Tensor) -> int:
+    """The greedy pick of one step's output: the device's token (int32, token first), or the logits' argmax."""
+    out = out.reshape(-1)
+    return int(out[0]) if out.dtype == torch.int32 else int(out.argmax())
+
+
 def _decode_alone(model, sid: int, ids: list[int]) -> list[torch.Tensor]:
     """``ids`` at positions ``0 ..`` on session ``sid`` by itself, one blocking step at a time."""
     model.activate_session(sid)
-    return [model.decode_traced(token, pos).reshape(-1).float() for pos, token in enumerate(ids)]
+    return [model.decode_traced(token, pos).reshape(-1) for pos, token in enumerate(ids)]
 
 
 def _poll(get, errors: list):
@@ -131,7 +155,7 @@ def _generate_interleaved(model, prompts: dict[int, list[int]], max_new: int, ke
                 if sid in keep:
                     logits[sid].append(out)
                 if pos >= len(prompts[sid]) - 1:
-                    token = int(out.argmax())
+                    token = _pick(out)
                     generated[sid].append(token)
                     picks[sid].put(token)
         except BaseException as e:
@@ -151,7 +175,6 @@ def _generate_interleaved(model, prompts: dict[int, list[int]], max_new: int, ke
                     raise RuntimeError("a decode stage failed") from errors[0]
             sid, pos = step
             model.activate_session(sid)
-            model.ensure_session_capacity(pos)
             model.replay_traced(pos)
             posted.put(step)
     finally:
@@ -191,7 +214,7 @@ def _log_throughput(run: dict, prompts: dict[int, list[int]], max_new: int) -> N
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
             "num_command_queues": 2,
-            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
+            "l1_small_size": _L1_SMALL_SIZE,
         }
     ],
     indirect=["device_params"],
@@ -201,12 +224,19 @@ def _log_throughput(run: dict, prompts: dict[int, list[int]], max_new: int) -> N
 def test_interleaved_sessions_match_solo(mesh_device, reset_seeds) -> None:
     from transformers import AutoTokenizer
 
+    from models.experimental.deepseek_v4_flash.demo.server import _GIL_SWITCH_SECONDS
+
     loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     config = load_config(loader.snapshot_dir)
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
     prompt_ids = [_tokenize_chat(tokenizer, text) for text in _TEXTS]
+    _stage_engram_or_skip(loader, config)
+    if host_rs.enabled():
+        host_rs.build()
     with contextlib.ExitStack() as prefetcher:
         model, lm_head, loader, config = _construct_model(mesh_device, prefetcher, loader=loader, config=config)
+        _assert_decode_parallelism(model, model.tp_size)
+        _assert_prefetch_rings(model)
         max_seq = _traced_max_seq(config, max(len(ids) for ids in prompt_ids) + _MAX_NEW_TOKENS, model.num_layers)
         model.prepare_static_decode(
             _build_rope(config, loader.snapshot_dir, max_seq),
@@ -215,12 +245,26 @@ def test_interleaved_sessions_match_solo(mesh_device, reset_seeds) -> None:
             num_sessions=_NUM_SESSIONS,
             total_tokens=_NUM_SESSIONS * max_seq,
             block_size=_PAGE_BLOCK_SIZE,
+            device_sampling=_DEVICE_SAMPLING,
         )
+        if model.device_sampler is not None:
+            model.device_sampler.set_sampling(0.0, _SEED)
+        logger.info(f"sampling: {'device' if _DEVICE_SAMPLING else 'host'}, greedy")
         sids = [model.open_session() for _ in prompt_ids]
         # The first step compiles and captures every variant; its writes are dropped by the reset.
         model.activate_session(sids[0])
         model.decode_traced(prompt_ids[0][0], 0)
         model.reset_session(sids[0])
+        # Every session's blocks for its whole run, before any replay: growing one mid-run rewrites the page
+        # tables, which first waits for every posted replay to be dispatched.
+        for sid, ids in zip(sids, prompt_ids):
+            model.ensure_session_capacity(len(ids) + _MAX_NEW_TOKENS - 2, sid)
+        if host_rs.enabled():
+            model.start_host_runtime()
+        logger.info(f"host runtime: {'Rust' if model.host_runtime_running else 'Python'}")
+        switch_interval = sys.getswitchinterval()
+        sys.setswitchinterval(_GIL_SWITCH_SECONDS)
+        prefetcher.callback(sys.setswitchinterval, switch_interval)
 
         prompts = dict(zip(sids, prompt_ids))
         checked = {sids[i] for i in _CHECKED}
@@ -239,7 +283,10 @@ def test_interleaved_sessions_match_solo(mesh_device, reset_seeds) -> None:
             model.reset_session(sid)
             solo = _decode_alone(model, sid, fed)
             for pos, (want, got) in enumerate(zip(solo, run["logits"][sid])):
-                passing, pcc = comp_pcc(want, got.float(), _PCC)
+                if got.dtype == torch.int32:
+                    assert _pick(want) == _pick(got), f"user {sid} position {pos}: device pick differs from solo"
+                    continue
+                passing, pcc = comp_pcc(want.float(), got.float(), _PCC)
                 assert passing, f"user {sid} position {pos}: interleaved logits PCC {pcc} vs solo"
                 assert int(want.argmax()) == int(got.argmax()), f"user {sid} position {pos}: argmax differs"
             logger.info(f"user {sid}: {len(fed)} interleaved positions match the solo run")

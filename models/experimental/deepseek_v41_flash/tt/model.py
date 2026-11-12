@@ -143,6 +143,8 @@ _ROW_NAMES = ("new_kv_row", "new_key_row")
 _CANDIDATE_NAMES = ("cand_blocks", "pool_count")
 # Rows of a session slot in the shared compressor windows: one tile, so a slot starts on a tile row.
 _WIN_SLOT_ROWS = ttnn.TILE_SIZE
+# Width of a spec fixup's rejected ring rows (one tile, more than a round's drafts).
+_FIX_ROWS = ttnn.TILE_SIZE
 # Tokens past the current position a session's blocks are grown for (when the pool can spare them), so
 # the device page tables are rewritten every 16 ratio-1 blocks instead of on every block.
 _GROW_AHEAD_TOKENS = 16 * CSA_INDEX_BLOCK_SIZE
@@ -553,6 +555,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # so a capacity check on one thread never sees blocks whose page table is not queued yet. Taken after
         # _cq_lock, never before it.
         self._paged_lock = threading.Lock()
+        # Per session, the furthest position known to have its blocks (ensure_session_capacity); a session
+        # only loses blocks to close / reset / truncate, which drop it.
+        self._covered_to: dict[int, int] = {}
         self._decode_batch = 1
         self._cache_handoff: dict[tuple[int, int], tuple[list, list]] = {}
         # Depth of the ratio > 1 compressor windows under speculative decode (None before prepare_spec_decode).
@@ -560,6 +565,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.dspark: Optional[DeepSeekV41DSpark] = None
         # Steps posted while set leave the drafter's receive of their row to spec_release_writes.
         self._spec_hold_writes = False
+        # What the stages' fix_slot and fix_rows hold (spec_fixup uploads them only when they change).
+        self._fix_sel_slot: Optional[int] = None
+        self._fix_rows_held: tuple = ()
+        # Session slots that verified since their last spec_fixup, whose ring rows may hold rejected rows.
+        self._spec_dirty: set[int] = set()
         # Outputs of dispatched steps nobody wants (a streamed round's rows past its first reject), read and
         # dropped ahead of the next read_decoded_output.
         self._stale_outputs = 0
@@ -1119,14 +1129,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
     def _build_packet(self, token_id, pos: int) -> torch.Tensor:
         """One INT32 socket page ``[1, 1, 1, _pkt_w]``: ``[token | slot * W + pos % W | pos | slot |
-        slot * W | slot * 32 | pos % drafter ring rows]`` for session slot ``_packet_slot``, then padding.
+        slot * W | slot * 32 | slot * R + pos % R]`` for session slot ``_packet_slot`` (``R`` the drafter's
+        ring rows), then padding.
 
         The slot fields are what makes a session switch free: the traces read the slot's ring rows,
         window rows and page-table row from here, so nothing on device changes between sessions. The
-        drafter's ring row (0 without a drafter) is where :meth:`_spec_write_step` writes the step's row.
+        drafter's ring row (0 without a drafter), in the slot's rows of its rings, is where
+        :meth:`_spec_write_step` writes the step's row.
         """
         w, slot = self.sliding_window, self._packet_slot
-        drafter_row = pos % self.dspark.ring_rows if self.dspark is not None else 0
+        drafter_row = self.dspark.ring_row(slot, pos) if self.dspark is not None else 0
         values = self._step_tokens(token_id) + [slot * w + pos % w, pos, slot, slot * w, slot * _WIN_SLOT_ROWS]
         values.append(drafter_row)
         packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
@@ -1179,6 +1191,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if not free:
             raise PagedCacheFull(f"all {self._max_sessions} session slots are in use")
         sid = paged.open_session()
+        self._covered_to.pop(sid, None)
         self._slot_of[sid] = free[0]
         self._session_pos[sid] = 0
         return sid
@@ -1192,6 +1205,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if sid in self._resident:
             self._resident[self._resident.index(sid)] = None
         paged.close_session(sid)
+        self._covered_to.pop(sid, None)
+        self._spec_dirty.discard(self._slot_of[sid])
         del self._slot_of[sid]
         self._session_pos.pop(sid, None)
         self._write_page_tables()
@@ -1216,6 +1231,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if self._engram_lookup is not None:
             self._engram_lookup.use_session(self._slot_of[sids[0]])
 
+    def _resident_slot(self) -> int:
+        """The resident session's slot; 0 with none (one session, or a compile run)."""
+        sid = self._resident[0] if self._resident else None
+        return self._slot_of.get(sid, 0)
+
     def ensure_session_capacity(self, pos: int, sid: Optional[int] = None) -> None:
         """Give session ``sid`` (the resident one when ``None``) blocks for every entry a step at ``pos``
         writes, growing ahead by up to :data:`_GROW_AHEAD_TOKENS` when the pools can spare it, and
@@ -1232,8 +1252,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise PagedCacheFull(f"position {pos} is past max_seq {self._decode_max_seq}")
         # Nearly every step is already covered (blocks are grown ahead), and then the command queue is not
         # needed: taking _cq_lock would wait for the replay thread to finish issuing another step's traces.
+        # PagedKVManager.covers scans the session's page rows, too slow for every step.
         with self._paged_lock:
+            if pos <= self._covered_to.get(sid, -1):
+                return
             if paged.covers(sid, pos):
+                self._covered_to[sid] = pos
                 return
         with self._cq_lock, self._paged_lock:
             ahead = min(pos + _GROW_AHEAD_TOKENS, self._decode_max_seq - 1)
@@ -1245,6 +1269,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 # The failed attempt may have grown some groups before running out.
                 paged.ensure_capacity(sid, pos)
                 changed = [g.layer_type for g in self._paged_ratios.values()]
+                ahead = pos
+            self._covered_to[sid] = ahead
             if changed:
                 self._write_page_tables(changed)
 
@@ -1300,7 +1326,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise KeyError(f"no such session {sid}")
         self._wait_replays_dispatched()
         paged.reset_session(sid)
+        self._covered_to.pop(sid, None)
         self._session_pos[sid] = 0
+        self._spec_dirty.discard(self._slot_of[sid])
         self._write_page_tables()
 
     def end_session_at(self, sid: int, pos: int) -> None:
@@ -1333,7 +1361,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise ValueError(f"cannot truncate session {sid} at {self._session_pos[sid]} to {pos}")
         self._wait_replays_dispatched()
         paged.truncate_session(sid, pos)
+        self._covered_to.pop(sid, None)
         self._session_pos[sid] = pos
+        # The prefill that must follow rebuilds the ring rows.
+        self._spec_dirty.discard(self._slot_of[sid])
         self._write_page_tables()
 
     @property
@@ -2322,8 +2353,29 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for sm in self.submeshes_io:
             device = sm["device"]
             sm["ring_shadow"] = {li: _device_zeros((1, 1, ring_rows, head_dim), device) for li in sm["layers"]}
-            sm["fix_mask"] = _device_zeros((1, 1, ring_rows, 1), device)
-            sm["fix_keep"] = _device_zeros((1, 1, ring_rows, 1), device)
+            # Every ring row's index, which _spec_fixup matches against the rejected rows in fix_rows.
+            sm["fix_ring_rows"] = ttnn.from_torch(
+                torch.arange(ring_rows, dtype=torch.float32).reshape(1, 1, ring_rows, 1),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            sm["fix_rows"] = ttnn.from_torch(
+                torch.full((1, 1, 1, _FIX_ROWS), -1.0),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            if self._slotted:
+                # Every ring row's session slot, against the fixing session's in fix_slot: only its rows are
+                # snapshot (_spec_fixup).
+                sm["fix_ring_slot"] = ttnn.from_torch(
+                    torch.arange(ring_rows, dtype=torch.float32).div(window).floor().reshape(1, 1, ring_rows, 1),
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                )
+                sm["fix_slot"] = _device_zeros((1, 1, 1, 1), device, ttnn.float32)
             sources = [li for li in sm["layers"] if li in cfg.kv_source_layer_ids and int(cfg.compress_ratios[li]) > 1]
             sm["deep_windows"] = bool(sources)
             # Several sessions' windows already hold _WIN_SLOT_ROWS rows per slot.
@@ -2417,6 +2469,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             tp_size=self.tp_size,
             stash_device=out_sm["device"],
             link=link,
+            sessions=self._max_sessions,
             **drafter_kwargs,
         )
         taps = dict(zip(self.dspark.targets, self.dspark.stash))
@@ -2451,17 +2504,30 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 _device_zeros((1, 1, 1, self._pkt_w), self.dspark.device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
             )
 
-    def _spec_fixup(self, sm: dict) -> None:
+    def _spec_fixup(self, sm: dict, masked: bool = False) -> None:
         """Undo the previous round's rejected rows on ``sm``, then snapshot its rings for this round.
 
-        ``fix_mask`` marks the rejected positions' ring slots (``fix_keep`` is its complement); they get
-        their shadow rows back. Every product is with 0 or 1, so the restore is exact. The compressor
-        windows need no restore (see :meth:`prepare_spec_decode`).
+        The ring rows listed in ``fix_rows`` (the rejected positions' slots, ``-1`` padded) get their shadow
+        rows back. Every product is with 0 or 1, so the restore is exact. The compressor windows need no
+        restore (see :meth:`prepare_spec_decode`).
+
+        The snapshot copies every session's rows, unless ``masked``: then only the rows of the session slot in
+        ``fix_slot`` are snapshot, so another session whose round left rejected rows in its own keeps the
+        snapshot its next fixup restores them from. That costs three more ring-sized ops per layer, and the
+        rings hold every session's rows, so :meth:`spec_fixup` masks only when another session needs it.
         """
+        hit = ttnn.eq(sm["fix_ring_rows"], sm["fix_rows"])
+        mask = ttnn.typecast(ttnn.max(hit, dim=-1, keepdim=True), ttnn.bfloat16)
+        keep = ttnn.add(ttnn.neg(mask), 1.0)
+        sel = ttnn.typecast(ttnn.eq(sm["fix_ring_slot"], sm["fix_slot"]), ttnn.bfloat16) if masked else None
+        unsel = ttnn.add(ttnn.neg(sel), 1.0) if sel is not None else None
         for li in sm["layers"]:
             ring, shadow = sm["scaches"][li].kv, sm["ring_shadow"][li]
-            ttnn.copy(ttnn.add(ttnn.multiply(ring, sm["fix_keep"]), ttnn.multiply(shadow, sm["fix_mask"])), ring)
-            ttnn.copy(ring, shadow)
+            ttnn.copy(ttnn.add(ttnn.multiply(ring, keep), ttnn.multiply(shadow, mask)), ring)
+            if sel is None:
+                ttnn.copy(ring, shadow)
+            else:
+                ttnn.copy(ttnn.add(ttnn.multiply(ring, sel), ttnn.multiply(shadow, unsel)), shadow)
 
     def capture_spec_traces(self, token_id, pos: int) -> None:
         """Compile and then capture the decode variants, every stage's fixup and the drafter's
@@ -2482,6 +2548,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         verify_variants = self._compile_verify_traces(token_id) if verify and not self._eager_decode else []
         for sm in self.submeshes_io:
             self._spec_fixup(sm)
+            if "fix_slot" in sm:
+                self._spec_fixup(sm, masked=True)
         if self.dspark is not None:
             self.dspark.send_main()
             self.dspark.write_main()
@@ -2500,6 +2568,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self._spec_fixup(sm)
             ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
             sm["fix_tid"] = tid
+            if "fix_slot" in sm:
+                tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
+                with _trace_capture_guard():
+                    self._spec_fixup(sm, masked=True)
+                ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
+                sm["fix_sel_tid"] = tid
         if self.dspark is not None:
             stash_device = self.dspark.stash_device
             tid = ttnn.begin_trace_capture(stash_device, cq_id=0)
@@ -2538,25 +2612,43 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._capture_verify_traces(verify_variants)
 
     def spec_fixup(self, rejected) -> None:
-        """Queue every stage's fixup ahead of a verify round: restore the ring slots of the previous round's
-        ``rejected`` positions."""
+        """Queue every stage's fixup ahead of a verify round: restore the ring slots of the resident session's
+        previous round's ``rejected`` positions, then snapshot the rings for this round.
+
+        The snapshot leaves another session's rows alone while that session may still have rejected rows in
+        them (it verified since its last fixup, :attr:`_spec_dirty`), so its next fixup restores them from its
+        own snapshot and several sessions' rounds can be in flight at once. Otherwise, as with a single reply,
+        it is the cheaper copy of every session's rows."""
         self._wait_replays_dispatched()
         window = self.sliding_window
-        sid = self._resident[0] if self._resident else None
-        base = self._slot_of.get(sid, 0) * window
-        mask = torch.zeros(1, 1, self._max_sessions * window, 1)
-        for p in rejected:
-            mask[0, 0, base + p % window, 0] = 1
+        slot = self._resident_slot()
+        held = tuple(sorted({slot * window + p % window for p in rejected}))
+        if len(held) > _FIX_ROWS:
+            raise ValueError(f"{len(held)} rejected rows, but a fixup restores at most {_FIX_ROWS}")
+        rows = None
+        if held != self._fix_rows_held:
+            rows = torch.full((1, 1, 1, _FIX_ROWS), -1.0)
+            rows[0, 0, 0, : len(held)] = torch.tensor(held, dtype=torch.float32)
+            self._fix_rows_held = held
+        masked = self._slotted and bool(self._spec_dirty - {slot})
+        sel = None
+        if masked and slot != self._fix_sel_slot:
+            sel = torch.full((1, 1, 1, 1), float(slot))
+            self._fix_sel_slot = slot
         for sm in self.submeshes_io:
-            host_to_device(mask, sm["fix_mask"])
-            host_to_device(1 - mask, sm["fix_keep"])
-            ttnn.execute_trace(sm["device"], sm["fix_tid"], cq_id=0, blocking=False)
+            if rows is not None:
+                host_to_device(rows, sm["fix_rows"])
+            if sel is not None:
+                host_to_device(sel, sm["fix_slot"])
+            ttnn.execute_trace(sm["device"], sm["fix_sel_tid" if masked else "fix_tid"], cq_id=0, blocking=False)
+        self._spec_dirty.discard(slot)
 
     def spec_write_main(self, positions) -> None:
         """Queue the drafter's ``write_main`` for verified ``positions``, rejected ones included (the draft
-        masks rows past its frontier). Their stash rows must still be in the stash."""
+        masks rows past its frontier), into the resident session's rings. Their stash rows must still be in the
+        stash, which every session's steps write."""
         self._wait_replays_dispatched()
-        self.dspark.set_main_rows(positions)
+        self.dspark.set_main_rows(positions, self._resident_slot())
         ttnn.execute_trace(self.dspark.stash_device, self._spec_tids["send_main"], cq_id=0, blocking=False)
         ttnn.execute_trace(self.dspark.device, self._spec_tids["write_main"], cq_id=0, blocking=False)
 
@@ -2584,6 +2676,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.ensure_session_capacity(positions[-1])
         if self._host is None:
             self._ensure_spec_reader()
+        self._spec_dirty.add(self._resident_slot())
         self._spec_hold_writes = True
         try:
             self.replay_traced_ahead(positions, tokens)
@@ -2821,7 +2914,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         device with ``seed`` first (``None`` keeps the last draw, which a greedy draft ignores)."""
         self._wait_replays_dispatched()
         d = self.dspark
-        d.set_block(token, frontier)
+        d.set_block(token, frontier, self._resident_slot())
         if seed is not None:
             d.refresh_uniforms(seed, accept=False)
         ttnn.execute_trace(d.device, self._spec_tids["draft"], cq_id=0, blocking=False)
@@ -2837,7 +2930,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError("the device accept needs the steps' logits: prepare_spec_decode(device_accept=True)")
         self._wait_replays_dispatched()
         d = self.dspark
-        d.set_round(start, drafts)
+        d.set_round(start, drafts, self._resident_slot())
         if seed is not None:
             d.refresh_uniforms(seed)
         tid = self._spec_tids["accept_sampled" if sampled else "accept_greedy"]

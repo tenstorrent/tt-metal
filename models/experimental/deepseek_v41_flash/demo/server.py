@@ -38,19 +38,26 @@ What V4.1 imposes on the serving side:
 
 * Users. ``--num-users`` sessions (40 with ``--dspark`` or ``--prefill-all-stages``, else 64) stay open at once, each with its own ring and window slot and its
   own rows of the compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
-  ``num_users * 204800``). At most ``--max-running`` (8, one per stage; 1 with ``--dspark``) generate at once, the rest parked
-  or queued; see "Users & KV cache" in the V4 server's docstring. A step decodes one user, and switching users costs no device work: the step's packet
-  names the user's slot. The scheduler interleaves the active users' steps through the stages, so up to one
+  ``num_users * 204800``). A request is admitted as soon as it has a slot: every pending prompt is prefilled (the traced
+  prefill, then the tokens replayed through decode) before any of them generates, and a prompt that arrives while a reply
+  is decoding waits only for the traces already in the dispatch queue (with ``--dspark``, for the verify round in
+  progress). ``--max-running`` (8, one per stage) then bounds how many of those turns decode at
+  once. While a prompt waits, its Engram rows are looked up
+  on the host, so the prefill does not gather them. A step decodes one user, and switching users costs no device work: the step's packet
+  names the user's slot. The scheduler interleaves the decoding users' steps through the stages, so up to one
   decoding user per stage (``DEEPSEEK_V4_NUM_STAGES``, default eight) keeps every stage busy; seating and posting,
   trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
   A user decoding alone keeps ``--decode-ahead`` (32) steps posted, as the decode demo does; a reply that stops
   early feeds the steps still posted a rerun of its last one (:meth:`V41ChatEngine.repeat_traced`).
 * Speculative decode (``--dspark``, on by default; ``--no-dspark`` or ``DEEPSEEK_V41_DSPARK=0`` turns it off). The DSpark drafter takes the
-  mesh's last row, so decode runs on the first seven, and a reply decodes in verify rounds of four drafts
-  (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~70 tok/s against ~45 a step at a time, for a
-  sampled (temperature 1) chat reply in ``tests/decode/test_dspark_spec.py``. Its rounds restore the running
-  session's ring rows and accept against the steps' logits on the host, and its drafter has no image rows, so ``--dspark`` decodes
-  one user at a time (``--max-running 1``, the other slots parked on device) and turns off ``--vision`` and
+  mesh's last row, so decode runs on the first seven, and a reply decodes in verify rounds
+  (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~81 tok/s at three drafts against ~56 a step at a
+  time, for a sampled (temperature 1) chat reply in ``tests/decode/test_dspark_spec.py``. Every session slot has its
+  own rows of the drafter's rings, as of the decode rings. The drafts a round checks follow the load
+  (``--dspark-drafts``, default 3 / 2 / 1 / 0 for 1 / 2 / 3 / 4+ seated decoding users): each user's draft takes the
+  drafter's time whatever its length, so under load the replies decode a step at a time, sharing the pipeline as
+  without ``--dspark``. Its rounds accept against the steps' logits on the host, and its
+  drafter has no image rows, so ``--dspark`` turns off ``--vision`` and
   ``--device-sampling``; a request's ``temperature`` and ``top_p`` apply. The rounds run on the Rust host runtime
   as single steps do (its threads replay the stages' traces, write the packets and Engram rows and read the
   outputs), and the web monitor watches them.
@@ -208,6 +215,7 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     _Handler,
     _normalized_messages,
     _Prefiller,
+    _PromptStopped,
     _Scheduler,
     _SlotPool,
     _text_content,
@@ -227,7 +235,7 @@ _NUM_USERS = 64  # default --num-users
 # and ~3.8 GB on stages 1 and 5-7; stage 4 also holds the layer-20 pool, so 40 x 204800 tokens (~10.5 GB of
 # its ~17 GB free) leave them room.
 _NUM_USERS_ALL_STAGES = 40
-# Default --num-users with --dspark: slots resident at once, of which one decodes at a time (--max-running 1).
+# Default --num-users with --dspark: slots resident at once.
 _NUM_USERS_DSPARK = 40
 # Default --max-context (prompt + reply): what one user's page tables address, the model's full context.
 _MAX_CONTEXT = 1048576
@@ -238,9 +246,16 @@ _KV_TOKENS_PER_USER = 204800
 # Default and most --decode-ahead: the decode steps a lone decoding turn keeps posted, the window
 # tests/decode/test_full_model_decode_demo.py keeps (its ``replay_ahead``).
 _DECODE_AHEAD = 32
-# --dspark: drafts a verify round checks, and the decode stages, which leave the 8 x 4 mesh's last row to the drafter.
-_DSPARK_DRAFTS = 4
+# --dspark: default --dspark-drafts, the drafts a verify round checks with 1, 2, 3, 4 or more seated decoding users
+# (0: plain decode), and the decode stages, which leave the 8 x 4 mesh's last row to the drafter.
+_DSPARK_DRAFTS = (3, 2, 1, 0)
 _DSPARK_STAGES = 7
+# The most --dspark-drafts takes: one user's rounds take ~1 ms more per draft up to 3, then stall to twice the round
+# (test_dspark_spec.py's draft-count sweep: 81 tok/s at 3 drafts, 43 at 4, against 56 greedy).
+_DSPARK_MAX_DRAFTS = 3
+# Fewer seated users raise the drafts only once they have stayed fewer this long, so a reply ending just before the
+# next one is seated does not switch speculation on and off.
+_DSPARK_RAISE_SECONDS = 2.0
 # A request that continues no slot's conversation reuses a parked slot whose cache it differs from only in the
 # cache's last this-many tokens, overwriting them, instead of taking a new slot (_V41SlotPool, _SlotReuse).
 _SLOT_REUSE_TOKENS = 512
@@ -281,6 +296,15 @@ _MAX_FILE_BYTES = 64 << 20  # per upload, DeepSeek's limit
 _MAX_STORED_FILE_BYTES = 4 << 30  # every live upload together
 _FILE_LIFETIME = (3600, 2592000)  # bounds of expires_after[seconds]
 _UPLOADS = itertools.count(1)  # names an upload in the live console until its bytes are in
+
+
+def _spec_fields(spec) -> dict:
+    """A turn's DSpark fields for the web monitor: its drafts per round and its reply's tokens per round so far
+    while it speculates, none while it decodes a step at a time."""
+    if spec is None:
+        return {}
+    rounds = len(spec.stats.accepted)
+    return {"drafts": spec.drafts, "tokens_per_round": spec.stats.tokens / rounds if rounds else None}
 
 
 def _host_cpus() -> list[int]:
@@ -1067,28 +1091,294 @@ class _SlotReuse:
             self.server.pool.reply_at[turn.slot] = (len(user.messages) - 1, reply_at)
 
 
-class _V41Scheduler(_SlotReuse, _Scheduler):
-    """:class:`_Scheduler` with :class:`_SlotReuse`'s in-place rewinds."""
+class _EngramPrefetch:
+    """One prompt's Engram rows, gathered while the turn waits, against a copy of its session history.
+
+    :meth:`consume` is what the traced prefill's chunk feed calls. A hit still hashes the chunk into the live
+    session (so decode's history stays in step) and skips the table gather, which is the slow part of the lookup.
+    """
+
+    def __init__(self, lookup, slot: int):
+        self.lookup = lookup
+        self.slot = slot
+        self._cv = threading.Condition()
+        self._rows: dict[tuple, dict] = {}
+        self._done = False
+        self.error: Exception | None = None
+
+    def consume(self, chunk_ids: torch.Tensor, start: int) -> dict | None:
+        """This chunk's prefetched rows ``{layer: [1, t, kin]}``.
+
+        Waits until the lookup has produced this chunk (or finished without it). ``None`` when it failed or
+        this chunk was not part of the prompt: the caller looks the chunk up itself then."""
+        ids = tuple(int(token) for token in chunk_ids.reshape(-1).tolist())
+        key = (int(start), ids)
+        with self._cv:
+            while key not in self._rows and not self._done:
+                self._cv.wait()
+            if self.error is not None:
+                return None
+            found = self._rows.get(key)
+        if found is None:
+            return None
+        # The rows were gathered against a copy. Extend the live session the way the lookup would have.
+        self.lookup.hash_session(self.slot, chunk_ids.reshape(1, -1), int(start))
+        return found
+
+    def run(
+        self,
+        history: torch.Tensor,
+        hashed_ids: list[int],
+        hash_start: int,
+        prefill_ids: list[int],
+        prefill_start: int,
+        chunk: int,
+    ) -> None:
+        """Gather ``hashed_ids`` at ``hash_start`` (lead tokens included, so their n-grams are in the history) and
+        keep the slices the traced prefill will ask for, ``prefill_ids`` at ``prefill_start``."""
+        t0 = time.perf_counter()
+        try:
+            ids_t = torch.tensor(hashed_ids, dtype=torch.long).view(1, -1).expand(history.shape[0], -1).contiguous()
+            rows = self.lookup.lookup_history(history, ids_t, hash_start)
+            skip = prefill_start - hash_start
+            cached = {}
+            for offset in range(0, len(prefill_ids), chunk):
+                piece = tuple(prefill_ids[offset : offset + chunk])
+                src = skip + offset
+                cached[(prefill_start + offset, piece)] = {
+                    layer: tensor[:, src : src + len(piece)].contiguous() for layer, tensor in rows.items()
+                }
+            with self._cv:
+                self._rows = cached
+                self._cv.notify_all()
+            logger.info(
+                f"engram prefetch (slot {self.slot}): {len(prefill_ids)} tokens in {time.perf_counter() - t0:.2f}s, "
+                f"{len(cached)} chunk(s)"
+            )
+        except Exception as exc:  # the prefill looks the chunk up itself when this missed
+            self.error = exc
+            logger.warning(f"engram prefetch (slot {self.slot}) failed: {exc}")
+        finally:
+            with self._cv:
+                self._done = True
+                self._cv.notify_all()
 
 
-class _SpecScheduler(_SlotReuse, _Scheduler):
-    """:class:`_Scheduler` (with :class:`_SlotReuse`'s in-place rewinds) that decodes each reply by DSpark speculative decode (``--dspark``).
+class _PrefillFirst(_Scheduler):
+    """Finish every pending prompt before decoding, and look Engram rows up while a prompt waits.
+
+    A turn is admitted as soon as it holds a KV slot (:meth:`V41GenerationServer._await_seat`), not when a decode
+    seat is free. While any turn is still prefilling, or one is waiting to be admitted, decode does not start
+    another step: traces already posted are fed (they cannot be cancelled mid-dispatch) and then every prompt
+    runs, the traced prefill one prompt at a time and the tokens replayed through decode pipelined. After that,
+    the first ``--max-running`` turns in admission order decode together; the rest stay admitted, prompts already
+    in the cache, until a seat frees.
+    """
+
+    def _admit(self, turn: _Turn) -> None:
+        super()._admit(turn)
+        if turn in self._active:
+            self._prefetch_engram(turn)
+
+    def _prefill_waiting(self) -> bool:
+        """A prompt is still to be prefilled, or one has been submitted and not yet admitted.
+
+        ``_new`` is appended under the scheduler lock and read here the way :meth:`_Scheduler._post_ahead` reads
+        it: a request that arrived during this round."""
+        if self._new:
+            return True
+        return any(turn.phase == _Turn.PREFILL and turn.error is None for turn in self._active)
+
+    def _holds_decode_seat(self, turn: _Turn) -> bool:
+        """Whether ``turn`` is one of the first ``--max-running`` decoding turns. A prompt does not take a seat."""
+        if turn.phase != _Turn.DECODE:
+            return True
+        seats = self.server.pool.max_running
+        held = 0
+        for other in self._active:
+            if other.phase != _Turn.DECODE or other.cancelled.is_set():
+                continue
+            if other is turn:
+                return True
+            held += 1
+            if held >= seats:
+                return False
+        return True
+
+    def _prefetch_engram(self, turn: _Turn) -> None:
+        """Start the host Engram lookup for the tokens the traced prefill will see, on a copy of the session."""
+        prefiller = self.server.prefiller
+        lookup = getattr(self.engine.model, "_engram_lookup", None)
+        if prefiller is None or lookup is None or not (turn.device_prefill or turn.replay_ids):
+            return
+        user = self.engine.users[turn.slot]
+        slot = self.engine.model._slot_of.get(user.sid)
+        if slot is None:
+            return
+        replay = list(turn.replay_ids)
+        lead = list(turn.ids[: turn.prefill_from])
+        body = list(turn.ids[turn.prefill_from : turn.prefill_from + turn.device_prefill])
+        # Lead tokens are replayed through decode before the traced prefill, so they are not in the prefill's
+        # chunks, but its n-grams read them. Hash them into the copy ahead of the prefill tokens. A window replay
+        # and a lead together do not occur; the prefill looks those up itself.
+        if replay and lead:
+            return
+        prefill_ids = replay + body
+        if not prefill_ids:
+            return
+        prefill_start = user.pos + len(lead) - len(replay)
+        if prefill_start < 0:
+            return
+        if lead:
+            hashed_ids, hash_start = lead + body, user.pos
+        else:
+            hashed_ids, hash_start = prefill_ids, prefill_start
+        try:
+            history = lookup.export_history(slot, hash_start)
+        except Exception as exc:  # the prefill looks the chunks up itself
+            logger.warning(f"user {turn.user_key!r}: engram prefetch skipped: {exc}")
+            return
+        traced = getattr(prefiller.model, "_traced", None)
+        chunk = (getattr(traced, "_chunk_size", None) if traced is not None else None) or prefiller.chunk_size
+        job = _EngramPrefetch(lookup, slot)
+        turn.engram_prefetch = job
+        threading.Thread(
+            target=job.run,
+            args=(history, hashed_ids, hash_start, prefill_ids, prefill_start, chunk),
+            name=f"engram-prefetch-{slot}",
+            daemon=True,
+        ).start()
+
+    def _prefill_on_device(self, turn: _Turn, drain_seconds: float = 0.0, drained: int = 0) -> None:
+        traced = getattr(getattr(self.server.prefiller, "model", None), "_traced", None)
+        prefetch = getattr(turn, "engram_prefetch", None)
+        if traced is not None:
+            traced._engram_prefetch = prefetch
+        try:
+            super()._prefill_on_device(turn, drain_seconds, drained)
+        finally:
+            if traced is not None:
+                traced._engram_prefetch = None
+            turn.engram_prefetch = None
+
+    def _drain_decode_queue(self) -> bool:
+        """Feed the decode steps whose traces are already posted, and do not post any more.
+
+        Returns whether the pipeline is still usable (``False`` once a readback has aborted every turn)."""
+        if not self._posted and not self._inflight:
+            return True
+        logger.info(
+            f"prefill waiting: finishing {len(self._posted)} posted decode step(s) "
+            f"({len(self._inflight)} in flight) before prefilling"
+        )
+        return self._settle()
+
+    def _prefill_only_round(self) -> None:
+        """One round of prompt work only: traced prefills and prompt tokens replayed through decode."""
+        self._stalled = False
+        for turn in list(self._active):
+            if turn not in self._active or turn.phase == _Turn.DECODE:
+                continue
+            if turn.error is not None:
+                if not turn.pending:
+                    self._fail(turn, turn.error)
+                continue
+            try:
+                if (
+                    (turn.device_prefill or turn.replay_ids)
+                    and turn.fed == turn.prefill_from
+                    and not turn.cancelled.is_set()
+                ):
+                    t_drain = time.perf_counter()
+                    drained = len(self._inflight) + len(self.engine._replay_q)
+                    if not self._settle():
+                        return
+                    self._prefill_on_device(turn, time.perf_counter() - t_drain, drained)
+                # A prefill that consumed the whole prompt is now decoding; it waits until every other
+                # prompt has finished too.
+                steps = [] if turn.phase == _Turn.DECODE else self._plan(turn)
+            except _PromptStopped:
+                self._stop_prompt(turn)
+                continue
+            except Exception as exc:  # one bad turn must not stop the others
+                if turn.pending:
+                    turn.error = exc
+                else:
+                    self._fail(turn, exc)
+                continue
+            if steps:
+                self._dispatch(turn, steps)
+        if self._inflight:
+            try:
+                self._collect(block=True)
+            except Exception as exc:
+                self._abort_all(exc)
+
+    def _round_turns(self) -> None:
+        if self._prefill_waiting():
+            if self._drain_decode_queue():
+                self._prefill_only_round()
+            return
+        waiting = [
+            turn
+            for turn in self._active
+            if turn.phase == _Turn.DECODE and not turn.cancelled.is_set() and not self._holds_decode_seat(turn)
+        ]
+        if not waiting:
+            super()._round_turns()
+            return
+        # Keep turns whose prompt is in but which have no decode seat out of this round, so a posted step of a
+        # seated turn is not stalled on them and lookahead follows the seated turns only.
+        self._active = [turn for turn in self._active if turn not in waiting]
+        try:
+            super()._round_turns()
+        finally:
+            self._active.extend(turn for turn in waiting if turn not in self._active)
+
+
+class _V41Scheduler(_SlotReuse, _PrefillFirst):
+    """:class:`_PrefillFirst` with :class:`_SlotReuse`'s in-place rewinds."""
+
+
+class _SpecScheduler(_SlotReuse, _PrefillFirst):
+    """:class:`_PrefillFirst` (with :class:`_SlotReuse`'s in-place rewinds) that decodes each reply by DSpark speculative decode (``--dspark``).
 
     A turn's prompt goes in as without it (the traced prefill, then decode steps, each of which also writes its
-    row into the drafter's rings). Its reply then runs on this thread in verify rounds of :data:`_DSPARK_DRAFTS`
-    drafts (:class:`~..tt.spec.DSparkSpeculator`, at the request's ``temperature`` and ``top_p``) until it ends,
-    and the session is handed back as plain decode would leave it. The server runs one turn at a time
-    (``--max-running 1``), so no other turn has steps in flight meanwhile; later requests and chores wait for the
-    reply. The last tokens before the
-    end of the context, where a round would run past it, are decoded a step at a time.
+    row into its session's rows of the drafter's rings). Its reply then runs on this thread in verify rounds
+    (:class:`~..tt.spec.DSparkSpeculator`, at the request's ``temperature`` and ``top_p``), one round per scheduler
+    round, and the session is handed back as plain decode would leave it.
 
-    Every verify round counts as a round of :attr:`rounds` and adds its tokens to :attr:`steps` and the rate window
-    as it ends, so the status pane's tok/s and tok/s/user follow the reply.
+    The drafts a round checks follow the load (:meth:`_pick_drafts`, ``--dspark-drafts``): every user's draft takes
+    the drafter's time whatever its length, so the more users decode, the fewer drafts pay, and with none every
+    reply decodes a step at a time as without ``--dspark``. A speculator whose length changes is finished and
+    restarted at the new one (a fixup and one draft).
+    With the host runtime and two or more seated replies ready, each scheduler round runs one round of every one
+    of them as a batch (:meth:`_spec_batch`): every verify dispatched, then each collected in turn, so the
+    pipeline is kept busy while the host accepts and the drafter drafts. Otherwise the seated replies take their
+    rounds one after another. Either way each speculator keeps its session's drafts and rejected rows between
+    rounds (:meth:`~..tt.spec.DSparkSpeculator.pause`; each session's fixup restores and snapshots its own ring
+    rows). A prompt submitted during a reply waits for the round in progress, and that prompt (and any others
+    waiting) is prefilled before decode resumes. The last tokens before the end of the context, where a round
+    would run past it, are decoded a step at a time.
+
+    At most one speculator is live, the one whose lone round ran last: its next round's rows may be in the
+    pipeline. The others are paused. Another session's round pauses it, and anything else on the device (a plain
+    step, a prefill, a chore: everything that follows :meth:`_settle`) waits for every speculator to finish first.
+
+    Every verify round adds its tokens to :attr:`steps` and the rate window as it ends, so the status pane's tok/s
+    and tok/s/user follow the replies.
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._spec_accounted = 0  # steps of this round the verify rounds have already put in the rate window
+        self._specs: dict = {}  # turn -> its reply's DSparkSpeculator, kept between its rounds
+        self._spec_live: _Turn | None = None
+        self._batched: set = set()  # the turns whose verify round this scheduler round ran in a batch
+        # Drafts per verify round this scheduler round (_pick_drafts; 0: plain decode), and since when fewer seated
+        # users have asked for more.
+        self._drafts = self.engine.dspark_drafts[0]
+        self._raise_since: float | None = None
 
     def _round(self) -> None:
         self.rounds += 1
@@ -1098,90 +1388,253 @@ class _SpecScheduler(_SlotReuse, _Scheduler):
         self._account(self.steps - before - self._spec_accounted)
         self._log_pool_change()
 
+    def _round_turns(self) -> None:
+        # A prompt's decode steps follow no verify round.
+        if self._specs and self._prefill_waiting() and not self._end_specs():
+            return
+        self._batched = set()
+        self._pick_drafts()
+        if self._drafts and not self._prefill_waiting() and self.engine.model.host_runtime_running:
+            ready = [turn for turn in self._active if self._holds_decode_seat(turn) and self._spec_budget(turn) > 0]
+            if len(ready) > 1:
+                self._batched = set(ready)
+                self._spec_batch(ready)
+        super()._round_turns()
+
+    def _settle(self) -> bool:
+        if self._specs and not self._end_specs():
+            return False
+        return super()._settle()
+
+    def _post_ahead(self) -> None:
+        # Verify rounds post their own steps. Steps posted ahead for a plain turn beside them (one near the end of
+        # its context) would have the next round settle them, which finishes every speculator.
+        if self._specs:
+            return
+        super()._post_ahead()
+
+    def _retire(self, turn: _Turn, outcome: str) -> None:
+        self._specs.pop(turn, None)
+        if self._spec_live is turn:
+            self._spec_live = None
+        super()._retire(turn, outcome)
+
     def _plan(self, turn: _Turn) -> list[tuple[int, int, bool]]:
+        if turn.phase != _Turn.DECODE:
+            return super()._plan(turn)
         engine = self.engine
         user = engine.users[turn.slot]
-        # Room for a whole round past the reply's last token, and for the next round's first row.
-        budget = min(turn.max_tokens - len(turn.generated), engine.max_seq - user.pos - 2 * (_DSPARK_DRAFTS + 1))
-        if (
-            turn.phase == _Turn.DECODE
-            and not turn.pending
-            and not turn.cancelled.is_set()
-            and (turn.next_id != engine.eos_id or turn.ignore_eos)
-            and budget > 0
-        ):
-            self._speculate(turn, budget)
-            if turn not in self._active:
+        # A posted step still has to be fed (_flush_ahead). Anything else waits while a prompt is pending, and
+        # only a seated turn takes a verify round.
+        if not self._flushing and (self._prefill_waiting() or not self._holds_decode_seat(turn)):
+            return []
+        if turn in self._batched:
+            if turn in self._specs or turn not in self._active:
                 return []
-        # Ends the turn (EOS, max_tokens, stopped), or steps it on near the end of the context.
+        else:
+            budget = self._spec_budget(turn)
+            if budget > 0:
+                self._spec_round(turn, budget)
+                if turn in self._specs or turn not in self._active:
+                    return []
+        if turn.pending:
+            return super()._plan(turn)
+        finishing = (
+            turn.cancelled.is_set()
+            or (turn.next_id == engine.eos_id and not turn.ignore_eos)
+            or len(turn.generated) >= turn.max_tokens
+            or user.pos >= engine.max_seq - 1
+        )
+        # A reply that ends (EOS, max_tokens, stopped) hands only its own session back; one stepped on near the end
+        # of the context by plain decode needs every speculator finished first.
+        if not self._end_specs([turn] if finishing else None):
+            return []
         return super()._plan(turn)
 
-    def _speculate(self, turn: _Turn, budget: int) -> None:
-        """Generate up to ``budget`` tokens of ``turn``'s reply in verify rounds, from ``turn.next_id`` at the
-        session's position, keeping :attr:`_Turn.generated` and the session's tokens as single steps would: every
-        token fed, the last one produced left in ``next_id``."""
+    def _pick_drafts(self) -> None:
+        """Set this scheduler round's drafts per verify round from ``--dspark-drafts`` by the seated decoding users:
+        fewer as soon as more users decode, more only once fewer have for :data:`_DSPARK_RAISE_SECONDS` (at once
+        with none decoding, when there is nothing to switch)."""
+        schedule = self.engine.dspark_drafts
+        users = sum(
+            1
+            for turn in self._active
+            if turn.phase == _Turn.DECODE and not turn.cancelled.is_set() and self._holds_decode_seat(turn)
+        )
+        target = schedule[min(max(users, 1), len(schedule)) - 1]
+        if target > self._drafts and users:
+            now = time.monotonic()
+            if self._raise_since is None:
+                self._raise_since = now
+            if now - self._raise_since < _DSPARK_RAISE_SECONDS:
+                return
+        self._raise_since = None
+        if target != self._drafts:
+            logger.info(
+                f"DSpark: {users} seated decoding user(s): "
+                + (f"{target} drafts a round" if target else "plain decode")
+                + f" (was {self._drafts or 'plain decode'})"
+            )
+            self._drafts = target
+
+    def _spec_budget(self, turn: _Turn) -> int:
+        """The tokens a verify round of ``turn``'s reply may emit now; 0 when it takes none (no drafts under this
+        load, a posted step to feed, a reply that ends, or too near the end of the context for a whole round and the
+        next one, dispatched ahead)."""
+        engine = self.engine
+        if not self._drafts:
+            return 0
+        if turn.phase != _Turn.DECODE or turn.pending or turn.cancelled.is_set() or self._flushing:
+            return 0
+        if turn.next_id == engine.eos_id and not turn.ignore_eos:
+            return 0
+        room = engine.max_seq - engine.users[turn.slot].pos - 2 * (self._drafts + 1)
+        return max(0, min(turn.max_tokens - len(turn.generated), room))
+
+    def _speculator(self, turn: _Turn):
+        """``turn``'s speculator at this round's drafts, started on its session (which must be resident) at its
+        first round, or restarted when the drafts per round changed: a speculator's rounds keep one length."""
         from models.experimental.deepseek_v41_flash.tt.spec import DSparkSpeculator
 
-        engine = self.engine
-        user = engine.users[turn.slot]
-        if not self._settle():
-            return
-        # The rounds write their packets themselves, after every packet the engine's thread has queued.
-        engine._packets.join()
+        spec = self._specs.get(turn)
+        if spec is not None and spec.drafts == self._drafts:
+            return spec
+        if spec is not None:
+            del self._specs[turn]
+            if self._spec_live is turn:
+                self._spec_live = None
+            spec.finish()
+            logger.debug(f"user {turn.user_key!r}: DSpark {spec.stats.summary(spec.drafts)}")
         temperature = turn.body.get("temperature")
         if temperature is None:
             temperature = self.server.temperature
         spec = DSparkSpeculator(
-            engine.model,
-            _DSPARK_DRAFTS,
+            self.engine.model,
+            self._drafts,
             temperature=float(temperature or 0.0),
             top_p=float(turn.body.get("top_p") or 1.0),
             seed=int(torch.randint(1, 2**31 - 1, ())),
         )
-        start = user.pos
-        tokens = [turn.next_id]  # the reply's tokens from start on; all but the last are fed
+        spec.start(turn.next_id, self.engine.users[turn.slot].pos)
+        self._specs[turn] = spec
+        return spec
 
-        def take(emitted: list[int]) -> None:
-            before = len(turn.generated)
-            for token in emitted:
-                turn.generated.append(tokens[-1])
-                turn.mark_token()
-                tokens.append(token)
-            turn.stream.push(turn.generated)
-            # Each verify round is a round of the status pane's counters, which roll its tokens into tok/s and
-            # tok/s/user as it goes rather than once the reply is over.
-            self.rounds += 1
-            self.steps += len(emitted)
-            self._spec_accounted += len(emitted)
-            self._account(len(emitted))
-            if len(turn.generated) // 32 > before // 32:
-                logger.debug(
-                    f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
-                    f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
-                    f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
-                    f"cache at {start + len(tokens) - 1}/{engine.max_seq}, DSpark {spec.stats.summary(_DSPARK_DRAFTS)}"
-                )
-
+    def _spec_round(self, turn: _Turn, budget: int) -> None:
+        """One verify round of ``turn``'s reply, at most ``budget`` tokens from ``turn.next_id`` at the session's
+        position (see :meth:`_spec_tokens`). The turn's speculator starts with its first round and ends with its
+        last; a round that dispatches the next one's rows ahead is one no other seated reply follows."""
+        engine = self.engine
+        user = engine.users[turn.slot]
+        if (self._inflight or self._posted) and not self._settle():
+            return
+        # The rounds write their packets themselves, after every packet the engine's thread has queued.
+        engine._packets.join()
+        others = any(
+            other is not turn
+            and other.phase == _Turn.DECODE
+            and not other.cancelled.is_set()
+            and self._holds_decode_seat(other)
+            for other in self._active
+        )
         try:
+            self._pause_live(turn)
             user.activate()
-            spec.start(turn.next_id, start)
-            spec.generate(
-                budget,
-                stop_ids=() if turn.ignore_eos else (engine.eos_id,),
-                on_tokens=take,
-                should_stop=lambda: turn.cancelled.is_set() or self._stop,
-            )
-            spec.finish()
+            spec = self._speculator(turn)
+            self._spec_live = turn
+            kept, done = spec.advance(budget, stop_ids=() if turn.ignore_eos else (engine.eos_id,), ahead=not others)
         except Exception as e:  # noqa: BLE001 - see _abort_all: a round's outputs and rows are in an unknown state
             self._abort_all(e)
             return
-        fed = tokens[:-1]
-        if spec.position != start + len(fed):
-            self._abort_all(RuntimeError(f"DSpark ended at {spec.position}, not {start} + {len(fed)} fed tokens"))
+        self._spec_tokens(turn, spec, kept, done)
+
+    def _spec_batch(self, turns: list[_Turn]) -> None:
+        """One verify round of each of ``turns``' replies, their verifies dispatched back to back so each one's
+        rows run through the pipeline while the host accepts the one before and the drafter drafts it.
+
+        Rounds are collected in the order they were dispatched (the rows leave the pipeline in that order), and
+        none dispatches the next round's rows ahead, so every speculator ends the batch paused. Needs the
+        host runtime: on the Python path the packets of rounds queued behind unread outputs would wedge the
+        packet writes (see :meth:`~..tt.model.DeepSeekV41Model.spec_verify_async`)."""
+        engine = self.engine
+        if (self._inflight or self._posted) and not self._settle():
             return
-        user.tokens.extend(fed)
-        user.pos = spec.position
-        turn.next_id = tokens[-1]
+        engine._packets.join()
+        budgets = {turn: self._spec_budget(turn) for turn in turns}
+        try:
+            self._pause_live()
+            for turn in turns:
+                engine.users[turn.slot].activate()
+                self._speculator(turn)
+            for turn in turns:
+                engine.users[turn.slot].activate()
+                self._specs[turn].dispatch()
+            rounds = []
+            for turn in turns:
+                engine.users[turn.slot].activate()
+                rounds.append(self._specs[turn].collect(budgets[turn], () if turn.ignore_eos else (engine.eos_id,)))
+        except Exception as e:  # noqa: BLE001 - see _abort_all
+            self._abort_all(e)
+            return
+        for turn, (kept, done) in zip(turns, rounds):
+            if turn not in self._active:
+                return
+            self._spec_tokens(turn, self._specs[turn], kept, done)
+
+    def _spec_tokens(self, turn: _Turn, spec, kept: list[int], done: bool) -> None:
+        """Take a verify round's ``kept`` tokens into ``turn`` as single steps would: every token fed, the last one
+        produced left in ``next_id``. Ends the turn's speculator once ``done``."""
+        engine = self.engine
+        user = engine.users[turn.slot]
+        before = len(turn.generated)
+        for token in kept:
+            turn.generated.append(turn.next_id)
+            turn.mark_token()
+            user.tokens.append(turn.next_id)
+            user.pos += 1
+            turn.next_id = token
+        if spec.position != user.pos:
+            self._abort_all(RuntimeError(f"DSpark is at {spec.position}, the session at {user.pos}"))
+            return
+        turn.stream.push(turn.generated)
+        # Each verify round rolls its tokens into the status pane's tok/s and tok/s/user as it ends.
+        self.steps += len(kept)
+        self._spec_accounted += len(kept)
+        self._account(len(kept))
+        if len(turn.generated) // 32 > before // 32:
+            logger.debug(
+                f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
+                f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
+                f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
+                f"cache at {user.pos}/{engine.max_seq}, DSpark {spec.stats.summary(spec.drafts)}"
+            )
+        if done:
+            self._end_specs([turn])
+
+    def _pause_live(self, turn: _Turn | None = None) -> None:
+        """Pause the live speculator unless it is ``turn``'s, before another session's round or end."""
+        live = self._spec_live
+        if live is None or live is turn:
+            return
+        self._spec_live = None
+        self.engine.users[live.slot].activate()
+        self._specs[live].pause()
+
+    def _end_specs(self, turns=None) -> bool:
+        """Hand ``turns``' sessions (every speculator's when ``None``) back to plain decode
+        (:meth:`~..tt.spec.DSparkSpeculator.finish`). Returns ``False`` once a failure has aborted every turn."""
+        ending = list(self._specs) if turns is None else [turn for turn in turns if turn in self._specs]
+        try:
+            for turn in ending:
+                spec = self._specs.pop(turn)
+                if self._spec_live is turn:
+                    self._spec_live = None
+                self.engine.users[turn.slot].activate()
+                spec.finish()
+                logger.debug(f"user {turn.user_key!r}: DSpark {spec.stats.summary(spec.drafts)}")
+        except Exception as e:  # noqa: BLE001 - see _abort_all
+            self._abort_all(e)
+            return False
+        return True
 
 
 class V41GenerationServer(GenerationServer):
@@ -1213,6 +1666,17 @@ class V41GenerationServer(GenerationServer):
         cache = self.engine.weight_cache
         self.files = _FileStore(os.path.join(cache.path, "files") if cache else None)
 
+    def _await_seat(self, turn, lease, client_gone) -> bool:
+        """Admit the turn now. ``--max-running`` limits decode, not prefill: the scheduler prefills every pending
+        prompt before generating, and only then seats ``--max-running`` replies."""
+        del turn, client_gone
+        with self.pool._cv:
+            if self.pool._closing:
+                raise RequestError(503, "server is shutting down", "server_error")
+            self.pool._running.add(lease.slot)
+            self.pool._cv.notify_all()
+        return True
+
     def start(self) -> None:
         super().start()
         if self.monitor_feed is not None:
@@ -1235,6 +1699,7 @@ class V41GenerationServer(GenerationServer):
         host_users, host_bytes = pool.host_usage()
         # Before the active turns: see _Scheduler._retire.
         ended = list(scheduler.ended_turns)[-monitor.FEED_ENDED_TURNS :]
+        specs = dict(getattr(scheduler, "_specs", {}))  # turn -> its DSpark speculator, while it speculates
         snapshot = {
             "t": time.time(),
             "model_id": self.model_id,
@@ -1257,6 +1722,7 @@ class V41GenerationServer(GenerationServer):
                     "prefill_s": turn.prefill_seconds,
                     "age_s": now - turn.t_submit,
                     "cancelled": turn.cancelled.is_set(),
+                    **_spec_fields(specs.get(turn)),
                 }
                 for turn in list(scheduler._active)
             ],
@@ -1276,6 +1742,12 @@ class V41GenerationServer(GenerationServer):
         }
         if self.engine.images is not None:
             snapshot["images"] = {**self.engine.images.stats(), "files": self.files.usage()}
+        if self.engine.dspark:
+            snapshot["dspark"] = {
+                "drafts": scheduler._drafts,
+                "schedule": list(self.engine.dspark_drafts),
+                "speculating": len(specs),
+            }
         return snapshot
 
     def stats(self) -> dict:
@@ -1551,17 +2023,17 @@ class V41ChatEngine(ChatEngine):
             )
 
         self.dspark = bool(getattr(args, "dspark", False))
+        # Drafts per verify round with 1, 2, ... seated decoding users, the last entry for more (--dspark-drafts).
+        self.dspark_drafts = tuple(getattr(args, "dspark_drafts", _DSPARK_DRAFTS))
         if self.dspark:
             # Before anything is compiled; the drafter's prefetcher rings are on its own row.
             self.model.prepare_spec_decode(self.rope["main"])
             if self.model.use_prefetcher:
                 prefetcher.enter_context(tensor_prefetcher_session(self.model.dspark.device))
             logger.info(
-                f"DSpark speculative decode: {_DSPARK_DRAFTS} drafts a round, the drafter on mesh row "
-                f"{self.model.num_submeshes}"
+                f"DSpark speculative decode: {', '.join(map(str, self.dspark_drafts))} drafts a round with "
+                f"1, 2, ... seated users, the drafter on mesh row {self.model.num_submeshes}"
             )
-            # A reply decodes in verify rounds (_SpecScheduler), which post their own steps.
-            self.max_decode_ahead = 0
         if self.model._eager_decode:
             # An eager step runs as its packet is written, at the position it was posted for.
             self.max_decode_ahead = 1
@@ -1889,11 +2361,20 @@ def parse_args(argv: list[str] | None = None):
         "--dspark",
         action=argparse.BooleanOptionalAction,
         default=os.environ.get("DEEPSEEK_V41_DSPARK", "1") not in ("0", "", "false", "False"),
-        help=f"decode every reply by DSpark speculative decode, {_DSPARK_DRAFTS} drafts a round, the drafter on the "
-        f"mesh's last row (decode on the first {_DSPARK_STAGES}); one user decoding at a time (--max-running 1) of "
-        f"--num-users slots (default {_NUM_USERS_DSPARK}), host sampling at the "
+        help="decode replies by DSpark speculative decode, --dspark-drafts drafts a round, the drafter on the "
+        f"mesh's last row (decode on the first {_DSPARK_STAGES}); --num-users slots (default {_NUM_USERS_DSPARK}), "
+        "host sampling at the "
         "request's temperature / top_p, and no --vision or --device-sampling "
         "(default: on; --no-dspark or DEEPSEEK_V41_DSPARK=0 turns it off)",
+    )
+    p.add_argument(
+        "--dspark-drafts",
+        default=os.environ.get("DEEPSEEK_V41_DSPARK_DRAFTS", ",".join(map(str, _DSPARK_DRAFTS))),
+        help="with --dspark, the drafts a verify round checks by the number of seated decoding users: a comma list "
+        "for 1, 2, 3, ... users, its last entry for any more, each 0 (plain decode) to "
+        f"{_DSPARK_MAX_DRAFTS}. Fewer drafts apply as soon as more users decode, more once fewer have for "
+        f"{_DSPARK_RAISE_SECONDS:g} s; one number fixes it (default: DEEPSEEK_V41_DSPARK_DRAFTS, else "
+        f"{','.join(map(str, _DSPARK_DRAFTS))})",
     )
     p.add_argument(
         "--rust-host",
@@ -1922,6 +2403,13 @@ def parse_args(argv: list[str] | None = None):
                 "decode steps a lone decoding turn keeps posted before their tokens are known, as "
                 f"test_full_model_decode_demo.py keeps them (default and most: {_DECODE_AHEAD})"
             )
+        elif action.dest == "max_running":
+            action.default = None
+            action.help = (
+                "turns decoding at once, in admission order, once every pending prompt is in (default: "
+                "DEEPSEEK_V4_MAX_RUNNING, else 8, one per pipeline stage; with --dspark, --dspark-drafts follows "
+                "how many decode). Capped at --num-users"
+            )
         elif action.dest == "l1_small_size":
             action.default = None
             action.help = (
@@ -1930,12 +2418,20 @@ def parse_args(argv: list[str] | None = None):
                 f"{_L1_SMALL_SIZE})"
             )
     args = p.parse_args(argv)
+    if args.max_running is None:
+        env = os.environ.get("DEEPSEEK_V4_MAX_RUNNING")
+        args.max_running = int(env) if env else 8
+    if args.max_running < 1:
+        p.error("--max-running must be at least 1")
+    try:
+        args.dspark_drafts = tuple(int(k) for k in str(args.dspark_drafts).split(",") if k.strip())
+    except ValueError:
+        p.error(f"--dspark-drafts takes comma-separated integers, got {args.dspark_drafts!r}")
+    if not args.dspark_drafts or not all(0 <= k <= _DSPARK_MAX_DRAFTS for k in args.dspark_drafts):
+        p.error(f"--dspark-drafts takes 0 to {_DSPARK_MAX_DRAFTS} drafts per entry, got {args.dspark_drafts}")
     if args.dspark:
-        # Speculative decode runs one reply at a time on the scheduler thread, accepts against the steps' logits
-        # and has no image rows. The other sessions stay resident in their slots, parked.
-        if args.max_running != 1 and args.max_running != p.get_default("max_running"):
-            p.error("--dspark decodes one session at a time: --max-running must be 1")
-        args.max_running = 1
+        # Speculative decode accepts against the steps' logits on the host and has no image rows. Its turns take
+        # verify rounds in turn, each session with its own rows of the drafter's rings.
         if args.num_users is None:
             args.num_users = _NUM_USERS_DSPARK
         args.vision = False

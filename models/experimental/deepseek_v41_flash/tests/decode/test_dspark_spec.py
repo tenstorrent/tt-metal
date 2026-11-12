@@ -16,6 +16,10 @@ after it, until ``DEEPSEEK_V4_SPEC_TOKENS`` (default 2000) tokens are generated 
 3. speculative decode with the DSpark drafter, sampled at ``DEEPSEEK_V4_SPEC_TEMPERATURE`` (default 1) and
    ``DEEPSEEK_V4_SPEC_TOP_P`` (default 1) with DeepInfer's accept rule (``DSparkSpeculator``) -- its
    acceptance, throughput and text are logged. At temperature 0 it is greedy and must equal the baseline.
+   With the pipelined verify it runs once per draft count in ``DEEPSEEK_V4_SPEC_DRAFTS`` (default ``all``: 1
+   to the most a round takes, see :func:`_draft_counts`; or a comma list such as ``2,4``), and a table of
+   tokens/round, ms/round and tok/s per draft count, greedy as 0 drafts, is logged at the end. Temperature 0
+   compares the counts on the same text.
 
 Runs 2 and 3 verify a round's ``DRAFTS + 1`` rows as pipelined single-token steps, then again with the
 parallel verify, all rows through every layer in one traced step (``DSparkSpeculator(parallel_verify=True)``,
@@ -78,6 +82,8 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
 DRAFTS = 4
+# The pipelined DSpark runs' drafts per round: "all" or a comma list (see _draft_counts).
+DRAFT_COUNTS = os.environ.get("DEEPSEEK_V4_SPEC_DRAFTS", "all")
 CORRUPT = 1 / 3
 VERIFY = os.environ.get("DEEPSEEK_V4_SPEC_VERIFY", "pipelined")
 # Log the greedy loop's progress (every 200 steps); the spec rounds log every phase regardless.
@@ -134,8 +140,9 @@ def test_dspark_spec_decode(mesh_device):
     eos_id = tokenizer.convert_tokens_to_ids(eos_token)
     prompt = _tokenize_chat(tokenizer, _DEFAULT_TEXT)
     turns = [_tokenize_turn(tokenizer, text) for text in _FOLLOW_UPS]
-    # Every follow-up asked, plus a verify block past the last position.
-    needed = len(prompt) + n_tokens + sum(len(turn) for turn in turns) + 2 * (DRAFTS + 1)
+    # Every follow-up asked, plus a verify block of the most drafts past the last position.
+    most_drafts = max(DRAFTS, config.dspark_block_size)
+    needed = len(prompt) + n_tokens + sum(len(turn) for turn in turns) + 2 * (most_drafts + 1)
     max_seq = _traced_max_seq(config, needed, config.num_hidden_layers)
     rope = _build_rope(config, loader.snapshot_dir, max_seq)
     modes = {"pipelined": (False,), "parallel": (True,), "both": (False, True)}[VERIFY]
@@ -231,6 +238,8 @@ def test_dspark_spec_decode(mesh_device):
             logger.info(f"[spec] run done: {len(got)} tokens, pos {spec.position}")
             return got
 
+        draft_counts = _draft_counts(model)
+        sweep = {}  # drafts -> the pipelined DSpark run's SpecStats
         for parallel_verify in modes:
             verify = "parallel verify" if parallel_verify else "pipelined verify"
 
@@ -249,19 +258,44 @@ def test_dspark_spec_decode(mesh_device):
             logger.info(f"oracle, {verify}: {oracle.stats.summary(DRAFTS)}")
             check(f"oracle spec ({verify})", got, EXACT)
 
-            # 3. The DSpark drafter. Sampling gives up equality with the baseline.
-            spec = DSparkSpeculator(
-                model, DRAFTS, parallel_verify=parallel_verify, temperature=TEMPERATURE, top_p=TOP_P
-            )
-            logger.info(f"[test] starting DSpark run ({verify}): temperature {TEMPERATURE}, top_p {TOP_P}")
-            got = converse(spec)
-            logger.info(
-                f"DSpark, {verify}, temperature {TEMPERATURE}, top_p {TOP_P}: {spec.stats.summary(DRAFTS)} "
-                f"(greedy {greedy_tps:.2f} tok/s)"
-            )
-            logger.info(f"DSpark output ({verify}): {tokenizer.decode(got)!r}")
-            if TEMPERATURE == 0:
-                check(f"DSpark spec ({verify})", got, EXACT)
+            # 3. The DSpark drafter, at every draft count (the parallel verify's traces take DRAFTS + 1 rows only).
+            # Sampling gives up equality with the baseline.
+            for drafts in [DRAFTS] if parallel_verify else draft_counts:
+                spec = DSparkSpeculator(
+                    model, drafts, parallel_verify=parallel_verify, temperature=TEMPERATURE, top_p=TOP_P
+                )
+                logger.info(
+                    f"[test] starting DSpark run ({verify}): {drafts} drafts/round, "
+                    f"temperature {TEMPERATURE}, top_p {TOP_P}"
+                )
+                got = converse(spec)
+                logger.info(
+                    f"DSpark, {verify}, {drafts} drafts, temperature {TEMPERATURE}, top_p {TOP_P}: "
+                    f"{spec.stats.summary(drafts)} (greedy {greedy_tps:.2f} tok/s)"
+                )
+                logger.info(f"DSpark output ({verify}, {drafts} drafts): {tokenizer.decode(got)!r}")
+                if not parallel_verify:
+                    sweep[drafts] = spec.stats
+                if TEMPERATURE == 0:
+                    check(f"DSpark spec ({verify}, {drafts} drafts)", got, EXACT)
+
+        if sweep:
+            lines = [
+                f"DSpark tok/s by drafts per round (pipelined verify, temperature {TEMPERATURE}, top_p {TOP_P}):",
+                "  drafts  tokens/round  ms/round   tok/s  vs greedy",
+                f"  {0:>6}  {1:>12.2f}  {1000 / greedy_tps:>8.1f}  {greedy_tps:>6.2f}  {1:>8.2f}x",
+            ]
+            for drafts, stats in sweep.items():
+                rounds = len(stats.accepted)
+                if not rounds:
+                    lines.append(f"  {drafts:>6}  no rounds")
+                    continue
+                tps = stats.tokens / stats.seconds
+                lines.append(
+                    f"  {drafts:>6}  {stats.tokens / rounds:>12.2f}  {1000 * stats.seconds / rounds:>8.1f}  "
+                    f"{tps:>6.2f}  {tps / greedy_tps:>8.2f}x"
+                )
+            logger.info("\n".join(lines))
 
 
 # Both parities below the sliding window (masked), across the causal switch, and past the ring's wrap.
@@ -346,6 +380,20 @@ def test_parallel_verify_rows(mesh_device):
                 f"verify at {p}: parallel {parallel_ms:.1f} ms, pipelined {pipelined_ms:.1f} ms; " + "; ".join(rows)
             )
         assert worst >= 0.99, f"a parallel-verify row is at PCC {worst:.5f} against its single-row decode"
+
+
+def _draft_counts(model) -> list[int]:
+    """The pipelined DSpark runs' drafts per round (``DEEPSEEK_V4_SPEC_DRAFTS``): ``all`` is every count
+    :class:`DSparkSpeculator` takes on ``model``, 1 to the drafter's block, its ``write_main`` rows less the
+    bonus row and the compressor windows less one; else the comma-separated counts, each checked against that."""
+    most = min(model.dspark.block, model.dspark.main_rows - 1, model.spec_window_rows - 2)
+    if DRAFT_COUNTS.strip() == "all":
+        return list(range(1, most + 1))
+    counts = [int(k) for k in DRAFT_COUNTS.split(",") if k.strip()]
+    bad = [k for k in counts if not 1 <= k <= most]
+    if bad or not counts:
+        raise ValueError(f"DEEPSEEK_V4_SPEC_DRAFTS={DRAFT_COUNTS!r}: draft counts run from 1 to {most}")
+    return counts
 
 
 def _tokenize_turn(tokenizer, text: str) -> list[int]:

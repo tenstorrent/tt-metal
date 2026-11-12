@@ -136,6 +136,27 @@ class RustEngramLookup(EngramHostLookup):
         self.rust.rows_into(input_ids.reshape(-1).tolist(), int(start_pos), [r.data_ptr() for r in rows.values()])
         return rows
 
+    @torch.no_grad()
+    def lookup_history(self, history: torch.Tensor, input_ids: torch.Tensor, start_pos: int) -> dict:
+        """:meth:`EngramHostLookup.lookup_history` in Rust, on a copy of ``history`` (a live session is not written)."""
+        if history.ndim != 2 or input_ids.ndim != 2 or history.shape[0] != input_ids.shape[0]:
+            raise ValueError(
+                f"history {tuple(history.shape)} and ids {tuple(input_ids.shape)} must both be [batch, length]"
+            )
+        history = history.contiguous()
+        input_ids = input_ids.contiguous()
+        b, length = input_ids.shape
+        rows = {layer_id: torch.empty(b, length, self.rust.kin, dtype=torch.bfloat16) for layer_id in self._order}
+        self.rust.rows_from_history(
+            history.data_ptr(),
+            int(history.shape[1]),
+            input_ids.data_ptr(),
+            int(length),
+            int(start_pos),
+            [r.data_ptr() for r in rows.values()],
+        )
+        return rows
+
     def gather(self, layer_id: int, ids: torch.Tensor) -> torch.Tensor:
         data = self.rust.gather(layer_id, ids.reshape(-1).tolist())
         return _bf16(data, (*ids.shape, self.layout.head_dim))

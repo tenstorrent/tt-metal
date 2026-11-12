@@ -48,7 +48,8 @@ pub struct DecodeConfig {
     pub batch: usize,
     pub sliding_window: i64,
     pub win_slot_rows: i64,
-    /// The DSpark drafter's ring depth: a step's row goes to ring row `pos % drafter_ring_rows`; 0: no drafter.
+    /// The DSpark drafter's ring depth per session slot: a step's row goes to ring row
+    /// `slot * drafter_ring_rows + pos % drafter_ring_rows`; 0: no drafter.
     pub drafter_ring_rows: i64,
     pub engram: Option<Arc<Engram>>,
     pub engram_sockets: Vec<EngramSockets>,
@@ -124,9 +125,9 @@ fn as_bytes(values: &[u16]) -> &[u8] {
 }
 
 /// V4.1's packet fields after the tokens (`DeepSeekV41Model._build_packet`): the session slot's ring row, pos,
-/// slot, ring base, window base and the drafter ring row (no drafter: 0).
+/// slot, ring base, window base and the drafter ring row, in the slot's rows of the drafter ring (no drafter: 0).
 fn packet_fields(pos: i64, slot: i64, window: i64, win_rows: i64, drafter_ring_rows: i64) -> [i64; 6] {
-    let drafter_row = if drafter_ring_rows > 0 { pos % drafter_ring_rows } else { 0 };
+    let drafter_row = if drafter_ring_rows > 0 { slot * drafter_ring_rows + pos % drafter_ring_rows } else { 0 };
     [slot * window + pos % window, pos, slot, slot * window, slot * win_rows, drafter_row]
 }
 
@@ -498,5 +499,7 @@ mod tests {
         assert_eq!(packet_fields(300, 0, 128, 32, 160), [300 % 128, 300, 0, 0, 0, 140]);
         assert_eq!(packet_fields(159, 0, 128, 32, 160)[5], 159);
         assert_eq!(packet_fields(160, 0, 128, 32, 160)[5], 0);
+        // Each session slot has its own ring_rows rows of the drafter ring.
+        assert_eq!(packet_fields(300, 2, 128, 32, 160)[5], 2 * 160 + 140);
     }
 }

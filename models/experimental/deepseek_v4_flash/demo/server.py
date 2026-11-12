@@ -3024,6 +3024,21 @@ class GenerationServer:
         Runs on the HTTP thread, so it must not touch the device."""
         return _normalized_messages(body.get("messages"), body.get("tools"), self.engine.chat_format)
 
+    def _await_seat(self, turn: _Turn, lease: _Lease, client_gone) -> bool:
+        """Wait for one of the ``--max-running`` decode seats; ``False`` when ``turn`` gives up first.
+
+        The seat is held until :meth:`_SlotPool.finish_run`. A variant that prefills every pending request before
+        decoding (the V4.1 server) overrides this and does not block here."""
+        counts = self.pool.counts()
+        if counts["running"] >= counts["max_running"] or counts["queued"]:
+            logger.info(
+                f"user {turn.user_key!r} (slot {lease.slot}) queued: {counts['running']}/{counts['max_running']} "
+                f"running, {counts['queued']} ahead"
+            )
+        return self.pool.wait_to_run(
+            lease.slot, lambda: turn.cancelled.is_set() or (client_gone is not None and client_gone())
+        )
+
     def generate(self, user_key: str, body: dict, on_chunk, request_id: str | None = None, client_gone=None) -> dict:
         """Run one chat-completion turn for ``user_key``.
 
@@ -3085,15 +3100,7 @@ class GenerationServer:
             turn.previous_owner, turn.restore = lease.previous, lease.restore
             with self._turns_lock:
                 self._turns[request_id] = turn
-            counts = self.pool.counts()
-            if counts["running"] >= counts["max_running"] or counts["queued"]:
-                logger.info(
-                    f"user {user_key!r} (slot {lease.slot}) queued: {counts['running']}/{counts['max_running']} "
-                    f"running, {counts['queued']} ahead"
-                )
-            seated = self.pool.wait_to_run(
-                lease.slot, lambda: turn.cancelled.is_set() or (client_gone is not None and client_gone())
-            )
+            seated = self._await_seat(turn, lease, client_gone)
             if not seated:
                 # Given up in the queue: the scheduler retires a cancelled turn at admission without running it.
                 turn.cancelled.set()
