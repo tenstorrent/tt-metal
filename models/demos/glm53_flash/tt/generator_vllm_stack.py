@@ -60,6 +60,8 @@ ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackFor
 MM_ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForConditionalGeneration"
 MM_ENV = "GLM53_STACK_MM"  # "1": the stack's embedding table carries the image rows (mk_head.mm_extra_rows)
 MM_ENCODER_ENV = "GLM53_STACK_MM_ENCODER"  # the multimodal class's image encoder: device (default) | hf_cpu | none
+MM_CACHE_ENV = "GLM53_STACK_MM_CACHE_MB"  # the image feature cache's bound: MB of feature rows (default 256)
+MM_ALIAS_CAP = 4096  # vLLM item identifiers remembered as aliases of a content key
 LATENT_DIM = 512  # kv_lora_rank: the latent page row, the only "KV" vLLM accounts for (generator_vllm.LATENT_DIM)
 
 
@@ -228,6 +230,9 @@ class StackPrefixCache:
                 a block of [0, start) evicted meanwhile it is prefilled from position 0 instead (the plugin passes the
                 whole history; vLLM's accounting is unaffected);
       release   the request's slot detaches from its entry.
+    Image requests (GLM53StackForConditionalGeneration) take no part: the key hashes token ids, which carry no pixels
+    (every image row is the same ``<|image|>`` id), so ``confirm`` refuses a prompt with mm items and ``plan`` neither
+    attaches nor snapshots the rows its caller names in ``skip`` (rows holding vision tokens).
     ``confirm`` runs on vLLM's scheduler thread, the rest on the worker's: one lock around the store."""
 
     def __init__(self, gen, kv, max_batch: int):
@@ -250,7 +255,7 @@ class StackPrefixCache:
         self.stats = {
             k: 0
             for k in ("confirmed", "confirmed_tokens", "not_resident", "attaches", "fallbacks", "snapshots",
-                      "snapshots_skipped")  # fmt: skip
+                      "snapshots_skipped", "mm_excluded")  # fmt: skip
         }
 
     @property
@@ -304,11 +309,13 @@ class StackPrefixCache:
         return 0
 
     # ---- one prefill call (worker thread)
-    def plan(self, tokens: torch.Tensor, rows: torch.Tensor, gslots: list, starts: list, ends: list):
+    def plan(self, tokens: torch.Tensor, rows: torch.Tensor, gslots: list, starts: list, ends: list, skip=()):
         """-> (the rows' starts: 0 for a hit that cannot attach; the generator keywords ``prefix_attach`` /
         ``snapshot_after``). A row at start > 0 in a generator slot that holds no live request is a NEW request vLLM
         admitted with its first ``start`` tokens cached (a continuation's slot is live). ``tokens`` = every row's
-        history from position 0, ``rows`` = the trimmed page-table rows."""
+        history from position 0, ``rows`` = the trimmed page-table rows. Rows in ``skip`` (image requests) neither
+        attach (one admitted at start > 0 is prefilled from 0; the multimodal plan already re-runs those) nor
+        snapshot."""
         starts = [int(v) for v in starts]
         attach, snap = {}, {}
         obm = self.gen.dsa_shard_map(self.kv)
@@ -317,6 +324,13 @@ class StackPrefixCache:
             self._pending = []
             for i, (g, s0) in enumerate(zip(gslots, starts)):
                 if s0 <= 0 or g in live:
+                    continue
+                if i in skip:  # an image request: never confirmed (confirm refuses mm items)
+                    starts[i] = 0
+                    self.stats["fallbacks"] += 1
+                    logger.warning(
+                        f"GLM53 stack prefix: generator slot {g}'s hit at {s0}: an image request, prefilled from 0"
+                    )
                     continue
                 key = self.store.key(tokens[i, :s0].tolist(), s0) if s0 % self.store.boundary == 0 else None
                 e = self.store.entries.get(key) if key is not None else None
@@ -339,6 +353,9 @@ class StackPrefixCache:
             for i, (s0, end) in enumerate(zip(starts, ends)):
                 end = int(end)
                 if end % self.grid or end % self.store.boundary or end <= s0:
+                    continue
+                if i in skip:  # an image request's state depends on pixels its token-id key does not carry
+                    self.stats["mm_excluded"] += 1
                     continue
                 key = self.store.key(tokens[i, :end].tolist(), end)
                 if key in self.store.entries or key in planned:
@@ -655,7 +672,8 @@ class GLM53StackForCausalLM:
         gslots = self._admit(kv, slots, starts)  # (a re-run continuation keeps its slot: admitted at its own start)
         extra = {"mm_rows": plan["rows"]} if plan is not None and plan["rows"] else {}
         if self.prefix is not None:  # GLM53_STACK_PREFIX: attach confirmed hits, snapshot the on-grid chunk ends
-            gen_starts, pfx = self.prefix.plan(tokens, rows, gslots, gen_starts, ends)
+            skip = plan["vision"] if plan is not None else ()  # image requests neither attach nor snapshot
+            gen_starts, pfx = self.prefix.plan(tokens, rows, gslots, gen_starts, ends, skip=skip)
             extra.update(pfx)
             lens = [e - s for s, e in zip(gen_starts, ends)]
             chunk = torch.zeros(B, max(lens), dtype=torch.int64)
@@ -1150,6 +1168,21 @@ def make_mm_encoder(snapshot: Path, env=os.environ, backend=None):
 GLM5NEXT_PROCESSOR_MODULES = ("vllm.models.glm5next.common.multimodal", "vllm.models.glm5next.nvidia.multimodal")
 
 
+def mm_content_key(item) -> str:
+    """An image item's feature-cache key: blake2b-128 over its kind, its processed pixels (dtype, shape, raw bytes) and
+    its grid -- equal for identical images under the same processing, whatever identifier vLLM gave the item (a
+    per-request uuid without vLLM's processor cache)."""
+    pv = item.pixel_values.detach().cpu().contiguous()
+    h = hashlib.blake2b(digest_size=16)
+    h.update(f"{item.kind}|{pv.dtype}|{tuple(pv.shape)}|{item.grid_thw.reshape(-1).tolist()}".encode())
+    h.update(pv.reshape(-1).view(torch.uint8).numpy())
+    return h.hexdigest()
+
+
+def _nbytes(t: torch.Tensor) -> int:
+    return int(t.numel()) * int(t.element_size())
+
+
 def _vllm_multimodal_api():
     """vLLM's multimodal declaration pieces in a vLLM process -- ``SupportsMultiModal`` and the registration of
     upstream's ``Glm5NextMultiModalProcessor`` / ``Glm5NextProcessingInfo`` with the Glm4v dummy-inputs builder
@@ -1215,13 +1248,20 @@ def declare_multimodal_class(api=None):
 
         def __init__(self, *a, **kw):
             super().__init__(*a, **kw)
-            # image features by item (vLLM's content identifier, else a hash of the pixels): one encoder call per item
-            # for every chunk of its request (and identical images of other requests), at most
-            # GLM53_STACK_MM_FEATURE_CACHE_ROWS rows (LRU; default 32768 = 256 MB of bf16)
-            self._feat_cache: collections.OrderedDict = collections.OrderedDict()
-            self._feat_rows_cap = int(os.environ.get("GLM53_STACK_MM_FEATURE_CACHE_ROWS", "32768"))
+            # image features by content (``mm_content_key``: the processed pixels + grid): one encoder call per
+            # distinct image for every chunk of its request and every request showing it; vLLM's item identifier is
+            # an alias of the key (a request's later chunks skip the hash); least recently used out past
+            # GLM53_STACK_MM_CACHE_MB of feature rows (default 256 MB: ~32 images of 972 rows), the newest kept
+            self._feat_cache: collections.OrderedDict = collections.OrderedDict()  # content key -> [n, 4096] bf16
+            self._feat_alias: collections.OrderedDict = collections.OrderedDict()  # identifier -> content key
+            self._feat_bytes = 0
+            mb = float(os.environ.get(MM_CACHE_ENV, "256"))
+            if mb < 0:
+                raise ValueError(f"{MM_CACHE_ENV}={mb}: the image feature cache bound must be >= 0 MB")
+            self._feat_bytes_cap = int(mb * 2**20)
             self._mm_failed: set = set()  # generator slots of image requests that failed (their chunks run as text)
-            self.mm_stats = dict(items_encoded=0, cache_hits=0, rows_staged=0, restarts=0, failed=0, encode_s=0.0)
+            self.mm_stats = dict(items_encoded=0, cache_hits=0, content_hits=0, evicted=0, rows_staged=0, restarts=0,
+                                 failed=0, encode_s=0.0)  # fmt: skip
 
         def allocate_kv_cache(self, shape, dtype, num_layers: int):
             self._mm_failed = set()
@@ -1253,30 +1293,49 @@ def declare_multimodal_class(api=None):
         def _mm_plan(self, tokens: torch.Tensor, starts: list, ends: list, slots: list, kwargs: dict) -> dict:
             """The multimodal side of one prefill call (``tokens [B, T]`` = every row's history from 0, row i's chunk
             [starts[i], ends[i])): {"starts": the generator's chunk starts, "rows": {row: (positions [m] absolute,
-            rows [m, 4096] bf16)}, "failed": rows whose request failed}.
+            rows [m, 4096] bf16)}, "failed": rows whose request failed, "vision": rows holding vision tokens (+ the
+            failed ones): the prefix cache neither attaches nor snapshots them}.
             - An off-grid continuation (start not a multiple of the backend's continuation_align, 128 with the TP
               prefill: the plugin leaves an image prompt's chunk ends where vLLM put them -- before an image item, at
               the budget) cannot resume the slot's state: the row re-runs [0, end) from position 0 in its own slot (the
               history is in ``tokens``; the earlier images come from the feature cache), wherever the cut lies, an
               image item included.
+            - GLM53_STACK_PREFIX: a NEW image request admitted at start > 0 (a prefix hit; never confirmed, as
+              ``confirm`` refuses mm items) re-runs [0, end) from 0 too, so every image row before the start is staged.
             - Image rows: every image item whose prompt rows (``feature_rows`` on the row's prefix) meet the chunk is
               encoded once per item (``_mm_features``: cached) and its rows inside the chunk staged (M1).
             - A row whose image input fails (an encoder error, a video, no encoder, no extra rows, inconsistent items)
               fails ITS request, not the engine: the chunk runs as text (its slot stays consistent) and the head
               returns a stop token (``_mm_failed_rows``); its later chunks do the same until the request is released."""
-            from models.demos.glm53_flash.tt.mm_inputs import feature_rows, items_in_range, mm_items, mm_present
+            from models.demos.glm53_flash.tt.mm_inputs import (
+                IMAGE_TOKEN_ID,
+                feature_rows,
+                items_in_range,
+                mm_items,
+                mm_present,
+            )
 
             align = int(getattr(self.gen.backend, "continuation_align", 1) or 1)
             present = mm_present(kwargs)  # (a text batch on this class arrives with pixel_values=[None] * B)
-            gen_starts, out, failed = list(starts), {}, set()
+            live = set(self.gen.live_slots(self.kv_cache)) if self.prefix is not None else None
+            gen_starts, out, failed, vision = list(starts), {}, set(), set()
             for i in range(int(tokens.shape[0])):
                 s, e = starts[i], ends[i]
+                if bool((tokens[i, :e] == IMAGE_TOKEN_ID).any()):  # (video frames use the same id)
+                    vision.add(i)
                 if s > 0 and s % align:
                     gen_starts[i] = 0
                     self.mm_stats["restarts"] += 1
                     logger.info(
                         f"GLM53 stack MM: plugin slot {slots[i]}: chunk [{s}, {e}) starts off the {align}-token grid: "
                         "re-run from 0"
+                    )
+                elif s > 0 and i in vision and live is not None and self._alias[slots[i]] not in live:
+                    gen_starts[i] = 0
+                    self.mm_stats["restarts"] += 1
+                    logger.info(
+                        f"GLM53 stack MM: plugin slot {slots[i]}: a new image request admitted with [0, {s}) cached: "
+                        "prefilled from 0 (image requests take no prefix hit)"
                     )
                 if s > 0 and self._alias[slots[i]] in self._mm_failed:
                     failed.add(i)
@@ -1296,7 +1355,7 @@ def declare_multimodal_class(api=None):
                 if rows_i is not None:
                     out[i] = rows_i
                     self.mm_stats["rows_staged"] += int(rows_i[0].numel())
-            return dict(starts=gen_starts, rows=out, failed=failed)
+            return dict(starts=gen_starts, rows=out, failed=failed, vision=vision | failed)
 
         def _mm_row(self, tokens, i: int, start: int, end: int, kwargs: dict, fns) -> tuple | None:
             """row i's (positions, rows) inside [start, end), or None (no image row there)"""
@@ -1329,17 +1388,33 @@ def declare_multimodal_class(api=None):
             return p_[order], v_[order]
 
         def _mm_features(self, item, identifier) -> torch.Tensor:
-            """one image item's [n_tokens, 4096] bf16 rows: from the cache, else ONE encoder call"""
-            if identifier:
-                key = ("id", str(identifier))
-            else:
-                h = hashlib.sha1(item.pixel_values.contiguous().numpy().tobytes())
-                h.update(str(item.grid_thw.tolist()).encode())
-                key = ("px", h.hexdigest())
+            """one image item's [n_tokens, 4096] bf16 rows: from the feature cache, else ONE encoder call. The cache
+            is keyed by content (``mm_content_key``), so identical images of different requests encode once; vLLM's
+            identifier only aliases that key (a request's later chunks find the item without re-hashing it)."""
+            alias = str(identifier) if identifier else None
+            key = self._feat_alias.get(alias) if alias is not None else None
+            hit = self._feat_cache.get(key) if key is not None else None
+            if hit is not None and int(hit.shape[0]) == item.n_tokens:
+                self._feat_alias.move_to_end(alias)
+                self._feat_cache.move_to_end(key)
+                self.mm_stats["cache_hits"] += 1
+                return hit
+            key = mm_content_key(item)
+            if alias is not None:
+                self._feat_alias[alias] = key
+                self._feat_alias.move_to_end(alias)
+                while len(self._feat_alias) > MM_ALIAS_CAP:
+                    self._feat_alias.popitem(last=False)
             hit = self._feat_cache.get(key)
+            grid = item.grid_thw.reshape(-1).tolist()
             if hit is not None:
                 self._feat_cache.move_to_end(key)
                 self.mm_stats["cache_hits"] += 1
+                self.mm_stats["content_hits"] += 1
+                logger.info(
+                    f"GLM53 stack MM: image item grid {grid} -> {item.n_tokens} rows from the feature cache (the pixels "
+                    f"of an earlier item, {key[:12]})"
+                )
                 return hit
             t0 = time.perf_counter()
             (feats,) = self.mm_encoder([item])
@@ -1350,16 +1425,21 @@ def declare_multimodal_class(api=None):
             self.mm_stats["items_encoded"] += 1
             self.mm_stats["encode_s"] += dt
             logger.info(
-                f"GLM53 stack MM: image item grid {item.grid_thw.reshape(-1).tolist()} -> {item.n_tokens} rows encoded "
-                f"in {dt * 1e3:.0f} ms ({type(self.mm_encoder).__name__})"
+                f"GLM53 stack MM: image item grid {grid} -> {item.n_tokens} rows encoded in {dt * 1e3:.0f} ms "
+                f"({type(self.mm_encoder).__name__}, {key[:12]})"
             )
-            self._feat_cache[key] = feats
-            while (
-                len(self._feat_cache) > 1
-                and sum(int(v.shape[0]) for v in self._feat_cache.values()) > self._feat_rows_cap
-            ):
-                self._feat_cache.popitem(last=False)
+            self._feat_put(key, feats)
             return feats
+
+        def _feat_put(self, key: str, feats: torch.Tensor) -> None:
+            """cache a new item's rows, then drop the least recently used past GLM53_STACK_MM_CACHE_MB (never the
+            newest: one item larger than the bound is kept until the next one arrives)"""
+            self._feat_cache[key] = feats
+            self._feat_bytes += _nbytes(feats)
+            while len(self._feat_cache) > 1 and self._feat_bytes > self._feat_bytes_cap:
+                _, old = self._feat_cache.popitem(last=False)
+                self._feat_bytes -= _nbytes(old)
+                self.mm_stats["evicted"] += 1
 
         def _stop_id(self) -> int:
             stops = sorted(int(t) for t in (getattr(self.gen, "stop_token_ids", ()) or ()))

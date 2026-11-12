@@ -16,7 +16,7 @@ blocks: snapshots at the on-grid chunk ends, the hit confirmation, the attach of
 on shared pages, the release, the LRU reuse of unpinned entries, and the fallbacks to a prefill from 0. Image input
 (GLM53_STACK_MM): the generator's per-chunk staging + id remap into the mock's extra embedding rows, image prompts kept
 out of the batched / packed replays, ``GLM53StackForConditionalGeneration`` (declaration with / without vLLM, the 0.31 /
-0.30 processor module, the plugin's per-row image items routed to the generator through a fake encoder: the feature cache, an off-grid continuation re-run from 0, a failed image request ending on a stop token beside served rows; the device tower's L1 plan and encoder selection) and, with a
+0.30 processor module, the plugin's per-row image items routed to the generator through a fake encoder: the feature cache (keyed by content, bounded in bytes: identical images of 16 requests encode once), an off-grid continuation re-run from 0, a failed image request ending on a stop token beside served rows, image requests kept out of the prefix cache; the device tower's L1 plan and encoder selection) and, with a
 vLLM interpreter (``GLM53_VLLM_PYTHON``, a subprocess: this process stays vLLM- and ttnn-free) and the checkpoint, the
 real processor the class registers run on the demo image.
 
@@ -61,7 +61,7 @@ from models.demos.glm53_flash.tt.generator_vllm_stack import (
     row_params,
     trim_page_rows,
 )
-from models.demos.glm53_flash.tt.mm_inputs import IMAGE_TOKEN_ID
+from models.demos.glm53_flash.tt.mm_inputs import IMAGE_TOKEN_ID, MMItem
 
 VOCAB = 64
 B = 4  # max_num_seqs = the backend's slots
@@ -1109,6 +1109,7 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
                              start_pos=[192], empty_slots=[3], sampling_params=_greedy(1))  # fmt: skip
     assert backend.state_io[n][1:3] == (0, None) and kv.state[ad._alias[3]] == b and pc.stats["fallbacks"] == 2
 
+
 # ------------------------------------------------------------------------------- image input (GLM53_STACK_MM)
 MM_WIDTH = 8  # the mock's feature width (the generator never looks at it)
 
@@ -1313,10 +1314,10 @@ def test_vllm_multimodal_api_takes_the_031_module_then_the_030_one(monkeypatch):
 STOP = VOCAB - 1  # the mock tokenizer's stop token (a failed image request ends on it)
 
 
-def _mm_adapter(encoder=None):
+def _mm_adapter(encoder=None, backend=None):
     """the multimodal class over the CPU mock (plain declaration: no vLLM here), warmed, with a recording encoder"""
     cls = declare_multimodal_class(None)
-    backend = _MockStackBackend(B)
+    backend = backend or _MockStackBackend(B)
     gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=(STOP,)), max_batch=B, max_seq_len=SEQ)
     ad = cls(gen, B, SEQ)
     kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
@@ -1332,10 +1333,11 @@ def _mm_adapter(encoder=None):
     return ad, backend, gen, kv, encoded
 
 
-def _items(lo: int, n_tokens: int, w: int = 16, ident=None) -> dict:
-    """the plugin's per-row lists of ONE row holding one image item of n_tokens tokens at [lo, lo + n_tokens)"""
+def _items(lo: int, n_tokens: int, w: int = 16, ident=None, fill: float = 0.0) -> dict:
+    """the plugin's per-row lists of ONE row holding one image item of n_tokens tokens at [lo, lo + n_tokens), its
+    pixels all ``fill`` (the feature cache's content key tells images apart by them)"""
     h = n_tokens * 4 // w
-    out = dict(pixel_values=[[torch.zeros(h * w, 4)]], image_grid_thw=[[torch.tensor([[1, h, w]])]],
+    out = dict(pixel_values=[[torch.full((h * w, 4), float(fill))]], image_grid_thw=[[torch.tensor([[1, h, w]])]],
                mm_placeholder_offsets=[[lo]], mm_placeholder_lengths=[[n_tokens]])  # fmt: skip
     if ident is not None:
         out["mm_identifiers"] = [[ident]]
@@ -1454,6 +1456,146 @@ def test_failed_image_request_does_not_stop_the_batch_or_the_engine():
                                     **_items(20, 32, ident="img-hash-1"))  # fmt: skip
         assert int(ids[0, 0]) == (good[-1] + 1) % VOCAB and kv.state[ad._alias[slot]] == _ledger(good, 20, 52)
     assert calls == [[1, 4, 16], [1, 8, 16]] and ad.mm_stats["cache_hits"] == 1 and ad.mm_stats["failed"] == 1
+
+
+def test_identical_images_encode_once_across_requests(monkeypatch):
+    """The feature cache is keyed by content (``mm_content_key``: the processed pixels + grid): 16 requests showing the
+    same image under 16 identifiers (vLLM's per-request uuids without its processor cache) encode it ONCE; a request's
+    later chunk finds the item by its identifier alone (an alias of the key: no re-hash); other pixels encode anew."""
+    ad, backend, gen, kv, encoded = _mm_adapter()
+    hashed = []
+    real = gvs.mm_content_key
+    monkeypatch.setattr(gvs, "mm_content_key", lambda it: hashed.append(it.offset) or real(it))
+    lo, n_img = 112, 32  # straddles the 128-token chunk end
+    img = _mm_prompt(200, lo, lo + n_img, 7)
+    for k in range(16):
+        slot = k % B
+        ids, _ = ad.prefill_forward(_history([img]), page_table=_table([_blocks(slot, 200)], 1), kv_cache=kv,
+                                    prompt_lens=[200], start_pos=[0], empty_slots=[slot], sampling_params=_greedy(1),
+                                    **_items(lo, n_img, ident=f"req{k}-mm-0", fill=0.5))  # fmt: skip
+        assert int(ids[0, 0]) == (img[-1] + 1) % VOCAB and kv.state[ad._alias[slot]] == _ledger(img, lo, lo + n_img)
+        ad.release_request(slot)
+    assert encoded == [[32]] and len(hashed) == 16
+    assert ad.mm_stats["items_encoded"] == 1 and ad.mm_stats["content_hits"] == 15 and ad.mm_stats["cache_hits"] == 15
+    # a 17th request in two engine steps: its first chunk hashes the item (a content hit), the second reads the alias
+    kw = _items(lo, n_img, ident="req16-mm-0", fill=0.5)
+    ad.prefill_forward(_history([img[:128]]), page_table=_table([_blocks(0, 128)], 1), kv_cache=kv, prompt_lens=[128],
+                       start_pos=[0], empty_slots=[0], sampling_params=None, **kw)  # fmt: skip
+    ids, _ = ad.prefill_forward(_history([img]), page_table=_table([_blocks(0, 200)], 1), kv_cache=kv,
+                                prompt_lens=[200], start_pos=[128], empty_slots=[0], sampling_params=_greedy(1), **kw)  # fmt: skip
+    assert kv.state[ad._alias[0]] == _ledger(img, lo, lo + n_img) and int(ids[0, 0]) == (img[-1] + 1) % VOCAB
+    assert encoded == [[32]] and len(hashed) == 17
+    assert ad.mm_stats["content_hits"] == 16 and ad.mm_stats["cache_hits"] == 17
+    ad.release_request(0)
+    # other pixels on the same grid: another image
+    ad.prefill_forward(_history([img]), page_table=_table([_blocks(1, 200)], 1), kv_cache=kv, prompt_lens=[200],
+                       start_pos=[0], empty_slots=[1], sampling_params=_greedy(1),
+                       **_items(lo, n_img, ident="req17-mm-0", fill=0.25))  # fmt: skip
+    assert encoded == [[32], [32]] and ad.mm_stats["items_encoded"] == 2 and len(ad._feat_cache) == 2
+
+
+def test_feature_cache_is_bounded_in_bytes(monkeypatch):
+    """GLM53_STACK_MM_CACHE_MB bounds the feature cache: past it the least recently used item goes (a later request
+    showing it encodes again, its identifier's alias only misses), the newest stays even when it alone is larger than
+    the bound; a negative bound is refused."""
+    item_bytes = 32 * MM_WIDTH * 2  # the mock's [32, MM_WIDTH] bf16 rows
+    monkeypatch.setenv(gvs.MM_CACHE_ENV, str(2.5 * item_bytes / 2**20))  # two items, not three
+    ad, *_, encoded = _mm_adapter()
+
+    def item(fill: float) -> MMItem:
+        return MMItem("image", torch.full((128, 4), fill), torch.tensor([[1, 8, 16]]), offset=0, length=32)
+
+    a, b, c = item(1.0), item(2.0), item(3.0)
+    for it, ident in ((a, "a"), (b, "b"), (a, "a"), (c, "c")):  # a read again before c arrives: b is the oldest
+        ad._mm_features(it, ident)
+    assert len(encoded) == 3 and list(ad._feat_cache) == [gvs.mm_content_key(x) for x in (a, c)]
+    assert ad._feat_bytes == 2 * item_bytes and ad.mm_stats["evicted"] == 1 and ad.mm_stats["cache_hits"] == 1
+    ad._mm_features(item(2.0), "b")  # b's alias names an evicted key: encoded anew, a (now the oldest) goes
+    assert len(encoded) == 4 and list(ad._feat_cache) == [gvs.mm_content_key(x) for x in (c, b)]
+    assert ad.mm_stats["evicted"] == 2 and ad._feat_bytes == 2 * item_bytes
+    monkeypatch.setenv(gvs.MM_CACHE_ENV, "0")
+    tiny, *_, tiny_encoded = _mm_adapter()
+    for _ in range(2):
+        tiny._mm_features(a, None)
+    assert len(tiny_encoded) == 1 and len(tiny._feat_cache) == 1 and tiny.mm_stats["content_hits"] == 1
+    monkeypatch.setenv(gvs.MM_CACHE_ENV, "-1")
+    with expect_error(ValueError, "must be >= 0 MB"):
+        _mm_adapter()
+
+
+class _MockMMPrefixBackend(_MockPrefixBackend):
+    """the prefix mock whose pages hold what the slot's state recorded (an image row: ("img", position))"""
+
+    @staticmethod
+    def _page_write(kv, slot: int, start: int, toks):
+        st = kv.state[slot][start : start + len(toks)]
+        row, pages = kv.page_table_host[slot], kv.__dict__.setdefault("pages", {})
+        for k, t in enumerate(st if len(st) == len(toks) else toks):  # (decode writes before its state grows)
+            pages[(int(row[(start + k) // BLOCK_SIZE]), (start + k) % BLOCK_SIZE)] = (
+                t if isinstance(t, tuple) else int(t)
+            )
+
+
+def test_image_requests_take_no_prefix_snapshot_or_hit(monkeypatch):
+    """GLM53_STACK_PREFIX on the multimodal class: the store's key hashes token ids, which carry no pixels (every image
+    row is the same <|image|> id), so an image request neither snapshots its on-grid chunk ends nor attaches -- confirm
+    refuses its mm items, and a new image request vLLM admitted at start > 0 all the same (a text document's snapshot
+    matches its first 128 tokens) re-runs from 0 with its image staged; a text request on the same adapter snapshots,
+    is confirmed and attaches as on the text class."""
+    monkeypatch.setattr(gvs, "PREFIX_CACHE", True)
+    ad, backend, gen, kv, encoded = _mm_adapter(backend=_MockMMPrefixBackend(B))
+    pc = ad.prefix
+    assert pc is not None and pc.grid == 128 and gen.shared_pages
+    none = dict(
+        pixel_values=[None], image_grid_thw=[None], mm_placeholder_offsets=[None], mm_placeholder_lengths=[None]
+    )
+
+    def steps(prompt, slot, ends, row, **kw):
+        start = 0
+        for end in ends:
+            out = ad.prefill_forward(_history([prompt[:end]]), page_table=_table([row[: -(-end // BLOCK_SIZE)]], 1),
+                                     kv_cache=kv, prompt_lens=[end], start_pos=[start], empty_slots=[slot],
+                                     sampling_params=_greedy(1) if end == len(prompt) else None, **kw)  # fmt: skip
+            start = end
+        return out
+
+    # an image prompt in three engine steps: its chunk ends 128 / 256 are on the grid, neither is snapshotted
+    lo, n_img = 80, 32
+    img = _mm_prompt(300, lo, lo + n_img, 9)
+    n0 = len(backend.state_io)
+    steps(img, 0, [128, 256, 300], _blocks(0, 300), **_items(lo, n_img, ident="img-a"))
+    assert [io[3] for io in backend.state_io[n0:]] == [None] * 3 and kv.state[ad._alias[0]] == _ledger(img, lo, lo + 32)
+    assert pc.stats["snapshots"] == 0 and pc.stats["mm_excluded"] == 2 and not pc.store.entries and encoded == [[32]]
+    ad.release_request(0)
+    assert ad.confirm_prefix_cache_hit(img, [("img-a", lo, n_img, "image")], 256) == 0
+    # a text document on the same adapter: a snapshot at 128, confirmed and attached for another question
+    doc = _prompt(128, 5)
+    t1, t2 = doc + _prompt(40, 50), doc + _prompt(30, 20)
+    row1 = _blocks(1, len(t1))
+    steps(t1, 1, [128, len(t1)], row1, **none)
+    assert pc.stats["snapshots"] == 1 and [e.n_tokens for e in pc.store.entries.values()] == [128]
+    e128 = pc.store.entries[pc.store.key(t1, 128)]
+    ad.release_request(1)
+    assert ad.confirm_prefix_cache_hit(t2, [], 128) == 128
+    out = ad.prefill_forward(_history([t2]), page_table=_table([row1[:2] + _blocks(2, len(t2))[2:]], 1), kv_cache=kv,
+                             prompt_lens=[len(t2)], start_pos=[128], empty_slots=[2], sampling_params=_greedy(1),
+                             **none)  # fmt: skip
+    g2 = ad._alias[2]
+    assert backend.state_io[-1] == (g2, 128, e128.device_entry, None) and kv.state[g2] == t2
+    assert int(out[0][0, 0]) == (t2[-1] + 1) % VOCAB and pc.stats["attaches"] == 1
+    # an image request behind the same document: its first 128 tokens match the text snapshot, but the hit is refused
+    i2 = doc + _mm_prompt(64, 8, 40, 7)  # the image at [136, 168) (positions below 256: exact in the mock's bf16 rows)
+    assert ad.confirm_prefix_cache_hit(i2, [("img-b", 136, 32, "image")], 128) == 0
+    # ... and admitted at 128 all the same (in plugin slot 3): re-run from 0, the image staged, no attach, no snapshot
+    n0 = len(backend.state_io)
+    ids, _ = ad.prefill_forward(_history([i2]), page_table=_table([row1[:2] + _blocks(3, len(i2))[2:]], 1),
+                                kv_cache=kv, prompt_lens=[len(i2)], start_pos=[128], empty_slots=[3],
+                                sampling_params=_greedy(1), **_items(136, 32, ident="img-b", fill=1.0))  # fmt: skip
+    g3 = ad._alias[3]
+    assert [io[1:] for io in backend.state_io[n0:]] == [(0, None, None), (128, None, None)]
+    assert kv.state[g3] == _ledger(i2, 136, 168) and int(ids[0, 0]) == (i2[-1] + 1) % VOCAB
+    assert encoded == [[32], [32]] and ad.mm_stats["restarts"] == 1
+    assert pc.stats["attaches"] == 1 and pc.stats["snapshots"] == 1 and pc.stats["mm_excluded"] == 2
 
 
 # the HF reference prompt of demo/sample_prompts/shapes_hello.png + the question (doc/vision/multimodal.md: 286 tokens,
