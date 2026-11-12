@@ -3361,6 +3361,55 @@ tasks:
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
       determinism_max_abs_diff: == 0
+- id: P.49
+  title: 'Serving contract: prefill stops at decode''s cap (the 64-token boundary) instead of computing to the prompt''s end; prefill''s cap equals decode''s for every prompt length (DS41-219)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.50
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/migration_configs.md
+  - models/demos/common/bringup
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-12, CONTRACT CHANGE AUTHORIZED, from decode's review (Brian Liu, #blaze-deepseek-v4, 2026-11-06 21:38: "stop prefill at the 64 boundary if you are only storing 128 SWA"; Kartik 2026-11-11 00:35: round the prefill tokens to the 64-token block, then pad to the chunk size). Today (serving_contract.md, P.42) prefill computes and attends every position up to the prompt's end and only clamps what it SERVES at cap = (prompt_len - 1) // kv_block_size x kv_block_size (kv_block_size = setting KV_BLOCK_SIZE, 64 deployed); decode replays [cap, prompt_len) itself, so prefill's work on [cap, prompt end) is wasted. Target: under the serving path prefill computes only positions [0, cap): the request's last chunk ends at cap (padded to the chunk size as the model already pads), nothing at or past cap is computed or written.
+      DS41-219 IN THE SAME TASK: under PD_DISAGG tt-d-gen hands prefill actual_end = prompt_len - 1 (tt-d-gen at /scratch/dnijemcevic/tt-d-gen, jazpur/dsv4-replay-window 48b79127fb1: types.hpp:105 prompt_compute_end; decode's cap: prefix_indexer.hpp reusable_prefix_cap). The model computes cap = (actual_end - 1) // 64 x 64, which differs from decode's when prompt_len % 64 == 1 (2,945 tokens: ours 2,880, decode's 2,944). Read tt-d-gen's code and make prefill's cap equal decode's for EVERY prompt length, from what the engine actually passes; cite the lines. If the model cannot know the length decode uses, stop and say exactly what is missing.
+      Behind a switch PREFILL_END: cap (new; default after acceptance) | end (today's path, kept). Update serving_contract.md and migration_configs.md (a "Changed in P.49" section) and the contract / runner / kv_layout / acks / window-snapshot tests to the new rule.
+      VERIFICATION, the owner's requirement: NO perf impact and NO accuracy degradation. (1) Every served tensor (window snapshot rows [cap - 128, cap), compressed KV and index keys [0, cap)) must be BIT-IDENTICAL between PREFILL_END=end and cap for the same prompt: positions below cap depend only on positions below cap; if any byte differs, find why and report it before anything else. Test prompt lengths with prompt_len % 64 in {0, 1, 2, 63}, one shorter than 128 + 64, one that is a single chunk and one of several chunks, both prompts (the spec's novel prompt and the code prompt from FIX.23). (2) Every accuracy check and limit holds; never loosen a check. If a check measures something the new path no longer computes (e.g. a last-token output past cap), do not change or drop it: stop and report which checks and why, and propose; the owner decides. (3) Perf: the A/B below at the quick rung and 51,200: chunk wall and device time per section, both sides. (4) The determinism test (FIX.23 / FIX.25) passes.
+      Report: the cap rule and its tt-d-gen citations; the bit-identity results per prompt length; accuracy table; A/B; what changed in the contract docs. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator measures. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+  ab:
+    env:
+      PREFILL_END: end
+      ENGRAM_TABLE: resident
+    change:
+      PREFILL_END: cap
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_prefill_end.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+      acks_early: == 0
+      contract_checks_failed: == 0
+      served_bytes_differ: == 0
+      determinism_max_abs_diff: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
