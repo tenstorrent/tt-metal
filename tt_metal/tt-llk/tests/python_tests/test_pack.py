@@ -31,7 +31,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
-    MathFidelity,
     PackerReluType,
     PerfRunType,
     format_dict,
@@ -51,11 +50,9 @@ from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
     LOOP_FACTOR,
-    MATH_FIDELITY,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
-    PACK_API,
     PACK_BLOCK,
     PACK_RMW_DEST,
     PACK_SRC_FROM_OUTPUT,
@@ -140,8 +137,7 @@ def test_pack(
     allow_int32_mix: bool = False,
     res_page_bytes: int | None = None,
     equiv_out: dict | None = None,
-    api_arm: str | None = None,
-    api_opts: dict | None = None,
+    make_config=None,
 ):
     if not allow_int32_mix and (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -323,25 +319,25 @@ def test_pack(
         "unpack_to_dest": unpack_to_dest,
     }
 
-    if api_arm is not None:
-        # pack_api_test.cpp: the compute API's pack_block (pack_api_shim.h), compiled as production compiles it
-        test_config_kwargs["test_name"] = "sources/pack_api_test.cpp"
-        test_config_kwargs["templates"] = [
-            generate_input_dim(input_dimensions, input_dimensions),
-            TILIZE(),
-            DEST_SYNC(dest_sync),
-            PACK_API(api_arm, num_tiles_in_block, **(api_opts or {})),
-            PACK_SRC_FROM_OUTPUT(),
-            MATH_FIDELITY(MathFidelity.LoFi),
-        ]
-        test_config_kwargs["compile_time_formats"] = True
-        test_config_kwargs["kernel_flags"] = ["-flto=1", "-flto-partition=one"]
-
-    configuration = create_test_or_perf_config(
-        is_perf=is_perf,
-        run_types=run_types,
-        test_config_kwargs=test_config_kwargs,
-    )
+    if make_config is not None:
+        # another kernel on this test's stimuli and golden (test_pack_api.py)
+        configuration = make_config(
+            test_config_kwargs,
+            dict(
+                tile_cnt=tile_cnt_A,
+                dest_index=dest_index,
+                relu_config=relu_config,
+                num_blocks=num_blocks,
+                num_tiles_in_block=num_tiles_in_block,
+                loop_factor=loop_factor,
+            ),
+        )
+    else:
+        configuration = create_test_or_perf_config(
+            is_perf=is_perf,
+            run_types=run_types,
+            test_config_kwargs=test_config_kwargs,
+        )
     if is_perf:
         configuration.run(perf_report)
         return

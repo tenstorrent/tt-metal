@@ -228,8 +228,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             RELU_CONFIG /* relu_config */);
         _llk_pack_init_wrapper_<ckernel::PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#if defined(PACK_API_SHIM_MATMUL)
-        // as matmul_block_init marks the pack thread
+#if defined(PACK_API_SHIM_MATMUL) && PACK_API_SHIM_PR
+        // as the PR's matmul_block_init marks the pack thread; main has no mark
         ckernel::packer::llk_pack_math_context(1);
 #endif
         // The output CB over the result buffer, in the 16 byte words of the metal CB pointers.

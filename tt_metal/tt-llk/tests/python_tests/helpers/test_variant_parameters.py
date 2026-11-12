@@ -2214,30 +2214,30 @@ class PACK_BLOCK(TemplateParameter):
 class PACK_API(TemplateParameter):
     """The compute API's pack_block through pack_api_shim.h (Blackhole): arm "0" the form tables, "T", "B" or "W" one form, "M" main's per-tile loop; tiles per block and the matmul K as pack_block<tiles, acc, kt>; the output CB, the kernel's matmul and pack-thread SFPU API traits, and a compile-time DEST start (dst) as a constant tile loop passes."""
 
-    arm: str = "0"
-    tiles: int = 1
-    kt: int = 0
-    out: int = 16
-    matmul: bool = False
-    sfpu: bool = False
-    dst: int = -1
-    partial_face: bool = False
+    api_arm: str = "0"
+    api_tiles: int = 1
+    api_kt: int = 0
+    api_out: int = 16
+    api_matmul: bool = False
+    api_sfpu: bool = False
+    api_dst: int = -1
+    api_partial_face: bool = False
 
     def convert_to_cpp(self) -> str:
-        arm = "0" if self.arm == "0" else f"'{self.arm}'"
+        arm = "0" if self.api_arm == "0" else f"'{self.api_arm}'"
         lines = [
             f"constexpr char pack_api_arm = {arm};",
-            f"constexpr std::uint32_t pack_api_tiles = {self.tiles};",
-            f"constexpr std::uint32_t pack_api_kt = {self.kt};",
-            f"#define PACK_API_SHIM_OUT {self.out}",
+            f"constexpr std::uint32_t pack_api_tiles = {self.api_tiles};",
+            f"constexpr std::uint32_t pack_api_kt = {self.api_kt};",
+            f"#define PACK_API_SHIM_OUT {self.api_out}",
         ]
-        if self.matmul:
+        if self.api_matmul:
             lines.append("#define PACK_API_SHIM_MATMUL")
-        if self.sfpu:
+        if self.api_sfpu:
             lines.append("#define PACK_API_SHIM_SFPU")
-        if self.dst >= 0:
-            lines.append(f"#define PACK_API_DST {self.dst}")
-        if self.partial_face:
+        if self.api_dst >= 0:
+            lines.append(f"#define PACK_API_DST {self.api_dst}")
+        if self.api_partial_face:
             lines.append("#define PACK_API_SHIM_PARTIAL_FACE 1")
         return "\n".join(lines)
 
