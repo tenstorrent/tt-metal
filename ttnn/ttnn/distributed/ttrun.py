@@ -97,6 +97,7 @@ class LaunchedJob:
         self._previous: dict = {}
 
     def __enter__(self) -> "LaunchedJob":
+        remove_stale_mpi_shm_segments()  # clear a previous killed job's /dev/shm leak before this one starts (P11)
         self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, start_new_session=True)
         # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks even if
         # the launcher re-sessioned or was reaped before we look.
@@ -167,9 +168,10 @@ def run_launcher(cmd: List[str], cwd: Path) -> int:
     return _resolve_exit_code(rc, job)
 
 
-def sweep_stale_shm_segments() -> int:
+def remove_stale_mpi_shm_segments() -> int:
     """Remove this user's Open MPI shared-memory segments that no live process maps (teardown plan P11): what a
-    killed job leaves in /dev/shm, 16 MB each, until reboot. Segments of running jobs are mapped and kept."""
+    killed job leaves in /dev/shm, 16 MB each, until reboot. Segments of running jobs are mapped and kept. Run as
+    the first step of launching a job (``LaunchedJob.__enter__``), so a previous job's leak never piles up."""
     host = socket.gethostname()
     mine = glob.glob(f"/dev/shm/sm_segment.{host}.{os.getuid()}.*")
     if not mine:
@@ -2856,8 +2858,7 @@ def legacy_flow(
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
     try:
-        sweep_stale_shm_segments()
-        rc = run_launcher(mpi_cmd, cwd=ORIGINAL_CWD)
+        rc = run_launcher(mpi_cmd, cwd=ORIGINAL_CWD)  # run_launcher clears stale /dev/shm as its first step
         if rc != 0:
             _emit_phase2_troubleshooting_hint(phase2_failure_hint)
         sys.exit(rc)
