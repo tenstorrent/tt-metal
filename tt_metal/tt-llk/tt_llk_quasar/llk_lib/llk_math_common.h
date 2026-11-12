@@ -62,42 +62,6 @@ extern thread_local AluCfgTracker alu_cfg;
 #endif
 
 /**
- * @brief The Dest format an FPU or MOVx2D write produces from a given srcA format.
- *
- * Programming the result into Dstacc_val and asserting Dstacc_override lets Dest readers take the
- * format from config instead of the implied Dest format.
- *
- * @tparam EN_32BIT_DEST: Set to true to use Dest register in 32bit mode
- * @param srcA_format: Input srcA format the Dest format is derived from
- * @param en_int32_dest_format: Set to true to use Dest register in Int32 format
- */
-template <bool EN_32BIT_DEST>
-constexpr DataFormat _fpu_dest_write_format_(const DataFormat srcA_format, const bool en_int32_dest_format)
-{
-    if (en_int32_dest_format)
-    {
-        return DataFormat::Int32;
-    }
-    if constexpr (EN_32BIT_DEST)
-    {
-        return DataFormat::Float32;
-    }
-    else
-    {
-        switch (srcA_format)
-        {
-            // Dest needs FP16A for MXFP4_2x_A and FP16B for MXFP4_2x_B
-            case DataFormat::MxFp4_2x_A:
-                return DataFormat::Float16;
-            case DataFormat::MxFp4_2x_B:
-                return DataFormat::Float16_b;
-            default:
-                return srcA_format;
-        }
-    }
-}
-
-/**
  * @brief Derives ALU_FORMAT_SPEC words 0..2 for a config type and SrcA/SrcB formats. Does not program them, @ref _configure_alu_cfg_ does.
  *
  * The one place the bit layout and the per-type quirks live, so equal states build equal words.
@@ -140,9 +104,7 @@ inline void _build_alu_words_(const DataFormat srca, const DataFormat srcb, alu_
     // MOVD2B/MOVB2D would otherwise pick the hi16 datum mux from a stale saved format.
     if constexpr (mov_ops && EN_32BIT_DEST)
     {
-        // Takes srca, not the Tf32 substitution above
-        const DataFormat dstacc_fmt             = _fpu_dest_write_format_<EN_32BIT_DEST>(srca, int8_math);
-        const std::uint8_t DSTACC_FORMAT_MASKED = masked_data_format(to_underlying(dstacc_fmt));
+        const std::uint8_t DSTACC_FORMAT_MASKED = masked_data_format(to_underlying(DataFormat::Float32));
 
         words.f.ALU_FORMAT_SPEC_REG_Dstacc_val      = DSTACC_FORMAT_MASKED;
         words.f.ALU_FORMAT_SPEC_REG_Dstacc_override = 1;
