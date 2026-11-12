@@ -130,3 +130,60 @@ def test_consts_layout_contract():
     assert torch.equal(rb[N * N :, N * N :], torch.eye(W - N * N)) and torch.equal(
         cb[N * N :, N * N :], torch.eye(W - N * N)
     )
+
+
+@pytest.mark.parametrize("T", [1, 4, 8, 16])
+def test_mhc_pre_ms1_combined_round1_is_bitwise(T):
+    """tt/mhc_pre.py GLM53_MHC_MS1 (kernels/mhc_pre MHC_MS1): round 1 gathers ONE fp32 tile per partial -- M in rows
+    0..T-1, S's rows t at rows 16 + t -- instead of the (M, S) pair. The K core's sync RISC writes S's rows into the M
+    page, leaders / root sum the combined pages in slot order, the root splits S back out. Emulated on the tiles' face-
+    major memory (tile_off), with garbage in the rows nothing reads: rows < T of M / S equal the pair's sums bitwise."""
+
+    def tile_off(r, c):  # kernels/mhc_pre/mhc_pre_common.hpp tile_off
+        return (((r >> 4) << 1) + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15)
+
+    def rows(mem, r0, n):  # rows r0 .. r0 + n - 1 of a face-major tile as [n, 32]
+        return torch.stack([torch.stack([mem[tile_off(r0 + t, c)] for c in range(32)]) for t in range(n)])
+
+    def chain_sum(tiles):  # sum_tiles: acc = tile 0; acc += tile k in slot order (fp32, elementwise)
+        acc = tiles[0].clone()
+        for x in tiles[1:]:
+            acc = acc + x
+        return acc
+
+    g = torch.Generator().manual_seed(1234 + T)
+    k_cores, group = 64, 8
+    m_parts, s_parts = [], []
+    for _ in range(k_cores):
+        m, s = torch.randn(1024, generator=g), torch.rand(1024, generator=g) * 7.0
+        live = torch.zeros(1024, dtype=torch.bool)
+        for t in range(T):
+            for c in range(32):
+                live[tile_off(t, c)] = True
+        # rows >= T: M zero up to row 15 (the row reads' zero fill), anything above; S anything (never read)
+        m = torch.where(live, m, torch.zeros_like(m))
+        for r in range(16, 32):
+            for c in range(32):
+                m[tile_off(r, c)] = torch.randn(1, generator=g).item()
+        m_parts.append(m)
+        s_parts.append(s)
+    # the pair: leaders sum their 8 members' M and S, the root sums the 8 group sums
+    m_tot = chain_sum([chain_sum(m_parts[group * q : group * q + group]) for q in range(k_cores // group)])
+    s_tot = chain_sum([chain_sum(s_parts[group * q : group * q + group]) for q in range(k_cores // group)])
+    # MS1: combine on the K core, the same two-level sums, split on the root
+    comb = []
+    for m, s in zip(m_parts, s_parts):
+        cmem = m.clone()
+        for t in range(T):
+            for c in range(32):
+                cmem[tile_off(16 + t, c)] = s[tile_off(t, c)]
+        comb.append(cmem)
+    c_tot = chain_sum([chain_sum(comb[group * q : group * q + group]) for q in range(k_cores // group)])
+    s_split = torch.zeros(1024)
+    for t in range(T):
+        for c in range(32):
+            s_split[tile_off(t, c)] = c_tot[tile_off(16 + t, c)]
+    assert torch.equal(rows(c_tot, 0, T).view(torch.int32), rows(m_tot, 0, T).view(torch.int32))
+    assert torch.equal(rows(s_split, 0, T).view(torch.int32), rows(s_tot, 0, T).view(torch.int32))
+    # S rows t < T live in faces 2 / 3 only: no row of M below 16 is overwritten
+    assert all(tile_off(16 + t, c) >= 512 for t in range(T) for c in range(32))

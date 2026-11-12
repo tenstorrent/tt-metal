@@ -39,6 +39,9 @@ from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import REAL_EMPTY as _EM
 
 # semaphores: owners + root 0..3 (mhc_pre); readers HN / M / TAIL (+ ReaderExperts' 10..14); owners LOGITS / GU / Y
 SEM_HN, SEM_LOGITS, SEM_GU, SEM_Y, SEM_M, SEM_TAIL = 4, 5, 6, 7, 8, 9
+# GLM53_MK_MOE_DEFER_INV=1 (mk_sparse GLM53_MK_SPARSE_DEFER_INV for this program): root -> readers, the deferred
+# 1/rms(h) tile landed; SEM_LOGITS' id (declared on the owners only) is free on the readers
+SEM_INVH_M = SEM_LOGITS
 SWI_CB0 = 18  # swiglu's CBs on the owners: 18..20 (mhc_pre 0..13, mhc_post 21..28, router tail 32..36)
 POST_CB0 = 21
 RTAIL_CB0 = 32
@@ -118,9 +121,19 @@ class MkMoE:
         hn = mk((1, 1, t, mhc.hidden), BF16)
         post, comb = (mk(sh, FP32) for sh in rm["pc_shapes"])
         coef = mk((1, 1, 32, 32), FP32)
+        # GLM53_MK_MOE_DEFER_INV=1 (default 0): mhc_pre publishes hn = h * w before its round 2 (the sparse_kda layer's
+        # GLM53_MK_SPARSE_DEFER_INV, the MLA program's GLM53_MLA_DEFER); the root writes 1/rms(h) to a DRAM tile and
+        # signals the readers, which scale the router logits and the shared gate | up at pack (reader_c.cpp, both linear
+        # in hn) and the routed experts' gate | up before SwiGLU (mk_experts MKX_XINV); shared down reads m, unscaled
+        defer = os.environ.get("GLM53_MK_MOE_DEFER_INV", "0") == "1"
+        if defer and getattr(self.experts, "xtp", None) is not None:
+            raise ValueError("GLM53_MK_MOE_DEFER_INV: the experts' MKX_XINV is not wired for expert TP partials")
+        invh = mk((1, 1, 32, 32), FP32, DRAM) if defer else None
+        rd.scale = dict(groups=[((0, 1), invh)], sem=SEM_INVH_M) if defer else None
         roles, mhc_cbs, mhc_sems = mhc.parts(s1, hn, post, comb, None, coef, t=t, x_mode=rm["s1_x"],
                                              xout_mode=_mhc.XOUT_NONE, pc_mode=rm["pc"],
-                                             signal=(SEM_HN, rd.noc_coords()))  # fmt: skip
+                                             signal=(SEM_HN, rd.noc_coords()),
+                                             defer=(invh, SEM_INVH_M, rd.noc_coords()) if defer else None)  # fmt: skip
         logits, gu, y2 = rd.outputs(t)
         # the shared expert's intermediate, persistent per TILE ROW count (not per t): every t <= 32 is the same one tile
         # row, so a server's widths (32, 8, 16, narrow 1..4) share ONE buffer per layer instead of each width's first
@@ -242,7 +255,8 @@ class MkMoE:
         # readers: the dense phases (router, shared gate_up | shared down) + the routed experts between them
         draw, r_cbs = rd.parts_raw([hn, hn, m], [logits, gu, y2], consumers=self.owner_noc)
         xraw, x_cbs, x_sems, x_io = self.experts.parts_raw(hn, ids, scores, y, t=t, wait=(SEM_TAIL, t), weights=weights,
-                                                           signal=(SEM_Y, self.owner_noc), live=live)  # fmt: skip
+                                                           signal=(SEM_Y, self.owner_noc), live=live,
+                                                           xinv=invh)  # fmt: skip
         for r, src in (("w", "reader_moe_w.cpp"), ("a", "reader_moe_a.cpp"), ("c", "reader_moe_c.cpp")):
             _, dct, drt, ddefs, dcfg = draw[r]
             _, xct, xrt, xdefs, xcfg = xraw[r]
@@ -268,9 +282,10 @@ class MkMoE:
                 ttnn.SemaphoreDescriptor(id=SEM_GU, core_ranges=mhc.kcores, initial_value=0),
                 ttnn.SemaphoreDescriptor(id=SEM_Y, core_ranges=mhc.kcores, initial_value=0),
             ]
+            + ([ttnn.SemaphoreDescriptor(id=SEM_INVH_M, core_ranges=rd.cores, initial_value=0)] if defer else [])
         )
         io = [s1, mhc.fn, mhc.w, mhc.sb, mhc.dbg, post, comb, coef, hn, logits, gu, y2, m, ids, scores, y, out,
-              self.tail_bias] + [p.ds.weight for p in rd.phases]  # fmt: skip
+              self.tail_bias] + [p.ds.weight for p in rd.phases] + ([invh] if defer else [])  # fmt: skip
         io += [t_ for t_ in x_io + post_io if all(t_ is not u for u in io)]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems,
                                                    cbs=mhc_cbs + tail_cbs + swi_cbs + post_cbs + r_cbs + x_cbs))  # fmt: skip

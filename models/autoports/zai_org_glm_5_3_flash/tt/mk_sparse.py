@@ -321,9 +321,14 @@ class MkSparseLayer:
         # instances publish hn = h * w before their round 2; the readers scale qkv / low-rank (attention) and router /
         # shared gate_up (FFN) outputs at pack by the root's per-row 1/rms(h) (all linear in hn), and the routed
         # experts' gate | up before SwiGLU (mk_experts MKX_XINV: xc, from the FFN invh tile)
-        defer_a = os.environ.get("GLM53_MK_SPARSE_DEFER_INV") == "1"
-        invh_a = self._persistent(("invh_a",), lambda: mk((1, 1, 32, 32), FP32)) if defer_a else None
-        invh_f = self._persistent(("invh_f",), lambda: mk((1, 1, 32, 32), FP32)) if defer_a else None
+        # GLM53_MK_SPARSE_DEFER_INV=dram: the same deferral with both invh tiles in DRAM -- in L1 the two interleaved
+        # tiles reserve 8 KB of every bank, below the 45-layer stack's L1 floor; the readers' late fetch (reader_a.cpp
+        # fetch_inv) and the experts' xa read them through their accessors either way
+        defer_mode = os.environ.get("GLM53_MK_SPARSE_DEFER_INV", "0")
+        defer_a = defer_mode in ("1", "dram")
+        inv_mem = DRAM if defer_mode == "dram" else L1
+        invh_a = self._persistent(("invh_a",), lambda: mk((1, 1, 32, 32), FP32, inv_mem)) if defer_a else None
+        invh_f = self._persistent(("invh_f",), lambda: mk((1, 1, 32, 32), FP32, inv_mem)) if defer_a else None
         rd.scale = dict(groups=[((0, 1), invh_a), ((3, 4), invh_f)], sem=SEM_INVH_S) if defer_a else None
         roles_a, mhc_cbs, mhc_sems = ma.parts(x, hn, post_a, comb_a, x_out, coef_a, t=t,
                                               x_mode=rm["s1_x"] if stack else _mhc.X_FLAT,

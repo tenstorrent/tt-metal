@@ -92,6 +92,15 @@ void kernel_main() {
     const uint32_t T = get_arg_val<uint32_t>(ph_rt0 + 0);
     const uint32_t gather_l1 = get_write_ptr(CB_GATHER);
     const uint32_t msg_l1 = get_write_ptr(CB_MSG);
+    // round-1 tiles per partial / group sum: the (M, S) pair, or with MHC_MS1 (T <= 16) one combined tile
+#if defined(MHC_MS1)
+    constexpr uint32_t R1_TILES = 1;
+#if defined(DEBUG_TAPS)
+#error "MHC_MS1: the root's M / S debug taps read the separate pair (mhc_pre.py keeps MS1 off with debug)"
+#endif
+#else
+    constexpr uint32_t R1_TILES = 2;
+#endif
 
 #if defined(MHC_K)
     constexpr auto dbg_args = TensorAccessorArgs<PH_CT0 + 1>();
@@ -118,7 +127,7 @@ void kernel_main() {
     zero_l1(pre_l1, N_STREAMS * FP32_TILE_BYTES);
     zero_l1(inv_l1, FP32_TILE_BYTES);
 #if defined(MHC_LEADER)
-    cb_reserve_back(CB_GATHER, 2 * GROUP);
+    cb_reserve_back(CB_GATHER, R1_TILES * GROUP);
 #endif
 
     // ---- round 1: (M, S) partial -> leader slot
@@ -130,19 +139,45 @@ void kernel_main() {
         tap(dbg, TAP_K0_S, get_read_ptr(CB_PART) + FP32_TILE_BYTES);
     }
 #endif
+#if defined(MHC_MS1)
+    // S's rows t < T -> rows 16 + t of the M page (M's rows >= T <= 16 are never read): packer-written data read by
+    // this RISC (invalidate first), then the fence lands every store before the NoC reads the page
+    invalidate_l1_cache();
+    {
+        volatile tt_l1_ptr uint32_t* m = words(get_read_ptr(CB_PART));
+        volatile tt_l1_ptr uint32_t* s = m + TILE_ELEMS;
+        for (uint32_t t = 0; t < T; ++t) {
+            for (uint32_t c = 0; c < TILE; ++c) {
+                m[tile_off(MS1_S_ROW + t, c)] = s[tile_off(t, c)];
+            }
+        }
+    }
+    invalidate_l1_cache();
+#endif
     send(
-        get_read_ptr(CB_PART), 2 * FP32_TILE_BYTES, leader_x, leader_y, gather_l1 + slot * 2 * FP32_TILE_BYTES, SEM_G1);
+        get_read_ptr(CB_PART),
+        R1_TILES * FP32_TILE_BYTES,
+        leader_x,
+        leader_y,
+        gather_l1 + slot * R1_TILES * FP32_TILE_BYTES,
+        SEM_G1);
     cb_pop_front(CB_PART, 2);
 
 #if defined(MHC_LEADER)
     noc_semaphore_wait(sem_ptr(SEM_G1), GROUP);
     MHC_SMARK();                            // s1 (leader): the group's 8 partials gathered
     noc_semaphore_set(sem_ptr(SEM_G1), 0);  // reset for a later instance in the same program
-    cb_push_back(CB_GATHER, 2 * GROUP);
-    cb_wait_front(CB_GSUM, 2);
+    cb_push_back(CB_GATHER, R1_TILES * GROUP);
+    cb_wait_front(CB_GSUM, R1_TILES);
     MHC_SMARK();  // s2 (leader): the group sum ready (sent to the root next)
-    send(get_read_ptr(CB_GSUM), 2 * FP32_TILE_BYTES, root_x, root_y, gather_l1 + group * 2 * FP32_TILE_BYTES, SEM_G1);
-    cb_pop_front(CB_GSUM, 2);
+    send(
+        get_read_ptr(CB_GSUM),
+        R1_TILES * FP32_TILE_BYTES,
+        root_x,
+        root_y,
+        gather_l1 + group * R1_TILES * FP32_TILE_BYTES,
+        SEM_G1);
+    cb_pop_front(CB_GSUM, R1_TILES);
 #endif
 
     // ---- round-1 message: pre_s(t) at msg[32 s + t]
@@ -272,11 +307,31 @@ void kernel_main() {
 #endif
 
     // ---- round 1: group partials
-    cb_reserve_back(CB_GATHER, 2 * N_GROUPS);
+    cb_reserve_back(CB_GATHER, R1_TILES * N_GROUPS);
     noc_semaphore_wait(sem_ptr(SEM_G1), N_GROUPS);
     MHC_SMARK();                            // root: the 8 group sums gathered
     noc_semaphore_set(sem_ptr(SEM_G1), 0);  // reset for a later instance in the same program
-    cb_push_back(CB_GATHER, 2 * N_GROUPS);
+    cb_push_back(CB_GATHER, R1_TILES * N_GROUPS);
+#if defined(MHC_MS1)
+    // the compute's combined total (CB_MSC: M rows < T, S rows 16 + t) -> S rows t of a zeroed CB_MSS page. This RISC
+    // only reads CB_MSC (never pops it: the compute reloads M from it, then pops both pages)
+    cb_wait_front(CB_MSC, 1);
+    cb_reserve_back(CB_MSS, 1);
+    {
+        const uint32_t mss_l1 = get_write_ptr(CB_MSS);
+        zero_l1(mss_l1, FP32_TILE_BYTES);
+        invalidate_l1_cache();  // packer-written CB_MSC
+        volatile tt_l1_ptr uint32_t* c = words(get_read_ptr(CB_MSC));
+        volatile tt_l1_ptr uint32_t* o = words(mss_l1);
+        for (uint32_t t = 0; t < T; ++t) {
+            for (uint32_t k = 0; k < TILE; ++k) {
+                o[tile_off(t, k)] = c[tile_off(MS1_S_ROW + t, k)];
+            }
+        }
+        invalidate_l1_cache();  // the stores land before the push (Blackhole: a fence)
+    }
+    cb_push_back(CB_MSS, 1);
+#endif
 
     // z (rows = tokens, cols = the 24 mixes) -> plane layout (plane v, lane t); unused lanes / planes zero
     cb_wait_front(CB_RED, 1);

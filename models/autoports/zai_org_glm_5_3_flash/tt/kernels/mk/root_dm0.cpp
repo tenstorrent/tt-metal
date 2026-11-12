@@ -38,11 +38,11 @@ void kernel_main() {
         if (layer > 0) {
             mkstack::load_args(layer);
             mk::cb_rewind_range(0, 2);
-            mk::cb_rewind_range(14, 7);
+            mk::cb_rewind_range(14, mhc::ROOT_CBS);
         }
         ph1::phase_main();
         mk::cb_rewind_range(0, 2);   // GATHER, MSG
-        mk::cb_rewind_range(14, 7);  // RED .. DBG (root only)
+        mk::cb_rewind_range(14, mhc::ROOT_CBS);  // RED .. DBG (.. MSS with MHC_MS1; root only)
         ph7::phase_main();
     }  // layer
 }

@@ -54,6 +54,20 @@ constexpr uint32_t CB_SB = 17;     // fp32 2 pages, root: scale row, bias row (r
 constexpr uint32_t CB_INVR = 18;   // fp32 1 page, root: 1/rms(h) column
 constexpr uint32_t CB_SCR = 19;    // fp32 pages, root: output tile assembly
 constexpr uint32_t CB_DBG = 20;    // fp32 2 pages, debug taps packed by the root compute
+// MHC_MS1 (GLM53_MHC_MS1, T <= 16): round 1 moves ONE fp32 tile per partial instead of the (M, S) pair -- M in rows
+// 0..T-1 (faces 0 / 1), S's rows t < T at rows 16 + t (faces 2 / 3). Every sum of round 1 is elementwise in slot
+// order, so M's and S's elements take exactly the adds they take as separate tiles (bitwise). The K core's sync RISC
+// writes S's rows into the M page (16 + T <= 32: M's rows >= T are never read), the leaders sum 8 pages instead of 16,
+// and the root sums 8 combined group pages into CB_MSC, its sync RISC copies rows 16 + t back to rows t of a zeroed
+// CB_MSS page, and the root compute reloads both (exact fp32 pack / unpack) for 1/rms(x) and z as before.
+#if defined(MHC_MS1)
+constexpr uint32_t CB_MSC = 21;     // fp32 1 page, root: the combined round-1 total (M rows < 16, S rows 16 + t)
+constexpr uint32_t CB_MSS = 22;     // fp32 1 page, root: S split out of CB_MSC (rows t < T; zero elsewhere)
+constexpr uint32_t ROOT_CBS = 9;    // root-only CBs RED .. MSS (the stack's per-phase rewind range from CB_RED)
+constexpr uint32_t MS1_S_ROW = 16;  // first row of S in a combined tile
+#else
+constexpr uint32_t ROOT_CBS = 7;  // root-only CBs RED .. DBG (the stack's per-phase rewind range from CB_RED)
+#endif
 
 // semaphores
 constexpr uint32_t SEM_G1 = 0;  // round-1 partials arrived (leader: 8 cores, root: 8 groups)

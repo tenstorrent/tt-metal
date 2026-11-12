@@ -64,8 +64,18 @@ ROOT = (8, 0)
 # mirrors mhc_pre_common.hpp
 CB = dict(
     GATHER=0, MSG=1, X=2, X32=3, FN=4, W=5, PART=6, PRE=7, H=8, S2=9, INV=10, OUT=11, XSTK=12, GSUM=13,
-    RED=14, PLANE=15, COEF=16, SB=17, INVR=18, SCR=19, DBG=20,
+    RED=14, PLANE=15, COEF=16, SB=17, INVR=18, SCR=19, DBG=20, MSC=21, MSS=22,
 )  # fmt: skip
+# GLM53_MHC_MS1=1 (mhc_pre_common.hpp MHC_MS1): round 1 gathers one combined (M | S) tile per partial at t <= 16
+MS1_T_MAX = 16
+
+
+def ms1_on(t: int, debug: bool = False) -> bool:
+    """the combined round-1 tile (GLM53_MHC_MS1=1): rows 0..t-1 hold M, rows 16..16+t-1 hold S -> t <= 16; the debug
+    taps read the separate (M, S) totals, so a debug build keeps the pair"""
+    return os.environ.get("GLM53_MHC_MS1") == "1" and t <= MS1_T_MAX and not debug
+
+
 SEMAPHORES = 4
 TAPS = ("M_total", "S_total", "z", "plane", "coef", "inv_h", "k0_M", "k0_S", "k0_pre0", "k0_inv")
 N_TAPS = len(TAPS)
@@ -286,13 +296,18 @@ class MhcPre:
             fmts.append(ttnn.CBFormatDescriptor(buffer_index=alias, data_format=dtype, page_size=page))
         return ttnn.CBDescriptor(total_size=page * pages, core_ranges=cores, format_descriptors=fmts)
 
-    def _cbs(self, hn_dtype):
+    def _cbs(self, hn_dtype, ms1: bool = False):
         t32, t16 = 4096, 2048
         hn_page = t32 if hn_dtype == FP32 else t16
+        # MHC_MS1: every round's gather holds 8 one-tile slots (round 1 combined, round 2 S2) and a group sum is one
+        # tile -> CB_GATHER 64 -> 32 KB on every core, CB_GSUM 8 -> 4 KB on the K cores; the root's split pages after
+        ms1_cbs = []
+        if ms1:
+            ms1_cbs = [self._cb(CB["MSC"], FP32, t32, 1, self.root), self._cb(CB["MSS"], FP32, t32, 1, self.root)]
         return [
             # remote-written: defined on every core (a CB has ONE address across its core set; the senders resolve the
             # receivers' address with their own get_write_ptr)
-            self._cb(CB["GATHER"], FP32, t32, 16, self.all),
+            self._cb(CB["GATHER"], FP32, t32, 8 if ms1 else 16, self.all),
             self._cb(CB["MSG"], FP32, 512, 1, self.all),
             # K cores
             self._cb(CB["X"], FP32, t32, 8, self.kcores, alias=CB["X32"]),
@@ -305,7 +320,7 @@ class MhcPre:
             self._cb(CB["INV"], FP32, t32, 1, self.kcores),
             self._cb(CB["OUT"], hn_dtype, hn_page, 2, self.kcores),
             self._cb(CB["XSTK"], FP32, t32, 1, self.kcores),
-            self._cb(CB["GSUM"], FP32, t32, 2, self.kcores),
+            self._cb(CB["GSUM"], FP32, t32, 1 if ms1 else 2, self.kcores),
             # root
             self._cb(CB["RED"], FP32, t32, 1, self.root),
             self._cb(CB["PLANE"], FP32, t32, 2 if self._pre_split() else 1, self.root),
@@ -315,7 +330,7 @@ class MhcPre:
             self._cb(CB["INVR"], FP32, t32, 1, self.root),
             self._cb(CB["SCR"], FP32, t32, 1, self.root),
             self._cb(CB["DBG"], FP32, t32, 2, self.root),
-        ]
+        ] + ms1_cbs
 
     @staticmethod
     def _rt(per_core: dict):
@@ -342,12 +357,14 @@ class MhcPre:
     def _pre_split() -> bool:
         return os.environ.get("GLM53_MHC_PRE_SPLIT") == "1" and os.environ.get("GLM53_MHC_PRE_EARLY") == "1"
 
-    def _compute_config(self):
+    def _compute_config(self, ms1_root: bool = False):
         cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
         )
         modes = [ttnn.UnpackToDestMode.Default] * 64
-        for cb in FP32_COPY_CBS:
+        # MHC_MS1: the root reloads M / S from its split pages (exact fp32); the root role only -- the owners' merged
+        # configs (mk_layer / mk_sparse / mk_moe / mk_mla) keep their own modes at these indices
+        for cb in FP32_COPY_CBS + ((CB["MSC"], CB["MSS"]) if ms1_root else ()):
             # GLM53_MHC_FPU_COLLAPSE=1: CB_PRE holds diag(pre_s), a matmul operand (through SrcB, not copied)
             if cb == CB["PRE"] and os.environ.get("GLM53_MHC_FPU_COLLAPSE") == "1":
                 continue
@@ -424,6 +441,9 @@ class MhcPre:
             # before their S2 / round-2 work — the leaders' hn no longer waits for the round-2 group sums
             if os.environ.get("GLM53_MHC_HN_FIRST") == "1":
                 extra = extra + [("MHC_HN_FIRST", "1")]
+        ms1 = ms1_on(t, debug)
+        if ms1:  # GLM53_MHC_MS1: the combined round-1 tile (mhc_pre_common.hpp MHC_MS1)
+            extra = extra + [("MHC_MS1", "1")]
         xo = x_out if x_out is not None else self.dbg
         dbg = self.dbg.buffer_address()
 
@@ -499,13 +519,15 @@ class MhcPre:
             self._kernel(
                 "compute.cpp", self.leaders, compute_ct, {}, [("MHC_K", "1"), ("MHC_LEADER", "1")] + extra, cc
             ),
-            self._kernel("compute.cpp", self.root, compute_ct, {}, [("MHC_ROOT", "1")] + extra, cc),
+            self._kernel(
+                "compute.cpp", self.root, compute_ct, {}, [("MHC_ROOT", "1")] + extra, self._compute_config(ms1)
+            ),
         ]
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all, initial_value=0) for i in range(SEMAPHORES)]
         return ttnn.ProgramDescriptor(
             kernels=[k_stream, root_stream, leader_sync, member_sync, root_sync, *computes],
             semaphores=sems,
-            cbs=self._cbs(hn.dtype),
+            cbs=self._cbs(hn.dtype, ms1),
         )
 
     # ---------------------------------------------------------------------------------------------- call

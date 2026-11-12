@@ -64,11 +64,11 @@ void kernel_main() {
     for (uint32_t layer = 0; layer < MK_LAYERS; ++layer) {  // stack program (kernels/mk/stack.hpp)
         if (layer > 0) {
             mk::cb_rewind_range(0, 2);
-            mk::cb_rewind_range(14, 7);
+            mk::cb_rewind_range(14, mhc::ROOT_CBS);
         }
         ph1::phase_main();
         mk::cb_rewind_range(0, 2);
-        mk::cb_rewind_range(14, 7);
+        mk::cb_rewind_range(14, mhc::ROOT_CBS);
         ph7::phase_main();
     }  // layer
 }

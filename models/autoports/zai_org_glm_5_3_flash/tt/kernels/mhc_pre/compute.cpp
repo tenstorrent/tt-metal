@@ -256,6 +256,19 @@ FORCE_INLINE void k_finish() {
 // group sums of round 1: CB_GATHER holds 8 x (M, S) -> CB_GSUM (M sum, S sum)
 FORCE_INLINE void leader_round1() {
     CircularBuffer cb_g(CB_GATHER), cb_gs(CB_GSUM);
+#if defined(MHC_MS1)
+    // 8 combined tiles -> one combined group sum (the same elementwise adds in slot order as the pair's two sums)
+    cb_g.wait_front(GROUP);
+    cb_gs.reserve_back(1);
+    tile_regs_acquire();
+    sum_tiles(CB_GATHER, 0, 1, GROUP, 0, 2);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_to(0, CB_GSUM);
+    tile_regs_release();
+    cb_gs.push_back(1);
+    cb_g.pop_front(GROUP);
+#else
     cb_g.wait_front(2 * GROUP);
     cb_gs.reserve_back(2);
     tile_regs_acquire();
@@ -268,6 +281,7 @@ FORCE_INLINE void leader_round1() {
     tile_regs_release();
     cb_gs.push_back(2);
     cb_g.pop_front(2 * GROUP);
+#endif
 }
 
 // group sum of round 2: CB_GATHER holds 8 S2 partials -> CB_GSUM page 0
@@ -289,6 +303,27 @@ FORCE_INLINE void leader_round2() {
 #if defined(MHC_ROOT)
 FORCE_INLINE void root_round1() {
     CircularBuffer cb_g(CB_GATHER), cb_red(CB_RED), cb_sb(CB_SB);
+#if defined(MHC_MS1)
+    // the 8 combined group tiles -> their total (CB_MSC); the sync RISC splits S's rows out of it into CB_MSS; then M
+    // (CB_MSC rows < T) and S reload exactly (fp32 pack / UnpackToDestFp32) into the DST slots of the pair's sums
+    CircularBuffer cb_msc(CB_MSC), cb_mss(CB_MSS);
+    cb_g.wait_front(N_GROUPS);
+    cb_msc.reserve_back(1);
+    tile_regs_acquire();
+    sum_tiles(CB_GATHER, 0, 1, N_GROUPS, 0, 2);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_to(0, CB_MSC);
+    tile_regs_release();
+    cb_msc.push_back(1);
+    cb_g.pop_front(N_GROUPS);
+    cb_sb.wait_front(2);
+    cb_mss.wait_front(1);
+    cb_red.reserve_back(1);
+    tile_regs_acquire();
+    load(CB_MSC, 0, 0);  // M
+    load(CB_MSS, 0, 1);  // S
+#else
     cb_g.wait_front(2 * N_GROUPS);
     cb_sb.wait_front(2);
 #if defined(DEBUG_TAPS)
@@ -310,6 +345,7 @@ FORCE_INLINE void root_round1() {
     tile_regs_acquire();
     sum_tiles(CB_GATHER, 0, 2, N_GROUPS, 0, 2);  // M
     sum_tiles(CB_GATHER, 1, 2, N_GROUPS, 1, 2);  // S
+#endif
     row_rms_inv(1, INV_WIDTH_BITS, X_EPS_BITS);  // column 0 of dst 1: 1 / rms(x) per token
     sfpu_mul_bcast_col_init();
     sfpu_mul_bcast_col(0, 1);  // m = M * inv
@@ -324,7 +360,12 @@ FORCE_INLINE void root_round1() {
     pack_to(0, CB_RED);
     tile_regs_release();
     cb_red.push_back(1);
+#if defined(MHC_MS1)
+    cb_msc.pop_front(1);
+    cb_mss.pop_front(1);
+#else
     cb_g.pop_front(2 * N_GROUPS);
+#endif
     cb_sb.pop_front(2);
 }
 
