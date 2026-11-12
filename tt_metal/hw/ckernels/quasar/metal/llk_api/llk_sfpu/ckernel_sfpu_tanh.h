@@ -56,25 +56,44 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     return result;
 }
 
-// Loads the coefficients _sfpu_tanh_polynomial_ reads (softcap, situ_glu). calculate_tanh needs no
-// init constants: SFPNONLINEAR's TANH_MODE uses its internal LUT. The template parameters are unused;
-// they keep the Blackhole signature so tanh_tile_init needs no Quasar branch.
+// Loads the coefficients _sfpu_tanh_polynomial_ reads (softcap, situ_glu) and the address mode
+// calculate_tanh stores through; SFPNONLINEAR's TANH_MODE itself uses its internal LUT. The template parameters are
+// unused; they keep the Blackhole signature so tanh_tile_init needs no Quasar branch.
 template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en /*unused*/>
 inline void tanh_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
+    // calculate_tanh stores through ADDR_MOD_6: Dest += SFP_ROWS per pass, the programming
+    // init_typecast uses.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
     sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
     sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;
     sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
 }
 
+// Pipelined across passes the way the Blackhole LUT kernels are (#65331): _calculate_tanh_sfp_rows_
+// issues load / SFPNONLINEAR / store plus a TTINCRWC per pass of SFP_ROWS rows (4 slots), each
+// waiting on the one before. Here the next pass's SFPLOAD and the previous pass's SFPSTORE sit
+// between an SFPNONLINEAR and its consumer (3 slots per pass); the steady-state body is recorded
+// once (executing as it records) and replayed; the store walks Dest through ADDR_MOD_6 (+SFP_ROWS, programmed by
+// tanh_init the way init_typecast does), so no TTINCRWC per pass. Same instruction and mode as before.
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_tanh() {
+    static_assert(ITERATIONS >= 2, "calculate_tanh pipelines at least two passes");
+    constexpr unsigned NEXT_PASS = ckernel::math::SFP_ROWS;  // Dest offset of the pass after the counter
+
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*pass 0*/);
+    TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::TANH_MODE);
+    // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), tanh pass r+1.
+    load_replay_buf<0 /*start*/, 3 /*len*/, true /*exec_while_loading*/>([] {
+        TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, NEXT_PASS);
+        TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
+        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::TANH_MODE);
+    });
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        _calculate_tanh_sfp_rows_();
-        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();  // does the dest_reg++ (increments by
-                                                                                   // 2 rows)
+    for (int d = 2; d < ITERATIONS; d++) {
+        TTI_REPLAY(0 /*start*/, 3 /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*exec_while_loading*/, 0 /*load*/);
     }
+    TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
 }
 
 }  // namespace sfpu
