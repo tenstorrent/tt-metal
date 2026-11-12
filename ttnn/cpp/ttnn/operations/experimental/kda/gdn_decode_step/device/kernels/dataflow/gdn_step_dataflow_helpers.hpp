@@ -69,6 +69,18 @@ inline void load_head_scalar(const Accessor& acc, DataflowBuffer& dfb, Noc& noc,
     dfb.push_back(1);
 }
 
+// ---- row-0-only transfers: a 32x32 tile stores row 0 as two 32-byte face rows at byte offsets 0 and entry/4.
+// Only the token row matters for the decode inputs, so moving 64 B instead of a whole tile cuts the per-core
+// traffic ~30x. Tiles are zero-filled first so the untouched rows are finite (they are masked, not ignored).
+template <typename Accessor>
+inline void read_row0_at(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t page, uint32_t dst_tile) {
+    const uint32_t entry = dfb.get_entry_size();
+    const uint32_t seg = entry / 64;  // bytes of one face row: 32 for bf16, 64 for fp32
+    const uint32_t base = dst_tile * entry;
+    noc.async_read(acc, dfb, seg, {.page_id = page, .offset_bytes = 0}, {.offset_bytes = base});
+    noc.async_read(acc, dfb, seg, {.page_id = page, .offset_bytes = entry / 4}, {.offset_bytes = base + entry / 4});
+}
+
 // state_page_idx ([2*Nv, >= B] ROW_MAJOR, one page per row): issue the reads of value head h's two pages, row h (state
 // pages) and row Nv + h (conv_hist pages), into `dfb` (2 entries, reserved and never pushed). The caller's next read
 // barrier completes them.
