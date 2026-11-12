@@ -70,6 +70,46 @@ def test_to_memory_config_same_config_dtype_change(device, input_dtype, output_d
     assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor).to(torch.float32))
 
 
+@pytest.mark.parametrize(
+    "shape, layout",
+    [
+        ((1, 1, 64, 64), ttnn.TILE_LAYOUT),
+        ((1, 1, 64, 16), ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 1, 64, 4), ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["tile", "row_major_aligned", "row_major_unaligned_pages"],
+)
+def test_to_memory_config_same_sharded_config_dtype_change(device, shape, layout):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=sharded_config
+    )
+
+    output_tensor = ttnn.to_memory_config(input_tensor, input_tensor.memory_config(), dtype=ttnn.float32)
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config() == input_tensor.memory_config()
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_to_memory_config_same_config_row_major_block_float_raises(device, dtype, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 32, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "to_memory_config"):
+        ttnn.to_memory_config(input_tensor, input_tensor.memory_config(), dtype=dtype)
+
+
 def test_to_memory_config_same_config_dtype_unchanged(device):
     torch.manual_seed(0)
     shape = (1, 1, 32, 64)

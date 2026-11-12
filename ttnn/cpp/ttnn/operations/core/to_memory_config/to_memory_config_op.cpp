@@ -251,6 +251,28 @@ bool can_use_reshard(
 
 }  // namespace
 
+Tensor typecast_keeping_memory_config(
+    const Tensor& tensor, DataType dtype, std::string_view op_name, const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_FATAL(
+        tensor.layout() == Layout::TILE || (dtype != DataType::BFLOAT8_B && dtype != DataType::BFLOAT4_B),
+        "{}: dtype {} requires TILE_LAYOUT, but the tensor is {}",
+        op_name,
+        dtype,
+        tensor.layout());
+    const auto current_mem_config = tensor.memory_config();
+    // typecast supports sub_core_grids only for TILE inputs.
+    const auto typecast_cores =
+        tensor.layout() == Layout::TILE ? sub_core_grids : std::optional<CoreRangeSet>(std::nullopt);
+    // typecast needs sharded pages aligned to L1, so a sharded tensor with unaligned pages is cast through an
+    // interleaved DRAM copy and moved back to its sharded config.
+    if (tensor.is_sharded() && tensor.buffer()->page_size() != tensor.buffer()->aligned_page_size()) {
+        auto interleaved = ttnn::to_memory_config(tensor, ttnn::DRAM_MEMORY_CONFIG);
+        auto casted = ttnn::typecast(interleaved, dtype, ttnn::DRAM_MEMORY_CONFIG, std::nullopt, typecast_cores);
+        return ttnn::to_memory_config(casted, current_mem_config);
+    }
+    return ttnn::typecast(tensor, dtype, current_mem_config, std::nullopt, typecast_cores);
+}
+
 Tensor to_memory_config(
     const Tensor& tensor,
     const MemoryConfig& memory_config,
@@ -265,7 +287,7 @@ Tensor to_memory_config(
         if (dtype.has_value() && dtype.value() != tensor.dtype()) {
             // The tensor is already in the requested memory config, so honour the dtype by typecasting
             // instead of silently dropping it.
-            return ttnn::typecast(tensor, dtype.value(), memory_config);
+            return typecast_keeping_memory_config(tensor, dtype.value(), "ttnn::to_memory_config");
         }
         return tensor;
     }

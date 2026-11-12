@@ -69,32 +69,9 @@ Tensor to_layout_impl(
                 // memory config is honoured here too, unlike the unchanged-dtype path below, which keeps
                 // to_layout a no-op and only warns. Typecast does not reshard, so a different memory config
                 // is applied afterwards with to_memory_config.
-                TT_FATAL(
-                    layout == ttnn::TILE_LAYOUT ||
-                        (dtype.value() != ttnn::DataType::BFLOAT8_B && dtype.value() != ttnn::DataType::BFLOAT4_B),
-                    "ttnn::to_layout: dtype {} requires TILE_LAYOUT, but the requested layout is {}",
-                    dtype.value(),
-                    layout);
-                const auto current_mem_config = tensor_arg.memory_config();
-                // sub_core_grids is only supported by typecast for TILE inputs.
-                const auto typecast_cores = tensor_arg.layout() == ttnn::TILE_LAYOUT
-                                                ? sub_core_grids
-                                                : std::optional<CoreRangeSet>(std::nullopt);
-                // Typecast needs sharded pages aligned to L1, so a sharded tensor with unaligned pages is
-                // cast through an interleaved copy.
-                if (tensor_arg.is_sharded() &&
-                    tensor_arg.buffer()->page_size() != tensor_arg.buffer()->aligned_page_size()) {
-                    auto interleaved = ttnn::to_memory_config(tensor_arg, ttnn::DRAM_MEMORY_CONFIG);
-                    auto casted = ttnn::typecast(
-                        interleaved, dtype.value(), ttnn::DRAM_MEMORY_CONFIG, std::nullopt, typecast_cores);
-                    return ttnn::to_memory_config(casted, memory_config.value_or(current_mem_config));
-                }
-                if (!memory_config.has_value() || memory_config.value() == current_mem_config) {
-                    return ttnn::typecast(tensor_arg, dtype.value(), current_mem_config, std::nullopt, typecast_cores);
-                }
                 auto casted =
-                    ttnn::typecast(tensor_arg, dtype.value(), current_mem_config, std::nullopt, typecast_cores);
-                return ttnn::to_memory_config(casted, memory_config.value());
+                    ttnn::typecast_keeping_memory_config(tensor_arg, dtype.value(), "ttnn::to_layout", sub_core_grids);
+                return memory_config.has_value() ? ttnn::to_memory_config(casted, memory_config.value()) : casted;
             }
             // A host tensor does not support a dtype override (see the host path below), so keep the
             // previous behaviour and leave the dtype unchanged.
