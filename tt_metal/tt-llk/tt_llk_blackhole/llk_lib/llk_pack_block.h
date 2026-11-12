@@ -849,7 +849,8 @@ inline constexpr llk_pack_per_tile_counts_t<is_fp32_dest_acc_en, matmul_kt> llk_
 
 // guard_dest_straddle: block-float tiles at DEST 3 and 4 read 6 cycles slower closed: a variable start packs per tile.
 // matmul_kt: K tiles per output block of the matmul that filled DEST, if known; 0 takes the forms no K reads slower.
-template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, bool guard_dest_straddle = false, std::uint32_t matmul_kt = 0>
+// arm_form: a test arm's form ('T', 'B' or 'W'), run as a constant output whose every state takes it; 0 the tables.
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, bool guard_dest_straddle = false, std::uint32_t matmul_kt = 0, char arm_form = 0>
 __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output)
 {
     static_assert(ntiles > 0, "pack_block packs at least one tile");
@@ -873,7 +874,11 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     // A constant output folds the forms of every state and reachable context (0 otherwise). A block that can pack per
     // tile in one of them packs per tile in all: a per-tile pack never pays a run-time form choice, and keeps no state.
     std::uint32_t forms = 0;
-    if (__builtin_constant_p(output_id))
+    if constexpr (arm_form != 0)
+    {
+        forms = arm_form == 'T' ? 1 : (arm_form == 'B' ? 2 : 4);
+    }
+    else if (__builtin_constant_p(output_id))
     {
         std::uint32_t any = 0;
         if constexpr (llk_pack_context_reach<matmul_kt>(0))
@@ -923,10 +928,11 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     const bool reconfigured   = (state >> 8) != 0;
     // Constant or variable, a block reads each state's word at a constant index in the folded path's context, so a late
     // constant still folds and both paths pick the same form.
-    const char form = forms == 2 ? 'B'
-                                 : (first_block ? (reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
-                                                                : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))
-                                                : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
+    const char form = arm_form != 0 ? arm_form
+                      : forms == 2  ? 'B'
+                                    : (first_block ? (reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1)
+                                                                   : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0))
+                                                   : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));
     // A fast untilize left open marks the last output, so only a first block closes it.
     if (!one_form && first_block)
     {
