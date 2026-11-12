@@ -309,9 +309,9 @@ TEST_F(GalaxyRingShiftTest, ChainedShiftsAlongColumnsNoHostSync) {
     TestChainedRingShifts(1, 8192, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/11);
 }
 
-// Volume test: 45056 x 1024 bf16 is 88 MiB per device (45056 tiles), about ten times the largest ring attention
-// shard run so far, which one direct send writes into the receiver's tensor two tiles per fabric packet. 3 shifts
-// back to back with no host sync in between, so the data ends 3 hops away.
+// Volume test: 45056 x 1024 bf16 is 88 MiB per device (45056 tiles), which one direct send writes into the
+// receiver's tensor two tiles per fabric packet. 3 shifts back to back with no host sync in between, so the data
+// ends 3 hops away.
 TEST_F(GalaxyRingShiftTest, ChainedShiftsOfLargeShardsAlongRows) {
     TestChainedRingShifts(
         1, 8 * 45056, 1024, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
@@ -323,8 +323,8 @@ TEST_F(GalaxyRingShiftTest, ChainedShiftsOfLargeShardsAlongColumns) {
 }
 
 // The socket manager outlives the device, and its intra-mesh sockets hold buffers of the mesh they were created on.
-// close_device drops them, so the first shift on the reopened mesh creates new ones. Keep this test last: it replaces
-// the fixture's device.
+// close_device drops them, so the first shift on the reopened mesh creates new ones. The reopened mesh has the same
+// shape and fabric config, so tests that run after this one use it as the fixture's device.
 TEST_F(GalaxyRingShiftTest, ShiftAfterDeviceReopen) {
     using namespace ttml;
     TestChainedRingShifts(1, 2048, 64, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/1);

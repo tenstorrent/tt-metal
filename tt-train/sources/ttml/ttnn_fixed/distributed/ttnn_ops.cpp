@@ -222,7 +222,7 @@ ttnn::Tensor ring_shift(
     // would wait forever.
     TT_FATAL(tensor.device() == mesh_device_ptr.get(), "ring_shift requires a tensor on the context's mesh device");
     TT_FATAL(
-        tensor.device_storage().get_coords().size() == mesh_shape.mesh_size(),
+        tensor.device_storage().is_uniform_storage(),
         "ring_shift requires a tensor on every device of the {} mesh, got one on {} devices",
         mesh_shape,
         tensor.device_storage().get_coords().size());
