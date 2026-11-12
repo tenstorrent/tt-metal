@@ -1198,6 +1198,9 @@ class GLM53StackForCausalLM:
         if self.spec and g == 0 and getattr(self.gen._binding(self.kv_cache), "spec", None) is not None:
             self.gen.spec_abort(self.kv_cache)  # the speculating request ended: its candidate rows are dead state
             self._spec_n = None
+        if self.spec and g == 0:  # (the served smoke's evidence: tau = committed tokens per fused step so far)
+            st = self.spec_stats
+            logger.info(f"GLM53 stack spec: {st} (tau {st['committed'] / max(1, st['fused']):.2f})")
         self._greedy.pop(g, None)
         self.gen.release_slot(self.kv_cache, g)
         if self.prefix is not None:  # its prefix-cache entry loses a reader
