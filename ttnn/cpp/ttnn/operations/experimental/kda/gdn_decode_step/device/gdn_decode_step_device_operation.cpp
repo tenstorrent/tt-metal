@@ -48,13 +48,13 @@ GdnDecodeStepOperation::program_factory_t GdnDecodeStepOperation::select_program
 void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attributes_t& a, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     check_tiled(in.qkv, "qkv", {DataType::BFLOAT16});
-    check_tiled(in.beta, a.fuse_conv ? "dt_bias" : "beta", {DataType::FLOAT32, DataType::BFLOAT16});
-    check_tiled(in.g, a.fuse_conv ? "neg_exp_A" : "g", {DataType::FLOAT32, DataType::BFLOAT16});
+    check_tiled(in.beta, "dt_bias", {DataType::FLOAT32, DataType::BFLOAT16});
+    check_tiled(in.g, "neg_exp_A", {DataType::FLOAT32, DataType::BFLOAT16});
     check_tiled(in.state, "state", {DataType::FLOAT32});
     check_tiled(in.weight, "weight", {DataType::BFLOAT16});
     for (const auto& [t, name] : std::array{
-             std::pair{&in.beta, "beta"},
-             std::pair{&in.g, "g"},
+             std::pair{&in.beta, "dt_bias"},
+             std::pair{&in.g, "neg_exp_A"},
              std::pair{&in.state, "state"},
              std::pair{&in.weight, "weight"}}) {
         check_same_device(in.qkv, *t, kOp, name);
@@ -81,71 +81,51 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
     const auto& qs = in.qkv.logical_shape();
     const uint32_t C = 2 * Nk * Dk + Nv * Dv;
     const bool paged = in.state_page_idx.has_value();
-    TT_FATAL(!paged || a.fuse_conv, "{}: state_page_idx needs the fused-conv mode (conv_hist)", kOp);
-    if (a.fuse_conv) {
+    TT_FATAL(
+        qs.rank() == 3 && qs[0] == 1 && qs[1] >= 1 && qs[1] <= tt::constants::TILE_HEIGHT &&
+            qs[2] >= a.qkvz_dim + 2 * Nv,
+        "{}: qkv (projection rows) must be [1, B <= 32, W >= qkvz_dim + 2*Nv] (got {})",
+        kOp,
+        qs);
+    TT_FATAL(
+        a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % tt::constants::TILE_WIDTH == 0 && 2 * Nv <= tt::constants::TILE_WIDTH,
+        "{}: qkvz_dim must be 2*Nk*Dk + 2*Nv*Dv (tile aligned) and 2*Nv <= 32 (a|b in one tile)",
+        kOp);
+    TT_FATAL(in.conv_hist.has_value() && in.conv_taps.has_value(), "{}: conv_hist and conv_taps are required", kOp);
+    check_tiled(*in.conv_hist, "conv_hist", {DataType::BFLOAT16});
+    check_tiled(*in.conv_taps, "conv_taps", {DataType::BFLOAT16});
+    check_same_device(in.qkv, *in.conv_hist, kOp, "conv_hist");
+    check_same_device(in.qkv, *in.conv_taps, kOp, "conv_taps");
+    const auto& hs = in.conv_hist->logical_shape();
+    const auto& ts = in.conv_taps->logical_shape();
+    if (paged) {
         TT_FATAL(
-            qs.rank() == 3 && qs[0] == 1 && qs[1] >= 1 && qs[1] <= tt::constants::TILE_HEIGHT &&
-                qs[2] >= a.qkvz_dim + 2 * Nv,
-            "{}: fused-conv qkv (projection rows) must be [1, B <= 32, W >= qkvz_dim + 2*Nv] (got {})",
+            in.conv_hist->buffer()->num_pages() >= 4,
+            "{}: conv_hist pool must hold at least 4 tiles (got {})",
             kOp,
-            qs);
-        TT_FATAL(
-            a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % tt::constants::TILE_WIDTH == 0 &&
-                2 * Nv <= tt::constants::TILE_WIDTH,
-            "{}: fused-conv needs qkvz_dim == 2*Nk*Dk + 2*Nv*Dv (tile aligned) and 2*Nv <= 32 (a|b in one tile)",
-            kOp);
-        TT_FATAL(
-            in.conv_hist.has_value() && in.conv_taps.has_value(), "{}: fused-conv needs conv_hist and conv_taps", kOp);
-        check_tiled(*in.conv_hist, "conv_hist", {DataType::BFLOAT16});
-        check_tiled(*in.conv_taps, "conv_taps", {DataType::BFLOAT16});
-        check_same_device(in.qkv, *in.conv_hist, kOp, "conv_hist");
-        check_same_device(in.qkv, *in.conv_taps, kOp, "conv_taps");
-        const auto& hs = in.conv_hist->logical_shape();
-        const auto& ts = in.conv_taps->logical_shape();
-        if (paged) {
-            TT_FATAL(
-                in.conv_hist->buffer()->num_pages() >= 4,
-                "{}: conv_hist pool must hold at least 4 tiles (got {})",
-                kOp,
-                in.conv_hist->buffer()->num_pages());
-        } else {
-            TT_FATAL(
-                hs.rank() == 5 && hs[0] >= qs[1] && hs[1] == Nv && hs[2] == 4 && hs[3] == tt::constants::TILE_HEIGHT &&
-                    hs[4] == tt::constants::TILE_WIDTH,
-                "{}: conv_hist must be packed [Bmax >= B, Nv, 4, 32, 32] (got {})",
-                kOp,
-                hs);
-        }
-        TT_FATAL(
-            ts.rank() == 4 && ts[0] == Nv && ts[1] == 4 && ts[2] == tt::constants::TILE_HEIGHT &&
-                ts[3] == tt::constants::TILE_WIDTH,
-            "{}: conv_taps must be packed [Nv, 4, 32, 32] (got {})",
-            kOp,
-            ts);
-        TT_FATAL(
-            2 * ((2 * Dk + Dv) / tt::constants::TILE_WIDTH) <= tt::constants::TILE_HEIGHT,
-            "{}: packed head row needs <= 16 chunks (chunk c in row 2c)",
-            kOp);
-        TT_FATAL(
-            in.beta.logical_volume() == Nv && in.g.logical_volume() == Nv,
-            "{}: dt_bias / neg_exp_A volume must be Nv",
-            kOp);
+            in.conv_hist->buffer()->num_pages());
     } else {
         TT_FATAL(
-            qs.rank() == 3 && qs[0] == 1 && qs[1] == 1 && qs[2] == C,
-            "{}: qkv must be [1, 1, 2*Nk*Dk + Nv*Dv] (got {})",
+            hs.rank() == 5 && hs[0] >= qs[1] && hs[1] == Nv && hs[2] == 4 && hs[3] == tt::constants::TILE_HEIGHT &&
+                hs[4] == tt::constants::TILE_WIDTH,
+            "{}: conv_hist must be packed [Bmax >= B, Nv, 4, 32, 32] (got {})",
             kOp,
-            qs);
-        for (const auto& [t, name] : std::array{std::pair{&in.beta, "beta"}, std::pair{&in.g, "g"}}) {
-            const auto& s = t->logical_shape();
-            TT_FATAL(
-                s.rank() == 3 && s[0] == 1 && s[1] == 1 && s[2] == Nv,
-                "{}: {} must be [1, 1, Nv] (got {})",
-                kOp,
-                name,
-                s);
-        }
+            hs);
     }
+    TT_FATAL(
+        ts.rank() == 4 && ts[0] == Nv && ts[1] == 4 && ts[2] == tt::constants::TILE_HEIGHT &&
+            ts[3] == tt::constants::TILE_WIDTH,
+        "{}: conv_taps must be packed [Nv, 4, 32, 32] (got {})",
+        kOp,
+        ts);
+    TT_FATAL(
+        2 * ((2 * Dk + Dv) / tt::constants::TILE_WIDTH) <= tt::constants::TILE_HEIGHT,
+        "{}: packed head row needs <= 16 chunks (chunk c in row 2c)",
+        kOp);
+    TT_FATAL(
+        in.beta.logical_volume() == Nv && in.g.logical_volume() == Nv,
+        "{}: dt_bias / neg_exp_A volume must be Nv",
+        kOp);
     const auto& ss = in.state.logical_shape();
     const uint32_t rows = static_cast<uint32_t>(in.qkv.logical_shape()[-2]);
     if (paged) {
@@ -214,7 +194,7 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
             "{}: state_pool2 / conv_hist_pool2 need state_page_idx",
             kOp);
         TT_FATAL(
-            ss.rank() == 4 && ss[0] >= rows && (a.fuse_conv || ss[0] == 1) && ss[1] == Nv && ss[2] == Dk && ss[3] == Dv,
+            ss.rank() == 4 && ss[0] >= rows && ss[1] == Nv && ss[2] == Dk && ss[3] == Dv,
             "{}: state must be [Bmax >= B, Nv, Dk, Dv] (got {}, B = {})",
             kOp,
             ss,
@@ -259,7 +239,6 @@ Tensor gdn_decode_step(
     const std::optional<Tensor>& state_page_idx,
     const std::optional<Tensor>& state_pool2,
     const std::optional<Tensor>& conv_hist_pool2) {
-    TT_FATAL(!fast_mode || conv_hist.has_value(), "{}: fast_mode needs the fused-conv mode (conv_hist)", kOp);
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnDecodeStepOperation>(
         GdnDecodeStepParams{
@@ -273,7 +252,6 @@ Tensor gdn_decode_step(
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
             .compute_kernel_config = compute_kernel_config,
-            .fuse_conv = conv_hist.has_value(),
             .qkvz_dim = qkvz_dim,
             .fast_mode = fast_mode,
             .fp32_state = fp32_state,

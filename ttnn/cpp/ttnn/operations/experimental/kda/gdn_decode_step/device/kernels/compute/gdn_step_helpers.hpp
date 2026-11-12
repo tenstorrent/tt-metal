@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Tile-level helpers shared by the gdn_decode_step compute kernels (plain and fused-conv variants).
+// Tile-level helpers shared by the gdn_decode_step compute kernels.
 #pragma once
 #include <cstdint>
 #include "api/compute/common.h"
@@ -84,23 +84,6 @@ inline void scale_rows(uint32_t a, uint32_t b, uint32_t out, DataflowBuffer& out
     for (uint32_t i = 0; i < n; ++i) {
         tile_regs_acquire();
         mul_tiles_bcast_cols(a, b, i, 0, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, out, i);
-        tile_regs_release();
-    }
-    out_dfb.push_back(n);
-}
-
-// out[i] = a[i] scaled per column by row 0 of b[i]
-inline void scale_cols(uint32_t a, uint32_t b, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
-    out_dfb.reserve_back(n);
-    pack_reconfig_data_format(out);
-    reconfig_data_format(a, b);
-    mul_bcast_rows_init(a, b);
-    for (uint32_t i = 0; i < n; ++i) {
-        tile_regs_acquire();
-        mul_tiles_bcast_rows(a, b, i, i, 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out, i);
@@ -278,23 +261,6 @@ inline void copy_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32
         tile_regs_release();
     }
     out_dfb.push_back(n);
-}
-
-// out = exp(a[0])
-inline void exp_tile_copy(uint32_t a, uint32_t out, DataflowBuffer& out_dfb) {
-    out_dfb.reserve_back(1);
-    pack_reconfig_data_format(out);
-    reconfig_data_format_srca(a);
-    copy_init(a);
-    tile_regs_acquire();
-    copy_tile(a, 0, 0);
-    exp_tile_init<false>();
-    exp_tile<false>(0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, out, 0);
-    tile_regs_release();
-    out_dfb.push_back(1);
 }
 
 }  // namespace gdn_step

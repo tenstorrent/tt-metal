@@ -11,15 +11,16 @@
 
 namespace ttnn::experimental::kda {
 
-// One decode step of the gated delta rule (B = 1), one core per value head. `state` is updated in place.
-// With conv_hist/conv_taps given (packed [Nv, 4, 32, 32] bf16: row c of a tile = channel chunk c of the head's
-// [q|k|v]), `qkv` is the full projection row [q|k|v|z|a|b], `beta` is dt_bias and `g` is -exp(A_log): the 4-tap causal
-// conv + SiLU, beta/decay gates and the silu(z) output gate are computed in-kernel and the packed history is shifted in
-// place. fast_mode (fused-conv mode only) selects the faster *_conv_fast kernels (same o; the in-place state keeps the
-// full fp32 sum, so it differs from the default kernels in the last bits). state_page_idx (fused-conv mode only) makes
-// `state` and `conv_hist` page pools: column b of the [2*Nv, >= B] index names, per value head, the first state page
-// and the first conv_hist page of batch row b. The optional second pools extend each page space: index pages past the
-// first pool's page count address state_pool2 / conv_hist_pool2.
+// One gated delta rule decode step for B <= 32 batch rows, one core per (value head, group of rows). `qkv` holds the
+// projection rows [q|k|v|z|a|b], `beta` is dt_bias and `g` is -exp(A_log). The op computes the 4-tap causal conv + SiLU
+// from the packed history conv_hist and the packed taps conv_taps (both required), the beta/decay gates, the recurrence
+// and the silu(z)-gated RMSNorm output, and updates `state` and conv_hist in place. A packed [32, 32] bf16 tile holds
+// channel chunk c of the head's [q|k|v] in row 2c + (b & 1) for batch row b (conv_taps: in rows 2c and 2c + 1).
+// fast_mode selects the faster *_conv_fast kernels (same o; the in-place state keeps the full fp32 sum, so it differs
+// from the default kernels in the last bits). state_page_idx makes `state` and `conv_hist` page pools: column b of the
+// [2*Nv, >= B] index names, per value head, the first state page and the first conv_hist page of batch row b. The
+// optional second pools extend each page space: index pages past the first pool's page count address state_pool2 /
+// conv_hist_pool2.
 ttnn::Tensor gdn_decode_step(
     const ttnn::Tensor& qkv,
     const ttnn::Tensor& beta,

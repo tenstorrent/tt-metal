@@ -48,10 +48,11 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const auto& g = in.g.mesh_tensor();
     const auto& state = in.state.mesh_tensor();
     const auto& weight = in.weight.mesh_tensor();
+    const auto& hist = in.conv_hist->mesh_tensor();  // validated: present
+    const auto& taps = in.conv_taps->mesh_tensor();
     const auto& output = output_tensor.mesh_tensor();
     const auto& device = qkv.device();
-    const bool fused = a.fuse_conv;
-    const bool paged = in.state_page_idx.has_value();  // validated: fused only
+    const bool paged = in.state_page_idx.has_value();
 
     const uint32_t Kt = a.key_dim / TILE_WIDTH;
     const uint32_t Vt = a.value_dim / TILE_WIDTH;
@@ -62,9 +63,9 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
 
     const auto grid = device.compute_with_storage_grid_size();
     const uint32_t num_cores_avail = grid.x * grid.y;
-    // work items: plain variant = one value head per core (B = 1); fused variant = (head, user group) with the smallest
-    // even group size (1 for B = 1) that fits the grid -> B=32: 12 heads x 8 groups of 4 users on 96 cores.
-    const uint32_t B = fused ? static_cast<uint32_t>(in.qkv.logical_shape()[-2]) : 1u;
+    // work items: (head, user group) with the smallest even group size (1 for B = 1) that fits the grid -> B=32: 12
+    // heads x 8 groups of 4 users on 96 cores.
+    const uint32_t B = static_cast<uint32_t>(in.qkv.logical_shape()[-2]);
     uint32_t gs = (B == 1) ? 1u : 2u;
     while (Nv * ((B + gs - 1) / gs) > num_cores_avail) {
         gs += 2;
@@ -100,22 +101,17 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const uint32_t tmp_tiles = std::max(Kt, Vt);
 
     // ---- dataflow buffers: {name, tiles, format}; producer/consumer roles listed per kernel below
-    std::vector<Dfb> reader_out;  // produced by reader, consumed by compute
-    if (fused) {
-        reader_out = {
-            {"hist", 3, bf16},
-            {"taps", 4, bf16},
-            {"cur", 1, bf16},
-            {"sel", Ct, bf16},
-            {"z_in", Vt, in_fmt},
-            {"a_s", 1, fp32},
-            {"b_s", 1, fp32},
-            {"dtb_s", 1, fp32},
-            {"nea_s", 1, fp32}};
-    } else {
-        reader_out = {
-            {"q_in", Kt, in_fmt}, {"k_in", Kt, in_fmt}, {"v_in", Vt, in_fmt}, {"beta_s", 1, fp32}, {"g_s", 1, fp32}};
-    }
+    // produced by reader, consumed by compute
+    std::vector<Dfb> reader_out = {
+        {"hist", 3, bf16},
+        {"taps", 4, bf16},
+        {"cur", 1, bf16},
+        {"sel", Ct, bf16},
+        {"z_in", Vt, in_fmt},
+        {"a_s", 1, fp32},
+        {"b_s", 1, fp32},
+        {"dtb_s", 1, fp32},
+        {"nea_s", 1, fp32}};
     const std::vector<Dfb> common_in = {
         {"state_in", KV, fp32},
         {"w_in", Vt, bf16},
@@ -143,30 +139,25 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         {"hn", KV, fp32},
         {"o", Vt, fp32},
         {"on", Vt, fp32}};
-    // fp32_state (fused + fast only): exact-fp32 state decay/add on the SFPU (see GdnDecodeStepParams::fp32_state)
-    const bool fp32_state = a.fp32_state && fused && a.fast_mode;
-    if (fused) {
-        for (const auto& d : std::vector<Dfb>{
-                 {"conv_p", 1, fp32},
-                 {"out_acc", Vt, fp32},
-                 {"acc2", Vt, fp32},
-                 {"qc", Kt, fp32},
-                 {"kc", Kt, fp32},
-                 {"vc", Vt, fp32},
-                 {"beta_t", 1, fp32},
-                 {"zs", Vt, fp32}}) {
-            compute_local.push_back(d);
-        }
-        if (fp32_state) {
-            // exact-fp32 copy of hd for the SFPU state add (KV tiles = 64 KB)
-            compute_local.push_back({"hd32", KV, fp32});
-        }
+    for (const auto& d : std::vector<Dfb>{
+             {"conv_p", 1, fp32},
+             {"out_acc", Vt, fp32},
+             {"acc2", Vt, fp32},
+             {"qc", Kt, fp32},
+             {"kc", Kt, fp32},
+             {"vc", Vt, fp32},
+             {"beta_t", 1, fp32},
+             {"zs", Vt, fp32}}) {
+        compute_local.push_back(d);
+    }
+    // fp32_state (fast only): exact-fp32 state decay/add on the SFPU (see GdnDecodeStepParams::fp32_state)
+    const bool fp32_state = a.fp32_state && a.fast_mode;
+    if (fp32_state) {
+        // exact-fp32 copy of hd for the SFPU state add (KV tiles = 64 KB)
+        compute_local.push_back({"hd32", KV, fp32});
     }
     const std::vector<Dfb> compute_out = {{"hnew", KV, fp32}, {"out", Vt, out_fmt}};
-    std::vector<Dfb> writer_local;
-    if (fused) {
-        writer_local = {{"wshift", 4, bf16}};
-    }
+    const std::vector<Dfb> writer_local = {{"wshift", 4, bf16}};
 
     m2::Group<m2::DataflowBufferSpec> dfbs;
     std::vector<Dfb> all;
@@ -201,13 +192,9 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     // ---- reader
     m2::KernelSpec reader{
         .unique_id = READER,
-        .source = std::string(kDir) + (fused ? (a.fast_mode ? "dataflow/reader_gdn_decode_step_conv_fast.cpp"
-                                                            : "dataflow/reader_gdn_decode_step_conv.cpp")
-                                             : "dataflow/reader_gdn_decode_step.cpp"),
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 (fused ? std::vector<std::string>{"head", "u0", "nu"}
-                        : std::vector<std::string>{"wi_start", "wi_count"})},
+        .source = std::string(kDir) + (a.fast_mode ? "dataflow/reader_gdn_decode_step_conv_fast.cpp"
+                                                   : "dataflow/reader_gdn_decode_step_conv.cpp"),
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "u0", "nu"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
     for (const auto& d : reader_out) {
@@ -215,59 +202,41 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     }
     reader.tensor_bindings = {
         m2::TensorBinding{QKV, "qkv"},
-        m2::TensorBinding{BETA, fused ? "dtb" : "beta"},
-        m2::TensorBinding{G, fused ? "nea" : "g"},
+        m2::TensorBinding{BETA, "dtb"},
+        m2::TensorBinding{G, "nea"},
         m2::TensorBinding{STATE, "state"},
-        m2::TensorBinding{WEIGHT, "weight"}};
-    if (fused) {
-        reader.tensor_bindings.push_back(m2::TensorBinding{HIST, "hist"});
-        reader.tensor_bindings.push_back(m2::TensorBinding{TAPS, "taps"});
-        reader.compile_time_args = {
-            {"Kt", Kt},
-            {"Vt", Vt},
-            {"Nk", Nk},
-            {"Nv", Nv},
-            {"z_tile0", (2 * Nk * Kt * TILE_WIDTH + Nv * Vt * TILE_WIDTH) / TILE_WIDTH},
-            {"ab_page", a.qkvz_dim / TILE_WIDTH},
-            {"dtb_fp32", in.beta.dtype() == DataType::FLOAT32 ? 1u : 0u},
-            {"nea_fp32", in.g.dtype() == DataType::FLOAT32 ? 1u : 0u},
-            {"l2_eps_bits", float_bits(a.l2_epsilon)},
-            {"norm_eps_bits", float_bits(a.norm_epsilon)}};
-    } else {
-        reader.compile_time_args = {
-            {"Kt", Kt},
-            {"Vt", Vt},
-            {"Nk", Nk},
-            {"Nv", Nv},
-            {"beta_fp32", in.beta.dtype() == DataType::FLOAT32 ? 1u : 0u},
-            {"g_fp32", in.g.dtype() == DataType::FLOAT32 ? 1u : 0u},
-            {"l2_eps_bits", float_bits(a.l2_epsilon)},
-            {"norm_eps_bits", float_bits(a.norm_epsilon)}};
-    }
+        m2::TensorBinding{WEIGHT, "weight"},
+        m2::TensorBinding{HIST, "hist"},
+        m2::TensorBinding{TAPS, "taps"}};
+    reader.compile_time_args = {
+        {"Kt", Kt},
+        {"Vt", Vt},
+        {"Nk", Nk},
+        {"Nv", Nv},
+        {"z_tile0", (2 * Nk * Kt * TILE_WIDTH + Nv * Vt * TILE_WIDTH) / TILE_WIDTH},
+        {"ab_page", a.qkvz_dim / TILE_WIDTH},
+        {"dtb_fp32", in.beta.dtype() == DataType::FLOAT32 ? 1u : 0u},
+        {"nea_fp32", in.g.dtype() == DataType::FLOAT32 ? 1u : 0u},
+        {"l2_eps_bits", float_bits(a.l2_epsilon)},
+        {"norm_eps_bits", float_bits(a.norm_epsilon)}};
 
     // ---- writer
     m2::KernelSpec writer{
         .unique_id = WRITER,
-        .source = std::string(kDir) +
-                  (fused ? "dataflow/writer_gdn_decode_step_conv.cpp" : "dataflow/writer_gdn_decode_step.cpp"),
+        .source = std::string(kDir) + "dataflow/writer_gdn_decode_step_conv.cpp",
         .dfb_bindings = {bind("hnew", EP::CONSUMER), bind("out", EP::CONSUMER)},
-        .tensor_bindings = {m2::TensorBinding{STATE, "state_out"}, m2::TensorBinding{OUT, "out"}},
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 (fused ? std::vector<std::string>{"head", "u0", "nu"}
-                        : std::vector<std::string>{"wi_start", "wi_count"})},
+        .tensor_bindings =
+            {m2::TensorBinding{STATE, "state_out"},
+             m2::TensorBinding{OUT, "out"},
+             m2::TensorBinding{QKV, "qkv_w"},
+             m2::TensorBinding{HIST, "hist_w"}},
+        .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Nk", Nk}, {"Nv", Nv}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "u0", "nu"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
-    if (fused) {
-        for (const auto& d : writer_local) {
-            writer.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
-            writer.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
-        }
-        writer.tensor_bindings.push_back(m2::TensorBinding{QKV, "qkv_w"});
-        writer.tensor_bindings.push_back(m2::TensorBinding{HIST, "hist_w"});
-        writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Nk", Nk}, {"Nv", Nv}};
-    } else {
-        writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}};
+    for (const auto& d : writer_local) {
+        writer.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
+        writer.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
     }
 
     if (paged) {
@@ -311,16 +280,14 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::string(kDir) +
-                  (fused ? (a.fast_mode ? "compute/gdn_decode_step_conv_fast.cpp" : "compute/gdn_decode_step_conv.cpp")
-                         : "compute/gdn_decode_step.cpp"),
-        .compiler_options = {.opt_level = fused ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::O3},
+                  (a.fast_mode ? "compute/gdn_decode_step_conv_fast.cpp" : "compute/gdn_decode_step_conv.cpp"),
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O2},
         .compile_time_args =
             {{"Kt", Kt},
              {"Vt", Vt},
              {"scale_bits", float_bits(a.scale)},
              {"inv_dv_bits", float_bits(1.0f / static_cast<float>(a.value_dim))}},
-        .runtime_arg_schema =
-            {.runtime_arg_names = (fused ? std::vector<std::string>{"nu"} : std::vector<std::string>{"wi_count"})},
+        .runtime_arg_schema = {.runtime_arg_names = {"nu"}},
         .hw_config = std::move(compute_hw),
     };
     if (fp32_state) {
@@ -344,22 +311,14 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     m2::KernelRunArgs compute_args{.kernel = COMPUTE};
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {
         const auto& core = dist.cores[i];
-        if (fused) {
-            const uint32_t item = dist.wi_start[i];  // one item per core
-            const uint32_t head = item / ugroups;
-            const uint32_t g = item % ugroups;
-            const uint32_t u0 = g * gs;
-            const uint32_t nu = std::min(gs, B - u0);
-            m2::AddRuntimeArgsForNode(reader_args.runtime_arg_values, core, {{"head", head}, {"u0", u0}, {"nu", nu}});
-            m2::AddRuntimeArgsForNode(writer_args.runtime_arg_values, core, {{"head", head}, {"u0", u0}, {"nu", nu}});
-            m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"nu", nu}});
-        } else {
-            m2::AddRuntimeArgsForNode(
-                reader_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-            m2::AddRuntimeArgsForNode(
-                writer_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-            m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
-        }
+        const uint32_t item = dist.wi_start[i];  // one item per core
+        const uint32_t head = item / ugroups;
+        const uint32_t g = item % ugroups;
+        const uint32_t u0 = g * gs;
+        const uint32_t nu = std::min(gs, B - u0);
+        m2::AddRuntimeArgsForNode(reader_args.runtime_arg_values, core, {{"head", head}, {"u0", u0}, {"nu", nu}});
+        m2::AddRuntimeArgsForNode(writer_args.runtime_arg_values, core, {{"head", head}, {"u0", u0}, {"nu", nu}});
+        m2::AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"nu", nu}});
     }
 
     // ---- tensor parameters
@@ -369,17 +328,12 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         m2::TensorParameter{.unique_id = G, .spec = g.tensor_spec()},
         m2::TensorParameter{.unique_id = STATE, .spec = state.tensor_spec()},
         m2::TensorParameter{.unique_id = WEIGHT, .spec = weight.tensor_spec()},
-        m2::TensorParameter{.unique_id = OUT, .spec = output.tensor_spec()}};
+        m2::TensorParameter{.unique_id = OUT, .spec = output.tensor_spec()},
+        m2::TensorParameter{.unique_id = HIST, .spec = hist.tensor_spec()},
+        m2::TensorParameter{.unique_id = TAPS, .spec = taps.tensor_spec()}};
     m2::ProgramRunArgs run_args;
-    run_args.tensor_args = {{QKV, qkv}, {BETA, beta}, {G, g}, {STATE, state}, {WEIGHT, weight}, {OUT, output}};
-    if (fused) {
-        tensor_parameters.push_back(
-            m2::TensorParameter{.unique_id = HIST, .spec = in.conv_hist->mesh_tensor().tensor_spec()});
-        tensor_parameters.push_back(
-            m2::TensorParameter{.unique_id = TAPS, .spec = in.conv_taps->mesh_tensor().tensor_spec()});
-        run_args.tensor_args.emplace(HIST, in.conv_hist->mesh_tensor());
-        run_args.tensor_args.emplace(TAPS, in.conv_taps->mesh_tensor());
-    }
+    run_args.tensor_args = {
+        {QKV, qkv}, {BETA, beta}, {G, g}, {STATE, state}, {WEIGHT, weight}, {OUT, output}, {HIST, hist}, {TAPS, taps}};
     if (paged) {
         tensor_parameters.push_back(
             m2::TensorParameter{.unique_id = PIDX, .spec = in.state_page_idx->mesh_tensor().tensor_spec()});
@@ -397,7 +351,7 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     }
 
     m2::ProgramSpec spec{
-        .name = fused ? "gdn_decode_step_conv" : "gdn_decode_step",
+        .name = "gdn_decode_step",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .tensor_parameters = std::move(tensor_parameters),
