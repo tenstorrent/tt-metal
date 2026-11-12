@@ -310,6 +310,13 @@ def load_attention_weights(
         o_proj_bias_prefill_tt = ttnn.slice(
             o_proj_bias_tt, [0] * len(b_shape), b_shape[:-1] + [hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        if fused_decode:
+            # Prefill reads the unpadded slices (the fused matmul + reduce-scatter that takes the padded o_proj is not
+            # supported on Blackhole, operations.py is_shape_fused_mm_rs_supported) and fused decode its stream, so
+            # the padded o_proj would be an unused copy.
+            ttnn.deallocate(o_proj_tt)
+            ttnn.deallocate(o_proj_bias_tt)
+            o_proj_tt = o_proj_bias_tt = None
 
     return AttentionWeights(
         wqkv=wqkv,
