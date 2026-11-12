@@ -945,14 +945,30 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
             logger.exception("[traced-prefill] Engram writer failed; the stage will wait on its socket forever")
             raise
 
+    def _prefetched_engram(self, chunk_ids: torch.Tensor, start: int) -> Optional[dict]:
+        """Rows a prefetch gathered for this chunk, waiting until that lookup has finished.
+
+        The prefetch hashed a copy of the session, so a hit still extends the live history the way
+        :meth:`EngramHostLookup.__call__` would, and the gather is not done again. ``None`` when the
+        lookup failed or this chunk was not in it."""
+        prefetch = getattr(self, "_engram_prefetch", None)
+        if prefetch is None:
+            return None
+        return prefetch.consume(chunk_ids, start)
+
     def _feed_engram(self, chunk_ids: Optional[torch.Tensor], start: int) -> None:
         """Queue one chunk's Engram rows ``[C, kin]`` for every Engram socket: the host lookup of ``chunk_ids`` (its
         ``t <= C`` real tokens) at ``start``, zero past them; all zero when ``chunk_ids`` is ``None`` (compile and
-        unwind runs). Queue before the chunk's packet: its replay waits on the rows."""
+        unwind runs). Queue before the chunk's packet: its replay waits on the rows.
+
+        ``_engram_prefetch``, when the server set one for this run, already gathered the rows while the prompt
+        waited; a hit only extends the live session history (the gather is the slow part)."""
         if not self._engram_queues:
             return
         c = self._chunk_size
-        found = None if chunk_ids is None else self.model.engram_lookup(chunk_ids.reshape(1, -1), start)
+        found = None if chunk_ids is None else self._prefetched_engram(chunk_ids, start)
+        if found is None and chunk_ids is not None:
+            found = self.model.engram_lookup(chunk_ids.reshape(1, -1), start)
         for li, queues in self._engram_queues.items():
             rows = torch.zeros(c, self.model.layers[li].engram.kin, dtype=torch.bfloat16)
             if found is not None:

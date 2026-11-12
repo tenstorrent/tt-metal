@@ -367,6 +367,16 @@ class EngramHostLookup:
             finally:
                 self.hash.cache = picked
 
+    def _rows(self, input_ids: torch.Tensor, hashes: torch.Tensor) -> dict:
+        """Each table's rows ``[B, L, kin]`` for hashes ``[B, L, n_layers, n_cols]``. Image-span tokens are zero:
+        the reference gates their Engram output to 0, and zero rows give the device half exactly that."""
+        image = (input_ids >= self.vocab_size).unsqueeze(-1)
+        rows = {}
+        for layer_id in self.tables:
+            found = self.gather(layer_id, hashes[:, :, self.layout.layer_ids.index(layer_id)]).flatten(-2)
+            rows[layer_id] = found.masked_fill(image, 0) if bool(image.any()) else found
+        return rows
+
     @torch.no_grad()
     def __call__(self, input_ids: torch.Tensor, start_pos: int) -> dict:
         """``input_ids`` ``[B, L]`` at positions ``start_pos ..`` -> each table layer's rows ``[B, L, n_hash_cols * head_dim]``.
@@ -375,12 +385,29 @@ class EngramHostLookup:
         device half exactly that."""
         with self._lock:
             hashes = self._hash(input_ids, start_pos)  # [B, L, n_engram_layers, n_hash_cols]
-        image = (input_ids >= self.vocab_size).unsqueeze(-1)
-        rows = {}
-        for layer_id in self.tables:
-            found = self.gather(layer_id, hashes[:, :, self.layout.layer_ids.index(layer_id)]).flatten(-2)
-            rows[layer_id] = found.masked_fill(image, 0) if bool(image.any()) else found
-        return rows
+        return self._rows(input_ids, hashes)
+
+    @torch.no_grad()
+    def lookup_history(self, history: torch.Tensor, input_ids: torch.Tensor, start_pos: int) -> dict:
+        """``__call__`` against a copy of ``history`` ``[B, H]`` (positions ``0 .. H``), not a live session.
+
+        The server looks a waiting prompt up this way, so the gather is done before the prefill runs and the
+        session a decode step is hashing is left alone. ``input_ids`` ``[B, L]`` sit at ``start_pos``."""
+        if history.ndim != 2 or input_ids.ndim != 2 or history.shape[0] != input_ids.shape[0]:
+            raise ValueError(
+                f"history {tuple(history.shape)} and ids {tuple(input_ids.shape)} must both be [batch, length]"
+            )
+        scratch = torch.zeros_like(self.hash.cache)
+        if history.shape[1] > scratch.shape[1]:
+            raise ValueError(f"history of {history.shape[1]} tokens is past max_seq {scratch.shape[1]}")
+        scratch[:, : history.shape[1]] = history.to(dtype=scratch.dtype)
+        with self._lock:
+            picked, self.hash.cache = self.hash.cache, scratch
+            try:
+                hashes = self._hash(input_ids, start_pos)
+            finally:
+                self.hash.cache = picked
+        return self._rows(input_ids, hashes)
 
     def gather(self, layer_id: int, ids: torch.Tensor) -> torch.Tensor:
         """Rows ``ids`` of ``layer_id``'s table, dequantized to bf16: ``[..., head_dim]``."""

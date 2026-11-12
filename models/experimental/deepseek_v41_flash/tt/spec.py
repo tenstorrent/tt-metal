@@ -21,10 +21,11 @@ softmax(logits_j / temperature)``; a ``propose`` override is deterministic, a on
 The pipelined verify is streamed (:meth:`~.model.DeepSeekV41Model.spec_verify_async`): the host applies the
 rule to each step's logits as they come out, and at the first reject (or after the last row) it queues the
 draft of the next round, then, while the drafter runs, the fixup and that round's first row ``a_m``, which
-needs no draft, then reads the drafts that follow ``a_m``, while the rows past the reject are still in the
-pipeline; their outputs are dropped and the next round's steps queue behind them. So a round takes the pipeline's latency plus a step per accepted draft, plus whatever of the draft is
-not hidden behind ``a_m``'s step (only the caller's last round, see :meth:`DSparkSpeculator.step`, leaves its
-fixup to the next round). Each decode step's row reaches the drafter's rings only when the host releases its
+needs no draft, then reads the drafts that follow ``a_m`` and dispatches them behind it, while the rows past
+the reject are still in the pipeline; their outputs are dropped and the next round's steps queue behind them.
+So a round takes the pipeline's latency plus a step per accepted draft, plus whatever of the draft is not hidden
+behind ``a_m``'s step, and the caller's work between rounds runs while the next round is in the pipeline (only
+the caller's last round, see :meth:`DSparkSpeculator.step`, leaves its fixup to the next round). Each decode step's row reaches the drafter's rings only when the host releases its
 receive, one row ahead of the accept, so the draft sees the round's rows up to the reject and no further.
 
 With ``device_accept`` (the drafter, pipelined verify and no top-p / top-k) the accept runs on the drafter
@@ -255,9 +256,12 @@ class DSparkSpeculator:
         # A streamed round reads those logits only once its verify is dispatched, while the pipeline runs it.
         self._logits_pending = False
         self._rejected: list[int] = []
-        # A streamed round's first row (``self._next`` at ``self._pos``) is already in the pipeline, with the
-        # fixup of the round before it: the previous round dispatched it at its reject, ahead of its draft.
-        self._row0_dispatched = False
+        # How many of a streamed round's rows (from ``self._next`` at ``self._pos``) are already in the pipeline,
+        # with the fixup of the round before it: the previous round dispatched the first at its reject, ahead of
+        # its draft, and the drafts once it had read them. 0, 1 or all of them.
+        self._ahead = 0
+        # The round dispatch() queued for collect(): (first position, inputs, start time, time after its fixup).
+        self._dispatched: Optional[tuple[int, list[int], float, float]] = None
 
     def _seed(self) -> Optional[int]:
         """A nonzero seed for the drafter's next uniforms when sampling, else None (greedy draws none)."""
@@ -274,6 +278,10 @@ class DSparkSpeculator:
         self._proposal_logits = None
         self._drafting = (token, frontier)
         if self._propose is None:
+            drafter = self.model.dspark
+            # Several sessions' speculators share the drafter, each at its own request's temperature.
+            if drafter.temperature != self.temperature:
+                drafter.set_sampling(self.temperature)
             self._logits_pending = self.temperature > 0 and not self.device_accept and self.streaming
             self.model.spec_draft_async(token, frontier, self._seed())
 
@@ -370,7 +378,7 @@ class DSparkSpeculator:
         self._next = token
         self._pos = pos
         self._rejected = []
-        self._row0_dispatched = False
+        self._ahead = 0
         self._stall.enter("start: draft")
         try:
             self._proposals = self._draft(token, pos - 1)
@@ -381,16 +389,11 @@ class DSparkSpeculator:
 
     def finish(self) -> None:
         """Hand the model back to plain decode, which feeds the last returned token at :attr:`position` next:
-        drop the round's first row the last :meth:`step` dispatched ahead, if any, read every output still
+        drop the next round's rows the last :meth:`step` dispatched ahead, if any, read every output still
         unread and undo the rejected rows (:meth:`~.model.DeepSeekV41Model.spec_fixup`). A :meth:`start` (or
         :meth:`prefill`) may follow."""
         model = self.model
-        if self._row0_dispatched:
-            if model.dspark is not None:
-                model.spec_release_writes()
-            model.spec_discard_outputs(1)
-            self._rejected.append(self._pos)
-            self._row0_dispatched = False
+        self._drop_ahead()
         self._stall.enter(f"finish at {self._pos}: drain_stale_outputs, spec_fixup({self._rejected})")
         try:
             model.drain_stale_outputs()
@@ -399,17 +402,194 @@ class DSparkSpeculator:
             self._stall.cancel()
         self._rejected = []
 
-    def step(self, budget: Optional[int] = None, stop_ids: Sequence[int] = ()) -> list[int]:
+    def pause(self) -> None:
+        """Leave the model to another session between two rounds; :meth:`step` carries on later from where this
+        one stopped, with this session resident again (``activate_sessions``) and its drafts kept.
+
+        The next round's rows the last :meth:`step` dispatched ahead are dropped (and redone by the next round;
+        ``step(ahead=False)`` dispatches none), and the draft's logits a streamed round reads late are read now:
+        the other session's draft replaces the drafter's outputs. The rejected rows wait for this session's next
+        fixup, which restores them from its own snapshot (:meth:`~.model.DeepSeekV41Model.spec_fixup`)."""
+        if self.device_accept:
+            raise NotImplementedError("a device accept accepts against the drafter's last draft, another session's")
+        model = self.model
+        self._drop_ahead()
+        if self._logits_pending:
+            self._proposal_logits = model.spec_draft_logits()[: self.drafts]
+            self._logits_pending = False
+
+    def _drop_ahead(self) -> None:
+        """Count the next round's rows already dispatched as rejected: release their drafter receives and mark
+        their outputs unwanted, so the next fixup restores the ring rows they wrote."""
+        n, self._ahead = self._ahead, 0
+        if not n:
+            return
+        if self.model.dspark is not None:
+            self.model.spec_release_writes(n)
+        self.model.spec_discard_outputs(n)
+        self._rejected += list(range(self._pos, self._pos + n))
+
+    def dispatch(self) -> None:
+        """The first half of a streamed round: queue the fixup and the round's verify; :meth:`collect` takes its
+        outputs. Other sessions may dispatch their rounds in between, each with its session resident: their rows
+        follow this one's through the pipeline, so the rounds are collected in the order they were dispatched."""
+        if not self.streaming:
+            raise RuntimeError("only a streamed verify is dispatched apart from its accept")
+        if self._dispatched is not None:
+            raise RuntimeError("the last dispatched round has not been collected")
+        model = self.model
+        t0 = time.perf_counter()
+        p = self._pos
+        inputs = [self._next] + self._proposals
+        if not self._ahead:
+            self._stall.enter(f"round p={p}: spec_fixup({self._rejected})")
+            try:
+                model.spec_fixup(self._rejected)
+            finally:
+                self._stall.cancel()
+        t1 = time.perf_counter()
+        # The previous round dispatched this one's first row at its reject, and its drafts once they were read.
+        first = self._ahead
+        if first < len(inputs):
+            self._stall.enter(f"round p={p}: spec_verify_async ({len(inputs) - first} steps)")
+            try:
+                model.spec_verify_async(inputs[first:], p + first)
+            finally:
+                self._stall.cancel()
+        self._ahead = 0
+        self._dispatched = (p, inputs, t0, t1)
+
+    def collect(self, budget: int, stop_ids: Sequence[int] = ()) -> tuple[list[int], bool]:
+        """The second half of the round :meth:`dispatch` queued, as :meth:`advance`'s: ``(tokens, done)``. It
+        dispatches no row ahead and reads the draft's logits before it returns, so another session's round may
+        follow."""
+        stop = set(stop_ids)
+        return self._cut(self._collect(budget, stop, ahead=False), budget, stop)
+
+    def _collect(self, budget: Optional[int], stop_ids: Sequence[int], ahead: bool) -> list[int]:
+        """Accept the dispatched round's rows as they come out, queue the next draft (and, ``ahead`` and not the
+        caller's last round, the next round's first row) and read the draft; returns the round's tokens."""
+        if self._dispatched is None:
+            raise RuntimeError("dispatch() a round first")
+        (p, inputs, t0, t1), self._dispatched = self._dispatched, None
+        model, k = self.model, self.drafts
+        held = model.dspark is not None
+        if self._logits_pending:
+            self._stall.enter(f"round p={p}: read the draft's logits")
+            try:
+                self._proposal_logits = model.spec_draft_logits()[:k]
+            finally:
+                self._stall.cancel()
+            self._logits_pending = False
+        for m in range(k + 1):
+            if held:
+                self._stall.enter(f"round p={p}: release_writes(row {m})")
+                try:
+                    model.spec_release_writes()
+                finally:
+                    self._stall.cancel()
+            self._stall.enter(f"round p={p}: read output of row {m}")
+            try:
+                row = model.read_decoded_output().reshape(-1).float()
+            finally:
+                self._stall.cancel()
+            token = self._verify_row(inputs, m, row)
+            if _VERBOSE:
+                # Row ``k`` is the bonus row: it has no draft to accept, it emits the round's last token.
+                if m < k:
+                    logger.info(
+                        f"[spec] round p={p}: row {m} draft {inputs[m + 1]} -> "
+                        f"{'accepted' if token is None else f'rejected, token {token}'}"
+                    )
+                else:
+                    logger.info(f"[spec] round p={p}: row {m} bonus (all drafts accepted) -> token {token}")
+            if token is not None:
+                break
+        t2 = time.perf_counter()
+        self._rejected = list(range(p + m + 1, p + len(inputs)))
+        self._next = token
+        self._pos = p + m + 1
+        emitted = inputs[1 : m + 1] + [token]
+        last = not ahead or any(t in stop_ids for t in emitted) or (budget is not None and len(emitted) >= budget)
+        self._stall.enter(f"round p={p}: queue the draft (frontier {p + m})")
+        try:
+            self._queue_draft(token, p + m)
+        finally:
+            self._stall.cancel()
+        t_queued = time.perf_counter()
+        if not last:
+            # The next round's first row needs no draft: queue it (behind the fixup of this round's
+            # rejects) while the drafter drafts its successors, so it runs through the pipeline meanwhile.
+            self._stall.enter(f"round p={p}: early row 0 at {self._pos} (fixup {self._rejected})")
+            try:
+                model.spec_fixup(self._rejected)
+                model.spec_verify_async([token], self._pos)
+            finally:
+                self._stall.cancel()
+            self._rejected = []
+            self._ahead = 1
+        t_row0 = time.perf_counter()
+        self._stall.enter(f"round p={p}: read the draft (frontier {p + m})")
+        try:
+            self._proposals = self._drafted()
+            if not ahead and self._logits_pending:
+                # Another session's draft may come next, and replace these on the drafter.
+                self._proposal_logits = model.spec_draft_logits()[:k]
+                self._logits_pending = False
+        finally:
+            self._stall.cancel()
+        t_draft = time.perf_counter()
+        # After the draft's readback, which would otherwise wait behind these rows' receives.
+        if held:
+            self._stall.enter(f"round p={p}: release_writes({k - m} trailing rows)")
+            try:
+                model.spec_release_writes(k - m)
+            finally:
+                self._stall.cancel()
+        model.spec_discard_outputs(k - m)
+        if self._ahead:
+            # The rest of the next round, its drafts behind its first row: whatever the caller does between rounds
+            # (a server streams the tokens) then runs while they go through the pipeline.
+            self._stall.enter(f"round p={p}: next round's drafts at {self._pos + 1}")
+            try:
+                model.spec_verify_async(self._proposals, self._pos + 1)
+            finally:
+                self._stall.cancel()
+            self._ahead += len(self._proposals)
+        t3 = time.perf_counter()
+        phases = {
+            "fixup": t1 - t0,
+            "verify": t2 - t1,
+            "queue draft": t_queued - t2,
+            "row0": t_row0 - t_queued,
+            "draft": t_draft - t_row0,
+            "release": t3 - t_draft,
+        }
+        for phase, seconds in phases.items():
+            self.stats.add(phase, seconds)
+        self.stats.accepted.append(m)
+        self.stats.seconds += t3 - t0
+        if _VERBOSE:
+            _log_round(self, p, emitted, phases)
+        return emitted
+
+    def step(self, budget: Optional[int] = None, stop_ids: Sequence[int] = (), ahead: bool = True) -> list[int]:
         """One verify round; returns the tokens it emits (1 to ``drafts + 1``).
 
         ``budget`` (tokens the caller still wants) and ``stop_ids`` say which round is the caller's last: a
-        streamed round that is not dispatches the next round's first row at its reject (see the module docstring).
+        streamed round that is not dispatches the next round's first row at its reject and its drafts once they
+        are read (see the module docstring).
+        ``ahead=False`` makes it dispatch none, as before a :meth:`pause`. A streamed round is :meth:`dispatch`
+        then :meth:`collect`'s half.
         """
+        if self.streaming:
+            self.dispatch()
+            return self._collect(budget, stop_ids, ahead)
         model, k = self.model, self.drafts
         t0 = time.perf_counter()
         p = self._pos
         inputs = [self._next] + self._proposals
-        if not self._row0_dispatched:
+        if not self._ahead:
             self._stall.enter(f"round p={p}: spec_fixup({self._rejected})")
             try:
                 model.spec_fixup(self._rejected)
@@ -439,101 +619,6 @@ class DSparkSpeculator:
             self.stats.accepted.append(m)
             self.stats.seconds += t3 - t0
             emitted = inputs[1 : m + 1] + [token]
-            if _VERBOSE:
-                _log_round(self, p, emitted, phases)
-            return emitted
-        if self.streaming:
-            held = model.dspark is not None
-            # Row 0 went in at the previous round's reject; its drafts follow it now.
-            first = 1 if self._row0_dispatched else 0
-            self._stall.enter(f"round p={p}: spec_verify_async ({len(inputs) - first} steps)")
-            try:
-                model.spec_verify_async(inputs[first:], p + first)
-            finally:
-                self._stall.cancel()
-            self._row0_dispatched = False
-            if self._logits_pending:
-                self._stall.enter(f"round p={p}: read the draft's logits")
-                try:
-                    self._proposal_logits = model.spec_draft_logits()[:k]
-                finally:
-                    self._stall.cancel()
-                self._logits_pending = False
-            for m in range(k + 1):
-                if held:
-                    self._stall.enter(f"round p={p}: release_writes(row {m})")
-                    try:
-                        model.spec_release_writes()
-                    finally:
-                        self._stall.cancel()
-                self._stall.enter(f"round p={p}: read output of row {m}")
-                try:
-                    row = model.read_decoded_output().reshape(-1).float()
-                finally:
-                    self._stall.cancel()
-                token = self._verify_row(inputs, m, row)
-                if _VERBOSE:
-                    # Row ``k`` is the bonus row: it has no draft to accept, it emits the round's last token.
-                    if m < k:
-                        logger.info(
-                            f"[spec] round p={p}: row {m} draft {inputs[m + 1]} -> "
-                            f"{'accepted' if token is None else f'rejected, token {token}'}"
-                        )
-                    else:
-                        logger.info(f"[spec] round p={p}: row {m} bonus (all drafts accepted) -> token {token}")
-                if token is not None:
-                    break
-            t2 = time.perf_counter()
-            self._rejected = list(range(p + m + 1, p + len(inputs)))
-            self._next = token
-            self._pos = p + m + 1
-            emitted = inputs[1 : m + 1] + [token]
-            last = any(t in stop_ids for t in emitted) or (budget is not None and len(emitted) >= budget)
-            self._stall.enter(f"round p={p}: queue the draft (frontier {p + m})")
-            try:
-                self._queue_draft(token, p + m)
-            finally:
-                self._stall.cancel()
-            t_queued = time.perf_counter()
-            if not last:
-                # The next round's first row needs no draft: queue it (behind the fixup of this round's
-                # rejects) while the drafter drafts its successors, so it runs through the pipeline meanwhile.
-                self._stall.enter(f"round p={p}: early row 0 at {self._pos} (fixup {self._rejected})")
-                try:
-                    model.spec_fixup(self._rejected)
-                    model.spec_verify_async([token], self._pos)
-                finally:
-                    self._stall.cancel()
-                self._rejected = []
-                self._row0_dispatched = True
-            t_row0 = time.perf_counter()
-            self._stall.enter(f"round p={p}: read the draft (frontier {p + m})")
-            try:
-                self._proposals = self._drafted()
-            finally:
-                self._stall.cancel()
-            t_draft = time.perf_counter()
-            # After the draft's readback, which would otherwise wait behind these rows' receives.
-            if held:
-                self._stall.enter(f"round p={p}: release_writes({k - m} trailing rows)")
-                try:
-                    model.spec_release_writes(k - m)
-                finally:
-                    self._stall.cancel()
-            model.spec_discard_outputs(k - m)
-            t3 = time.perf_counter()
-            phases = {
-                "fixup": t1 - t0,
-                "verify": t2 - t1,
-                "queue draft": t_queued - t2,
-                "row0": t_row0 - t_queued,
-                "draft": t_draft - t_row0,
-                "release": t3 - t_draft,
-            }
-            for phase, seconds in phases.items():
-                self.stats.add(phase, seconds)
-            self.stats.accepted.append(m)
-            self.stats.seconds += t3 - t0
             if _VERBOSE:
                 _log_round(self, p, emitted, phases)
             return emitted
@@ -583,7 +668,7 @@ class DSparkSpeculator:
         A round cut short by a stop id or the count keeps only the tokens up to the cut: the rows it accepted
         past the cut count as rejected, so :meth:`extend` can carry on from the last returned token. The
         streamed verify's unwanted outputs are read off before it returns. After ``should_stop`` the last round
-        may have dispatched the next one's first row, which :meth:`extend` and :meth:`finish` account for.
+        may have dispatched the next one's rows, which :meth:`extend` and :meth:`finish` account for.
         """
         out: list[int] = []
         stop = set(stop_ids)
@@ -591,18 +676,11 @@ class DSparkSpeculator:
         while not done and len(out) < max_new_tokens:
             if should_stop is not None and should_stop():
                 break
-            emitted = self.step(max_new_tokens - len(out), stop)
-            kept = emitted
-            for keep, token in enumerate(emitted, start=1):
-                out.append(token)
-                if token in stop or len(out) == max_new_tokens:
-                    self._cut_round(emitted, keep)
-                    kept = emitted[:keep]
-                    done = True
-                    break
+            kept, done = self.advance(max_new_tokens - len(out), stop)
+            out.extend(kept)
             if on_tokens is not None:
                 on_tokens(kept)
-            if _VERBOSE and (len(out) % 10 < len(emitted) or done):
+            if _VERBOSE and (len(out) % 10 < len(kept) or done):
                 logger.info(f"[spec] generate: {len(out)}/{max_new_tokens} tokens, pos {self._pos}")
         self._stall.enter("generate: drain_stale_outputs")
         try:
@@ -613,6 +691,21 @@ class DSparkSpeculator:
             f"[spec] generate done: {len(out)} tokens, pos {self._pos}, stats {self.stats.summary(self.drafts)}"
         )
         return out
+
+    def advance(self, budget: int, stop_ids: Sequence[int] = (), ahead: bool = True) -> tuple[list[int], bool]:
+        """One round of at most ``budget`` tokens: ``(tokens, done)``, ``done`` once they reach a stop id or the
+        budget. A round cut short there keeps only the tokens up to the cut, as :meth:`generate`'s rounds do.
+        ``ahead`` is :meth:`step`'s."""
+        stop = set(stop_ids)
+        return self._cut(self.step(budget, stop, ahead), budget, stop)
+
+    def _cut(self, emitted: list[int], budget: int, stop: set[int]) -> tuple[list[int], bool]:
+        """Cut the round that emitted ``emitted`` at its first stop id or at ``budget`` tokens."""
+        for keep, token in enumerate(emitted, start=1):
+            if token in stop or keep == budget:
+                self._cut_round(emitted, keep)
+                return emitted[:keep], True
+        return emitted, False
 
     def _cut_round(self, emitted: list[int], keep: int) -> None:
         """Make the last round as if it had accepted only ``keep - 1`` drafts, emitting ``emitted[:keep]``."""

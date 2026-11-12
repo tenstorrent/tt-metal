@@ -151,6 +151,38 @@ impl PyEngram {
         })
         .map_err(err)
     }
+
+    /// `rows_into` against a copy of `history` (`[batch, hist_len]` i64 at `history`), not a live session.
+    /// `ids` is `[batch, n_ids]` i64. `outs` is one `batch * n_ids * kin` bf16 buffer per table.
+    fn rows_from_history(
+        &self,
+        py: Python<'_>,
+        history: usize,
+        hist_len: usize,
+        ids: usize,
+        n_ids: usize,
+        start: usize,
+        outs: Vec<usize>,
+    ) -> PyResult<()> {
+        let inner = &self.inner;
+        let batch = inner.batch();
+        let n_out = batch * n_ids * inner.kin();
+        py.allow_threads(|| unsafe {
+            // An empty history (a prompt at position 0) has no allocation to borrow.
+            let history = if hist_len == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(history as *const i64, batch * hist_len)
+            };
+            let ids = std::slice::from_raw_parts(ids as *const i64, batch * n_ids);
+            let mut buffers: Vec<&mut [u16]> = outs
+                .iter()
+                .map(|&p| std::slice::from_raw_parts_mut(p as *mut u16, n_out))
+                .collect();
+            inner.rows_from_history(history, hist_len, ids, start, &mut buffers)
+        })
+        .map_err(err)
+    }
 }
 
 /// The traced decode step's host side (see `decode`).
@@ -180,8 +212,8 @@ impl PyDecodeHost {
     /// A socket argument is the address of Python's socket (`native_handle`) or the id of a named socket
     /// (`export_descriptor`), which this runtime connects to. `engram_sockets` is
     /// `[(layer_id, [socket per TP rank], local_kin)]`. `counters_path` is a file (in `/dev/shm`) to keep the
-    /// runtime's counters in, for the web monitor. `drafter_ring_rows` is the DSpark drafter's ring depth, for the
-    /// packet's drafter ring row (0: no drafter).
+    /// runtime's counters in, for the web monitor. `drafter_ring_rows` is the DSpark drafter's ring depth per
+    /// session slot, for the packet's drafter ring row (0: no drafter).
     #[new]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (stages, variants, packet_socket, batch, sliding_window, win_slot_rows, output_socket,

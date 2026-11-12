@@ -71,8 +71,8 @@ python models/experimental/deepseek_v41_flash/tools/fill_expert_cache.py --dspar
 python models/experimental/deepseek_v41_flash/demo/server.py --host 0.0.0.0 --port 8000
 ```
 
-By default it runs DSpark speculative decode (one user slot, text only) with the KV-only prefill spread over
-every stage. It also starts the web monitor at `http://<host>:8090`, which keeps running after the server
+By default it runs DSpark speculative decode (text only; one reply decoding at a time, `--max-running N` lets
+N take verify rounds in turn) with the KV-only prefill spread over every stage. It also starts the web monitor at `http://<host>:8090`, which keeps running after the server
 exits. `--no-dspark` serves many users (40 by default) with images instead.
 
 Startup is done when it logs `serving 'deepseek-v4.1-flash' on http://...`. Then:

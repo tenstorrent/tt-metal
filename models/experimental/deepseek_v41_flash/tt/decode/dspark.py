@@ -220,8 +220,10 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
     ``use_prefetcher`` streams the ringed projections (:func:`dspark_prefetch_rings`) through
     ``prefetch_buffers``, the mapping every stage on ``device`` shares, which builds each ring on first use.
 
-    ``ring_rows`` (a multiple of a tile) is the depth of the ``main_kv`` ring. The attention's keys are
-    ``kv_rows = ring_rows + TILE_SIZE``: the ring, then the block, the sink's zero row and padding to a tile.
+    ``ring_rows`` (a multiple of a tile) is the depth of one session's ``main_kv`` ring. The attention's keys
+    are ``kv_rows = ring_rows + TILE_SIZE``: the ring, then the block, the sink's zero row and padding to a tile.
+    ``sessions`` slots each have their own ring, ``ring_rows`` rows of :attr:`ring` from ``slot * ring_rows``;
+    with more than one, the attention copies the drafting slot's into :attr:`ring_view` first.
     """
 
     def __init__(
@@ -233,6 +235,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         device,
         rot,
         ring_rows: int,
+        sessions: int = 1,
         cache=None,
         weight_dtype=ttnn.bfloat8_b,
         shared_dtype=ttnn.bfloat8_b,
@@ -351,13 +354,20 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             cache_file_name=sink_file,
             mesh_mapper=row,
         )
-        self.ring = ttnn.from_torch(
-            torch.zeros(1, 1, ring_rows, self.head_dim),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        self.sessions = sessions
+
+        def ring(rows):
+            return ttnn.from_torch(
+                torch.zeros(1, 1, rows, self.head_dim),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        self.ring = ring(sessions * ring_rows)
+        # One session's rows, which the draft's attention reads; with one session the ring itself.
+        self.ring_view = ring(ring_rows) if sessions > 1 else self.ring
 
         self.attn_norm = gamma("attn_norm")
         self.ffn_norm = gamma("ffn_norm")
@@ -441,19 +451,25 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         return _rope_tail(_rms(kv, self.kv_norm, self.eps), cos, sin, self.rot)
 
     def write_main(self, main_x, cos, sin, slots) -> None:
-        """Write row ``j`` of the ``main_kv`` of ``main_x`` ``[1, 1, R, D]`` into ring slot ``slots[j]``
-        (INT32 ``[R]``, ``-1`` skips the row)."""
+        """Write row ``j`` of the ``main_kv`` of ``main_x`` ``[1, 1, R, D]`` into row ``slots[j]`` of
+        :attr:`ring` (INT32 ``[R]``, the session's base included; ``-1`` skips the row)."""
         kv = _rows_on_one_core(self._kv(main_x, cos, sin))
         ttnn.experimental.paged_update_cache(self.ring, kv, update_idxs_tensor=slots)
         ttnn.deallocate(kv)
 
-    def attention(self, x, q_cos, q_sin, q_neg_sin, kv_cos, kv_sin, bias_row) -> ttnn.Tensor:
+    def attention(self, x, q_cos, q_sin, q_neg_sin, kv_cos, kv_sin, bias_row, ring_base=None) -> ttnn.Tensor:
         """The block's attention: ``x`` ``[1, 1, T, D]`` -> ``[1, 1, T, D]`` (all-reduced).
 
         The ``T * local_heads`` query rows are folded onto one axis and attend the shared keys
         ``[ring | block kv | sink | padding]``; ``bias_row`` ``[1, 1, 1, kv_rows]`` masks the ring
         slots outside the window and the padding, and the sink row's score is its per-head bias.
+        ``ring_base`` (INT32 ROW_MAJOR ``[1]``, with several sessions) is the drafting slot's first row of
+        :attr:`ring`.
         """
+        if self.sessions > 1:
+            ttnn.fill_cache(
+                self.ring_view, self.ring, 0, input_row_offset_tensor=ring_base, num_input_rows=self.ring_rows
+            )
         t = x.shape[2]
         # wkv's B grid contains wq_a's, so its replica of x feeds both.
         x = _decode_activation(self.wkv, x)
@@ -463,7 +479,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         q = _rope_tail(q, q_cos, q_sin, self.rot)
         kv = self._kv(x, kv_cos, kv_sin)
         kv = ttnn.pad(kv, [(0, 0), (0, 0), (0, self.kv_rows - self.ring_rows - t), (0, 0)], 0.0)
-        keys = ttnn.concat([self.ring, kv], dim=2)
+        keys = ttnn.concat([self.ring_view, kv], dim=2)
         scores = ttnn.matmul(q, keys, transpose_b=True, dtype=ttnn.float32, compute_kernel_config=_HIFI4)
         scores = ttnn.add(ttnn.multiply(scores, self.scale), ttnn.add(self.sink_bias, bias_row))
         probs = ttnn.typecast(ttnn.softmax(scores, dim=-1, compute_kernel_config=_HIFI4), ttnn.bfloat16)
@@ -510,11 +526,11 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         shared = _rows(self.shared_w2(ttnn.multiply(ttnn.silu(gate), up)))
         return self._all_reduce(ttnn.add(routed, shared))
 
-    def forward(self, streams, pre_mix, rope: dict, bias_row) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def forward(self, streams, pre_mix, rope: dict, bias_row, ring_base=None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """``(streams [1, T, hc, D], pre_mix [1, T, 1, hc])`` -> the same pair for the next stage."""
         post, comb, collapsed, attn_pre = self.attn_hc(streams, pre_mix)
         normed = _rms(rows_from_tokens(collapsed), self.attn_norm, self.eps)
-        attn_out = self.attention(normed, *rope["q"], *rope["kv"], bias_row)
+        attn_out = self.attention(normed, *rope["q"], *rope["kv"], bias_row, ring_base)
         streams = mix_streams(post, comb, attn_out, streams)
         post, comb, collapsed, ffn_pre = self.ffn_hc(streams, attn_pre)
         normed = _rms(rows_from_tokens(collapsed), self.ffn_norm, self.eps)
@@ -546,6 +562,13 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
     the target layers. When that is not ``device``, ``link`` is a D2D ``(sender, receiver)`` socket pair
     from it to ``device``: :meth:`send_main` gathers the staged rows there and sends them, and
     :meth:`write_main` receives them.
+
+    ``sessions`` is the decode model's session slots. Each has its own rows of every ring (:meth:`ring_row`),
+    so a session's rings hold its own positions whatever the others decode between its rounds, and a draft
+    reads the slot :meth:`set_block` names. The rest is one draft's: the stash (every step's, whichever its
+    session), the logits ring, the uniforms and :attr:`out` hold the last steps' and the last draft's, so a
+    caller reads a draft before the next one and, with several sessions, drafts no other session between a
+    :meth:`draft` and the :meth:`accept_draft` that accepts against it.
     """
 
     def __init__(
@@ -565,7 +588,10 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         use_prefetcher: bool = False,
         stash_device=None,
         link=None,
+        sessions: int = 1,
     ):
+        if sessions < 1:
+            raise ValueError(f"sessions must be at least 1, got {sessions}")
         stash_device = device if stash_device is None else stash_device
         if (link is None) != (stash_device is device):
             raise ValueError("a stash on another device needs a link to the drafter's, and only then")
@@ -588,6 +614,9 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         self.main_rows = main_rows
         self.stash_rows = stash_rows
         self.ring_rows = -(-(self.window + main_rows - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        self.sessions = sessions
+        # What set_sampling last staged (the inputs start greedy).
+        self.temperature = 0.0
         self.rope_dim = config.qk_rope_head_dim
         self.local_heads = config.num_attention_heads // tp_size
         replicate = ttnn.ReplicateTensorToMesh(device) if tp_size > 1 else None
@@ -618,6 +647,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
                     device,
                     self.rot,
                     self.ring_rows,
+                    sessions=sessions,
                     cache=stage_cache,
                     weight_dtype=weight_dtype,
                     shared_dtype=shared_dtype,
@@ -692,9 +722,10 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
 
         w, r, t = main_rows, self.rope_dim, self.block
         # The block's INT32 packet (set_block): its ids, the key and query rows' positions, the ring slot of
-        # the frontier and how many positions up to it the window holds.
+        # the frontier, how many positions up to it the window holds and the session's first ring row.
         self._block_fields, offset = {}, 0
-        for name, n in {"ids": t, "pos": t, "q_pos": t * self.local_heads, "frontier_slot": 1, "live": 1}.items():
+        fields = {"ids": t, "pos": t, "q_pos": t * self.local_heads, "frontier_slot": 1, "live": 1, "ring_base": 1}
+        for name, n in fields.items():
             self._block_fields[name] = (offset, n)
             offset += n
         kv_rows = self.stages[0].kv_rows
@@ -725,7 +756,15 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         # The round's INT32 packet (set_round), for accept_draft: the next block's positions and frontier
         # fields as if no draft were accepted, the verified rows' logits-ring slots and which rows were drafts.
         self._round_fields, offset = {}, 0
-        fields = {"pos": t, "q_pos": t * self.local_heads, "frontier_slot": 1, "live": 1, "q_rows": t, "keep": t}
+        fields = {
+            "pos": t,
+            "q_pos": t * self.local_heads,
+            "frontier_slot": 1,
+            "live": 1,
+            "ring_base": 1,
+            "q_rows": t,
+            "keep": t,
+        }
         for name, n in fields.items():
             self._round_fields[name] = (offset, n)
             offset += n
@@ -786,14 +825,21 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         idx = torch.as_tensor(positions, dtype=torch.long)
         return make_rope_table(self.cos_half[idx], self.sin_half[idx])
 
-    def set_main_rows(self, positions) -> None:
-        """Stage :meth:`write_main` for verified ``positions`` (at most ``main_rows``, consecutive or not),
-        rejected rows included: :meth:`set_block`'s mask hides every row past the frontier."""
+    def ring_row(self, slot: int, pos: int) -> int:
+        """The row of every ring that holds session slot ``slot``'s position ``pos``."""
+        if not 0 <= slot < self.sessions:
+            raise ValueError(f"session slot {slot} is not one of the drafter's {self.sessions}")
+        return slot * self.ring_rows + pos % self.ring_rows
+
+    def set_main_rows(self, positions, slot: int = 0) -> None:
+        """Stage :meth:`write_main` for session slot ``slot``'s verified ``positions`` (at most ``main_rows``,
+        consecutive or not), rejected rows included: :meth:`set_block`'s mask hides every row past the
+        frontier. The rows come from the stash, so no other session may have stepped since them."""
         w = self.main_rows
         positions = list(positions)
         n = len(positions)
         assert 0 < n <= w, f"{n} rows for a {w}-row write"
-        slots = [p % self.ring_rows for p in positions] + [-1] * (w - n)
+        slots = [self.ring_row(slot, p) for p in positions] + [-1] * (w - n)
         positions = positions + [positions[-1]] * (w - n)
         gather = torch.zeros(1, 1, w, self.stash_rows)
         gather[0, 0, torch.arange(w), torch.tensor(positions) % self.stash_rows] = 1
@@ -803,13 +849,14 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         host_to_device(cos, self.inputs["main_cos"])
         host_to_device(sin, self.inputs["main_sin"])
 
-    def set_block(self, token: int, frontier: int) -> None:
-        """Stage :meth:`draft` for ``token`` at position ``frontier + 1``, ``frontier`` being the last
-        verified position. The draft attends the ring slots of the ``window`` positions up to it; rows a
-        round wrote past it are masked.
+    def set_block(self, token: int, frontier: int, slot: int = 0) -> None:
+        """Stage :meth:`draft` for ``token`` at position ``frontier + 1`` of session slot ``slot``, ``frontier``
+        being the last verified position. The draft attends the slot's ring rows of the ``window`` positions up
+        to it; rows a round wrote past it are masked.
 
         Only the block's integers go up, as one packet; :meth:`draft` builds its inputs from them."""
         t = self.block
+        base = self.ring_row(slot, 0)
         if frontier + t >= self.cos_half.shape[0]:
             raise ValueError(f"positions up to {frontier + t} past the {self.cos_half.shape[0]}-row RoPE table")
         positions = list(range(frontier + 1, frontier + 1 + t))
@@ -819,18 +866,20 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             "q_pos": [p for p in positions for _ in range(self.local_heads)],
             "frontier_slot": [frontier % self.ring_rows],
             "live": [min(self.window, frontier + 1)],
+            "ring_base": [base],
         }
         _upload_packet(values, self._block_fields, self.inputs["block"])
 
-    def set_round(self, start: int, drafts: int) -> None:
-        """Stage :meth:`accept_draft` for the round that verified ``[next, the last draft's first drafts]`` at
-        positions ``start .. start + drafts``. The decode steps of those positions must have handed the drafter
-        their logits (:meth:`write_logits`), and the last :meth:`draft` / :meth:`accept_draft` must be the one
-        that proposed those drafts.
+    def set_round(self, start: int, drafts: int, slot: int = 0) -> None:
+        """Stage :meth:`accept_draft` for the round of session slot ``slot`` that verified ``[next, the last
+        draft's first drafts]`` at positions ``start .. start + drafts``. The decode steps of those positions must
+        have handed the drafter their logits (:meth:`write_logits`), and the last :meth:`draft` /
+        :meth:`accept_draft` must be the one that proposed those drafts.
 
         The packet holds the next block's fields for a frontier of ``start`` (no draft accepted); the trace
         adds the accepted count on device."""
         t = self.block
+        base = self.ring_row(slot, 0)
         if not 0 < drafts < t:
             raise ValueError(f"a device accept takes 1 to {t - 1} drafts (one row is the bonus draw's), got {drafts}")
         if start + drafts + t >= self.cos_half.shape[0]:
@@ -841,6 +890,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             "q_pos": [p for p in positions for _ in range(self.local_heads)],
             "frontier_slot": [start % self.ring_rows],
             "live": [start + 1],
+            "ring_base": [base],
             "q_rows": [(start + j) % LOGIT_ROWS for j in range(t)],
             "keep": [int(j < drafts) for j in range(t)],
         }
@@ -850,6 +900,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         """Draft (and accept) at ``temperature``; 0, the initial state, is greedy."""
         if temperature < 0:
             raise ValueError(f"temperature must be >= 0, got {temperature}")
+        self.temperature = temperature
         inv = 1.0 / temperature if temperature > 0 else 0.0
         for name, value in (("temp", temperature), ("inv_temp", inv)):
             host_to_device(torch.full((1, 1, 1, 1), value), self.inputs[name])
@@ -955,7 +1006,9 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         f = _packet_fields(self.inputs["block"], self._block_fields)
         ids, pos, q_pos = (ttnn.typecast(f[name], ttnn.uint32) for name in ("ids", "pos", "q_pos"))
         scalar = [1, 1, 1, 1]
-        return self._draft(ids, pos, q_pos, _as_float(f["frontier_slot"], scalar), _as_float(f["live"], scalar))
+        return self._draft(
+            ids, pos, q_pos, _as_float(f["frontier_slot"], scalar), _as_float(f["live"], scalar), f["ring_base"]
+        )
 
     def accept_draft(self, sampled: bool) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Accept the round :meth:`set_round` staged against the last draft, then draft from the result, all on
@@ -1017,10 +1070,16 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         frontier_slot = ttnn.add(_as_float(f["frontier_slot"], [1, 1, 1, 1]), accepted)
         frontier_slot = ttnn.subtract(frontier_slot, ttnn.multiply(ttnn.ge(frontier_slot, rows), rows))
         live = ttnn.clamp(ttnn.add(_as_float(f["live"], [1, 1, 1, 1]), accepted), min=1.0, max=float(self.window))
-        return self._draft(ids, pos, q_pos, frontier_slot, live)
+        return self._draft(ids, pos, q_pos, frontier_slot, live, f["ring_base"])
 
     def _draft(
-        self, ids: ttnn.Tensor, pos: ttnn.Tensor, q_pos: ttnn.Tensor, frontier_slot: ttnn.Tensor, live: ttnn.Tensor
+        self,
+        ids: ttnn.Tensor,
+        pos: ttnn.Tensor,
+        q_pos: ttnn.Tensor,
+        frontier_slot: ttnn.Tensor,
+        live: ttnn.Tensor,
+        ring_base: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         inp, t = self.inputs, self.block
         x_embed, token, rope, bias_row = self._block_inputs(ids, pos, q_pos, frontier_slot, live)
@@ -1028,8 +1087,10 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             ttnn.repeat(tokens_from_rows(x_embed), ttnn.Shape([1, 1, self.hc, 1])), ttnn.TILE_LAYOUT
         )
         pre_mix = self.pre_mix_init
+        # INT32 ROW_MAJOR [1]: fill_cache reads it on device, so the trace drafts whichever slot the packet names.
+        ring_base = ttnn.reshape(ring_base, [1]) if self.sessions > 1 else None
         for stage in self.stages:
-            streams, pre_mix = stage.forward(streams, pre_mix, rope, bias_row)
+            streams, pre_mix = stage.forward(streams, pre_mix, rope, bias_row, ring_base)
 
         # pre_mix [1, T, 1, hc] @ streams [1, T, hc, D] per token, over hc padded to a tile with real zeros:
         # the matmul reads the tiles' padding, which other ops leave unspecified.

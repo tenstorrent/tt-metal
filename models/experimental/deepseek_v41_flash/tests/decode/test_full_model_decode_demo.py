@@ -158,6 +158,21 @@ def _available_bytes() -> int:
         return next(int(line.split()[1]) * 1024 for line in meminfo if line.startswith("MemAvailable:"))
 
 
+def _stage_engram_or_skip(loader, config) -> None:
+    """Stage the Engram tables of the layers this run builds in tmpfs, so the build maps one shared copy instead
+    of reading ~203 GB of its own; skip the test when they fit neither as copies nor as a private read."""
+    max_layers = min(
+        int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers)), config.num_hidden_layers
+    )
+    engram_ids = [i for i in config.engram_layer_ids if i < max_layers]
+    if not engram_ids:
+        return
+    stage_engram_tables(loader, engram_ids)
+    nbytes = engram_ram_needed(loader, engram_ids)
+    if _available_bytes() < ENGRAM_RAM_MARGIN * nbytes:
+        pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables of layers {engram_ids}")
+
+
 def _build_rope(config, snapshot_dir, max_seq: int) -> dict:
     """``(cos_half, sin_half)`` ``[max_seq, Rd/2]`` for the sliding and compressed RoPE families.
 
@@ -365,13 +380,7 @@ def _build_and_prefill(
         int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers)), config.num_hidden_layers
     )
     engram_ids = [i for i in config.engram_layer_ids if i < max_layers]
-    if engram_ids:
-        # Stage the tables in tmpfs first, so the build maps one shared copy instead of reading ~203 GB of its
-        # own; the skip below then only fires when they neither fit as copies nor as a private read.
-        stage_engram_tables(loader, engram_ids)
-        nbytes = engram_ram_needed(loader, engram_ids)
-        if _available_bytes() < ENGRAM_RAM_MARGIN * nbytes:
-            pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables of layers {engram_ids}")
+    _stage_engram_or_skip(loader, config)
 
     max_new_tokens = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "2560"))
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id

@@ -228,7 +228,21 @@ impl Engram {
     /// (ids past the vocabulary cached as dead) -> hashes `[batch, len, n_layout_layers, n_cols]`.
     pub fn hash(&self, slot: usize, ids: &[i64], start: usize) -> Result<Vec<i64>, String> {
         self.check_slot(slot)?;
+        let mut history = self.histories[slot].lock();
+        self.hash_history(&mut history, ids, start)
+    }
+
+    /// `hash` against a caller-owned history `[batch, max_seq]`, which it extends. A prefetch uses a copy so the
+    /// lookup does not write a live session the decode packet writer is hashing.
+    fn hash_history(&self, history: &mut [i64], ids: &[i64], start: usize) -> Result<Vec<i64>, String> {
         let batch = self.batch;
+        if history.len() != batch * self.max_seq {
+            return Err(format!(
+                "history has {} values, not [batch={batch}, max_seq={}]",
+                history.len(),
+                self.max_seq
+            ));
+        }
         if ids.is_empty() || ids.len() % batch != 0 {
             return Err(format!("{} ids are not [batch={batch}, len]", ids.len()));
         }
@@ -238,7 +252,6 @@ impl Engram {
         }
         let (n_layers, n_cols, max_ngram, n_heads) =
             (self.layout_layers.len(), self.n_cols(), self.max_ngram, self.n_heads);
-        let mut history = self.histories[slot].lock();
         for b in 0..batch {
             for l in 0..len {
                 let id = ids[b * len + l];
@@ -333,11 +346,42 @@ impl Engram {
     /// its history), then each table's rows `[batch, len, kin]` bf16, the positions spread over threads.
     /// `outs` holds one `ids.len() * kin` buffer per table, in table order.
     pub fn rows_into(&self, ids: &[i64], start: usize, outs: &mut [&mut [u16]]) -> Result<(), String> {
+        let hashes = self.hash(self.current_session(), ids, start)?;
+        self.write_token_rows(ids, &hashes, outs)
+    }
+
+    /// `rows_into` against a copy of `history` (`[batch, hist_len]`, positions `0 .. hist_len`), leaving every live
+    /// session untouched. The server prefetches a waiting prompt's rows this way.
+    pub fn rows_from_history(
+        &self,
+        history: &[i64],
+        hist_len: usize,
+        ids: &[i64],
+        start: usize,
+        outs: &mut [&mut [u16]],
+    ) -> Result<(), String> {
+        let batch = self.batch;
+        if hist_len > self.max_seq || history.len() != batch * hist_len {
+            return Err(format!(
+                "history of {} values is not [batch={batch}, {hist_len}] within max_seq {}",
+                history.len(),
+                self.max_seq
+            ));
+        }
+        let mut local = vec![0i64; batch * self.max_seq];
+        for b in 0..batch {
+            local[b * self.max_seq..b * self.max_seq + hist_len]
+                .copy_from_slice(&history[b * hist_len..(b + 1) * hist_len]);
+        }
+        let hashes = self.hash_history(&mut local, ids, start)?;
+        self.write_token_rows(ids, &hashes, outs)
+    }
+
+    fn write_token_rows(&self, ids: &[i64], hashes: &[i64], outs: &mut [&mut [u16]]) -> Result<(), String> {
         let kin = self.kin();
         if outs.len() != self.tables.len() || outs.iter().any(|o| o.len() != ids.len() * kin) {
             return Err(format!("need {} output buffers of {} values", self.tables.len(), ids.len() * kin));
         }
-        let hashes = self.hash(self.current_session(), ids, start)?;
         let per_token = self.n_layout_layers() * self.n_cols();
         for (t, out) in outs.iter_mut().enumerate() {
             out.par_chunks_mut(kin).enumerate().try_for_each(|(n, dst)| {

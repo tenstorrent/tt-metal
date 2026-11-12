@@ -9,7 +9,8 @@ It runs as a process of its own, so watching the server costs the server nothing
 * the Rust host runtime keeps its counters (steps posted and read back, per-thread timings) in a small shared
   file, ``<prefix>.counters``, which its threads update anyway and this process maps read-only;
 * the server writes a raw snapshot, ``<prefix>.json``, once a second (:class:`MonitorFeed`): the slots and who
-  holds them, the active turns' token counts, the KV page pool, totals and the turns that ended, and a log tail.
+  holds them, the active turns' token counts, the KV page pool, totals and the turns that ended, with ``--dspark``
+  the drafts per verify round (the server's and each speculating turn's), and a log tail.
   Counts and timestamps only, and replaced by a rename, so a reader never sees half of one.
 
 Every rate, average and time series is worked out here: decode tok/s in total and per user, prefill tok/s,
@@ -294,6 +295,8 @@ class Monitor:
         point["host"] = snap.get("host", {}).get("users", 0)
         point["kv"] = {name: used / total if total else 0.0 for name, (used, total) in snap.get("pool", {}).items()}
         point["tokens_left"] = snap.get("tokens_left", 0)
+        if snap.get("dspark") is not None:
+            point["drafts"] = snap["dspark"]["drafts"]
         if images:
             point["images_live"] = len(images.get("live", []))
             point["image_rows_free"] = images.get("rows_free", 0)
