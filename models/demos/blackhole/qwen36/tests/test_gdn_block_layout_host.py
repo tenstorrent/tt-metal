@@ -222,12 +222,49 @@ def test_history_and_tap_packing(tp):
     assert torch.equal(pack_conv_taps(taps, dims), _pack_reference(taps, dims))
 
 
+def _devices(n):
+    return ",".join(str(i) for i in range(n))
+
+
 @pytest.mark.parametrize(
     "mesh, visible, tp",
-    [("P150x8", None, 8), ("P150x4", None, 4), ("(1, 8)", None, 8), ("(2, 4)", None, 4), ("P150x8", "0,1,2,3", 4)],
+    [
+        ("P150x8", None, 8),
+        ("P150x4", None, 4),
+        ("(1, 8)", None, 8),
+        ("(2, 4)", None, 4),
+        ("P150x8", "0,1,2,3", 4),
+        ("BH-Galaxy", None, 4),  # one engine opens the (8, 4) grid
+        ("BH-Galaxy", _devices(8), 8),  # DP=4 rank: (1, 8)
+        ("BH-Galaxy", _devices(16), 8),  # DP=2 rank: (2, 8)
+        ("BH-Galaxy", _devices(4), 4),  # DP=8 rank: (1, 4)
+        ("(4, 8)", _devices(8), 8),
+    ],
 )
 def test_mesh_tp_degree(mesh, visible, tp):
     assert mesh_tp_degree(mesh, visible or "") == tp
+
+
+@pytest.mark.parametrize(
+    "mesh, parent, devices", [("BH-Galaxy", (4, 8), 32), ("(4, 8)", (4, 8), 32), ("P150x8", (1, 8), 8)]
+)
+def test_mesh_tp_degree_matches_the_plugins_standard_dp_ranks(mesh, parent, devices):
+    """A standard DP rank sees its submesh's devices in TT_VISIBLE_DEVICES; its TP degree is the submesh's columns."""
+    dp_submeshes = pytest.importorskip("vllm_tt_plugin.utils.dp_submeshes")
+    for dp in (2, 4, 8):
+        _, rank_mesh = dp_submeshes.dp_submesh_shapes(parent, dp)
+        assert mesh_tp_degree(mesh, _devices(devices // dp)) == rank_mesh[1], f"{mesh} DP={dp}"
+
+
+@pytest.mark.parametrize(
+    "mesh, visible, tp", [("P150x8", "", 8), ("BH-Galaxy", _devices(8), 8), ("(4, 8)", _devices(8), 8), ("", "", 4)]
+)
+def test_spec_plan_tp_is_mesh_tp_degree(monkeypatch, mesh, visible, tp):
+    """The MTP class's spec_plan sizes its state at mesh_tp_degree, and at TP=4 without a MESH_DEVICE."""
+    qwen36_vllm = pytest.importorskip("models.demos.blackhole.qwen36.tt.qwen36_vllm")
+    monkeypatch.setenv("MESH_DEVICE", mesh)
+    monkeypatch.setenv("TT_VISIBLE_DEVICES", visible)
+    assert qwen36_vllm._mesh_tp() == tp
 
 
 def test_mesh_tp_degree_needs_mesh_device():
