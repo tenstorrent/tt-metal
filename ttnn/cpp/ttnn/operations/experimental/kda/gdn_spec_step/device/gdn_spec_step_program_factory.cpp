@@ -182,8 +182,10 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     }
     std::vector<Dfb> compute_out = {
         {"hnew", kHnewDepth * KV, t32, fp32}, {"out", Vt, tout, out_fmt}, {"wout", Ch, t16, bf16}};
-    // bounce: a held user's window tiles, or (conv_hist) the Lw - 1 packed history tiles of the window rows
-    const uint32_t bounce_tiles = hist_paged ? std::max(Ch, Lw - 1) : Ch;
+    // bounce: a held user's window tiles, or (conv_hist) the Lw - 1 packed history tiles of the window rows. The
+    // writer's 2-tile zero block for the output padding rows follows the packed tiles: Lw + 1 tiles keep it off the
+    // ring end (an indexed block must not straddle it).
+    const uint32_t bounce_tiles = hist_paged ? std::max(Ch, Lw + 1) : Ch;
     std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", bounce_tiles, t16, bf16}};
     if (ring_paged) {
         // the user's row of ring_page_idx (T*Nv words), one aligned page

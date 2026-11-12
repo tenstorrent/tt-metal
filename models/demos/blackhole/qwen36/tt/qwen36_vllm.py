@@ -465,19 +465,13 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
 
 
-_MESH_TP = {"N150": 1, "N300": 2, "P150x4": 4, "N150x4": 4, "T3K": 8}
-
-
 def _mesh_tp(default=4):
-    """Tensor-parallel degree from MESH_DEVICE ("P150x4" -> 4, "(1, 4)" -> 4)."""
-    s = os.environ.get("MESH_DEVICE")
-    if not s:
-        return default
-    if s in _MESH_TP:
-        return _MESH_TP[s]
+    """Tensor-parallel degree of this engine's mesh (kv_cache_spec.mesh_tp_degree); ``default`` when MESH_DEVICE is
+    unset or names no mesh."""
+    from models.demos.blackhole.qwen36.tt.kv_cache_spec import mesh_tp_degree
+
     try:
-        dims = [int(x) for x in s.strip("() ").replace("x", ",").split(",") if x.strip()]
-        return math.prod(dims) if dims else default
+        return mesh_tp_degree()
     except ValueError:
         return default
 

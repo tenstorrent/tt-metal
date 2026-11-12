@@ -390,7 +390,8 @@ def layer_index(name):
     return int(m.group(1))
 
 
-# The plugin's MESH_DEVICE presets (vllm_tt_plugin.utils.dp_discovery).
+# The plugin's MESH_DEVICE presets (vllm_tt_plugin.utils.dp_discovery). One engine on a BH Galaxy opens the (8, 4) grid
+# (vllm_tt_plugin.worker._resolve_mesh_grid).
 _MESH_PRESETS = {
     "N150": (1, 1),
     "P100": (1, 1),
@@ -403,13 +404,19 @@ _MESH_PRESETS = {
     "T3K": (1, 8),
     "P150x8": (1, 8),
     "P300x2": (1, 4),
+    "BH-Galaxy": (8, 4),
 }
+# Standard DP views a 32-device mesh as (4, 8) and gives each rank a (devices // 8, 8) submesh, or (1, devices) below 8
+# devices (vllm_tt_plugin.utils.dp_submeshes).
+_GALAXY_DEVICES = 32
+_GALAXY_COLS = 8
 
 
 def mesh_tp_degree(mesh_device=None, visible_devices=None):
-    """Tensor-parallel degree of the mesh the plugin opens: the columns of MESH_DEVICE (a preset or a "(rows, cols)"
-    tuple; rows hold replicas), or the TT_VISIBLE_DEVICES count when that differs from the MESH_DEVICE size, as the
-    plugin's mesh resolution does. Defaults read the environment."""
+    """Tensor-parallel degree of the mesh the plugin opens for this engine: the columns of MESH_DEVICE (a preset or a
+    "(rows, cols)" tuple; rows hold replicas). When TT_VISIBLE_DEVICES names a different device count than MESH_DEVICE,
+    as for a standard DP rank, the engine's mesh is (1, count), or (count // 8, 8) on a 32-device Galaxy, as the
+    plugin's DP discovery splits it. Defaults read the environment."""
     mesh_device = os.environ.get("MESH_DEVICE") if mesh_device is None else mesh_device
     visible_devices = os.environ.get("TT_VISIBLE_DEVICES") if visible_devices is None else visible_devices
     if not mesh_device:
@@ -426,9 +433,11 @@ def mesh_tp_degree(mesh_device=None, visible_devices=None):
             grid = None
         if grid is None or len(grid) != 2:
             raise ValueError(f"MESH_DEVICE={mesh_device!r} is neither a mesh preset nor a (rows, cols) tuple")
-    visible = [d for d in (visible_devices or "").split(",") if d.strip()]
-    if visible and len(visible) != grid[0] * grid[1]:
-        return len(visible)
+    count = len([d for d in (visible_devices or "").split(",") if d.strip()])
+    if count and count != grid[0] * grid[1]:
+        if grid[0] * grid[1] == _GALAXY_DEVICES and count % _GALAXY_COLS == 0:
+            return _GALAXY_COLS
+        return count
     return grid[1]
 
 
