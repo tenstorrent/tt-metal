@@ -72,7 +72,7 @@ def cmp(a, b):
     [
         pytest.param(
             {
-                "l1_small_size": 16384,
+                "l1_small_size": int(os.environ.get("DSV41_L1_SMALL", "16384")),
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "trace_region_size": int(os.environ.get("DSV41_IL_TRACE_REGION", "1600000000")),
                 "num_command_queues": CQS,
@@ -168,6 +168,7 @@ def test_xrow_d2d(mesh_device):
             alloc_mib=round(mv.total_bytes_allocated_per_bank / 2**20, 2),
             free_mib=round(mv.total_bytes_free_per_bank / 2**20, 2),
             largest_free_mib=round(mv.largest_contiguous_bytes_free_per_bank / 2**20, 2),
+            l1_alloc_b=ttnn.get_memory_view(md, ttnn.BufferType.L1).total_bytes_allocated_per_bank,
         )
 
     clean()
