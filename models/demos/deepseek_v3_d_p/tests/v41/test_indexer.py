@@ -8,13 +8,15 @@ selection kernels (``tt/v41/indexer_kernels.py``) vs torch.
 ``test_v41_indexer`` uses the oracle's V4.1 layers 2 -> 3 -> 20 -> 21 -> 24 reference (synthetic weights, 96
 candidate blocks) and tests layers 2 (ratio-2 KV+index source), 20 (ratio-1 candidate source), 24
 (candidate-constrained index source). Bars (G1): index scores >= 0.999; selection exact given identical scores
-(checked on tie-free scores fed to both sides, through the module's ``select``: candidate block sets and top-k row
+(checked on tie-free scores fed to both sides, through the module's ``select``: candidate block sets and top-k
+row
 sets, with 96 candidate blocks (one-level candidates) and 32 (two-level)); determinism. Recall of the device
 selection against the reference under device scores is reported as a diagnostic only.
 
 ``test_v41_indexer_selection_long`` feeds tie-free scores of chunks starting at 0 / 20,480 / 65,536 with the
 production 2048 candidate blocks (all blocks candidates / one-level / two-level candidates and the gathered
-candidate top-k, ``segment_max`` / ``gather_runs`` underneath) and checks the same exactness against ``v41.select_candidate_blocks`` + ``torch.topk``.
+candidate top-k, ``segment_max`` / ``gather_runs`` underneath) and checks the same exactness against
+``v41.select_candidate_blocks`` + ``torch.topk``.
 """
 
 import time
@@ -60,7 +62,8 @@ MESH_2X4 = [
         id="fabric2d-mesh-2x4",
     )
 ]
-# the kernel tests derive every shape from the mesh: they run on the Galaxy layouts too (the 2x4 cases skip there)
+# the kernel tests derive every shape from the mesh: they run on the Galaxy layouts too (the 2x4 cases skip
+# there)
 KERNEL_MESHES = MESH_2X4 + galaxy_meshes()
 
 
@@ -105,7 +108,8 @@ def _ref_blocks(mask: torch.Tensor, block: int) -> list[set]:
 
 
 def _check_selection(mesh_device, cfg, tables, scores: torch.Tensor, start: int, results: dict, tag: str):
-    """Exactness of the candidate source's blocks and top-k and of a candidate index source's top-k on the same
+    """Exactness of the candidate source's blocks and top-k and of a candidate index source's top-k on the
+    same
     host ``scores`` [S, W] (-inf where not visible), through ``TtV41Indexer.select``."""
     seq, width = scores.shape
     visible = start + seq
@@ -131,7 +135,8 @@ def _check_selection(mesh_device, cfg, tables, scores: torch.Tensor, start: int,
     ref_rows = _ref_rows(scores, k)
     results[f"{tag}_source_topk_exact"] = _rows(_per_query(idx)[0, 0]) == ref_rows
     if published.ids is not None and cfg.CANDIDATE_TOPK_BLOCKS > k:
-        # the source's top-k among its own candidate blocks (its path on rows wider than SUBSET_TOPK_MIN_WIDTH)
+        # the source's top-k among its own candidate blocks (its path on rows wider than
+        # SUBSET_TOPK_MIN_WIDTH)
         idx = source._topk_in_blocks(feed, published.ids, k)
         results[f"{tag}_source_topk_in_blocks_exact"] = _rows(_per_query(idx)[0, 0]) == ref_rows
     idx, _ = consumer.select(feed, tables, start, visible, published)
@@ -224,7 +229,8 @@ def test_v41_indexer(mesh_device, device_params):
         results[f"L{layer}_scores"] = comp_pcc(ref_score[finite], dev_score[finite], 0.0)[1]
 
         if layer > cfg.CANDIDATE_SOURCE_LAYER and real_candidates.ids is not None:
-            # candidate scoring (the long-row path of a candidate index source) vs the reference and the full-row
+            # candidate scoring (the long-row path of a candidate index source) vs the reference and the
+            # full-row
             # score, both over the candidate rows
             ids = real_candidates.ids
             sparse = per_query(indexer.candidate_rows(tt_x, tt_qr, index_k, tables, 0, ids))[0, 0].float()
@@ -285,9 +291,12 @@ def test_v41_indexer(mesh_device, device_params):
 
 
 def _tie_free_scores(seq: int, start: int, g) -> torch.Tensor:
-    """[seq, W] scores of a ratio-1 chunk at ``start`` (-inf where not visible, W = visible rows rounded to 32):
-    per row a random 30 % (at least 4096) of the visible rows get distinct positive bf16 values and the rest one lower
-    value, so block maxima and the top picks are tie-free while rows may hold more elements than bf16 has distinct
+    """[seq, W] scores of a ratio-1 chunk at ``start`` (-inf where not visible, W = visible rows rounded to
+    32):
+    per row a random 30 % (at least 4096) of the visible rows get distinct positive bf16 values and the rest
+    one lower
+    value, so block maxima and the top picks are tie-free while rows may hold more elements than bf16 has
+    distinct
     values."""
     width = _round32(start + seq)
     p = torch.arange(start, start + seq).view(-1, 1)
@@ -323,11 +332,16 @@ def test_v41_indexer_selection_long(mesh_device, device_params, start):
 
 
 def _decode_scores(rows: int, cap: int, visible: torch.Tensor, g) -> torch.Tensor:
-    """[rows, cap + 32] scores of a decode tile over a pool of ``cap`` rows (the pad tile after them): row i sees
-    its first ``visible[i]`` rows, -inf beyond; an idle row (0) is all -inf. Tie-free where it matters: up to 4096
-    of a row's blocks hold one distinct positive bf16 code each (at a random row of the block), the rest of the
-    visible rows are -100, so the top-2048 blocks by maximum, the top-k rows and the top-k inside the candidate
-    blocks are unambiguous. The codes stay below 2^32: the segment max's -inf column masks saturate against values
+    """[rows, cap + 32] scores of a decode tile over a pool of ``cap`` rows (the pad tile after them): row i
+    sees
+    its first ``visible[i]`` rows, -inf beyond; an idle row (0) is all -inf. Tie-free where it matters: up to
+    4096
+    of a row's blocks hold one distinct positive bf16 code each (at a random row of the block), the rest of
+    the
+    visible rows are -100, so the top-2048 blocks by maximum, the top-k rows and the top-k inside the
+    candidate
+    blocks are unambiguous. The codes stay below 2^32: the segment max's -inf column masks saturate against
+    values
     above ~1e36 on the FPU (`-inf + x` -> `-bf16max + x`), which real scores never reach."""
     width = cap + 32
     out = torch.full((rows, width), float("-inf"))
@@ -364,9 +378,12 @@ def _chip0(t) -> torch.Tensor:
 @pytest.mark.parametrize("cap", [8192, 16384, 20480, 69632, 1048576], ids=lambda c: f"cap{c}")
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_decode_selection(mesh_device, device_params, cap):
-    """The decode tile's selection (``TtV41Indexer.select`` with ``DecodePins``) against the reference: 32 rows at
-    their own visible counts (idle rows, a row below INDEX_TOPK, block and superblock boundaries, the full pool),
-    the candidate source's published blocks vs ``select_candidate_blocks`` with that row's count, its top-k vs the
+    """The decode tile's selection (``TtV41Indexer.select`` with ``DecodePins``) against the reference: 32
+    rows at
+    their own visible counts (idle rows, a row below INDEX_TOPK, block and superblock boundaries, the full
+    pool),
+    the candidate source's published blocks vs ``select_candidate_blocks`` with that row's count, its top-k vs
+    the
     dense top-k, a consumer's top-k vs its dense score masked by the published blocks. Capacities on the
     all-candidates, one-level and two-level paths (the last two below and above SUBSET_TOPK_MIN_WIDTH)."""
     rows, cfg = 32, C
@@ -452,7 +469,8 @@ def _pin_rows(mesh_device, newest: torch.Tensor, rows: int):
 
 
 def _kernel_rows(seq: int, width: int, g) -> torch.Tensor:
-    """[seq, width] bf16 rows with negatives, zeros, repeated values and -inf runs (whole blocks, partial blocks and
+    """[seq, width] bf16 rows with negatives, zeros, repeated values and -inf runs (whole blocks, partial
+    blocks and
     a -inf row tail)."""
     x = (torch.randn(seq, width, generator=g) * 4).to(torch.bfloat16).float()
     x[:, ::7] = -x[:, ::7].abs() - 1  # plenty of all-negative blocks
@@ -467,7 +485,8 @@ def _kernel_rows(seq: int, width: int, g) -> torch.Tensor:
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_segment_max(mesh_device, device_params, width):
     """segment_max vs torch (exact, every chip): seg 8 / 32, partial last chunk and padded output widths,
-    negative / -inf / tied values, pins inside, at the edge of and past the row, and the rank-0 (masked) pin."""
+    negative / -inf / tied values, pins inside, at the edge of and past the row, and the rank-0 (masked)
+    pin."""
     sp, tp = tuple(mesh_device.shape)
     rows = 64  # per chip
     seq = rows * sp * tp
@@ -508,7 +527,8 @@ def test_v41_segment_max(mesh_device, device_params, width):
 @pytest.mark.parametrize("k", [96, 2048], ids=lambda k: f"K{k}")
 @pytest.mark.parametrize("mesh_device, device_params", MESH_2X4, indirect=True)
 def test_v41_gather_runs(mesh_device, device_params, k):
-    """gather_runs vs torch (exact, every chip): runs of 8 and 32, ids in any order with repeats, the sentinel and
+    """gather_runs vs torch (exact, every chip): runs of 8 and 32, ids in any order with repeats, the sentinel
+    and
     ids just past the row reading -inf."""
     sp, tp = tuple(mesh_device.shape)
     rows, width = 64, 65536 + 96
@@ -542,15 +562,18 @@ def test_v41_gather_runs(mesh_device, device_params, k):
 
 
 def _fp4_like(shape, g) -> torch.Tensor:
-    """bf16 values with at most 2 significant bits (FP4 e2m1 codes times a power of two), as QDQ'd q and index-K."""
+    """bf16 values with at most 2 significant bits (FP4 e2m1 codes times a power of two), as QDQ'd q and
+    index-K."""
     codes = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
     v = codes[torch.randint(0, 8, shape, generator=g)] * torch.where(torch.rand(shape, generator=g) < 0.5, -1.0, 1.0)
     return (v * 2.0 ** torch.randint(-4, 0, shape[:-1] + (1,), generator=g)).to(torch.bfloat16)
 
 
 def _candidate_score_ref(q, w, k, ids, positions) -> torch.Tensor:
-    """[S, K * 8] reference of ``candidate_scores``: per head a bf16 q . k (exact fp32 dot, one rounding), relu,
-    weighted sum over the heads in fp32, one bf16 rounding; -inf for sentinel ids and rows past the query. Also
+    """[S, K * 8] reference of ``candidate_scores``: per head a bf16 q . k (exact fp32 dot, one rounding),
+    relu,
+    weighted sum over the heads in fp32, one bf16 rounding; -inf for sentinel ids and rows past the query.
+    Also
     returns sum_h |w_h relu(q_h . k)| (the scale of the head sum's accumulation error)."""
     seq, nk = ids.shape
     nblocks = k.shape[0] // 8
@@ -570,9 +593,12 @@ def _candidate_score_ref(q, w, k, ids, positions) -> torch.Tensor:
 @pytest.mark.parametrize("nk, start", [(96, 2048), (2048, 131072)], ids=["K96", "K2048"])
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_candidate_scores(mesh_device, device_params, nk, start):
-    """candidate_scores vs torch (every chip): the newest block pinned first (partly past the query), random blocks
-    with a repeat, a sentinel tail on some queries; FP4-like q / index-K, bf16 head weights. The finite pattern must
-    match exactly; values within one bf16 rounding plus 2^-6 of the head terms' magnitude of the fp32-accumulated
+    """candidate_scores vs torch (every chip): the newest block pinned first (partly past the query), random
+    blocks
+    with a repeat, a sentinel tail on some queries; FP4-like q / index-K, bf16 head weights. The finite
+    pattern must
+    match exactly; values within one bf16 rounding plus 2^-6 of the head terms' magnitude of the
+    fp32-accumulated
     reference, PCC >= 0.9999; deterministic."""
     sp, tp = tuple(mesh_device.shape)
     rows = 32  # per chip
@@ -626,13 +652,15 @@ def test_v41_candidate_scores(mesh_device, device_params, nk, start):
     exact = float((diff == 0).float().mean())
     pcc = comp_pcc(ref[finite], dev[finite], 0.0)[1]
     print(f"candidate_scores K{nk}: exact {exact:.4f}, max abs diff {float(diff.max()):.3e}, pcc {pcc:.6f}")
-    # the device's head sum is not an exact fp32 sum (measured: within 2^-7.6 of sum_h |terms| beyond the output's
+    # the device's head sum is not an exact fp32 sum (measured: within 2^-7.6 of sum_h |terms| beyond the
+    # output's
     # bf16 rounding); bound it by one bf16 rounding of the output plus 2^-6 of the terms' magnitude
     bound = ref[finite].abs() * 2**-7 + magnitude[finite] * 2**-6 + 1e-6
     assert bool((diff <= bound).all()), float((diff / bound).max())
     assert pcc >= 0.9999, pcc
     assert torch.equal(again, dev), "candidate_scores is not deterministic"
-    # the per-row pin page: each row's own position (here: the chunk's, so the same finite pattern), then a row
+    # the per-row pin page: each row's own position (here: the chunk's, so the same finite pattern), then a
+    # row
     # whose entry is the sentinel sees every candidate row, and rows with earlier positions see fewer
     with phase("per-row pins", what="device candidate scores with a per-row pin page"):
         newest = positions - start
@@ -650,7 +678,8 @@ def test_v41_candidate_scores(mesh_device, device_params, nk, start):
         diff2 = (dev2[finite2] - ref2[finite2]).abs()
         bound2 = ref2[finite2].abs() * 2**-7 + magnitude2[finite2] * 2**-6 + 1e-6
         assert bool((diff2 <= bound2).all()), float((diff2 / bound2).max())
-    # the index-K as persistent block pages (the decode pool's form), the queried slot's block 0 at a page offset
+    # the index-K as persistent block pages (the decode pool's form), the queried slot's block 0 at a page
+    # offset
     with phase("block pages", what="device candidate scores from block pages at a base"):
         base_blocks = 3 * 256  # another slot's pages before this one's
         pages = torch.cat(
@@ -670,8 +699,10 @@ def test_v41_candidate_scores(mesh_device, device_params, nk, start):
 
 
 def _range_score_ref(q_u: torch.Tensor, w_u: torch.Tensor, k_u: torch.Tensor, newest: int):
-    """[W] reference of ``range_scores`` for one user (``_candidate_score_ref``'s arithmetic over every key): per
-    head a bf16 q . k, relu, weighted sum over the heads in fp32, one bf16 rounding; -inf past ``newest`` (every
+    """[W] reference of ``range_scores`` for one user (``_candidate_score_ref``'s arithmetic over every key):
+    per
+    head a bf16 q . k, relu, weighted sum over the heads in fp32, one bf16 rounding; -inf past ``newest``
+    (every
     key for the sentinel). Also returns sum_h |w_h relu(q_h . k)|."""
     s = torch.einsum("hd,td->ht", q_u.float(), k_u.float()).to(torch.bfloat16).float().relu()
     terms = w_u.float().unsqueeze(-1) * s
@@ -708,9 +739,12 @@ def _valid_topk(picked: set, scores: torch.Tensor, k: int) -> bool:
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_range_scores(mesh_device, device_params, split):
     """``range_scores`` (the single-query scorer) vs torch on every chip: four users of a
-    20,480-row pool at a position that is a multiple of neither 32 nor 8, below INDEX_TOPK, on a tile boundary,
-    idle (sentinel) and at the full pool, in the one-row and the 32-row split layouts; the finite pattern exact, the values within ``candidate_scores``'s bound,
-    deterministic, bit-equal to ``candidate_scores`` over the same keys from block pages; then the one-row selection
+    20,480-row pool at a position that is a multiple of neither 32 nor 8, below INDEX_TOPK, on a tile
+    boundary,
+    idle (sentinel) and at the full pool, in the one-row and the 32-row split layouts; the finite pattern
+    exact, the values within ``candidate_scores``'s bound,
+    deterministic, bit-equal to ``candidate_scores`` over the same keys from block pages; then the one-row
+    selection
     (``TtV41Indexer.select`` with a one-entry pin page) on the device score is a top-k of it up to ties, the
     consumer's inside the published blocks, and the dense path (``indexer_score_dsa`` + mask) agrees on the
     selection up to the scorers' rounding (the overlap is printed; at least 90 % is demanded)."""
@@ -842,7 +876,8 @@ def test_v41_range_scores(mesh_device, device_params, split):
         assert blocks is not None
         ref_blocks = _ref_blocks(mask, cfg.CANDIDATE_BLOCK_SIZE)[0]
         if blocks != ref_blocks:
-            # ties among block maxima at the boundary: every device block must reach the reference's k-th maximum
+            # ties among block maxima at the boundary: every device block must reach the reference's k-th
+            # maximum
             bmax = torch.nn.functional.pad(dev, (0, -width % 8), value=float("-inf")).view(-1, 8).amax(-1)
             kth = min(float(bmax[b]) for b in ref_blocks if b != n_u // 8)
             extra = sorted(blocks - ref_blocks)[:8]
@@ -905,9 +940,12 @@ def test_v41_range_scores(mesh_device, device_params, split):
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_select_split_rows(mesh_device, device_params, split):
     """``TtV41Indexer.select_split_rows`` (the live rows' selections merged in one chain) on
-    four tile rows' split-layout scores stacked along the rows, against ``select_split`` row by row: the top-k ids
-    and the candidate source's published blocks bit-equal, for the candidate source and for a plain consumer, in
-    the one-row and the 32-row layouts; the rows at distinct positions (one below INDEX_TOPK, one idle). Then the
+    four tile rows' split-layout scores stacked along the rows, against ``select_split`` row by row: the top-k
+    ids
+    and the candidate source's published blocks bit-equal, for the candidate source and for a plain consumer,
+    in
+    the one-row and the 32-row layouts; the rows at distinct positions (one below INDEX_TOPK, one idle). Then
+    the
     per-row chain and the merged one are timed over four rows."""
     cfg, rows = C, 32
     cap = 20480
@@ -924,15 +962,28 @@ def test_v41_select_split_rows(mesh_device, device_params, split):
         k.view(users, width, 128)[:, cap:] = 0
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
         dev_q = ttnn.from_torch(
-            q.reshape(1, 1, rows, -1), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
+            q.reshape(1, 1, rows, -1),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep,
         )
         dev_w = ttnn.from_torch(
-            w.reshape(1, 1, rows, 32), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
+            w.reshape(1, 1, rows, 32),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep,
         )
         dev_k = ttnn.from_torch(
-            k.reshape(users, 1, width, 128), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
+            k.reshape(users, 1, width, 128),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=rep,
         )
-        # the tile's pin page: row t's newest (the verify rows read their user's keys with their own pin entry)
+        # the tile's pin page: row t's newest (the verify rows read their user's keys with their own pin
+        # entry)
         page = torch.full((rows,), -1, dtype=torch.int64)
         for u, t in enumerate(tile_rows):
             page[t] = newest[u]
@@ -945,7 +996,9 @@ def test_v41_select_split_rows(mesh_device, device_params, split):
     consumer = TtV41Indexer(mesh_device, cfg, 24, weights)
     topk = cfg.INDEX_TOPK
     with phase("scores", what="range_scores of the four rows (user u's keys, tile row t's query and pin)"):
-        scores = [range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, rows=split, row=t) for u, t in enumerate(tile_rows)]
+        scores = [
+            range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, rows=split, row=t) for u, t in enumerate(tile_rows)
+        ]
         n_rows = scores[0].shape[2]
         assert n_rows == split, (n_rows, split)
         stacked = ttnn.concat(scores, dim=2)
@@ -970,16 +1023,23 @@ def test_v41_select_split_rows(mesh_device, device_params, split):
                 pin_t = ttnn.slice(dev_pin, [0, 0, 0, t], [1, 1, 1, t + 1])
                 one, pub = indexer.select_split(scores[u], pin_t, width, topk, cand)
                 one_t = _chip0(one)[0]
-            assert torch.equal(merged_t[u], one_t), f"{name}: row {u}'s top-k differs at {(merged_t[u] != one_t).nonzero()[:8].flatten().tolist()}"
+            assert torch.equal(
+                merged_t[u], one_t
+            ), f"{name}: row {u}'s top-k differs at {(merged_t[u] != one_t).nonzero()[:8].flatten().tolist()}"
             if blocks_t is not None:
                 pub_t = _chip0(pub.ids)[0]
                 assert torch.equal(blocks_t[u], pub_t), f"{name}: row {u}'s blocks differ"
             n_valid = len(_rows(one_t.view(1, -1))[0])
-            print(f"select_split_rows {name} row {u} (newest {int(newest[u])}): {n_valid} picks, bit-equal to the row's own")
+            print(
+                f"select_split_rows {name} row {u} (newest {int(newest[u])}): {n_valid} picks, bit-equal to the row's own"
+            )
     with phase("timing", what="the per-row chain against the merged one, four rows (with the host's dispatch)"):
         pins = [ttnn.slice(dev_pin, [0, 0, 0, t], [1, 1, 1, t + 1]) for t in tile_rows]
         for what, fn in (
-            ("select_split x 4 (source)", lambda: [source.select_split(s, p, width, topk) for s, p in zip(scores, pins)]),
+            (
+                "select_split x 4 (source)",
+                lambda: [source.select_split(s, p, width, topk) for s, p in zip(scores, pins)],
+            ),
             ("select_split_rows (source)", lambda: source.select_split_rows(stacked, newest_page, users, width, topk)),
             (
                 "select_split x 4 (plain)",
@@ -996,14 +1056,17 @@ def test_v41_select_split_rows(mesh_device, device_params, split):
             for _ in range(10):
                 fn()
             ttnn.synchronize_device(mesh_device)
-            print(f"{what} at {cap} keys, {split} split rows: {(time.perf_counter() - t0) / 10 * 1e3:.3f} ms a call (with host)")
+            print(
+                f"{what} at {cap} keys, {split} split rows: {(time.perf_counter() - t0) / 10 * 1e3:.3f} ms a call (with host)"
+            )
 
 
 _LIVE_POSITIONS = [19999, 299, 4095, -1, 20479, 8191, 12345, 16383, 20000, 511, 17, 9000, 2047, -1, 15000, 6001]
 
 
 def _live_layout(layout: str, users: int = 4) -> list[tuple[int, int]]:
-    """(tile row, user) of the live rows, as ``TtV41VerifyDecoder.block_rows`` lays them out at K = 3: ``c1`` one
+    """(tile row, user) of the live rows, as ``TtV41VerifyDecoder.block_rows`` lays them out at K = 3: ``c1``
+    one
     user's block (its own row, then the rows past the users'), ``c32`` every user's four rows."""
     if layout == "c1":
         return [(3, 3), (4, 3), (5, 3), (6, 3)]
@@ -1011,9 +1074,12 @@ def _live_layout(layout: str, users: int = 4) -> list[tuple[int, int]]:
 
 
 def _blocks_case(mesh_device, layout: str) -> dict:
-    """The inputs of a consumer's selection over the live rows of ``layout`` on a pool of four users of 20,480 rows:
-    FP4-like query and index-K block pages, head weights, the tile's pin page (the rows at distinct positions, one
-    below INDEX_TOPK, idle ones) and the blocks published for each live row (the pinned block first, random blocks,
+    """The inputs of a consumer's selection over the live rows of ``layout`` on a pool of four users of 20,480
+    rows:
+    FP4-like query and index-K block pages, head weights, the tile's pin page (the rows at distinct positions,
+    one
+    below INDEX_TOPK, idle ones) and the blocks published for each live row (the pinned block first, random
+    blocks,
     a short list with a sentinel tail every fourth row, sentinels for an idle row)."""
     cfg, rows, cap, users = C, 32, 20480, 4
     width = cap + 32
@@ -1088,10 +1154,13 @@ def _blocks_row(case: dict, l: int):
 @pytest.mark.parametrize("layout", ["c1", "c32"])
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_select_rows_in_blocks(mesh_device, device_params, layout):
-    """``TtV41Indexer.select_rows_in_blocks`` (the live rows' selections in their candidate blocks in one chain) against ``select_user_in_blocks`` row by row, bit-equal on every chip: the verify step's two
-    layouts on a pool of four users of 20,480 rows (``c1``: one user's block of four tile rows, its own and the rows
+    """``TtV41Indexer.select_rows_in_blocks`` (the live rows' selections in their candidate blocks in one
+    chain) against ``select_user_in_blocks`` row by row, bit-equal on every chip: the verify step's two
+    layouts on a pool of four users of 20,480 rows (``c1``: one user's block of four tile rows, its own and
+    the rows
     past the users'; ``c32``: every user's four rows, 16 live rows), the rows at distinct positions (one below
-    INDEX_TOPK, one idle with sentinel blocks, one at the pool's end, one with a short block list). Then the per-row
+    INDEX_TOPK, one idle with sentinel blocks, one at the pool's end, one with a short block list). Then the
+    per-row
     chain and the merged one are timed."""
     block = C.CANDIDATE_BLOCK_SIZE
     with phase("inputs", what="FP4-like query / index-K block pages, head weights, pins, published blocks"):
@@ -1143,8 +1212,10 @@ def test_v41_select_rows_in_blocks(mesh_device, device_params, layout):
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_candidate_scores_skip_sentinel(mesh_device, device_params, layout, monkeypatch):
     """``V41_CANDSCORE_SENTINEL=skip`` (no read for a sentinel block id) against the default
-    (the slot's block 0 read for it): the merged selection and every row's own bit-equal between the two, on rows
-    with sentinel tails and idle rows of all sentinels; then a launch over idle rows alone (the padding chips of a
+    (the slot's block 0 read for it): the merged selection and every row's own bit-equal between the two, on
+    rows
+    with sentinel tails and idle rows of all sentinels; then a launch over idle rows alone (the padding chips
+    of a
     one-slot step) is timed both ways."""
     from models.demos.deepseek_v3_d_p.tt.v41 import indexer_kernels
 
@@ -1187,9 +1258,12 @@ def test_v41_candidate_scores_skip_sentinel(mesh_device, device_params, layout, 
 @pytest.mark.parametrize("layout", ["c1", "c32"])
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_range_scores_rows(mesh_device, device_params, layout, split):
-    """``range_scores(live=)`` (the live rows' scores in one launch that writes their stacked split layouts) against one launch a row, concatenated: bit-equal on every chip and deterministic, in the
-    verify step's two layouts (4 and 16 live rows of a four-user pool of 20,480 rows, rows at distinct positions,
-    idle ones) and in the one-row and the 32-row split layouts (with 32 split rows the 128 and 512 units go round
+    """``range_scores(live=)`` (the live rows' scores in one launch that writes their stacked split layouts)
+    against one launch a row, concatenated: bit-equal on every chip and deterministic, in the
+    verify step's two layouts (4 and 16 live rows of a four-user pool of 20,480 rows, rows at distinct
+    positions,
+    idle ones) and in the one-row and the 32-row split layouts (with 32 split rows the 128 and 512 units go
+    round
     the grid's cores, several a core). Then both forms are timed."""
     rows, cap, users = 32, 20480, 4
     width = cap + 32
@@ -1260,15 +1334,65 @@ def test_v41_range_scores_rows(mesh_device, device_params, layout, split):
             print(f"{what} ({layout}, {n_live} live rows, {split} split rows): {ms:.3f} ms a call (with host)")
 
 
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
+def test_v41_range_scores_rows_cache(mesh_device, device_params):
+    """``range_scores(live=)`` with 4 live rows, then 16, then 4 again in one process, each against one launch
+    a
+    row: with 32 split rows both counts launch on the same cores with the same compile-time arguments, so the
+    second
+    call is a program-cache hit, and a hit re-applies each core's runtime arguments only up to the length the
+    first
+    call gave it (tt_metal apply_descriptor_runtime_args). The 32-slot round's verify step after its plain
+    step is
+    that sequence, and hung the device."""
+    rows, cap, users, split = 32, 20480, 4, 32
+    width = cap + 32
+    g = torch.Generator().manual_seed(266)
+    newest = torch.full((rows,), -1, dtype=torch.int64)
+    for l, (t, _) in enumerate(_live_layout("c32", users)):
+        newest[t] = _LIVE_POSITIONS[l]
+    q = _fp4_like((rows, 32, 128), g)
+    w = (torch.randn(rows, 32, generator=g) * 0.05).to(torch.bfloat16)
+    k = _fp4_like((users * width, 128), g)
+    k.view(users, width, 128)[:, cap:] = 0
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+    row_major = dict(device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+    dev_q = ttnn.from_torch(q.reshape(1, 1, rows, -1), **row_major)
+    dev_w = ttnn.from_torch(w.reshape(1, 1, rows, 32), **row_major)
+    dev_k = ttnn.from_torch(
+        k.reshape(users, 1, width, 128),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=rep,
+    )
+    dev_pin = _replicated(mesh_device, newest.view(1, 1, 1, rows).to(torch.int32), ttnn.uint32)
+    n_rows = split_geometry(width, split)[0]
+    for step, layout in enumerate(["c1", "c32", "c1"]):
+        live_rows = _live_layout(layout, users)
+        with phase(f"stacked{step}", what=f"range_scores over the {len(live_rows)} live rows of {layout}"):
+            out = range_scores(dev_q, dev_w, dev_k, dev_pin, 0, width, rows=split, live=[(u, t) for t, u in live_rows])
+            ttnn.synchronize_device(mesh_device)
+            stacked_t = _chip0(out).float()
+        for l, (t, u) in enumerate(live_rows):
+            one_t = _chip0(range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, rows=split, row=t)).float()
+            mine = stacked_t[l * n_rows : (l + 1) * n_rows]
+            assert torch.equal(mine, one_t), f"call {step} ({layout}), live row {l}: the scores differ"
+        print(f"range_scores(live=) call {step}: {layout}, {len(live_rows)} live rows bit-equal")
+
+
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize("positions", ["lockstep", "spread"])
 @pytest.mark.parametrize("layout", ["c1", "c32"])
 @pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
 def test_v41_range_scores_rows_wide(mesh_device, device_params, layout, positions):
-    """``range_scores(live=)`` at the production pool's width (a ratio-4 source of the 1,054,720-row pool: 263,712
-    columns, the default 32 split rows of 33 chunk slots each) against one launch a row: the 32-slot verify gate
+    """``range_scores(live=)`` at the production pool's width (a ratio-4 source of the 1,054,720-row pool:
+    263,712
+    columns, the default 32 split rows of 33 chunk slots each) against one launch a row: the 32-slot verify
+    gate
     hung the device with it, which the narrow pool of ``test_v41_range_scores_rows`` did
-    not. ``lockstep``: every user near its 75th compressed row and its four rows one apart (the gate's 300-token
+    not. ``lockstep``: every user near its 75th compressed row and its four rows one apart (the gate's
+    300-token
     prompt in every slot: one non-empty split row a live row); ``spread``: ``_LIVE_POSITIONS``. Keys past row
     20,480 are zero (only the visible prefix is read)."""
     rows, cap, users, prefix = 32, 1054720 // 4, 4, 20480
