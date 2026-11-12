@@ -9,6 +9,7 @@
 namespace ckernel {
 
 namespace sfpu {
+void abs_init();
 void softcap_init();
 }  // namespace sfpu
 
@@ -17,7 +18,11 @@ void softcap_init();
 template <SfpuType sfpu_op>
 inline void llk_math_eltwise_unary_sfpu_init() {
     _llk_math_eltwise_sfpu_init_();
-    if constexpr (sfpu_op == SfpuType::softcap) {
+    if constexpr (sfpu_op == SfpuType::abs || sfpu_op == SfpuType::abs_int32) {
+        // calculate_abs_int32 advances Dest through the ADDR_MOD_6 abs_init programs (ttnn reaches it
+        // through abs_tile_init).
+        sfpu::abs_init();
+    } else if constexpr (sfpu_op == SfpuType::softcap) {
         sfpu::softcap_init();
     }
 }
