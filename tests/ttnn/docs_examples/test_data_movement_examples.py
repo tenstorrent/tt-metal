@@ -14,9 +14,7 @@ def test_concat(device):
 
     # Concatenate along dimension 3
     concatenated_tensor = ttnn.concat([tensor1, tensor2], dim=3)
-    logger.info(
-        "Concatenated Tensor Shape:", concatenated_tensor.shape
-    )  # Concatenated Tensor Shape: Shape([1, 1, 64, 64])
+    logger.info(f"Concatenated Tensor Shape: {concatenated_tensor.shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_nonzero(device):
@@ -159,12 +157,7 @@ def test_fill_rm(device):
 
     # Create input tensor
     input = torch.zeros((N, C, H, W))
-    xt = ttnn.Tensor(
-        input.reshape(-1).tolist(),
-        input.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device)
+    xt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device)
 
     # Fill the tensor
     output = ttnn.fill_rm(N, C, H, W, hOnes, wOnes, xt, val_hi, val_lo)
@@ -184,12 +177,7 @@ def test_fill_ones_rm(device):
 
     # Create input tensor
     input = torch.zeros((N, C, H, W))
-    xt = ttnn.Tensor(
-        input.reshape(-1).tolist(),
-        input.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device)
+    xt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device)
 
     # Fill the tensor
     output = ttnn.fill_ones_rm(N, C, H, W, hOnes, wOnes, xt)
@@ -243,7 +231,8 @@ def test_gather(device):
     )
 
     # Gather elements along dimension 1 using the index tensor
-    ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    gathered_tensor = ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    logger.info(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
 
 
 def test_sort(device):

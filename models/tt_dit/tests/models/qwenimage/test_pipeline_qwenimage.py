@@ -4,6 +4,8 @@
 
 import itertools
 import os
+import time
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -12,9 +14,15 @@ from loguru import logger
 from PIL import Image, ImageFilter
 
 import ttnn
-from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
+from models.tt_dit.pipelines.events import SectionEnd, SectionStart
+from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import (
+    DEFAULT_DBCACHE,
+    QwenImagePipeline,
+    QwenImagePipelineConfig,
+)
+from models.tt_dit.utils.dbcache import DBCacheConfig
 
-from .device_params import EDIT_MESH_DEVICE_PARAMS, MESH_DEVICE_PARAMS
+from .device_params import DBCACHE_MESH_DEVICE_PARAMS, EDIT_MESH_DEVICE_PARAMS, MESH_DEVICE_PARAMS
 
 DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / "gemma3" / "dog.jpg"
 
@@ -110,6 +118,75 @@ def test_qwenimage_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), DBCACHE_MESH_DEVICE_PARAMS, indirect=True)
+def test_qwenimage_dbcache(*, mesh_device: ttnn.MeshDevice, is_ci_env: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Compares a DBCache run with a full one, which caches nothing at threshold 0."""
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
+    config = QwenImagePipelineConfig.default(
+        mesh_shape=mesh_device.shape, resolutions=[(1024, 1024)], dbcache=DEFAULT_DBCACHE
+    )
+    pipeline = QwenImagePipeline(device=mesh_device, config=config)
+    prompt = 'A coffee shop entrance with a chalkboard sign reading "Qwen Coffee $2 per cup".'
+
+    def run(dbcache: DBCacheConfig | None) -> tuple[np.ndarray, dict[str, float]]:
+        starts: dict[str, float] = {}
+        durations: dict[str, float] = {}
+
+        def on_event(event: object) -> None:
+            if isinstance(event, SectionStart):
+                starts[event.name] = time.perf_counter()
+            elif isinstance(event, SectionEnd):
+                durations[event.name] = time.perf_counter() - starts[event.name]
+
+        images = pipeline(prompts=[prompt], num_inference_steps=50, seed=0, dbcache=dbcache, on_event=on_event)
+        name = "full" if dbcache is not None else "cached"
+        images[0].save(f"qwenimage_dbcache_{name}.png")
+        return np.asarray(images[0], dtype=np.float64), durations
+
+    def program_count() -> int:
+        return sum(d.num_program_cache_entries() for d in [mesh_device, *pipeline._devices])
+
+    # The warm-up compiles every program, the cached path's included.
+    programs = program_count()
+    full, full_times = run(DBCacheConfig(residual_diff_threshold=0))
+    full_programs = program_count() - programs
+    cached, cached_times = run(None)
+    cached_programs = program_count() - programs - full_programs
+    new_programs = {"full run": full_programs, "cached run": cached_programs}
+    assert not any(new_programs.values()), f"programs compiled after the warm-up: {new_programs}"
+    assert pipeline._dbcache is not None
+    cached_steps = pipeline._dbcache.cached_steps
+    assert cached_steps, "nothing was cached"
+
+    mse = np.mean((full - cached) ** 2)
+    psnr = 10 * np.log10(255**2 / mse) if mse > 0 else float("inf")
+    pcc = np.corrcoef(full.ravel(), cached.ravel())[0, 1]
+    logger.info(f"DBCache skipped {len(cached_steps)} of 50 steps: {cached_steps}")
+    logger.info(f"DBCache vs. full: PSNR {psnr:.1f} dB, PCC {pcc:.4f}")
+    for section in ("total", "denoising"):
+        speedup = full_times[section] / cached_times[section]
+        logger.info(
+            f"{section}: full {full_times[section]:.1f} s, DBCache {cached_times[section]:.1f} s, {speedup:.2f}x"
+        )
+
+    def step_mean(times: dict[str, float], steps: Iterable[int]) -> float:
+        values = [times[f"denoising_step_{s}"] for s in steps]
+        return 1e3 * sum(values) / len(values) if values else float("nan")
+
+    computed_steps = [s for s in range(50) if s not in cached_steps]
+    logger.info(
+        f"per step: full {step_mean(full_times, range(50)):.0f} ms, computed "
+        f"{step_mean(cached_times, computed_steps):.0f} ms, skipped {step_mean(cached_times, cached_steps):.0f} ms"
+    )
+
+    # Measured with DEFAULT_DBCACHE on WH 2x4: 27 steps skipped, 28.8 dB, 2.10x. BH 2x2 is not
+    # measured with it (with threshold 0.08, 4 warm-up steps and 2 cached in a row: 28.7 dB, 1.66x).
+    assert psnr >= 25
+    assert full_times["denoising"] / cached_times["denoising"] >= 1.4
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_DEVICE_PARAMS, indirect=True)

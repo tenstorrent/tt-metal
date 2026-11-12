@@ -564,8 +564,7 @@ bool can_use_fused_msda_from_offsets_l1_value(
         return false;
     }
 
-    const auto cb_plan =
-        derive_circular_buffer_plan(attrs, args, shapes, BufferType::L1, BufferType::L1, output_spec.data_type());
+    const auto cb_plan = derive_circular_buffer_plan(attrs, args, shapes, BufferType::L1, output_spec.data_type());
     return usable_program_l1 - pending_tensor_bytes > circular_buffer_bytes_per_core(cb_plan);
 }
 
