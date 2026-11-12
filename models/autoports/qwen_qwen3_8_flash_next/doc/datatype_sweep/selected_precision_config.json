@@ -1,5 +1,5 @@
 {
-  "config_id": "combined_head4_gdn8hifi2_lofi",
+  "config_id": "combined_head8hifi2_gdn8hifi2_lofi",
   "weight_groups": {
     "gdn_input": "bfloat8_b",
     "gdn_output": "bfloat8_b",
@@ -9,7 +9,7 @@
     "shared_expert": "bfloat16",
     "hc": "bfloat8_b",
     "ple_projection": "bfloat8_b",
-    "lm_head": "bfloat4_b",
+    "lm_head": "bfloat8_b",
     "routed_expert_gate_up": "bfloat4_b",
     "routed_expert_down": "bfloat4_b",
     "ple_tables": "bfloat4_b",
@@ -27,7 +27,7 @@
     "shared_expert": "HiFi2",
     "hc": "LoFi",
     "ple_projection": "HiFi2",
-    "lm_head": "LoFi",
+    "lm_head": "HiFi2",
     "routed_expert_gate_up": "LoFi",
     "routed_expert_down": "LoFi",
     "router": "HiFi2",
