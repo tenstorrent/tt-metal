@@ -10,7 +10,6 @@ leaves the next prompt token(s) for decode: ``prefill_len`` < ``prompt_len`` wit
 
 import json
 
-import pytest
 
 from models.demos.common.prefill.runners.migration_driver import MigrationDriver
 
@@ -39,8 +38,8 @@ def test_one_token_tail_leaves_the_next_prompt_token_for_decode(tmp_path, monkey
     ]
 
 
-def test_a_tail_past_the_pool_is_refused(tmp_path, monkeypatch):
-    with pytest.raises(ValueError, match="handoff tail needs prompt tokens up to 101"):
+def test_a_tail_past_the_pool_is_refused(tmp_path, monkeypatch, expect_error):
+    with expect_error(ValueError, "handoff tail needs prompt tokens up to 101"):
         _driver(tmp_path, monkeypatch, 1)._write_handoff([(0, 1, 100)], {0: "t"}, {"t": POOL})
 
 
