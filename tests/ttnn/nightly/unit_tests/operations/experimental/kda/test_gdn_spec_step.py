@@ -847,10 +847,12 @@ def test_spec_step_history_pages_refuse_bad_layouts(device, expect_error):
 
 
 @pytest.mark.parametrize("hist", [False, True], ids=["window", "conv_hist"])
-@pytest.mark.parametrize("K_draft, B", [(7, 1), (7, 4), (11, 1), (11, 2)])
+@pytest.mark.parametrize("K_draft, B", [(7, 1), (7, 4), (8, 1), (8, 3), (11, 1), (11, 2)])
 def test_spec_step_long_verifies(device, K_draft, B, hist):
     """T = 8 and 12 (the model's K = 7 and 11) in both history modes: the program fits the kernel config buffer, and
-    outputs and states are bit-identical to the sequential decode."""
+    outputs and states are bit-identical to the sequential decode. T = 9: with conv_hist the 11 packed history tiles
+    leave one tile of the writer's bounce buffer before the 2-tile zero block of the output padding rows; a block that
+    crossed the buffer end overwrote the ring_page_idx row allocated after it, and the states went to wrong pages."""
     T = K_draft + 1
     gen = torch.Generator().manual_seed(3000 + 10 * B + T)
     inp = inputs(B, seed=B + T + 3)
@@ -864,6 +866,7 @@ def test_spec_step_long_verifies(device, K_draft, B, hist):
         v.set_history(inp["rows"])
     out = ttnn.to_torch(v.run(consts, taps)).reshape(v.R, VD)
     ref = decode_per_user(device, consts, inp["h"], inp["hist2"], v.token_rows(), MODEL_MODE)
+    assert not out[B * T :].any(), "output rows past B*T are not 0"
     writes = []
     for t in range(T):
         for u in range(B):
