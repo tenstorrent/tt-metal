@@ -625,7 +625,8 @@ uint32_t finalize_kernel_bins(
     if (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
-        return base_offset;
+        // As below: a core type with no kernel group ends at offset 0, so it reserves no config buffer.
+        return kernel_groups.empty() ? 0 : base_offset;
     }
     // Emule runs host code, not RISC-V binaries. Each binary still gets a text slot, which tt-emule fills with
     // the kernel's identity, so a kernel-config block names its kernels wherever it is copied, as silicon's does.
