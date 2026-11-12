@@ -20,6 +20,7 @@ import os
 import time
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
