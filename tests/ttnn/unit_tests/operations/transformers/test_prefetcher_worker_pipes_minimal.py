@@ -58,7 +58,7 @@ class _MinimalLayout:
             self._sender = ttnn.CoreCoord(1, 0) if grid.x >= 2 else ttnn.CoreCoord(0, 1)
         else:
             if grid.x < num_receivers + 1:
-                pytest.skip(f"{num_receivers} receivers and a sender need {num_receivers + 1} cores in a row, grid {grid}")
+                pytest.skip(f"{num_receivers} receivers plus a sender need {num_receivers + 1} cores in a row")
             self._sender = ttnn.CoreCoord(num_receivers, 0)
         self.num_receivers = num_receivers
         self.num_blocks = num_receivers
