@@ -84,7 +84,7 @@ class BinarySfpu(Sfpu):
         src1 = block.dest_src0
         src2 = block.dest_src1
         dst = block.tile_id_dest
-        data_format = config.sentinel._sfpu_format.cpp_enum_value
+        data_format = compute_unit.dest_format.cpp_enum_value
         dst_rounding_mode = self.dst_rounding_mode.cpp_enum_value
         dst_tile_shape = operation.tile_shape.dst_tile_shape
         vector_mode = self._vector_mode(operation)

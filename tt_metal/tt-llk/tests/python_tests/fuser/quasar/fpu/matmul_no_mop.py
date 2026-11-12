@@ -25,10 +25,10 @@ class MatmulNoMopFpu(MatmulFpu):
         block: BlockData,
     ) -> str:
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        src_a_format, src_b_format = fidelity_source_formats(
-            config, operation, compute_unit
-        )
-        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+        src_a_format, src_b_format = fidelity_source_formats(compute_unit)
+        return configure_alu_cfg(
+            config, compute_unit, cfg_type="AluCfgType::DEFAULT"
+        ) + (
             f"_llk_math_matmul_init_no_mop_<{math_fidelity}>"
             f"({src_a_format}, {src_b_format}, {block.block_cols}, {block.block_rows});\n"
         )
@@ -41,9 +41,7 @@ class MatmulNoMopFpu(MatmulFpu):
         block: BlockData,
     ) -> str:
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        src_a_format, src_b_format = fidelity_source_formats(
-            config, operation, compute_unit
-        )
+        src_a_format, src_b_format = fidelity_source_formats(compute_unit)
         kt_dim = (
             compute_unit.src_a.dimensions[1]
             // compute_unit.src_a.tile_shape.total_col_dim()

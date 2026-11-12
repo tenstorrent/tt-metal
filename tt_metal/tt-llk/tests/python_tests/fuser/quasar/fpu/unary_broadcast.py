@@ -35,7 +35,9 @@ class UnaryBroadcastFpu(Fpu):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         tensor_shape = operation.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+        return configure_alu_cfg(
+            config, compute_unit, cfg_type="AluCfgType::DEFAULT"
+        ) + (
             f"// Operation {stage}: Unary Broadcast FPU\n"
             f"_llk_math_eltwise_unary_broadcast_init_<{broadcast_type}, {en_32bit_dest}, false>"
             f"({tensor_shape});\n"

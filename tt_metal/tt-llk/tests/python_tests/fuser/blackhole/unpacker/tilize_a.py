@@ -56,7 +56,7 @@ class UnpackerTilizeA(Unpacker):
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         narrow_tile = str(compute_unit.src_a.tile_shape.total_col_dim() == 16).lower()
 
-        return f"_llk_unpack_tilize_init_({config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}, {block_ct_dim}, {face_r_dim}, {narrow_tile}, {num_faces});\n"
+        return f"_llk_unpack_tilize_init_({compute_unit.unpack_A_src.cpp_underlying_value}, {compute_unit.unpack_A_dst.cpp_underlying_value}, {block_ct_dim}, {face_r_dim}, {narrow_tile}, {num_faces});\n"
 
     def unpack(
         self,
@@ -75,7 +75,7 @@ class UnpackerTilizeA(Unpacker):
             f"{{\n"
             f"    std::uint32_t row = ({block.tile_id_src_a}) / {block_ct_dim};\n"
             f"    std::uint32_t col = ({block.tile_id_src_a}) % {block_ct_dim};\n"
-            f"    _llk_unpack_tilize_(L1_ADDRESS({buffer_a}[row * {block_ct_dim}]), col, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}, {face_r_dim}, {num_faces}, {narrow_tile});\n"
+            f"    _llk_unpack_tilize_(L1_ADDRESS({buffer_a}[row * {block_ct_dim}]), col, {compute_unit.unpack_A_src.cpp_underlying_value}, {compute_unit.unpack_A_dst.cpp_underlying_value}, {face_r_dim}, {num_faces}, {narrow_tile});\n"
             f"}}\n"
         )
 
@@ -88,4 +88,4 @@ class UnpackerTilizeA(Unpacker):
     ) -> str:
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
 
-        return f"_llk_unpack_tilize_uninit_({config.sentinel.unpack_a_dst_format}, {tensor_shape});\n"
+        return f"_llk_unpack_tilize_uninit_({compute_unit.unpack_A_dst.cpp_underlying_value}, {tensor_shape});\n"

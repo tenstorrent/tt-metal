@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.reduce import reduce_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from helpers.llk_params import DataFormat, ReduceDimension, ReducePool
+from helpers.llk_params import ReduceDimension, ReducePool
 
 
 class ReduceFpu(Fpu):
@@ -57,21 +57,7 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
-        _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
-        is_int_fpu_en = (
-            "true"
-            if (
-                (
-                    compute_unit.src_a is not None
-                    and compute_unit.src_a.data_format in _int_fpu_formats
-                )
-                or (
-                    compute_unit.src_b is not None
-                    and compute_unit.src_b.data_format in _int_fpu_formats
-                )
-            )
-            else "false"
-        )
+        is_int_fpu_en = compute_unit.int_fpu_en
 
         return (
             f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}>(\n"

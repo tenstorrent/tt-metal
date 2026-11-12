@@ -136,12 +136,3 @@ class UnpackerA(Unpacker):
             f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}>"
             f"({block.tile_id_src_a}, {tensor_shape});\n"
         )
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

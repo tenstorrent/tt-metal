@@ -30,7 +30,6 @@ class GoldenExecutor:
         self.pack_nodes = [
             node for node in operation.pack_nodes if isinstance(node, PackNode)
         ]
-        self.output_format = self.pack_nodes[0].output.data_format
         self.buffers = {id(node.output): {} for node in self.pack_nodes}
         operands = {
             id(operand): operand
@@ -67,9 +66,6 @@ class GoldenExecutor:
 
     def _run_math(self, planned: PlannedBlock, bank, state: GoldenState) -> None:
         for node in self.operation.math_nodes:
-            self.config.sentinel.configure_golden(
-                self.config, self.operation, node, output_format=self.output_format
-            )
             if isinstance(node, SfpuNode):
                 self._run_node(planned.plan(node, "sfpu"), bank, state)
                 continue
@@ -89,28 +85,17 @@ class GoldenExecutor:
     def _run_pack(self, planned: PlannedBlock, bank, state: GoldenState) -> None:
         for node in self.operation.pack_nodes:
             if isinstance(node, SfpuNode):
-                self.config.sentinel.configure_golden(
-                    self.config, self.operation, node, output_format=self.output_format
-                )
                 self._run_node(planned.plan(node, "sfpu"), bank, state)
                 continue
-            self.config.sentinel.configure_golden(
-                self.config,
-                self.operation,
-                node,
-                output_format=node.output.data_format,
-            )
             state.output = self.buffers[id(node.output)]
             self._run_node(planned.plan(node, "pack"), bank, state)
 
     def run(self, blocks) -> None:
-        operation, config = self.operation, self.config
-        config.sentinel.prepare_operation(config, operation, blocks)
-        config.sentinel.configure_golden(
-            config, operation, output_format=self.output_format
-        )
-        dest_dtype = format_dict[config.sentinel.golden_math_format]
-        relu_configs = {}
+        operation = self.operation
+        first = operation.first_math
+        dest_dtype = format_dict[
+            first.dest_format if isinstance(first, SfpuNode) else first.src_format
+        ]
         for planned in blocks:
             for bank in planned.bank.bank_assignments():
                 state = GoldenState(
@@ -119,8 +104,7 @@ class GoldenExecutor:
                         tile_dimensions(operation.tile_shape),
                         operation.tile_shape.total_num_faces(),
                         dest_dtype,
-                    ),
-                    relu_configs,
+                    )
                 )
                 self._run_math(planned, bank, state)
                 self._run_pack(planned, bank, state)

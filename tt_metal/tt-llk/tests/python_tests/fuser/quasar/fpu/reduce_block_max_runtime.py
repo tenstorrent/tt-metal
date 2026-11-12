@@ -33,7 +33,9 @@ class ReduceBlockMaxRuntimeFpu(Fpu):
     ) -> str:
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         dest_acc = config.dest_acc.cpp_enum_value
-        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+        return configure_alu_cfg(
+            config, compute_unit, cfg_type="AluCfgType::DEFAULT"
+        ) + (
             f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>"
             f"({block.block_cols}, {tensor_shape});\n"
         )

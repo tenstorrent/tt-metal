@@ -47,14 +47,14 @@ class EltwiseFpu(Fpu):
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
         tensor_shape = operation.tile_shape.cpp_value
-        src_a_format, src_b_format = fidelity_source_formats(
-            config, operation, compute_unit
-        )
+        src_a_format, src_b_format = fidelity_source_formats(compute_unit)
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
             acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
-            return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+            return configure_alu_cfg(
+                config, compute_unit, cfg_type="AluCfgType::DEFAULT"
+            ) + (
                 f"// Operation {stage}: Eltwise {op} broadcast FPU\n"
                 f"_llk_math_eltwise_binary_broadcast_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>"
                 f"({src_a_format}, {src_b_format}, {tensor_shape}, {acc_to_dest});\n"
@@ -63,7 +63,9 @@ class EltwiseFpu(Fpu):
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
 
-        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+        return configure_alu_cfg(
+            config, compute_unit, cfg_type="AluCfgType::DEFAULT"
+        ) + (
             f"// Operation {stage}: Eltwise {op} FPU\n"
             f"_llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {math_fidelity}, {reuse_dest}>"
             f"({src_a_format}, {src_b_format}, {tensor_shape}, {acc_to_dest});\n"
@@ -88,15 +90,6 @@ class EltwiseFpu(Fpu):
             f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {reuse_dest}>"
             f"({block.tile_id_dest}, {tensor_shape});\n"
         )
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""
 
     def __str__(self) -> str:
         return f"EltwiseFpu({self.operation})"

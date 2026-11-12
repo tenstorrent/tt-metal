@@ -53,12 +53,3 @@ class TransposeDestUnpacker(UnpackerA):
         block: BlockData,
     ) -> str:
         return "_llk_unpack_set_srcB_dummy_valid_();\n"
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

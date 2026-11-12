@@ -9,7 +9,7 @@ from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
 def binary_golden(call, state, node, operation, config):
     tile_count = len(state.dest)
     tile_dims = state.dest.tile_dims
-    data_format = config.sentinel.golden_math_format
+    data_format = node.dest_format
     tensor = state.dest.tilized(data_format)
     tile_rows = tile_dims[0] * tile_dims[1] // 32
     iterations = node.sfpu.iterations

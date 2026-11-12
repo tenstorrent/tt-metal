@@ -47,7 +47,7 @@ class PackUntilize(Packer):
         return (
             f"_llk_init_packer_dest_offset_registers_<{dest_sync}, PackMode::Untilize>({face_r_dim});\n"
             f"_llk_pack_untilize_init_<{block_ct_dim}, {full_ct_dim}>(\n"
-            f"    {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
+            f"    {pack_node.pack_dst_format.cpp_underlying_value}, {face_r_dim}, {num_faces}\n"
             f");\n"
         )
 
@@ -65,7 +65,7 @@ class PackUntilize(Packer):
         return (
             f"_llk_pack_untilize_<{block_ct_dim}, {full_ct_dim}>(\n"
             f"    {untilize_l1_address(pack_node.output, block)},\n"
-            f"    {config.sentinel.pack_dst_format}, {face_r_dim}, {block.tile_id_dest}\n"
+            f"    {pack_node.pack_dst_format.cpp_underlying_value}, {face_r_dim}, {block.tile_id_dest}\n"
             f");\n"
         )
 
