@@ -477,6 +477,12 @@ def test_mk_e2e(mesh_device, monkeypatch):
         f"users agree {same}, first {outs[0][:1]} ids {outs[0][:24]}"
     )
     logger.info(f"MK_E2E_TEXT: {text!r}")
+    import hashlib as _hl  # every user's generated ids, whole (the MK_E2E line shows user 0's first 24 only)
+
+    logger.info(
+        f"MK_E2E_ALL_IDS: sha256 {_hl.sha256(repr([list(o) for o in outs]).encode()).hexdigest()[:16]} "
+        f"({len(outs)} users, {sum(len(o) for o in outs)} ids)"
+    )
     logger.info(f"MK_E2E counters: {gen.counters_report()}")
     assert n_gen >= 1
     if mm_in is not None and sampling is None:  # the image gate: the HF greedy reference's ids
