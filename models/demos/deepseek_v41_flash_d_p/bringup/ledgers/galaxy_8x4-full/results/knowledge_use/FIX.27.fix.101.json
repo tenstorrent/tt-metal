@@ -1,0 +1,17 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.27",
+  "role": "debug",
+  "attempt": 1,
+  "agent": "ttnn-expert-debugger",
+  "t": "2026-11-12T21:01:01",
+  "head": "33d0dd745ad",
+  "touched": []
+ }
+}

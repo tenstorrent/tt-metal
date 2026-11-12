@@ -44,6 +44,24 @@ def key_hash(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
+def _git_knows(path: Path) -> bool:
+    """The path is in git's index or in HEAD (False outside a work tree, or without git)."""
+    import subprocess
+
+    cwd = path.parent if path.parent.is_dir() else Path.cwd()
+    for cmd in (
+        ["git", "ls-files", "--error-unmatch", "--", str(path)],
+        ["git", "cat-file", "-e", f"HEAD:./{path.name}"],
+    ):
+        try:
+            r = subprocess.run(cmd, cwd=cwd, capture_output=True)
+        except OSError:
+            return False
+        if r.returncode == 0:
+            return True
+    return False
+
+
 class ChunkError(ValueError):
     pass
 
@@ -78,8 +96,10 @@ class ChunkedJson:
         return self.chunk_files() or ([self.legacy] if self.legacy.exists() else [])
 
     def paths(self) -> list[Path]:
-        """What a commit stages for this store: the chunk directory and the old file (its deletion, once)."""
-        return [self.dir, self.legacy]
+        """What a commit stages for this store: the chunk directory, and the old file only while it is on disk or git
+        still has it (in the index, or in HEAD with its deletion staged): its deletion is committed once, after which
+        the old name is never listed again (OV-38: FIX.27's gate commit named a file git no longer knew)."""
+        return [self.dir] + ([self.legacy] if self.legacy.exists() or _git_knows(self.legacy) else [])
 
     def exists(self) -> bool:
         return bool(self.files())

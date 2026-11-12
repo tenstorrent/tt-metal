@@ -1,0 +1,53 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "git add -A -- <path> fails (pathspec did not match) for a deletion already staged; git commit -- <path> commits it"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "framework-only change, no kernel"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "n/a",
+   "evidence": "no device use; only the gate's CPU selftests"
+  },
+  {
+   "id": "OV-38",
+   "answer": "done",
+   "evidence": "core/gate.py _stage skips staged deletions in git add; core/chunked.py ChunkedJson.paths names the old file only while on disk or known to git; selftest test_a_gate_commit_after_the_migration_was_staged_names_no_vanished_file; gate FIX.27 --check run"
+  },
+  {
+   "id": "FIX.27",
+   "answer": "done",
+   "evidence": "chunks below 256 KB bound (+ one record), ledger_files_over_limit 0"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.27",
+  "role": "overseer",
+  "attempt": 4,
+  "agent": "bringup-engineer",
+  "t": "2026-11-12T21:08:23",
+  "head": "33d0dd745ad",
+  "touched": [
+   "models/demos/common/bringup/core/chunked.py",
+   "models/demos/common/bringup/core/gate.py",
+   "models/demos/common/bringup/selftest/test_ledger_chunks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.27.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.27.overseer.4.json"
+  ]
+ }
+}
