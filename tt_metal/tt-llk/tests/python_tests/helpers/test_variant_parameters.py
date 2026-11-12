@@ -2212,7 +2212,7 @@ class PACK_BLOCK(TemplateParameter):
 
 @dataclass
 class PACK_API(TemplateParameter):
-    """The compute API's pack_block through pack_api_shim.h (Blackhole): arm "0" the form tables, "T", "B" or "W" one form, "M" main's per-tile loop; tiles per block and the matmul K as pack_block<tiles, acc, kt>; the output CB and the kernel's matmul and pack-thread SFPU API traits."""
+    """The compute API's pack_block through pack_api_shim.h (Blackhole): arm "0" the form tables, "T", "B" or "W" one form, "M" main's per-tile loop; tiles per block and the matmul K as pack_block<tiles, acc, kt>; the output CB, the kernel's matmul and pack-thread SFPU API traits, and a compile-time DEST start (dst) as a constant tile loop passes."""
 
     arm: str = "0"
     tiles: int = 1
@@ -2220,6 +2220,7 @@ class PACK_API(TemplateParameter):
     out: int = 16
     matmul: bool = False
     sfpu: bool = False
+    dst: int = -1
 
     def convert_to_cpp(self) -> str:
         arm = "0" if self.arm == "0" else f"'{self.arm}'"
@@ -2233,6 +2234,8 @@ class PACK_API(TemplateParameter):
             lines.append("#define PACK_API_SHIM_MATMUL")
         if self.sfpu:
             lines.append("#define PACK_API_SHIM_SFPU")
+        if self.dst >= 0:
+            lines.append(f"#define PACK_API_DST {self.dst}")
         return "\n".join(lines)
 
 

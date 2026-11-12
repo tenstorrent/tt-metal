@@ -208,6 +208,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     constexpr std::uint32_t out = PACK_API_SHIM_OUT;
+#if defined(PACK_API_DST)
+    constexpr std::uint32_t dst = PACK_API_DST;
+    (void)DST_INDEX;
+#else
+    const std::uint32_t dst = DST_INDEX;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
@@ -247,12 +253,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if PACK_API_SHIM_PR
                 if constexpr (pack_api_arm != 'M')
                 {
-                    pack_api_shim::pack_block<pack_api_tiles, is_fp32_dest_acc_en, pack_api_kt, pack_api_arm>(DST_INDEX, out);
+                    pack_api_shim::pack_block<pack_api_tiles, is_fp32_dest_acc_en, pack_api_kt, pack_api_arm>(dst, out);
                 }
                 else
 #endif
                 {
-                    pack_api_shim::main_pack_block<is_fp32_dest_acc_en>(DST_INDEX, out, pack_api_tiles);
+                    pack_api_shim::main_pack_block<is_fp32_dest_acc_en>(dst, out, pack_api_tiles);
                 }
                 if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                 {

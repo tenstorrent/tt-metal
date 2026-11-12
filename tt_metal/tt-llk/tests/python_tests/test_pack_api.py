@@ -52,10 +52,14 @@ def test_pack_api(
 # in a kernel with the matmul and pack-thread SFPU API headers.
 PACK_API_PRODUCTION = {
     "bmm_full_f16b_2x2": dict(
-        dest_sync=DestSync.Full, block_tiles=4, opts=dict(out=2, matmul=True, sfpu=True)
+        dest_sync=DestSync.Full,
+        block_tiles=4,
+        opts=dict(out=2, matmul=True, sfpu=True, dst=0),
     ),
     "bmm_half_f16b_2x2": dict(
-        dest_sync=DestSync.Half, block_tiles=4, opts=dict(out=2, matmul=True, sfpu=True)
+        dest_sync=DestSync.Half,
+        block_tiles=4,
+        opts=dict(out=2, matmul=True, sfpu=True, dst=0),
     ),
 }
 
