@@ -176,7 +176,13 @@ class Golden:
         """One unpack step, L1 -> `register`."""
         l1_format = cfg.in_formats[index]
         fmt = src_format or self._default_src_format(cfg, index)
-        unpack = getattr(self.blocks, f"l1_to_{register}")
+        # A real attribute reference rather than a name built from a string:
+        # a rename now breaks where grep and the linter can see it, instead of
+        # at run time on whichever path happens to use that register.
+        unpack = {
+            "srcA": self.blocks.l1_to_srcA,
+            "srcB": self.blocks.l1_to_srcB,
+        }[register]
 
         def run(regs: Registers) -> None:
             regs[into] = unpack(regs[source], l1_format, fmt, **cfg.geometry)
@@ -193,7 +199,10 @@ class Golden:
     ) -> Step:
         """One Dest-feedback step, Dest -> `register`."""
         fmt = src_format or self._default_src_format(cfg, 0)
-        convert = getattr(self.blocks, f"dest_to_{register}")
+        convert = {
+            "srcA": self.blocks.dest_to_srcA,
+            "srcB": self.blocks.dest_to_srcB,
+        }[register]
 
         def run(regs: Registers) -> None:
             # The conversion branches on the **Dest** format, and the src format
