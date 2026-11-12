@@ -625,7 +625,7 @@ class LTXDistilledPipeline(LTXPipeline):
         Opt-in (LTX_LATENT_STATS=1): the fingerprints are host reductions over the whole latent
         (~7 ms at S1, ~10 ms at S2 for 1080p/145f) on the critical path between stages.
         """
-        if os.environ.get("LTX_LATENT_STATS", "0") == "0":
+        if os.environ.get("LTX_LATENT_STATS", "0") not in ("1", "true", "True"):
             return
         for name, tensor in (("video", video), ("audio", audio)):
             if tensor is None:
