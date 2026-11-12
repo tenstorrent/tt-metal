@@ -7,12 +7,11 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
 from typing import overload
-
-from test_ltx_audio_trace_control import definitions
+from unittest.mock import Mock, patch
 
 import torch
+from test_ltx_audio_trace_control import definitions
 
 ROOT = Path(__file__).resolve().parents[2]
 VAE = ROOT / "models/vae/vae_ltx.py"
@@ -226,8 +225,13 @@ class EncoderLifecycleTests(unittest.TestCase):
         ns = definitions(
             ROOT / "utils/tracing.py",
             {"Tracer", "_tree_map", "_verify_value", "_clone_tensor"},
-            dict(ttnn=native, overload=overload, logger=Mock(), _kernel_prewarm_capturing=False,
-                 _TRACER_VALID_INPUT_TYPES=(torch.Tensor, int, float, str, bool, type(None))),
+            dict(
+                ttnn=native,
+                overload=overload,
+                logger=Mock(),
+                _kernel_prewarm_capturing=False,
+                _TRACER_VALID_INPUT_TYPES=(torch.Tensor, int, float, str, bool, type(None)),
+            ),
         )
         self.tracer_type = ns["Tracer"]
         # Native transfer/copy boundaries only; prepare/staging/capture/replay/release are production.
@@ -252,23 +256,31 @@ class EncoderLifecycleTests(unittest.TestCase):
 
         self.enc.encode_device = encode
         self.warmup = next(
-            n for n in ast.walk(ast.parse(PIPE.read_text()))
+            n
+            for n in ast.walk(ast.parse(PIPE.read_text()))
             if isinstance(n, ast.If) and ast.unparse(n.test) == "self.vae_encoder is not None and warm_encoders"
         )
         release = methods(
-            ROOT / "pipelines/ltx/pipeline_ltx.py", "LTXPipeline", ["release_traces"],
+            ROOT / "pipelines/ltx/pipeline_ltx.py",
+            "LTXPipeline",
+            ["release_traces"],
             dict(StateTensor=Mock()),
         )["release_traces"]
         self.pipe = SimpleNamespace(
-            vae_encoder=self.enc, vae_decoder=Mock(), _audio_adapter=Mock(),
-            transformer=None, _trace_state={},
+            vae_encoder=self.enc,
+            vae_decoder=Mock(),
+            _audio_adapter=Mock(),
+            transformer=None,
+            _trace_state={},
             _warmup_encode=lambda h, w: self.enc.forward(self.image(h)),
         )
         self.pipe.release_traces = lambda: release(self.pipe)
 
     def warm(self):
-        exec(compile(ast.Module([self.warmup], type_ignores=[]), str(PIPE), "exec"),
-             dict(self=self.pipe, warm_encoders=True, height=8, width=8, os=os, logger=Mock(), ref_num_frames=None))
+        exec(
+            compile(ast.Module([self.warmup], type_ignores=[]), str(PIPE), "exec"),
+            dict(self=self.pipe, warm_encoders=True, height=8, width=8, os=os, logger=Mock(), ref_num_frames=None),
+        )
 
     def assert_released(self, tracers):
         for tracer in tracers:
@@ -307,8 +319,7 @@ class EncoderLifecycleTests(unittest.TestCase):
         self.warm()
         old = list(self.created)
         tree = ast.parse((ROOT / "pipelines/ltx/pipeline_ltx.py").read_text())
-        reset = next(n for n in ast.walk(tree) if isinstance(n, ast.Expr)
-                     and ast.unparse(n) == "self.release_traces()")
+        reset = next(n for n in ast.walk(tree) if isinstance(n, ast.Expr) and ast.unparse(n) == "self.release_traces()")
         exec(compile(ast.Module([reset], type_ignores=[]), "cold_reset", "exec"), dict(self=self.pipe))
         self.assert_released(old)
         self.warm()
@@ -319,23 +330,29 @@ class EncoderLifecycleTests(unittest.TestCase):
     def check_prepare_failure(self, error_type, phase, release_error=False):
         error = error_type("primary preparation failure")
         original = self.enc.encode_device
+
         # Use the actual failed prepare transition, including staged inputs.
         def fail(*args):
             raise error
+
         self.enc.encode_device = fail
         if phase == "stage":
             original_stage = self.tracer_type._stage_inputs
+
             def stage_then_fail(tracer, *args):
                 original_stage(tracer, *args)
                 raise error
+
             fault = patch.object(self.tracer_type, "_stage_inputs", stage_then_fail)
         else:
             fault = patch.object(self.enc, "encode_device", fail)
         original_release = self.tracer_type.release_trace
+
         def release(tracer):
             original_release(tracer)
             if release_error:
                 raise RuntimeError("secondary cleanup failure")
+
         with fault, patch.object(self.tracer_type, "release_trace", release):
             with self.assertRaises(error_type) as caught:
                 self.enc.forward(self.image())
@@ -359,15 +376,19 @@ class EncoderLifecycleTests(unittest.TestCase):
         start = len(self.created)
         original = self.enc.encode_device
         error = error_type("warmup failure")
+
         def fail(x, h, w):
             if h == shape and self.enc.traced != fail_eager:
                 raise error
             return original(x, h, w)
+
         original_release = self.tracer_type.release_trace
+
         def release(tracer):
             original_release(tracer)
             if release_error:
                 raise RuntimeError("secondary warmup cleanup failure")
+
         with patch.object(self.enc, "encode_device", fail), patch.object(self.tracer_type, "release_trace", release):
             with self.assertRaises(error_type) as caught:
                 self.warm()
@@ -397,24 +418,32 @@ class EncoderLifecycleTests(unittest.TestCase):
 def _preparation_case(error_type, phase, release_error):
     def test(self):
         self.check_prepare_failure(error_type, phase, release_error)
+
     return test
 
 
 def _warmup_case(error_type, shape, fail_eager):
     def test(self):
         self.check_warmup_failure(error_type, shape, fail_eager)
+
     return test
 
 
 for _error in (RuntimeError, KeyboardInterrupt):
     for _phase in ("stage", "prep"):
         for _secondary in (False, True):
-            setattr(EncoderLifecycleTests, f"test_prepare_{_error.__name__}_{_phase}_cleanup_fault_{_secondary}",
-                    _preparation_case(_error, _phase, _secondary))
+            setattr(
+                EncoderLifecycleTests,
+                f"test_prepare_{_error.__name__}_{_phase}_cleanup_fault_{_secondary}",
+                _preparation_case(_error, _phase, _secondary),
+            )
     for _shape in (4, 8):
         for _eager in (False, True):
-            setattr(EncoderLifecycleTests, f"test_warmup_{_error.__name__}_{_shape}_eager_{_eager}",
-                    _warmup_case(_error, _shape, _eager))
+            setattr(
+                EncoderLifecycleTests,
+                f"test_warmup_{_error.__name__}_{_shape}_eager_{_eager}",
+                _warmup_case(_error, _shape, _eager),
+            )
 
 
 if __name__ == "__main__":

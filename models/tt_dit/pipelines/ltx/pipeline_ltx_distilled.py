@@ -1808,9 +1808,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0, traced, device=self.mesh_device
             )
             if image_cond and i2v.guide_rows is not None:  # annealed end guide: values-only mask update
-                step_mask = ref_fl_end_guide_step_mask(
-                    i2v.denoise_mask, i2v.guide_rows, sigma_next, sigmas[0].item()
-                )
+                step_mask = ref_fl_end_guide_step_mask(i2v.denoise_mask, i2v.guide_rows, sigma_next, sigmas[0].item())
                 mask_host = torch.ones(1, 1, video_N, 1)
                 mask_host[:, :, :video_N_real, :] = step_mask[0, :, 0].unsqueeze(-1)
                 state._tt_i2v_mask.update(

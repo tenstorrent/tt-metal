@@ -14,10 +14,10 @@ from typing import TYPE_CHECKING, Iterable, Sequence
 import torch
 from einops import rearrange
 from loguru import logger
+from models.common.utility_functions import is_blackhole
 from safetensors.torch import load_file
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
