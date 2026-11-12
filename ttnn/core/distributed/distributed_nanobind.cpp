@@ -275,8 +275,9 @@ void py_module(nb::module_& mod) {
             [](const MeshCoordinateRange& a, const MeshCoordinateRange& b) { return a == b; },
             nb::is_operator());
 
-    static_cast<nb::class_<MeshCoordinateRangeSet>>(mod.attr("MeshCoordinateRangeSet"))
-        .def(nb::init<>(), "Default constructor for an empty MeshCoordinateRangeSet.")
+    auto mesh_coordinate_range_set =
+        static_cast<nb::class_<MeshCoordinateRangeSet>>(mod.attr("MeshCoordinateRangeSet"));
+    mesh_coordinate_range_set.def(nb::init<>(), "Default constructor for an empty MeshCoordinateRangeSet.")
         .def(nb::init<const MeshCoordinateRange&>(), "Constructor with specified range.", nb::arg("range"))
         .def("merge", &MeshCoordinateRangeSet::merge, nb::arg("range"))
         .def(
@@ -290,6 +291,9 @@ void py_module(nb::module_& mod) {
             "__eq__",
             [](const MeshCoordinateRangeSet& a, const MeshCoordinateRangeSet& b) { return a == b; },
             nb::is_operator());
+    // merge() mutates the set in place, so like Python's own set it compares by value but is unhashable;
+    // nanobind would otherwise keep object.__hash__ and equal sets would hash differently.
+    mesh_coordinate_range_set.attr("__hash__") = nb::none();
 
     static_cast<nb::class_<SystemMeshDescriptor>>(mod.attr("SystemMeshDescriptor"))
         .def(nb::init<>())

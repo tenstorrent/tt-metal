@@ -779,9 +779,11 @@ def test_mesh_coordinate_range_value_equality():
     assert {a: 1}[b] == 1
 
 
-def test_mesh_coordinate_range_set_value_equality():
+def test_mesh_coordinate_range_set_value_equality(expect_error):
     r = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(1, 1))
     a = ttnn.MeshCoordinateRangeSet(r)
     b = ttnn.MeshCoordinateRangeSet(r)
     assert a == b
     assert a != ttnn.MeshCoordinateRangeSet()
+    with expect_error(TypeError, "unhashable"):
+        hash(a)
