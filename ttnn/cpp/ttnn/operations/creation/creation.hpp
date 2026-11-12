@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <concepts>
 #include <functional>
 #include <utility>
 #include <variant>
@@ -37,7 +38,7 @@ Tensor ones(
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 template <typename FillValueType>
-    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
+    requires std::integral<FillValueType> or std::is_same_v<FillValueType, float>
 Tensor full(
     const ttnn::Shape& shape,
     FillValueType fill_value,
@@ -73,7 +74,7 @@ Tensor from_buffer(
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 template <typename FillValueType>
-    requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
+    requires std::integral<FillValueType> or std::is_same_v<FillValueType, float>
 Tensor full_like(
     const Tensor& tensor,
     FillValueType fill_value,
