@@ -151,29 +151,33 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
         // Slopes in LReg0/1/2 packed hi/lo, intercepts in LReg4/5/6 -- where WH and BH keep a
-        // 6-entry SFPLUTFP32 table. gelu_appx uses the same six registers the same way.
-        sfpi::vLut16ss s01 = l_reg[sfpi::LRegs::LReg0];
-        sfpi::vLut16ss s23 = l_reg[sfpi::LRegs::LReg1];
-        sfpi::vLut16ss s45 = l_reg[sfpi::LRegs::LReg2];
-        sfpi::vLut16ii i01 = l_reg[sfpi::LRegs::LReg4];
-        sfpi::vLut16ii i23 = l_reg[sfpi::LRegs::LReg5];
-        sfpi::vLut16ii i45 = l_reg[sfpi::LRegs::LReg6];
+        // 6-entry SFPLUTFP32 table, loaded by tanh_init. gelu_appx uses the same six registers.
+        //
+        // Raw TTI rather than sfpi::lut: sfpi writes the LUT result back into LReg3, the register
+        // SFPLUTFP32 reads its input from, so every row is a serial load / lut / store chain plus
+        // a TTINCRWC (4 slots, and the SFPU stalls on each adjacency). The hardware leaves the LUT
+        // destination free, so the result goes to LReg7 and the rows pipeline: the next row's
+        // SFPLOAD and the previous row's SFPSTORE sit between a LUT and its consumer (3 slots per
+        // row). The steady-state body is recorded once and replayed; the store walks dest through
+        // ADDR_MOD_6 (dest += 2, programmed by tanh_init<true>), so no TTINCRWC per row. Same
+        // instruction and mode bits as before; only the destination register and the schedule
+        // change.
+        static_assert(ITERATIONS >= 2, "calculate_tanh<true> pipelines at least two rows");
+        constexpr unsigned LUT_MODE = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_RETAIN;
 
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
+        // Body for row r: load row r+1, store row r (dest += 2), lut row r+1.
+        load_replay_buf<Exec>(0 /*start*/, 3 /*len*/, [] {
+            TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2 /*row r+1*/);
+            TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+            TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
+        });
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            val = sfpi::lut(val, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
-            sfpi::dst_reg[0] = val;
-
-            sfpi::dst_reg++;
+        for (int d = 2; d < ITERATIONS; d++) {
+            TTI_REPLAY(0, 3, 0, 0);
         }
-
-        l_reg[sfpi::LRegs::LReg0] = s01;
-        l_reg[sfpi::LRegs::LReg1] = s23;
-        l_reg[sfpi::LRegs::LReg2] = s45;
-        l_reg[sfpi::LRegs::LReg4] = i01;
-        l_reg[sfpi::LRegs::LReg5] = i23;
-        l_reg[sfpi::LRegs::LReg6] = i45;
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -236,6 +240,11 @@ inline void tanh_init() {
         //
         // test_tanh_lut_consistency.py checks all four against the header, and holds the two
         // arch copies of this table together.
+        //
+        // calculate_tanh<true> stores through ADDR_MOD_6: dest += 2 per row, the same programming
+        // typecast and the fp32 exp use.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
         sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.192871094f);
 
