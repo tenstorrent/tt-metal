@@ -450,8 +450,14 @@ jobs:
           # a CIv2 SKU is one single `tt-ubuntu-2204-*` label. prepare_test_matrix.py
           # intersects this list against each tests yaml's own `skus:` map, so dropping a
           # SKU here removes exactly its matrix rows from every impl this workflow calls
-          # (ttnn, t3000, fabric, umd, runtime-sim, blackhole-multi-card), with no change
-          # needed in the impls or the tests yamls. Uncomment to restore.
+          # (ttnn, t3000, fabric, umd, runtime-sim), with no change needed in the impls or
+          # the tests yamls. Uncomment to restore.
+          #
+          # The one exception is blackhole-multi-card-fast-sanity-tests, whose tests yaml
+          # is bh_quietbox_2 only: an empty intersection against a non-empty tests yaml is
+          # a hard error in prepare_test_matrix.py, not a no-op, so that job is gated off
+          # separately below. Any other suite that loses its last SKU here needs the same
+          # treatment.
           if [[ "$run_wormhole" == "true" ]]; then
             wh_skus+=(
               # CIv1 -- temporarily disabled
@@ -621,8 +627,19 @@ jobs:
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # Blackhole multi-card post-commit tests (QB2/P300 box).
+  #
+  # TEMPORARY: killed outright by the leading `false &&`. Every test in
+  # blackhole_multi_card_sanity_tests.yaml is bh_quietbox_2 only, and that SKU is
+  # CIv1, so it is commented out of generate-sku-matrix above. That leaves this
+  # suite with a non-empty tests yaml and an empty SKU intersection, which
+  # prepare_test_matrix.py treats as a configuration error rather than a no-op:
+  #   ::error::No tests selected for enabled SKUs '...'
+  # so load-test-matrix fails the run instead of skipping. Gating the whole job
+  # off is what "no CIv1 legs" means for this suite -- there is nothing left in it
+  # to run on CIv2. A skipped job is fine for ai-run-summary, which drops children
+  # whose result is skipped. Drop the `false &&` when the CIv1 SKUs come back.
   blackhole-multi-card-fast-sanity-tests:
-    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-blackhole == 'true' && toJSON(inputs.run-blackhole-multi-card-sanity-tests) != 'false' }}
+    if: ${{ false && always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-blackhole == 'true' && toJSON(inputs.run-blackhole-multi-card-sanity-tests) != 'false' }}
     # bake-env-dev-full is in needs but deliberately absent from the if: above.
     # A failed bake leaves the ref empty and the leg falls back to the artifact
     # path, which a gate on the bake would turn into a skipped suite instead.
