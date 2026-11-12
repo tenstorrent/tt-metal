@@ -1,0 +1,17 @@
+# Python packages the weightless synthetic H3 needs on top of the pinned ttnn wheel venv (h3.sh installs them into
+# traytest/venv-ttnn-wheel, never into run.sh's venv). Versions are those of the patched H3 build venv that ran
+# the synthetic H3 before the wheel. torchaudio is left out: only an audio resample path imports it.
+# torchvision is not listed: h3.sh installs the one that matches the venv's CPU torch from the torch index.
+pytest==9.0.3
+pytest-timeout==2.4.0
+loguru==0.6.0
+diffusers==0.38.0
+transformers==5.12.1
+tokenizers==0.22.2
+safetensors==0.8.0
+huggingface_hub==1.16.1
+pillow==12.3.0
+av==17.1.0
+tqdm==4.66.3
+pyyaml==6.0.3
+pytz==2025.2

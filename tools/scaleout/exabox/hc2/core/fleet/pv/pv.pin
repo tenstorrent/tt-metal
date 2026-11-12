@@ -1,0 +1,5 @@
+# fleet/pv/pv.pin: the power virus run.sh's bus-bar stage runs (shipped in-tree and in the tgz).
+# run-ttx is BHFT 4.7.4 funtest_bh/tenstorrent/bin/run-ttx (PyInstaller single file, version 2026-04-08-3b82a468ccfe5b48);
+# checked to start from a bare dir holding only these two files (ldd: libdl, libz, libpthread, libc; --help rc 0).
+run-ttx sha256=a7353f97fef1bed6bd216ffdc6d19253f824e0a420bba60a4c57cdf94e6cecad bytes=25141352
+single-core-matrix-pv-fp32-noc.ttx sha256=727de9fd3f1298b1267f08148340b17e8dbf436acf7584f093998553d2d290c1 bytes=178713

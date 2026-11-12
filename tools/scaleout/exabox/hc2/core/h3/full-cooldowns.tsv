@@ -1,0 +1,8 @@
+# h3/full-cooldowns.tsv: reliability.sh h3-full cooldowns (h3/tables.py, seed 5534).
+# Rows 'offset_s<TAB>duration_s': 5 zero-load cooldowns of 60-180 s in the first 30 min, offset from the first gen;
+# each starts at the first gen boundary at or after its offset. None after 30 min (h3.sh --cooldowns-end): then continuous full load.
+39	153
+550	69
+768	136
+1177	77
+1621	105

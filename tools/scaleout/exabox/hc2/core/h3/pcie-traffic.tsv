@@ -1,0 +1,7 @@
+# h3/pcie-traffic.tsv: LTX-like PCIe traffic per H3 step (h3/pcie_traffic.py). One row per mode, fixed:
+# every loop and every box moves the same bytes from the same seed. reload_mb_per_chip is written and read back at step
+# start in chunk_mb chunks (3328 MB x 32 chips = 112 GB per direction per box, LTX worker-start weight volume);
+# gen_mb_per_chip is written before every gen and read back after it. Sizes in MiB.
+# mode	seed	reload_mb_per_chip	gen_mb_per_chip	chunk_mb
+random	6925	3328	128	64
+full	6926	3328	128	64

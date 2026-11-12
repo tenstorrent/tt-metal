@@ -1,0 +1,69 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+# lib/stubhost/py: the device python of run.sh --stub (lib/stubhost.sh). A healthy 32-chip box: every device step
+# run.sh reaches answers as a clean pass without opening any device; other scripts run under the real python3 on the
+# fake tree. Adapted from tests/test_fleet.sh's stub (healthy path only, no fault knobs). Calls go to $W_STATE/calls.
+case "$1" in
+  -) src=$(cat); case $src in *enumerate_devices*) ls "$W_DEV" | wc -l ;; esac; exit 0 ;;
+  -I) [ "$2" = -c ] || exit 2
+      [ "$3" = 'import ttexalens' ] && exit 0
+      echo "probe ok"; exit 0 ;;
+  ub0_repro.py) echo "ub0 $*" >> "$W_STATE/calls"
+     p=; r=; for x in "$@"; do [ "$p" = --result ] && r=$x; p=$x; done
+     [ -n "$r" ] && p=$(awk -F'\t' '$2 == "bmc_poll_start" { f = $5 } END { print f }' "${r%/*}/heavy/steps.tsv" 2>/dev/null) && [ -n "$p" ] \
+       && for i in $(seq 50); do grep -q ',vr_pg_UBB3,' "${r%/*}/heavy/$p" 2>/dev/null && break; sleep 0.1; done
+     echo "AICLK after the quiet: 800 MHz chips 0-31"; echo "AICLK after mesh open: 1350 MHz chips 0-31"; exit 0 ;;
+  numeric_pinpoint.py|./numeric_pinpoint.py) echo "pinpoint $*" >> "$W_STATE/calls"
+     python3 -I - "$@" <<'PY'
+import json, sys
+a = sys.argv[1:]
+cs = {}
+for i in range(32):
+    u = i // 8; bus = (0x00, 0x40, 0xC0, 0x80)[u] + 1 + i % 8
+    d = dict(checks=10, bad_checks=0, bad=0, per_bank=[0] * 8, per_lane=[0, 0], per_phase={p: [0, 2] for p in ("hr", "nr", "hl", "nw", "rw")})
+    cs[f"{bus:02x}:00.0"] = dict(mesh=i, tray=u + 1, dram=d, mm_l1=dict(checks=4, bad_checks=0), mm_dram=dict(checks=4, bad_checks=0))
+json.dump(dict(schema="pinpoint-1", s=50, chips=cs, errors={}), open(a[a.index("--result") + 1], "w"))
+PY
+     exit 0 ;;
+  */fleet_py.py) [ "$2" = disc ] && { echo "disc ${TT_VISIBLE_DEVICES-all}" >> "$W_STATE/calls"; cat "$W_DISC"; exit 0; }
+     exec python3 "$@" ;;
+esac
+s=$1; shift; beat=/dev/null; a_rows=""; a_chunk_min=""; a_gap_s=""; a_mode=""; a_res=""
+while [ $# -gt 0 ]; do case $1 in --beat) beat=$2; shift ;; --rows) a_rows=$2; shift ;; --chunk-min) a_chunk_min=$2; shift ;;
+  --gap-s) a_gap_s=$2; shift ;; --mode) a_mode=$2; shift ;; --result) a_res=$2; shift ;;
+  --out|--heavy-pcie-mb|--parts|--cqs|--heavy|--heavy-n|--burst-gap-ms|--pcie-every|--rw-after|--trays) shift ;; esac; shift; done
+rows=${a_rows:-/dev/null}
+case $s in
+  */fabric_repro.py) echo "pair $TT_VISIBLE_DEVICES" >> "$W_STATE/calls"; echo open > "$beat"; echo "done 9" > "$beat"; echo close > "$beat"; exit 0 ;;
+  */agloop.py) echo "agloop" >> "$W_STATE/calls"; echo "launch 1" > "$beat"
+     echo '{"event": "end", "iters": 9, "ag_sp_total": 72, "verify_failures": 0}' >> "$rows"; echo close > "$beat"; exit 0 ;;
+  */chunk_load.py) echo "chunks $a_chunk_min $a_gap_s" >> "$W_STATE/calls"
+     # the real scheduler (chunk_sched.run) with a no-op load; the long chunk (--mode=full) runs 0.02 min, not 25
+     m=$a_chunk_min; case $a_rows in */long/*) m=0.02 ;; esac
+     python3 - "$s" "$rows" "$beat" "$m" "$a_gap_s" <<'PYC' || exit $?
+import json, os, sys, time
+sys.path.insert(0, os.path.dirname(sys.argv[1])); import chunk_sched as cs
+rows, beatf = sys.argv[2], sys.argv[3]
+chunks, gp = cs.schedule({"FLEET_CHUNK_MIN": sys.argv[4], "FLEET_GAP_S": sys.argv[5]})
+f = open(rows, "a")
+def row(**kw): f.write(json.dumps(kw) + "\n"); f.flush()
+def beat(x): open(beatf, "w").write(x + "\n")
+row(event="setup", parts="h3,mm,sfpu,dram,pcie".split(","))
+def step(k, i): time.sleep(0.05); return 4
+chips = [dict(metal=i, dev=i, pci=f"0000:{(0x00, 0x40, 0xC0, 0x80)[i // 8] + 1 + i % 8:02x}:00.0", tray=i // 8 + 1) for i in range(32)]
+def verify(k): return {str(i): dict(c, launches=3, mismatched=0, nonfinite=0, bad_parts=[]) for i, c in enumerate(chips)}
+cs.run(chunks, gp, step, lambda: None, verify, row, beat=beat, util=lambda k, n, b, secs: dict(tflops_chip=250.0),
+       extra=lambda k: dict(heavy="stub: no load", checks_per_launch=7, checks=21, run_ahead="stub", fallback=[]))
+row(event="end", verify_failures=0, verify_errors=0)
+beat("close")
+PYC
+     exit 0 ;;
+  */h3shape_repro.py) echo "h3shape" >> "$W_STATE/calls"; echo "launch 1" > "$beat"; sleep 2; echo close > "$beat"; exit 0 ;;
+  */maxutil.py) echo "maxutil $a_mode" >> "$W_STATE/calls"
+     echo "MAXUTIL stub: no archive, no load"; echo "MAXUTIL 32/32 chips passed their output check"
+     [ -z "$a_res" ] || echo '{"maxutil": {"mode": "'"$a_mode"'", "passed": 32}}' > "$a_res"; exit 0 ;;
+esac
+echo "stub py: unexpected $s" >&2; exit 2

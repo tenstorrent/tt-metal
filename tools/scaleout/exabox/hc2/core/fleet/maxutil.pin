@@ -1,0 +1,7 @@
+# fleet/maxutil.pin: the prebuilt max-util archive run.sh's max-util step unpacks (fleet/maxutil_pack.sh).
+# Packed 2026-11-05 from a tt-metal checkout (build_Release) with /opt/openmpi-v5.0.7-ulfm;
+# repacked with build_Release/tt_metal/soc_descriptors (the earlier archive abaecf815feb lacked blackhole_140_arch.yaml).
+# Copies: $HOME/tray-test-dist/ on the build host and on the cluster node (one archive file each).
+sha256=3f8185a74b3a76233ad2133a3f62acbc2f1e62791edfe7747e21ea141103818f
+file=maxutil-3f8185a74b3a.tar.zst
+bytes=141637300
