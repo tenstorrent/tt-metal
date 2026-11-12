@@ -12,10 +12,10 @@ work, so an op composes them into a chain and the chain runs it later. They live
 here rather than in :mod:`.chain` because they need the architecture's blocks,
 and a chain deliberately knows nothing about hardware.
 
-Writing a test never involves the data-transfer blocks: pick the golden for the
-architecture and call it with tensors.
+Writing a test never involves the data-transfer blocks: name the operation and
+the architecture, then call it with tensors.
 
-    golden = get_data_copy_golden(QUASAR, )
+    golden = get_golden(Op.DataCopy, QUASAR)
     result = golden.run(stimuli, in_format, out_format)
 """
 
@@ -125,9 +125,8 @@ class Golden:
         """
         if arch is None and blocks is None:
             raise TypeError(
-                f"{type(self).__name__} has no architecture. Use an "
-                f"architecture's factory (e.g. get_data_copy_golden) or pass "
-                f"arch= / blocks= explicitly."
+                f"{type(self).__name__} has no architecture. Build it with "
+                f"get_golden(op, arch, ...), or pass arch= / blocks= explicitly."
             )
         self.arch = arch
         self.blocks = blocks if blocks is not None else arch.blocks()

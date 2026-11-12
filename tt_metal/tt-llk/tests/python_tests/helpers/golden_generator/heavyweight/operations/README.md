@@ -12,9 +12,9 @@ Writing a test never touches the data-transfer blocks. Pick the golden for your
 architecture and hand it tensors:
 
 ```python
-from helpers.golden_generator.heavyweight.operations import get_data_copy_golden
+from helpers.golden_generator.heavyweight.operations import QUASAR, Op, get_golden
 
-result = get_data_copy_golden(QUASAR).run(stimuli, in_format, out_format)
+result = get_golden(Op.DataCopy, QUASAR).run(stimuli, in_format, out_format)
 ```
 
 ## Contents
@@ -547,7 +547,7 @@ every operation takes one as an argument:
 ```python
 QUASAR = ArchProfile(name="Quasar", blocks=QuasarDataTransferBlocks)
 
-golden = get_eltwise_binary_golden(QUASAR, MathOperation.Elwmul, MathFidelity.HiFi4)
+golden = get_golden(Op.EltwiseBinary, QUASAR, MathOperation.Elwmul, MathFidelity.HiFi4)
 ```
 
 Before this each fact was restated per operation — `blocks` in five files, the
@@ -559,39 +559,35 @@ for information that is `ops + architectures`.
 | Quasar | MX — `MxFp8R`, `MxFp8P`, `MxFp4`, `MxInt8`, `MxInt4`, `MxInt2` | **No block float.** No `MxFp4_2x_A/B` — those are src-register formats, never L1 formats. |
 | Wormhole · Blackhole | Block float — `Bfp8`, `Bfp8_b`, `Bfp4_b`, `Bfp2_b` | **No MX.** |
 
-Available today: `get_data_copy_golden`, `get_eltwise_binary_golden` and
-`get_matmul_golden` on all three, and `get_eltwise_binary_reuse_dest_golden` on
-Quasar only.
+Available today: `Op.DataCopy`, `Op.EltwiseBinary` and `Op.Matmul` on all
+three, and `Op.EltwiseBinaryReuseDest` on Quasar only.
 
-## What the names mean
+## One factory, three registries
 
-`get_data_copy_golden(arch)` is the caller's handle for "the datacopy golden on
-this architecture". The name carries the operation and nothing else, because the
-architecture is a value: a test that reads its own architecture at run time
-passes the profile through, and a fourth architecture adds no names.
+`get_golden(op, arch, ...)` is the only entry point. Neither the operation nor
+the architecture is part of a name, so a test that resolves either at run time
+hands it straight over, and a fourth architecture or a fifth operation adds no
+functions.
 
-Whether that architecture runs the shared pipeline or one of its own is decided
-inside the factory, which is the point of it being a function:
+What varies per operation sits in three tables beside it rather than in
+branches inside the function. An if-chain there would grow a case per
+operation, which is the shape this replaced.
 
-```python
-def get_data_copy_golden(arch, *args, **kwargs):
-    pipeline = QuasarDataCopyGolden if arch is QUASAR else DataCopyGolden
-    return pipeline(*args, arch=arch, **kwargs)
-```
+| Registry | Holds | Adding a row means |
+|---|---|---|
+| `_PIPELINES` | the class each `Op` runs | a new operation |
+| `_VALIDATED_ON` | the architectures an `Op` has been checked on | narrowing one |
+| `_ARCH_PIPELINES` | a different class for one `(op, arch)` | an architecture's own chain |
 
-One place to read, and one place to change.
+`_ARCH_PIPELINES` is empty today. The day Quasar needs its own datacopy chain it
+gains one row, `(Op.DataCopy, QUASAR): QuasarDataCopyGolden`, and no caller
+changes.
 
-**The factories are named as functions and the pipelines as classes,** which is
-what keeps those two lines apart. A pipeline specialised for one architecture
-can take the obvious name, `QuasarDataCopyGolden`, without colliding with the
-factory that returns it, and both can be exported from the same module. The
-shape of the name tells you which one you are looking at: `get_..._golden` makes
-a golden, `...Golden` is a pipeline class.
-
-It also settles a smaller problem. A test that cross-validates imports both
-goldens into one namespace, and the lightweight golden already exports
-`MatmulGolden` and `DataCopyGolden`. Nothing the heavyweight package exports as
-a factory can clash with those.
+**`Op` is an enum rather than the pipeline class itself** for one practical
+reason: a test that cross-validates imports both goldens into one namespace,
+and the lightweight golden already exports `MatmulGolden`, `DataCopyGolden` and
+`EltwiseBinaryGolden`. Passing the class would mean aliasing one side. An `Op`
+member cannot clash.
 
 ## When an architecture differs
 
@@ -609,14 +605,20 @@ There are four ways to express a difference, in the order to reach for them.
    `MatmulGolden.OPERAND_REGISTERS` names which src register each operand rides.
    A subclass overrides the attribute and `build_chain` is left alone.
 3. **The chain shape genuinely differs.** Subclass the operation, override
-   `build_chain`, and bind the subclass in the factory table. One new row.
-4. **The operation does not exist there.** Leave the factory out, the way
-   `EltwiseBinaryReuseDestGolden` has a Quasar row and no others.
+   `build_chain`, and add one row to `_ARCH_PIPELINES` keyed `(op, arch)`.
+   Prefer naming the subclass for what differs rather than for the
+   architecture, so `SrcSDataCopyGolden` rather than `QuasarDataCopyGolden`: a
+   second architecture may want the same chain, and a name taken from the first
+   then reads as a lie.
+4. **The operation has not been checked there.** Add a row to `_VALIDATED_ON`,
+   the way `Op.EltwiseBinaryReuseDest` names Quasar and nothing else. Every
+   pipeline will run anywhere and return numbers, so an unchecked pair has to
+   be refused rather than documented.
 
 **Never branch on `arch.name` inside `build_chain`.** That field exists so a
 refusal can say which device refused. Branching on it puts hardware knowledge
 back into the operations layer, which is the one thing this split is for, and it
-hides the difference from anyone reading the factory table.
+hides the difference from anyone reading the registries.
 
 ---
 
@@ -626,7 +628,7 @@ hides the difference from anyone reading the factory table.
    with `chain.dry_run([...pre-loaded slots...])`.
 2. If the maths is not one of the existing `apply` implementations, pass your own
    `fn` to `src_to_dest`, and make `reads` match what it touches.
-3. Add one factory in `arch.py`: `def get_my_op_golden(arch, *args, **kwargs)`, forwarding to the pipeline. Refuse there any architecture the op has not been checked on. If the op multiplies, ask the blocks' `fpu_*` methods for the phases and the operand windows rather than carrying them.
+3. Add one `Op` member and one `_PIPELINES` row in `arch.py`, plus a `_VALIDATED_ON` row naming the architectures you actually checked. If the op multiplies, ask the blocks' `fpu_*` methods for the phases and the operand windows rather than carrying them.
 4. Validate against silicon at **full Dest width first** — run with a `Float16`
    output so the packed result *is* Dest, and compare in ULPs. Only then move to
    an MX output, where a lattice step is hundreds of ULPs wide and will hide a
