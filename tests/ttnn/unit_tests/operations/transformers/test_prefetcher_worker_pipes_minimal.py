@@ -2,23 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The smallest ttnn.dram_prefetcher over a worker-sender PrefetcherPipe: one sender, one receiver, one bank.
+"""The smallest ttnn.dram_prefetcher over a worker-sender PrefetcherPipe: one sender, one bank, one row.
 
 A bringup vehicle for architectures whose smallest device does not fit test_prefetcher_worker_pipes'
 layouts. Those stack receivers, senders and a spare core in separate rows, so they need a grid at least
-three rows tall; the Quasar emulator exposes two worker cores in one row. Two cores is the floor for the
-op itself, since a pipe's sender must not be one of its receivers.
+three rows tall; the Quasar emulator's smallest model exposes two worker cores in one row. Two cores is
+the floor for the op itself, since a pipe's sender must not be one of its receivers.
 
-What this still covers: the reader's DRAM reads under transaction ids, the staging ring, the writer's
-strided pipe writes and credit returns, the receiver's drain, and the reader/writer exit handshake. What
-it does not: multiple banks, more than one receiver per sender (so neither pipe fan-out nor the strided
-split of a shard across receivers), and entry re-sizing between tensors.
+What this covers: the reader's DRAM reads under transaction ids, the staging ring, the writer's strided
+pipe writes and credit returns, the receiver's drain, and the reader/writer exit handshake. With two
+receivers, which needs three cores in a row, it also covers pipe fan-out and the strided split of a
+shard across receivers. What it does not: multiple banks and entry re-sizing between tensors.
 """
 
 import pytest
 import torch
 import ttnn
-import numpy as np
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -41,22 +40,31 @@ def _one_core(core):
 
 
 class _MinimalLayout:
-    """One sender feeding one receiver from one DRAM bank.
+    """One sender feeding `num_receivers` receivers from one DRAM bank.
 
-    The receiver is the grid's first core and doubles as the matmul's only worker. The sender is the
-    next core along the row, or the core below when the grid is a single column.
+    The receivers are the first cores of row 0, and with one receiver it doubles as the matmul's only
+    worker. The sender is the next core along the row, or the core below when a single receiver sits in
+    a single-column grid. The op makes num_blocks = readers x receivers_per_reader, so every receiver
+    gets one K-block per receiver.
     """
 
     num_banks = 1
-    num_blocks = 1
     in0_block_w = _IN0_BLOCK_W
 
-    def __init__(self, device):
+    def __init__(self, device, num_receivers=1):
         grid = device.compute_with_storage_grid_size()
-        assert grid.x * grid.y >= 2, f"need two worker cores for a sender and a receiver, grid is {grid}"
-        receiver = ttnn.CoreCoord(0, 0)
-        self._sender = ttnn.CoreCoord(1, 0) if grid.x >= 2 else ttnn.CoreCoord(0, 1)
-        self.receiver_cores = _one_core(receiver)
+        if num_receivers == 1:
+            assert grid.x * grid.y >= 2, f"need two worker cores for a sender and a receiver, grid is {grid}"
+            self._sender = ttnn.CoreCoord(1, 0) if grid.x >= 2 else ttnn.CoreCoord(0, 1)
+        else:
+            if grid.x < num_receivers + 1:
+                pytest.skip(f"{num_receivers} receivers and a sender need {num_receivers + 1} cores in a row, grid {grid}")
+            self._sender = ttnn.CoreCoord(num_receivers, 0)
+        self.num_receivers = num_receivers
+        self.num_blocks = num_receivers
+        self.receiver_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_receivers - 1, 0))]
+        )
         self.sender_cores = _one_core(self._sender)
         self.worker_cores = self.receiver_cores
         self.matmul_grid = (1, 1)
@@ -84,7 +92,7 @@ def _make_pipe(device, layout):
         sender_cores=layout.sender_cores,
         receiver_domain=layout.receiver_cores,
         ring_size=ring_size,
-        max_receivers_per_pipe=1,
+        max_receivers_per_pipe=layout.num_receivers,
     )
     return space, space.create_pipes(layout.sender_receiver_mapping())
 
@@ -162,14 +170,15 @@ class _Isolation:
             self.device.reset_sub_device_stall_group()
 
 
+@pytest.mark.parametrize("num_receivers", [1, 2], ids=["1recv", "2recv"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
-def test_minimal_pipe_completion(device, num_layers):
-    """Every block reaches the receiver: a discard consumer drains exactly what the prefetcher pushes.
+def test_minimal_pipe_completion(device, num_layers, num_receivers):
+    """Every block reaches every receiver: a discard consumer drains exactly what the prefetcher pushes.
 
     Hangs rather than fails if a block is lost, which is the point: it is the cheapest signal that the
     whole sender-to-receiver path moves data on a new architecture.
     """
-    layout = _MinimalLayout(device)
+    layout = _MinimalLayout(device, num_receivers)
     _space, pipes = _make_pipe(device, layout)
     _pt, tt_weights, tt_addrs = _make_weights(device, layout, num_layers)
 
@@ -184,56 +193,24 @@ def test_minimal_pipe_completion(device, num_layers):
         ttnn.synchronize_device(device)
 
 
-def _tile_words(pt_weight):
-    """Pack a [1, 1, K, N] weight the way a row-major 32x32 tile image lays it out.
-
-    Tiles walk N first, then K. Inside a tile, elements are row-major bfloat16, and each device
-    word holds two of them, low half first. This is the byte image a contiguous DRAM read of the
-    shard would return.
-    """
-    values = pt_weight[0, 0].contiguous().to(torch.bfloat16)
-    k, n = values.shape
-    tiles = values.reshape(k // 32, 32, n // 32, 32).permute(0, 2, 1, 3).contiguous().reshape(-1)
-    halves = tiles.view(torch.int16).numpy().astype(np.uint16)
-    return halves[0::2].astype(np.uint32) | (halves[1::2].astype(np.uint32) << 16)
-
-
+@pytest.mark.parametrize("num_receivers", [1, 2], ids=["1recv", "2recv"])
 @pytest.mark.parametrize("num_layers", [1, 3], ids=["1layer", "3layers"])
-def test_minimal_pipe_bytes(device, num_layers):
+def test_minimal_pipe_bytes(device, num_layers, num_receivers):
     """Every block that lands is the weight itself.
 
     The discard consumer only counts entries. This receiver memcmps each one against the source tensor
-    and hangs on the first word that differs. One bank, one receiver and one block per layer, so the
-    expected bytes are the whole weight. Every layer reads the same weight, as the BH validator tests
-    do, so one source tensor checks them all. Three layers wrap the two-and-a-half-entry pipe ring.
+    and hangs on the first word that differs. With two receivers each one checks its own strided slice of
+    the bank's shard. Every layer reads the same weight, as the BH validator tests do, so one source
+    tensor checks them all. Three layers wrap the two-and-a-half-entry pipe ring.
     """
-    layout = _MinimalLayout(device)
-    print(
-        f"BYTES layout sender={layout._sender} entry_size={layout.entry_size} "
-        f"blocks={layout.num_blocks} k_tiles={layout.k_tiles}",
-        flush=True,
-    )
+    layout = _MinimalLayout(device, num_receivers)
     _space, pipes = _make_pipe(device, layout)
-    print("BYTES pipe created", flush=True)
     _pt, tt_weights, _ = _make_weights(device, layout, num_layers=1)
     tt_addrs = _make_addrs(device, layout, [tt_weights[0].buffer_address()] * num_layers)
-    expected = _tile_words(_pt[0])
-    head = " ".join(f"0x{int(w):08x}" for w in expected[:8])
-    expected_sum = 0
-    for word in expected.tolist():
-        expected_sum = (expected_sum + int(word)) & 0xFFFFFFFF
-    print(
-        f"BYTES weights ready addr=0x{tt_weights[0].buffer_address():x} "
-        f"expected_sum=0x{expected_sum:08x} words={len(expected)} head={head}",
-        flush=True,
-    )
 
     with _Isolation(device, layout) as isolation:
-        print("BYTES launching dram_prefetcher", flush=True)
         ttnn.dram_prefetcher(tt_weights + [tt_addrs], num_layers, prefetcher_pipes=pipes)
-        print("BYTES dram_prefetcher returned", flush=True)
         isolation.stall_on_workers()
-        print("BYTES launching validator", flush=True)
         ttnn.experimental.test_tensor_prefetcher_pipe_validator(
             device,
             tt_weights[0],
@@ -242,7 +219,6 @@ def test_minimal_pipe_bytes(device, num_layers):
             prefetcher_pipes=pipes,
             bank_to_receivers=[(0, layout.receiver_cores)],
         )
-        print("BYTES validator returned", flush=True)
 
 
 def test_minimal_pipe_matmul(device):
