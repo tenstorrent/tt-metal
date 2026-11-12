@@ -27,7 +27,7 @@
 #include <vector>
 
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/buffers/dram_receiver_config_page.hpp"
+#include "hostdev/dram_receiver_config_page.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"

@@ -107,9 +107,6 @@ static_assert(kCceRequestRingOffset % kCceSenderLineBytes == 0);
 static_assert(kCceSenderControlBytes % kCceSenderLineBytes == 0);
 static_assert((uint64_t{1} << 32) % kCceRequestRingBytes == 0);
 
-// TensorPrefetcherTensorLayout::layout_mode of a receiver-contiguous tensor, the only layout a CCE sender delivers.
-inline constexpr uint32_t kCceReceiverContiguousLayoutMode = 1;
-
 // The CCE sender kernel's runtime args. The budget is rdcycle cycles per bounded wait, 0 = infinite. The sender reads
 // tensors from its own DRAM view only: GDDR offset view offset + bank-local address on its own Mimir. The view offset
 // is 64-bit because a view can start 4 GiB or more into its Mimir.

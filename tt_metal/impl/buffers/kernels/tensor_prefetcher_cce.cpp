@@ -264,7 +264,7 @@ RequestOutcome prefetch_request(
         }
         TensorPrefetcherTensorLayout layout;
         __builtin_memcpy(&layout, page_bytes + entry.layout_offset, sizeof(layout));
-        if (layout.layout_mode != tt::tt_metal::kCceReceiverContiguousLayoutMode || layout.streaming != 0) {
+        if (layout.layout_mode != tt::tt_metal::TENSOR_PREFETCHER_LAYOUT_RECEIVER_CONTIGUOUS || layout.streaming != 0) {
             outcome.code = CceSenderStatusCode::BadLayout;
             break;
         }

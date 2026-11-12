@@ -375,7 +375,6 @@ class CMakeBuild(build_ext):
             # The tensor-prefetcher kernels (Blackhole DRISC and Quasar CCE) and the host/device shared
             # headers they include: a wheel run resolves kernel includes against the wheel, not TT_METAL_HOME.
             "impl/buffers/kernels/**/*",
-            "impl/buffers/dram_receiver_config_page.hpp",
             "impl/buffers/dram_sender_state_block.hpp",
             "impl/buffers/tensor_prefetcher_cce_abi.hpp",
             "impl/buffers/tensor_prefetcher_request.hpp",

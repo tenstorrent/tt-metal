@@ -266,8 +266,6 @@ std::pair<uint32_t, uint32_t> pick_page_size(uint32_t max_page_size, uint32_t nu
     return {page, static_cast<uint32_t>(total / page)};
 }
 
-static_assert(TENSOR_PREFETCHER_LAYOUT_RECEIVER_CONTIGUOUS == kCceReceiverContiguousLayoutMode);
-
 // How to resolve a weight whose two candidate layouts describe the same bytes: one shard per bank,
 // feeding that bank's single receiver. There K-row-major and receiver-contiguous read identically
 // (n_per_recv == n_per_bank, one slab at offset 0), so the bytes cannot settle it.

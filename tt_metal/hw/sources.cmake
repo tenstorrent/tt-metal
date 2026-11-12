@@ -239,6 +239,7 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
+    inc/hostdev/dram_receiver_config_page.hpp
     inc/hostdev/profiler_common.h
     inc/hostdev/profiler_zone_id.h
     inc/hostdev/realtime_profiler_msgs.h

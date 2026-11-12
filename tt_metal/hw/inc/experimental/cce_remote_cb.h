@@ -26,7 +26,7 @@
 #include "dev_mem_map.h"
 #include "experimental/cce_hart.h"
 #include "internal/circular_buffer_interface.h"
-#include "tt_metal/impl/buffers/dram_receiver_config_page.hpp"
+#include "hostdev/dram_receiver_config_page.hpp"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 
 namespace experimental::cce_remote_cb {
