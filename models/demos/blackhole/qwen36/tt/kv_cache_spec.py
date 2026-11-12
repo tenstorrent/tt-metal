@@ -35,6 +35,8 @@ DRAM_BANKS = 8
 BLOCK_SIZES = (64, 128, 256, 512, 1024, 2048)
 # gdn_decode_step handles at most this many batch rows.
 MAX_DECODE_ROWS = 32
+# gdn_spec_step's ctrl word that holds a head: no state or history write, the result is discarded (int32 of 0xFFFFFFFF).
+SPEC_STEP_HOLD = -1
 
 
 class GdnLayoutError(ValueError):
@@ -188,12 +190,14 @@ class GdnBlockLayout:
     def verify_tables(self, start_blocks, windows, num_blocks, rows):
         """gdn_spec_step ``ctrl`` page and ``ring_page_idx`` (with ``conv_hist``) of a verify of T = windows.shape[1]
         tokens per row: row r reads its full state from block ``start_blocks[r]`` and writes the full state after its
-        query token t into block ``windows[r, t]``. ``rows``: the op's batch; rows past ``len(start_blocks)`` use the
-        null block 0. Returns int32 (ctrl [1, N], idx [rows, 2 * T * Nv]): ctrl word 1 + rows + r * Nv + h is the first
+        query token t into block ``windows[r, t]``. ``rows``: the op's batch; rows past ``len(start_blocks)`` are
+        padding rows. Returns int32 (ctrl [1, N], idx [rows, 2 * T * Nv]): ctrl word 1 + rows + r * Nv + h is the first
         float32 page of head h's start state, word 1 + rows + rows * Nv + r * Nv + h its first history page (the
         window parity and the mi words are 0); idx entry (r, t * Nv + h) is the first float32 page of the state after
         token t, entry (r, T * Nv + t * Nv + h) its first history page. The start block can be one of the row's own
-        windows: the op reads it before it writes any state."""
+        windows: the op reads it before it writes any state. A padding row (window block 0) is held
+        (SPEC_STEP_HOLD): it writes nothing, so the null block 0 never takes GDN state, whose float32 bytes attention
+        would read as bfloat16 (NaN or Inf at positions it masks) when a verify's padded columns point at block 0."""
         nv = self.dims.nv
         windows = torch.as_tensor(windows, dtype=torch.int64)
         starts = torch.as_tensor(start_blocks, dtype=torch.int64).reshape(-1)
@@ -204,8 +208,11 @@ class GdnBlockLayout:
         windows = torch.cat([windows, torch.zeros(rows - n, T, dtype=torch.int64)])
         start_pages = self.index_host(starts, num_blocks).to(torch.int64)  # [2 * Nv, rows]
         ctrl = torch.zeros(1, -(-(1 + rows + 2 * rows * nv) // 16) * 16, dtype=torch.int64)
-        ctrl[0, 1 + rows : 1 + rows + rows * nv] = start_pages[:nv].T.reshape(-1)
-        ctrl[0, 1 + rows + rows * nv : 1 + rows + 2 * rows * nv] = start_pages[nv:].T.reshape(-1)
+        held = (windows[:, 0] == 0).reshape(rows, 1)
+        ctrl[0, 1 + rows : 1 + rows + rows * nv] = start_pages[:nv].T.masked_fill(held, SPEC_STEP_HOLD).reshape(-1)
+        ctrl[0, 1 + rows + rows * nv : 1 + rows + 2 * rows * nv] = (
+            start_pages[nv:].T.masked_fill(held, SPEC_STEP_HOLD).reshape(-1)
+        )
         dest_pages = self.index_host(windows.reshape(-1), num_blocks).to(torch.int64)  # [2 * Nv, rows * T]
         rec = dest_pages[:nv].T.reshape(rows, T * nv)
         hist = dest_pages[nv:].T.reshape(rows, T * nv)

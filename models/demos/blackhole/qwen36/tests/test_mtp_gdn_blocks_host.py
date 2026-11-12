@@ -24,7 +24,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout
 from models.demos.blackhole.qwen36.tests.spec_block_helpers import SpecBlocks
 from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
-from models.demos.blackhole.qwen36.tt.kv_cache_spec import GdnDims, plan_gdn_block_layout
+from models.demos.blackhole.qwen36.tt.kv_cache_spec import SPEC_STEP_HOLD, GdnDims, plan_gdn_block_layout
 
 TP8 = GdnDims(nk=2, nv=6, dk=128, dv=128, kconv=4)
 ATTENTION = [i % 4 == 3 for i in range(16)]  # 4 attention layers, 12 GDN layers in 3 groups
@@ -57,6 +57,8 @@ def test_verify_tables_name_the_start_and_window_pages(K):
     assert not ctrl[0, : 1 + rows].any(), "window parity and mi words must be 0"
     for r in range(rows):
         rec, hist = _pages(lay, starts[r])
+        if r == 1:  # padding rows are held: they write no GDN state into the null block
+            rec = hist = [SPEC_STEP_HOLD] * nv
         assert ctrl[0, 1 + rows + r * nv : 1 + rows + (r + 1) * nv].tolist() == rec
         assert ctrl[0, 1 + rows + rows * nv + r * nv : 1 + rows + rows * nv + (r + 1) * nv].tolist() == hist
         for t in range(T):
@@ -74,12 +76,13 @@ def test_verify_tables_pad_missing_rows_and_follow_row_moves(expect_error):
     ctrl, idx = lay.verify_tables(starts, windows, NUM_BLOCKS, 4)
     null_ctrl, null_idx = lay.verify_tables([], torch.zeros(0, T), NUM_BLOCKS, 4)
     assert torch.equal(idx[2:], null_idx[2:]), "rows past the windows use the null block"
+    nv = TP8.nv
+    assert (ctrl[0, 5 + 2 * nv : 5 + 4 * nv] == SPEC_STEP_HOLD).all(), "rows past the windows are held"
     assert not null_ctrl[0, :5].any() and set(null_idx.unique().tolist()) == set(
         lay.index_host([0], NUM_BLOCKS)[:, 0].tolist()
     )
     moved_ctrl, moved_idx = lay.verify_tables(starts[::-1], windows.flip(0), NUM_BLOCKS, 4)
     assert torch.equal(moved_idx[:2], idx[:2].flip(0)), "a row move permutes the index rows only"
-    nv = TP8.nv
     for part in (slice(5, 5 + 2 * nv), slice(5 + 4 * nv, 5 + 6 * nv)):
         words = ctrl[0, part].reshape(2, nv)
         assert torch.equal(moved_ctrl[0, part].reshape(2, nv), words.flip(0))

@@ -1655,6 +1655,15 @@ class MTPBlockEngine(MTPSpecEngine):
     def _prepare_verify(self):
         self.model.prepare_verify_trace(self._prep_pt, self.T, warm_positions=[0] * self.B)
 
+    def capture_decode(self):
+        """The base capture, then zero the null block 0: the warm passes wrote GDN state there (every row of a warm
+        verify points at it). Serving never writes GDN state into it (verify_tables holds padding rows), and a verify's
+        padded columns past a row's last real block read and write block 0, where attention must find finite values."""
+        captured = self.captured
+        super().capture_decode()
+        if not captured:
+            self.model.gdn_blocks.zero_blocks([0])
+
     def _remap_gdn(self, idx):
         """The GDN state follows mamba_state, which already names each row's blocks after the move."""
 
