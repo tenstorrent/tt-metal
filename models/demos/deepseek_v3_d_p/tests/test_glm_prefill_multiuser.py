@@ -27,8 +27,9 @@ but the pipeline test also run on a LoudBox.
 * test_glm_packed_pipeline_matches_one_rank (8x4 only): the model split over two pipeline ranks on one mesh,
   packed forwards handed rank to rank, must match one rank, eager and traced.
 
-Mesh and chunk: each mesh runs the chunk that gives the production per-chip shape, 640 rows per SP row
-(2x4 -> 1,280-token chunks, 8x4 -> 5,120). On 2x4 every chip sees what a galaxy chip sees in attention
+Mesh and chunk: each mesh runs the chunk that gives the production per-chip shape, 640 rows per SP chip
+(2x4 -> 1,280-token chunks, 8x4 -> 5,120, a 4x4 stage -> 2,560 with SP on its axis-1 ring; the pipeline test is
+8x4 only). On 2x4 every chip sees what a galaxy chip sees in attention
 (640 rows, 16 heads, 160 sparse_sdpa tokens) but holds 32 experts instead of 8.
 
 Depth: 4 layers with every GLM-5.3 layer kind (_TestGLM53Config): 0-1 dense with full indexers, 2 MoE with a
@@ -52,10 +53,12 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
+    torus_x_device_params,
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
@@ -143,12 +146,28 @@ MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
+    # One 4x4 stage (a galaxy tray half, GLM-5.3's serving stage): SP on the axis-1 ring at its 2,560-token chunk,
+    # TP=4 on the axis-0 line. Needs the galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4
+    # descriptor); unnarrowed, requires_mesh_topology skips it.
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=TEST_L1_SMALL_SIZE),
+        2,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4-sp1",
+    ),
 ]
+
+
+def _sp_axis(mesh_device):
+    """The mesh's SP axis: 1 on a 4x4 stage (SP on the tray half's ring), else 0."""
+    return 1 if tuple(mesh_device.shape) == (4, 4) else 0
 
 
 def _build(mesh_device, config, device_params, num_links, chunk, num_slots, forward_chunks=1, indexer_types=None):
     """Random-weight chunked transformer plus KVPE and indexer-K caches with ``num_slots`` user slots."""
-    sp_axis, tp_axis = 0, 1
+    sp_axis = _sp_axis(mesh_device)
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
     seq_cache = N_CHUNKS * chunk
     # _resolve_config_only is lru_cached and shared process-wide; don't leak max_seq_len into it.
@@ -216,7 +235,8 @@ def _token_ids(config, num_users, length):
 def _forward_input(mesh_device, chunks, ids_by_slot, chunk):
     """A forward's tokens in the packed per-chip layout (pack_forward_tokens), SP-sharded on device. A
     partial chunk's tail and an empty chunk are padded with token 0."""
-    sp = mesh_device.shape[0]
+    sp_axis = _sp_axis(mesh_device)
+    sp = mesh_device.shape[sp_axis]
     chunk_tokens = []
     for c in chunks:
         real = [] if c.is_empty else ids_by_slot[c.slot_id][c.actual_start : c.actual_end].tolist()
@@ -228,7 +248,9 @@ def _forward_input(mesh_device, chunks, ids_by_slot, chunk):
         dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=mesh_shard_dims(0, sp_axis)
+        ),
     )
 
 
@@ -278,7 +300,7 @@ def _chunk_real_rows(hidden, k, num_chunks, chunk_obj, sp, chunk_local):
 def _read_user_slots(cache, mesh_device, layers_per_user, num_slots):
     """Per-slot cache rows [layers_per_user, seq_cache, D], in device (shard-major) order. Both sides of
     every comparison are read the same way, so there is nothing to un-rotate."""
-    rows, _ = gather_cache_natural(cache, mesh_device, tp_shard_kv=True)
+    rows, _ = gather_cache_natural(cache, mesh_device, tp_shard_kv=True, sp_axis=_sp_axis(mesh_device))
     assert rows.shape[0] == num_slots * layers_per_user, (rows.shape, num_slots, layers_per_user)
     return [rows[s * layers_per_user : (s + 1) * layers_per_user] for s in range(num_slots)]
 
@@ -311,7 +333,7 @@ def _compare_slots(label, kv_slots, idx_slots, pairs, threshold):
 def test_glm_multiuser_interleaved_matches_sequential(variant, config_only, mesh_device, device_params, num_links):
     """Round-robin over users (slots N..2N-1) must reproduce each user run alone (slots 0..N-1)."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_device.shape[0]
+    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_device.shape[_sp_axis(mesh_device)]
     num_slots = 2 * NUM_USERS
     mesh_device.enable_program_cache()
     config, transformer, kvpe_cache, index_kv_cache = _build(
@@ -385,7 +407,7 @@ def test_glm_packed_forward_matches_one_chunk_forwards(variant, config_only, mes
     the MoE sized for FORWARD_CHUNKS chunks, padding), which the first comparison cannot see.
     """
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[_sp_axis(mesh_device)]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     chunk_local = chunk // sp
     lengths, forwards = _packed_schedule(chunk)
@@ -523,7 +545,7 @@ def test_glm_packed_presend_matches_inline_push(variant, config_only, mesh_devic
     per step): with pre-sends (slots 0..3) every shared step pushes only its rest, and the KV caches and outputs must
     match the same forwards pushing every row in line (pre-sends off, slots 4..7)."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[_sp_axis(mesh_device)]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     chunk_local = chunk // sp
     lengths, forwards = _packed_schedule(chunk)
@@ -626,6 +648,17 @@ def test_glm_packed_presend_matches_inline_push(variant, config_only, mesh_devic
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=TEST_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -636,17 +669,20 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
     """Traced packed forwards (slots 0..3) must fill the same KVPE and indexer-K as the eager packed
     forward of the same chunks on the same model (slots 4..7)."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[_sp_axis(mesh_device)]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     lengths, forwards = _packed_schedule(chunk)
     num_users = len(lengths)
     seq_cache = N_CHUNKS * chunk
     config = _test_config(config_only)
     config.max_seq_len = seq_cache
+    sp_axis = _sp_axis(mesh_device)
     rt_config = TtPrefillRuntimeConfig(
         num_layers=NUM_LAYERS,
         max_seq_len=seq_cache,
         mesh_shape=tuple(mesh_device.shape),
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
         chunk_size=chunk,
         forward_tokens_budget=FORWARD_CHUNKS * chunk,
         num_users=2 * num_users,
@@ -673,8 +709,8 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=NUM_LAYERS,
             num_users=cache_slots,
         ),
@@ -683,8 +719,8 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=full_indexer_rank(config, NUM_LAYERS),
             num_users=cache_slots,
             dtype=ttnn.bfloat8_b,
@@ -825,7 +861,7 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
     TRACED_PCC -- only the traced models on the mesh, as in production, where each rank is its own process: an eager
     MoE model sharing the mesh's TT_CCL state and sub-device managers cannot coexist with two captures."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[_sp_axis(mesh_device)]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     lengths, forwards = _packed_schedule(chunk)
     num_users = len(lengths)

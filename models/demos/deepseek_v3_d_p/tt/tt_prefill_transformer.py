@@ -851,8 +851,10 @@ class TtPrefillTransformer(LightweightModule):
         owned_padding_config = None
         if metadata is None and padding_config is None:
             chunk_local = h.shape[2] // n
-            real_rows = packed_real_rows(chunks, self.mesh_device.shape[0], chunk_local)
-            owned_padding_config = packed_padding_config(self.mesh_device, real_rows, n * chunk_local)
+            real_rows = packed_real_rows(chunks, self.mesh_device.shape[self.sp_axis], chunk_local)
+            owned_padding_config = packed_padding_config(
+                self.mesh_device, real_rows, n * chunk_local, sp_axis=self.sp_axis
+            )
             padding_config = owned_padding_config
 
         reuse = self.indexer_types is not None
