@@ -249,6 +249,7 @@ def run_case(
     cmd: list | None = None,
     launcher_signal: int | None = None,
     signal_after: float = 0.0,
+    launcher_ready: tuple | None = None,  # (rank, marker): wait for this rank's phase marker before the launcher signal
     rank_signal: tuple | None = None,  # (rank, signal, seconds after the rank is ready)
     signal_on_marker: str | None = None,  # gate rank_signal on this phase marker file (e.g. "open_enter") not the pid
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
@@ -295,9 +296,14 @@ def run_case(
     def worker():
         try:
             if launcher_signal is not None:
+                where = "immediately"
+                if launcher_ready is not None:
+                    gr, gm = launcher_ready
+                    wait_marker(gr, gm)  # the ranks are at the tested phase before we signal, not a wall-clock guess
+                    where = f"{signal_after:.0f} s after rank {gr} reached {gm}"
                 time.sleep(signal_after)
                 os.kill(proc.pid, launcher_signal)
-                sent.append(f"{signal.Signals(launcher_signal).name} to tt-run at {signal_after:.0f} s")
+                sent.append(f"{signal.Signals(launcher_signal).name} to tt-run {where}")
             if rank_signal is not None:
                 r, sig, after = rank_signal
                 pid = pid_of(r)
@@ -316,6 +322,7 @@ def run_case(
                         sent.append(f"SIGKILL to phase-1 rank (pid {new[0]})")
                         return
                     time.sleep(0.2)
+                sent.append("FAULT NOT DELIVERED: no phase-1 (generate_rank_bindings) process appeared")
         except Exception as e:  # noqa: BLE001
             # a fault that could not be delivered is a harness error, not a teardown outcome: mark it loudly so a
             # row cannot quietly "pass" (or xfail) without the fault it was supposed to inject (review: P9/P4 ack).
@@ -393,6 +400,14 @@ def clean(r: Result) -> None:
 
 def nonzero(r: Result) -> None:
     assert r.exit not in (0, None), f"R4: the launcher returned {r.exit} although a rank failed\n{r.log[-3000:]}"
+
+
+def fault_delivered(r: Result) -> None:
+    """The fault this row injects from the harness (a signal to the launcher or a rank, a phase-1 kill) really
+    happened. Without this a row can pass for the wrong reason — a job that ends non-zero on its own, or a signal
+    that arrived during a clean early exit — so a missed injection must fail the row, not slip through."""
+    assert "FAULT NOT DELIVERED" not in r.signal_sent, f"the fault was not injected: {r}"
+    assert r.signal_sent, f"no fault was injected (nothing sent): {r}"
 
 
 def rank_reached(r: Result, rank: int, marker: str) -> None:
