@@ -70,7 +70,13 @@ def test_native_phi3_reference_decoder_supplies_position_embeddings():
 
 @pytest.mark.parametrize("seq_len", [128, 4096])
 def test_qwen_t3k_prefill_matmul_configs_match_across_batching(monkeypatch, seq_len):
-    args = SimpleNamespace(base_model_name="Qwen3-32B", device_name="T3K", mlp2_grid=lambda _: (8, 8))
+    args = SimpleNamespace(
+        base_model_name="Qwen3-32B",
+        device_name="T3K",
+        num_devices=8,
+        max_grid_size=ttnn.CoreGrid(x=8, y=7),
+        mlp2_grid=lambda _: (8, 8),
+    )
     args.use_minimal_prefill_matmul = MethodType(ModelArgs.use_minimal_prefill_matmul, args)
     args.use_minimal_qkv_prefill_matmul = MethodType(ModelArgs.use_minimal_qkv_prefill_matmul, args)
     monkeypatch.setattr("models.ttt_compat.tt.model_config.is_blackhole", lambda: False)
@@ -223,19 +229,41 @@ def test_compute_galaxy_width_shard_cores_rejects_non_positive_width(expect_erro
 
 
 @pytest.mark.parametrize(
-    ("grid_x", "grid_y", "n_tiles"),
+    ("grid_x", "grid_y", "n_tiles", "expected"),
     [
-        (11, 10, 48),  # Qwen2.5-1.5B dim on a p150b
-        (11, 10, 72),  # Gemma-2-2B dim on a p150b
-        (12, 10, 48),
+        (11, 10, 48, (3, 8)),  # Qwen2.5-1.5B dim on a p150b
+        (11, 10, 72, (4, 9)),  # Gemma-2-2B dim on a p150b
+        (12, 10, 48, (2, 12)),
+        (13, 10, 48, (2, 12)),
     ],
 )
-def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n_tiles):
+def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n_tiles, expected):
     monkeypatch.setattr("models.ttt_compat.tt.model_config.is_wormhole_b0", lambda: False)
     args = SimpleNamespace(max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y))
     rows, cols = ModelArgs.find_grid(args, n_tiles)
+    assert (rows, cols) == expected
     assert rows <= grid_y and cols <= grid_x
     assert n_tiles % (rows * cols) == 0
+
+
+@pytest.mark.parametrize("num_chunks", [1, 2, 3, 4])
+@pytest.mark.parametrize("num_devices", [1, 2, 4, 8])
+@pytest.mark.parametrize(
+    ("grid_x", "grid_y", "wormhole"), [(8, 8, True), (11, 10, False), (12, 10, False), (13, 10, False)]
+)
+def test_xattn_kv_prefill_mem_cfg_fits_the_device_grid(monkeypatch, grid_x, grid_y, wormhole, num_devices, num_chunks):
+    monkeypatch.setattr("models.ttt_compat.tt.model_config.is_wormhole_b0", lambda: wormhole)
+    args = SimpleNamespace(
+        max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y), n_kv_heads=8, num_devices=num_devices, head_dim=128
+    )
+    args.find_grid = MethodType(ModelArgs.find_grid, args)
+    seq_len = num_chunks * 1632
+    mem_cfg = ModelArgs.get_xattn_kv_prefill_mem_config(args, seq_len)
+    shard_spec = mem_cfg.shard_spec
+    size = shard_spec.grid.bounding_box().grid_size()
+    assert size.x <= grid_x and size.y <= grid_y
+    rows = max(1, 8 // num_devices) * seq_len
+    assert shard_spec.shape[0] * shard_spec.grid.num_cores() == rows
 
 
 @pytest.mark.parametrize(
@@ -372,3 +400,26 @@ def test_llama8_n150_prefill_k_block_scope(device_name, model_name, seq_len, exp
 def test_gelu_pytorch_tanh_maps_to_gelu_tanh(key):
     activation = ModelArgs._get_hidden_activation_type(None, {key: "gelu_pytorch_tanh"})
     assert activation.op_type == ttnn.UnaryOpType.GELU_TANH
+
+
+@pytest.mark.parametrize(
+    ("mesh_shape", "dim", "distributed_prefill_norm", "mode", "expected"),
+    [
+        ((1, 2), 4096, False, Mode.PREFILL, False),  # default: dim 4096 gathers the full width for the prefill norm
+        ((1, 2), 4096, True, Mode.PREFILL, True),  # opted in
+        ((1, 2), 4096, True, "prefill", True),  # string modes (Transformer.process_hidden_states_after_prefill_trace)
+        ((1, 2), 4096, True, Mode.DECODE, False),  # decode is unchanged
+        ((1, 1), 4096, True, Mode.PREFILL, False),  # nothing to distribute on one device
+        ((1, 2), 5120, False, Mode.PREFILL, True),  # dim > 4096 always distributes it
+    ],
+)
+def test_distributed_prefill_norm_is_opt_in_for_dim_4096_and_below(
+    mesh_shape, dim, distributed_prefill_norm, mode, expected
+):
+    args = object.__new__(ModelArgs)
+    args.mesh_device = SimpleNamespace(shape=mesh_shape)
+    args.is_multichip = mesh_shape[0] * mesh_shape[1] > 1
+    args.dim = dim
+    args.distributed_prefill_norm = distributed_prefill_norm
+
+    assert args.is_distributed_norm(mode) is expected

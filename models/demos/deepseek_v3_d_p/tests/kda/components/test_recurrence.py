@@ -13,8 +13,12 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    AffineTransform,
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
+    distributed_prefix,
+    kda_device_params,
+    pack_transform,
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
@@ -330,11 +334,7 @@ def _run_distributed_recurrence(
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True)
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
 def test_distributed_recurrence_matches_serial_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
@@ -366,11 +366,7 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True)
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
 def test_distributed_recurrence_trace_replay_matches_eager(
     mesh_device: ttnn.MeshDevice,
@@ -399,25 +395,36 @@ def test_distributed_recurrence_trace_replay_matches_eager(
 _STRADDLE_RANKS, _STRADDLE_LOCAL_ROWS = 4, 128
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# SP4 along mesh axis 1, on 2x4 and on 8x4 (one head per chip over 8 TP ranks).
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param((2, 4), kda_device_params((2, 4)), id="mesh-2x4"),
+        pytest.param(
+            (8, 4),
+            kda_device_params((8, 4)),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="galaxy-8x4",
+        ),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "groups,start,length",
     [
         # Unsplit control at the same geometry: calibrates the gates for a 512-token recurrence.
         pytest.param(1, 0, None, id="g1-unsplit-control"),
-        # One group per head: the packed head summaries the distributed prefix gathers.
+        # One group per head: the packed head summaries the relay carries.
         pytest.param(1, 128 + 64, None, id="g1-split-mid-rank1"),
         pytest.param(1, 2 * 128 + 96, None, id="g1-split-one-chunk-head"),
         pytest.param(1, 2 * 128 + 32, None, id="g1-split-one-chunk-tail"),
         pytest.param(1, 128 + 64, 352, id="g1-end-inside-last-rank"),
-        # Ranks 3 and 0 hold no valid chunk: the gathered prefix must apply their identity summaries.
+        # Ranks 3 and 0 hold no valid chunk: the relay must apply their identity summaries.
         pytest.param(1, 128 + 64, 160, id="g1-empty-ranks"),
         pytest.param(1, 128 + 64, 480, id="g1-end-inside-tail"),
         pytest.param(1, 4 * 128 + 128 + 32, None, id="g1-start-beyond-span"),
-        # Several groups per head: reduced head slots and per-group head/tail slots. A three-chunk head splits
-        # group 1 of two (it straddles: both of its slots are live) or ends exactly at group 2 of four (a
-        # group-aligned reset at a nonzero group); a two-chunk head ends group 0 of two.
+        # A sequence-parallel head is one group whatever summary_group_chunks asks: these splits (a three- or
+        # two-chunk head, a reset at a chunk boundary) must match the one-group path too.
         pytest.param(2, 128 + 32, None, id="g2-split-mid-group1"),
         pytest.param(4, 128 + 32, None, id="g4-split-late-reset"),
         pytest.param(2, 128 + 64, None, id="g2-split-group-boundary"),
@@ -508,7 +515,7 @@ def test_distributed_recurrence_split_interval_matches_reference(
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True)
 @pytest.mark.parametrize("order", [(0, 1), (1, 0)])
 def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
     mesh_device: ttnn.MeshDevice, order: tuple[int, ...]
@@ -530,8 +537,8 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         )
         return ttnn.reshape(tensor, (1, 32, 32))
 
-    entry, final = recurrence.distributed_prefix(
-        recurrence.pack_transform(recurrence.AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1)))),
+    entry, final = distributed_prefix(
+        pack_transform(AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1)))),
         to_mesh(initial, (None, 1)),
         sequence_parallel_axis=0,
         compute_config=ttnn.init_device_compute_kernel_config(

@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
@@ -61,6 +62,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_natural, unrotate_cache_layer
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import decode_tail
 
 CHUNK = 5120
 # 11 chunks is 56320 tokens — the "55k" leg, and past the 10-chunk mark the memory gate wants.
@@ -220,11 +222,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     per_chunk_layer_pccs = {}
 
     for chunk in range(NUM_CHUNKS):
+        # Chunk 0 is the request head, whose KDA layers start from zero carries on device; every later
+        # chunk must continue the carry, which is precisely what this test exists to catch.
         start = chunk * CHUNK
-        if chunk == 0:
-            # Only at the head of a request: a carry summarizes the prefix behind it, so zeroing it
-            # between chunks is precisely the bug this test exists to catch.
-            model.reset_streams()
 
         tokens_tt = prepare_prefill_input_tensor(
             trace.token_ids(CHUNK, start)[0].tolist(),
@@ -275,11 +275,12 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             columns = tuple(mesh_device.shape)[1]
             tp_size = tuple(mesh_device.shape)[TP_AXIS]
             history = KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE - 1
+            page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
             per_chip = KimiK3Config.KDA_NUM_HEADS * KimiK3Config.KDA_HEAD_DIM // tp_size
             tp_shards = []
             for t in range(tp_size):
                 row, column = (0, t) if SP_AXIS == 0 else (t, 0)
-                tp_shards.append(shards[row * columns + column].reshape(history, -1))
+                tp_shards.append(decode_tail(shards[row * columns + column], page_channels).reshape(history, -1))
             got_conv = torch.cat(
                 [
                     torch.cat([sh[:, stream * per_chip : (stream + 1) * per_chip] for sh in tp_shards], dim=-1)
