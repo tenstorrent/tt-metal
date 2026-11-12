@@ -193,6 +193,7 @@ def test_concurrent_shared_prefixes_keep_private_history_and_follow_moves():
 def test_decode_releases_only_its_slot_history_despite_page_id_collision(remap):
     model = adapter()
     model.max_batch_size = model.rows = 4
+    model.row_sizes, model.sub_caches = (), {}
     model.prefill_slot_keys = {0: 1, 1: 2}
     model.cache.prefill_history = {1: object(), 2: object()}
     model.generator = SimpleNamespace(
