@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Helpers for code running on a CCE hart: the cycle counter, bounded waits, runtime args, and pointers into this
-// CCE's TL1 and a peer CCE's TL1.
+// Helpers for code running on a CCE hart: bounded waits, runtime args, and pointers into this CCE's TL1 and a peer
+// CCE's TL1.
 
 #pragma once
 
@@ -15,6 +15,7 @@
 
 #include "dev_mem_map.h"
 #include "experimental/cce_gddr.h"
+#include "risc_common.h"
 
 // Forward declared from dataflow_api.h
 template <typename T>
@@ -22,19 +23,13 @@ T get_arg_val(int arg_idx);
 
 namespace experimental::cce_hart {
 
-FORCE_INLINE uint64_t read_cycle_counter() {
-    uint64_t cycles;
-    asm volatile("rdcycle %0" : "=r"(cycles));
-    return cycles;
-}
-
 // Counts a budget from construction. A budget of 0 never expires.
 class WaitDeadline {
 public:
     explicit WaitDeadline(uint64_t budget_cycles) :
-        budget_cycles_(budget_cycles), start_cycles_(budget_cycles == 0 ? 0 : read_cycle_counter()) {}
+        budget_cycles_(budget_cycles), start_cycles_(budget_cycles == 0 ? 0 : get_timestamp()) {}
 
-    bool expired() const { return budget_cycles_ != 0 && read_cycle_counter() - start_cycles_ >= budget_cycles_; }
+    bool expired() const { return budget_cycles_ != 0 && get_timestamp() - start_cycles_ >= budget_cycles_; }
 
 private:
     uint64_t budget_cycles_;

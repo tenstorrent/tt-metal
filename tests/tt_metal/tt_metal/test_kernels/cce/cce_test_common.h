@@ -18,7 +18,6 @@ namespace cce_test {
 using experimental::cce_hart::arg_u64;
 using experimental::cce_hart::own_tl1_words;
 using experimental::cce_hart::peer_tl1_word;
-using experimental::cce_hart::read_cycle_counter;
 using experimental::cce_hart::wait_until;
 using experimental::cce_hart::WaitDeadline;
 
@@ -60,10 +59,10 @@ inline bool on_one_line(uint64_t first_address, uint64_t second_address) {
 // Spins until `ready()` or `budget_cycles` pass; returns whether it became ready and stores the cycles spent.
 template <typename Ready>
 inline bool poll_bounded(Ready ready, uint64_t budget_cycles, uint32_t& cycles_spent) {
-    const uint64_t start = read_cycle_counter();
+    const uint64_t start = get_timestamp();
     const WaitDeadline deadline(budget_cycles);
     const bool is_ready = wait_until(deadline, ready);
-    cycles_spent = static_cast<uint32_t>(read_cycle_counter() - start);
+    cycles_spent = static_cast<uint32_t>(get_timestamp() - start);
     return is_ready;
 }
 

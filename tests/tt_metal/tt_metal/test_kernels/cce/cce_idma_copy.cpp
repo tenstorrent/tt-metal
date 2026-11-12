@@ -166,9 +166,9 @@ static uint32_t pending_count(uint32_t trid) {
 // Like cce_test::poll_bounded, against a deadline the caller shares across several polls.
 template <typename Ready>
 static bool poll_until(Ready ready, const cce_test::WaitDeadline& deadline, uint32_t& cycles_spent) {
-    const uint64_t start = cce_test::read_cycle_counter();
+    const uint64_t start = get_timestamp();
     const bool is_ready = cce_test::wait_until(deadline, ready);
-    cycles_spent += static_cast<uint32_t>(cce_test::read_cycle_counter() - start);
+    cycles_spent += static_cast<uint32_t>(get_timestamp() - start);
     return is_ready;
 }
 
@@ -295,7 +295,7 @@ static void wait_for_trids(
                     remaining &= ~(1u << trid);
                     trace[trid * abi::kTraceWordsPerTrid] = rank++;
                     trace[trid * abi::kTraceWordsPerTrid + 1] =
-                        static_cast<uint32_t>(cce_test::read_cycle_counter() - last_issue_cycles);
+                        static_cast<uint32_t>(get_timestamp() - last_issue_cycles);
                 }
             }
             return remaining == 0;
@@ -448,7 +448,7 @@ static Report run_trid_issuer(
         used_trids |= 1u << (trid % abi::kNumTrids);
         record_pending(pending_count<CMDBUF>(trid % abi::kNumTrids), report);
     }
-    const uint64_t last_issue_cycles = cce_test::read_cycle_counter();
+    const uint64_t last_issue_cycles = get_timestamp();
     if (report.code != success_code) {
         report.flags &= ~abi::kFlagVcSpace;
     }
@@ -585,7 +585,7 @@ static Report run_trid_table(
             record_failure(report, success_code, abi::kCodeVcSpaceTimeout);
             break;
         }
-        const uint64_t issue_cycles = cce_test::read_cycle_counter();
+        const uint64_t issue_cycles = get_timestamp();
         if (command != 0 && issue_cycles - previous_issue_cycles > report.probe_first) {
             report.probe_first = static_cast<uint32_t>(issue_cycles - previous_issue_cycles);
         }
@@ -601,7 +601,7 @@ static Report run_trid_table(
         }
         report.probe_second = total_pending > report.probe_second ? total_pending : report.probe_second;
     }
-    const uint64_t last_issue_cycles = cce_test::read_cycle_counter();
+    const uint64_t last_issue_cycles = get_timestamp();
     if (report.code != success_code) {
         report.flags &= ~abi::kFlagVcSpace;
     }
@@ -662,7 +662,7 @@ static Report run_trid_stream(
             used_trids |= 1u << trid;
             record_pending(pending_count<CMDBUF_0>(trid), report);
         }
-        const uint64_t last_issue_cycles = cce_test::read_cycle_counter();
+        const uint64_t last_issue_cycles = get_timestamp();
         if (used_trids != 0) {
             BatchArgs issued = batch;
             issued.num_commands = report.elements_issued - issued_before;

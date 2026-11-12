@@ -19,7 +19,6 @@ using cce_test::arg_u64;
 using cce_test::own_tl1_words;
 using cce_test::peer_tl1_word;
 using cce_test::poll_bounded;
-using cce_test::read_cycle_counter;
 using cce_test::WaitDeadline;
 
 static volatile uint32_t* cached_word(uint32_t offset) {
@@ -441,7 +440,7 @@ static void run_two_hart_increment(const Args& args, Status& status) {
         status.fail(abi::kCodePeerTimeout);
         return;
     }
-    const uint64_t start = read_cycle_counter();
+    const uint64_t start = get_timestamp();
     for (uint32_t iteration = 0; iteration < args.count; ++iteration) {
         status.words[abi::kStatusAmoReturnSum] += amoadd_w(amo_word, args.value);
     }
@@ -459,7 +458,7 @@ static void run_two_hart_increment(const Args& args, Status& status) {
         }
         status.words[abi::kStatusLrScReturnSum] += previous;
     }
-    status.words[abi::kStatusCycles] = static_cast<uint32_t>(read_cycle_counter() - start);
+    status.words[abi::kStatusCycles] = static_cast<uint32_t>(get_timestamp() - start);
     flush_l1_dcache(0);
     asm volatile("fence rw, w" ::: "memory");
     *own_tl1_words(flag_line(args.flag_offset, abi::kMaxParticipants + args.participant)) = 1;
@@ -484,7 +483,7 @@ static void run_op_matrix(const Args& args, const WaitDeadline& deadline, Status
     const uint32_t num_bytes = args.num_points * abi::kLineBytes;
     discard_l1_range(args.target_offset, num_bytes);
     invalidate_l2_cache_range(args.target_offset, num_bytes);
-    const uint64_t start = read_cycle_counter();
+    const uint64_t start = get_timestamp();
     for (uint32_t entry = 0; entry < args.num_points; ++entry) {
         if (deadline.expired()) {
             status.fail(abi::kCodeBudgetExpired);
@@ -522,7 +521,7 @@ static void run_op_matrix(const Args& args, const WaitDeadline& deadline, Status
         words[abi::kOpEntryReturnedHi] = static_cast<uint32_t>(previous >> 32);
         words[abi::kOpEntryAttempts] = attempts;
     }
-    status.words[abi::kStatusCycles] = static_cast<uint32_t>(read_cycle_counter() - start);
+    status.words[abi::kStatusCycles] = static_cast<uint32_t>(get_timestamp() - start);
     flush_l1_dcache(0);
     flush_l2_cache_range(args.target_offset, num_bytes);
 }
@@ -582,7 +581,7 @@ static void run_sweep(const Args& args, const WaitDeadline& deadline, Status& st
         uint32_t interleaved = 0;
         uint64_t last = 0;
         const bool doubleword = abi::is_doubleword_op(args.operation);
-        const uint64_t start = read_cycle_counter();
+        const uint64_t start = get_timestamp();
         for (uint32_t iteration = 0; iteration < count && iteration < abi::kMaxCount; ++iteration) {
             if (deadline.expired()) {
                 expired = true;
@@ -605,7 +604,7 @@ static void run_sweep(const Args& args, const WaitDeadline& deadline, Status& st
             last = previous;
             return_sum += previous;
         }
-        const uint32_t cycles = static_cast<uint32_t>(read_cycle_counter() - start);
+        const uint32_t cycles = static_cast<uint32_t>(get_timestamp() - start);
         volatile uint32_t* result =
             own_tl1_words(args.result_offset + (args.participant * args.num_points + point) * abi::kSweepResultBytes);
         result[abi::kSweepResultReturnSumLo] = static_cast<uint32_t>(return_sum);
@@ -694,7 +693,7 @@ static void run_ordering(const Args& args, const WaitDeadline& deadline, Status&
     }
     volatile uint32_t* data = cached_word(data_line);
     const uint32_t words_per_line = abi::kLineBytes / sizeof(uint32_t);
-    const uint64_t start = read_cycle_counter();
+    const uint64_t start = get_timestamp();
     for (uint32_t round = 0; round < args.count; ++round) {
         if (args.participant == 0) {
             for (uint32_t word = 0; word < words_per_line; ++word) {
@@ -731,7 +730,7 @@ static void run_ordering(const Args& args, const WaitDeadline& deadline, Status&
             release_swap_w(ack_word, round + 1);
         }
     }
-    status.words[abi::kStatusCycles] = static_cast<uint32_t>(read_cycle_counter() - start);
+    status.words[abi::kStatusCycles] = static_cast<uint32_t>(get_timestamp() - start);
 }
 
 static void run_neighbour_write(const Args& args, const WaitDeadline& deadline, Status& status) {
@@ -747,7 +746,7 @@ static void run_neighbour_write(const Args& args, const WaitDeadline& deadline, 
         return;
     }
     volatile uint32_t* words = cached_word(args.target_offset);
-    const uint64_t start = read_cycle_counter();
+    const uint64_t start = get_timestamp();
     for (uint32_t iteration = 0; iteration < args.count; ++iteration) {
         if (deadline.expired()) {
             status.fail(abi::kCodeBudgetExpired);
@@ -759,7 +758,7 @@ static void run_neighbour_write(const Args& args, const WaitDeadline& deadline, 
             words[args.participant] = abi::neighbour_word(args.seed, args.participant, iteration);
         }
     }
-    status.words[abi::kStatusCycles] = static_cast<uint32_t>(read_cycle_counter() - start);
+    status.words[abi::kStatusCycles] = static_cast<uint32_t>(get_timestamp() - start);
     if (args.participant == 0) {
         status.words[abi::kStatusAmoFinal] = amoadd_w(words, 0);
     }
@@ -804,7 +803,7 @@ static void run_storm(const Args& args, const WaitDeadline& deadline, Status& st
     uint32_t barriers = 0;
     uint32_t max_barrier_cycles = 0;
     uint32_t done = 0;
-    const uint64_t start = read_cycle_counter();
+    const uint64_t start = get_timestamp();
     bool expired = false;
     while (done < args.count && !expired) {
         const uint32_t burst = soak ? abi::soak_burst(schedule) : args.count;
@@ -874,7 +873,7 @@ static void run_storm(const Args& args, const WaitDeadline& deadline, Status& st
         }
         if (soak && !expired && done < args.count && abi::soak_barrier(schedule)) {
             result[abi::kStormResultProgress] = done;
-            const uint64_t barrier_start = read_cycle_counter();
+            const uint64_t barrier_start = get_timestamp();
             if (!barrier(
                     args.flag_offset,
                     args.participant,
@@ -885,7 +884,7 @@ static void run_storm(const Args& args, const WaitDeadline& deadline, Status& st
                 status.fail(abi::kCodePeerTimeout);
                 break;
             }
-            const uint32_t barrier_cycles = static_cast<uint32_t>(read_cycle_counter() - barrier_start);
+            const uint32_t barrier_cycles = static_cast<uint32_t>(get_timestamp() - barrier_start);
             max_barrier_cycles = barrier_cycles > max_barrier_cycles ? barrier_cycles : max_barrier_cycles;
             barriers++;
         }
@@ -901,7 +900,7 @@ static void run_storm(const Args& args, const WaitDeadline& deadline, Status& st
     result[abi::kStormResultSwapSumHi] = static_cast<uint32_t>(swap_sum >> 32);
     result[abi::kStormResultBarriers] = barriers;
     result[abi::kStormResultMaxBarrierCycles] = max_barrier_cycles;
-    result[abi::kStormResultCycles] = static_cast<uint32_t>(read_cycle_counter() - start);
+    result[abi::kStormResultCycles] = static_cast<uint32_t>(get_timestamp() - start);
     result[abi::kStormResultInterleaved] = interleaved;
     result[abi::kStormResultMaxCasTries] = max_cas_tries;
     finish_participants(args, num_bytes, deadline, status);
