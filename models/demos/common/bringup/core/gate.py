@@ -317,8 +317,59 @@ def gate_units(task: dict, tasks: dict | None = None) -> list[tuple[str, str]]:
             seen.add(key)
             units.append((key, c))
     if [u for u, _ in units] == [tid]:
-        return [(tid, step_command(task.get("step"), cmd))]
-    return [(u, step_command((tasks.get(unit_base(u)) or task).get("step"), c)) for u, c in units]
+        return with_determinism(task, [(tid, step_command(task.get("step"), cmd))])
+    return with_determinism(
+        task, [(u, step_command((tasks.get(unit_base(u)) or task).get("step"), c)) for u, c in units]
+    )
+
+
+# FIX.25 (owner 2026-11-12: "determinism is the highest of all priorities"): the framework's model-level tests; a gate
+# that runs one of them (or is a full-model step) runs the model determinism check too
+MODEL_LEVEL_TEST = re.compile(
+    r"models/demos/common/bringup/tests/test_(ladder|profile|positions|contract|contract_acks|smoke|batch)\.py"
+)
+DETERMINISM_TEST = re.compile(r"\btest_determinism\.py\b")
+DETERMINISM_METRIC = "determinism_max_abs_diff"
+
+
+MODEL_LEVEL_STEPS = FULL_MODEL_STEPS + ("overseer_fix", "fix")
+
+
+def needs_determinism(task: dict, units: list[tuple[str, str]]) -> bool:
+    """FIX.25: a device gate (tasks.yaml ``device: true``, which device_policy_errors holds to the safe runner) that
+    runs the model: a framework model-level test (ladder, profile, positions, contract, smoke), or any device test of
+    a full-model or fix step; and runs no determinism test of its own (the framework's or the model's, by name).
+    Component, swap, fork and box gates keep their own per-op checks (testing/determinism.py)."""
+    cmd = " && ".join(c for _, c in units)
+    if not task.get("device") or DETERMINISM_TEST.search(cmd) or "run_safe_pytest.sh" not in cmd:
+        return False
+    return bool(MODEL_LEVEL_TEST.search(cmd)) or task.get("step") in MODEL_LEVEL_STEPS
+
+
+def with_determinism(task: dict, units: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """FIX.25: every model-level gate runs the model determinism check (testing/model_determinism.py), without its
+    tasks.yaml entry naming it; no switch turns it off (owner: no exemption for the model). It joins the gate's first
+    unit whose runs may share one process at the model's shipped configuration (core/batch.py: shared framework tests,
+    no switch variable), first in it, so it costs no model load of its own (tests.one_process) and its first sequence
+    is the cold one after the load; a gate without such a unit gets it as its own first unit <task>#test_determinism.
+    A non-deterministic model fails the unit (the test asserts; DETERMINISM_METRIC == 0 is also a gate limit, see
+    gate_limits), its message naming the prompt, run, first differing chunk and first differing layer state."""
+    if not needs_determinism(task, units):
+        return units
+    for k, (u, c) in enumerate(units):
+        runs = batch.parse_all(c)
+        if runs and all(set(r["env"]) <= batch.ITEM_VARS for r in runs):
+            return units[:k] + [(u, f"{batch.DETERMINISM_CMD} && {c}")] + units[k + 1 :]
+    return [(f"{task.get('id')}#test_determinism", batch.DETERMINISM_CMD)] + units
+
+
+def gate_limits(task: dict, tasks: dict | None = None) -> dict[str, str]:
+    """The gate's thresholds: tasks.yaml's, plus (FIX.25) determinism_max_abs_diff == 0 whenever the gate runs a
+    determinism test (injected or named). Never loosens a tasks.yaml limit: one it sets stays as it is."""
+    out = dict(task["gate"].get("metrics") or {})
+    if DETERMINISM_METRIC not in out and any(DETERMINISM_TEST.search(c) for _, c in gate_units(task, tasks)):
+        out[DETERMINISM_METRIC] = "== 0"
+    return out
 
 
 def gate_command(task: dict, tasks: dict | None = None) -> str:
@@ -664,7 +715,7 @@ def run_units(
     it runs the delta. ``only``: run just these units (gate --unit); ``rerun``: run these even if kept (gate --rerun).
     """
     tid, tasks = task["id"], tasks or {}
-    limits = task["gate"].get("metrics") or {}
+    limits = gate_limits(task, tasks)  # FIX.25: with the determinism limit
     plan = (
         unit_stamps(spec, task, env, tasks)
         if store is not None
@@ -810,7 +861,7 @@ def delta_status(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
     task = tasks[tid]
     delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid)
     under = stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks), with_bytes=True)  # F175
-    limits = task["gate"].get("metrics") or {}
+    limits = gate_limits(task, tasks)  # FIX.25
     env = gate_env(spec, ledger, tid)
     units = gate_units(task, tasks)
     out = []
@@ -928,7 +979,7 @@ def run_gate(
     dur = time.time() - t0
 
     got = M.load(tid, results_dir)
-    thresholds = task["gate"].get("metrics", {})
+    thresholds = gate_limits(task, tasks)  # FIX.25: with the determinism limit
     if reuse is not None and reuse.get("partial"):  # F122: a quick A/B; the full gate runs before the final task
         thresholds = measured_only(thresholds, got)
     m_ok, lines = check_metrics(thresholds, got)
@@ -961,7 +1012,7 @@ def run_gate(
         duration_s=round(dur, 1),
         rc=rc,
         attempts=entry.get("attempts", 0) + (0 if verdict == "PASS" else 1),
-        metrics=state_metrics(task["gate"].get("metrics", {}), got),
+        metrics=state_metrics(gate_limits(task, tasks), got),
         log=str(log),
         reason=[] if verdict == "PASS" else res.lines,
         stamp={"units": sids, "reused": reused} if sids else None,  # F150

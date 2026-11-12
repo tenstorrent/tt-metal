@@ -228,6 +228,13 @@ paths may be relative to the artifact root, so only `paths.art` changes per host
   runner, the known-issues file lost its format, or a changed file reads the environment outside `tt/settings.py`.
 - Component tests and fork tests check bitwise determinism: A, B, A, then A until 5 runs, every A byte-identical
   (`testing/determinism.py`; `tests.determinism_repeats`, `tests.nondeterministic` for a step exempt with its reason).
+- Every model-level device gate (tasks.yaml `device: true` with a framework ladder / profile / positions / contract /
+  smoke test, or a full-model or fix step) also runs the model determinism check, without its tasks.yaml entry naming
+  it (FIX.25, `core/gate.py` `with_determinism`, `testing/model_determinism.py`, `tests/test_determinism.py`): the
+  spec's prompt and a code prompt, 4 chunks each, 3 runs each interleaved (the first after the load cold), every
+  chunk's final hidden and every layer's served state bit for bit; `determinism_max_abs_diff == 0` is added to the
+  gate's limits. It runs first in the gate's first shared-model process (no load of its own); the perf A/B runs it on
+  both sides and an accept needs it on the 'on' side. No switch exempts the model.
 - With `serving.kv_dtype` set, every ladder rung must run on that KV format: one cache format for the ladder, the
   contract and serving.
 - Commits stage only the task's paths; formatting runs before testing and hashing, so the tested bytes are committed.

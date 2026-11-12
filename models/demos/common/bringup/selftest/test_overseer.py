@@ -363,11 +363,17 @@ def test_a_fix_job_runs_its_gate_tasks_commands_exactly(sandbox):
     """F151: a fix job's segment of a full-model task (integrate, contract, perf) kept run_safe_pytest's precompile
     pass, which the task's own gate skips (gate_command adds --no-precompile by the task's step, and the fix's step is
     overseer_fix): DeepSeek-V4.1 FIX.8 / FIX.9 / FIX.5 compiled L.last and X.3 twice in 45-70 min gates."""
+    from models.demos.common.bringup.core.gate import DETERMINISM_METRIC as DET
     from models.demos.common.bringup.core.gate import gate_command, gate_units, run_gate
+    from models.demos.common.bringup.selftest.conftest import PY
 
     runner = sandbox.repo / "scripts/run_safe_pytest.sh"
     runner.parent.mkdir()
-    runner.write_text(f"#!/bin/bash\necho \"$BRINGUP_TASK $*\" >> {sandbox.repo.parent / 'calls.txt'}\n")
+    record = f"{PY} -c \"from models.demos.common.bringup.core import metrics as M; M.record('{DET}', 0.0)\""
+    runner.write_text(  # FIX.25: the determinism run records its gated metric, as the real test does
+        f"#!/bin/bash\necho \"$BRINGUP_TASK $*\" >> {sandbox.repo.parent / 'calls.txt'}\n"
+        f'case "$*" in *test_determinism.py*) {record};; esac\n'
+    )
     runner.chmod(0o755)
     safe = "scripts/run_safe_pytest.sh --run-all"
     tasks = {
@@ -391,15 +397,23 @@ def test_a_fix_job_runs_its_gate_tasks_commands_exactly(sandbox):
     job = OV.queue_fix(sandbox.spec.bringup_dir, "Fix.", ["C.1", "L.1", "X.3"], tasks=tasks)
     fix = OV.fix_task(job, tasks)
     units = gate_units(fix, tasks)
+    # FIX.25: a device gate runs the model determinism check once, first (here its own unit: no shared framework test)
+    det = [u for u in units if u[0].endswith("#test_determinism")]
+    assert len(det) == 1 and units[0] == det[0]
+    units = units[1:]
     # F170: the fix runs each task's units exactly as that task's own gate does (X.3: its ladder and its profile)
-    assert units == [u for t in ("C.1", "L.1", "X.3") for u in gate_units(tasks[t], tasks)]
+    own = lambda t: [u for u in gate_units(tasks[t], tasks) if not u[0].endswith("#test_determinism")]  # noqa: E731
+    assert units == [u for t in ("C.1", "L.1", "X.3") for u in own(t)]
     assert "--no-precompile" not in units[0][1] and units[1][1].count("--no-precompile") == 1
-    assert gate_command(fix, tasks).count("--no-precompile") == 4  # L.1, and X.3's ladder, clean wall and profile
+    # L.1, and X.3's ladder, clean wall and profile; and the determinism check's (FIX.25)
+    assert gate_command(fix, tasks).count("--no-precompile") == 5
     led = sandbox.tasks(*tasks.values(), fix)
     for t in tasks:
         led.update(t, status="PASS")
     assert run_gate(sandbox.spec, led, "FIX.1").verdict == "PASS"
     calls = (sandbox.repo.parent / "calls.txt").read_text().splitlines()
+    assert calls[0] == "FIX.1 --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py"  # FIX.25
+    calls = calls[1:]
     assert calls[:2] == ["C.1 --run-all t_c.py", "L.1 --no-precompile --run-all t_l.py"]
     assert len(calls) == 5 and all(c.startswith("X.3 --no-precompile") for c in calls[2:])
 

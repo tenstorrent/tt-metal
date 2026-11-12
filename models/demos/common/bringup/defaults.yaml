@@ -48,7 +48,10 @@ tests:
   contract_tail_pad: 32       # the contract test's last chunk ends this many tokens early
   determinism_repeats: 5      # component and fork tests: A runs, A,B,A then A again, bit-identical to the first A
                               # (testing/determinism.py; 0 turns it off). About 5 extra calls per test.
-  nondeterministic: {}        # component steps exempt from that check, {step: reason}
+  nondeterministic: {}        # component steps exempt from that check, {step: reason} (never the model: FIX.25)
+  model_determinism:          # FIX.25 (owner 2026-11-12): every model-level gate runs the device model twice and more
+    chunks: 4                 # on two prompts (testing/model_determinism.py): chunks per sequence from position 0
+    runs: 3                   # sequences per prompt (the first after the load cold; >= 2), compared bit for bit
   fork_waivers: {}            # F199: owner-accepted failing fork tests, {<test id as fork_suite prints it>: reason}; WAIVED
   one_process: true           # F259 (on: device check 2026-11-06, 3 runs 393 s vs ~20 min, accuracy identical): the A/B side's / a gate unit's profile, ladder and position runs in ONE pytest
                               # process, the model loaded once (core/batch.py); false = a process each (until the

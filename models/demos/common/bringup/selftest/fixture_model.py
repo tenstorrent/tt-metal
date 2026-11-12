@@ -366,5 +366,31 @@ class FakeDeviceModel:
         pass
 
 
+class NondeterministicFakeModel(FakeDeviceModel):
+    """FIX.25's selftest: a deliberately non-deterministic device model. Layer ``layer``'s output gets a tiny term
+    that depends on how many chunks the model ran before (a stand-in for an arrival-order sum, DS41-235): identical
+    inputs give different outputs from the second sequence on, the first chunk included. ``bits_only``: the term is
+    a signed zero instead (equal values, different bits)."""
+
+    def __init__(self, spec, layers, layer=1, bits_only=False):
+        super().__init__(spec, layers)
+        self.calls, self.at, self.bits_only = 0, layer, bits_only
+
+    def layer(self, i, h, start, state):
+        out = super().layer(i, h, start, state)
+        if i != self.at:
+            return out
+        self.calls += 1
+        if self.bits_only:  # every run: one element zero; +0 in the first sequence (4 chunks), -0 after
+            out = out.clone()
+            out[0, 1] = 0.0 if self.calls <= 4 else -0.0
+            return out
+        return out + 1e-4 * ((self.calls * 7919) % 13) * out.abs().mean()
+
+
 def device_model(mesh, spec, layers, lm_head=True):
+    import os
+
+    if os.environ.get("FIXTURE_NONDETERMINISTIC") == "1":  # FIX.25's selftest: the gate must fail
+        return NondeterministicFakeModel(spec, layers)
     return FakeDeviceModel(spec, layers)
