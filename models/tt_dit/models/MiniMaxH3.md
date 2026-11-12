@@ -390,23 +390,9 @@ resident weights it does not fit at construction, while bucketed ref2va and dyna
 numbers were taken with FSDP on (`test_performance_minimax_h3.py` passes `dit_fsdp=True`), and the construction
 log records the choice (`dit_fsdp: on (dynamic ref2va)`).
 
-**On the quad.** `MINIMAX_H3_DYNAMIC_LENGTH=1` or `create_pipeline(..., dynamic_length=True)` serves the 4x32
-dynamically too, eagerly: the preset's `trace_denoise` belongs to its bucketed path and yields to the request
-(an explicit `trace_denoise=True` beside it raises). At SP=32 the alignment is 1024 rows and every served length
-sits in the short class (at most 3776 rows per device at the t2va cap), so one program set covers them all; the
-quad-only length-keyed ring SDPA gives way to the ring-joint SDPA with its runtime row count. The quad keeps
-`use_persistent_ccl_buffers`, and on the dynamic path the projections' and ff1's all-gather pairs are sized at the
-row capacity (`persistent_buffer_rows`, the norms' `row_capacity`), so every length shares one pair instead of
-pinning a pair per length served; ff2's fused reduce-scatter output pair is the activation it returns, so on that
-path ff2 allocates its exact output per call instead (the barrier-semaphore mode the 4x8 runs for every
-collective). The quad preset pins `dit_fsdp: False`: the dynamic-ref2va FSDP default is a 4x8 rule and a 32-way
-weight all-gather is unmeasured, so the quad stays unsharded on both paths. Dynamic ref2va on the quad is unmeasured
-(the cap-sized K/V gather pair is the same 2.34 GB per device as on the 4x8, sized on the global packed length);
-`MINIMAX_H3_DIT_FSDP=1` opts into the sharding. Measured on a quad at 130 W (16:9, 5 s, 50 steps): the dynamic path takes 24.1 s against 19.8 s
-traced (denoise 0.461 s against 0.383 s per step, 0.4 % against 16.6 % padding): at SP=32 a step has little work per
-chip, so the eager dispatch costs more than the padding it removes, and the audio decoder runs untraced (+0.5 s).
-The quad preset therefore keeps `trace_denoise` and buckets by default; dynamic length is the opt-in there until an
-eager quad step is cheaper than the trace. Construction with a warm kernel cache is 2.4 min against 4.1 min.
+**On the quad.** The 4x32 preset stays bucketed and traced by default; dynamic length is opt-in there, with
+`MINIMAX_H3_DYNAMIC_LENGTH=1` or `create_pipeline(..., dynamic_length=True)`. The opt-in runs the denoise eagerly
+(an explicit `trace_denoise=True` beside it raises).
 
 **Backup.** The 4x8 ladder path is kept behind a flag for a few weeks and then removed. It is selected by
 `create_pipeline(..., dynamic_length=False)`, by `MINIMAX_H3_DYNAMIC_LENGTH=0` in the environment, or by
