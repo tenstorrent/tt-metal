@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_inputs.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_interpret.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_router_analysis.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_stream_registers.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_values.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 
@@ -49,6 +50,9 @@ enum class FindingCode : uint8_t {
     TYPE_LARGER_THAN_ELEMENT,
     // An enum region holds a value that names no enumerator.
     UNKNOWN_ENUMERATOR,
+    // A stream register's count, as the router reads it, is above its channel's slots: taken below zero, or given
+    // more than the channel holds.
+    STREAM_COUNT_OUT_OF_RANGE,
     // A VC is connected to a sibling it never forwards to: expected on an E/W router that can't turn.
     CONNECTED_NOT_LIVE,
     // A VC forwards to a direction it has no sibling for: expected on a corner chip, since a correct
@@ -96,10 +100,11 @@ FindingSeverity get_finding_severity(FindingCode code);
 FindingOrigin get_finding_origin(FindingCode code);
 
 // Everything decode finds about one router: what capture recorded of it, its unread regions, enum regions that name
-// no enumerator, and its directions' differences.
+// no enumerator, stream counts out of range against `register_facts`, and its directions' differences.
 std::vector<Finding> find_router_findings(
     const RouterValues& values,
     const manifest::Arch& arch,
+    const StreamRegisterFactsByRegister& register_facts,
     const std::optional<std::vector<VcDirections>>& directions);
 
 // The record's routers the manifest doesn't have.

@@ -93,9 +93,9 @@ RegionResult read_l1_region(const RouterSnapshot& snapshot, const manifest::cont
             return get_missing_bytes_reason(
                 snapshot, Unread{.code = UnreadCode::OUTSIDE_CAPTURED_L1, .message = "capture didn't read the L1"});
         }
-        return InactiveRegion{
+        return InactiveRegion{InactiveL1{
             .bytes = full_read_bytes,
-            .bin_offset = get_read_bin_offset(*l1_read) + (region.address - l1_read->address)};
+            .bin_offset = get_read_bin_offset(*l1_read) + (region.address - l1_read->address)}};
     }
 
     if (sizeof(T) > region.element_size) {
@@ -138,18 +138,12 @@ RegionResult read_l1_region(const RouterSnapshot& snapshot, const manifest::cont
     return TypedRegionReads{std::in_place_type<RegionReads<T>>, std::move(reads)};
 }
 
-// A stream register's value: the word's low value_bits bits. The bits above can hold other state (Blackhole keeps
-// more above BUF_SPACE_AVAILABLE's count).
-constexpr uint32_t mask_stream_register_word(uint32_t word, uint32_t value_bits) {
-    return value_bits >= 32 ? word : word & ((uint32_t{1} << value_bits) - 1);
-}
-
-// A stream register's value read as T, which fits in a word.
+// A stream register's value read as T, which fits in a word: the word under `read_mask`, the bits the router reads.
+// The bits outside it can hold other state (Blackhole keeps a message-info count above a count register's count).
 template <typename T>
-T read_stream_register_value(uint32_t word, uint32_t value_bits) {
+T read_stream_register_value(uint32_t word, uint32_t read_mask) {
     static_assert(sizeof(T) <= sizeof(uint32_t));
-    const auto value =
-        std::bit_cast<std::array<std::byte, sizeof(uint32_t)>>(mask_stream_register_word(word, value_bits));
+    const auto value = std::bit_cast<std::array<std::byte, sizeof(uint32_t)>>(word & read_mask);
     std::array<std::byte, sizeof(T)> bytes{};
     std::copy_n(value.begin(), sizeof(T), bytes.begin());
     return std::bit_cast<T>(bytes);
@@ -169,9 +163,26 @@ uint32_t read_round_word(const RoundRead& round_read, uint64_t address) {
 }
 
 // The stream register's reads, each its value as T: one per round that read it, when the manifest marks it
-// multi_sampled, then its read in the full read. Or why capture read none.
+// multi_sampled, then its read in the full read. Or its word, when it's inactive. Or why capture read none.
 template <typename T>
 RegionResult read_stream_register(const RouterSnapshot& snapshot, const manifest::content::StreamReg& stream_register) {
+    const auto get_not_captured_reason = [&] {
+        return get_missing_bytes_reason(
+            snapshot,
+            Unread{
+                .code = UnreadCode::REGISTER_NOT_CAPTURED,
+                .message = fmt::format("capture didn't read the register at {:#x}", stream_register.address)});
+    };
+    // Nothing writes an inactive register, so its word isn't a value: it's kept as it is. The manifest's reader
+    // refuses an inactive register that's multi_sampled, so it has no round reads.
+    if (!stream_register.active) {
+        const std::optional<RegisterRead> register_read = snapshot.find_register_read(stream_register.address);
+        if (!register_read.has_value()) {
+            return get_not_captured_reason();
+        }
+        return InactiveRegion{
+            InactiveRegister{.word = register_read->word, .bin_offset = get_read_bin_offset(*register_read->read)}};
+    }
     if constexpr (sizeof(T) > sizeof(uint32_t)) {
         TT_THROW(
             "Fabric decode: the manifest names {} for the stream register at {:#x}, but it's larger than a word",
@@ -187,7 +198,7 @@ RegionResult read_stream_register(const RouterSnapshot& snapshot, const manifest
                     .t_ns = round_read.read->t_ns,
                     .bin_offset = get_read_bin_offset(*round_read.read),
                     .word = word,
-                    .elements = {read_stream_register_value<T>(word, stream_register.value_bits)}});
+                    .elements = {read_stream_register_value<T>(word, stream_register.read_mask)}});
             }
         }
         if (const std::optional<RegisterRead> register_read = snapshot.find_register_read(stream_register.address)) {
@@ -195,14 +206,10 @@ RegionResult read_stream_register(const RouterSnapshot& snapshot, const manifest
                 .t_ns = register_read->read->t_ns,
                 .bin_offset = get_read_bin_offset(*register_read->read),
                 .word = register_read->word,
-                .elements = {read_stream_register_value<T>(register_read->word, stream_register.value_bits)}});
+                .elements = {read_stream_register_value<T>(register_read->word, stream_register.read_mask)}});
         }
         if (reads.empty()) {
-            return get_missing_bytes_reason(
-                snapshot,
-                Unread{
-                    .code = UnreadCode::REGISTER_NOT_CAPTURED,
-                    .message = fmt::format("capture didn't read the register at {:#x}", stream_register.address)});
+            return get_not_captured_reason();
         }
         return TypedRegionReads{std::in_place_type<RegionReads<T>>, std::move(reads)};
     }

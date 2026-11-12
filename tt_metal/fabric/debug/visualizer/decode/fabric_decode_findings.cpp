@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
@@ -134,6 +135,40 @@ void add_unknown_enumerator_findings(
     });
 }
 
+// One finding for each count register whose count, in any read, is above its channel's slots.
+void add_stream_count_findings(
+    const RouterValues& values, const StreamRegisterFactsByRegister& register_facts, std::vector<Finding>& findings) {
+    const std::string& router_path = values.get_snapshot().get_router().path;
+    manifest::for_each_router_region(
+        *values.get_snapshot().get_router().router, [&](std::string_view path, const auto& region) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(region)>, manifest::content::StreamReg>) {
+                if (!std::holds_alternative<StreamRole>(region.role) ||
+                    region.type != manifest::manifest_type_name<uint32_t>) {
+                    return;
+                }
+                const RegionReads<uint32_t>* reads = values.find_reads<uint32_t>(path);
+                if (reads == nullptr) {
+                    return;
+                }
+                const std::optional<uint32_t> depth = register_facts.at(&region).depth;
+                for (const RegionRead<uint32_t>& read : *reads) {
+                    const uint32_t count = read.elements.at(0);
+                    if (!is_stream_count_in_range(count, depth)) {
+                        findings.push_back(make_finding(
+                            FindingCode::STREAM_COUNT_OUT_OF_RANGE,
+                            fmt::format("{}/{}", router_path, path),
+                            fmt::format(
+                                "the count reads {} (signed {}), above the channel's {} slots",
+                                count,
+                                sign_extend_stream_count(count),
+                                *depth)));
+                        return;
+                    }
+                }
+            }
+        });
+}
+
 // Each VC's connected-but-not-live and live-but-not-connected directions.
 void add_direction_findings(
     const std::string& router_path,
@@ -172,6 +207,7 @@ FindingSeverity get_finding_severity(FindingCode code) {
         case FindingCode::ROUND_READ_FAILED:
         case FindingCode::CORE_MISMATCH:
         case FindingCode::UNKNOWN_ENUMERATOR:
+        case FindingCode::STREAM_COUNT_OUT_OF_RANGE:
         case FindingCode::ROUTING_TABLE_COPIES_DIFFER:
         case FindingCode::ROUTING_TABLE_SHAPE_MISMATCH:
         case FindingCode::ROUTING_TABLE_MESH_MEMBERS_DIFFER: return FindingSeverity::WARNING;
@@ -196,6 +232,7 @@ FindingOrigin get_finding_origin(FindingCode code) {
         case FindingCode::OUTSIDE_CAPTURED_L1:
         case FindingCode::TYPE_LARGER_THAN_ELEMENT:
         case FindingCode::UNKNOWN_ENUMERATOR:
+        case FindingCode::STREAM_COUNT_OUT_OF_RANGE:
         case FindingCode::CONNECTED_NOT_LIVE:
         case FindingCode::LIVE_NOT_CONNECTED:
         case FindingCode::ROUTING_TABLE_COPIES_DIFFER:
@@ -210,11 +247,13 @@ FindingOrigin get_finding_origin(FindingCode code) {
 std::vector<Finding> find_router_findings(
     const RouterValues& values,
     const manifest::Arch& arch,
+    const StreamRegisterFactsByRegister& register_facts,
     const std::optional<std::vector<VcDirections>>& directions) {
     std::vector<Finding> findings;
     add_capture_findings(values.get_snapshot(), findings);
     add_region_findings(values, findings);
     add_unknown_enumerator_findings(values, arch, findings);
+    add_stream_count_findings(values, register_facts, findings);
     add_direction_findings(values.get_snapshot().get_router().path, directions, findings);
     return findings;
 }

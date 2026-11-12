@@ -11,6 +11,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 #include <enchantum/enchantum.hpp>
@@ -25,6 +26,7 @@
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_routing.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_routing_table.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_snapshot.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_stream_registers.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_values.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
@@ -79,10 +81,16 @@ DecodedRouter decode_router(
     const CapturedRouter& captured = snapshot.get_router();
     const manifest::Router& router = *captured.router;
     DecodedRouter decoded{.ref = captured.ref, .path = captured.path, .router = captured.router};
+    const StreamRegisterFactsByRegister register_facts = collect_stream_register_facts(facts, captured.ref, router);
     manifest::for_each_router_region(router, [&](std::string_view path, const auto& region) {
         const InterpretContext context = make_interpret_context(facts, routes, captured.ref, router, path);
-        decoded.regions.push_back(
-            DecodedRegion{.path = std::string(path), .decoded = make_decoded_region_json(values, region, context)});
+        json region_decoded;
+        if constexpr (std::is_same_v<std::decay_t<decltype(region)>, manifest::content::StreamReg>) {
+            region_decoded = make_decoded_region_json(values, region, register_facts.at(&region), context);
+        } else {
+            region_decoded = make_decoded_region_json(values, region, context);
+        }
+        decoded.regions.push_back(DecodedRegion{.path = std::string(path), .decoded = std::move(region_decoded)});
     });
     manifest::for_each_arch_area(arch, [&](std::string_view name, const manifest::content::L1& area) {
         const std::string path = make_arch_area_path(name);
@@ -99,7 +107,8 @@ DecodedRouter decode_router(
         routing_tables.push_back(RouterRoutingTable{
             .ref = captured.ref, .path = captured.path, .router = captured.router, .read = std::move(*read)});
     }
-    std::ranges::move(find_router_findings(values, arch, decoded.directions), std::back_inserter(findings));
+    std::ranges::move(
+        find_router_findings(values, arch, register_facts, decoded.directions), std::back_inserter(findings));
     return decoded;
 }
 

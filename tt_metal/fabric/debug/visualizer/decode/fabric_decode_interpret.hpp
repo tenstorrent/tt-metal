@@ -76,12 +76,14 @@ InterpretContext make_interpret_context(
 // -- Named functions: meaning analysis needs as well, as typed results. The interpreters call them, and so does
 // analysis, which never reads JSON. Each takes its meaning from where the kernel does.
 
-// The enumerator `value` names, in lower case, or null when it names none. EDMStatus through find_edm_status_name;
-// every other enum through enchantum, which must reach its enumerators.
+// The enumerator `value` names, in lower case, or null when it names none. EDMStatus and EriscSyncStep through their
+// tables (fabric_decode_enum_names.hpp); every other enum through enchantum, which must reach its enumerators.
 template <typename E>
 std::optional<std::string> find_enum_name(E value) {
     if constexpr (std::is_same_v<E, EDMStatus>) {
         return find_edm_status_name(value);
+    } else if constexpr (std::is_same_v<E, EriscSyncStep>) {
+        return find_erisc_sync_step_name(value);
     } else {
         static_assert(
             enchantum::count<E> > 0,

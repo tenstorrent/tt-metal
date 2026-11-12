@@ -32,7 +32,7 @@ namespace tt::tt_fabric::decode {
 static_assert(std::endian::native == std::endian::little, "Decode copies the device's little-endian bytes as they are");
 
 // One read of a region: which of capture's passes made it, when, and the region's elements, read as T. A stream
-// register has one element, its word's low value_bits bits.
+// register has one element, its word under the manifest's read_mask: the value the router reads.
 template <typename T>
 struct RegionRead {
     // The round that read it. Null for the full read: the L1 read for an L1 region, or the register's one read.
@@ -42,8 +42,8 @@ struct RegionRead {
     // Where the region's bytes start in the .bin: inside the full read's L1 read for an L1 region, or the read's own
     // bytes for a round read or a stream register.
     uint64_t bin_offset = 0;
-    // A stream register's whole word, before it's masked to value_bits, so bits set above the value still show. Null
-    // for an L1 region.
+    // A stream register's whole word, before it's masked to read_mask, so bits the router doesn't read still show.
+    // Null for an L1 region.
     std::optional<uint32_t> word;
     std::vector<T> elements;
 };
@@ -53,14 +53,22 @@ struct RegionRead {
 template <typename T>
 using RegionReads = std::vector<RegionRead<T>>;
 
-// A region the manifest marks inactive: allocated, but nothing on this run writes it. Its bytes aren't read into its
-// type, so analysis can't take them for values, but they're kept, so bytes something wrote unexpectedly still show.
-struct InactiveRegion {
-    // The region's bytes, in the full read's L1 read.
+// An inactive L1 region's bytes, in the full read's L1 read.
+struct InactiveL1 {
     std::span<const std::byte> bytes;
     // Where they start in the .bin.
     uint64_t bin_offset = 0;
 };
+
+// An inactive stream register's word, from the full read.
+struct InactiveRegister {
+    uint32_t word = 0;
+    // Where it is in the .bin.
+    uint64_t bin_offset = 0;
+};
+
+// A region the manifest marks inactive: allocated, but nothing on this run writes it.
+using InactiveRegion = std::variant<InactiveL1, InactiveRegister>;
 
 namespace detail {
 
@@ -106,7 +114,7 @@ public:
     template <typename T>
     const RegionRead<T>* find_read(std::string_view path, std::optional<uint32_t> round) const;
 
-    // The bytes of the inactive region at `path`. Null when the region there is active, or there's none.
+    // What capture read of the inactive region at `path`. Null when the region there is active, or there's none.
     const InactiveRegion* find_inactive(std::string_view path) const;
 
     // Why the region at `path` has no bytes. Null when it was read, or there's no region there.

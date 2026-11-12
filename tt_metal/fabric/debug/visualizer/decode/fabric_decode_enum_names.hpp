@@ -3,12 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The names of the registered enums enchantum can't reach. Enchantum finds enumerators by searching a range of values
-// (±256 by default), and EDMStatus's start at 0xA0B0C0D0, so they're listed here once.
+// (±256 by default), and EDMStatus's start at 0xA0B0C0D0 and EriscSyncStep's reach 0x0B00, so they're listed here
+// once.
 
 #pragma once
 
 #include <optional>
 #include <string>
+
+#include <hostdevcommon/fabric_common.h>
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
@@ -39,6 +42,20 @@ inline std::optional<std::string> find_edm_status_name(EDMStatus status) {
         FABRIC_DECODE_EDM_STATUS_NAME(INITIALIZATION_COMPLETE);
     }
 #undef FABRIC_DECODE_EDM_STATUS_NAME
+    return std::nullopt;
+}
+
+// The EriscSyncStep enumerator `step` names, in lower case, or null when it names none. Spelled and checked as
+// find_edm_status_name's are.
+inline std::optional<std::string> find_erisc_sync_step_name(EriscSyncStep step) {
+#define FABRIC_DECODE_ERISC_SYNC_STEP_NAME(enumerator) \
+    case EriscSyncStep::enumerator: return manifest::lower_name(#enumerator)
+    switch (step) {
+        FABRIC_DECODE_ERISC_SYNC_STEP_NAME(IDLE);
+        FABRIC_DECODE_ERISC_SYNC_STEP_NAME(START);
+        FABRIC_DECODE_ERISC_SYNC_STEP_NAME(ANSWER);
+    }
+#undef FABRIC_DECODE_ERISC_SYNC_STEP_NAME
     return std::nullopt;
 }
 
