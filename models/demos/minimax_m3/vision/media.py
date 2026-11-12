@@ -126,7 +126,12 @@ class MiniMaxM3Media:
         # convolution or pooling op), captures no trace and runs on one chip, without fabric.
         self.device_params = {}
         vision = hf_config["vision_config"]
-        assert vision["patch_size"] == PATCH_SIZE and vision.get("spatial_merge_size", MERGE_SIZE) == MERGE_SIZE, vision
+        patch_size, merge_size = vision["patch_size"], vision.get("spatial_merge_size", MERGE_SIZE)
+        if (patch_size, merge_size) != (PATCH_SIZE, MERGE_SIZE):
+            raise ValueError(
+                f"the media module makes patches of {PATCH_SIZE} x {PATCH_SIZE} pixels, merged {MERGE_SIZE} x"
+                f" {MERGE_SIZE}; vision_config has patch_size {patch_size} and spatial_merge_size {merge_size}"
+            )
         self._stub = False
         self._encoder = None
 

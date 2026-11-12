@@ -62,6 +62,17 @@ def test_prepare_rejects(expect_error, kind, image, message):
         MiniMaxM3Media(CONFIG).prepare(kind, image)
 
 
+@pytest.mark.parametrize(
+    "vision",
+    [{"patch_size": 16, "spatial_merge_size": 2}, {"patch_size": 14, "spatial_merge_size": 3}],
+    ids=["patch_size", "spatial_merge_size"],
+)
+def test_media_rejects_another_patch_geometry(expect_error, vision):
+    """MiniMaxM3Media raises ValueError for a vision_config whose patches are not the ones that prepare makes."""
+    with expect_error(ValueError, "vision_config has patch_size"):
+        MiniMaxM3Media({**CONFIG, "vision_config": vision})
+
+
 def test_prepare_takes_read_only_and_flipped_images(monkeypatch):
     """prepare takes a read-only image without a warning, and a flipped or channel-swapped view as it takes a copy."""
     from_numpy = torch.from_numpy
