@@ -28,7 +28,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t num_faces = params.num_faces;
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
+        formats.unpack_A_src,
+        formats.unpack_B_src,
+        formats.unpack_A_dst,
+        formats.unpack_B_dst,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
     _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces);
 
     std::uint32_t read_offset = 0;

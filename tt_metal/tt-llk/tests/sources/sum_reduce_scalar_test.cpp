@@ -72,18 +72,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
 
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
-
     // compute_kernel_hw_startup
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        DEFAULT_TENSOR_SHAPE.total_num_faces(),
-        DEFAULT_TENSOR_SHAPE.total_num_faces());
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, DEFAULT_TENSOR_SHAPE, DEFAULT_TENSOR_SHAPE);
 
     // Poison op (see the file header).
     const std::uint32_t poison_tile_bytes = SCALE_DATUM_SIZE(formats.unpack_A_src, DEFAULT_TENSOR_SHAPE.total_tensor_size());
@@ -94,7 +85,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * poison_tile_bytes), formats.unpack_A_src, formats.unpack_A_dst);
     }
-    _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape.face_r_dim, num_faces);
+    _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape);
 
     // sum_reduce_scalar_init -> copy_init: unpack A only,
     // no broadcast/transpose (datacopy A2D source path).

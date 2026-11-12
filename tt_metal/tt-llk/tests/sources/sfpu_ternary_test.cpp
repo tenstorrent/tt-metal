@@ -84,10 +84,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            num_faces /* num_faces_A */,
-            num_faces /* num_faces_B */);
+            ckernel::DEFAULT_TENSOR_SHAPE,
+            ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_unpack_A_init_<BROADCAST_TYPE, false /* acc_to_dest */, reuse_dest_type, unpack_to_dest>(
             UNPACK_TRANSPOSE_FACES /* transpose_of_faces */,
             UNPACK_TRANSPOSE_WITHIN_FACE /* within_face_16x16_transpose */,

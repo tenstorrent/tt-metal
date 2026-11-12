@@ -123,10 +123,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        num_faces /* unpA_num_faces */,
-        num_faces /* unpB_num_faces */);
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
 
     // Step 1: unpack the two DEST seeds. buffer_A carries X (the operand the op scales in place) and buffer_B carries
     // P (the column source); the MATH thread A2D-datacopies them into DEST[DST_TILE] and DEST[SRC_TILE].

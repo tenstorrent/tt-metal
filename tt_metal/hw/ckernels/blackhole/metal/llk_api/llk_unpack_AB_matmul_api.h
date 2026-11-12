@@ -154,10 +154,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces));
+        get_operand_tensor_shape(operandA_id),
+        get_operand_tensor_shape(operandB_id)));
 
     SAN_HOOK(init<OperationUnpackMatmul>(
         StateVal<OperationUnpackMatmul::Transpose>(transpose),
@@ -213,10 +211,8 @@ inline void llk_unpack_AB_matmul(
         unpack_dst_format[operandB_id],
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
-        get_operand_face_r_dim(operandB_id),
-        get_operand_face_r_dim(operandA_id),
-        get_operand_num_faces(operandB_id),
-        get_operand_num_faces(operandA_id)));
+        get_operand_tensor_shape(operandB_id),
+        get_operand_tensor_shape(operandA_id)));
 
     SAN_HOOK(execute<OperationUnpackMatmul>(
         StateVal<OperationUnpackMatmul::CtDim>(ct_dim),
