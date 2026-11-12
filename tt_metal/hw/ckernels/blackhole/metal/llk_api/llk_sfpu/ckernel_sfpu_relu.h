@@ -226,12 +226,6 @@ inline void _relu_min_(T threshold) {
 // When threshold MSB = 0, invert operands (~x, ~t) so that unsigned order maps to sign magnitude
 // order, run min/max, then invert the result back.
 // When threshold MSB = 1, raw bits already sort correctly under sign-magnitude with min/max roles swapped.
-// The U32 rows store through ADDR_MOD_6 (dest += 2, programmed by relu_min_init / relu_max_init), so
-// they need no TTINCRWC: 6 (MSB clear) / 4 (MSB set) instructions per row instead of 7 / 5. The
-// threshold stays in a general LReg (SFPSWAP writes both operands, so the compiler copies it per
-// row): on Blackhole LReg12-15 double as the SFPLOADMACRO template slots, and an SFPSWAP whose
-// operand is a programmed constant register was seen to poison it once a macro init had run on
-// the core (alternating lanes keep their input), so no constant register is used here.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, DataFormat FORMAT, int ITERATIONS = 8>
 inline void relu_clamp_uint(uint threshold) {
     static_assert(
@@ -295,10 +289,12 @@ inline void relu_clamp_uint(uint threshold) {
 // rank numerically. That is all these clamps need: max(x, t) is t for x < 0 and the numeric max
 // otherwise; max(0, min(x, t)) is 0 for x < 0 (min keeps x, the max against +0 drops it) and the
 // numeric clamp otherwise. INT_MIN (0x80000000, sign-magnitude -0) ranks below +0 too. Verified
-// bit-identical with the predicated compare it replaces on Blackhole silicon. Rows are 4
-// (relu_min) / 5 (relu_max) instructions instead of 9 / 10, storing through ADDR_MOD_6 (no
-// TTINCRWC). The threshold stays in a general LReg; see relu_clamp_uint for why no constant
-// register is used.
+// bit-identical with the predicated compare it replaces on Blackhole silicon. Rows are 5
+// (relu_min) / 6 (relu_max) instructions instead of 9 / 10: load, the compiler's copy of the
+// threshold (SFPSWAP writes both operands), one SFPSWAP per bound, store, TTINCRWC. The threshold
+// stays in a general LReg: an SFPSWAP against a programmed constant register (LREG12) and a
+// store-side ADDR_MOD_6 increment were both seen to misbehave on silicon depending on what the
+// previous kernel left in the SFPU, so this keeps the same load/store shape as the predicated form.
 //
 // A negative relu_min threshold keeps the plain int32 compare: there the negative lanes must be
 // ordered numerically, which the sign-magnitude image does not do.
@@ -353,18 +349,7 @@ inline void relu_clamp_int(uint threshold) {
         }
     }
 }
-
-// The integer clamps above store through ADDR_MOD_6: program it to advance the dest counter by
-// one sfpi row (two counter steps). The float paths load and store with ADDR_MOD_7 and
-// dst_reg++, so this is inert for them.
-inline void _relu_clamp_addr_mod_init_() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-}
-
-inline void relu_min_init() {
-    _relu_clamp_addr_mod_init_();
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void relu_min_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_min(uint uint_threshold) {
@@ -378,10 +363,7 @@ inline void relu_min(uint uint_threshold) {
     }
 }
 
-inline void relu_max_init() {
-    _relu_clamp_addr_mod_init_();
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void relu_max_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE>
 inline void relu_max(uint uint_threshold) {
