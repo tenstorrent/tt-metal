@@ -3,13 +3,9 @@
 
 """MiniMax-M3 media module and stored-value format, host only."""
 
-import os
 import pickle
-import subprocess
-import sys
 import warnings
 import weakref
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -138,18 +134,6 @@ def test_image_pickles_out_of_band():
     back = pickle.loads(stream, buffers=buffers)
     assert (back.grid_h, back.grid_w) == (item.grid_h, item.grid_w)
     assert np.array_equal(back.pixels, item.pixels)
-
-
-def test_media_imports_without_ttnn():
-    """The media module imports without ttnn, so a process that only prepares media runs without it; only load
-    imports ttnn and the encoder."""
-    repo = Path(__file__).resolve().parents[5]
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(repo), os.environ.get("PYTHONPATH")]))}
-    code = (
-        "import sys; import models.demos.minimax_m3.vision.media; print(sorted(m for m in sys.modules if m == 'ttnn'))"
-    )
-    out = subprocess.run([sys.executable, "-c", code], cwd=repo, env=env, capture_output=True, text=True)
-    assert out.returncode == 0 and out.stdout.strip() == "[]", out.stdout + out.stderr
 
 
 def test_load_after_load(expect_error):

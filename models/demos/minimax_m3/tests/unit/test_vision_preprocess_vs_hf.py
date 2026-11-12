@@ -272,17 +272,24 @@ def test_vision_patch_rows_read_only():
 
 
 def test_vision_preprocess_imports_without_ttnn():
-    """preprocess.py and image_input.py import in a fresh interpreter where importing ttnn fails, and import no
-    transformers."""
+    """preprocess.py, image_input.py and the media module import in a fresh interpreter where importing ttnn fails,
+    and import no transformers."""
     code = "\n".join(
         [
             "import sys",
-            "sys.modules['ttnn'] = None  # import ttnn now raises ImportError",
+            "tried = []  # every import of ttnn or of a ttnn module, guarded or not",
+            "class NoTtnn:",
+            "    def find_spec(self, name, path=None, target=None):",
+            "        if name.split('.')[0] == 'ttnn':",
+            "            tried.append(name)",
+            "            raise ImportError(f'{name} is blocked')",
+            "sys.meta_path.insert(0, NoTtnn())",
             f"sys.path.insert(0, {str(REPO)!r})",
             "from models.demos.minimax_m3.tt.vision import image_input, preprocess",
+            "from models.demos.minimax_m3.vision import media",
             "loaded = sorted(m for m in sys.modules if m.split('.')[0] in ('ttnn', 'transformers'))",
-            "assert loaded == ['ttnn'] and sys.modules['ttnn'] is None, loaded",
-            f"assert all(m.__file__.startswith({str(REPO)!r}) for m in (image_input, preprocess))",
+            "assert not tried and not loaded, (tried, loaded)",
+            f"assert all(m.__file__.startswith({str(REPO)!r}) for m in (image_input, preprocess, media))",
             "print(preprocess.MAX_TOKENS)",
         ]
     )
