@@ -3467,6 +3467,28 @@ tasks:
       top5_overlap: '>= limit'
       contract_checks_failed: == 0
       determinism_max_abs_diff: == 0
+- id: FIX.27
+  title: 'Ledger files that grow by appending are split into chunks below the repo''s 500 KB limit (state_metrics.json first): no compaction, no data dropped'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - FIX.25
+  device: false
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  brief:
+    details: |-
+      OWNER 2026-11-12. FIX.26's gate passed but git refused its commit: the pre-commit hook check-large-files (500 KB limit) rejects ledgers/galaxy_8x4-full/state_metrics.json (515,706 bytes now; F253: every task's gate metrics beside state.json, ledger.py:250, written on every gate). FIX.26 stays COMMIT_PENDING until this is fixed. Other ledger files grow the same way: history_state.json 290 KB, state.json 146 KB today.
+      THE FIX, the owner's words: "split the file, if this is something that gets appended to split it into chunks, do not compact". So: (1) state_metrics.json becomes a set of chunk files (a directory or numbered files beside state.json), each well below the limit, new entries appended to the newest chunk and a new chunk started when it would pass a size bound (say 256 KB); NO compaction, no rounding, no dropping or summarising of old entries: every byte of information that is in the file today stays, readable. (2) Every reader and writer (ledger.py state() / its merge, gate.py, the dashboard, stamps / _SKIP patterns, orchestrator.py's file patterns, selftests) uses the chunks through one place; no second code path. (3) Migrate today's file into chunks once, losslessly: a selftest proves the merged content of the chunks equals today's file content exactly (as parsed JSON). (4) Check EVERY file the framework appends to and commits (history_state.json, state.json, results/*, knowledge_use, the dashboard files, logs that are committed) and apply the same chunking to any that grows without bound; list each with its size and growth per task in your report. (5) Selftests: the round trip, the size bound, appending across a chunk boundary, readers seeing every chunk. Do not touch FIX.26's work (its staged files) beyond what the split needs; the owner then lets FIX.26 commit through the framework. No device use.
+      Report in plain language, short, every term defined: what was split, the chunk rule, the files checked and their sizes, the selftest results.
+  gate:
+    cmd: python -m pytest -q models/demos/common/bringup/selftest/test_core.py models/demos/common/bringup/selftest/test_ledger_chunks.py
+    metrics:
+      ledger_files_over_limit: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
