@@ -373,7 +373,8 @@ def adapter(monkeypatch):
         mesh_device=None,
         gdn_blocks=blocks,
         prefill_traced_chunked=prefill,
-        vision_rows_host=lambda rows: events.append(("vision rows to host", rows)) or f"host {rows}",
+        vision_rows=lambda tokens, image=None, video=None: events.append(("vision rows", int(tokens.shape[-1])))
+        or "host vision",
     )
     monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: t)
     monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda *a, **kw: None)
@@ -438,22 +439,18 @@ def test_prefill_checks_the_start_blocks(adapter, expect_error):
         adapter(0, 2500, (4, 5, 6), start_blocks=(1, 2, 3))
 
 
-@pytest.fixture
-def multimodal(monkeypatch):
-    """Rows carry pixels, and the vision tower answers "vision"."""
-    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
-
-    monkeypatch.setattr(Qwen36ForCausalLM, "_has_visual", staticmethod(lambda kwargs, key: key == "pixel_values"))
-    monkeypatch.setattr(Qwen36ForCausalLM, "_compute_vision_tokens", lambda self, model, kwargs: "vision")
+# One row with one image (vllm-tt-plugin's per-row lists, one entry per item).
+IMAGE_ROW = dict(pixel_values=[[torch.zeros(16, 8)]], image_grid_thw=[[torch.tensor([1, 4, 4])]])
 
 
-def test_multimodal_prefill_writes_its_checkpoint_with_the_whole_row_rope(adapter, multimodal):
+def test_multimodal_prefill_writes_its_checkpoint_with_the_whole_row_rope(adapter):
     """A whole multimodal prompt with a checkpoint after 2048 tokens runs as two segments, both with the vision rows
     and the RoPE table of all 2500 tokens, so an image across token 2048 keeps its M-RoPE positions in both."""
-    events = adapter(0, 2500, (4, 5, 6), checkpoint=(2048, (1, 2, 3)), max_batch_size=1, pixel_values=["x"])
-    # The device rows are read once, before the first segment's trace replays can overwrite them.
+    events = adapter(0, 2500, (4, 5, 6), checkpoint=(2048, (1, 2, 3)), max_batch_size=1, **IMAGE_ROW)
+    # The vision rows of the row's 2500 tokens are read once, before the first segment's trace replays can overwrite
+    # them on device.
     assert events == [
-        ("vision rows to host", "vision"),
+        ("vision rows", 2500),
         ("prefill", 0, 2048, "host vision", 2500),
         ("write", (1, 2, 3)),
         ("prefill", 2048, 2500, "host vision", 2500),
@@ -461,15 +458,15 @@ def test_multimodal_prefill_writes_its_checkpoint_with_the_whole_row_rope(adapte
     ]
 
 
-def test_multimodal_prefill_continues_from_its_start_blocks(adapter, multimodal, expect_error):
+def test_multimodal_prefill_continues_from_its_start_blocks(adapter, expect_error):
     """A multimodal request replayed after preemption that outgrows one step continues after its images from the
     state its first chunk wrote; like a text row, it must start on a KV block boundary."""
-    events = adapter(2048, 2500, (4, 5, 6), start_blocks=(1, 2, 3), max_batch_size=1, pixel_values=["x"])
+    events = adapter(2048, 2500, (4, 5, 6), start_blocks=(1, 2, 3), max_batch_size=1, **IMAGE_ROW)
     assert events == [
-        ("vision rows to host", "vision"),
+        ("vision rows", 2500),
         ("restore", (1, 2, 3)),
         ("prefill", 2048, 2500, "host vision", 2500),
         ("write", (4, 5, 6)),
     ]
     with expect_error(ValueError, "prefill resumes at 1920, inside a 1024-token KV block"):
-        adapter(1920, 2500, (4, 5, 6), start_blocks=(1, 2, 3), max_batch_size=1, pixel_values=["x"])
+        adapter(1920, 2500, (4, 5, 6), start_blocks=(1, 2, 3), max_batch_size=1, **IMAGE_ROW)

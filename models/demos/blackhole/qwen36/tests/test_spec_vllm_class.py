@@ -50,7 +50,6 @@ from models.demos.blackhole.qwen36.tt.qwen36_vllm import (  # noqa: E402
     Qwen36ForCausalLM,
     Qwen36MTPContractForCausalLM,
     TT_Qwen3_5ProcessingInfo,
-    TT_Qwen3_5SpecProcessingInfo,
 )
 from models.demos.blackhole.qwen36.tt.spec_engine import (  # noqa: E402
     DraftResult,
@@ -553,10 +552,13 @@ def test_decode_input_update_contract():
     assert Qwen36ForCausalLM.decode_input_update_contract == 1
 
 
-def test_processor_info_text_only():
-    """The spec class registers a text-only processor info; the base class keeps its own."""
-    assert CLS._processor_factory.info is TT_Qwen3_5SpecProcessingInfo
+def test_processor_info_serves_images_and_video():
+    """The spec class serves Qwen36ForCausalLM's multimodal processor: one image and one video per request."""
+    assert CLS._processor_factory.info is TT_Qwen3_5ProcessingInfo
     assert Qwen36ForCausalLM._processor_factory.info is TT_Qwen3_5ProcessingInfo
+    info = TT_Qwen3_5ProcessingInfo.__new__(TT_Qwen3_5ProcessingInfo)
+    assert info.get_supported_mm_limits() == {"image": 1, "video": 1}
+    assert CLS._PER_ROW_ROPE_DELTA and not Qwen36ForCausalLM._PER_ROW_ROPE_DELTA
 
 
 def test_plugin_admission_accepts_class(hf_config):
@@ -624,8 +626,10 @@ def gen_eng(monkeypatch):
     eng = FakeEngine()
     vocab = eng.V
 
-    def prefill(tokens, pt, actual_len, vision_tokens=None, start_pos=0, on_chunk=None):
+    def prefill(tokens, pt, actual_len, vision_tokens=None, start_pos=0, on_chunk=None, rope_token_ids=None):
         eng.calls.append(("model_prefill", tokens.clone(), start_pos, actual_len))
+        if vision_tokens is not None:
+            eng.calls.append(("model_prefill_vision", vision_tokens, rope_token_ids.clone()))
         if on_chunk is not None:
             on_chunk(None, start_pos, actual_len - start_pos)
         return torch.full((1, 1, vocab), float(actual_len))
@@ -635,11 +639,17 @@ def gen_eng(monkeypatch):
         restore=lambda state, b: eng.calls.append(("restore", tuple(b))),
         write_state=lambda state, b: eng.calls.append(("write", tuple(b))),
     )
+
+    def vision_rows(row_tokens, image=None, video=None):
+        eng.calls.append(("vision_rows", row_tokens.clone(), image, video))
+        return f"rows of {row_tokens[0].item()}"
+
     model = SimpleNamespace(
         args=SimpleNamespace(max_seq_len=4096, max_batch_size=4, vocab_size=vocab),
         mesh_device=None,
         gdn_blocks=blocks,
         prefill_traced_chunked=prefill,
+        vision_rows=vision_rows,
     )
     gen = object.__new__(CLS)
     gen.model = [model]
@@ -889,12 +899,55 @@ def test_prefill_forward(gen_eng):
     assert _last(eng, "finish_prefill") == ("finish_prefill", 0, 7, True)
 
 
-def test_prefill_forward_rejects_visual(gen_eng, expect_error):
-    """Image/video inputs raise ValueError before the engine is touched."""
+def test_prefill_forward_runs_the_vision_tower_per_row(gen_eng):
+    """In a step of four prefill rows (text, image, image and video, video), each multimodal row runs the vision tower
+    over its own items, right before its own prefill, which splices those rows with the RoPE table of the row's tokens.
+    The text rows get no vision rows. An item of the other modality is None in vllm-tt-plugin's per-row lists."""
     gen, eng = gen_eng
-    for key in ("pixel_values", "pixel_values_videos"):
-        with expect_error(ValueError, "text-only"):
-            _prefill(gen, 1, [7], slots=[0], **{key: [torch.zeros(1)]})
+    img = [torch.full((4, 3), float(u)) for u in range(4)]
+    vid = [torch.full((8, 3), 10.0 + u) for u in range(4)]
+    grid_i, grid_v = torch.tensor([1, 2, 2]), torch.tensor([2, 2, 2])
+    kw = dict(
+        pixel_values=[None, [img[1]], [img[2], None], None],
+        image_grid_thw=[None, [grid_i], [grid_i, None], None],
+        pixel_values_videos=[None, [None], [None, vid[2]], [vid[3]]],
+        video_grid_thw=[None, [None], [None, grid_v], [grid_v]],
+    )
+    logits, _ = _prefill(gen, 4, [7, 12, 15, 9], slots=[2, 0, 3, 1], **kw)
+    assert tuple(logits.shape) == (4, 1, eng.V)
+    rows = [c for c in eng.calls if c[0] in ("vision_rows", "model_prefill", "model_prefill_vision")]
+    assert [c[0] for c in rows] == [
+        "model_prefill",
+        "vision_rows",
+        "model_prefill",
+        "model_prefill_vision",
+        "vision_rows",
+        "model_prefill",
+        "model_prefill_vision",
+        "vision_rows",
+        "model_prefill",
+        "model_prefill_vision",
+    ]
+    calls = [c for c in rows if c[0] == "vision_rows"]
+    for c, u, end in zip(calls, (1, 2, 3), (12, 15, 9)):
+        assert c[1].tolist() == list(range(20 * u, 20 * u + end)), "the row's own tokens from position 0"
+    (_, _, image, video), (_, _, image2, video2), (_, _, image3, video3) = calls
+    assert torch.equal(image[0], img[1]) and image[1].tolist() == [[1, 2, 2]] and video is None
+    assert torch.equal(image2[0], img[2]) and torch.equal(video2[0], vid[2]) and video2[1].tolist() == [[2, 2, 2]]
+    assert image3 is None and torch.equal(video3[0], vid[3])
+    spliced = [c for c in rows if c[0] == "model_prefill_vision"]
+    assert [c[1] for c in spliced] == ["rows of 20", "rows of 40", "rows of 60"]
+    assert [c[2].shape[1] for c in spliced] == [12, 15, 9]
+
+
+def test_ordinary_class_keeps_multimodal_at_one_sequence(gen_eng, expect_error):
+    """Qwen36ForCausalLM decodes every row with the last prefill's M-RoPE delta, so it refuses an image row when it
+    serves more than one sequence, before any row is prefilled."""
+    gen, eng = gen_eng
+    plain = object.__new__(Qwen36ForCausalLM)
+    plain.model, plain.data_parallel = gen.model, 1
+    with expect_error(ValueError, "only at max_num_seqs 1"):
+        _prefill(plain, 2, [7, 9], pixel_values=[None, [torch.zeros(4, 3)]], image_grid_thw=[None, [torch.ones(3)]])
     assert eng.calls == []
 
 

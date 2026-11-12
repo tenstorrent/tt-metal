@@ -522,6 +522,7 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
             B=1,
             model=types.SimpleNamespace(),
             _last_hidden=[],
+            _rope_deltas=[0],
         )
 
     def clean(e):
@@ -543,6 +544,7 @@ def _bare_engine(B, K=2, **kw):
     e._parked, e._prompts, e._fresh_dirty = {}, {}, set()
     e._no_draft, e._speculated, e._withheld_streak = set(range(B)), set(range(B)), {u: 3 for u in range(B)}
     e._row_active, e._last_pt, e._last_cap_blocks, e.skipped_propose_calls = None, None, 4, 0
+    e._rope_deltas = [0] * B
     e.__dict__.update(kw)
     return e
 
@@ -762,7 +764,7 @@ def test_propose_writes_anchor_kv_of_kept_rows(recorded, monkeypatch):
     staged, reseeds = {}, []
     model = types.SimpleNamespace(
         _fit_spec_page_table=lambda pt, nb: torch.as_tensor(pt, dtype=torch.int32),
-        _rope_tp_cos_sin_decode_torch=lambda pos: (None, None),
+        _rope_tp_cos_sin_decode_torch=lambda pos, deltas=None: (None, None),
     )
     e = _bare_engine(
         B,

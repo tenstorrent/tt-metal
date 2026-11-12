@@ -431,7 +431,7 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     )
     model.record_prefill_trace_chunked = record
     model.gdn_blocks = SimpleNamespace(warmup=lambda: calls.append("blocks"))
-    wrapper = SimpleNamespace(model=[model], mesh_device="mesh")
+    wrapper = SimpleNamespace(model=[model], mesh_device="mesh", _PER_ROW_ROPE_DELTA=False)
     kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
 
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
@@ -442,12 +442,14 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     assert calls == [prepare, "blocks", prepare, "record", "blocks"]
 
 
-def test_prefill_warmup_warms_vision_before_any_trace(monkeypatch):
-    """A vision program first created after trace capture can be overwritten by a trace replay, so the eager B=1
-    prefill warmup runs the vision tower first and the traced call does not run it again."""
+@pytest.mark.parametrize("max_batch_size, per_row_rope_delta", [(1, False), (8, True)])
+def test_prefill_warmup_warms_vision_before_any_trace(monkeypatch, max_batch_size, per_row_rope_delta):
+    """A vision program first created after trace capture can be overwritten by a trace replay, so the eager prefill
+    warmup of a launch that serves visual requests (B=1, or the MTP class at any B) runs the vision tower first and
+    the traced call does not run it again."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     calls = []
-    model = SimpleNamespace(num_devices=8, args=SimpleNamespace(max_batch_size=1), _chunked_trace_id=None)
+    model = SimpleNamespace(num_devices=8, args=SimpleNamespace(max_batch_size=max_batch_size), _chunked_trace_id=None)
 
     def record(device):
         calls.append("record")
@@ -456,7 +458,12 @@ def test_prefill_warmup_warms_vision_before_any_trace(monkeypatch):
     model.prepare_prefill_trace_chunked = lambda device, page_table, chunk_size: calls.append("prepare")
     model.record_prefill_trace_chunked = record
     model.gdn_blocks = SimpleNamespace(warmup=lambda: calls.append("blocks"))
-    wrapper = SimpleNamespace(model=[model], mesh_device="mesh", warmup_vision=lambda: calls.append("vision"))
+    wrapper = SimpleNamespace(
+        model=[model],
+        mesh_device="mesh",
+        warmup_vision=lambda: calls.append("vision"),
+        _PER_ROW_ROPE_DELTA=per_row_rope_delta,
+    )
     kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
 
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
@@ -493,28 +500,34 @@ def test_vision_warmup_covers_each_patch_bucket_once(monkeypatch):
 
 
 def test_visual_input_above_the_warmed_vision_bucket_is_refused(monkeypatch, expect_error):
-    """An image or video whose patch bucket was not warmed raises before the vision tower runs; an input inside the
-    warmed buckets runs."""
+    """An image or video of a prefill row whose patch bucket was not warmed raises before the vision tower runs, also
+    when the row's other item fits; an input inside the warmed buckets runs."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
-    gen = SimpleNamespace(_vision_warmed_bucket=8192, _gather_user_visual=Qwen36ForCausalLM._gather_user_visual)
+    gen = SimpleNamespace(_vision_warmed_bucket=8192, _row_visual=Qwen36ForCausalLM._row_visual)
     gen._check_vision_bucket = lambda grid: Qwen36ForCausalLM._check_vision_bucket(gen, grid)
     ran = []
     model = SimpleNamespace(
-        get_image_features=lambda pixels, grid: ran.append(("image", int(grid.prod()))) or "rows",
-        get_video_features=lambda pixels, grid: ran.append(("video", int(grid.prod()))) or "rows",
+        vision_rows=lambda tokens, image=None, video=None: ran.append(
+            tuple(int(g[1].prod()) if g is not None else None for g in (image, video))
+        )
+        or "rows"
     )
 
-    def vision_tokens(kind, t, h, w):
-        pixel_key = "pixel_values" if kind == "image" else "pixel_values_videos"
-        kwargs = {pixel_key: [torch.zeros(t * h * w, 8)], f"{kind}_grid_thw": [torch.tensor([[t, h, w]])]}
-        return Qwen36ForCausalLM._compute_vision_tokens(gen, model, kwargs)
+    def vision_rows(*items):
+        """The vision rows of one prefill row with the items (kind, t, h, w), in vllm-tt-plugin's per-row lists."""
+        kwargs = {}
+        for key, kind in (("pixel_values", "image"), ("pixel_values_videos", "video")):
+            kwargs[key] = [[torch.zeros(t * h * w, 8) if k == kind else None for k, t, h, w in items]]
+            kwargs[f"{kind}_grid_thw"] = [[torch.tensor([t, h, w]) if k == kind else None for k, t, h, w in items]]
+        return Qwen36ForCausalLM._row_vision_rows(gen, model, kwargs, 0, torch.zeros(4))
 
-    assert vision_tokens("image", 1, 80, 102) == "rows"  # 8160 patches: bucket 8192
+    assert vision_rows(("image", 1, 80, 102)) == "rows"  # 8160 patches: bucket 8192
     with expect_error(ValueError, "Vision input of 8192 patches needs vision bucket 10240"):
-        vision_tokens("image", 1, 64, 128)
+        vision_rows(("image", 1, 64, 128))
     with expect_error(ValueError, "max_pixels"):
-        vision_tokens("video", 4, 64, 64)
-    assert ran == [("image", 8160)]
+        vision_rows(("image", 1, 32, 32), ("video", 4, 64, 64))
+    assert vision_rows(("image", 1, 32, 32), ("video", 2, 32, 32)) == "rows"
+    assert ran == [(8160, None), (1024, 2048)]
 
 
 def test_prefill_prepare_is_idempotent_and_record_requires_it(monkeypatch, expect_error):

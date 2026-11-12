@@ -39,17 +39,9 @@ _VISION_WARMUP_PATCHES = 8191
 
 class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        # Serve a single visual item per request (B=1, max_concurrency=1). Image and video are both
-        # supported, but only ONE modality per request: the model's vision splice keys off a single
-        # placeholder token id (image_token_id XOR video_token_id), so a mixed image+video prompt
-        # cannot be spliced correctly.
+        # At most one image and one video per request. A request with both splices each modality's vision rows at its
+        # own placeholder tokens (Qwen36Model.vision_rows).
         return {"image": 1, "video": 1}
-
-
-class TT_Qwen3_5SpecProcessingInfo(TT_Qwen3_5ProcessingInfo):
-    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        # the spec engine's prefill is text-only: vLLM rejects visual items at admission (HTTP 400)
-        return {"image": 0, "video": 0}
 
 
 class _Qwen36Generator(Generator, SupportsMultiModal):
@@ -165,54 +157,49 @@ class _Qwen36Generator(Generator, SupportsMultiModal):
         return inst
 
     @staticmethod
-    def _has_visual(kwargs, pixel_key):
-        """True only when the request carries REAL visual data for this modality. vLLM attaches an
-        empty pixel_values placeholder to text requests for a multimodal-registered model, so a
-        plain ``is not None`` check misclassifies text as multimodal. Mirrors the emptiness test in
-        _gather_user_visual (key absent / empty list / first item None => text-only)."""
-        v = kwargs.get(pixel_key)
-        return v is not None and len(v) > 0 and v[0] is not None
+    def _row_items(kwargs, key, row):
+        """vllm-tt-plugin's entries of the multimodal field ``key`` for prefill row ``row``: one per item of the row's
+        request, None for an item without the field (an item of the other modality). Empty for a text row."""
+        v = kwargs.get(key)
+        if v is None or len(v) <= row or v[row] is None:
+            return []
+        return list(v[row]) if isinstance(v[row], (list, tuple)) else [v[row]]
 
-    @staticmethod
-    def _gather_user_visual(kwargs, pixel_key, grid_key):
-        """Pull this (B=1) user's patches + (t,h,w) grids for one modality out of the vLLM kwargs.
-
-        Returns (pixel_values, grid_thw) or None when the request carries nothing for this modality.
-        Multiple items for the user arrive as lists; concat the patches and stack the grids (same
-        shape get_image_features / get_video_features expect: [num_patches, patch_dim] + [N, 3]).
-        """
-        if pixel_key not in kwargs or len(kwargs[pixel_key]) == 0 or kwargs[pixel_key][0] is None:
+    @classmethod
+    def _row_visual(cls, kwargs, pixel_key, grid_key, row):
+        """(pixel values [num_patches, patch_dim], grid_thw [n, 3]) of prefill row ``row``'s items of one modality, in
+        item order (the order of their placeholder tokens), or None when the row has none."""
+        items = [
+            (p, g)
+            for p, g in zip(cls._row_items(kwargs, pixel_key, row), cls._row_items(kwargs, grid_key, row))
+            if p is not None
+        ]
+        if not items:
             return None
-        pixel_values = kwargs[pixel_key][0]
-        grid_thw = kwargs[grid_key][0]
-        if isinstance(pixel_values, list) and len(pixel_values) > 0:
-            pixel_values = torch.concat(pixel_values, dim=0)
-            grid_thw = torch.stack([g.to(dtype=torch.int32) for g in grid_thw], dim=0)
-        return pixel_values, grid_thw
+        pixels = torch.concat([p for p, _ in items], dim=0)
+        return pixels, torch.concat([g.reshape(-1, 3).to(dtype=torch.int32) for _, g in items], dim=0)
 
-    def _compute_vision_tokens(self, model, kwargs):
-        """Run the vision tower for this (single-user, B=1) request, if it carries images or video.
+    @classmethod
+    def _row_has_visual(cls, kwargs, row):
+        """True when prefill row ``row`` carries pixels. vLLM attaches an empty placeholder to text requests of a
+        multimodal model, so the field's presence alone does not make a row multimodal."""
+        return any(
+            p is not None for key in ("pixel_values", "pixel_values_videos") for p in cls._row_items(kwargs, key, row)
+        )
 
-        Mirrors the Qwen3-VL generator's multimodal check: pull this user's pixels + grid out of
-        the vLLM kwargs and return the packed embeddings (ttnn [num_vision_tokens, H]) for prefill
-        to splice in. Returns None for a text-only request, so the whole multimodal path is skipped.
-
-        Image and video share the vision tower; dispatching to get_video_features (vs
-        get_image_features) is what tells the model to splice into video_token_id placeholders and
-        build the video M-RoPE. A request carries at most one visual modality (see
-        get_supported_mm_limits); video takes precedence if both are somehow present.
-        """
-        video = self._gather_user_visual(kwargs, "pixel_values_videos", "video_grid_thw")
-        if video is not None:
-            self._check_vision_bucket(video[1])
-            return model.get_video_features(*video)
-
-        image = self._gather_user_visual(kwargs, "pixel_values", "image_grid_thw")
-        if image is not None:
-            self._check_vision_bucket(image[1])
-            return model.get_image_features(*image)
-
-        return None
+    def _row_vision_rows(self, model, kwargs, row, row_tokens):
+        """Host vision rows of prefill row ``row`` whose tokens from position 0 are ``row_tokens``
+        (Qwen36Model.vision_rows over the row's images and videos), or None for a text row. The model keeps one
+        request's grids, so this runs right before the row's prefill. Raises ValueError for an item above the warmed
+        vision buckets (_check_vision_bucket)."""
+        image = self._row_visual(kwargs, "pixel_values", "image_grid_thw", row)
+        video = self._row_visual(kwargs, "pixel_values_videos", "video_grid_thw", row)
+        if image is None and video is None:
+            return None
+        for items in (image, video):
+            if items is not None:
+                self._check_vision_bucket(items[1])
+        return model.vision_rows(row_tokens, image=image, video=video)
 
     def warmup_vision(self):
         """Run the vision tower once per patch bucket up to _vision_warmup_patches, before any trace is captured.
@@ -281,6 +268,9 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         "supports_prefix_caching": True,
         "supports_chunked_prefill": True,
     }
+    # Decode offsets the RoPE position of every row by rope.rope_delta, the M-RoPE delta of the last prefill, so a
+    # multimodal request needs max_num_seqs 1.
+    _PER_ROW_ROPE_DELTA = False
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
@@ -357,16 +347,13 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         mamba_state = kwargs.get("mamba_state")
         if mamba_state is None:
             raise ValueError("Qwen36ForCausalLM keeps the GDN state in vLLM KV cache blocks and needs mamba_state")
-        # Require real visual data, not a non-None empty pixel_values placeholder from vLLM on text requests.
-        visual = self._has_visual(kwargs, "pixel_values") or self._has_visual(kwargs, "pixel_values_videos")
-        if visual and model.args.max_batch_size > 1:
-            raise ValueError(
-                "batched (max_num_seqs>1) serving is text-only; multimodal is single-sequence "
-                "(max_concurrency=1). Run the model at max_num_seqs=1 for image/video requests."
-            )
-        # Read to the host once, before any segment's trace replay can overwrite the device rows (vision_rows_host).
-        vision_tokens = model.vision_rows_host(self._compute_vision_tokens(model, kwargs)) if visual else None
         N = tokens.shape[0]
+        if model.args.max_batch_size > 1 and not self._PER_ROW_ROPE_DELTA:
+            if any(self._row_has_visual(kwargs, u) for u in range(N)):
+                raise ValueError(
+                    f"{type(self).__name__} serves image and video requests only at max_num_seqs 1: its decode "
+                    "offsets every row's RoPE position by the M-RoPE delta of the last prefill"
+                )
         start_pos = kwargs.get("start_pos")
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         comp = ttnn.ConcatMeshToTensor(model.mesh_device, dim=0)
@@ -377,11 +364,13 @@ class Qwen36ForCausalLM(_Qwen36Generator):
             rb = row_blocks(mamba_state, u)
             segments = self._prefill_segments(int(start_pos[u]) if start_pos is not None else 0, T, rb)
             logger.info(f"Prefilling row {u}: tokens [{segments[0][0]}, {T})")
+            # Read to the host once, before any segment's trace replay can overwrite the device rows (vision_rows_host).
+            vision_tokens = self._row_vision_rows(model, kwargs, u, tokens[u, :T])
             if segments[0][0] > 0:
                 blocks.restore(mamba_state, rb.start)
             on_chunk = self._prefill_chunk_hook(u, tokens[u, :T], pt[u : u + 1], mamba_state, kwargs)
             extra = {} if on_chunk is None else {"on_chunk": on_chunk}
-            if visual:
+            if vision_tokens is not None:
                 # An image's M-RoPE positions need all of its tokens, and a checkpoint can split an image.
                 extra["rope_token_ids"] = tokens[u : u + 1, :T]
             logits = None
@@ -504,9 +493,10 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         # paged/chunked SDPA needs the page-table stick % 32 == 0.
         num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-        # A visual request runs only at max_batch_size 1 (prefill_forward refuses it otherwise), so only that launch
-        # compiles the vision tower before trace capture.
-        if not enable_trace and model.args.max_batch_size == 1:
+        # A visual request runs at max_batch_size 1, or at any max_batch_size on a class with per-row M-RoPE deltas
+        # (prefill_forward refuses it otherwise), so only those launches compile the vision tower before trace capture.
+        # The tower runs one prefill row at a time, so the buckets do not depend on max_batch_size.
+        if not enable_trace and (model.args.max_batch_size == 1 or self._PER_ROW_ROPE_DELTA):
             self.warmup_vision()
         logger.info(
             f"Qwen prefill warmup ({'record' if enable_trace else 'prepare'}): chunk={_PREFILL_WARMUP_CHUNK}, "
@@ -557,9 +547,6 @@ def _mesh_tp(default=4):
         return default
 
 
-@MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
-)
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Qwen36ForCausalLM with speculative decoding over the MTP drafter head (tt/spec_engine.py MTPBlockEngine), for the
     plugin's spec-decode contract (B * (K+1) <= 32), synchronous scheduling and host acceptance.
@@ -569,10 +556,13 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     row's full state from mamba_state.start_blocks and writes the full state after query token t, recurrent state and
     convolution history, into windows[:, t] (gdn_spec_step on the blocks), and the runner points the next step's
     start_blocks at the block of the count its accept walk committed. An ordinary [B, 1] decode runs as a verify
-    without drafts. Prefill, prefix caching and chunked prefill are Qwen36ForCausalLM's; the drafter's KV cache is
-    model-owned and indexed by the attention block ids (Qwen36Model._allocate_mtp_kv_cache)."""
+    without drafts. Prefill, prefix caching, chunked prefill and the multimodal processor are Qwen36ForCausalLM's; the
+    drafter's KV cache is model-owned and indexed by the attention block ids (Qwen36Model._allocate_mtp_kv_cache).
+    Image and video requests run at any max_num_seqs: the engine keeps the M-RoPE delta of each state slot's request
+    and offsets the RoPE positions of the slot's verify and drafter rows by it."""
 
     _ENABLE_MTP = True
+    _PER_ROW_ROPE_DELTA = True
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
     # decode_forward is overridden and does not execute the reload commands (DECODE_RELOAD_CONTRACT legacy mode)
@@ -745,8 +735,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         return eng
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
-        if self._has_visual(kwargs, "pixel_values") or self._has_visual(kwargs, "pixel_values_videos"):
-            raise ValueError("Qwen36MTPContractForCausalLM is text-only; image/video requests are not supported")
         eng = self._ensure_ready(kv_cache)
         N = tokens.shape[0]
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
@@ -854,7 +842,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         self._engine().release(int(slot))
 
     def note_state_slots_moved(self, moves):
-        """The drafter's per-slot state moved with slot_remap in decode_forward; nothing to do."""
+        """The drafter's per-slot state and the slots' M-RoPE deltas moved with slot_remap in decode_forward (the same
+        move); nothing to do."""
 
     def release_persistent_capture(self):
         logger.info("[spec] release_persistent_capture: start")

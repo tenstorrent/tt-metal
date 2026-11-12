@@ -271,10 +271,11 @@ def engine(monkeypatch):
         gdn_blocks=SimpleNamespace(verify_tokens=K + 1, set_verify_blocks=lambda s: log.append(("tables", s))),
         _fit_spec_page_table=lambda pt, nb: torch.as_tensor(pt).to(torch.int32),
         spec_feed_rows=lambda h: h,
+        rope=SimpleNamespace(rope_delta=0),
     )
 
-    def verify_traced(tokens, positions, mi, read_logits=False, page_tables=None, inactive=None):
-        log.append(("verify", tokens, positions, inactive))
+    def verify_traced(tokens, positions, mi, read_logits=False, page_tables=None, inactive=None, rope_deltas=None):
+        log.append(("verify", tokens, positions, inactive, rope_deltas))
         return [0] * (B * (K + 1)), "feed", None
 
     model.verify_traced = verify_traced
@@ -283,7 +284,9 @@ def engine(monkeypatch):
     eng._last_hidden = [f"h{u}" for u in range(B)]
     eng._mtp_pt_rows = [f"pt{u}" for u in range(B)]
     monkeypatch.setattr(eng, "_stage_mtp_tables", lambda pt: log.append(("stage_mtp",)))
-    monkeypatch.setattr(eng, "_warm_mtp_last", lambda h, tok, pos, pt: log.append(("mtp_last", h, tok, pos, pt)))
+    monkeypatch.setattr(
+        eng, "_warm_mtp_last", lambda h, tok, pos, pt, delta=None: log.append(("mtp_last", h, tok, pos, pt, delta))
+    )
     monkeypatch.setattr(
         eng, "_warm_mtp_chunk", lambda f, cs, n, prompt, pt: log.append(("mtp_chunk", cs, n, len(prompt)))
     )
@@ -319,7 +322,7 @@ def test_drafter_starts_after_the_prompts_last_chunk(engine, expect_error):
     _verify(eng, [0, 0, 5000, 0], [False, False, True, False])
     names = [e[0] for e in log]
     assert names == ["stage_mtp", "mtp_last", "tables", "verify"]
-    assert log[1][1:] == ("h2", 2 * eng.T, 4999, "pt2")
+    assert log[1][1:] == ("h2", 2 * eng.T, 4999, "pt2", 0)
     log.clear()
     _verify(eng, [0, 0, 5002, 0], [False, False, True, False])
     assert [e[0] for e in log] == ["tables", "verify"]
@@ -344,3 +347,67 @@ def test_row_moves_move_the_drafter_rows_only(engine):
     assert eng._fresh == {0: 50, 3: 100} and eng._last_hidden[0] == "h3" and eng._active == {0, 3}
     eng.release(3)
     assert 3 not in eng._fresh and 3 not in eng._active
+
+
+def test_slot_keeps_its_requests_mrope_delta(engine):
+    """The prompt's last chunk keeps the M-RoPE delta of the row's prefill (rope.rope_delta) for the slot. The slot's
+    first verify writes the drafter KV of the prompt's last position at that delta, and every verify gives each row its
+    own slot's delta. The delta moves with a row move and resets when the slot is released."""
+    eng, log = engine
+    eng.model.rope.rope_delta = -12
+    eng.prefill_hook(2, torch.arange(300), torch.ones(1, 8), final=False)("h", 0, 300)
+    assert eng._rope_deltas == [0, 0, 0, 0], "an intermediate chunk keeps no delta"
+    eng.prefill_hook(2, torch.arange(500), torch.ones(1, 8), final=True)("h", 300, 200)
+    eng.finish_prefill(2, 500, final=True)
+    eng.model.rope.rope_delta = 0  # a text prompt prefilled into slot 0 after it
+    eng.prefill_hook(0, torch.arange(40), torch.ones(1, 8), final=True)("h", 0, 40)
+    eng.finish_prefill(0, 40, final=True)
+    assert eng._rope_deltas == [0, 0, -12, 0]
+    log.clear()
+    _verify(eng, [40, 0, 500, 0], [True, False, True, False])
+    warms = {e[3]: e[5] for e in log if e[0] == "mtp_last"}
+    assert warms == {39: 0, 499: -12}
+    assert [e[4] for e in log if e[0] == "verify"] == [[0, 0, -12, 0]]
+    eng.remap_slots([2, 1, 0, 3])
+    assert eng._rope_deltas == [-12, 0, 0, 0]
+    eng.release(0)
+    assert eng._rope_deltas == [0, 0, 0, 0]
+
+
+def test_drafter_rows_take_their_slots_delta(engine, monkeypatch):
+    """Every drafter position table takes each row's own delta: the recorded drafter's reseed rows (user-major, T per
+    user) and draft steps, and the eager draft steps and reseeds."""
+    from models.demos.blackhole.qwen36.tt import spec_engine
+
+    eng, _ = engine
+    B, T, K = eng.B, eng.T, eng.K
+    eng._rope_deltas = [0, -12, 5, 0]
+    tables, steps = [], []
+    eng.model._rope_tp_cos_sin_decode_torch = lambda pos, deltas=None: tables.append(list(deltas)) or (None, None)
+    eng.model.ttnn_mtp_decode_forward = lambda *a, rope_deltas=None, **kw: steps.append(list(rope_deltas)) or (
+        "logits",
+        "h",
+    )
+    eng._stage = lambda *a: None
+    eng._id_to_host = lambda t: [0] * B
+    eng._dr_outs, eng._dr_pos, eng._dr_cos, eng._dr_sin = [None] * K, [None] * K, [None] * K, [None] * K
+    eng.mtp_extra_steps, eng.mesh = 0, None
+    monkeypatch.setattr(ttnn, "execute_trace", lambda *a, **kw: None)
+    monkeypatch.setattr(spec_engine, "draft_argmax", lambda mtp, logits: "ids")
+    ctok = torch.zeros(B, T, dtype=torch.int64)
+    cpos = torch.arange(1, T + 1).repeat(B, 1)
+    pt = torch.ones(B, eng.nb, dtype=torch.int32)
+    m = [1, 2, 0, 0]
+    eng._propose_recorded(ctok, cpos, m, [0] * B, [7] * B, pt)
+    assert tables == [[d for d in eng._rope_deltas for _ in range(T)]] + [eng._rope_deltas] * K
+    tables.clear()
+    eng._vfeed = SimpleNamespace(shape=(1, 1, B * T, 64))
+    eng.mtp = SimpleNamespace(forward_decode=lambda *a, **kw: (None, "h"))
+    eng._reseed_mtp_batched(ctok, cpos, m, pt)
+    assert tables == [[d for d in eng._rope_deltas for _ in range(T)]]
+    eng._draft([0] * B, "anchor", [7] * B)
+    assert steps == [eng._rope_deltas] * K
+    steps.clear()
+    eng._eager_row = lambda feed, r: "row"
+    eng._reseed_mtp(ctok, cpos, m)
+    assert steps == [[0], [-12], [-12]]
