@@ -149,3 +149,22 @@ def test_decode_breakdown_4k(mesh_device):
         except Exception as err:  # report and move on: each variant is a separate question
             logger.info(f"RESULT device-stitch {exchange}: failed: {type(err).__name__}: {str(err)[:300]}")
     vae.device_stitch = False
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_image_decode_attribution_4k(mesh_device):
+    """4K decode with the VAE's `profile` attribution on (it serializes the waves, so the total is not the served
+    number): how the time splits between host prep, upload, device decode and readback, and how much crosses PCIe."""
+    torch.set_num_threads(max(1, len(os.sched_getaffinity(0)) // 2))
+    vae, config = _vae(mesh_device, 2)
+    vae.profile = True
+    z = torch.randn(1, config.latent_channels, 1, 4096 // 16, 4096 // 16)
+    for run in ("cold", "warm1", "warm2"):
+        vae._profile = vae._empty_profile()
+        mark = time.perf_counter()
+        vae.decode_clip(z)
+        seconds = time.perf_counter() - mark
+        p = vae._profile
+        keys = ("host_prep", "upload", "device", "readback", "readback_mb", "tiling", "stitch", "waves", "units")
+        logger.info(f"RESULT decode_attr 4096 {run}: {seconds:.2f}s " + " ".join(f"{k}={p.get(k)}" for k in keys))

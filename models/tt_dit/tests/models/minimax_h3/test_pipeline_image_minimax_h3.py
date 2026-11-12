@@ -499,3 +499,28 @@ def test_defer_finish_overlap(mesh_device, guide_examples):
         f"[{serial_totals}] vs deferred [{', '.join(f'{t:.2f}' for t in totals)}] | finish each "
         f"[{', '.join(f'{f:.2f}' for _, f in finishes)}]"
     )
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_prompt_encode_scaling(mesh_device, guide_examples):
+    """Warm prompt-encode time at the presentation rungs (text only): flat across rungs means per-op dispatch, not
+    compute or weight bandwidth, dominates -- the case for tracing the encoder."""
+    import ttnn as _ttnn
+
+    t2i, _, _ = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    for rung in (1024, 2048, 4096, 8192):
+        pipe._force_prompt_pad = rung
+        try:
+            times = []
+            for _ in range(4):
+                mark = time.perf_counter()
+                embeds, _ = pipe.encode_prompt(t2i["prompt"])
+                _ttnn.synchronize_device(mesh_device)
+                times.append(time.perf_counter() - mark)
+                _ttnn.deallocate(embeds)
+        finally:
+            pipe._force_prompt_pad = None
+        warm = sorted(times[1:])
+        logger.info(f"RESULT prompt_encode rung {rung}: warm min {warm[0] * 1e3:.0f} ms, median {warm[1] * 1e3:.0f} ms")
