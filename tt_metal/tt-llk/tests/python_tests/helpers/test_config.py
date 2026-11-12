@@ -133,6 +133,9 @@ class TestConfig:
 
     # === STATIC VARIABLES ===
 
+    # The matmul test sources whose pack thread runs production's pack_block through pack_api_shim.h with compile-time formats
+    MATMUL_PACK_SHIM_TESTS: ClassVar[tuple] = ("matmul_test.cpp", "math_matmul_test.cpp", "matmul_dyn_test.cpp")
+
     # Architecture Selection
     ARCH_NON_COMPUTE: ClassVar[str]
     ARCH_COMPUTE: ClassVar[str]
@@ -1078,7 +1081,7 @@ class TestConfig:
         if os.environ.get("LLK_MATMUL_PACK_CTFMT") == "1":
             compile_time_formats = True
         # the matmul tests' pack thread runs production's pack_block (pack_api_shim.h) with compile-time formats: production's LTO
-        if compile_time_formats and os.path.basename(str(test_name)) in ("matmul_test.cpp", "math_matmul_test.cpp", "matmul_dyn_test.cpp"):
+        if compile_time_formats and os.path.basename(str(test_name)) in TestConfig.MATMUL_PACK_SHIM_TESTS:
             self.kernel_flags += [f for f in ("-flto=1", "-flto-partition=one") if f not in self.kernel_flags]
 
         # Artefact directory is always relative to ARTEFACTS_DIR. An absolute
@@ -1814,6 +1817,11 @@ class TestConfig:
                     )
                 if type(parameter).__name__ == "NUM_TILES_IN_BLOCK":
                     header_content.append(f"constexpr std::uint32_t MATMUL_CONST_NTB = {parameter.num_tiles_in_block};")
+            # the perf output CB of the shim's matmul tests: the whole blocks that fit the 64 KB PERF_OUTPUT ring (perf.h, 16 x 4096 B)
+            if self.compile_time_formats and os.path.basename(str(self.test_name)) in TestConfig.MATMUL_PACK_SHIM_TESTS:
+                by_name = {type(p).__name__: p for p in self.runtimes}
+                tiles = by_name["NUM_TILES_IN_BLOCK"].num_tiles_in_block if "NUM_TILES_IN_BLOCK" in by_name else by_name["CRK_TILE_DIMM"].r_dimm * by_name["CRK_TILE_DIMM"].c_dimm
+                header_content.append(f"#define MATMUL_PERF_CB_PAGES {tiles * max(1, 16 * 4096 // 16 // (tiles * self.pack_size))}")
 
         if self.compile_time_formats:
             header_content.extend(self.generate_compile_time_data_formats())

@@ -575,6 +575,18 @@ constexpr std::uint32_t matmul_pack_kt = MATMUL_PK_KT;
 constexpr std::uint32_t matmul_pack_kt = 0;
 #endif
 
+// The perf CB: the whole blocks that fit the 64 KB PERF_OUTPUT ring, so a block continues the last one's W offset except
+// at the wrap, as in production's output CB. Python gives the pages with constant dims (MATMUL_PERF_CB_PAGES in build.h).
+inline std::uint32_t matmul_ring_pages([[maybe_unused]] const std::uint32_t block_tiles, [[maybe_unused]] const std::uint32_t page_words)
+{
+#ifdef MATMUL_PERF_CB_PAGES
+    return MATMUL_PERF_CB_PAGES;
+#else
+    const std::uint32_t blocks = PERF_RING_TILES * 4096 / 16 / (block_tiles * page_words);
+    return block_tiles * (blocks > 0 ? blocks : 1);
+#endif
+}
+
 // production's pack_block(dst, cb, n) with a run-time count: llk_matmul_pack's per-tile loop
 template <bool is_fp32_dest_acc_en>
 inline void matmul_pack_runtime_count(const std::uint32_t start_tile_index, const std::uint32_t output, const std::uint32_t ntiles)
@@ -678,10 +690,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // as matmul_block_init marks the pack thread
         ckernel::packer::llk_pack_math_context(1);
 #endif
-        // the output CB over the result tiles, in the 16 byte words of the metal CB pointers: one block that wraps (perf), or every block (golden)
+        // the output CB over the result tiles, in the 16 byte words of the metal CB pointers: the perf ring, or every block (golden)
         {
             const std::uint32_t base  = (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || perf_ring) ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[0]);
-            const std::uint32_t pages = (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || perf_ring) ? CT_DIM * RT_DIM : CT_DIM * RT_DIM * (MATMUL_FUNC_BLOCKS ? LOOP_FACTOR : 1);
+            const std::uint32_t pages = (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || perf_ring) ? matmul_ring_pages(CT_DIM * RT_DIM, TILE_SIZE_PACK)
+                                                                                                      : CT_DIM * RT_DIM * (MATMUL_FUNC_BLOCKS ? LOOP_FACTOR : 1);
             pack_api_shim::cb_bind(matmul_pack_out, base + 1, TILE_SIZE_PACK, pages);
         }
 #endif
