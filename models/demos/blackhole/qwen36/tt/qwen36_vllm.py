@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""vLLM wrapper for Qwen3.5/3.6 on Blackhole — a thin tt_transformers Generator subclass.
+"""vLLM wrappers for Qwen3.5/3.6/3.8 on Blackhole: thin tt_transformers Generator subclasses.
 
-Hybrid model: 8 paged-KV attention + 24 GDN recurrent-state layers. GDN forbids token-padding and
-isn't position-general, so prefill is model-owned (masked-bucket for short prompts / chunk-outer
-trace for long, via prefill_dispatch) while Generator drives decode only. GDN + KV state is
-model-bound, so the kv_cache contract param is accepted but unused.
+Hybrid model: paged-KV attention + GDN recurrent-state layers. GDN forbids token-padding and isn't position-general,
+so prefill is model-owned (masked-bucket for short prompts / chunk-outer trace for long) while Generator drives decode
+only. Qwen36ForCausalLM keeps the GDN state of each request in vLLM-owned KV cache blocks (MambaSpec groups,
+tt/gdn_block_state.py); Qwen36MTPContractForCausalLM keeps it in model-owned per-slot buffers.
 """
 
 import math
@@ -25,11 +25,10 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
-from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
+from models.demos.blackhole.qwen36.tt.generator_interface import warmup_decode_buckets
 from models.tt_transformers.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
-_PREFILL_WARMUP_BUCKET = 4096
 _BLOCK_SIZE = 64
 
 
@@ -48,11 +47,8 @@ class TT_Qwen3_5SpecProcessingInfo(TT_Qwen3_5ProcessingInfo):
         return {"image": 0, "video": 0}
 
 
-@MULTIMODAL_REGISTRY.register_processor(
-    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
-)
-class Qwen36ForCausalLM(Generator, SupportsMultiModal):
-    """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
+class _Qwen36Generator(Generator, SupportsMultiModal):
+    """Construction, KV budget, sampling checks and multimodal helpers shared by the Qwen3.6 vLLM classes."""
 
     # Decode bucketing keeps several traces live and refreshes the selected
     # bucket's inputs before replay, so their I/O buffers may safely overlap.
@@ -161,15 +157,6 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         model.init_vision_model()
         return cls([model], [args], mesh_device)
 
-    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
-        """Allocate paged KV (8 attn layers) + external GDN state; returns the 8 KV pairs.
-
-        batch_size = max_batch_size (vLLM's max_num_seqs, threaded through initialize_vllm_model):
-        the paged KV blocks (kv_cache_shape) already cover all users, and this sizes the per-slot
-        GDN recurrent/conv state [B,...] + the decode kv grid. B==1 is the single-sequence path."""
-        batch_size = self.model[0].args.max_batch_size
-        return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch_size)
-
     @staticmethod
     def _has_visual(kwargs, pixel_key):
         """True only when the request carries REAL visual data for this modality. vLLM attaches an
@@ -218,99 +205,100 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
         return None
 
-    def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
-        """All prefill is model-owned (Generator drives decode only)."""
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+)
+class Qwen36ForCausalLM(_Qwen36Generator):
+    """vLLM-compatible wrapper for Qwen3.5/3.6/3.8 on a Blackhole TP mesh (P150x4, P150x8).
+
+    vLLM owns the GDN state of every request: get_kv_cache_spec declares one MambaSpec per GDN layer, and each GDN
+    layer keeps a request's recurrent state and convolution history in the KV cache block that its MambaSpec group
+    gives the request (tt/gdn_block_state.py). Prefill starts every request from zero state and copies the end state
+    into the block; decode reads and writes the blocks with gdn_decode_step.
+    """
+
+    @classmethod
+    def get_kv_cache_spec(cls, vllm_config):
+        """vllm-tt-plugin hook: one FullAttentionSpec per attention layer and one MambaSpec per GDN layer, per device
+        at the MESH_DEVICE TP degree (tt/kv_cache_spec.py). The attention block size is the smallest one, at least
+        --block-size, whose K and V block holds one GDN state. Raises ValueError for an unsupported mesh."""
+        from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
+            kv_cache_bf8_enabled,
+            mesh_tp_degree,
+            qwen36_kv_cache_spec,
+        )
+
+        tc = vllm_config.model_config.hf_config
+        tc = tc.get_text_config() if hasattr(tc, "get_text_config") else tc
+        cc = vllm_config.cache_config
+        specs = qwen36_kv_cache_spec(
+            tc,
+            mesh_tp_degree(),
+            kv_bf8=kv_cache_bf8_enabled(),
+            mamba_block_size=getattr(cc, "mamba_block_size", None) or vllm_config.model_config.max_model_len,
+            mamba_cache_mode=getattr(cc, "mamba_cache_mode", None) or "none",
+            min_block_size=getattr(cc, "block_size", None),
+        )
+        attn = next(spec for name, spec in specs.items() if name.endswith(".self_attn"))
+        logger.info(
+            f"Qwen GDN state in vLLM KV cache blocks: attention block size {attn.block_size} "
+            f"({attn.page_size_bytes} B per layer and block)"
+        )
+        return specs
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """vllm-tt-plugin hook. One K and V buffer pair per attention layer; the GDN layers of the same layer slot
+        keep their request state inside it (gdn_block_state.GdnBlockState). The GDN layers keep only a batch-1
+        prefill workspace. Returns the attention [K, V] pairs."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import GdnBlockState, is_mamba_entry
+
         model = self.model[0]
-        if model.num_devices > 1 and model.args.max_batch_size > 1:
-            # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
-            # non-None empty pixel_values placeholder from vLLM on text requests.
-            assert not self._has_visual(kwargs, "pixel_values") and not self._has_visual(
-                kwargs, "pixel_values_videos"
-            ), (
+        if model.num_devices < 2:
+            raise ValueError("Qwen36ForCausalLM keeps the GDN state in KV cache blocks only on a TP mesh")
+        shapes = {tuple(int(d) for d in e[0]) for e in per_layer_specs if not is_mamba_entry(e)}
+        if len(shapes) != 1:
+            raise ValueError(f"the attention layers need one K / V cache shape, got {sorted(shapes)}")
+        kv_caches = model.allocate_kv_caches(shapes.pop(), ttnn.bfloat16, batch_size=1)
+        model.gdn_blocks = GdnBlockState(model, per_layer_specs, kv_caches)
+        return kv_caches
+
+    def zero_kv_cache_blocks(self, kv_cache=None, block_ids=()):
+        """vllm-tt-plugin hook: zero vLLM's new_block_ids_to_zero in every K and V buffer before the step."""
+        self.model[0].gdn_blocks.zero_blocks(block_ids)
+
+    def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
+        """Prefill each row on the GDN layers' batch-1 workspace from zero state, then copy the row's end state into
+        its state blocks (mamba_state). A row whose start_pos is above 0 is computed again from position 0: ``tokens``
+        holds the row's tokens from position 0 to prompt_lens. Returns host logits [N, 1, vocab]."""
+        model = self.model[0]
+        mamba_state = kwargs.get("mamba_state")
+        if mamba_state is None:
+            raise ValueError("Qwen36ForCausalLM keeps the GDN state in vLLM KV cache blocks and needs mamba_state")
+        # Require real visual data, not a non-None empty pixel_values placeholder from vLLM on text requests.
+        visual = self._has_visual(kwargs, "pixel_values") or self._has_visual(kwargs, "pixel_values_videos")
+        if visual and model.args.max_batch_size > 1:
+            raise ValueError(
                 "batched (max_num_seqs>1) serving is text-only; multimodal is single-sequence "
                 "(max_concurrency=1). Run the model at max_num_seqs=1 for image/video requests."
             )
-            return self._prefill_forward_tp_batched(model, tokens, page_table, prompt_lens, kwargs.get("empty_slots"))
-        vision_tokens = self._compute_vision_tokens(model, kwargs)
-        if model.num_devices > 1:
-            return self._prefill_forward_tp(model, tokens, page_table, prompt_lens, vision_tokens=vision_tokens)
-        seq_len = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
-        logger.info(f"Prefilling User 1 up to {seq_len} tokens")
-        # Multimodal works WITH the captured trace here: prefill_dispatch routes to the traced
-        # path, which splices the image/video rows via a fixed-shape ttnn.where over persistent
-        # buffers (compiled at warmup, updated per request by copy_host_to_device — no request-time
-        # compile).
-        logits = prefill_dispatch(
-            model,
-            tokens,
-            page_table,
-            prompt_lens,
-            use_trace=kwargs.get("enable_trace", False),
-            vision_tokens=vision_tokens,
-        )
-        logits = ttnn.to_torch(logits)
-        # The vLLM runner unpacks (logits, rope_deltas) because the HF config has mrope_section.
-        # Zero deltas are returned for all modalities: the multimodal M-RoPE delta is applied
-        # entirely model-side (build_request_rope stashes self.rope.rope_delta during prefill, and
-        # every decode path offsets the rope position by it), so the value handed back to vLLM is
-        # unused for device-side rope and stays zero.
-        rope_deltas = torch.zeros(logits.shape[0], dtype=torch.long)
-        logger.info(f"Finished prefill up to {seq_len} tokens, starting decode...")
-        return logits, rope_deltas
-
-    def _prefill_forward_tp(self, model, tokens, page_table, prompt_lens, vision_tokens=None):
-        """TP (B=1) paged prefill via the model-owned masked fixed-bucket path.
-
-        prefill_traced_chunked rounds the prompt up to a fixed bucket and masks the GDN to the
-        EXACT valid_len, so prefill runs one of a bounded, pre-warmed program set (the
-        compile-clobbers-trace fix) — for <=2048 prompts it is entirely the masked bucket (no
-        chunk trace needed). Longer prompts replay the chunk-outer trace (Milestone B). Returns
-        host logits [1, 1, vocab] gathered to a single replica."""
-        T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
-        if tokens.shape[1] > T:
-            tokens = tokens[:, :T]
-        logger.info(f"Prefilling User 1 up to {T} tokens (TP masked-bucket/chunked)")
-        # Multimodal is supported on TP too: prefill_traced_chunked splices the image/video rows via
-        # a fixed-shape ttnn.where over hidden-sharded persistent buffers (the vision rows are
-        # gathered to full hidden on host, placed along seq, then re-sharded), so no request-time
-        # compile clobbers the parked trace.
-        logits = model.prefill_traced_chunked(
-            tokens, page_table, actual_len=T, vision_tokens=vision_tokens
-        )  # [1,1,vocab] replicated
-        logits = (
-            ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
-            .reshape(-1, model.args.vocab_size)[:1]
-            .float()
-            .view(1, 1, -1)
-        )
-        logger.info(f"Finished prefill up to {T} tokens, starting decode...")
-        return logits, torch.zeros(1, dtype=torch.long)
-
-    def _prefill_forward_tp_batched(self, model, tokens, page_table, prompt_lens, empty_slots):
-        """TP batched (max_num_seqs>1) prefill: prefill each request in this step into its decode slot.
-
-        vLLM prefills new requests while other slots decode, so each user's B=1 state is written into
-        row empty_slots[u] of the batched GDN buffers without disturbing the live rows (model-owned,
-        via prefill_paged_slots). Attention fills each request's blocks via its page-table row.
-
-        tokens:      torch [N, max_T] (rows are the N requests scheduled this prefill step).
-        page_table:  torch [N, max_blocks] — row u = request u's blocks.
-        prompt_lens: per-request real lengths (row u trimmed to prompt_lens[u]).
-        empty_slots: per-request decode slot; defaults to range(N) (mirrors Generator.prefill_forward_text).
-        Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — text M-RoPE delta is 0, applied model-side).
-        """
+        vision_tokens = self._compute_vision_tokens(model, kwargs) if visual else None
         N = tokens.shape[0]
-        plens = [int(prompt_lens[u]) for u in range(N)] if prompt_lens is not None else [tokens.shape[1]] * N
-        if empty_slots is None:
-            empty_slots = list(range(N))
-        empty_slots = [int(s) for s in empty_slots]
-        token_ids_list = [tokens[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)]
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
-        logger.info(f"Prefilling {N} user(s) into slots {empty_slots} (TP batched masked-bucket)")
-        host_logits = model.prefill_paged_slots(token_ids_list, pt, empty_slots, valid_lens=plens)
-        logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)  # [N, 1, vocab]
-        logger.info(f"Finished batched prefill of {N} user(s), starting decode...")
-        return logits, torch.zeros(N, dtype=torch.long)
+        comp = ttnn.ConcatMeshToTensor(model.mesh_device, dim=0)
+        rows = []
+        for u in range(N):
+            T = int(prompt_lens[u]) if prompt_lens is not None else tokens.shape[1]
+            logger.info(f"Prefilling row {u} up to {T} tokens")
+            # Short prompts run one masked-bucket forward; longer ones replay the chunk trace, then the masked tail.
+            logits = model.prefill_traced_chunked(
+                tokens[u : u + 1, :T], pt[u : u + 1], actual_len=T, vision_tokens=vision_tokens
+            )
+            rows.append(ttnn.to_torch(logits, mesh_composer=comp).reshape(-1, model.args.vocab_size)[:1].float())
+            ttnn.deallocate(logits)
+            model.gdn_blocks.write_prefill_state(mamba_state, u)
+        # Zero rope deltas: the multimodal M-RoPE delta is applied model-side (rope.rope_delta).
+        return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
 
     def decode_forward(self, *args, **kwargs):
         args = list(args)
@@ -326,20 +314,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             elif pos < len(args):
                 args[pos] = val
 
-        # Traced decode (single-device and TP): trace captured at pos 0 in warmup, replayed here.
-        # Valid for TP — GDN state is in fixed in-place buffers, and prefill only replays pre-warmed programs.
+        # Traced decode: trace captured in warmup, replayed here. The GDN layers read the state of each row from the
+        # blocks that their persistent page index names, so the index is set before the replay.
         if not getattr(self, "_decode_logged", False):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen)")
-        model = self.model[0]
-        # Batched serving: apply vLLM's condense slot_remap to the per-slot GDN recurrent/conv state
-        # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
-        # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
-        # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
-        if model.num_devices > 1 and model.args.max_batch_size > 1:
-            slot_remap = _read("slot_remap", 9)
-            if slot_remap is not None:
-                model._remap_gdn_slots(slot_remap)
+        mamba_state = kwargs.pop("mamba_state", None)
+        if mamba_state is not None:
+            # A row that vLLM moved (slot_remap) or gave to another request keeps reading its request's blocks: moving
+            # a row rewrites the page index and moves no state.
+            self.model[0].gdn_blocks.set_decode_blocks(mamba_state)
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
         # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
         # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
@@ -351,8 +335,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             num_active = int((start_pos != -1).sum()) if start_pos is not None else width
             num_active = max(1, min(num_active, width))
             bucket = min(width, 1 << max(0, (num_active - 1).bit_length()))  # smallest pow2 >= num_active
-            # Keep full width when slot_remap is set: remap indexes the full slot space (tokens /
-            # GDN). Rare (row moves only); bucketing resumes next step. Check kw + positional #9.
+            # Keep full width when slot_remap is set: the sampler's per-slot state remap indexes the full slot
+            # space. Rare (row moves only); bucketing resumes next step. Check kw + positional #9.
             if _read("slot_remap", 9) is not None:
                 bucket = width
             if bucket < width:
@@ -391,34 +375,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         model = self.model[0]
         if enable_trace and model._chunked_trace_id is not None:
             return
-        # Size the chunk-trace page table to the full KV cache (not a hardcoded 4096) so served ISL
-        # isn't capped; still captures one chunk — just a bigger page-table tensor.
-        if kv_cache:
-            # Round to a multiple of 32: paged/chunked SDPA needs the page-table stick % 32 == 0.
-            num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
-        else:
-            num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
+        # Size the chunk-trace page table to the full KV cache so served ISL isn't capped; round to a multiple of 32:
+        # paged/chunked SDPA needs the page-table stick % 32 == 0.
+        num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-        # Batched serving (max_num_seqs>1): the decode buffers are [B,...], but prefill runs B=1. Bind
-        # the PERSISTENT B=1 GDN prefill scratch and capture the chunk trace against IT, so long prompts
-        # (>chunk_size) replay the traced chunk-outer path per user instead of the slower eager fallback.
-        # The scratch is not freed (prefill_paged_slots rebinds it per request); the batched decode
-        # buffers are restored before the decode-trace warmup captures at [B,...].
-        batched = model.num_devices > 1 and model.args.max_batch_size > 1
         logger.info(
             f"Qwen prefill warmup ({'record' if enable_trace else 'prepare'}): chunk={_PREFILL_WARMUP_CHUNK}, "
-            f"page_table_blocks={num_blocks}{', batched B=1 scratch' if batched else ''}"
+            f"page_table_blocks={num_blocks}"
         )
-        prev = model._bind_gdn_prefill_scratch() if batched else None
-        try:
-            model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
-            if enable_trace:
-                model.record_prefill_trace_chunked(self.mesh_device)
-        finally:
-            if prev is not None:
-                model._unbind_gdn_prefill_scratch(prev)
-        if batched:
-            model.warmup_gdn_slot_ops()
+        model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
+        if enable_trace:
+            model.record_prefill_trace_chunked(self.mesh_device)
+        model.gdn_blocks.warmup()
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
@@ -428,19 +396,13 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
 
 
-_MESH_TP = {"N150": 1, "N300": 2, "P150x4": 4, "N150x4": 4, "T3K": 8}
-
-
 def _mesh_tp(default=4):
-    """Tensor-parallel degree from MESH_DEVICE ("P150x4" -> 4, "(1, 4)" -> 4)."""
-    s = os.environ.get("MESH_DEVICE")
-    if not s:
-        return default
-    if s in _MESH_TP:
-        return _MESH_TP[s]
+    """Tensor-parallel degree of this engine's mesh (kv_cache_spec.mesh_tp_degree); ``default`` when MESH_DEVICE is
+    unset or names no mesh."""
+    from models.demos.blackhole.qwen36.tt.kv_cache_spec import mesh_tp_degree
+
     try:
-        dims = [int(x) for x in s.strip("() ").replace("x", ",").split(",") if x.strip()]
-        return math.prod(dims) if dims else default
+        return mesh_tp_degree()
     except ValueError:
         return default
 
@@ -448,7 +410,7 @@ def _mesh_tp(default=4):
 @MULTIMODAL_REGISTRY.register_processor(
     Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
-class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
+class Qwen36MTPContractForCausalLM(_Qwen36Generator):
     """Plugin spec-decode contract adapter (B * (K+1) <= 32) over the MTP engine in tt/spec_engine.py."""
 
     _ENABLE_MTP = True
@@ -460,7 +422,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     # verify answers argmax_ids (greedy) or logits ([B, 1+K, V] for host acceptance);
     # the first token after prefill is host-sampled
     model_capabilities = {
-        **Qwen36ForCausalLM.model_capabilities,
+        **_Qwen36Generator.model_capabilities,
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose", "hidden_feed"),
         "spec_hidden_handoff": ("on_device",),
@@ -531,6 +493,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         assert model.mtp is not None, "MTP head not built (checkpoint has no MTP weights?)"
         model.set_gdn_fused_decode(True)
         return self
+
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        """Allocate paged KV + model-owned GDN state; returns the attention KV pairs.
+
+        batch_size = max_batch_size (vLLM's max_num_seqs, threaded through initialize_vllm_model):
+        the paged KV blocks (kv_cache_shape) already cover all users, and this sizes the per-slot
+        GDN recurrent/conv state [B,...] + the decode kv grid. B==1 is the single-sequence path."""
+        batch_size = self.model[0].args.max_batch_size
+        return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=batch_size)
 
     def _engine(self):
         from models.demos.blackhole.qwen36.tt.spec_engine import get_spec_engine

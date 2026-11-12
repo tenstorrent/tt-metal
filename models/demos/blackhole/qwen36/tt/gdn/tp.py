@@ -12,6 +12,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.kv_cache_spec import GdnDims, pack_conv_taps
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     fused_recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
@@ -326,7 +327,51 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
+    dims = GdnDims(nk=nk // tp, nv=nv // tp, dk=dk, dv=dv, kconv=args.gdn_conv_kernel_size)
+    if tp > 1 and not dims.decode_step_problems():
+        tw.update(_decode_step_weights(mesh, sd, P, taps, dims, tp))
     return tw
+
+
+def _decode_step_weights(mesh, sd, P, taps, dims, tp):
+    """The constants gdn_decode_step reads (GDN decode on state in KV cache blocks): dt_bias and -exp(A_log) in
+    float32 (tw["dt_bias"] / tw["neg_exp_A"] are bfloat16), the norm weight as a [Dv] bfloat16 tensor, and each
+    device's conv taps packed into [Nv, 4, 32, 32] head tiles. Small, so they skip the weight cache."""
+
+    def fp32_sharded(t):
+        return ttnn.from_torch(
+            t.float().reshape(1, 1, -1),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    C = dims.conv_dim
+    packed = torch.cat(
+        [pack_conv_taps([t[d * C : (d + 1) * C] for t in taps], dims) for d in range(tp)], dim=0
+    )  # [tp * Nv, 4, 32, 32]
+    return {
+        "dt_bias_fp32": fp32_sharded(sd[P + "dt_bias"]),
+        "neg_exp_A_fp32": fp32_sharded(-torch.exp(sd[P + "A_log"].float())),
+        "norm_w_1d": ttnn.from_torch(
+            sd[P + "norm.weight"].reshape(-1).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        "conv_taps_packed": ttnn.from_torch(
+            packed.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=tpc.tp_shard_mapper(mesh, 0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+    }
 
 
 class TPGatedDeltaNet:
@@ -379,6 +424,9 @@ class TPGatedDeltaNet:
         self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
         self.conv_states = None
         self.rec_state = None
+        # Views of the vLLM KV cache blocks that hold the request state, bound by gdn_block_state.GdnBlockState. When
+        # set, decode reads and writes the blocks and rec_state / conv_carry are only the batch-1 prefill workspace.
+        self.state_blocks = None
         # ---- Batched (multi-user) spec-decode verify buffers, allocated by prepare_spec_verify. ----
         # (n_users, T) the spec buffers are sized for; None until prepare_spec_verify runs.
         self._spec_shape = None
@@ -1444,6 +1492,8 @@ class TPGatedDeltaNet:
         )
 
     def forward_decode(self, x):
+        if self.state_blocks is not None:
+            return self._forward_decode_blocks(x)
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode conv→recurrence→norm/gate chain L1-resident
@@ -1574,6 +1624,53 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
+
+    def _forward_decode_blocks(self, x):
+        """Decode rows [0, B) on the state in vLLM KV cache blocks: ONE gdn_decode_step does the causal conv on the
+        packed history, the gates, the recurrence and the gated norm, reading and writing the pages that
+        state_blocks.idx names for each row. Then the out-projection and all-reduce of forward_decode."""
+        tw, sb = self.tw, self.state_blocks
+        if len(x.shape) == 4:
+            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
+        B = x.shape[-2]
+        qkvzab = tpc.matmul_1d_decode(
+            x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))  # [q | k | v | z | a | b] rows
+        gated = ttnn.experimental.kda.gdn_decode_step(
+            qkvzab,
+            tw["dt_bias_fp32"],
+            tw["neg_exp_A_fp32"],
+            sb.rec_k,
+            tw["norm_w_1d"],
+            self.Nv,
+            self.Nk,
+            self.Dk,
+            self.Dv,
+            scale=self.scale,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat16,
+            conv_hist=sb.hist,
+            conv_taps=tw["conv_taps_packed"],
+            qkvz_dim=self.qkvz_dim_tp,
+            fast_mode=True,
+            fp32_state=True,
+            state_page_idx=sb.idx,
+            **({} if sb.rec_v is None else {"state_pool2": sb.rec_v}),
+        )  # [1, B, Nv * Dv]
+        ttnn.deallocate(qkvzab)
+        partial = self._row_proj(gated, tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     # ------------------------------------------------------------------ #
     # Batched (multi-user) speculative verify

@@ -239,6 +239,9 @@ class Qwen36Model:
         # addresses are baked into the chunk-prefill trace and reused by every prefill_paged_slots
         # replay, so it is never freed/reallocated (only zeroed in place). See _bind_gdn_prefill_scratch.
         self._gdn_prefill_scratch = None
+        # gdn_block_state.GdnBlockState when the GDN request state lives in vLLM KV cache blocks
+        # (Qwen36ForCausalLM.allocate_kv_cache_per_layer); the GDN layers then keep only a batch-1 prefill workspace.
+        self.gdn_blocks = None
 
         # Optional vision tower (DropInVisionTransformer), attached lazily by
         # init_vision_model() for the multimodal serving path. None on the text-only path.
@@ -886,7 +889,7 @@ class Qwen36Model:
                     # (slices the staged per-request table for multimodal; 1D RoPE otherwise).
                     cos, sin = self.rope.get_prefill_rot_mats(chunk_start, chunk_end - chunk_start)
 
-                    block_size = 64
+                    block_size = get_block_size(self._paged_kv_caches)
                     chunk_blocks_end = math.ceil(chunk_end / block_size)
                     chunk_page_table = page_table[:, chunk_start // block_size : chunk_blocks_end]
                     chunk_page_table_tt = ttnn.from_torch(
@@ -2834,7 +2837,7 @@ class Qwen36Model:
         """Eager final partial-chunk prefill (< chunk_size). GDN zero-pads to 128-multiple internally
         (not bucket padding). Returns hidden [1,T_tail_padded,hidden_size]."""
         T_tail = token_slice.shape[1]
-        block_size = 64
+        block_size = get_block_size(self._paged_kv_caches)
         tok = ttnn.from_torch(
             token_slice.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
@@ -3680,6 +3683,9 @@ class Qwen36Model:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
         self._chunked_prepared_key = None
+        if self.gdn_blocks is not None:
+            self.gdn_blocks.release()
+            self.gdn_blocks = None
         if getattr(self, "_paged_kv_caches", None) is not None:
             for k_cache, v_cache in self._paged_kv_caches:
                 ttnn.deallocate(k_cache)

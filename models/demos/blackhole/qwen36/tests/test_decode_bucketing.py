@@ -76,7 +76,9 @@ def test_bucket_selection():
     logger.info("PASSED: bucket selection picks smallest pow2 >= num_active and never drops active rows")
 
 
-def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch):
+def test_positional_slot_remap_keeps_full_width_and_moves_no_gdn_state(monkeypatch):
+    """GDN state lives in vLLM KV cache blocks, so a row move needs no GDN state gather; the step keeps full width
+    because the sampler's slot remap indexes the full slot space."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     from models.tt_transformers.tt.generator import Generator
 
@@ -119,17 +121,16 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
     )
 
     assert result == "output"
-    assert remaps == [slot_remap]
+    assert remaps == []
     assert forwarded[0][0][0].shape[0] == 4
 
 
 @pytest.mark.parametrize("sampling", ["host", "device"])
 @pytest.mark.parametrize("passing", ["keyword", "positional"])
-def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, sampling, passing):
-    """#51982: a batch condense must move the per-slot GDN recurrent/conv state exactly once, before
-    the decode reads it, whether the step samples on host or device. Decode contract v1
-    (vllm-tt-plugin#78) delivers slot_remap in both modes as a keyword; positional is the
-    tt_transformers Generator signature (index 9)."""
+def test_condense_rewrites_the_gdn_page_index_before_decode(monkeypatch, sampling, passing):
+    """#51982 with GDN state in vLLM KV cache blocks: a batch condense must point every row at its request's state
+    blocks before the decode reads them, whether the step samples on host or device. The adapter sets the page index
+    from mamba_state (the blocks of each row after the move) and moves no state; mamba_state is not forwarded."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     from models.tt_transformers.tt.generator import Generator
 
@@ -139,12 +140,14 @@ def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, s
         args=SimpleNamespace(max_batch_size=8),
         sampling=None,
         _remap_gdn_slots=lambda remap: events.append(("remap", list(remap))),
+        gdn_blocks=SimpleNamespace(set_decode_blocks=lambda state: events.append(("index", state))),
     )
     wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
     wrapper.model = [model]
     wrapper.data_parallel = 1  # read by Generator.__del__
 
     def fake_decode(self, *args, **kwargs):
+        assert "mamba_state" not in kwargs
         remap = kwargs["slot_remap"] if "slot_remap" in kwargs else args[9]
         tokens = kwargs["tokens"] if "tokens" in kwargs else args[0]
         events.append(("decode", list(remap), int(tokens.shape[0])))
@@ -157,6 +160,7 @@ def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, s
     # in an 8-wide batch, so plain bucketing would shrink this step to width 4.
     tokens, positions = _padded_decode_batch(3, 8)
     slot_remap = [0, 3, 2, 3, 4, 5, 6, 7]
+    mamba_state = object()
     sampling_params = SimpleNamespace() if sampling == "device" else None
     reload = dict(reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False)
 
@@ -169,17 +173,30 @@ def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, s
             kv_cache=None,
             sampling_params=sampling_params,
             slot_remap=slot_remap,
+            mamba_state=mamba_state,
             **reload,
         )
     else:
         result = Qwen36ForCausalLM.decode_forward(
-            wrapper, tokens, positions, None, None, True, True, sampling_params, None, None, slot_remap, **reload
+            wrapper,
+            tokens,
+            positions,
+            None,
+            None,
+            True,
+            True,
+            sampling_params,
+            None,
+            None,
+            slot_remap,
+            mamba_state=mamba_state,
+            **reload,
         )
 
     assert result == "output"
-    # GDN state moves once, before the forward; the remap is still forwarded (seed-RNG remap in
-    # Generator); the step keeps full width because the remap indexes the full slot space.
-    assert events == [("remap", slot_remap), ("decode", slot_remap, 8)]
+    # The index is set once, before the forward; no GDN state moves; the remap still reaches Generator (seed RNG);
+    # the step keeps full width because the remap indexes the full slot space.
+    assert events == [("index", mamba_state), ("decode", slot_remap, 8)]
 
 
 def test_unsupported_device_sampling_fails_at_startup(expect_error, monkeypatch):
@@ -399,7 +416,8 @@ def test_decode_warmup_restages_when_num_blocks_changes(monkeypatch):
 
 
 def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatch):
-    """#56474: the eager call allocates/compiles prefill; the traced call records on the same buffers."""
+    """#56474: the eager call allocates/compiles prefill; the traced call records on the same buffers. Both phases
+    compile the GDN state-block programs (idempotent) before any trace can be captured after them."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     calls = []
     model = SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), _chunked_trace_id=None)
@@ -408,13 +426,11 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
         calls.append("record")
         model._chunked_trace_id = 7
 
-    model._bind_gdn_prefill_scratch = lambda: calls.append("bind") or "batched"
-    model._unbind_gdn_prefill_scratch = lambda prev: calls.append(("unbind", prev))
     model.prepare_prefill_trace_chunked = lambda device, page_table, chunk_size: calls.append(
         ("prepare", tuple(page_table.shape))
     )
     model.record_prefill_trace_chunked = record
-    model.warmup_gdn_slot_ops = lambda: calls.append("slot_ops")
+    model.gdn_blocks = SimpleNamespace(warmup=lambda: calls.append("blocks"))
     wrapper = SimpleNamespace(model=[model], mesh_device="mesh")
     kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
 
@@ -422,8 +438,8 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
 
-    prepare, unbind = ("prepare", (1, 128)), ("unbind", "batched")
-    assert calls == ["bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
+    prepare = ("prepare", (1, 128))
+    assert calls == [prepare, "blocks", prepare, "record", "blocks"]
 
 
 def test_prefill_prepare_is_idempotent_and_record_requires_it(monkeypatch, expect_error):
@@ -1200,21 +1216,35 @@ def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
 def test_vllm_warmup_leaves_no_late_allocations(
     mesh_device, prefill_first, sampling, reset_seeds, ensure_gc, monkeypatch
 ):
-    """#56474: after the two-phase vLLM warmup (either order, host or device sampling) every trace replays clean."""
+    """#56474: after the two-phase vLLM warmup (either order, host or device sampling) every trace replays clean.
+    The adapter allocates through allocate_kv_cache_per_layer, as vllm-tt-plugin does, with the GDN state of each row
+    in its own KV cache blocks."""
     if not trace_allocation_tracker.TRACE_ALLOC_TRACKING:
         pytest.skip("needs TT_METAL_TRACE_ALLOC_TRACKING=1")
     from models.common.sampling.sampling_params import SamplingParams
+    from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout
 
     bmax = 8
-    model, page_table = _build(mesh_device, bmax)
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=N_LAYERS, hf_model="Qwen/Qwen3.6-27B"
+    )
     if sampling and model.sampling is None:
         pytest.skip("on-device sampling unsupported on this mesh")
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     gen = Qwen36ForCausalLM([model], [model.args], mesh_device)
     gen._tt_allow_decode_trace_buffer_reuse = False  # let the tracker see the decode trace inputs too
-    kv_cache = model._paged_kv_caches
+    probe = PluginLayout.for_model(model, num_blocks=1)
+    bpu = -(-CTX // probe.block_size)
+    # Block 0 is the null block; row u owns bpu attention blocks and one state block per GDN group.
+    per_row = bpu + probe.num_groups
+    layout = PluginLayout.for_model(model, num_blocks=1 + bmax * per_row)
+    kv_cache = gen.allocate_kv_cache_per_layer(layout.per_layer_specs)
+    page_table = torch.stack(
+        [torch.arange(1 + u * per_row, 1 + u * per_row + bpu, dtype=torch.int32) for u in range(bmax)]
+    )
+    state_blocks = [tuple(1 + u * per_row + bpu + g for g in range(layout.num_groups)) for u in range(bmax)]
     prefill_kw = dict(kv_cache=kv_cache, can_sample_on_device=False)
-    decode_kw = dict(kv_cache=kv_cache, max_batch_size=bmax, num_blocks=BPU, can_sample_on_device=sampling)
+    decode_kw = dict(kv_cache=kv_cache, max_batch_size=bmax, num_blocks=bpu, can_sample_on_device=sampling)
     gen.warmup_model_prefill(enable_trace=False, **prefill_kw)
     gen.warmup_model_decode(enable_trace=False, **decode_kw)
     record = [
@@ -1230,9 +1260,10 @@ def test_vllm_warmup_leaves_no_late_allocations(
     sampled = SamplingParams(temperature=[1.0] * bmax, top_k=[10] * bmax, top_p=[0.9] * bmax)
     params = [greedy, sampled] if sampling else [None]
 
-    def decode(width, sampling_params, **kwargs):
+    def decode(width, sampling_params, rows=None, **kwargs):
         start_pos = torch.full((bmax,), -1, dtype=torch.int32)
         start_pos[:width] = T
+        rows = list(range(bmax)) if rows is None else rows
         flags = dict(
             reload_inputs=True,
             reload_page_table=False,
@@ -1243,19 +1274,22 @@ def test_vllm_warmup_leaves_no_late_allocations(
         gen.decode_forward(
             torch.zeros(bmax, 1, dtype=torch.int32),
             start_pos,
-            page_table=page_table,
+            page_table=page_table[rows],
             kv_cache=kv_cache,
             enable_trace=True,
             read_from_device=True,
             sampling_params=sampling_params,
+            mamba_state=layout.step_state([state_blocks[r] if i < width else None for i, r in enumerate(rows)], bmax),
             **flags,
         )
 
     for _ in range(2):  # every trace replays after every other one
-        gen.prefill_forward(prompt, page_table[:1], kv_cache, [T], empty_slots=[0])
+        gen.prefill_forward(
+            prompt, page_table[:1], kv_cache, [T], mamba_state=layout.step_state(state_blocks[:1], bmax)
+        )
         for sampling_params in params:
             for width in (1, 2, 4, 8):
                 decode(width, sampling_params)
         # A batch condense that moves every slot; device sampling state must be reloaded with it.
         remap = torch.tensor([*range(1, bmax), 0], dtype=torch.int32)
-        decode(bmax, params[-1], slot_remap=remap, reset_sampling_state=sampling)
+        decode(bmax, params[-1], rows=remap.tolist(), slot_remap=remap, reset_sampling_state=sampling)
