@@ -10,9 +10,9 @@ weights, no checkpoint):
   - test_vision_encoder_load_and_encode: the encoder used the way the service's load() and encode() will use it: built
     from a state_dict and a transformers config, one warm-up image, then two images of other grids with the warm-up's
     patch count, each read with read_embeddings into its slot of one preallocated buffer laid out like a stored value
-    ([n_tokens, 6144] bf16, with no header), with guard bytes around the slots. Each slot must hold the chip's output
-    bit for bit and match the reference, nothing else in the buffer may change, and the images after the warm-up must
-    add no program to the cache.
+    (format.py: the header that encode() writes first, then [n_tokens, 6144] bf16), with guard bytes around the slots.
+    Each slot's rows must hold the chip's output bit for bit and match the reference, nothing else in the buffer may
+    change (the headers included), and the images after the warm-up must add no program to the cache.
 The host tests of the encoder, which need no chip, are in test_vision_encoder_api.py.
 
 Image sizes (width x height in pixels), named by their grid of 14-pixel patches as the other vision tests name
@@ -106,9 +106,9 @@ def test_vision_encoder_vs_ref(mesh_device, device_params, size, vision_referenc
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_reference):
     """Built as load() will build it and called as encode() will call it, the encoder writes each image's tokens into
-    its slot of a shared buffer: bit for bit the chip's output, at PCC >= 0.9998 against the reference, with the guard
-    bytes untouched; after one warm-up image of 224x224 (h16w16), images of 448x112 (h8w32) and 112x448 (h32w8),
-    256 patches each, add no program to the cache."""
+    its slot of a shared buffer, after the slot's header: bit for bit the chip's output, at PCC >= 0.9998 against the
+    reference, with the headers and the guard bytes untouched; after one warm-up image of 224x224 (h16w16), images of
+    448x112 (h8w32) and 112x448 (h32w8), 256 patches each, add no program to the cache."""
     from transformers import MiniMaxM3VLConfig
 
     reference = vision_reference(NUM_LAYERS)
@@ -124,10 +124,16 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
     images = [_noise_pixels(112, 448), _noise_pixels(448, 112)]
     sizes = [media_format.stored_nbytes((p.shape[0] // FACTOR) * (p.shape[1] // FACTOR), HIDDEN) for p in images]
     buffer = np.full(GUARD_BYTES + sum(size + GUARD_BYTES for size in sizes), GUARD, dtype=np.uint8)
-    guard = buffer.copy()
     starts = np.cumsum([GUARD_BYTES] + [size + GUARD_BYTES for size in sizes])[:-1]
-    for i, (pixels, start) in enumerate(zip(images, starts)):  # encode(): one item at a time
-        embeddings = media_format.embeddings(memoryview(buffer)[start : start + sizes[i]], HIDDEN)
+    slots = [memoryview(buffer)[start : start + size] for start, size in zip(starts, sizes)]
+    for slot in slots:
+        media_format.Header("image").write(slot)  # encode() writes each value's header, then its rows
+    before = buffer.copy()
+    row_bytes = np.zeros(buffer.shape, dtype=bool)  # the bytes of the rows that format.embeddings gives
+    for i, (pixels, slot) in enumerate(zip(images, slots)):  # encode(): one item at a time
+        embeddings = media_format.embeddings(slot, HIDDEN)
+        offset = embeddings.ctypes.data - buffer.ctypes.data
+        row_bytes[offset : offset + embeddings.nbytes] = True
         tokens = encoder.forward(pixels)
         read_embeddings(tokens, embeddings)
         plain = _read_plain(tokens)
@@ -139,7 +145,7 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
         assert_close(name, _reference_tokens(reference, pixels), stored.float(), 0.9998, MAX_REL_L2["final"])
         assert mesh_device.num_program_cache_entries() == cache_entries, f"{name} added a program to the cache"
 
-    outside = np.ones(buffer.shape, dtype=bool)
-    for start, size in zip(starts, sizes):
-        outside[start : start + size] = False
-    assert np.array_equal(buffer[outside], guard[outside]), "read_embeddings wrote outside the embeddings of its slot"
+    outside = ~row_bytes  # the headers and the guard bytes
+    assert np.array_equal(buffer[outside], before[outside]), "read_embeddings wrote outside the rows of its slot"
+    for i, slot in enumerate(slots):
+        assert media_format.Header.read(slot) == media_format.Header("image"), f"image {i}: the header changed"
