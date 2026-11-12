@@ -26,9 +26,9 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
     """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
     import torch
+    from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
     from models.demos.blackhole.qwen36.tt import tp_common as tpc
-    from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
     def pack(gate):
         # Runs only on a tensor-cache miss (as_tensor preprocess), so a cached load never reads
@@ -279,12 +279,15 @@ class Qwen36MLP:
         )
         # Dense MLP: args.mlp_math_fidelity, else QWEN36_MLP_FIDELITY (default hifi2). MoE shared expert stays LoFi.
         fid = tpc.mlp_fidelity(getattr(args, "mlp_math_fidelity", None) if dense else ttnn.MathFidelity.LoFi)
+        # prefill_options.mlp_l1_acc: packer L1 accumulation for the dense prefill MLP matmuls (down + fused gate/up
+        # AGMM), as the GDN / attention projections use (COMPUTE_HIFI2).
+        _l1acc = tpc.prefill_options(args).mlp_l1_acc
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=_l1acc
         )
         # fuse_swiglu AGMM: fp32 acc (subblock_w=4) to match GDN/attn in-proj.
         self.compute_kernel_config_agmm = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=_l1acc
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -319,8 +322,9 @@ class Qwen36MLP:
     def _forward_tp(self, x, decode_ar=None):
         """TP forward: replicated input; reduce-scatter output fractured on hidden dim
         (decode_ar: all-reduce -> replicated RES40 output instead)."""
-        from models.demos.blackhole.qwen36.tt import tp_common as tpc
         from models.tt_transformers.tt.ccl import tt_all_reduce
+
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         w = self.weights
         args = self.args

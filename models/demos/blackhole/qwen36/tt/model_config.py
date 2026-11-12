@@ -9,12 +9,35 @@ load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from models.tt_transformers.tt.model_config import ModelArgs
 
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576
+
+
+@dataclass
+class Qwen36PrefillOptions:
+    """Prefill options of the tensor-parallel (1, N) path. The defaults are the stock path; set_column_prefill_profile()
+    turns on the set measured for Qwen3.5-9B on one (1, 4) Blackhole column.
+
+    exact_norms: RMSNorms of the prefill path at HiFi4 with fp32 accumulation (HiFi2 biases sum(x^2)).
+    lm_head_cfg: LM-head compute config (tpc.lm_head_compute_config modes); None keeps QWEN36_LMHEAD_CFG.
+    fused_norm_bf8 / gdn_gated_bf8: the fused distributed norm and the GDN gate multiply emit the bf8 their bf8-AGMM
+        consumers gather (prefill_agmm_bf8), instead of bf16 + a cast.
+    mlp_l1_acc: packer L1 accumulation for the TP prefill MLP matmuls.
+    gdn_l1: grouped-prefill GDN in-projection outputs, z and conv outputs in L1.
+    """
+
+    exact_norms: bool = False
+    lm_head_cfg: Optional[str] = None
+    fused_norm_bf8: bool = False
+    gdn_gated_bf8: bool = False
+    mlp_l1_acc: bool = False
+    gdn_l1: bool = False
 
 
 class Qwen36ModelArgs(ModelArgs):
@@ -160,6 +183,7 @@ class Qwen36ModelArgs(ModelArgs):
         # prefill projections at S <= this use all-gather + 1D matmul instead of the fused all-gather-matmul (which has a
         # ~100 µs floor at short S); 0 = off
         self.prefill_small_m_max = 0
+        self.prefill_options = Qwen36PrefillOptions()
         # cap (channels) for the GDN prefill conv's channel_chunk_size (gdn/tp.py kda_channel_chunk_size); smaller chunks
         # spread work over more cores (bit-exact)
         self.kda_conv_chunk_cap = 512
@@ -432,6 +456,55 @@ class Qwen36ModelArgs(ModelArgs):
             return False
         return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
 
+    # Prefill AGMM launch configs of the column profile, (grid_x, grid_y, workers/link, M_block, N_block) per call site
+    # and bucket ("site@S"; rows S = Bg * Tb), measured on a (1, 4) column; a missing site = the qwen36 default.
+    _COLUMN_AGMM = {
+        "mlp_gateup@128": (12, 9, 6, 1, 8),
+        "mlp_gateup@384": (12, 9, 6, 1, 8),
+        "mlp_gateup": (12, 9, 6, 4, 12),
+        "gdn_in@128": (8, 9, 6, 4, 8),
+        "gdn_in@384": (12, 9, 6, 2, 8),
+        "gdn_in": (12, 9, 6, 8, 12),
+        "attn_qkv@128": (12, 9, 6, 2, 16),
+        "attn_qkv@384": (12, 9, 6, 1, 12),
+        "attn_qkv": (12, 9, 6, 8, 12),
+        "gdn_out@1152": (12, 9, 6, 4, 16),
+    }
+
+    def set_column_prefill_profile(self):
+        """Prefill settings measured for Qwen3.5-9B (dense, dim 4096) on one (1, 4) Blackhole column, for requests of up
+        to ~1.2k new tokens (text, or one image up to 1 MP): exact norms, HiFi4 LM head, bf8 CCLs,
+        GDN activations in L1, SDPA chunks, small-M projections at 128 rows and per-bucket AGMM launch configs. Call
+        before the layers are built (Qwen36Model.from_pretrained(prefill_profile="column") does)."""
+        assert (
+            self.moe_num_experts <= 0 and self.dim == 4096 and tuple(self.cluster_shape)[0] == 1
+        ), "measured for a dense dim-4096 checkpoint on a (1, N) mesh"
+        import ttnn
+
+        self.prefill_fused_dist_norm = True
+        self.prefill_agmm_bf8 = True
+        self.mlp_math_fidelity = ttnn.MathFidelity.HiFi2
+        self.prefill_small_m_max = 128
+        self.prefill_sdpa_config_fn = lambda S: (128, 128, True)
+        self.prefill_agmm_config_fn = self._column_agmm_config
+        self.prefill_options = Qwen36PrefillOptions(
+            exact_norms=True,
+            lm_head_cfg="hifi4_fp32",
+            fused_norm_bf8=True,
+            gdn_gated_bf8=True,
+            mlp_l1_acc=True,
+            gdn_l1=True,
+        )
+
+    def _column_agmm_config(self, S, name):
+        if S >= 2048:  # measured below 2048 rows
+            return None
+        for key in (f"{name}@{S}", name):
+            if key in self._COLUMN_AGMM:
+                gx, gy, workers, mb, nb = self._COLUMN_AGMM[key]
+                return {"grid_x": gx, "grid_y": gy, "num_workers_per_link": workers, "M_block": mb, "N_block": nb}
+        return None
+
     def is_distributed_norm(self, mode):
         """Force the distributed-norm path for multi-device MoE prefill.
 
@@ -446,6 +519,18 @@ class Qwen36ModelArgs(ModelArgs):
         from models.tt_transformers.tt.common import Mode
 
         if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
+            return True
+        # Dense checkpoints whose dim does not exceed the base heuristic's 4096 (Qwen3.5-9B, dim 4096) hit the same
+        # double-gather on a (1,N) mesh: the TP config DRAM-shards the GDN / attention in-projections, so layer.py fuses
+        # the norm all-gather into the AGMM in-proj; the base rule would pre-gather in DistributedNorm and the AGMM
+        # gather again (K mismatch), and the spec-feed final norm needs the fractured output. Decode keeps the base
+        # rule.
+        if (
+            self.moe_num_experts <= 0
+            and self.is_multichip
+            and mode == Mode.PREFILL
+            and getattr(self, "gdn_qkvz_weight_memcfg", None) is not None
+        ):
             return True
         return super().is_distributed_norm(mode)
 
