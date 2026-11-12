@@ -111,8 +111,14 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
     return pack_tile_addr;
 }
 
-// The kernel's compute API traits (pack_math_context.h): a matmul API header, a pack-thread SFPU init header.
-#if defined(PACK_API_SHIM_MATMUL)
+#if __has_include("llk_pack_block.h")
+#define PACK_API_SHIM_PR 1
+#else
+#define PACK_API_SHIM_PR 0
+#endif
+
+// The kernel's compute API traits (pack_math_context.h, the PR's): a matmul API header, a pack-thread SFPU init header.
+#if PACK_API_SHIM_PR && defined(PACK_API_SHIM_MATMUL)
 namespace ckernel::packer
 {
 template <>
@@ -122,7 +128,7 @@ struct llk_pack_matmul_api<1>
 };
 } // namespace ckernel::packer
 #endif
-#if defined(PACK_API_SHIM_SFPU)
+#if PACK_API_SHIM_PR && defined(PACK_API_SHIM_SFPU)
 namespace ckernel::packer
 {
 template <>
@@ -133,11 +139,8 @@ struct llk_pack_sfpu_api<1>
 } // namespace ckernel::packer
 #endif
 
-#if __has_include("llk_pack_block.h")
-#define PACK_API_SHIM_PR 1
+#if PACK_API_SHIM_PR
 #include "llk_pack_block.h"
-#else
-#define PACK_API_SHIM_PR 0
 #endif
 
 namespace pack_api_shim
