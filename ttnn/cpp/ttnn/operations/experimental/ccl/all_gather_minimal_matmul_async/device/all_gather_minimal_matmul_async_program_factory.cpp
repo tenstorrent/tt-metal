@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
 #include <algorithm>
 #include <bit>
@@ -659,6 +660,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
     // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
     const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // Fabric2D (the KDA Galaxy path): input blocks reach a whole row or column of the matmul grid in one multicast
+    // write instead of hopping core to core. Every other configuration keeps the core-to-core relay.
+    const bool mcast = fabric_2d && !transpose_core_grid;
     TT_FATAL(
         (mux_index_on_x ? full_grid_size.x : full_grid_size.y) >= num_mux_cores,
         "There are not enough cores along the mux axis ({}) for the number of mux cores requested ({})",
@@ -821,6 +825,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
     }
 
+    if (mcast) {
+        defines["AGMM_MCAST"] = "1";
+    }
     if (fabric_2d) {
         defines["FABRIC_2D"] = "1";
     }
@@ -1735,6 +1742,34 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             N_end_tile,
         };
         desc.kernels[kComputeKernelIdx].emplace_runtime_args(core, as_runtime_args(compute_runtime_args));
+    }
+
+    if (mcast) {
+        // in1: multicast down each column from its row-0 injector.
+        ttnn::kernel_lib::host::Mcast in1_mcast(
+            *device,
+            ttnn::kernel_lib::host::McastConfig{.noc = in1_noc},
+            tt::tt_metal::CoreRangeSet(core_grid),
+            grid_size.y,
+            ttnn::kernel_lib::host::McastFixedSenderConfig{},
+            ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
+        std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 2> in1_targets{
+            desc.kernels[kIn1SenderKernelIdx], desc.kernels[kIn1ReceiverKernelIdx]};
+        in1_mcast.attach(desc, "in1_mcast", in1_targets, next_semaphore_id);
+        // in0: multicast along each row from its x = 0 injector. The fabric cores at the far end of the row receive it
+        // like any core and forward it to the neighbour chips from their L1.
+        ttnn::kernel_lib::host::Mcast in0_mcast(
+            *device,
+            ttnn::kernel_lib::host::McastConfig{.noc = in0_noc},
+            tt::tt_metal::CoreRangeSet(core_grid),
+            grid_size.x,
+            ttnn::kernel_lib::host::McastFixedSenderConfig{},
+            ttnn::kernel_lib::host::McastCoreOrder::RowMajor);
+        std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 3> in0_targets{
+            desc.kernels[kIn0SenderKernelIdx],
+            desc.kernels[kIn0ReceiverNoFabricKernelIdx],
+            desc.kernels[kIn0ReceiverFabricKernelIdx]};
+        in0_mcast.attach(desc, "in0_mcast", in0_targets, in1_mcast.next_semaphore_id());
     }
 
     return desc;
