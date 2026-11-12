@@ -191,15 +191,19 @@ def blend_clip_frames(a, b, extent: int):
     return head if extent == b.shape[0] else np.concatenate([head, b[extent:]], axis=0)
 
 
-def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
+def assemble_clip_parts(parts: list[tuple], frame_overlap: int, out: np.ndarray | None = None):
     """Temporal assembly into one preallocated buffer: seam math on overlap frames, memcpy for the rest.
 
     ``parts`` is ``[(segment, previous_overlap_or_None), ...]`` in output order; each fills its own slab.
+    ``out``: for planar parts, an already-allocated output of the right shape and dtype to fill (every
+    frame is written, so its prior contents do not matter); ignored when it does not match.
     """
     total = sum(clip_num_frames(segment) for segment, _ in parts)
     first = parts[0][0]
     if isinstance(first, np.ndarray):
-        out = np.empty((total, *first.shape[1:]), dtype=first.dtype)
+        shape = (total, *first.shape[1:])
+        if out is None or out.shape != shape or out.dtype != first.dtype or not out.flags.c_contiguous:
+            out = np.empty(shape, dtype=first.dtype)
     else:
         shape = list(first.shape)
         shape[2] = total
@@ -377,6 +381,13 @@ class MiniMaxH3Vae:
         self._stitcher = None
         self._yuv_pool = None
         self._blender = None
+        # Host buffers the YUV readback scatters each chunk into, kept across decodes (see
+        # `_yuv_chunk_buffer`). Keyed by the chunk's planar shape; a list indexed by chunk.
+        self._yuv_chunk_buffers: dict[tuple[int, int], list[np.ndarray]] = {}
+        # Planar output shape of the last YUV decode per latent shape, so the next decode of that shape
+        # can fault its output in while the device works (`_prefault_output`).
+        self._yuv_output_shapes: dict[tuple[int, ...], tuple[int, ...]] = {}
+        self._prefault_pool = None
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
@@ -574,6 +585,7 @@ class MiniMaxH3Vae:
                 "upload",
                 "device",
                 "readback",
+                "readback_join",
                 "unpatchify",
                 "tiling",
                 "stitch",
@@ -617,11 +629,12 @@ class MiniMaxH3Vae:
             "tiling",
             "upload",
             "host_prep",
+            "blend",
             "residual",
         ):
-            share = 100 * p[name] / total if total else 0.0
+            share = 100 * p.get(name, 0.0) / total if total else 0.0
             per_wave = f"  {p[name] / waves * 1000:6.0f} ms/wave" if waves and name in ("device", "readback") else ""
-            logger.info(f"    {name:<12} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
+            logger.info(f"    {name:<12} {p.get(name, 0.0):6.2f} s  ({share:4.1f} %){per_wave}")
         logger.info(f"    readback volume {p['readback_mb'] / 1000:.2f} GB")
 
     def _run_encoder_units(self, units: list[torch.Tensor]) -> list[torch.Tensor]:
@@ -932,17 +945,58 @@ class MiniMaxH3Vae:
         if pending is not None:
             yield from read_wave(*pending)
 
-    def _decode_clips_device_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+    def _decode_clips_device_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", *, reuse_host_buffers: bool = False
+    ) -> list:
+        """``reuse_host_buffers``: return YUV clips that are views of `_yuv_chunk_buffer` buffers, which the
+        next decode overwrites. Only for a caller that copies the clips out before returning (`_decode`)."""
         if self.stitch_exchange == "neighbor":
             return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
         if self.stitch_exchange == "strips":
             reason = self._strips_unserved(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
             if reason is None:
-                return self._decode_clips_strip_stitched(chunk_latents, output_type)
+                return self._decode_clips_strip_stitched(chunk_latents, output_type, reuse_host_buffers)
             if not getattr(self, "_warned_strips_fallback", False):
                 self._warned_strips_fallback = True
                 logger.warning(f"strips stitch: {reason}; using the gather stitch")
-        return self._decode_clips_gather_stitched(chunk_latents, output_type)
+        return self._decode_clips_gather_stitched(chunk_latents, output_type, reuse_host_buffers)
+
+    def _prefault_output(self, shape: tuple[int, ...]):
+        """Allocate a planar uint8 output and fault every page in, on a helper thread.
+
+        The returned future's buffer is fresh (the caller keeps it), so this only moves the page faults
+        of the ~0.2 GB output off the decode's critical path and into the device-bound waves; without it
+        they land in the temporal assembly (`blend`), the step whose time varies most with host memory
+        state. One write per 4 KB page is enough to fault it (and a whole 2 MB page where NumPy got one).
+        """
+        if self._prefault_pool is None:
+            self._prefault_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_out_prefault")
+
+        def touch() -> np.ndarray:
+            buffer = np.empty(shape, dtype=np.uint8)
+            buffer.reshape(-1)[::4096] = 0
+            return buffer
+
+        return self._prefault_pool.submit(touch)
+
+    def _yuv_chunk_buffer(self, index: int, frames: int, height: int, width: int) -> np.ndarray:
+        """The persistent planar uint8 buffer chunk ``index`` of a decode is read back into.
+
+        A fresh ``np.empty`` per chunk (43 MB at 28 x 768 x 1344) is faulted in by the scatter that fills
+        it, on the single finish thread the decode waits on. NumPy advises arrays of 4 MB and up for huge
+        pages, so with the kernel's THP defrag set to ``madvise`` each fault may compact memory
+        synchronously, which costs nothing on a quiet host and up to seconds per decode on a busy or
+        fragmented one. A buffer reused from the previous decode is already resident. The bytes written
+        are the same either way. Two planar shapes are kept (e.g. landscape and portrait).
+        """
+        key = (frames, height * width * 3 // 2)
+        buffers = self._yuv_chunk_buffers.pop(key, [])
+        self._yuv_chunk_buffers[key] = buffers
+        while len(self._yuv_chunk_buffers) > 2:
+            del self._yuv_chunk_buffers[next(iter(self._yuv_chunk_buffers))]
+        while len(buffers) <= index:
+            buffers.append(np.empty(key, dtype=np.uint8))
+        return buffers[index]
 
     def _strips_unserved(self, latent_h: int, latent_w: int, output_type: str) -> str | None:
         """Why strips cannot serve, or None."""
@@ -981,7 +1035,9 @@ class MiniMaxH3Vae:
             )
         return unpatchify_device(ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT), **dims)
 
-    def _decode_clips_gather_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+    def _decode_clips_gather_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", reuse_host_buffers: bool = False
+    ) -> list:
         """Temporal chunks decoded and stitched entirely on device, packed into full waves.
 
         The win over the host path is transfer volume, not compute. That path reads back
@@ -1094,9 +1150,12 @@ class MiniMaxH3Vae:
                 canvas_shape = tuple(canvas.shape)
                 canvas_dtype = str(canvas.dtype)
                 if output_type == "yuv420":
-                    finish = self._read_canvas_yuv(canvas)
-                    ttnn.deallocate(canvas)
                     frames, canvas_h, canvas_w = canvas_shape[-3], canvas_shape[-2], canvas_shape[-1]
+                    buffer = None
+                    if reuse_host_buffers:
+                        buffer = self._yuv_chunk_buffer(len(canvases) + len(pending), frames, canvas_h, canvas_w)
+                    finish = self._read_canvas_yuv(canvas, out=buffer)
+                    ttnn.deallocate(canvas)
                     read_bytes = frames * canvas_h * canvas_w * 3 // 2
                     pending.append(self._yuv_finish_pool.submit(finish))
                 else:
@@ -1122,7 +1181,9 @@ class MiniMaxH3Vae:
             profile["readback_join"] += time.perf_counter() - mark
         return canvases
 
-    def _decode_clips_strip_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+    def _decode_clips_strip_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", reuse_host_buffers: bool = False
+    ) -> list:
         """Each device blends only the tiles it reads back."""
         from .stitch_device_minimax_h3 import StripTileStitcher
 
@@ -1268,7 +1329,10 @@ class MiniMaxH3Vae:
             rows_shape = tuple(canvas_rows.shape)
             canvas_shape = (*rows_shape[:-2], canvas_h, rows_shape[-1])
             if output_type == "yuv420":
-                finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True)
+                buffer = None
+                if reuse_host_buffers:
+                    buffer = self._yuv_chunk_buffer(len(canvases) + len(pending), *canvas_shape[-3:])
+                finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True, out=buffer)
                 ttnn.deallocate(canvas_rows)
                 read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
                 pending.append(self._yuv_finish_pool.submit(finish))
@@ -1567,7 +1631,7 @@ class MiniMaxH3Vae:
             self._yuv_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_yuv_finish")
         return self._yuv_pool
 
-    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, rows_partitioned: bool = False):
+    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, rows_partitioned: bool = False, out: np.ndarray | None = None):
         """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
 
         Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
@@ -1580,6 +1644,8 @@ class MiniMaxH3Vae:
         ``1/mesh_rows`` of the rows (of every column), so only the columns are split here, and the
         clamp and cast run after the split, on the patch a device keeps rather than on a canvas it
         mostly discards. Both are elementwise, so the bytes are the same either way.
+
+        ``out``: a ``(frames, height * 3 // 2 * width)`` uint8 buffer to read into (`_yuv_chunk_buffer`).
         """
         if rows_partitioned:
             mesh_rows = tuple(self.mesh_device.shape)[0]
@@ -1590,7 +1656,12 @@ class MiniMaxH3Vae:
             canvas = ttnn.typecast(canvas, ttnn.bfloat16)
             canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
             planar = fast_device_to_host_yuv(
-                canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=True
+                canvas,
+                self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                use_persistent_buffer=False,
+                defer=True,
+                out=out,
             )
             return lambda: planar().reshape(-1, height * 3 // 2, width)
 
@@ -1599,7 +1670,7 @@ class MiniMaxH3Vae:
         canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
 
         height, width = int(canvas.shape[-2]), int(canvas.shape[-1])
-        planar = replicated_to_host_yuv(canvas, self.mesh_device)
+        planar = replicated_to_host_yuv(canvas, self.mesh_device, out=out)
         return lambda: planar.reshape(planar.shape[0], height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
@@ -1716,8 +1787,13 @@ class MiniMaxH3Vae:
             z_BCTHW[:, :, i * chunk_size : i * chunk_size + chunk_size + config.token_overlap]
             for i in range(num_chunks)
         ]
+        output_key = (*z_BCTHW.shape, output_type)
+        prefault = None
+        if output_type == "yuv420" and output_key in self._yuv_output_shapes:
+            prefault = self._prefault_output(self._yuv_output_shapes[output_key])
         if self.device_stitch and chunk_latents:
-            clips = self._decode_clips_device_stitched(chunk_latents, output_type)
+            # The clips may be views of reused buffers; `assemble_clip_parts` below copies them out.
+            clips = self._decode_clips_device_stitched(chunk_latents, output_type, reuse_host_buffers=True)
         elif chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
             mark = time.perf_counter()
@@ -1758,7 +1834,12 @@ class MiniMaxH3Vae:
         if overlap is not None:
             parts.append((overlap, None))
 
-        result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
+        if parts:
+            result = assemble_clip_parts(parts, config.frame_overlap, prefault.result() if prefault else None)
+        else:
+            result = concat_clip_frames([])
+        if output_type == "yuv420" and isinstance(result, np.ndarray):
+            self._yuv_output_shapes[output_key] = result.shape
         self._profile["blend"] = time.perf_counter() - assemble_mark
         self._profile["concat"] = 0.0
         if pad_tokens > 0:

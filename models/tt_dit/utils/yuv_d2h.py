@@ -107,6 +107,7 @@ def _yuv_planar_d2h(
     view=None,
     pool: ThreadPoolExecutor | None = None,
     defer: bool = False,
+    out: np.ndarray | None = None,
 ) -> np.ndarray | Callable[[], np.ndarray]:
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
 
@@ -142,6 +143,11 @@ def _yuv_planar_d2h(
         view: Optional mesh device view for multi-host environments.
             When provided, uses ``host_buffer()`` / ``get_shard()`` with
             ``view.is_local()`` filtering instead of ``get_device_tensors()``.
+        out: Optional C-contiguous ``(T, out_H*out_W*3//2)`` uint8 buffer to write the frame into
+            instead of a fresh allocation. A buffer reused across calls is already faulted in, so the
+            scatter does not pay first-touch page faults (or, for a NumPy buffer advised for huge
+            pages, a synchronous compaction when the host has no free 2 MB block). The caller owns it:
+            it is overwritten on every call it is passed to.
     """
     Hu, Wu = H // 2, W // 2
     hw = H * W
@@ -237,6 +243,7 @@ def _yuv_planar_d2h(
                 [t[3] for t in triples],
                 "CHWT",
                 (TP_eff, SP_eff),
+                out=out,
                 out_H=out_H,
                 out_W=out_W,
             )
@@ -248,7 +255,10 @@ def _yuv_planar_d2h(
         out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
         out_row = out_hw + 2 * out_uv
 
-        out = np.empty((T, out_row), dtype=np.uint8)
+        if out is None:
+            out = np.empty((T, out_row), dtype=np.uint8)
+        elif out.shape != (T, out_row) or out.dtype != np.uint8 or not out.flags.c_contiguous:
+            raise ValueError(f"out must be C-contiguous uint8 of shape {(T, out_row)}, got {out.shape} {out.dtype}")
         out_t = torch.from_numpy(out)
         y_view = out_t.as_strided((T, out_H, out_W), (out_row, out_W, 1), 0)
         u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)
@@ -298,6 +308,7 @@ def fast_device_to_host_yuv(
     logical_w: int | None = None,
     use_persistent_buffer: bool = True,
     defer: bool = False,
+    out: np.ndarray | None = None,
 ) -> np.ndarray | Callable[[], np.ndarray] | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
@@ -358,6 +369,7 @@ def fast_device_to_host_yuv(
             rather than the frame itself.  The transfer is complete when it
             returns; what is left is host work the caller can overlap with the
             next frame's device work.  Calling it yields the frame.
+        out: Optional output buffer, passed to ``_yuv_planar_d2h`` (see there).
 
     Returns:
         ``np.ndarray`` of shape ``(T, H'*W' + 2*(H'/2 * W'/2))``, dtype uint8,
@@ -481,7 +493,7 @@ def fast_device_to_host_yuv(
     # 3+4
     new_H = logical_h if logical_h is not None else H
     new_W = logical_w if logical_w is not None else W
-    out = _yuv_planar_d2h(
+    return _yuv_planar_d2h(
         tt_Y,
         tt_Cb,
         tt_Cr,
@@ -494,9 +506,8 @@ def fast_device_to_host_yuv(
         view=d2h_view,
         pool=pool,
         defer=defer,
+        out=out,
     )
-
-    return out
 
 
 def replicated_to_host_yuv(
@@ -505,6 +516,7 @@ def replicated_to_host_yuv(
     *,
     coefficients=None,
     pool: ThreadPoolExecutor | None = None,
+    out: np.ndarray | None = None,
 ) -> np.ndarray:
     """YUV 4:2:0 readback of a video every device already holds in full.
 
@@ -523,6 +535,7 @@ def replicated_to_host_yuv(
         mesh_device: The mesh device.
         coefficients: ``ttnn.experimental.YUVCoefficients``; defaults to BT.601 limited range.
         pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
+        out: Optional output buffer, passed to ``_yuv_planar_d2h`` (see there).
 
     Returns:
         ``np.ndarray`` of shape ``(T, H*W + 2*(H/2 * W/2))``, dtype uint8, planar yuv420p.
@@ -566,4 +579,4 @@ def replicated_to_host_yuv(
     tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
     tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
 
-    return _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, view=view, pool=pool)
+    return _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, view=view, pool=pool, out=out)
