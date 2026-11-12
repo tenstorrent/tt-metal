@@ -280,10 +280,10 @@ std::uint32_t pack_address(const T& params, std::uint32_t rt, std::uint32_t bloc
     }
 }
 
-inline void untilize_block(std::uint32_t output_address, std::uint32_t output_format, std::uint32_t num_faces)
+inline void untilize_block(std::uint32_t output_address, std::uint32_t output_format, const ckernel::TensorShape tensor_shape)
 {
     _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
-        output_address, output_format, FACE_R_DIM, num_faces, 0 /* tile_dst_rt_offset */);
+        output_address, output_format, tensor_shape, 0 /* tile_dst_rt_offset */);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -291,14 +291,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t NUM_DATUMS_IN_TILE = FACE_R_DIM * FACE_C_DIM * num_faces;
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    const std::uint32_t NUM_DATUMS_IN_TILE  = FACE_R_DIM * FACE_C_DIM * num_faces;
     check_pack_untilize_shape(num_faces, TILE_CNT);
 
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PACK_MODE>(formats.pack_src, formats.pack_dst, NUM_DATUMS_IN_TILE /* tile_size */);
         _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PACK_MODE>();
-        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, num_faces);
+        _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, tensor_shape);
         PROFILER_SYNC();
     }
 
@@ -319,7 +320,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_packer_wait_for_math_done_();
                         }
-                        untilize_block(pack_address(params, rt, block, num_faces, formats.pack_dst), formats.pack_dst, num_faces);
+                        untilize_block(pack_address(params, rt, block, num_faces, formats.pack_dst), formats.pack_dst, tensor_shape);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

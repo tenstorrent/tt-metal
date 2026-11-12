@@ -98,14 +98,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, 0 /* tile_size */);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
     // Ugly but we are converting one 4 face tile into two 2 face tiles side by side
-    _llk_pack_untilize_init_<BLOCK_CT_DIM * 2, FULL_CT_DIM * 2, false, TILE_C_DIM, true>(
-        formats.pack_src, formats.pack_dst, params.in0_tile_r_dim, params.num_faces / 2);
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(params.in0_tile_r_dim, params.num_faces / 2);
+    _llk_pack_untilize_init_<BLOCK_CT_DIM * 2, FULL_CT_DIM * 2, false, TILE_C_DIM, true>(formats.pack_src, formats.pack_dst, tensor_shape);
 
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_packer_wait_for_math_done_();
         _llk_pack_untilize_<BLOCK_CT_DIM * 2, FULL_CT_DIM * 2, false, 0, true>(
-            L1_ADDRESS(params.buffer_Res[block * params.NUM_TILES_IN_BLOCK]), params.num_faces / 2, 0 /* tile_dst_rt_offset */);
+            L1_ADDRESS(params.buffer_Res[block * params.NUM_TILES_IN_BLOCK]), tensor_shape, 0 /* tile_dst_rt_offset */);
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
     _llk_pack_untilize_uninit_(formats.pack_src);
