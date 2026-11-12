@@ -30,6 +30,7 @@ from .pack_effects import (
     apply_pack_effects,
     is_deterministic,
 )
+from .warn import caller_stacklevel
 
 
 class UnmodelledHardwareWarning(RuntimeWarning):
@@ -182,7 +183,7 @@ class Pack:
                 f"may land one ULP of {l1_format} either side. Compare with PCC, "
                 f"not exactly.",
                 UnmodelledHardwareWarning,
-                stacklevel=2,
+                stacklevel=caller_stacklevel(),
             )
         self.check_outlier_promotion(dest_format, l1_format)
         # Normally already at Dest precision (src_to_dest wrote it there), so this
@@ -219,7 +220,7 @@ class Pack:
                     f"but this golden has no lattice for it, so the rounding "
                     f"codec is used instead. Those bytes are unverified.",
                     UnmodelledHardwareWarning,
-                    stacklevel=3,
+                    stacklevel=caller_stacklevel(),
                 )
             else:
                 values = truncated

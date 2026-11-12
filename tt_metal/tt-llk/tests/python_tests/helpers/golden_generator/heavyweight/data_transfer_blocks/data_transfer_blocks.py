@@ -293,15 +293,13 @@ class DataTransferBlocks:
         """One fidelity phase of a multiply: window, multiply, flush."""
         return self.arch.fpu.partial_product(srcA, srcB, phase, dest_format)
 
-    def fpu_warn_split_unmodelled(self, op_name: str, stacklevel: int = 4) -> None:
+    def fpu_warn_split_unmodelled(self, op_name: str) -> None:
         """Say so when a multiply here falls back to the exact product.
 
-        `stacklevel` is 4 rather than the FPU's own 3 because this wrapper adds
-        a frame: the count starts at ``warnings.warn`` and has to reach past
-        the warning helper, the FPU method and this one to land on the caller.
-        A caller that adds a frame of its own raises it again.
+        The warning blames whoever asked for the multiply. See
+        :func:`.units.warn.caller_stacklevel`.
         """
-        self.arch.fpu.warn_split_unmodelled(op_name, stacklevel=stacklevel)
+        self.arch.fpu.warn_split_unmodelled(op_name)
 
 
 # ----------------------------------------------------------------------

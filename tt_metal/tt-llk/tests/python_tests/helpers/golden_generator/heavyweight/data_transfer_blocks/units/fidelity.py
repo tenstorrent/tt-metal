@@ -20,6 +20,7 @@ from helpers.llk_params import MathFidelity, format_dict
 
 from ..storage import truncate_mantissa
 from .pack import UnmodelledHardwareWarning
+from .warn import caller_stacklevel
 
 #: How many phases a multiply runs at each fidelity.
 FIDELITY_PHASES = {
@@ -50,7 +51,7 @@ def fidelity_phases(math_fidelity: MathFidelity) -> range:
     return range(FIDELITY_PHASES[math_fidelity])
 
 
-def warn_unmodelled_split(op_name: str, arch_name: str, stacklevel: int = 2) -> None:
+def warn_unmodelled_split(op_name: str, arch_name: str) -> None:
     """Warn that this architecture's multiply is the exact product.
 
     "HiFi4 included" is not a slip: Wormhole's and Blackhole's per-phase masks
@@ -63,7 +64,7 @@ def warn_unmodelled_split(op_name: str, arch_name: str, stacklevel: int = 2) -> 
         f"device at every fidelity, HiFi4 included. Treat it as a reference, "
         f"not as an exact golden.",
         UnmodelledHardwareWarning,
-        stacklevel=stacklevel,
+        stacklevel=caller_stacklevel(),
     )
 
 

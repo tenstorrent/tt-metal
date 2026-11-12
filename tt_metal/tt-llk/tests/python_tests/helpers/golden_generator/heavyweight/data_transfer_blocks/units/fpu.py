@@ -35,6 +35,7 @@ from .fidelity import (
     warn_unmodelled_split,
 )
 from .pack import UnmodelledHardwareWarning
+from .warn import caller_stacklevel
 
 #: The element-wise operations the FPU performs on two src registers.
 _ELEMENTWISE = {
@@ -128,18 +129,19 @@ class Fpu:
         """The phase indices a multiply at `math_fidelity` runs."""
         return fidelity_phases(math_fidelity)
 
-    def warn_split_unmodelled(self, op_name: str, stacklevel: int = 3) -> None:
+    def warn_split_unmodelled(self, op_name: str) -> None:
         """Say so when a multiply here falls back to the exact product.
 
         Silent unless this architecture's multiplier is genuinely unmodelled. An
         integer multiply also skips the phase loop, but it is exact on the device
         too, so warning there would be wrong.
 
-        `stacklevel` counts from ``warnings.warn``, and 3 blames whoever called this.
+        The warning blames whoever asked for the multiply. See
+        :func:`.warn.caller_stacklevel`.
         """
         if self.mantissa_split is not None:
             return
-        warn_unmodelled_split(op_name, self.l1.name, stacklevel=stacklevel)
+        warn_unmodelled_split(op_name, self.l1.name)
 
     def operand_halves(
         self, srcA: torch.Tensor, srcB: torch.Tensor, phase: int
@@ -240,10 +242,7 @@ class Fpu:
             f"IEEE's rule and not necessarily this device's -- Blackhole "
             f"rounds ties away from zero. Treat those datums as unverified.",
             UnmodelledHardwareWarning,
-            # 4, not 3: the count starts at warnings.warn and has to reach
-            # past this method, src_to_dest and the blocks wrapper to land on
-            # whoever asked for the write.
-            stacklevel=4,
+            stacklevel=caller_stacklevel(),
         )
 
     @staticmethod

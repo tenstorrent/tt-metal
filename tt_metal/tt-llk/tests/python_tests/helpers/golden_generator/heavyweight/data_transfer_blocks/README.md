@@ -313,7 +313,7 @@ multiply and the matmul because the two decompose identically.
 | `fidelity_phases(math_fidelity)` | A `range` of phase numbers. `FIDELITY_PHASES` maps a fidelity to a count, and `PHASE_OPERAND_HALVES` names each phase's two halves, **biggest term first**, so stopping early drops what was contributing least. |
 | `resolve_non_finite(a_half, b_half, srcA, srcB, phase)` | Repairs operand positions holding an infinity or a NaN. See below. |
 | `non_finite_lanes(srcA, srcB)` | Where either operand is non-finite, so the split and flush rules can skip them. |
-| `warn_unmodelled_split(op_name, arch_name, stacklevel=2)` | The warning text for an architecture whose split this package does not model. |
+| `warn_unmodelled_split(op_name, arch_name)` | The warning text for an architecture whose split this package does not model. |
 
 #### `split_mantissa`: why subtract rather than mask
 
@@ -738,6 +738,27 @@ would reach nobody running the tests, and they are the only audience for a
 warning that says "this answer is approximate". Worse, `pytest.warns` bypasses
 the filter, so the unit test asserting the warning would keep passing while the
 suite stayed silent.
+
+## Who a warning blames
+
+Every `warnings.warn` here passes `stacklevel=caller_stacklevel()`, from
+[units/warn.py](units/warn.py). The rule is one sentence: **blame the first
+frame outside `data_transfer_blocks/`.** For the packer that is the operation's
+step; for the FPU's split warning, the pipeline that asked for the multiply.
+
+It is counted rather than hard-coded because a hard-coded level is a claim
+about how many wrappers sit between a unit and whoever asked, and any layer
+added between them makes it wrong. A wrong one does not fail. It quietly blames
+the wrong file, sending the reader to the facade instead of their own code.
+
+This package carried six such constants and they did not agree. Two warnings
+raised from the same function at the same depth used `stacklevel=2` and
+`stacklevel=3`, so one had to be wrong, and it was: the stochastic-rounding
+warning blamed `data_transfer_blocks.py` rather than the operation.
+
+The walk costs nothing in practice, since every warn site sits behind a guard.
+`test_heavyweight_blocks.py` asserts the origin is outside this package, so the
+next added layer cannot quietly break it again.
 
 ---
 
