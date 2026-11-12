@@ -202,8 +202,8 @@ inline void _llk_pack_untilize_init_(
 
     if constexpr (narrow_row)
     {
-        // Changed to check against TILE_C_DIM instead of FACE_C_DIM until tt-metal#24095 is investigated.
-        static_assert(row_num_datums < TILE_C_DIM, "row_num_datums must be set to less than TILE_C_DIM for narrow_row packing");
+        // Each narrow row is read from one face of the dest register, so it holds at most FACE_C_DIM datums.
+        static_assert(row_num_datums >= 1 && row_num_datums <= FACE_C_DIM, "row_num_datums must be 1 to FACE_C_DIM for narrow_row packing");
     }
 
     _llk_pack_untilize_configure_addrmod_();

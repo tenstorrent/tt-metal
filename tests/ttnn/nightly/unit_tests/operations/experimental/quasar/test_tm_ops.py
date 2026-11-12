@@ -4,6 +4,8 @@
 
 """Regression coverage for quasar TM ops."""
 
+import math
+
 import pytest
 import torch
 
@@ -1750,3 +1752,27 @@ def test_quasar_transpose_rm_subaligned_output_wider_than_tensor_raises(device, 
     tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, "exceeds the tensor width"):
         ttnn.experimental.quasar.transpose(tt_in, 0, 3, memory_config=_width_shard_config(device, 1, 3072, 4))
+
+
+# Row-major height-sharded WH transpose through the fork's sharded factory, with whole HxW planes in each
+# shard, for output rows of every width class: H % 32 up to one face, wider than one face, above one tile,
+# and W % 32 both zero and nonzero. bfloat16 only: the fork's sharded factory takes no Float32 output.
+@pytest.mark.parametrize("w", [32, 40, 64])
+@pytest.mark.parametrize("h", [4, 8, 12, 16, 17, 20, 24, 28, 31, 32, 40, 50])
+def test_quasar_transpose_wh_sharded_rm_output_row_widths(h, w, device):
+    # The sharded row-major factory needs shard elements to be a multiple of a tile.
+    planes_per_shard = 1024 // math.gcd(h * w, 1024)
+    torch.manual_seed(0)
+    x = torch.randn((1, 2 * planes_per_shard, h, w), dtype=torch.float32).to(torch.bfloat16)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (planes_per_shard * h, w), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+
+    out = ttnn.experimental.quasar.transpose(tt_in, 2, 3)
+
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(out.cpu()))

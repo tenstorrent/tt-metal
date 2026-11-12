@@ -30,6 +30,7 @@ void kernel_main() {
     constexpr uint32_t W_per_tile = get_arg(args::W_per_tile);
     constexpr uint32_t W_per_tile_last = get_arg(args::W_per_tile_last);
     constexpr uint32_t H_size_bytes = get_arg(args::H_size_bytes);
+    constexpr uint32_t output_row_pitch_bytes = get_arg(args::output_row_pitch_bytes);
     constexpr uint32_t l1_read_offset_bytes = get_arg(args::l1_read_offset_bytes);
 
     const uint32_t stick_size_bytes = H_size_bytes;
@@ -41,8 +42,9 @@ void kernel_main() {
     const auto s = TensorAccessor(tensor::output);
     uint32_t dst_addr = noc_address_backend::extract_local_address(s.get_noc_addr(0));
 
-    // temporary fix until pack_untilze is fully fixed
-    if constexpr (Ht > 8) {
+    // The host adds this kernel only on the staging path: copy the H datums of each staged row into the
+    // output shard at its row pitch.
+    {
         noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             UnicastEndpoint{},
             stick_size_bytes,
@@ -61,7 +63,7 @@ void kernel_main() {
                         {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
                          .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                          .addr = dst_addr});
-                    dst_addr += stick_size_bytes;
+                    dst_addr += output_row_pitch_bytes;
                 }
                 noc.async_writes_flushed();
                 cb_src.pop_front(Ht);
