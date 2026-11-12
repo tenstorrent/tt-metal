@@ -354,6 +354,16 @@ def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_
     logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
     tie = float(os.environ.get("GLM53_MK_SPEC_TIE", "1.0"))
     assert steps > 0, "the speculative path ran no step"
+    # GLM53_MK_SPEC_TTFT_RATIO (e.g. 1.10): the spec request's TTFT (its prefill fills the MTP cache) within that ratio
+    # of the plain request's on the same build; GLM53_MK_SPEC_MIN_TAU: a floor on tau
+    ratio = float(os.environ.get("GLM53_MK_SPEC_TTFT_RATIO", "0") or 0)
+    if ratio:
+        assert (
+            st["prefill_s"] <= ratio * plain_timing["prefill_s"]
+        ), f"spec TTFT {st['prefill_s'] * 1e3:.0f} ms > {ratio} x plain {plain_timing['prefill_s'] * 1e3:.0f} ms"
+    min_tau = float(os.environ.get("GLM53_MK_SPEC_MIN_TAU", "0") or 0)
+    if min_tau:
+        assert tau >= min_tau, f"tau {tau:.2f} < the floor {min_tau}"
     assert first is None or gap < tie, (
         f"spec ids differ from plain at {first} where the plain top-2 gap is {gap:.3f} >= {tie}: {sids[:first + 4]} vs "
         f"{plain[:first + 4]}"
