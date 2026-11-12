@@ -43,8 +43,10 @@ struct GdnSpecStepParams {
 struct GdnSpecStepInputs {
     // [1, B*T <= R <= round_up(B*T,32), W >= qkvz_dim + 2*Nv] bf16 TILE, raw rows u*T + t of [q|k|v|z|a|b]
     Tensor qkvzab;
-    Tensor win_a;    // [B, Lw <= 32, C] bf16 TILE: conv window ping-pong pair; the op reads win[par] (rows 0..Lw-1 of
-    Tensor win_b;    // user u = the previous window) and writes win[1 - par] (rows 0..Lw-1 = [E_prev[mi+1:mi+K]; new])
+    // [B, Lw <= 32, C] bf16 TILE: conv window ping-pong pair; the op reads win[par] (rows 0..Lw-1 of user u = the
+    // previous window) and writes win[1 - par] (rows 0..Lw-1 = [E_prev[mi+1:mi+K]; new]). Absent with conv_hist.
+    std::optional<Tensor> win_a;
+    std::optional<Tensor> win_b;
     Tensor ring;     // fp32 TILE, >= T*B*Nv blocks of [Dk, Dv]: block (t*B*Nv + u*Nv + h) = state after token t; the
                      // start block per (u,h) comes from the ctrl page
     Tensor ctrl;     // uint32 ROW_MAJOR, one page [1, N >= 1 + B + B*Nv] (N*4 % 64 == 0): word 0 = window parity,
@@ -62,6 +64,12 @@ struct GdnSpecStepInputs {
     // optional second fp32 pool (ring_page_idx only): ring pages >= ring's page count (in ring_page_idx and in the ctrl
     // start words) address ring_pool2 at (page - that count), so one user's heads can span two buffers.
     std::optional<Tensor> ring_pool2;
+    // optional bf16 TILE page pool (ring_page_idx only) holding the convolution history in gdn_decode_step's packed
+    // format: 4 pages per value head, slot s >= 1 = history row s - 1 (slot 3 the newest), channel chunk c of the
+    // head's [q | k | v] row in tile rows 2c and 2c + 1. It replaces the window pair (win_a / win_b absent): the
+    // start history of (u, h) is slots 1..3 at ctrl word 1 + B + B*Nv + u*Nv + h (its slot-0 page), the history after
+    // token t goes to slots 1..3 at ring_page_idx entry (u, T*Nv + t*Nv + h), and the ctrl mi words are not read.
+    std::optional<Tensor> conv_hist;
 };
 
 }  // namespace ttnn::experimental::prim

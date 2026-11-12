@@ -20,8 +20,8 @@ namespace ttnn::experimental::kda {
 // and kernel_opts 0.
 ttnn::Tensor gdn_spec_step(
     const ttnn::Tensor& qkvzab,
-    const ttnn::Tensor& win_a,
-    const ttnn::Tensor& win_b,
+    const std::optional<ttnn::Tensor>& win_a,
+    const std::optional<ttnn::Tensor>& win_b,
     const ttnn::Tensor& ring,
     const ttnn::Tensor& ctrl,
     const ttnn::Tensor& taps,
@@ -49,6 +49,7 @@ ttnn::Tensor gdn_spec_step(
     uint32_t value_blocks = 1,
     uint32_t kernel_opts = 0,
     const std::optional<ttnn::Tensor>& ring_page_idx = std::nullopt,  // [>= B, T*Nv]: per-token, per-head ring pages
-    const std::optional<ttnn::Tensor>& ring_pool2 = std::nullopt);    // second fp32 pool past ring's pages
+    const std::optional<ttnn::Tensor>& ring_pool2 = std::nullopt,     // second fp32 pool past ring's pages
+    const std::optional<ttnn::Tensor>& conv_hist = std::nullopt);     // packed history pages (no window pair)
 
 }  // namespace ttnn::experimental::kda

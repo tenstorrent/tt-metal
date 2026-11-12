@@ -12,12 +12,18 @@
 // all-equal fp32 scalar tiles beta_t[t] / dec[t].
 // GDN_RING_PAGE_IDX: the ctrl word of (u,h) is the first fp32 ring page of the start state, not a block index.
 // GDN_RING_POOL2 (= ring's page count): pages from there on are ring_pool2's (page - count).
+// GDN_HIST_PAGED: the start history comes from gdn_decode_step's packed history pages (conv_hist) instead of win[par]:
+// ctrl word 1 + B + B*Nv + bh is the slot-0 page of (u, h)'s start history, slots 1..3 go to rows 1..3 of the head's
+// window tiles (mi = 0), the other window rows are 0, and the ctrl mi word is not read.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 
 #ifndef GDN_FAST
 #define GDN_FAST 0
+#endif
+#ifndef GDN_HIST_PAGED
+#define GDN_HIST_PAGED 0
 #endif
 #if GDN_FAST
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
@@ -53,8 +59,12 @@ template <
     uint32_t hold_sentinel>
 TT_KERNEL void reader(uint32_t u, uint32_t h) {
     const auto qkv_acc = TensorAccessor(tensor::qkv);
+#if GDN_HIST_PAGED
+    const auto hist_acc = TensorAccessor(tensor::hist);
+#else
     const auto wa_acc = TensorAccessor(tensor::win_a);
     const auto wb_acc = TensorAccessor(tensor::win_b);
+#endif
     const auto ring_acc = TensorAccessor(tensor::ring);
 #ifdef GDN_RING_POOL2
     const auto ring2_acc = same_layout_accessor(ring_acc, tensor::ring2);
@@ -106,8 +116,11 @@ TT_KERNEL void reader(uint32_t u, uint32_t h) {
         return 2 * Nk * Kt + h * Vt + (c - 2 * Kt);
     };
 
-    // ---- ctrl page: parity, mi[u], start state of (u,h)
+    // ---- ctrl page: parity, mi[u], start state of (u,h) (and its start history page)
     uint32_t par, mi, blk;
+#if GDN_HIST_PAGED
+    uint32_t hist_page0;
+#endif
     ctrl_r.reserve_back(1);
     noc.async_read(ctrl_acc, ctrl_r, ctrl_bytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
@@ -115,7 +128,12 @@ TT_KERNEL void reader(uint32_t u, uint32_t h) {
         auto lock = ctrl_r.scoped_write_lock(1);
         auto p = lock.template get_ptr<volatile uint32_t>();
         par = p[0] & 1u;
+#if GDN_HIST_PAGED
+        mi = 0;
+        hist_page0 = p[1 + B + B * Nv + bh];
+#else
         mi = p[1 + u];
+#endif
         blk = p[1 + B + bh];
     }
     ctrl_r.push_back(1);
@@ -130,7 +148,13 @@ TT_KERNEL void reader(uint32_t u, uint32_t h) {
         blk = bh;
 #endif
         mi = 0;
+#if GDN_HIST_PAGED
+        hist_page0 = 0;  // any 4 valid pages: the held head's result is discarded
+#endif
     }
+#if GDN_HIST_PAGED
+    (void)par;  // no window pair
+#endif
     if (mi > T - 1) {
         mi = T - 1;  // ctrl contents are data (not validated by the host): an out-of-range mi is clamped, not reported
     }
@@ -201,6 +225,17 @@ TT_KERNEL void reader(uint32_t u, uint32_t h) {
     // ---- phase 2 (bulk): window + raw projection tiles, taps, weight row; the conv selectors built meanwhile
     // src_in[c] = whole window tile of user u, chunk c (win[par]); src_in[Ch + c] = whole raw projection tile
     src_in.reserve_back(2 * Ch);
+#if GDN_HIST_PAGED
+    // window tile c: row 1 + i = history slot 1 + i, read from the slot's row of the same parity (the packed pages
+    // hold chunk c in rows 2c and 2c + 1, so each 32 B face-row read keeps its 64 B alignment class)
+    zero_reserved(src_in, noc, Ch);
+    for (uint32_t c = 0; c < Ch; ++c) {
+        for (uint32_t i = 0; i < K - 1; ++i) {
+            pack_row_from_row(hist_acc, src_in, noc, hist_page0 + 1 + i, 2 * c + ((1 + i) & 1u), c, 1 + i);
+        }
+        read_tiles_at(qkv_acc, src_in, noc, pg + chunk_col(c), 1, Ch + c);
+    }
+#else
     for (uint32_t c = 0; c < Ch; ++c) {
         const uint32_t col = chunk_col(c);
         if (par) {
@@ -210,6 +245,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h) {
         }
         read_tiles_at(qkv_acc, src_in, noc, pg + col, 1, Ch + c);
     }
+#endif
     // taps[c]: rows 0..K-1 (tap j in row j) of tile column chunk_col(c); the rest of the tile is zero
     taps.reserve_back(Ch);
     zero_reserved(taps, noc, Ch);

@@ -48,8 +48,6 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
     using namespace kda_factory_detail;
     constexpr uint32_t TW = tt::constants::TILE_WIDTH;
     check_tiled(in.qkvzab, "qkvzab", {DataType::BFLOAT16});
-    check_tiled(in.win_a, "win_a", {DataType::BFLOAT16});
-    check_tiled(in.win_b, "win_b", {DataType::BFLOAT16});
     check_tiled(in.ring, "ring", {DataType::FLOAT32});
     check_tiled(in.taps, "taps", {DataType::BFLOAT16});
     check_tiled(in.dt_bias, "dt_bias", {DataType::FLOAT32, DataType::BFLOAT16});
@@ -63,9 +61,24 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         "{}: ctrl must be UINT32/INT32 (got {})",
         kOp,
         in.ctrl.dtype());
+    // the convolution history comes from the window pair or, with conv_hist, from packed history pages
+    const bool hist_paged = in.conv_hist.has_value();
+    TT_FATAL(
+        hist_paged ? (!in.win_a.has_value() && !in.win_b.has_value()) : (in.win_a.has_value() && in.win_b.has_value()),
+        "{}: pass either win_a and win_b (window pair) or conv_hist with ring_page_idx (history pages), not both "
+        "(got win_a {}, win_b {}, conv_hist {})",
+        kOp,
+        in.win_a.has_value(),
+        in.win_b.has_value(),
+        hist_paged);
+    if (!hist_paged) {
+        check_tiled(*in.win_a, "win_a", {DataType::BFLOAT16});
+        check_tiled(*in.win_b, "win_b", {DataType::BFLOAT16});
+        check_same_device(in.qkvzab, *in.win_a, kOp, "win_a");
+        check_same_device(in.qkvzab, *in.win_b, kOp, "win_b");
+        TT_FATAL(in.win_a->buffer() != in.win_b->buffer(), "{}: win_a and win_b must be distinct buffers", kOp);
+    }
     for (const auto& [t, name] : std::array{
-             std::pair{&in.win_a, "win_a"},
-             std::pair{&in.win_b, "win_b"},
              std::pair{&in.ring, "ring"},
              std::pair{&in.ctrl, "ctrl"},
              std::pair{&in.taps, "taps"},
@@ -74,7 +87,6 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
              std::pair{&in.weight, "weight"}}) {
         check_same_device(in.qkvzab, *t, kOp, name);
     }
-    TT_FATAL(in.win_a.buffer() != in.win_b.buffer(), "{}: win_a and win_b must be distinct buffers", kOp);
     check_output_interleaved(a.output_mem_config, kOp);
     check_compute_config(a.compute_kernel_config, kOp);
     TT_FATAL(a.compute_kernel_config.fp32_dest_acc_en, "{}: fp32_dest_acc_en must be enabled", kOp);
@@ -123,7 +135,10 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         R_max,
         qs);
     for (const auto& [t, name] : std::array{std::pair{&in.win_a, "win_a"}, std::pair{&in.win_b, "win_b"}}) {
-        const auto& ws = t->logical_shape();
+        if (!t->has_value()) {
+            continue;
+        }
+        const auto& ws = (*t)->logical_shape();
         TT_FATAL(
             ws.rank() == 3 && ws[0] >= B && ws[1] >= Lw && ws[1] <= tt::constants::TILE_HEIGHT && ws[2] == C,
             "{}: {} must be [B' >= B, Lw <= L <= 32, C = {}] (got {})",
@@ -151,14 +166,30 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
             kOp,
             idx.dtype());
         const auto& is = idx.logical_shape();
+        const uint32_t idx_words = (in.conv_hist.has_value() ? 2 : 1) * T * Nv;
         TT_FATAL(
-            is.rank() == 2 && is[0] >= B && is[1] == T * Nv,
-            "{}: ring_page_idx must be [>= B, T*Nv] (got {}, B = {}, T = {}, Nv = {})",
+            is.rank() == 2 && is[0] >= B && is[1] == idx_words,
+            "{}: ring_page_idx must be [>= B, {}] (T*Nv, twice that with conv_hist; got {}, B = {}, T = {}, Nv = {})",
             kOp,
+            idx_words,
             is,
             B,
             T,
             Nv);
+        if (in.conv_hist.has_value()) {
+            const Tensor& hist = *in.conv_hist;
+            check_tiled(hist, "conv_hist", {DataType::BFLOAT16});
+            check_same_device(in.qkvzab, hist, kOp, "conv_hist");
+            TT_FATAL(K == 4, "{}: conv_hist holds gdn_decode_step's 4-slot history; conv_kernel must be 4", kOp);
+            // a head's [q | k | v] chunks take tile rows 2c and 2c + 1 of one packed page
+            TT_FATAL(
+                2 * ((2 * Dk + Dv) / TW) <= tt::constants::TILE_HEIGHT,
+                "{}: a head's [q | k | v] row ({} channels) does not fit one packed history tile",
+                kOp,
+                2 * Dk + Dv);
+            // a held head reads its placeholder history from pages 0..3
+            TT_FATAL(hist.buffer()->num_pages() >= 4, "{}: conv_hist must hold at least 4 pages", kOp);
+        }
         if (in.ring_pool2.has_value()) {
             check_tiled(*in.ring_pool2, "ring_pool2", {DataType::FLOAT32});
             check_same_device(in.qkvzab, *in.ring_pool2, kOp, "ring_pool2");
@@ -186,6 +217,7 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
             in.ring.buffer()->num_pages());
     } else {
         TT_FATAL(!in.ring_pool2.has_value(), "{}: ring_pool2 needs ring_page_idx", kOp);
+        TT_FATAL(!in.conv_hist.has_value(), "{}: conv_hist needs ring_page_idx", kOp);
         TT_FATAL(
             in.ring.logical_volume() >= static_cast<uint64_t>(T) * B * Nv * Dk * Dv &&
                 in.ring.logical_shape()[-1] == Dv && in.ring.logical_shape()[-2] == Dk,
@@ -195,10 +227,13 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
     }
     const auto& cs = in.ctrl.logical_shape();
     const uint32_t words = static_cast<uint32_t>(cs[-1]);
+    // with conv_hist the ctrl page also carries the start history page of every (u, h)
+    const uint32_t ctrl_words = 1 + B + (in.conv_hist.has_value() ? 2 : 1) * B * Nv;
     TT_FATAL(
-        static_cast<uint64_t>(words) == in.ctrl.logical_volume() && words >= 1 + B + B * Nv && (words * 4) % 64 == 0,
-        "{}: ctrl must be one row-major page [.., N] with N >= 1 + B + B*Nv and N*4 %% 64 == 0 (got {})",
+        static_cast<uint64_t>(words) == in.ctrl.logical_volume() && words >= ctrl_words && (words * 4) % 64 == 0,
+        "{}: ctrl must be one row-major page [.., N] with N >= {} and N*4 %% 64 == 0 (got {})",
         kOp,
+        ctrl_words,
         cs);
     TT_FATAL(
         in.dt_bias.logical_volume() == Nv && in.neg_exp_A.logical_volume() == Nv,
@@ -221,8 +256,8 @@ GdnSpecStepOperation::tensor_return_value_t GdnSpecStepOperation::create_output_
 
 Tensor gdn_spec_step(
     const Tensor& qkvzab,
-    const Tensor& win_a,
-    const Tensor& win_b,
+    const std::optional<Tensor>& win_a,
+    const std::optional<Tensor>& win_b,
     const Tensor& ring,
     const Tensor& ctrl,
     const Tensor& taps,
@@ -246,7 +281,8 @@ Tensor gdn_spec_step(
     bool fast_mode,
     bool fp32_state,
     const std::optional<Tensor>& ring_page_idx,
-    const std::optional<Tensor>& ring_pool2) {
+    const std::optional<Tensor>& ring_pool2,
+    const std::optional<Tensor>& conv_hist) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnSpecStepOperation>(
         GdnSpecStepParams{
@@ -278,7 +314,8 @@ Tensor gdn_spec_step(
             .neg_exp_A = neg_exp_A,
             .weight = weight,
             .ring_page_idx = ring_page_idx,
-            .ring_pool2 = ring_pool2});
+            .ring_pool2 = ring_pool2,
+            .conv_hist = conv_hist});
 }
 
 }  // namespace ttnn::experimental::prim

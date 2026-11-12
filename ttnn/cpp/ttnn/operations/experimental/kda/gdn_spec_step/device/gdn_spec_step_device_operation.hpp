@@ -25,8 +25,8 @@ struct GdnSpecStepOperation {
 
 Tensor gdn_spec_step(
     const Tensor& qkvzab,
-    const Tensor& win_a,
-    const Tensor& win_b,
+    const std::optional<Tensor>& win_a,
+    const std::optional<Tensor>& win_b,
     const Tensor& ring,
     const Tensor& ctrl,
     const Tensor& taps,
@@ -50,6 +50,7 @@ Tensor gdn_spec_step(
     bool fast_mode = false,
     bool fp32_state = false,
     const std::optional<Tensor>& ring_page_idx = std::nullopt,
-    const std::optional<Tensor>& ring_pool2 = std::nullopt);
+    const std::optional<Tensor>& ring_pool2 = std::nullopt,
+    const std::optional<Tensor>& conv_hist = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

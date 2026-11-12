@@ -7,6 +7,9 @@
 // steps (state -> hnew per token), the row-batched gated RMSNorm. Writer: window rows to win[1-par] (HOLD: copy-through
 // via a bounce), the state after token t to ring block t*BH + bh or to ring_page_idx's pages (HOLD: skipped), the
 // user's T output rows.
+// conv_hist (GDN_HIST_PAGED): the reader builds the start window rows from the start block's packed history pages and
+// the writer writes the history after every token into packed history pages instead of the window pair, so every
+// destination block holds a complete gdn_decode_step state.
 //
 // fast_mode (GDN_FAST): the T beta/decay gate pairs are computed in software fp32 on the reader (as
 // reader_gdn_decode_step_conv_fast.cpp does per user) and pushed as ready scalar tiles `beta_t[t]` / `dec[t]`; the
@@ -63,8 +66,6 @@ constexpr uint32_t kHnewDepth = 2;
 ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_program_artifacts(
     const GdnSpecStepParams& a, const GdnSpecStepInputs& in, Tensor& output_tensor) {
     const auto& qkv = in.qkvzab.mesh_tensor();
-    const auto& win_a = in.win_a.mesh_tensor();
-    const auto& win_b = in.win_b.mesh_tensor();
     const auto& ring = in.ring.mesh_tensor();
     const auto& ctrl = in.ctrl.mesh_tensor();
     const auto& taps = in.taps.mesh_tensor();
@@ -114,6 +115,8 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     const bool ring_paged = in.ring_page_idx.has_value();
     const m2::TensorParamName RING2{"ring_pool2"};
     const bool ring2 = in.ring_pool2.has_value();  // validated: only with ring_page_idx
+    const m2::TensorParamName HIST{"conv_hist"};
+    const bool hist_paged = in.conv_hist.has_value();  // validated: only with ring_page_idx
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -179,7 +182,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     }
     std::vector<Dfb> compute_out = {
         {"hnew", kHnewDepth * KV, t32, fp32}, {"out", Vt, tout, out_fmt}, {"wout", Ch, t16, bf16}};
-    std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", Ch, t16, bf16}};
+    // bounce: a held user's window tiles, or (conv_hist) the Lw - 1 packed history tiles of the window rows
+    const uint32_t bounce_tiles = hist_paged ? std::max(Ch, Lw - 1) : Ch;
+    std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", bounce_tiles, t16, bf16}};
     if (ring_paged) {
         // the user's row of ring_page_idx (T*Nv words), one aligned page
         writer_local.push_back(
@@ -227,6 +232,9 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     if (FAST) {
         reader.compiler_options.defines.emplace("GDN_FAST", "1");
     }
+    if (hist_paged) {
+        reader.compiler_options.defines.emplace("GDN_HIST_PAGED", "1");
+    }
     for (const auto& d : reader_out) {
         reader.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
     }
@@ -236,8 +244,6 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     }
     reader.tensor_bindings = {
         m2::TensorBinding{QKV, "qkv"},
-        m2::TensorBinding{WIN_A, "win_a"},
-        m2::TensorBinding{WIN_B, "win_b"},
         m2::TensorBinding{RING, "ring"},
         m2::TensorBinding{CTRL, "ctrl"},
         m2::TensorBinding{TAPS, "taps"},
@@ -246,6 +252,12 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         m2::TensorBinding{WEIGHT, "weight"}};
     if (ring2) {
         reader.tensor_bindings.push_back(m2::TensorBinding{RING2, "ring2"});
+    }
+    if (hist_paged) {
+        reader.tensor_bindings.push_back(m2::TensorBinding{HIST, "hist"});
+    } else {
+        reader.tensor_bindings.push_back(m2::TensorBinding{WIN_A, "win_a"});
+        reader.tensor_bindings.push_back(m2::TensorBinding{WIN_B, "win_b"});
     }
     reader.compile_time_args = {
         {"Kt", Kt},
@@ -274,11 +286,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         .compiler_options = {.opt_level = KernelBuildOptLevel::Os},  // code size (kernel config buffer)
         .dfb_bindings = {bind("hnew", EP::CONSUMER), bind("out", EP::CONSUMER), bind("wout", EP::CONSUMER)},
         .tensor_bindings =
-            {m2::TensorBinding{RING, "ring_out"},
-             m2::TensorBinding{OUT, "out"},
-             m2::TensorBinding{WIN_A, "win_a_w"},
-             m2::TensorBinding{WIN_B, "win_b_w"},
-             m2::TensorBinding{CTRL, "ctrl_w"}},
+            {m2::TensorBinding{RING, "ring_out"}, m2::TensorBinding{OUT, "out"}, m2::TensorBinding{CTRL, "ctrl_w"}},
         .runtime_arg_schema = {.runtime_arg_names = {"u", "h"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -293,6 +301,13 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     if (ring2) {
         writer.tensor_bindings.push_back(m2::TensorBinding{RING2, "ring2_out"});
         writer.compiler_options.defines.emplace("GDN_RING_POOL2", std::to_string(in.ring.buffer()->num_pages()));
+    }
+    if (hist_paged) {
+        writer.tensor_bindings.push_back(m2::TensorBinding{HIST, "hist_w"});
+        writer.compiler_options.defines.emplace("GDN_HIST_PAGED", "1");
+    } else {
+        writer.tensor_bindings.push_back(m2::TensorBinding{WIN_A, "win_a_w"});
+        writer.tensor_bindings.push_back(m2::TensorBinding{WIN_B, "win_b_w"});
     }
     writer.compile_time_args = {
         {"Kt", Kt},
@@ -371,8 +386,6 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     // ---- tensor parameters (ring and the window pair are read by the reader and written in place by the writer)
     m2::Group<m2::TensorParameter> tensor_parameters = {
         m2::TensorParameter{.unique_id = QKV, .spec = qkv.tensor_spec()},
-        m2::TensorParameter{.unique_id = WIN_A, .spec = win_a.tensor_spec()},
-        m2::TensorParameter{.unique_id = WIN_B, .spec = win_b.tensor_spec()},
         m2::TensorParameter{.unique_id = RING, .spec = ring.tensor_spec()},
         m2::TensorParameter{.unique_id = CTRL, .spec = ctrl.tensor_spec()},
         m2::TensorParameter{.unique_id = TAPS, .spec = taps.tensor_spec()},
@@ -383,8 +396,6 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     m2::ProgramRunArgs run_args;
     run_args.tensor_args = {
         {QKV, qkv},
-        {WIN_A, win_a},
-        {WIN_B, win_b},
         {RING, ring},
         {CTRL, ctrl},
         {TAPS, taps},
@@ -401,6 +412,16 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         tensor_parameters.push_back(
             m2::TensorParameter{.unique_id = RING2, .spec = in.ring_pool2->mesh_tensor().tensor_spec()});
         run_args.tensor_args.emplace(RING2, in.ring_pool2->mesh_tensor());
+    }
+    if (hist_paged) {
+        tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = HIST, .spec = in.conv_hist->mesh_tensor().tensor_spec()});
+        run_args.tensor_args.emplace(HIST, in.conv_hist->mesh_tensor());
+    } else {
+        for (const auto& [name, t] : {std::pair{WIN_A, &*in.win_a}, std::pair{WIN_B, &*in.win_b}}) {
+            tensor_parameters.push_back(m2::TensorParameter{.unique_id = name, .spec = t->mesh_tensor().tensor_spec()});
+            run_args.tensor_args.emplace(name, t->mesh_tensor());
+        }
     }
 
     m2::ProgramSpec spec{

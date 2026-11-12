@@ -10,8 +10,8 @@ namespace ttnn::experimental::kda {
 
 ttnn::Tensor gdn_spec_step(
     const ttnn::Tensor& qkvzab,
-    const ttnn::Tensor& win_a,
-    const ttnn::Tensor& win_b,
+    const std::optional<ttnn::Tensor>& win_a,
+    const std::optional<ttnn::Tensor>& win_b,
     const ttnn::Tensor& ring,
     const ttnn::Tensor& ctrl,
     const ttnn::Tensor& taps,
@@ -39,7 +39,8 @@ ttnn::Tensor gdn_spec_step(
     uint32_t value_blocks,
     uint32_t kernel_opts,
     const std::optional<ttnn::Tensor>& ring_page_idx,
-    const std::optional<ttnn::Tensor>& ring_pool2) {
+    const std::optional<ttnn::Tensor>& ring_pool2,
+    const std::optional<ttnn::Tensor>& conv_hist) {
     TT_FATAL(
         qkvzab.storage_type() == StorageType::DEVICE && qkvzab.buffer() != nullptr,
         "gdn_spec_step: qkvzab must be an allocated device tensor");
@@ -87,7 +88,8 @@ ttnn::Tensor gdn_spec_step(
         fast_mode,
         fp32_state,
         ring_page_idx,
-        ring_pool2);
+        ring_pool2,
+        conv_hist);
 }
 
 }  // namespace ttnn::experimental::kda

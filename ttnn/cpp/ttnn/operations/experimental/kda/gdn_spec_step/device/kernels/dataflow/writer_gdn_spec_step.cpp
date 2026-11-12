@@ -12,7 +12,15 @@
 // must hold ALL Nv heads of a user (the op cannot check ctrl contents).
 // GDN_RING_PAGE_IDX: the state after token t goes to ring page ring_page_idx[u][t*Nv + h] instead of block t*B*Nv + bh.
 // GDN_RING_POOL2 (= ring's page count): pages from there on are ring_pool2's (page - count).
+// GDN_HIST_PAGED: instead of the window, the convolution history after every token goes to gdn_decode_step's packed
+// history pages (slots 1..3 at ring_page_idx[u][T*Nv + t*Nv + h] + 1..3), from the compute's window tiles: packed tile
+// P_j (rows 2c and 2c + 1 = window row j of chunk c, other rows 0) is built once per window row j = 1..Lw-1 in the
+// bounce buffer, and slot s after token t is P_{t+s}. Held heads write no history.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
+
+#ifndef GDN_HIST_PAGED
+#define GDN_HIST_PAGED 0
+#endif
 
 using namespace gdn_step_df;
 
@@ -41,6 +49,29 @@ inline void write_rows_single(
     dfb.pop_front(count);
 }
 
+// Packed history tiles P_j, j = 1 .. n_rows, into dst tiles j - 1 (zeroed by the caller): rows 2c and 2c + 1 of P_j
+// take row j of window tile c, for every chunk c < n_chunks. bf16: one face row is 16 values, 8 words.
+inline void pack_window_rows(DataflowBuffer& win, DataflowBuffer& dst, uint32_t n_chunks, uint32_t n_rows) {
+    auto src_lock = win.scoped_read_lock(n_chunks);
+    auto src = src_lock.template get_ptr<volatile uint32_t>();
+    auto dst_lock = dst.scoped_write_lock(n_rows);
+    auto out = dst_lock.template get_ptr<volatile uint32_t>();
+    const uint32_t words = win.get_entry_size() / 4;
+    for (uint32_t j = 1; j <= n_rows; ++j) {
+        for (uint32_t c = 0; c < n_chunks; ++c) {
+            for (uint32_t half = 0; half < 2; ++half) {
+                const uint32_t from = c * words + tile_elem_index(j, 16 * half) / 2;
+                for (uint32_t r = 2 * c; r < 2 * c + 2; ++r) {
+                    const uint32_t to = (j - 1) * words + tile_elem_index(r, 16 * half) / 2;
+                    for (uint32_t w = 0; w < 8; ++w) {
+                        out[to + w] = src[from + w];
+                    }
+                }
+            }
+        }
+    }
+}
+
 template <typename Accessor>
 inline void write_whole_tile(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t page, uint32_t src_tile) {
     const uint32_t entry = dfb.get_entry_size();
@@ -67,8 +98,12 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     const auto ring2_acc = same_layout_accessor(ring_acc, tensor::ring2_out);
 #endif
     const auto out_acc = TensorAccessor(tensor::out);
+#if GDN_HIST_PAGED
+    const auto hist_acc = TensorAccessor(tensor::hist_w);
+#else
     const auto wa_acc = TensorAccessor(tensor::win_a_w);
     const auto wb_acc = TensorAccessor(tensor::win_b_w);
+#endif
     const auto ctrl_acc = TensorAccessor(tensor::ctrl_w);
     DataflowBuffer hnew(dfb::hnew);
     DataflowBuffer out(dfb::out);
@@ -85,6 +120,7 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     const uint32_t bh = u * Nv + h;
     const uint32_t tr = (u * T) / 32;  // output tile row of the user's rows
     const uint32_t r0 = (u * T) % 32;
+#if !GDN_HIST_PAGED
     const bool write_qk = (h % rf) == 0;  // the rf value heads of a key head share its q/k chunks: one writer
     auto chunk_col = [&](uint32_t c) -> uint32_t {
         if (c < Kt) {
@@ -96,6 +132,7 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
         return 2 * Nk * Kt + h * Vt + (c - 2 * Kt);
     };
     auto owns = [&](uint32_t c) -> bool { return c >= 2 * Kt || write_qk; };
+#endif
 
     // ---- ctrl page: parity and HOLD
     ctrl_w.reserve_back(1);
@@ -120,6 +157,34 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     ctrl_w.pop_front(1);
     const bool hold = (blk == hold_sentinel);
 
+#if GDN_HIST_PAGED
+    // ---- history: slots 1..3 after every token into the pages ring_page_idx names (held heads: nothing)
+    (void)par;
+    {
+        constexpr uint32_t NP = Lw - 1;  // packed tiles P_1 .. P_{Lw-1}
+        wout.wait_front(Ch);
+        if (!hold) {
+            bounce.reserve_back(NP);
+            zero_reserved(bounce, noc, NP);
+            pack_window_rows(wout, bounce, Ch, NP);
+            bounce.push_back(NP);
+            bounce.wait_front(NP);
+            for (uint32_t t = 0; t < T; ++t) {
+                uint32_t page0;
+                {
+                    auto lock = ridx.scoped_write_lock(1);
+                    page0 = lock.template get_ptr<volatile uint32_t>()[T * Nv + t * Nv + h];
+                }
+                for (uint32_t s = 1; s < 4; ++s) {
+                    write_whole_tile(hist_acc, bounce, noc, page0 + s, t + s - 1);
+                }
+            }
+            noc.async_write_barrier();
+            bounce.pop_front(NP);
+        }
+        wout.pop_front(Ch);
+    }
+#else
     // ---- window: win[1 - par] <- rebuilt rows (or the held user's rows copied through)
     if (hold) {
         bounce.reserve_back(Ch);
@@ -167,6 +232,7 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
             }
         }
     }
+#endif
 
     // ---- output padding rows: the last user's cores zero rows [r0 + T, 32) of the head's Vt output tiles from a
     //      zeroed bounce region (4 KiB covers every in-tile offset of an fp32 tile). Equal source / destination
