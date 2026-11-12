@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scale_geometry, write_chunk_metadata
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
@@ -1130,7 +1131,9 @@ class TtPrefillRuntime:
             self._packed_padding_rows(rows),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=mesh_shard_dims(0, self.config.sp_axis), mesh_shape=self.mesh_device.shape
+            ),
         )
         # copy_host_to_device_tensor replaces the destination's declared topology; keep the original.
         topology = self._packed_padding_config.tensor_topology()
@@ -1198,7 +1201,9 @@ class TtPrefillRuntime:
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=mesh_shard_dims(0, self.config.sp_axis), mesh_shape=self.mesh_device.shape
+            ),
         )
         controller = SubDeviceTraceController(self.mesh_device)
         self.model.set_trace_controller(controller)

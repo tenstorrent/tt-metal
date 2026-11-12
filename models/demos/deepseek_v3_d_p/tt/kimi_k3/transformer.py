@@ -632,7 +632,7 @@ class TtKimiK3Transformer(LightweightModule):
         if not traced:
             # One MoE padding config for every layer of the forward (None when every row is real).
             padding_config = packed_padding_config(
-                self.mesh_device, packed_real_rows(chunks, sp_factor, rows), n * rows
+                self.mesh_device, packed_real_rows(chunks, sp_factor, rows), n * rows, sp_axis=self.sp_axis
             )
 
         # Each chunk's KDA scalars, built once per forward like the single-chunk path builds them once per
