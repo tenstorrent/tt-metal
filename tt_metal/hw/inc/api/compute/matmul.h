@@ -225,27 +225,24 @@ constexpr std::uint32_t matmul_api_reuse_dir() {
     }
 }
 
-// reuse_dir 3: the held operand from the operand formats of the CBs and the block, before the unpack and math inits
-template <std::uint32_t reuse_dir>
-ALWI void matmul_api_set_reuse_a(
+// reuse_dir 3: the direction matmul_reuse_dir picks for the operand formats of the CBs and the block
+ALWI std::uint32_t matmul_api_runtime_dir(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
-    if constexpr (reuse_dir == 3) {
-        const std::uint32_t dir = matmul_reuse_dir(
-            MathFidelity::LoFi,
-            static_cast<DataFormat>(unpack_src_format[get_operand_id(in0_cb_id)]),
-            static_cast<DataFormat>(unpack_src_format[get_operand_id(in1_cb_id)]),
-            ct_dim,
-            rt_dim,
-            false,
-            true,
-            MM_THROTTLE != 0);
-        matmul_runtime_reuse_a = dir == 0 ? ct_dim >= rt_dim : dir == 1;
-    }
+    return matmul_reuse_dir(
+        MathFidelity::LoFi,
+        static_cast<DataFormat>(unpack_src_format[get_operand_id(in0_cb_id)]),
+        static_cast<DataFormat>(unpack_src_format[get_operand_id(in1_cb_id)]),
+        ct_dim,
+        rt_dim,
+        false,
+        true,
+        MM_THROTTLE != 0);
+#else
+    return 0;
 #endif
 }
 #endif
-
 
 #ifdef ARCH_BLACKHOLE
 // defines the FW-controlled throttle level for block matmul kernels on Blackhole
@@ -296,7 +293,8 @@ ALWI void matmul_block_math_dynamic_throttle(
     const std::uint32_t transpose,
     std::uint32_t ct_dim,
     std::uint32_t rt_dim,
-    std::uint32_t num_k = 1) {
+    std::uint32_t num_k = 1,
+    const std::uint32_t held_a = matmul_held_a_init) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
@@ -304,19 +302,31 @@ ALWI void matmul_block_math_dynamic_throttle(
     const std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
+            // the held operand of a reuse_dir 3 MOP
+            if constexpr (reuse_dir == 3) {
+                if (held_a != matmul_held_a_init) {
+                    matmul_runtime_reuse_a = held_a != 0;
+                }
+            }
             MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, false, true, in1_order, reuse_dir, false, false, key_ct, key_rt>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
         if constexpr (multi_k) {
             for (std::uint32_t k = 0; k < num_k; k++) {
-                MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim)));
+                MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim, held_a)));
             }
         } else {
-            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim)));
+            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim, held_a)));
         }
     } else {
         if (throttled_mop_status != 0) {
+            // the held operand of a reuse_dir 3 MOP
+            if constexpr (reuse_dir == 3) {
+                if (held_a != matmul_held_a_init) {
+                    matmul_runtime_reuse_a = held_a != 0;
+                }
+            }
             MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
@@ -324,12 +334,169 @@ ALWI void matmul_block_math_dynamic_throttle(
         if constexpr (multi_k) {
             for (std::uint32_t k = 0; k < num_k; k++) {
                 MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir, row_end_fold>(
-                    idst, ct_dim, rt_dim)));
+                    idst, ct_dim, rt_dim, held_a)));
             }
         } else {
-            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir, row_end_fold>(idst, ct_dim, rt_dim)));
+            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir, row_end_fold>(idst, ct_dim, rt_dim, held_a)));
         }
     }
+#endif
+}
+#endif
+
+#ifdef ARCH_BLACKHOLE
+// The unpack and math inits of matmul_block_init for the reuse direction the LLK runs
+template <
+    std::uint32_t llk_dir,
+    std::uint32_t unpack_ttsync,
+    std::uint32_t stream_z,
+    bool row_mop_on,
+    std::uint32_t kt_key,
+    DataFormat form_out,
+    int in1_order,
+    bool row_end_fold,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt>
+ALWI void matmul_block_init_llk(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+    UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync, llk_dir, stream_z>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<
+          matmul_elided_fidelity<in0_format, in1_format, out_format>(),
+          MM_THROTTLE,
+          row_mop_on,
+          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
+          in1_order,
+          llk_dir,
+          row_end_fold,
+          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
+          block_ct,
+          block_rt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+}
+
+// reuse_dir 3 at the init: keeps the held operand for the calls; where the CBs and the block are compile-time constants the direction
+// folds and the init runs as 0, 1 or 2
+template <
+    std::uint32_t unpack_ttsync,
+    std::uint32_t stream_z,
+    bool row_mop_on,
+    std::uint32_t kt_key,
+    DataFormat form_out,
+    int in1_order,
+    bool row_end_fold,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt>
+ALWI void matmul_block_init_llk_runtime(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    const std::uint32_t d = matmul_api_runtime_dir(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
+    if (__builtin_constant_p(d)) {
+        if (d == 1) {
+            matmul_block_init_llk<1, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+        } else if (d == 2) {
+            matmul_block_init_llk<2, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+        } else {
+            matmul_block_init_llk<0, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+        }
+    } else {
+        matmul_runtime_reuse_a = d == 0 ? ct_dim >= rt_dim : d == 1;
+        matmul_block_init_llk<3, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+    }
+#endif
+}
+
+// The unpack and math calls of matmul_block for the reuse direction the LLK runs
+template <
+    std::uint32_t llk_dir,
+    std::uint32_t unpack_ttsync,
+    std::uint32_t stream_z,
+    bool row_mop_on,
+    std::uint32_t kt_key,
+    DataFormat form_out,
+    int in1_order,
+    bool row_end_fold,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt>
+ALWI void matmul_block_llk(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t in0_tile_index,
+    const std::uint32_t in1_tile_index,
+    const std::uint32_t idst,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t held_a = matmul_held_a_init) {
+    UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, llk_dir, stream_z>(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
+    // Dynamic throttling is only available on Blackhole architecture
+    MATH((matmul_block_math_dynamic_throttle<
+          row_mop_on,
+          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
+          in1_order,
+          false,
+          in0_format,
+          in1_format,
+          out_format,
+          llk_dir,
+          row_end_fold,
+          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(),
+          block_ct,
+          block_rt>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, 1, held_a)));
+}
+
+// reuse_dir 3 at a call: the held operand the init kept; where the CBs and the block are compile-time constants the direction folds
+// and the call runs as 0, 1 or 2
+template <
+    std::uint32_t unpack_ttsync,
+    std::uint32_t stream_z,
+    bool row_mop_on,
+    std::uint32_t kt_key,
+    DataFormat form_out,
+    int in1_order,
+    bool row_end_fold,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format,
+    std::uint32_t block_rt,
+    std::uint32_t block_ct,
+    std::uint32_t block_kt>
+ALWI void matmul_block_llk_runtime(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t in0_tile_index,
+    const std::uint32_t in1_tile_index,
+    const std::uint32_t idst,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    const std::uint32_t d = matmul_api_runtime_dir(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
+    const bool reuse_a = d == 0 ? ct_dim >= rt_dim : d == 1;
+    matmul_block_llk<3, unpack_ttsync, stream_z, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim, reuse_a);
 #endif
 }
 #endif
@@ -542,19 +709,11 @@ ALWI void matmul_block_init(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((matmul_api_set_reuse_a<dir>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
-    MATH((matmul_api_set_reuse_a<dir>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
-    UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync, dir, stream_z_on>(
-        in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<
-          matmul_elided_fidelity<in0_format, in1_format, out_format>(),
-          MM_THROTTLE,
-          row_mop_on,
-          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
-          in1_order,
-          dir,
-          row_end_fold,
-          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(), block_ct, block_rt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+    if constexpr (dir == 3) {
+        matmul_block_init_llk_runtime<unpack_ttsync, stream_z_on, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+    } else {
+        matmul_block_init_llk<dir, unpack_ttsync, stream_z_on, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+    }
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #else
@@ -654,20 +813,11 @@ ALWI void matmul_block(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, dir, stream_z_on>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    // Dynamic throttling is only available on Blackhole architecture
-    MATH((matmul_block_math_dynamic_throttle<
-          row_mop_on,
-          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
-          in1_order,
-          false,
-          in0_format,
-          in1_format,
-          out_format,
-          dir,
-          row_end_fold,
-          llk_math_matmul_half_end_fold<row_mop_on, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_key, out_format, in0_format, in1_format, block_rt, block_ct, block_kt>(), block_ct, block_rt>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+    if constexpr (dir == 3) {
+        matmul_block_llk_runtime<unpack_ttsync, stream_z_on, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+    } else {
+        matmul_block_llk<dir, unpack_ttsync, stream_z_on, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct, block_kt>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+    }
 #else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));

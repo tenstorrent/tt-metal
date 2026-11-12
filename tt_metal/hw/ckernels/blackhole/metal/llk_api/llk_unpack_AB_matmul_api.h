@@ -55,7 +55,8 @@ inline void llk_unpack_AB_matmul_impl(
     const bool partial_face_b,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
-    const std::uint32_t kt_dim) {
+    const std::uint32_t kt_dim,
+    const std::uint32_t held_a = matmul_held_a_init) {
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_<
         0,
@@ -77,7 +78,8 @@ inline void llk_unpack_AB_matmul_impl(
         partial_face_b,
         ct_dim,
         rt_dim,
-        kt_dim);
+        kt_dim,
+        held_a);
     WAYPOINT("UPMD");
 }
 
@@ -197,7 +199,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t tile_index_b,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t kt_dim = 1,
+    const std::uint32_t held_a = matmul_held_a_init) {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
@@ -252,7 +255,8 @@ inline void llk_unpack_AB_matmul(
         partial_face_b,
         ct_dim,
         rt_dim,
-        kt_dim);
+        kt_dim,
+        held_a);
 }
 
 // llk_unpack_AB_matmul for num_k k steps in one call: in0 advances one tile and in1 in1_k_stride tiles per step.

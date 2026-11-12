@@ -408,7 +408,7 @@ def test_fpu_op_inits_set_the_pack_math_context():
         r"\b_?llk_math_(?!eltwise_unary_sfpu|eltwise_binary_sfpu|eltwise_ternary_sfpu|sfpu|welfords_sfpu|two_pass_sfpu|triangle_solve_sfpu|ema_sfpu|pack_sync|hash_cb)\w*init\w*"
     )
     custom_mm = re.compile(
-        r"custom_mm|compressed_mm|matmul_block_math_dynamic_throttle"
+        r"custom_mm|compressed_mm|matmul_block_math_dynamic_throttle|matmul_block_init_llk"
     )
     missing = []
     for path, name, body in _api_functions(

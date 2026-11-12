@@ -590,7 +590,8 @@ inline void _llk_unpack_AB_matmul_(
     const bool unpB_partial_face = false,
     std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim   = 1,
-    const std::uint32_t kt_dim   = 1)
+    const std::uint32_t kt_dim   = 1,
+    const std::uint32_t held_a   = matmul_held_a_init)
 {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
@@ -598,7 +599,7 @@ inline void _llk_unpack_AB_matmul_(
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     static_assert(reuse_dir == 0 || (!auto_ttsync && stream_z == 0), "a forced reuse direction runs on the per-row unpack with the default stream");
-    const bool reuse_a        = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+    const bool reuse_a        = matmul_call_reuse_a<reuse_dir>(ct_dim, rt_dim, held_a);
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
     LLK_ASSERT((reuse_a ? ct_dim : rt_dim) <= dest_max_tiles, "matmul: a row has more tiles than DEST holds");

@@ -58,6 +58,22 @@ constexpr bool matmul_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt
     }
 }
 
+// The held operand of a matmul call: held_a 0 holds in1, 1 in0, matmul_held_a_init the one the reuse_dir 3 init kept (read only for
+// reuse_dir 3, so other directions fold it away)
+constexpr std::uint32_t matmul_held_a_init = 2;
+template <std::uint32_t reuse_dir>
+inline bool matmul_call_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t held_a)
+{
+    if constexpr (reuse_dir == 3)
+    {
+        return held_a == matmul_held_a_init ? matmul_runtime_reuse_a : held_a != 0;
+    }
+    else
+    {
+        return matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+    }
+}
+
 // A 32-bit tile takes twice the unpacker cycles of a 16-bit or Bfp8_b / Bfp4_b one (32 against 64 datums per cycle), and the streamed operand
 // is unpacked once per output tile, the held one once per row: with one operand of 32 bits and the other of 16 bits or Bfp8_b / Bfp4_b at LoFi
 // the block holds the 32-bit operand and streams the other, which halves the unpack stream of a block of 4 tiles or more where the held operand
