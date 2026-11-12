@@ -3390,6 +3390,20 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // this function for Emule, JIT-compiling to x86 in execute_program_emulated instead. Eager callers
     // (the Metal 2.0 Program/MeshWorkload constructors) reach compile() directly, so skip here too.
     if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
+        // Name each kernel's binaries as a build would, so the debug tools find the binaries the
+        // emulator writes there; a kernel's watcher id makes its name unique without a compile hash.
+        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
+        for (const auto& kernels : kernels_) {
+            for (const auto& [id, kernel] : kernels) {
+                const std::string full_name =
+                    kernel->name() + "/emule-" + std::to_string(kernel->get_watcher_kernel_id()) + "/";
+                kernel->set_full_name(full_name);
+                JitBuildOptions build_options(build_env.build_env);
+                build_options.set_name(full_name);
+                kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+                Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+            }
+        }
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());
         return;

@@ -333,6 +333,14 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
+            if (!k.get_full_kernel_name().empty()) {
+                kd.elf_paths = k.elf_paths_by_processor_index(
+                    *device,
+                    MetalContext::instance(impl.get_context_id())
+                        .build_env_manager()
+                        .get_device_build_env(device->build_id())
+                        .build_env.get_out_kernel_root_path());
+            }
             if (!quasar_arch_include.empty()) {
                 kd.include_paths.insert(kd.include_paths.begin(), quasar_arch_include);
             }
