@@ -830,8 +830,11 @@ class MiniMaxH3Vae:
 
     # ---------------------------------------------------------------- decode
 
-    def _stream_decoder_units(self, units: list[torch.Tensor]):
+    def _stream_decoder_units(self, units: list[torch.Tensor], raw: bool = False):
         """Yield decoded pixel tiles in ``units`` order, running the mesh a wave at a time.
+
+        ``raw``: yield each wave's readback instead -- ``(wave_output, count)`` -- and leave the per-tile unpatchify
+        to :meth:`_unpatchify_wave`, so a deferred caller can do that host work off the critical path.
 
         Same argument as :meth:`_run_encoder_units`: the reference decodes each spatial
         tile of each temporal chunk on its own and only cross-fades afterwards, and the ViT
@@ -865,7 +868,7 @@ class MiniMaxH3Vae:
         # via the constructor's `profile` flag; leave it off to go fast.
         attribute = self.profile
 
-        def read_wave(decoded, count: int) -> list[torch.Tensor]:
+        def read_wave(decoded, count: int) -> list:
             mark = time.perf_counter()
             out = self._read_wave_units(decoded)
             elapsed = time.perf_counter() - mark
@@ -874,26 +877,9 @@ class MiniMaxH3Vae:
             profile["shape"] = tuple(decoded.shape)
             profile["dtype"] = str(decoded.dtype)
             profile["readback_mb"] += out.numel() * out.element_size() / 1e6
-
-            mark = time.perf_counter()
-            # `.float()` per tile rather than once over the whole batch: the batch is 32 x 22 MB and
-            # upcasting it whole allocates a 5 GB fp32 intermediate only to slice it 32 ways. The blend
-            # still runs in fp32, so this is numerically identical -- the device output is bf16 either
-            # way, and upcasting earlier adds no information.
-            tiles = [
-                unpatchify(
-                    out[index : index + 1].float(),
-                    num_frames=num_frames,
-                    height=height,
-                    width=width,
-                    out_channels=self.config.out_channels,
-                    patch_size=self.config.spatial_compression_ratio,
-                    patch_size_t=self.config.decoder_patch_size_t,
-                )
-                for index in range(count)
-            ]
-            profile["unpatchify"] += time.perf_counter() - mark
-            return tiles
+            if raw:
+                return [(out, count)]
+            return self._unpatchify_wave(out, count, (num_frames, height, width))
 
         pending: tuple | None = None  # (decoded_device_tensor, count) for the wave in flight
         for start in range(0, len(units), wave_size):
@@ -936,6 +922,31 @@ class MiniMaxH3Vae:
 
         if pending is not None:
             yield from read_wave(*pending)
+
+    def _unpatchify_wave(self, out: torch.Tensor, count: int, latent_shape: tuple[int, int, int]) -> list[torch.Tensor]:
+        """A wave's readback to its ``count`` decoded pixel tiles (host)."""
+        from .decoder_minimax_h3 import unpatchify
+
+        num_frames, height, width = latent_shape
+        mark = time.perf_counter()
+        # `.float()` per tile rather than once over the whole batch: the batch is 32 x 22 MB and
+        # upcasting it whole allocates a 5 GB fp32 intermediate only to slice it 32 ways. The blend
+        # still runs in fp32, so this is numerically identical -- the device output is bf16 either
+        # way, and upcasting earlier adds no information.
+        tiles = [
+            unpatchify(
+                out[index : index + 1].float(),
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                out_channels=self.config.out_channels,
+                patch_size=self.config.spatial_compression_ratio,
+                patch_size_t=self.config.decoder_patch_size_t,
+            )
+            for index in range(count)
+        ]
+        self._profile["unpatchify"] += time.perf_counter() - mark
+        return tiles
 
     def _decode_clips_device_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
         if self.stitch_exchange == "neighbor":
@@ -1604,10 +1615,13 @@ class MiniMaxH3Vae:
         mark = time.perf_counter()
         units = self._latent_tiles(z_BCTHW)
         self._profile["tiling"] += time.perf_counter() - mark
-        decoded = list(self._stream_decoder_units(units))
+        # The readbacks only: the per-tile unpatchify (~65 ms at 4K) is host work too, so it goes with the stitch.
+        waves = list(self._stream_decoder_units(units, raw=True))
+        latent_shape = tuple(units[0].shape[2:])
         latent_h, latent_w = z_BCTHW.shape[-2], z_BCTHW.shape[-1]
 
         def stitch() -> torch.Tensor:
+            decoded = [tile for out, count in waves for tile in self._unpatchify_wave(out, count, latent_shape)]
             mark = time.perf_counter()
             out = self._stitch_decoded(decoded, latent_h, latent_w)
             self._profile["stitch"] += time.perf_counter() - mark
