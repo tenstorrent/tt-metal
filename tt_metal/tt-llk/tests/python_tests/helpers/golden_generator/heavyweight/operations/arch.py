@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""The architectures an operation can run on, and the per-op factories.
+"""The architectures an operation can run on, and the per-operation factories.
 
 An operation does not have a subclass per architecture. What differs between
 architectures is **data**, namely which blocks to use, so each architecture states
@@ -10,20 +10,19 @@ operation needs to know about the hardware itself it asks the blocks: the FPU
 carries its own multiplier width, the packer its own edge-mask polarity.
 
 The factories at the bottom are the package's public surface, so a test writes
-``get_quasar_matmul_golden(MathFidelity.HiFi4)`` and never touches the blocks.
-They are named as functions rather than as classes because that is what they
-are, which leaves the class-shaped name free for a pipeline class that needs it.
+``get_matmul_golden(QUASAR, MathFidelity.HiFi4)`` and never touches the blocks.
+They are named as functions because that is what they are, which leaves the
+class-shaped name free for a pipeline class that wants it.
 
-A factory name says which architecture the golden runs on and nothing more. It
-does not promise that the pipeline is shared, nor that it is specialised: that
-is read off the first argument of its ``_factory`` call, so an architecture that
-grows its own chain changes one row here and no caller. See `README.md`, "When
-an architecture differs".
+There is one per operation rather than one per operation and architecture pair.
+The architecture travels as an argument, so a test that reads its own
+architecture at run time passes it straight through, and a fourth architecture
+adds no names here. What an architecture needs that is specific to it goes in
+the body of the factory, which is why these are functions rather than bound
+partials. See `README.md`, "When an architecture differs".
 """
 
-import re
 from dataclasses import dataclass
-from functools import partial
 from typing import Callable
 
 from ..data_transfer_blocks import (
@@ -62,62 +61,68 @@ BLACKHOLE = ArchProfile(name="Blackhole", blocks=BlackholeDataTransferBlocks)
 
 
 # ----------------------------------------------------------------------
-# Per-architecture factories.
+# The factories.
 #
-# ``partial`` rather than a subclass: there is nothing for a subclass to add
-# beyond binding the architecture, and a class would be somewhere to override
-# a chain. ``partial`` also survives being a class attribute, where a plain
-# function would bind as a method and pass ``self`` as the first argument.
+# One per operation rather than one per operation and architecture pair. The
+# architecture is a value, so it belongs in an argument rather than in ten
+# names, and a test that resolves its architecture at run time can pass it
+# straight through.
+#
+# Plain functions rather than ``partial``, because a function has a body, and
+# the body is where an architecture that needs a different pipeline, or that
+# has no pipeline at all, is dealt with. Each takes `arch` first and forwards
+# the rest to the pipeline, so the pipeline keeps one definition of its own
+# arguments and their defaults.
 # ----------------------------------------------------------------------
 
 
-def _factory(golden_class, arch: ArchProfile):
-    """`golden_class` bound to `arch`, under the name a caller imports.
+def get_data_copy_golden(arch: ArchProfile, *args, **kwargs) -> DataCopyGolden:
+    """A datacopy golden on `arch`. Takes no arguments of its own."""
+    return DataCopyGolden(*args, arch=arch, **kwargs)
 
-    ``partial`` carries no ``__name__``, which breaks anything that introspects
-    it: a ``pytest.mark.parametrize`` id, a repr in a failure, a log line. Set
-    it here, and from the same rule the bindings below are named by, so the two
-    cannot drift apart.
+
+def get_eltwise_binary_golden(
+    arch: ArchProfile, *args, **kwargs
+) -> EltwiseBinaryGolden:
+    """An element-wise binary golden on `arch`.
+
+    Forwards ``operation`` and ``math_fidelity``.
     """
-
-    def snake(name: str) -> str:
-        """``EltwiseBinaryReuseDestGolden`` to ``eltwise_binary_reuse_dest_golden``."""
-        return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
-
-    f = partial(golden_class, arch=arch)
-    f.__name__ = f"get_{arch.name.lower()}_{snake(golden_class.__name__)}"
-    f.__doc__ = f"{golden_class.__name__} on {arch.name}. See {arch.name} above."
-    return f
+    return EltwiseBinaryGolden(*args, arch=arch, **kwargs)
 
 
-get_quasar_data_copy_golden = _factory(DataCopyGolden, QUASAR)
-get_quasar_eltwise_binary_golden = _factory(EltwiseBinaryGolden, QUASAR)
-get_quasar_matmul_golden = _factory(MatmulGolden, QUASAR)
-get_quasar_eltwise_binary_reuse_dest_golden = _factory(
-    EltwiseBinaryReuseDestGolden, QUASAR
-)
+def get_matmul_golden(arch: ArchProfile, *args, **kwargs) -> MatmulGolden:
+    """A matmul golden on `arch`. Forwards ``math_fidelity``."""
+    return MatmulGolden(*args, arch=arch, **kwargs)
 
-get_wormhole_data_copy_golden = _factory(DataCopyGolden, WORMHOLE)
-get_wormhole_eltwise_binary_golden = _factory(EltwiseBinaryGolden, WORMHOLE)
-get_wormhole_matmul_golden = _factory(MatmulGolden, WORMHOLE)
 
-get_blackhole_data_copy_golden = _factory(DataCopyGolden, BLACKHOLE)
-get_blackhole_eltwise_binary_golden = _factory(EltwiseBinaryGolden, BLACKHOLE)
-get_blackhole_matmul_golden = _factory(MatmulGolden, BLACKHOLE)
+def get_eltwise_binary_reuse_dest_golden(
+    arch: ArchProfile, *args, **kwargs
+) -> EltwiseBinaryReuseDestGolden:
+    """A reuse-dest golden on `arch`. Forwards ``operation``, ``math_fidelity``
+    and ``reuse_dest_type``.
+
+    Quasar only, and that is enforced rather than merely documented: the
+    pipeline would run happily on another architecture and hand back numbers
+    nobody has checked against a device.
+    """
+    if arch is not QUASAR:
+        raise ValueError(
+            f"reuse_dest has only been modelled and checked on Quasar, not on "
+            f"{arch.name}. Nothing about the pipeline refuses to run there, "
+            f"which is why this does: the result would look plausible and be "
+            f"unverified."
+        )
+    return EltwiseBinaryReuseDestGolden(*args, arch=arch, **kwargs)
+
 
 __all__ = [
     "BLACKHOLE",
     "QUASAR",
     "WORMHOLE",
     "ArchProfile",
-    "get_blackhole_data_copy_golden",
-    "get_blackhole_eltwise_binary_golden",
-    "get_blackhole_matmul_golden",
-    "get_quasar_data_copy_golden",
-    "get_quasar_eltwise_binary_golden",
-    "get_quasar_eltwise_binary_reuse_dest_golden",
-    "get_quasar_matmul_golden",
-    "get_wormhole_data_copy_golden",
-    "get_wormhole_eltwise_binary_golden",
-    "get_wormhole_matmul_golden",
+    "get_data_copy_golden",
+    "get_eltwise_binary_golden",
+    "get_eltwise_binary_reuse_dest_golden",
+    "get_matmul_golden",
 ]

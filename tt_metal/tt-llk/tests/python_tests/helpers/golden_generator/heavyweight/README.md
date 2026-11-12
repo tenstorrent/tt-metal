@@ -92,9 +92,9 @@ only tells you the tolerance is wide enough.
 Pick the golden for your architecture and hand it tensors. There is no setup.
 
 ```python
-from helpers.golden_generator.heavyweight.operations import get_quasar_eltwise_binary_golden
+from helpers.golden_generator.heavyweight.operations import get_eltwise_binary_golden
 
-golden = get_quasar_eltwise_binary_golden(MathOperation.Elwmul, MathFidelity.HiFi4)
+golden = get_eltwise_binary_golden(QUASAR, MathOperation.Elwmul, MathFidelity.HiFi4)
 expected = golden.run(
     [src_A, src_B],            # the same tensors the harness packed into L1
     formats.input_format,
@@ -110,15 +110,17 @@ against `res_from_L1`.
 
 ### The four goldens available today
 
-| Factory | Constructor takes |
+| Factory | Takes, after `arch` |
 |---|---|
-| `get_quasar_data_copy_golden` | — |
-| `get_quasar_eltwise_binary_golden` | `operation`, `math_fidelity` |
-| `get_quasar_matmul_golden` | `math_fidelity` |
-| `get_quasar_eltwise_binary_reuse_dest_golden` | `operation`, `math_fidelity`, `reuse_type` |
+| `get_data_copy_golden` | — |
+| `get_eltwise_binary_golden` | `operation`, `math_fidelity` |
+| `get_matmul_golden` | `math_fidelity` |
+| `get_eltwise_binary_reuse_dest_golden` | `operation`, `math_fidelity`, `reuse_type` |
 
 Wormhole and Blackhole have datacopy / eltwise / matmul equivalents —
-`get_wormhole_matmul_golden`, `get_blackhole_eltwise_binary_golden` and so on.
+`get_matmul_golden(WORMHOLE, ...)` and so on. `get_eltwise_binary_reuse_dest_golden`
+is Quasar only and refuses another architecture rather than returning numbers
+nobody has checked.
 All of them come from the same place, `heavyweight.operations`.
 
 They are **factories, not classes**. Each is the generic op bound to an
@@ -261,13 +263,16 @@ class MyOpGolden(Golden):
         return regs["srcA"].abs()      # your maths, on register-precision values
 ```
 
-Then one factory per architecture, beside the others in
+Then one factory, beside the others in
 [`operations/arch.py`](operations/arch.py):
 
 ```python
-QuasarMyOpGolden = _factory(MyOpGolden, QUASAR)
-WormholeMyOpGolden = _factory(MyOpGolden, WORMHOLE)
+def get_my_op_golden(arch, *args, **kwargs):
+    return MyOpGolden(*args, arch=arch, **kwargs)
 ```
+
+It works on every architecture at once. Refuse there any that the op has not
+actually been checked on, the way `get_eltwise_binary_reuse_dest_golden` does.
 
 No subclass: the architecture is an argument, so there is nothing for one to
 add. If your op multiplies, ask `self.blocks.fpu_*` for the phases and the operand
