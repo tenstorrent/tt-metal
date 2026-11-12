@@ -75,9 +75,11 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
                     break
             self._key_to_file[key] = filename
         self._mxfp4_keys = {k[: -len("_blocks")] for k in weight_map if k.endswith("_blocks")}
-        # TEMP experiment: GPT_OSS_DENSE_ROUNDED_DECODE = a file of GPTQ-rounded dense weights (dense_gptq.py; q / k in
-        # Meta order); each of its keys is also served as "<key>_decode", which only the fused decode stream copies
-        # read (attention/weights.py, topk.py, model.py LM head), so prefill keeps the checkpoint weights.
+        # GPT_OSS_DENSE_ROUNDED_DECODE = a file of GPTQ-rounded dense weights (dense_gptq.py; q / k in Meta order):
+        # attention q / k / v / o, router and LM head weights on the bfloat8_b grid. Its values replace the checkpoint
+        # ones for prefill and decode alike: each key is served under its own name and as "<key>_decode" (the name the
+        # fused decode stream copies read). The decode streams keep the weights' 32x32 tiles as they are, so both
+        # copies hold the same bfloat8_b values; tt/weight_source.py dense_rounded_tag() names their caches.
         self._decode_rounded_path = env_path(
             "GPT_OSS_DENSE_ROUNDED_DECODE"
         )  # a local file or hf://... (tt/weight_source.py)
@@ -102,12 +104,10 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
                 self._rounded = torch.load(rounded)
             if key in self._rounded:
                 return self._rounded[key]
-        if (
-            self._decode_rounded is not None
-            and key.endswith("_decode")
-            and key[: -len("_decode")] in self._decode_rounded
-        ):
-            return self._kv_smooth(key, self._decode_rounded[key[: -len("_decode")]].clone())  # already Meta order
+        if self._decode_rounded is not None:
+            base = key[: -len("_decode")] if key.endswith("_decode") else key
+            if base in self._decode_rounded:
+                return self._kv_smooth(key, self._decode_rounded[base].clone())  # already Meta order
         filename = self._key_to_file[key]
         handle = self._handle(filename)
         if key in self._mxfp4_keys:

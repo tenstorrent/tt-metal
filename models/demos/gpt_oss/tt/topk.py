@@ -19,6 +19,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 from .fused_decode.config import DECODE_ROUTER_FAST_TOPK, ROUTER_DECODE_TERMS, ROUTER_DECODE_WEIGHT_DTYPE
 from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from .weight_source import dense_rounded_tag
 
 
 def _bfp8_lofi_exact(w):
@@ -113,7 +114,7 @@ class TopKRouter:
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"weight{dense_rounded_tag()}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.bias = ttnn.as_tensor(

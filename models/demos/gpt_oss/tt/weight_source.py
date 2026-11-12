@@ -47,3 +47,13 @@ def resolve(value):
 def env_path(name):
     """resolve() of environment variable `name` ("" when unset)."""
     return resolve(os.environ.get(name, ""))
+
+
+DENSE_ROUNDED_ENV = "GPT_OSS_DENSE_ROUNDED_DECODE"
+
+
+def dense_rounded_tag():
+    """Cache-name tag of the dense weights (attention, router, LM head) when they come from the GPTQ-rounded file of
+    GPT_OSS_DENSE_ROUNDED_DECODE. Prefill and decode both read those values (utils/lazy_state_dict.py), so every
+    copy of a dense weight is tagged, not just the decode streams."""
+    return "_drnd" if os.environ.get(DENSE_ROUNDED_ENV) else ""

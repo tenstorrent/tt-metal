@@ -202,6 +202,15 @@ class MLP:
                 mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device
             )
 
+            # Every prefill runs on the routed experts when they are built with the K-GPTQ weights (prefills the routed
+            # path does not take on its own are padded into it, __call__), so the per-expert prefill weights would be
+            # an unused copy of the experts.
+            routed_only_prefill = (
+                mesh_config is not None
+                and prefill_kgptq_enabled()
+                and routed_prefill_supported(mesh_device, mesh_config, hf_config, use_throughput_experts)
+            )
+
             # Create experts with new modular implementation
             self.experts = Experts(
                 mesh_device=mesh_device,
@@ -220,6 +229,7 @@ class MLP:
                 decode_weight_dtype=routed_decode_weights_dtype(layer_idx),
                 decode_gain=moe_decode_gain(layer_idx),
                 decode_state_dict=decode_experts_state_dict,
+                prefill_weights=not routed_only_prefill,
             )
 
         # Routed top-k prefill experts (experts/prefill_routed.py): only the routed (token, expert) pairs are computed,
@@ -249,17 +259,24 @@ class MLP:
             self.routed_router = self.router.with_expert_order(self.routed_prefill.expert_order)
 
     def _routed_padded_rows(self, shape, batch_size):
-        """Rows to pad a batch-1 prefill to so it takes the routed path (GPT_OSS_PREFILL_KGPTQ), else None."""
-        if self.routed_prefill is None or not prefill_kgptq_enabled() or batch_size != 1:
+        """Rows per user to pad a prefill to so it takes the routed path (GPT_OSS_PREFILL_KGPTQ), else None.
+
+        Any prefill qualifies: its leading dims and rows are flattened into one [1, 1, R, H] sequence (the experts are
+        per token), stacked by user when batch_size > 1 (the routed path reduces per user, so each user's S = R / B
+        rows are padded alike). Each user is padded to whole 32-row tiles (64 rows for an odd B, so the total is a
+        multiple of 64), and further in those steps until the B users hold at least the routed minimum."""
+        if self.routed_prefill is None or not prefill_kgptq_enabled():
             return None
         dims = [shape[i] for i in range(len(shape))]
-        if len(dims) < 2 or math.prod(dims[:-2]) != 1:
+        if len(dims) < 2:
             return None
-        rows = max(
-            self.routed_prefill.min_seq, -(-dims[-2] // ROUTED_PREFILL_SEQ_MULTIPLE) * ROUTED_PREFILL_SEQ_MULTIPLE
-        )
-        padded = list(dims[:-2]) + [rows, dims[-1]]
-        return rows if self.routed_prefill.supports(padded) else None
+        rows = math.prod(dims[:-1])
+        if rows % batch_size:
+            return None
+        step = ROUTED_PREFILL_SEQ_MULTIPLE // 2 if batch_size % 2 == 0 else ROUTED_PREFILL_SEQ_MULTIPLE
+        per_user = -(-(rows // batch_size) // step) * step
+        per_user = max(per_user, -(-self.routed_prefill.min_seq // (batch_size * step)) * step)
+        return per_user if self.routed_prefill.supports([1, 1, batch_size * per_user, dims[-1]]) else None
 
     def routed_prefill_supports(self, shape):
         """Whether a prefill input of this shape takes the routed experts (else the dense prefill path)."""
@@ -329,18 +346,28 @@ class MLP:
         padded_rows = None if is_decode else self._routed_padded_rows(hidden_states.shape, batch_size)
         if padded_rows is not None:
             # GPT_OSS_PREFILL_KGPTQ: a prefill the routed path does not take on its own runs on it padded with zero
-            # rows (they route like any token and their outputs are dropped), so it reads the same K-GPTQ experts.
-            rank = len(hidden_states.shape)
-            S, H = hidden_states.shape[-2], hidden_states.shape[-1]
-            x = ttnn.pad(hidden_states, [(0, 0)] * (rank - 2) + [(0, padded_rows - S), (0, 0)], 0.0)
-            expert_indices, expert_weights = self.routed_router(x, True, 1)
-            out = self.routed_prefill(x, expert_indices, expert_weights, batch_size=1)
+            # rows (they route like any token and their outputs are dropped), so every prefill reads the same K-GPTQ
+            # experts and no other prefill copy of them is held.
+            shape = [hidden_states.shape[i] for i in range(len(hidden_states.shape))]
+            H = shape[-1]
+            S = math.prod(shape[:-1]) // batch_size
+            padded = padded_rows > S
+            x = ttnn.reshape(hidden_states, (1, batch_size, S, H))  # a view: hidden_states stays the caller's
+            if padded:
+                x = ttnn.pad(x, [(0, 0), (0, 0), (0, padded_rows - S), (0, 0)], 0.0)
+            x = ttnn.reshape(x, (1, 1, batch_size * padded_rows, H))
+            expert_indices, expert_weights = self.routed_router(x, True, batch_size)
+            out = self.routed_prefill(x, expert_indices, expert_weights, batch_size=batch_size)
             ttnn.deallocate(expert_indices)
             ttnn.deallocate(expert_weights)
-            ttnn.deallocate(x)
-            expert_output = ttnn.slice(out, [0] * rank, [hidden_states.shape[i] for i in range(rank - 2)] + [S, H])
-            ttnn.deallocate(out)
-            return expert_output
+            if padded:  # only the padded copy is ours to free
+                ttnn.deallocate(x)
+            out = ttnn.reshape(out, (1, batch_size, padded_rows, H))
+            if padded_rows > S:
+                sliced = ttnn.slice(out, [0, 0, 0, 0], [1, batch_size, S, H])
+                ttnn.deallocate(out)
+                out = sliced
+            return ttnn.reshape(out, tuple(shape))
         if is_decode and self.dense_decode:
             # Batched decode (dense MoE): dense [tokens, experts] routing weights straight from the router.
             expert_weights = self.router.dense_decode(hidden_states)

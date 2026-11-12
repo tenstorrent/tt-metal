@@ -22,6 +22,7 @@ from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
 from .host_readback import DecodeHostReadback, DecodeHostRows
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
+from .weight_source import dense_rounded_tag
 
 # Sequence-parallel prefill (Model._forward_layers_and_head, DecoderLayer._prefill_forward_sp): on by default
 # where every layer supports it; GPT_OSS_PREFILL_SP=0 keeps the residual stream replicated.
@@ -333,7 +334,7 @@ class Model:
             dtype=(
                 ttnn.bfloat16 if FULL_FIDELITY and os.environ.get("GPT_OSS_FF_DENSE_BF8") != "1" else ttnn.bfloat8_b
             ),
-            cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded_pow2.weight"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head_padded_pow2{dense_rounded_tag()}.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )

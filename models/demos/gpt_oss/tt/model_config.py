@@ -402,6 +402,11 @@ class ModelArgs:
             return False
         if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
             return False
+        from models.demos.gpt_oss.tt.weight_source import dense_rounded_tag
+
+        if meta.get("dense_rounded", "") != dense_rounded_tag():
+            # the dense weights' caches are named by their values (checkpoint or GPTQ-rounded, weight_source.py)
+            return False
         if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
             return False
         decode_bf8 = self._routed_decode_bf8_layers(fused_decode)
@@ -453,6 +458,8 @@ class ModelArgs:
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
         built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete).
         The optional decode weight sets a previous build of the same cache recorded stay recorded."""
+        from models.demos.gpt_oss.tt.weight_source import dense_rounded_tag
+
         cache_path = self.weight_cache_path(dtype)
         marker = cache_path / self.WEIGHT_CACHE_MARKER
         previous = {}
@@ -473,6 +480,7 @@ class ModelArgs:
                         "model_name": self.model_name,
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
+                        "dense_rounded": dense_rounded_tag(),
                         "fused_decode_weights": (
                             self.FUSED_DECODE_WEIGHTS_VERSION
                             if fused_decode

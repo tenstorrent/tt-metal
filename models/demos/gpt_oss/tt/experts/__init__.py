@@ -27,7 +27,6 @@ Usage:
 """
 
 import ttnn
-
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
@@ -62,6 +61,7 @@ class Experts:
         decode_weight_dtype=None,
         decode_gain=None,
         decode_state_dict=None,
+        prefill_weights=True,
     ):
         """
         Initialize expert layers.
@@ -81,6 +81,9 @@ class Experts:
                 dense_moe_decode_supported): every expert is computed for every token by two DRAM-sharded matmuls
                 over all experts side by side (decode_forward_dense).
             decode_weight_dtype: Weight dtype of the fused decode streams (indexed_decode; default weight_dtype).
+            prefill_weights: Load the per-expert prefill weights. False when every prefill runs on the routed
+                experts (experts/prefill_routed.py, MLP.__call__ pads any prefill into it): they would be an unused
+                copy of the experts.
         """
         self.config = config
         self.mesh_config = mesh_config
@@ -96,7 +99,7 @@ class Experts:
         # 128k-token context needs at batch 32).
         self.weights = None
         self.prefill_sparsity = None
-        if not dense_decode_tokens:
+        if not dense_decode_tokens and prefill_weights:
             self.weights = load_expert_weights(
                 mesh_device=mesh_device,
                 config=config,
@@ -160,6 +163,7 @@ class Experts:
     def _create_prefill_sparsity(self):
         """Create prefill sparsity mask once and reuse."""
         import torch
+
         from models.demos.gpt_oss.config import Mode
 
         prefill_config = self.mesh_config.get_config(Mode.PREFILL)
@@ -228,6 +232,7 @@ class Experts:
             )
         if self.dense_decode_weights is not None:
             return self._prefill_forward_dense(hidden_states, topk_expert_weights)
+        assert self.weights is not None, "these experts hold no prefill weights: prefill runs on the routed experts"
         # Determine mode based on sequence length. Decode with several tokens per device (batch > 1 without expert
         # parallelism) takes the prefill path: each token's experts are the same computation either way, and the
         # one-token decode ops below only accept a single token.

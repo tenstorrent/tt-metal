@@ -24,7 +24,8 @@ ranks, scatter, embedding) instead of deepseek_prefill.dispatch / combine: those
 a neighbour along it, which a 1xN mesh does not have.
 
 Numerics policy: LoFi, bf16 dest accumulation, bf8 activations, bf4 weights except the layers in
-GPT_OSS_ROUTED_PREFILL_BF8_LAYERS (default: layers 0 and 1), which hold bf8 weights. unified_routed_expert_moe hardcodes
+GPT_OSS_ROUTED_PREFILL_BF8_LAYERS (default: none with GPT_OSS_PREFILL_KGPTQ, else layers 0 and 1), which hold bf8
+weights. unified_routed_expert_moe hardcodes
 LoFi and bf16 dest (kFp32DestAccEn = false in unified_routed_expert_ffn_program_factory.cpp) and ignores
 compute_kernel_config, so this module does not pass one.
 
@@ -110,7 +111,10 @@ ROUTED_WEIGHTS_DTYPE = ttnn.bfloat4_b
 # bf8 holds the MXFP4 checkpoint values almost exactly (weight rel. error ~1e-4 for gate/up); bf4 shares one exponent
 # per 16 values and loses 12-16% of the weight norm on every layer. Layers 0 and 1 are the smallest set that passes the
 # per-prompt accuracy guard (layer 0 alone does not); each bf8 layer costs ~0.2 ms TTFT at 1K, and "all" ~4 ms.
+# That was measured with the plain bf4 rounding. With GPT_OSS_PREFILL_KGPTQ every layer reads the K-GPTQ rounding the
+# decode experts read (layers 0 and 1 too), so prefill and decode hold the same expert values on every layer.
 ROUTED_PREFILL_BF8_LAYERS_DEFAULT = "0,1"
+ROUTED_PREFILL_BF8_LAYERS_DEFAULT_KGPTQ = ""
 
 
 def routed_prefill_enabled():
@@ -129,7 +133,8 @@ def routed_prefill_chunk():
 
 def routed_prefill_bf8_layers():
     """Raw GPT_OSS_ROUTED_PREFILL_BF8_LAYERS spec (recorded in the weight-cache marker)."""
-    return os.getenv(ROUTED_PREFILL_BF8_LAYERS_ENV, ROUTED_PREFILL_BF8_LAYERS_DEFAULT).strip()
+    default = ROUTED_PREFILL_BF8_LAYERS_DEFAULT_KGPTQ if prefill_kgptq_enabled() else ROUTED_PREFILL_BF8_LAYERS_DEFAULT
+    return os.getenv(ROUTED_PREFILL_BF8_LAYERS_ENV, default).strip()
 
 
 def prefill_kgptq_enabled():
