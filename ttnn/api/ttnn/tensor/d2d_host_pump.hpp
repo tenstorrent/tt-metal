@@ -10,7 +10,21 @@
 // then the metadata blob) that both sides lay out identically. There are no acknowledgements: flow control
 // is back-pressure. The sender's MPI send completes only once the receiver pump posted its receive, and it
 // does that only after the receiver mesh took the previous transfer. The device side is injected as
-// callbacks, so everything here runs without a device.
+// callbacks, so everything here runs without a device. The loopback channel holds one transfer at most, for the
+// same effect. Stopping a pump while an MPI transfer is in flight needs the data path quiesced.
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/distributed_context.hpp>
 
 namespace ttnn::d2d_host {
 

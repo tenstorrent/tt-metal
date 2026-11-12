@@ -18,6 +18,8 @@
 
 #include "gtest/gtest.h"
 
+#include <tt-metalium/distributed_context.hpp>
+
 #include "ttnn/tensor/d2d_host_pump.hpp"
 
 namespace ttnn::d2d_host {
@@ -114,7 +116,7 @@ TEST(D2DHostPump, LoopbackDeliversTransfersInOrder) {
     constexpr uint32_t kTransfers = 50;
     for (uint32_t n = 0; n < kTransfers; ++n) {
         sender_dev.produced.fetch_add(1);
-        ASSERT_TRUE(eventually([&] { return receiver_dev.written.load() == n + 1; }));
+        ASSERT_TRUE(eventually([&receiver_dev, n] { return receiver_dev.written.load() == n + 1; }));
     }
     EXPECT_TRUE(receiver_dev.content_ok.load());
     EXPECT_EQ(sender.stats().transfers, kTransfers);
@@ -137,12 +139,12 @@ TEST(D2DHostPump, ReceiverWaitsForDevice) {
     EXPECT_EQ(receiver_dev.written.load(), 0u);
 
     receiver_dev.device_free = 1;
-    ASSERT_TRUE(eventually([&] { return receiver_dev.written.load() == 1; }));
+    ASSERT_TRUE(eventually([&receiver_dev] { return receiver_dev.written.load() == 1; }));
     std::this_thread::sleep_for(100ms);
     EXPECT_EQ(receiver_dev.written.load(), 1u);
 
     receiver_dev.device_free = 2;
-    ASSERT_TRUE(eventually([&] { return receiver_dev.written.load() == 2; }));
+    ASSERT_TRUE(eventually([&receiver_dev] { return receiver_dev.written.load() == 2; }));
     EXPECT_TRUE(receiver_dev.content_ok.load());
 }
 
@@ -166,7 +168,7 @@ TEST(D2DHostPump, CallbackFailureIsReported) {
     ops.read = [] { throw std::runtime_error("device read failed"); };
     SenderPump sender(std::move(ops), std::move(tx));
     sender_dev.produced.fetch_add(1);
-    ASSERT_TRUE(eventually([&] { return sender.failed(); }));
+    ASSERT_TRUE(eventually([&sender] { return sender.failed(); }));
     EXPECT_THROW(sender.rethrow_if_failed(), std::runtime_error);
 }
 
@@ -179,7 +181,7 @@ TEST(D2DHostPump, LostTransferIsDetected) {
     FakeSender sender_dev;
     std::atomic<bool> stop{false};
     ASSERT_TRUE(tx->send_transfer(7, parts_of(sender_dev.buffers), stop));
-    ASSERT_TRUE(eventually([&] { return receiver.failed(); }));
+    ASSERT_TRUE(eventually([&receiver] { return receiver.failed(); }));
     EXPECT_ANY_THROW(receiver.rethrow_if_failed());
 }
 
@@ -191,7 +193,7 @@ TEST(D2DHostPump, PartSizeMismatchIsDetected) {
     std::vector<std::vector<uint32_t>> wrong(kNumParts, std::vector<uint32_t>(kPartWords / 2));
     std::atomic<bool> stop{false};
     ASSERT_TRUE(tx->send_transfer(0, parts_of(wrong), stop));
-    ASSERT_TRUE(eventually([&] { return receiver.failed(); }));
+    ASSERT_TRUE(eventually([&receiver] { return receiver.failed(); }));
     EXPECT_ANY_THROW(receiver.rethrow_if_failed());
 }
 

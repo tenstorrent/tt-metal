@@ -5,12 +5,18 @@
 #include "ttnn/tensor/d2d_host_pump.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <cstring>
 #include <limits>
 #include <numeric>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/span.hpp>
 
 namespace ttnn::d2d_host {
 
@@ -71,14 +77,18 @@ public:
     explicit LoopbackChannel(std::shared_ptr<LoopbackState> state) : state_(std::move(state)) {}
 
     bool send_transfer(uint32_t seq, const std::vector<Part>& parts, const std::atomic<bool>& stop) override {
-        if (stop.load()) {
-            return false;
+        // One transfer in the queue at most, like an MPI rendezvous send that waits for the receiver.
+        std::unique_lock lock(state_->mutex);
+        while (!state_->transfers.empty()) {
+            if (stop.load(std::memory_order_acquire)) {
+                return false;
+            }
+            state_->cv.wait_for(lock, std::chrono::milliseconds(1));
         }
         LoopbackTransfer t{.seq = seq};
         for (const auto& p : parts) {
             t.parts.emplace_back(p.data, p.data + p.bytes);
         }
-        std::lock_guard lock(state_->mutex);
         state_->transfers.push_back(std::move(t));
         state_->cv.notify_all();
         return true;
@@ -125,13 +135,15 @@ public:
         seq_ = seq;
         std::vector<multihost::RequestPtr> requests;
         requests.reserve(parts.size() + 1);
-        requests.push_back(ctx_->isend(
-            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seq_), sizeof(seq_)), peer_, multihost::Tag{tag_}));
         for (const auto& p : parts) {
             TT_FATAL(
                 p.bytes <= static_cast<size_t>(std::numeric_limits<int>::max()),
                 "D2D host mode: a {} byte part exceeds the MPI message size limit",
                 p.bytes);
+        }
+        requests.push_back(ctx_->isend(
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seq_), sizeof(seq_)), peer_, multihost::Tag{tag_}));
+        for (const auto& p : parts) {
             requests.push_back(ctx_->isend(ttsl::Span<std::byte>(p.data, p.bytes), peer_, multihost::Tag{tag_}));
         }
         return complete_all(requests, stop);

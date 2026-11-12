@@ -3746,9 +3746,21 @@ std::vector<d2d_host::Part> shard_parts(Tensor& host_tensor, const std::vector<d
 
 // A host tensor with a zeroed shard at every coord the mapper covers (the buffers the D2H read fills and the
 // peer's transfer lands in).
+// Every coord gets a buffer of its own: a replicating mapper would otherwise hand all coords one shared buffer, and
+// per-coord data would be written over (sender) or received into (receiver) the same bytes.
 Tensor make_host_tensor(const D2DStreamConfig& cfg, const std::shared_ptr<distributed::MeshDevice>& mesh) {
     auto mapper = ttnn::distributed::create_mesh_mapper(*mesh, cfg.mapper->config());
-    return (*mapper)(stream_service_common::make_zero_host_tensor(cfg.global_spec));
+    Tensor tensor = (*mapper)(stream_service_common::make_zero_host_tensor(cfg.global_spec));
+    // The tensor is ours alone and the host buffer is only reachable through a const accessor.
+    auto& host_buffer =
+        const_cast<tt::tt_metal::DistributedHostBuffer&>(tensor.host_storage().host_tensor().buffer());
+    const std::vector<distributed::MeshCoordinate> coords(
+        host_buffer.shard_coords().begin(), host_buffer.shard_coords().end());
+    const size_t shard_bytes = host_buffer.get_shard(coords.front())->view_bytes().size();
+    host_buffer.emplace_shards(coords, [shard_bytes](const distributed::MeshCoordinate&) {
+        return tt::tt_metal::HostBuffer(std::vector<std::byte>(shard_bytes, std::byte{0}));
+    });
+    return tensor;
 }
 
 std::unique_ptr<d2d_host::SenderState> make_host_sender_state(
@@ -3854,6 +3866,34 @@ void host_handshake(
         theirs.empty() ? 0 : theirs.front());
 }
 
+// The D2H reader kernel signals its workers once when it starts, before any transfer, and again after each
+// transfer it drained. The D2D contract is one signal per drained transfer, so the start-up one is taken here,
+// before any worker workload can run: wait for it on every worker core, then clear it.
+void consume_d2h_startup_token(
+    distributed::MeshDevice& mesh,
+    const tt::tt_metal::D2HStreamService& d2h,
+    const std::vector<distributed::MeshCoordinate>& coords,
+    const CoreRange& worker_cores) {
+    constexpr auto kTimeout = std::chrono::seconds(30);
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+    const auto sem_addr = static_cast<uint32_t>(d2h.get_transfer_done_sem_addr());
+    std::vector<uint32_t> zero{0};
+    for (const auto& coord : coords) {
+        auto* device = tt::tt_metal::internal::get_device(mesh, coord);
+        for (const auto& core : tt::tt_metal::corerange_to_cores(worker_cores)) {
+            std::vector<uint32_t> word{0};
+            while (word.at(0) == 0) {
+                TT_FATAL(
+                    std::chrono::steady_clock::now() < deadline,
+                    "D2DStreamService host mode: the D2H reader did not start (no start-up signal at coord {})",
+                    coord);
+                tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_addr, sizeof(uint32_t), word);
+            }
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, sem_addr, zero);
+        }
+    }
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 std::unique_ptr<D2DStreamServiceSender> D2DStreamService::wrap_host_sender(
@@ -3871,6 +3911,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::wrap_host_sender(
             metadata_addrs.emplace(coord, d2h.get_metadata_input_addr(coord));
         }
     }
+    CMAKE_UNIQUE_NAMESPACE::consume_d2h_startup_token(*mesh, d2h, state->coords, cfg.sender_worker_cores);
     auto impl = std::make_unique<D2DStreamServiceSender::Impl>(D2DStreamServiceSender::Impl{
         .mesh_device = mesh,
         .per_shard_spec = d2h.get_per_shard_spec(),

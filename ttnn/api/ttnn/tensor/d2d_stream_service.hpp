@@ -92,6 +92,7 @@ enum class D2DTransport : uint8_t {
     // create_sender / create_receiver), and the receiver mesh is fed from its host (H2DStreamService).
     // The worker contract (counters, semaphores, metadata, backing tensors) is the same as Fabric's.
     // Not supported in host mode: relay, stage_gate, extra_tensors, describe() / export_pipeline_descriptor.
+    // The metadata blob must be the same on every coord (the D2H and H2D services carry one per mesh).
     // The fabric-link lease calls are no-ops.
     Host,
 };
