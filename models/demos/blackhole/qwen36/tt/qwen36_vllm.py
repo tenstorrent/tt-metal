@@ -1427,6 +1427,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                     "(the scheduler must not chunk it)"
                 )
             vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
+            if vision_tokens is not None and hasattr(model, "vision_rows_host"):
+                # hotfix: rows to host right after the tower, before any trace replay (see Qwen36Model.vision_rows_host)
+                vision_tokens = model.vision_rows_host(vision_tokens)
             if nonfinal[i]:
                 assert starts is not None, "non-final prefill chunk without start_pos"
                 out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], final=False)
