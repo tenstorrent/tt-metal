@@ -95,6 +95,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 #include "ckernel.h"
@@ -318,6 +319,24 @@ constexpr std::uint32_t dst_advance_addr_mod()
            : INC == 32 ? ADDR_MOD_6
            : INC == 40 ? ADDR_MOD_3
                        : ADDR_MOD_1;
+}
+
+/**
+ * @brief Call `body` with the runtime direction as a compile-time value: std::true_type when `ascending` is set,
+ * std::false_type otherwise. The body reads it as `decltype(direction)::value`, so a template taking the direction as a
+ * bool template argument is instantiated for both and picked at run time.
+ */
+template <typename Body>
+inline void with_direction(const bool ascending, Body body)
+{
+    if (ascending)
+    {
+        body(std::true_type {});
+    }
+    else
+    {
+        body(std::false_type {});
+    }
 }
 
 // Strides 1 and 2 run after SFPTRANSP, so neighbouring positions sit in neighbouring LREGs.
@@ -1245,14 +1264,10 @@ inline void ce_full()
 template <int indices_offset, int group_2_offset, int inc_dst_addr>
 inline void record_ce_full(const bool dir)
 {
-    if (dir)
-    {
-        load_replay_buf<Exec>(0, 16, [] { ce_full<indices_offset, group_2_offset, inc_dst_addr, true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(0, 16, [] { ce_full<indices_offset, group_2_offset, inc_dst_addr, false>(); });
-    }
+    detail::with_direction(
+        dir,
+        [](auto direction)
+        { load_replay_buf<Exec>(0 /*start*/, 16 /*len*/, [] { ce_full<indices_offset, group_2_offset, inc_dst_addr, decltype(direction)::value>(); }); });
 }
 
 } // namespace topk_xl_unfused_macro
@@ -1409,14 +1424,9 @@ inline void column_pair_len8_loads()
 
 inline NOINLINE void record_column_pair_len8_loads(const bool ascending)
 {
-    if (ascending)
-    {
-        load_replay_buf<Exec>(0, column_pair_len8_loads_len, [] { column_pair_len8_loads<true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(0, column_pair_len8_loads_len, [] { column_pair_len8_loads<false>(); });
-    }
+    detail::with_direction(
+        ascending,
+        [](auto direction) { load_replay_buf<Exec>(0 /*start*/, column_pair_len8_loads_len, [] { column_pair_len8_loads<decltype(direction)::value>(); }); });
 }
 
 // The same trick for `sort_len == 16`, whose first layer is step 4 of `window_sort<THIRTY_TWO, EIGHT, FOUR>`:
@@ -1467,14 +1477,9 @@ inline void column_pair_len16_loads()
 
 inline NOINLINE void record_column_pair_len16_loads(const bool ascending)
 {
-    if (ascending)
-    {
-        load_replay_buf<Exec>(0, column_pair_len16_loads_len, [] { column_pair_len16_loads<true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(0, column_pair_len16_loads_len, [] { column_pair_len16_loads<false>(); });
-    }
+    detail::with_direction(
+        ascending,
+        [](auto direction) { load_replay_buf<Exec>(0 /*start*/, column_pair_len16_loads_len, [] { column_pair_len16_loads<decltype(direction)::value>(); }); });
 }
 
 // The four plain loads `step_group_pipelined` expects to already have been issued, for the first group.
@@ -1491,40 +1496,22 @@ inline void prologue_loads()
 template <int group_2_offset>
 inline void prologue_loads_rt(const bool ascending)
 {
-    if (ascending)
-    {
-        prologue_loads<group_2_offset, true>();
-    }
-    else
-    {
-        prologue_loads<group_2_offset, false>();
-    }
+    detail::with_direction(ascending, [](auto direction) { prologue_loads<group_2_offset, decltype(direction)::value>(); });
 }
 
 template <int group_2_offset, int inc_dst_addr>
 inline void step_group_pipelined_rt(const bool ascending)
 {
-    if (ascending)
-    {
-        step_group_pipelined<group_2_offset, inc_dst_addr, true>();
-    }
-    else
-    {
-        step_group_pipelined<group_2_offset, inc_dst_addr, false>();
-    }
+    detail::with_direction(ascending, [](auto direction) { step_group_pipelined<group_2_offset, inc_dst_addr, decltype(direction)::value>(); });
 }
 
 template <int group_2_offset, int inc_dst_addr>
 inline void record_step_group_pipelined(const bool ascending)
 {
-    if (ascending)
-    {
-        load_replay_buf<Exec>(0, pipelined_group_len, [] { step_group_pipelined<group_2_offset, inc_dst_addr, true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(0, pipelined_group_len, [] { step_group_pipelined<group_2_offset, inc_dst_addr, false>(); });
-    }
+    detail::with_direction(
+        ascending,
+        [](auto direction)
+        { load_replay_buf<Exec>(0 /*start*/, pipelined_group_len, [] { step_group_pipelined<group_2_offset, inc_dst_addr, decltype(direction)::value>(); }); });
 }
 
 } // namespace topk_xl_fused_macro
@@ -1582,28 +1569,8 @@ inline NOINLINE void len32_groups(const int iterations, const bool dir)
     detail::window_sort_replay_loop<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE, len32_loads_len, len32_stores_len>(
         iterations,
         dir,
-        [dir]
-        {
-            if (dir)
-            {
-                len32_loads<true>();
-            }
-            else
-            {
-                len32_loads<false>();
-            }
-        },
-        [dir]
-        {
-            if (dir)
-            {
-                len32_stores<true>();
-            }
-            else
-            {
-                len32_stores<false>();
-            }
-        });
+        [dir] { detail::with_direction(dir, [](auto direction) { len32_loads<decltype(direction)::value>(); }); },
+        [dir] { detail::with_direction(dir, [](auto direction) { len32_stores<decltype(direction)::value>(); }); });
 }
 
 } // namespace topk_xl_fused_macro
@@ -1630,53 +1597,62 @@ inline void bitonic_sort_len_k(bool ascending)
  * @brief Run `groups` × GROUP_OFFSET / 8 unfused bodies of load8_rows_x2_unfused · bitonic_sort_len_k<false>(dir) ·
  * store8_rows_x2_unfused, each advancing Dst by 8 rows.
  *
- * The last body of a group advances by GROUP_OFFSET + 8 instead, past the rows the group's partner LREGs covered. Only
- * that LREG7 store differs, so the rest of the body is recorded once and each body issues 2 instructions.
+ * The last body of a group advances by GROUP_OFFSET + 8 instead, past the rows the group's partner LREGs covered. The
+ * first body is recorded; the others replay it, and the last body of a group replays all but its LREG7 store and
+ * issues that store with the larger advance. With SFPLOADMACRO the body is the 16-instruction macro body
+ * (topk_xl_unfused_macro::ce_full).
  *
  * @tparam INDICES: Dest distance from the value region to the index region, values = <ONE_TILE/TWO_TILES/FOUR_TILES>
  * @tparam GROUP_OFFSET: Dest distance from the LREG0-1 rows to the LREG2-3 rows, values = <ONE_FACE/TWO_FACES>
  * @param groups: Groups to run, at least 1
  * @param dir: Direction of every sort
- * @note Overwrites replay slots [0, 17).
+ * @note Overwrites replay slots [0, 18). With SFPLOADMACRO, call loadmacro_configure<EIGHT, THIRTY_TWO, No>(dir) first.
  */
 template <detail::IndicesOffset INDICES, detail::GroupOffset GROUP_OFFSET>
 inline void unfused_step_groups(const int groups, const bool dir)
 {
     static_assert(GROUP_OFFSET == detail::GroupOffset::ONE_FACE || GROUP_OFFSET == detail::GroupOffset::TWO_FACES, "no ADDR_MOD advances Dst past the group");
-    constexpr int indices_offset     = static_cast<int>(INDICES);
-    constexpr int group_offset       = static_cast<int>(GROUP_OFFSET);
-    constexpr int bodies_per_group   = group_offset / HALF_FACE_INC;
-    constexpr std::uint32_t load_len = 8; // load8_rows_x2_unfused: one SFPLOAD per LREG
+    constexpr int indices_offset   = static_cast<int>(INDICES);
+    constexpr int group_offset     = static_cast<int>(GROUP_OFFSET);
+    constexpr int bodies_per_group = group_offset / HALF_FACE_INC;
+#if TOPK_XL_UNFUSED_MACRO
+    constexpr std::uint32_t body_len = 16; // topk_xl_unfused_macro::ce_full
+    auto record_first_body           = [dir] { topk_xl_unfused_macro::record_ce_full<indices_offset, group_offset, HALF_FACE_INC>(dir); };
+#else
+    constexpr std::uint32_t rows_x2_len = 8; // load8_rows_x2_unfused / store8_rows_x2_unfused: one SFPLOAD / SFPSTORE per LREG
     constexpr std::uint32_t body_len =
-        load_len +
+        rows_x2_len +
         window_sort_len<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::EIGHT, detail::Transposes::BOTH, detail::Fused::No>() +
-        7; // store_first_7_rows_x2_unfused
+        rows_x2_len;
+    auto record_first_body = [dir]
+    {
+        load_replay_buf<Exec>(
+            0 /*start*/,
+            body_len,
+            [dir]
+            {
+                load8_rows_x2_unfused<indices_offset, group_offset>();
+                bitonic_sort_len_k<false>(dir);
+                store8_rows_x2_unfused<indices_offset, group_offset, HALF_FACE_INC>();
+            });
+    };
+#endif
+    static_assert(body_len <= 32, "the body must fit the 32-slot replay buffer");
     for (int g = 0; g < groups; g++)
     {
         for (int b = 0; b < bodies_per_group; b++)
         {
             if (g == 0 && b == 0)
             {
-                load_replay_buf<Exec>(
-                    0 /*start*/,
-                    body_len,
-                    [dir]
-                    {
-                        load8_rows_x2_unfused<indices_offset, group_offset>();
-                        bitonic_sort_len_k<false>(dir);
-                        store_first_7_rows_x2_unfused<indices_offset, group_offset>();
-                    });
+                record_first_body();
             }
-            else
+            else if (b < bodies_per_group - 1)
             {
                 lltt::replay(0 /*start*/, body_len);
             }
-            if (b < bodies_per_group - 1)
-            {
-                TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, detail::dst_advance_addr_mod<HALF_FACE_INC>(), indices_offset + group_offset + 4);
-            }
             else
             {
+                lltt::replay(0 /*start*/, body_len - 1);
                 TTI_SFPSTORE(
                     p_sfpu::LREG7, InstrModLoadStore::INT32, detail::dst_advance_addr_mod<group_offset + HALF_FACE_INC>(), indices_offset + group_offset + 4);
             }
@@ -1688,14 +1664,7 @@ template <int group_2_offset, int inc_dst_addr>
 inline void fused_step_group(const bool ascending)
 {
 #if TOPK_XL_FUSED_MACRO
-    if (ascending)
-    {
-        topk_xl_fused_macro::step_group<group_2_offset, inc_dst_addr, true>();
-    }
-    else
-    {
-        topk_xl_fused_macro::step_group<group_2_offset, inc_dst_addr, false>();
-    }
+    detail::with_direction(ascending, [](auto direction) { topk_xl_fused_macro::step_group<group_2_offset, inc_dst_addr, decltype(direction)::value>(); });
 #else
     load16_rows_x2<group_2_offset>();
     bitonic_sort_len_k(ascending);
@@ -1821,6 +1790,14 @@ inline void leave_transpose_cfg_block()
     math::_configure_src_zero_flag_(false);
 }
 
+// enter_transpose_cfg_block, then hold the math class until SrcA and SrcB are math-owned and their in-flight consumers
+// have drained: the face moves write SrcA/SrcB, which hardware arbitration does not gate.
+inline void enter_transpose_cfg_block_after_src_drain()
+{
+    enter_transpose_cfg_block();
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+}
+
 // Transpose all 8 value faces (and, for the unfused path, all 8 index
 // faces). When the caller has already opened a transpose CFG block via
 // `enter_transpose_cfg_block`, pass `manage_outer_cfg=false` to skip the
@@ -1869,9 +1846,8 @@ inline void transpose_8_faces()
 // several `transpose_N_faces` calls in one shared
 // `enter_transpose_cfg_block` / `leave_transpose_cfg_block` pair.
 //
-// `transpose_8_faces<...>` above is a thin alias for the `N=8` instance
-// (kept for the K=2048 fast path's existing call sites); the `N != 8`
-// instances are reached from the generic paths.
+// It emits each face's transpose unrolled; `transpose_8_faces` walks the
+// faces from one replay recording instead.
 template <int N, bool fused = true, int indices_offset = 256, bool manage_outer_cfg = true>
 inline void transpose_N_faces()
 {
@@ -1889,6 +1865,28 @@ inline void transpose_N_faces()
     if constexpr (manage_outer_cfg)
     {
         leave_transpose_cfg_block();
+    }
+}
+
+/**
+ * @brief Transpose N value faces (and, unfused, N index faces) inside an open transpose CFG block: the replay walk of
+ * @ref transpose_8_faces for N = 8, the unrolled @ref transpose_N_faces otherwise.
+ *
+ * @tparam N: Value faces to transpose, values = <2/4/8>
+ * @tparam fused: Fused (indices packed in the values) or unfused layout
+ * @tparam indices_offset: Dest distance from the value region to the index region, unfused only
+ * @note Call between enter_transpose_cfg_block and leave_transpose_cfg_block.
+ */
+template <int N, bool fused, int indices_offset>
+inline void transpose_faces()
+{
+    if constexpr (N == 8)
+    {
+        transpose_8_faces<fused, indices_offset, false /* manage_outer_cfg */>();
+    }
+    else
+    {
+        transpose_N_faces<N, fused, indices_offset, false /* manage_outer_cfg */>();
     }
 }
 
@@ -2377,12 +2375,9 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // calls below — the bitonic work between them doesn't touch the
     // affected CFG bits, so this saves 20 redundant CFG ops vs setting
     // them per call.
-    enter_transpose_cfg_block();
+    enter_transpose_cfg_block_after_src_drain();
 
     // ── Phase 6 — length 512 ───────────────────────────────────────────────
-    // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
-    // class until both banks are math-owned and their in-flight consumers have drained.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
     // Column pairs (load + TRANSP + W4 sort + store<2, 16>), N = 8.
@@ -2640,10 +2635,7 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     // transpose CFG block and pass `manage_outer_cfg=false` to each
     // `transpose_N_faces` call. Saves a handful of CFG writes per
     // transposed phase.
-    enter_transpose_cfg_block();
-    // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
-    // class until both banks are math-owned and their in-flight consumers have drained.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    enter_transpose_cfg_block_after_src_drain();
 
     // ── build bitonic sequences of len=(K/4) ──────────────────────────────
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
@@ -2846,251 +2838,27 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
 //  Public entry: rebuild
 // =============================================================================
 //
-// After `_topk_xl_merge_` the top-2048 result lives in DST tiles
-// dst_index / dst_index+1 but its bitonic structure is broken (the merge
-// only guarantees ordering, not the bitonic property the next merge would
-// need). Rebuild restores the bitonic property by repeating the length-2048
-// build phase of the local sort.
+// After `_topk_xl_merge_` the top-K result lives in DST tiles dst_index / dst_index+1 but its bitonic structure is
+// broken (the merge only guarantees ordering, not the bitonic property the next merge would need). Rebuild restores
+// it by repeating the length-K build phase of the local sort: transpose, sort the column pairs, transpose back, then
+// the compare steps that cross faces within each column.
 //
-// The fused and unfused paths diverge: fused mode uses a 5-slot MOP
-// template (the body is 34 instructions and doesn't fit in one 32-slot
-// replay window), unfused mode uses straightforward split-record loops.
-// Forward declaration — defined below the K=2048 optimized body.
-template <std::uint32_t K, bool fused>
-inline void _topk_xl_rebuild_generic_(std::uint32_t dst_index, bool ascending);
-
+//   Fused: the column-pair body is 34 instructions, too large for one replay window, so it runs from the 5-slot
+//          MOP template (sort_column_pairs_with_mop); canonical_big_block_with_replay does the per-column steps,
+//          and topk_mop_config<true>() restores the merge MOP config the template clobbered.
+//   Unfused: every body fits the replay buffer; the per-column steps are stride 64 (K = 2048 only), 32 (K >= 1024),
+//            16 and the W32 sort from stride 8.
+//
+// One `enter_transpose_cfg_block` / `leave_transpose_cfg_block` pair wraps both transposes.
 template <std::uint32_t K, bool fused>
 inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascending)
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
-    if constexpr (K != 2048)
-    {
-        _topk_xl_rebuild_generic_<K, fused>(dst_index, ascending);
-        return;
-    }
-#if TOPK_XL_FUSED_MACRO
-    if constexpr (fused)
-    {
-        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
-    }
-#endif
-
-    bool dir                                             = ascending;
-    const std::uint32_t tile_offset                      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
-
-    if constexpr (fused)
-    {
-        // ── Fused path ─────────────────────────────────────────────────────
-        // One CFG block wraps both transposes since the bitonic work between
-        // them doesn't touch the transpose CFG bits.
-        enter_transpose_cfg_block();
-        // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
-        // class until both banks are math-owned and their in-flight consumers have drained.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-        transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
-
-        // In the transposed faces, each body loads a lane's even column into LREG0-3 and its odd column into
-        // LREG4-7 (GroupOffset::ODD_COLUMNS) and sorts both in `dir`: window 32, strides 8 down to 1.
-        sort_column_pairs_with_mop(8, dir);
-
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
-        leave_transpose_cfg_block();
-
-        // Final A + B + C pass per column to finish the rebuild.
-        for (int col = 0; col < 2; col++)
-        {
-            canonical_big_block_with_replay<4>(dir);
-            set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        }
-
-        // The build phase clobbered the MOP Expander config. Restore the
-        // merge MOP setup (REPLAY(0, 16)) so the next `_topk_xl_merge_`
-        // finds the programming `_topk_xl_init_` left at init time.
-        topk_mop_config<true>();
-    }
-    else
-    {
-        // ── Unfused path (extended 256K path on main) ──────────────────────
-        // Same overall shape as the fused path, but the body is small
-        // enough to fit in a single 32-slot replay window so we don't need
-        // the 5-slot MOP template. The unfused tile layout has indices
-        // sitting at offset +128 inside each value region (vs +256 in the
-        // older non-distributed-topk unfused path).
-        constexpr detail::IndicesOffset indices = detail::IndicesOffset::TWO_TILES;
-        constexpr int indices_offset            = static_cast<int>(indices);
-        enter_transpose_cfg_block();
-        // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
-        // class until both banks are math-owned and their in-flight consumers have drained.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-        transpose_8_faces<fused, indices_offset, false /* manage_outer_cfg */>();
-
-        // W32 sort from stride 8, N = 8 per col × 2 cols; the second col replays the first col's recording.
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::EIGHT,
-            detail::Stride::ONE,
-            detail::GroupOffset::HALF_FACE,
-            detail::DstAdvance::ONE_FACE,
-            detail::Fused::No,
-            indices>(8 /*iterations*/, dir);
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        set_dst_write_addr_offset(tile_offset + 2);
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::EIGHT,
-            detail::Stride::ONE,
-            detail::GroupOffset::HALF_FACE,
-            detail::DstAdvance::ONE_FACE,
-            detail::Fused::No,
-            indices,
-            detail::ReplayMode::REPLAY>(8 /*iterations*/, dir);
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        set_dst_write_addr_offset(tile_offset + 0);
-        transpose_8_faces<fused, indices_offset, false /* manage_outer_cfg */>();
-        leave_transpose_cfg_block();
-
-#if TOPK_XL_UNFUSED_MACRO
-        // Program the direction's macros once for all three stride phases below.
-        loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::No>(dir);
-#endif
-        for (int col = 0; col < 2; col++)
-        {
-#if TOPK_XL_UNFUSED_MACRO
-            // ── Stride-64 — 16-slot macro body, recording IS iter 0 ────────
-            topk_xl_unfused_macro::record_ce_full<indices_offset, 64, 8>(dir);
-            for (int i = 1; i < 8; i++)
-            {
-                lltt::replay(0, 16);
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-            // ── Stride-32 — recorded body carries the ADDR_MOD_4 (+8) tail;
-            // the last inner iter of each outer pair replays [0, 15) and
-            // emits its own ADDR_MOD_3 (+40) tail, exactly the shipping
-            // split-record fold.
-            for (int i = 0; i < 2; i++)
-            {
-                for (int j = 0; j < 4; j++)
-                {
-                    if (i == 0 && j == 0)
-                    {
-                        topk_xl_unfused_macro::record_ce_full<indices_offset, 32, 8>(dir);
-                    }
-                    else if (j < 3)
-                    {
-                        lltt::replay(0, 16);
-                    }
-                    else
-                    {
-                        lltt::replay(0, 15);
-                        topk_xl_unfused_macro::ce_tail<indices_offset, 32, 40>();
-                    }
-                }
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-            // ── Stride-16 — same shape; fold iters take ADDR_MOD_2 (+24) ───
-            for (int i = 0; i < 4; i++)
-            {
-                for (int j = 0; j < 2; j++)
-                {
-                    if (i == 0 && j == 0)
-                    {
-                        topk_xl_unfused_macro::record_ce_full<indices_offset, 16, 8>(dir);
-                    }
-                    else if (j == 0)
-                    {
-                        lltt::replay(0, 16);
-                    }
-                    else
-                    {
-                        lltt::replay(0, 15);
-                        topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24>();
-                    }
-                }
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-#else
-            // ── Stride-64 — clean N = 8 replay, recording IS iter 0 ────────
-            window_sort_rows<
-                detail::WindowSize::THIRTY_TWO,
-                detail::Stride::EIGHT,
-                detail::Stride::EIGHT,
-                detail::GroupOffset::FOUR_FACES,
-                detail::DstAdvance::HALF_FACE,
-                detail::Fused::No,
-                indices>(8 /*iterations*/, dir);
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-            // ── Stride-32 / stride-16 — the last body of each group folds the +8 INCRWC into its LREG7 store
-            unfused_step_groups<indices, detail::GroupOffset::TWO_FACES>(2 /*groups*/, dir);
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-            unfused_step_groups<indices, detail::GroupOffset::ONE_FACE>(4 /*groups*/, dir);
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-#endif // TOPK_XL_UNFUSED_MACRO
-
-            // ── Stride-8 — clean N = 8 replay, recording IS iter 0 ────────
-            window_sort_rows<
-                detail::WindowSize::THIRTY_TWO,
-                detail::Stride::EIGHT,
-                detail::Stride::ONE,
-                detail::GroupOffset::HALF_FACE,
-                detail::DstAdvance::ONE_FACE,
-                detail::Fused::No,
-                indices>(8 /*iterations*/, dir);
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-            set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        }
-    }
-
-    // Clear SrcA / SrcB valids — the next caller might issue a DST
-    // transpose, which requires both to be invalid to be safe.
-    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
-}
-
-// =============================================================================
-//  Generic rebuild for K=512 / K=1024 (optimised in place)
-// =============================================================================
-//
-// len=K build via transpose + column pairs + per-col tails, with the K=2048 path's
-// optimisations where the generic structure allows them:
-//
-//   Fused path:
-//     * 5-slot MOP template for the column-pair build (W32 sort from stride 8) (the
-//       same `topk_rebuild_build2048_mop_config` the K=2048 fast path
-//       uses — the body is 34 instructions, too large for one 32-slot
-//       replay window, so the two `SFPTRANSP`s inside `W32 sort from stride 8`
-//       are emitted from the MOP template's A1 / A3 slots).
-//     * One `enter_transpose_cfg_block` / `leave_transpose_cfg_block`
-//       pair wrapping both `transpose_N_faces` calls.
-//     * `canonical_big_block_with_replay<row_scale_factor>(dir)` for
-//       the per-col post-transpose work (sub-B + sub-C; sub-A is
-//       `if constexpr`'d away for rsf<4).
-//     * `topk_mop_config<true>()` at the end to restore the merge MOP
-//       config (the rebuild template clobbered it).
-//
-//   Unfused path:
-//     * `<Exec>`-record on iter 0 of every stride-N inner loop; iters
-//       1..n-1 fire from the replay buffer.
-//     * ADDR_MOD_3 fold (`store<X, 40>` in place of `store<X, 32>` +
-//       trailing `INCRWC(+8)`) on the last stride-32 / stride-16 sort_k
-//       iter of each outer pair. Saves one math-thread issue per outer
-//       pair.
-//     * Same shared `enter/leave_transpose_cfg_block` pair as above.
-//
-// Only K=512 and K=1024 reach this body; `_topk_xl_rebuild_` routes K=2048
-// to its own path.
-template <std::uint32_t K, bool fused>
-inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool ascending)
-{
-    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
-    bool dir                                             = ascending;
-    constexpr int num_tiles_per_sequence                 = K == 512 ? 1 : K == 1024 ? 1 : 2;
-    const std::uint32_t tile_offset                      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
-    constexpr int row_scale_factor                       = K == 512 ? 1 : K == 1024 ? 2 : 4;
-    constexpr int n_iters_column_pairs                   = row_scale_factor * 2;
+    bool dir                             = ascending;
+    constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
+    const std::uint32_t tile_offset      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    constexpr int row_scale_factor       = K == 512 ? 1 : K == 1024 ? 2 : 4;
+    constexpr int n_iters_column_pairs   = row_scale_factor * 2;
 #if TOPK_XL_FUSED_MACRO
     // The K = 512 rebuild has no step groups.
     if constexpr (fused && K >= 1024)
@@ -3101,44 +2869,31 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
 
     if constexpr (fused)
     {
-        enter_transpose_cfg_block();
-        // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
-        // class until both banks are math-owned and their in-flight consumers have drained.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-        transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
+        enter_transpose_cfg_block_after_src_drain();
+        transpose_faces<n_iters_column_pairs, true /* fused */, 256 /* indices_offset */>();
 
         // In the transposed faces, each body loads a lane's even column into LREG0-3 and its odd column into
         // LREG4-7 (GroupOffset::ODD_COLUMNS) and sorts both in `dir`: window 32, strides 8 down to 1.
         sort_column_pairs_with_mop(n_iters_column_pairs, dir);
 
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
+        transpose_faces<n_iters_column_pairs, true /* fused */, 256 /* indices_offset */>();
         leave_transpose_cfg_block();
 
-        // Per-col post-transpose work = sub-B (stride-32 pair, K>=1024) +
-        // sub-C (stride-16 W32 sort × rsf), folded into `canonical_big_block_with_replay`
-        // exactly as the K=2048 fast path does it (with sub-A disabled
-        // for rsf<4 via `if constexpr`).
         for (int col = 0; col < 2; col++)
         {
             canonical_big_block_with_replay<row_scale_factor>(dir);
             set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
         }
 
-        // The rebuild MOP template clobbered the merge MOP setup; put it
-        // back so the next `_topk_xl_merge_` finds the programming
-        // `_topk_xl_init_` left.
         topk_mop_config<true>();
     }
     else
     {
         constexpr detail::IndicesOffset indices = num_tiles_per_sequence == 2 ? detail::IndicesOffset::TWO_TILES : detail::IndicesOffset::ONE_TILE;
         constexpr int indices_offset            = static_cast<int>(indices);
-        enter_transpose_cfg_block();
-        // The face moves write SrcA/SrcB, which hardware arbitration does not gate: hold the math
-        // class until both banks are math-owned and their in-flight consumers have drained.
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
-        transpose_N_faces</* N */ row_scale_factor * 2, fused, indices_offset, false /* manage_outer_cfg */>();
+        enter_transpose_cfg_block_after_src_drain();
+        transpose_faces<n_iters_column_pairs, fused, indices_offset>();
 
         // ── stride-8 + W32 sort from stride 8 build phase (both columns) ──────────
         // The unfused body is 26 instructions and fits the replay buffer whole; the second col replays the first
@@ -3165,71 +2920,48 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         set_dst_write_addr_offset(tile_offset + 0);
 
-        transpose_N_faces</* N */ row_scale_factor * 2, fused, indices_offset, false /* manage_outer_cfg */>();
+        transpose_faces<n_iters_column_pairs, fused, indices_offset>();
         leave_transpose_cfg_block();
 
 #if TOPK_XL_UNFUSED_MACRO
-        // Program the direction's macros once for the stride-32 and stride-16 phases below.
+        // Program the direction's macros once for the stride phases below.
         loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::No>(dir);
 #endif
         for (int col = 0; col < 2; col++)
         {
-            // The inner loop counts scale with `row_scale_factor`, like the
-            // fused branch above.
-            //
-            // Each stride-N pair re-records its load / store body fresh
-            // because `group_2_offset` is baked into the SFPLOAD/SFPSTORE
-            // immediates. Recording is `<Exec>` so iter 0 doubles as the
-            // first inline iteration.
-            if constexpr (K >= 1024)
+            if constexpr (row_scale_factor >= 4)
             {
+                // ── stride-64 ─────────────────────────────────────────────
 #if TOPK_XL_UNFUSED_MACRO
-                // ── stride-32 — 16-slot macro body. The recorded body
-                // carries the ADDR_MOD_4 (+8) tail; the last body of each
-                // outer iter replays [0, 15) and emits the ADDR_MOD_3
-                // (+40) fold tail, preserving the shipping stride walk.
-                topk_xl_unfused_macro::record_ce_full<indices_offset, 32, 8>(dir);
-                for (int i = 0; i < (row_scale_factor >> 1); i++)
+                topk_xl_unfused_macro::record_ce_full<indices_offset, 64, 8>(dir);
+                for (int i = 1; i < 8; i++)
                 {
-                    if (!(i == 0))
-                    {
-                        lltt::replay(0, 16);
-                    }
-                    lltt::replay(0, 16);
-                    lltt::replay(0, 16);
-                    lltt::replay(0, 15);
-                    topk_xl_unfused_macro::ce_tail<indices_offset, 32, 40>();
+                    lltt::replay(0 /*start*/, 16 /*len*/);
                 }
-                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 #else
+                window_sort_rows<
+                    detail::WindowSize::THIRTY_TWO,
+                    detail::Stride::EIGHT,
+                    detail::Stride::EIGHT,
+                    detail::GroupOffset::FOUR_FACES,
+                    detail::DstAdvance::HALF_FACE,
+                    detail::Fused::No,
+                    indices>(8 /*iterations*/, dir);
+#endif
+                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+            }
+            if constexpr (row_scale_factor >= 2)
+            {
                 // ── stride-32 — the last body of each group folds the +8 INCRWC into its LREG7 store
                 unfused_step_groups<indices, detail::GroupOffset::TWO_FACES>(row_scale_factor >> 1, dir);
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-#endif // TOPK_XL_UNFUSED_MACRO
             }
 
-#if TOPK_XL_UNFUSED_MACRO
-            // ── stride-16 — 16-slot macro body; every second body replays
-            // [0, 15) and emits the ADDR_MOD_2 (+24) fold tail.
-            topk_xl_unfused_macro::record_ce_full<indices_offset, 16, 8>(dir);
-            lltt::replay(0, 15);
-            topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24>();
-            for (int i = 1; i < row_scale_factor; i++)
-            {
-                lltt::replay(0, 16);
-                lltt::replay(0, 15);
-                topk_xl_unfused_macro::ce_tail<indices_offset, 16, 24>();
-            }
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-#else
             // ── stride-16 — the last body of each group folds the +8 INCRWC into its LREG7 store
             unfused_step_groups<indices, detail::GroupOffset::ONE_FACE>(row_scale_factor, dir);
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-#endif // TOPK_XL_UNFUSED_MACRO
 
-            // ── stride-8 + W32 sort from stride 8 ────────────────────────────────
-            // Clean N-iter replay (no LREG7 fold needed; the store's
-            // ADDR_MOD_5 (+16) already lands on the right boundary).
+            // ── stride-8 + W32 sort from stride 8 ─────────────────────────
             window_sort_rows<
                 detail::WindowSize::THIRTY_TWO,
                 detail::Stride::EIGHT,
@@ -3243,13 +2975,11 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
             set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
         }
 
-        // No MOP-Expander reprogramming happened on the unfused path — the
-        // stride-8 build phase above just uses a plain replay window, so
-        // the merge MOP config from `_topk_xl_init_` is still live and we
-        // don't need to call `topk_mop_config<fused>()` here.
+        // The unfused path does not reprogram the MOP Expander, so the merge MOP config from `_topk_xl_init_` is
+        // still live.
     }
 
-    // Clear srcA and srcB valids — needed for DST transpose.
+    // Clear SrcA / SrcB valids — the next caller might issue a DST transpose, which requires both to be invalid.
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
