@@ -529,6 +529,30 @@ def test_to_layout_same_layout_dtype_change_sharded_to_interleaved(device):
     assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
 
 
+def test_to_layout_same_layout_dtype_change_sharded_to_different_shard_grid(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 128, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_same_layout_height_sharded_config(shape),
+    )
+    output_config = ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=1, x=4),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=output_config)
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config() == output_config
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
 def test_to_layout_same_layout_dtype_change_sub_core_grids(device):
     torch.manual_seed(0)
     shape = (1, 1, 64, 64)

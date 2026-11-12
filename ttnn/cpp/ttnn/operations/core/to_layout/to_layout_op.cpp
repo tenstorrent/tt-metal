@@ -64,19 +64,18 @@ Tensor to_layout_impl(
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             if (ttnn::is_device_tensor(tensor_arg)) {
-                // The tensor is already in the requested layout, so honour the dtype (and any requested
-                // memory config) by typecasting instead of silently dropping them.
-                // Typecast requires matching input and output memory layouts, so a different layout is
-                // converted afterwards.
+                // The tensor is already in the requested layout, so honour the dtype by typecasting instead of
+                // silently dropping it. The dtype change materializes a new tensor anyway, so the requested
+                // memory config is honoured here too, unlike the unchanged-dtype path below, which keeps
+                // to_layout a no-op and only warns. Typecast does not reshard, so a different memory config
+                // is applied afterwards with to_memory_config.
                 const auto current_mem_config = tensor_arg.memory_config();
-                const bool same_memory_layout =
-                    !memory_config.has_value() || memory_config->memory_layout() == current_mem_config.memory_layout();
                 // sub_core_grids is only supported by typecast for TILE inputs.
                 const auto typecast_cores = tensor_arg.layout() == ttnn::TILE_LAYOUT
                                                 ? sub_core_grids
                                                 : std::optional<CoreRangeSet>(std::nullopt);
-                if (same_memory_layout) {
-                    return ttnn::typecast(tensor_arg, dtype.value(), memory_config, std::nullopt, typecast_cores);
+                if (!memory_config.has_value() || memory_config.value() == current_mem_config) {
+                    return ttnn::typecast(tensor_arg, dtype.value(), current_mem_config, std::nullopt, typecast_cores);
                 }
                 auto casted =
                     ttnn::typecast(tensor_arg, dtype.value(), current_mem_config, std::nullopt, typecast_cores);
