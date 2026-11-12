@@ -150,7 +150,7 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
     tmp.program();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en = false, std::uint32_t reconfig_skip = 0>
 __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     [[maybe_unused]] const std::uint32_t use_32bit_dest,
     const std::uint32_t pack_dst_format,
@@ -174,7 +174,8 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
         // is_fp32_dest_acc_en). Uninit mirrors by restoring caller's pack_src.
         constexpr std::uint32_t compat_src = ckernel::to_underlying(DataFormat::Float16_b);
         const std::uint32_t tile_size      = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
-        reconfig_packer_data_format_and_state<is_fp32_dest_acc_en>(compat_src, pack_dst_format, tile_size, TILE_C_DIM, num_faces, /*partial_face=*/false);
+        reconfig_packer_data_format_and_state<is_fp32_dest_acc_en, reconfig_skip>(
+            compat_src, pack_dst_format, tile_size, TILE_C_DIM, num_faces, /*partial_face=*/false);
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0);
     }
@@ -285,7 +286,7 @@ inline void _llk_pack_fast_tilize_block_(
     ckernel::ckernel_template::run();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, std::uint32_t reconfig_skip = 0>
 inline void _llk_pack_fast_tilize_uninit_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t face_r_dim,
@@ -297,7 +298,8 @@ inline void _llk_pack_fast_tilize_uninit_(
         // Mirror of init: restore caller's pack_src_format via reconfig, which also
         // sets Read_32b correctly (=1 for fp32/dest_acc per cpack_common logic).
         const std::uint32_t tile_size = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
-        reconfig_packer_data_format_and_state<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, TILE_C_DIM, num_faces, /*partial_face=*/false);
+        reconfig_packer_data_format_and_state<is_fp32_dest_acc_en, reconfig_skip>(
+            pack_src_format, pack_dst_format, tile_size, TILE_C_DIM, num_faces, /*partial_face=*/false);
     }
     // DEST remap is NOT cleared here — set/owned by the math thread (see init comment).
     // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them).

@@ -634,6 +634,11 @@ constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_fo
     {
         return 0;
     }
+    // Fast tilize's fp32 path reconfigures through a Float16_b input with this mask, so Dstacc is written.
+    if (is_fp32_dest_acc_en && pack_fast_tilize_linked<sync>)
+    {
+        skip &= ~LLK_PACK_RECONFIG_SKIP_DSTACC;
+    }
     if (pack_fast_tilize_linked<sync> || pack_fast_untilize_linked<sync> || pack_strides_writer<1> || pack_strides_writer<2> || pack_strides_writer<3> ||
         pack_strides_writer<4> || pack_strides_writer<5> || pack_strides_writer<6> || pack_strides_writer<7> || pack_strides_writer<8> ||
         pack_strides_writer<9> || pack_strides_writer<10>)
