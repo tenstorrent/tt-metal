@@ -403,3 +403,99 @@ def test_reference_area_limit(mesh_device, guide_examples, limit_mp):
     over = tall + [(1024, 1024)] if len(tall) < 16 else tall[:-1] + [(2048, 8192)]
     run("just over the limit", over, "")
     assert not failures, f"{len(failures)} cases failed: {failures}"
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_host_time_4k(mesh_device, guide_examples):
+    """Where a warm 4K request spends host-only time (the device idle while it runs): the work a pipelined server
+    could overlap with the next request's device work. Wraps the host steps and the VAE's device decode with timers;
+    reports per request, never asserts."""
+    import time as _time
+    from collections import defaultdict
+
+    from ....pipelines.minimax_h3 import pipeline_minimax_h3_image as pmod
+
+    t2i, edit_prompt, ref = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    spent = defaultdict(float)
+
+    def timed(owner, name, label, materialize=False):
+        fn = getattr(owner, name)
+
+        def wrapper(*args, **kwargs):
+            mark = _time.perf_counter()
+            out = fn(*args, **kwargs)
+            if materialize:
+                out = list(out)
+            spent[label] += _time.perf_counter() - mark
+            return out
+
+        setattr(owner, name, wrapper)
+
+    for name in ("load_reference_image", "bound_short_edge", "draw_request_noise", "vae_reference_pixels",
+                 "reference_rows", "anchor_rows", "build_image_packed_sequence", "patchify", "unpatchify",
+                 "finish_image"):
+        timed(pmod.host, name, f"host {name}")
+    timed(pipe, "_build_presentation", "host tokenize + image processor")
+    pipe("warm", width=4096, height=4096, seed=0)
+    pipe("warm", width=4096, height=4096, seed=0, images=[ref])
+    timed(pipe._vae, "_stream_decoder_units", "vae device decode + readback", materialize=True)
+    timed(pipe._vae, "_stitch_decoded", "host vae tile stitch")
+    for tag, kwargs in (("t2i 4K", dict(prompt=t2i["prompt"], width=4096, height=4096, seed=1)),
+                        ("edit 4K 1 ref", dict(prompt=edit_prompt, width=4096, height=4096, seed=1, images=[ref]))):
+        spent.clear()
+        result = pipe(**kwargs)
+        t = result.timings
+        post = t.decode - spent["vae device decode + readback"] - spent["host vae tile stitch"] - spent[
+            "host finish_image"] - spent["host unpatchify"]
+        host_total = sum(v for k, v in spent.items() if k.startswith("host")) + post
+        lines = [f"{k}: {v * 1e3:.0f} ms" for k, v in sorted(spent.items(), key=lambda kv: -kv[1])]
+        lines.append(f"host un-normalize (mul/add/clamp): {post * 1e3:.0f} ms")
+        logger.info(f"RESULT host_time {tag}: total {t.total:.2f}s, host-only {host_total * 1e3:.0f} ms | " + "; ".join(lines))
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_defer_finish_overlap(mesh_device, guide_examples):
+    """`defer_finish` as a server uses it: the host tail (stitch, un-normalize, uint8) of request N runs on a thread
+    while request N+1 runs on the device. Asserts the deferred image is byte-identical to the normal path; reports
+    back-to-back 4K throughput serial vs overlapped, and whether the overlapped tail slows the next request."""
+    import threading
+
+    t2i, edit_prompt, ref = guide_examples
+    pipe = MiniMaxH3ImagePipeline(mesh_device=mesh_device, weights_dir=_weights_dir())
+    pipe.warmup()
+    requests = [dict(prompt=t2i["prompt"], width=4096, height=4096, seed=s) for s in range(4)]
+    requests += [dict(prompt=edit_prompt, width=4096, height=4096, seed=s, images=[ref]) for s in range(2)]
+
+    expected = pipe(**requests[0]).image
+    deferred = pipe(**requests[0], defer_finish=True)
+    assert deferred.image is None and deferred.finish is not None
+    assert deferred.finish().tobytes() == expected.tobytes(), "deferred finish changed the image"
+
+    started = time.perf_counter()
+    serial = [pipe(**r) for r in requests]
+    serial_s = time.perf_counter() - started
+
+    started = time.perf_counter()
+    totals, finishes, pending = [], [], None
+    for r in requests:
+        result = pipe(**r, defer_finish=True)
+        totals.append(result.timings.total)
+        if pending is not None:
+            pending.join()
+        pending = threading.Thread(target=lambda res=result: finishes.append((res.finish(), res.timings.finish)))
+        pending.start()
+    pending.join()
+    overlapped_s = time.perf_counter() - started
+
+    for a, (b, _) in zip(serial, finishes):
+        assert a.image.tobytes() == b.tobytes()
+    serial_totals = ", ".join(f"{r.timings.total:.2f}" for r in serial)
+    logger.info(
+        f"RESULT defer_finish: {len(requests)} requests (4 t2i + 2 edit, 4K) serial {serial_s:.2f}s vs overlapped "
+        f"{overlapped_s:.2f}s ({100 * (1 - overlapped_s / serial_s):.1f}% less) | device-path totals serial "
+        f"[{serial_totals}] vs deferred [{', '.join(f'{t:.2f}' for t in totals)}] | finish each "
+        f"[{', '.join(f'{f:.2f}' for _, f in finishes)}]"
+    )

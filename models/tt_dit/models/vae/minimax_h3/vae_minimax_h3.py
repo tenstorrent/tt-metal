@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -1590,18 +1590,30 @@ class MiniMaxH3Vae:
         Tiles are laid out in *pixel* space and mapped back onto the latent grid, so the
         blend extents are pixel-space too (unlike encode, where they are divided down).
         """
+        return self.decode_clip_deferred(z_BCTHW)()
+
+    def decode_clip_deferred(self, z_BCTHW: torch.Tensor) -> Callable[[], torch.Tensor]:
+        """:meth:`decode_clip` in two halves: the device decode and tile readback now, and the host stitch (a
+        callable) later. A server can run the stitch -- ~0.2 s at 4K, host-only -- while the device decodes the
+        next request. Same bits as :meth:`decode_clip`."""
         self._ensure_loaded(self.decoder, self._decoder_subfolder())
         if self.device_stitch:
-            return self._decode_clips_device_stitched([z_BCTHW])[0]
+            out = self._decode_clips_device_stitched([z_BCTHW])[0]
+            return lambda: out
 
         mark = time.perf_counter()
         units = self._latent_tiles(z_BCTHW)
         self._profile["tiling"] += time.perf_counter() - mark
         decoded = list(self._stream_decoder_units(units))
-        mark = time.perf_counter()
-        out = self._stitch_decoded(decoded, z_BCTHW.shape[-2], z_BCTHW.shape[-1])
-        self._profile["stitch"] += time.perf_counter() - mark
-        return out
+        latent_h, latent_w = z_BCTHW.shape[-2], z_BCTHW.shape[-1]
+
+        def stitch() -> torch.Tensor:
+            mark = time.perf_counter()
+            out = self._stitch_decoded(decoded, latent_h, latent_w)
+            self._profile["stitch"] += time.perf_counter() - mark
+            return out
+
+        return stitch
 
     def decode_tile_grid(self, latent_height: int, latent_width: int):
         """Public alias for :meth:`_decode_tile_grid`, for callers that need the seam positions.

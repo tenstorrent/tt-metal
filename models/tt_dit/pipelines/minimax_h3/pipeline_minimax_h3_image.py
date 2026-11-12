@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -114,6 +114,9 @@ class ImageRequestTimings:
     denoise: float = 0.0
     denoise_steps: list[float] = field(default_factory=list)
     decode: float = 0.0
+    # The host tail (tile stitch, un-normalize, uint8), when `defer_finish` left it to `ImageResult.finish`: set once
+    # that runs, and not part of `decode` or `total` then.
+    finish: float = 0.0
     total: float = 0.0
     # Program-cache entries added during each stage: nonzero on a warm pipeline means a JIT compile on the serving path.
     program_misses: dict[str, int] = field(default_factory=dict)
@@ -121,11 +124,14 @@ class ImageRequestTimings:
 
 @dataclass
 class ImageResult:
-    image: Image.Image
+    image: Image.Image | None  # None with `defer_finish`: call `finish()`
     canvas: tuple[int, int]
     packed_length: int
     rung: int
     timings: ImageRequestTimings
+    # With `defer_finish`: the host tail, returning the image. Host-only (no device work), so a server can run it on
+    # another thread while the next request runs on the device.
+    finish: Callable[[], Image.Image] | None = None
 
 
 class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
@@ -443,13 +449,28 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         CPU) its OpenMP pool fights tt-metal's busy-polling dispatch threads, which measured 130x slower on the
         decode's tile stitch (7.8 s vs 0.06 s at 2K) -- the same fix as the Wan/LTX pipelines (#60670)."""
         previous = torch.get_num_threads()
-        # H3_IMAGE_TORCH_THREADS overrides, e.g. several replicas in one process should split the CPUs between them.
-        threads = int(os.environ.get("H3_IMAGE_TORCH_THREADS", 0)) or max(1, len(os.sched_getaffinity(0)) // 2)
-        torch.set_num_threads(threads)
+        torch.set_num_threads(self._torch_threads(deferred=bool(kwargs.get("defer_finish"))))
+        if kwargs.get("defer_finish"):
+            # The thread count is per process, and the deferred host tail may still be running on another thread when
+            # this call returns (that is its point), so it is not restored: a deferred caller owns the process's torch.
+            return self._generate(prompt, **kwargs)
         try:
             return self._generate(prompt, **kwargs)
         finally:
             torch.set_num_threads(previous)
+
+    @staticmethod
+    def _torch_threads(deferred: bool = False) -> int:
+        """Half the CPU mask, or 8 when the host tail is deferred: then it overlaps the next request, and at half the
+        CPUs it slowed that request's device path by up to ~0.1 s (dispatch threads starved). Measured on a 4x8
+        Galaxy, 4 t2i + 2 edits at 4K back to back: 24 threads 3.2% faster than serial, 8 threads 6.6% (the tile
+        stitch is memory-bound: 0.28 s at 8 threads vs 0.33 s at 24). H3_IMAGE_TORCH_THREADS overrides both, e.g.
+        several replicas in one process should split the CPUs between them."""
+        override = int(os.environ.get("H3_IMAGE_TORCH_THREADS", 0))
+        if override:
+            return override
+        half = max(1, len(os.sched_getaffinity(0)) // 2)
+        return min(8, half) if deferred else half
 
     def _generate(
         self,
@@ -460,7 +481,11 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         seed: int = 0,
         images: Sequence[Image.Image] | None = None,
         min_generation_area: int | None = host.DEFAULT_MIN_GENERATION_AREA,
+        defer_finish: bool = False,
     ) -> ImageResult:
+        """`defer_finish`: return once the device work is done (the decoded tiles are read back), leaving the host tail
+        -- tile stitch, un-normalize, uint8 -- to `ImageResult.finish()` (same bits). A server runs it on another
+        thread while the next request runs on the device; ~0.25 s of each 4K request is that tail."""
         timings = ImageRequestTimings()
         started = time.perf_counter()
         canvas = host.resolve_image_canvas(width, height, min_generation_area)
@@ -514,19 +539,35 @@ class MiniMaxH3ImagePipeline(MiniMaxH3Pipeline):
         latents = host.unpatchify(target, lh, lw)
         mean = torch.tensor(self.vae_config.latents_mean, dtype=torch.float32).view(1, -1, 1, 1, 1)
         std = torch.tensor(self.vae_config.latents_std, dtype=torch.float32).view(1, -1, 1, 1, 1)
-        decoded = self._vae.decode_clip(latents * std + mean)[0, :, 0].float()  # ImageNet-normalized pixels
-        pm = torch.tensor(host.PIXEL_MEAN).view(3, 1, 1)
-        ps = torch.tensor(host.PIXEL_STD).view(3, 1, 1)
-        # In place on the decoder's own output: the same ops in the same order as `(x * ps + pm).clamp(0, 1)`, so
-        # the same bits, without three 4K-sized float temporaries.
-        pixels01 = decoded.mul_(ps).add_(pm).clamp_(0, 1)
-        image = host.finish_image(pixels01, (width, height))
-        timings.decode = time.perf_counter() - mark
+        stitch = self._vae.decode_clip_deferred(latents * std + mean)
         miss_since(count, "decode")
-        timings.total = time.perf_counter() - started
-        return ImageResult(
-            image=image, canvas=canvas, packed_length=layout.sequence_length, rung=self.last_rung, timings=timings
+        torch_threads = self._torch_threads(deferred=defer_finish)
+
+        def finish() -> Image.Image:
+            finish_started = time.perf_counter()
+            if defer_finish:  # on the caller's thread, maybe after `__call__` returned
+                torch.set_num_threads(torch_threads)
+            decoded = stitch()[0, :, 0].float()  # ImageNet-normalized pixels
+            pm = torch.tensor(host.PIXEL_MEAN).view(3, 1, 1)
+            ps = torch.tensor(host.PIXEL_STD).view(3, 1, 1)
+            # In place on the decoder's own output: the same ops in the same order as `(x * ps + pm).clamp(0, 1)`, so
+            # the same bits, without three 4K-sized float temporaries.
+            pixels01 = decoded.mul_(ps).add_(pm).clamp_(0, 1)
+            image = host.finish_image(pixels01, (width, height))
+            timings.finish = time.perf_counter() - finish_started
+            return image
+
+        result = ImageResult(
+            image=None, canvas=canvas, packed_length=layout.sequence_length, rung=self.last_rung, timings=timings
         )
+        if defer_finish:
+            result.finish = finish
+        else:
+            result.image = finish()
+            timings.finish = 0.0  # part of `decode` here
+        timings.decode = time.perf_counter() - mark
+        timings.total = time.perf_counter() - started
+        return result
 
     # ------------------------------------------------------------------ denoise
 
