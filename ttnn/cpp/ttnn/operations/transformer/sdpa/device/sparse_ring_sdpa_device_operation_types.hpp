@@ -35,6 +35,10 @@ struct SparseRingSDPAParams {
     // block whose mask rows keep every full key block. With the dynamic split on, each unit's cores split it by cost
     // (sparse_dyn_split.hpp weighted_range). Empty: the equal counts. Part of the program hash.
     std::vector<uint32_t> dense_q_blocks;
+    // Token-major output (concatenate_heads layout) [B, 1, N, H * D] and its dtype (nullopt = bf16). Set after
+    // construction; keyed in compute_program_hash.
+    bool output_token_major = false;
+    std::optional<DataType> output_dtype = std::nullopt;
 
     SparseRingSDPAParams(
         std::optional<float> scale,

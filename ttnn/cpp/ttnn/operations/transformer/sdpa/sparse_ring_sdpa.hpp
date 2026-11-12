@@ -41,6 +41,11 @@ ttnn::Tensor sparse_ring_sdpa(
     std::optional<uint32_t> q_blocks_per_pass = std::nullopt,
     const std::optional<ttnn::Tensor>& block_counts = std::nullopt,
     const std::optional<ttnn::Tensor>& head_weights = std::nullopt,
-    const std::vector<uint32_t>& dense_q_blocks = {});
+    const std::vector<uint32_t>& dense_q_blocks = {},
+    // Token-major output (MINIMAX_H3_MK_S1_TOKEN_MAJOR_O): write O as [1, 1, N/ring_size, H * D] (the
+    // concatenate_heads layout), optionally in another dtype (bfloat8_b for a BFP8 consumer). Defaults = today's
+    // [1, H, N/ring_size, D] bf16.
+    bool output_token_major = false,
+    std::optional<DataType> output_dtype = std::nullopt);
 
 }

@@ -206,7 +206,9 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     std::optional<uint32_t> q_blocks_per_pass,
     const std::optional<ttnn::Tensor>& block_counts,
     const std::optional<ttnn::Tensor>& head_weights,
-    const std::vector<uint32_t>& dense_q_blocks) {
+    const std::vector<uint32_t>& dense_q_blocks,
+    bool output_token_major,
+    std::optional<DataType> output_dtype) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -234,7 +236,9 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         q_blocks_per_pass,
         block_counts,
         head_weights,
-        dense_q_blocks);
+        dense_q_blocks,
+        output_token_major,
+        output_dtype);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -952,8 +956,13 @@ void bind_sdpa(nb::module_& mod) {
                 dynamic split on, each head's cores split its blocks by cost instead of by count, and the per-core
                 cap may grow by up to 3 blocks where L1 allows it in the same passes. Defaults to [] (the equal-count split).
 
+            output_token_major (bool): write the output as [1, 1, N/ring_size, H * D] (the concatenate_heads
+                layout) instead of [1, H, N/ring_size, D]. Defaults to False.
+            output_dtype (ttnn.DataType, optional): bfloat16 (default) or bfloat8_b: the final output only; the
+                running output accumulator keeps its own (Float32) format.
+
         Returns:
-            ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
+            ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q (or token-major, see above).
         )doc",
         &sparse_ring_sdpa_wrapper,
         nb::arg("input_tensor_q").noconvert(),
@@ -982,7 +991,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("q_blocks_per_pass") = nb::none(),
         nb::arg("block_counts").noconvert() = nb::none(),
         nb::arg("head_weights").noconvert() = nb::none(),
-        nb::arg("dense_q_blocks") = std::vector<uint32_t>{});
+        nb::arg("dense_q_blocks") = std::vector<uint32_t>{},
+        nb::arg("output_token_major") = false,
+        nb::arg("output_dtype") = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

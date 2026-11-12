@@ -34,6 +34,22 @@ DYNAMIC_RING_SDPA_CHUNKS: dict[str, tuple[int, int]] = {"short": (320, 384), "lo
 
 _TO_OUT_ROW_PARALLEL = os.environ.get("MINIMAX_H3_TO_OUT_ROW_PARALLEL", "0") == "1"
 _TO_OUT_BFP8_WEIGHT = os.environ.get("MINIMAX_H3_TO_OUT_BFP8_WEIGHT", "0") == "1"
+_S1_LOGGED: set = set()
+
+
+def _log_s1_once(dtype) -> None:
+    if dtype not in _S1_LOGGED:
+        _S1_LOGGED.add(dtype)
+        print(f"[MINIMAX_H3_MK_S1] sparse ring output token-major, dtype {dtype}", flush=True)
+
+
+# MINIMAX_H3_MK_S1_TOKEN_MAJOR_O (token-major output, default off): the sparse ring op writes its output token-major
+# [1, 1, N, H * D] -- the concatenate_heads layout -- so the head concat goes; with "1" / "bf8" it also packs bfloat8_b
+# when to_out takes a BFP8 activation, so the to_out cast goes too. "layout" = token-major only (bf16, bit-identical by
+# construction).
+_S1_TOKEN_MAJOR_O = os.environ.get("MINIMAX_H3_MK_S1_TOKEN_MAJOR_O", "0")
+if _S1_TOKEN_MAJOR_O not in ("0", "1", "bf8", "layout"):
+    raise ValueError(f"MINIMAX_H3_MK_S1_TOKEN_MAJOR_O must be 0, 1, bf8 or layout, got {_S1_TOKEN_MAJOR_O!r}")
 if _TO_OUT_BFP8_WEIGHT and not _TO_OUT_ROW_PARALLEL:
     raise ValueError("MINIMAX_H3_TO_OUT_BFP8_WEIGHT=1 needs MINIMAX_H3_TO_OUT_ROW_PARALLEL=1")
 
@@ -1042,8 +1058,21 @@ class MiniMaxH3Attention(Module):
             and self._exp_sdpa_program_config(rows) is None
         )
 
-    def _sparse_ring_attention(self, q_BHNE, k_BHNE, v_BHNE, sol_kwargs: dict) -> ttnn.Tensor:
-        """Resident-mode Sol-Attn through the sparse ring op; returns [1, H, N_local, D] like `_ring_attention`."""
+    def _s1_token_major_out(self):
+        """MINIMAX_H3_MK_S1_TOKEN_MAJOR_O: None (off), or the output dtype for a token-major sparse-op output."""
+        if _S1_TOKEN_MAJOR_O == "0" or self.sol_prefix_mode == "separate":
+            return None  # the separate prefix pass rewrites rows of the head-major output
+        bf8_consumer = (
+            _S1_TOKEN_MAJOR_O in ("1", "bf8")
+            and getattr(self.to_out, "activation_dtype", None) == ttnn.bfloat8_b
+        )
+        return ttnn.bfloat8_b if bf8_consumer else ttnn.bfloat16
+
+    def _sparse_ring_attention(
+        self, q_BHNE, k_BHNE, v_BHNE, sol_kwargs: dict, token_major_dtype=None
+    ) -> ttnn.Tensor:
+        """Resident-mode Sol-Attn through the sparse ring op; returns [1, H, N_local, D] like `_ring_attention`, or
+        [1, 1, N_local, H * D] in `token_major_dtype` when that is given."""
         assert self.sol_logical_n is not None, "the sparse ring op needs sol_logical_n (host int)"
         if self._SPARSE_RING_DTYPE not in ("bf16", "bf8"):
             raise ValueError(f"MINIMAX_H3_SPARSE_RING_DTYPE must be bf16 or bf8, got {self._SPARSE_RING_DTYPE!r}")
@@ -1089,9 +1118,16 @@ class MiniMaxH3Attention(Module):
             block_size=SOL_BLOCK,
             **({"head_weights": sol_kwargs["sol_head_weights"]} if "sol_head_weights" in sol_kwargs else {}),
             **({"dense_q_blocks": dense} if (dense := self._sol_dense_q_blocks(q.shape[2])) else {}),
+            **(
+                {}
+                if token_major_dtype is None
+                else {"output_token_major": True, "output_dtype": token_major_dtype}
+            ),
         )
         for t in cast:
             ttnn.deallocate(t)
+        if token_major_dtype is not None:
+            return out  # already the consumer's layout and dtype
         want = ttnn.bfloat16 if q_BHNE.dtype == ttnn.bfloat8_b else q_BHNE.dtype
         if out.dtype != want:
             out_bf16 = ttnn.typecast(out, want)
@@ -1259,6 +1295,7 @@ class MiniMaxH3Attention(Module):
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
+        spatial_1BND_token_major = None  # set when the sparse op writes the concat layout
         if exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,
@@ -1292,7 +1329,13 @@ class MiniMaxH3Attention(Module):
             if self.sol_attn and self.sol_active:
                 sol_kwargs = self._sol_tensors(q_BHNE, k_BHNE, v_BHNE)
             if sol_kwargs and self.sol_mode == "resident" and self._SPARSE_RING:
-                spatial_BHNE = self._sparse_ring_attention(q_BHNE, k_BHNE, v_BHNE, sol_kwargs)
+                token_major_dtype = self._s1_token_major_out()
+                spatial_BHNE = self._sparse_ring_attention(
+                    q_BHNE, k_BHNE, v_BHNE, sol_kwargs, token_major_dtype=token_major_dtype
+                )
+                if token_major_dtype is not None:
+                    spatial_1BND_token_major = spatial_BHNE
+                    _log_s1_once(token_major_dtype)
             elif sol_kwargs and self.sol_mode == "resident" and self._SOL_RESIDENT_PASSES > 1:
                 spatial_BHNE = self._sol_resident_multipass(q_BHNE, k_BHNE, v_BHNE, logical_n, sol_kwargs)
             else:
@@ -1326,8 +1369,11 @@ class MiniMaxH3Attention(Module):
                 ),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
-        spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE, runtime_rows=self.dynamic_length)
-        spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
+        if spatial_1BND_token_major is not None:
+            spatial_1BND = spatial_1BND_token_major  # the sparse op wrote the concatenate_heads layout itself
+        else:
+            spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE, runtime_rows=self.dynamic_length)
+            spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
         if self.to_out_row_parallel:
             return self._to_out_row_parallel(

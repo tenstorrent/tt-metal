@@ -26,6 +26,20 @@ inline Slice q_chunk_out_slice(uint32_t q_chunk, uint32_t nb, uint32_t nq, uint3
     return Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
 }
 
+// Token-major output (MINIMAX_H3_MK_S1_TOKEN_MAJOR_O): the output's tile id in the token-major layout
+// [B, 1, N, H * DH] that concatenate_heads makes, addressed with the head-major coordinates (b, h, row, col) the
+// writer already uses: same interface as TensorTileShape / StaticTensorTileShape (id_of, d2, stride2).
+class TokenMajorTileShape {
+public:
+    uint32_t nh, nt, dht;
+    TokenMajorTileShape(uint32_t, uint32_t d1, uint32_t d2, uint32_t d3) : nh(d1), nt(d2), dht(d3) {}
+    uint32_t id_of(uint32_t i0, uint32_t i1, uint32_t i2, uint32_t i3) const {
+        return (i0 * nt + i2) * (nh * dht) + i1 * dht + i3;
+    }
+    uint32_t d2() const { return nt; }
+    uint32_t stride2() const { return nh * dht; }
+};
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -81,7 +95,11 @@ void kernel_main() {
     const auto out_writer = TensorAccessor(out_args, out_addr);
     constexpr bool output_has_no_padding = q_local_padded_Nt % Sq_chunk_t == 0;
     using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
+#ifdef SPARSE_RING_OUT_TOKEN_MAJOR
+    using OutputTileShape = TokenMajorTileShape;
+#else
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
+#endif
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
 

@@ -1503,6 +1503,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     writer_kernel.core_ranges = core_grid_set;
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
+    if (args.output_token_major) {
+        // Token-major output: O tiles go to (row, head * vDHt + col) of [B, 1, N, H * vDH] (writer only).
+        writer_kernel.defines.emplace_back("SPARSE_RING_OUT_TOKEN_MAJOR", "1");
+    }
     writer_kernel.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_kernel{};

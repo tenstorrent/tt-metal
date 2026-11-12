@@ -133,6 +133,10 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_v = tensor_args.gathered_v;
 
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
+    TT_FATAL(
+        !args.output_dtype.has_value() || *args.output_dtype == DataType::BFLOAT16 ||
+            *args.output_dtype == DataType::BFLOAT8_B,
+        "SparseRingSDPA output_dtype must be bfloat16 or bfloat8_b");
     const uint32_t block_size = args.block_size;
     TT_FATAL(
         block_size == kSupportedBlockSize,
@@ -351,9 +355,16 @@ SparseRingSDPAResultSpec SparseRingSDPADeviceOperation::compute_output_specs(
     const auto v_head_dim = tensor_args.input_v.logical_shape()[3];
     auto out_shape = input.logical_shape();
     out_shape[3] = v_head_dim;
+    if (args.output_token_major) {
+        // Token-major output: [B, H, N, D] -> [B, 1, N, H * D], the layout concatenate_heads produces.
+        out_shape[3] = out_shape[1] * v_head_dim;
+        out_shape[1] = 1;
+    }
 
     return {tt::tt_metal::TensorSpec(
-        out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        out_shape,
+        TensorLayout(
+            args.output_dtype.value_or(DataType::BFLOAT16), PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 SparseRingSDPAResult SparseRingSDPADeviceOperation::create_output_tensors(
@@ -396,6 +407,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.block_size,
         args.q_blocks_per_pass,
         args.dense_q_blocks,
+        args.output_token_major,
+        args.output_dtype,
         tensor_args.pooled_k.has_value(),
         tensor_args.pooled_v.has_value(),
         tensor_args.block_counts.has_value(),
@@ -471,7 +484,9 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::optional<uint32_t> q_blocks_per_pass,
     const std::optional<ttnn::Tensor>& block_counts,
     const std::optional<ttnn::Tensor>& head_weights,
-    const std::vector<uint32_t>& dense_q_blocks) {
+    const std::vector<uint32_t>& dense_q_blocks,
+    bool output_token_major,
+    std::optional<DataType> output_dtype) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     TT_FATAL(
         pooled_k.has_value() == pooled_v.has_value(),
@@ -534,6 +549,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         block_size,
         q_blocks_per_pass,
         dense_q_blocks);
+    operation_attributes.output_token_major = output_token_major;
+    operation_attributes.output_dtype = output_dtype;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
