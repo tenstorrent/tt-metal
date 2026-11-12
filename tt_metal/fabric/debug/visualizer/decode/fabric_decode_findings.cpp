@@ -4,6 +4,7 @@
 
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_findings.hpp"
 
+#include <cstddef>
 #include <string_view>
 #include <type_traits>
 
@@ -100,7 +101,8 @@ void add_region_findings(const RouterValues& values, std::vector<Finding>& findi
 void add_unknown_enumerator_finding(
     const RouterValues& values, std::string_view path, std::string_view type_name, std::vector<Finding>& findings) {
     manifest::visit_registered_type(type_name, [&]<typename T>(std::type_identity<T>) {
-        if constexpr (std::is_enum_v<T>) {
+        // enchantum cannot reflect std::byte, so it has no enumerators to name.
+        if constexpr (std::is_enum_v<T> && !std::is_same_v<T, std::byte>) {
             const RegionReads<T>* reads = values.find_reads<T>(path);
             if (reads == nullptr) {
                 return;

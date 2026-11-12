@@ -185,9 +185,7 @@ RoutingAnalysis analyze_routing_tables(
         });
         if (copy == chip->copies.end()) {
             chip->copies.push_back(RoutingTableCopy{
-                .read = entry.read,
-                .read_router_ref = entry.ref,
-                .read_manifest_router = entry.router});
+                .read = entry.read, .read_router_ref = entry.ref, .read_manifest_router = entry.router});
             copy = std::prev(chip->copies.end());
         }
         copy->routers.push_back(entry.path);
@@ -200,11 +198,11 @@ RoutingAnalysis analyze_routing_tables(
     return analysis;
 }
 
-json make_chip_routing_json(const ChipRouting& routing, const manifest::ManifestFacts& facts) {
+json make_chip_routing_json(const ChipRouting& routing, const manifest::ManifestFacts& facts, const RouteView& routes) {
     json copies = json::array();
     for (const RoutingTableCopy& copy : routing.copies) {
-        const InterpretContext context =
-            make_interpret_context(facts, copy.read_router_ref, *copy.read_manifest_router, copy.routers.front());
+        const InterpretContext context = make_interpret_context(
+            facts, routes, copy.read_router_ref, *copy.read_manifest_router, copy.routers.front());
         json entry;
         entry["routers"] = copy.routers;
         entry["read_router"] = copy.routers.front();

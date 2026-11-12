@@ -5,27 +5,16 @@
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_router_analysis.hpp"
 
 #include <algorithm>
-#include <variant>
 
 #include <hostdevcommon/fabric_common.h>
 #include <tt_stl/assert.hpp>
 
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_route_view.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 
 namespace tt::tt_fabric::decode {
 
 namespace {
-
-// The direction the router faces: its my_direction field, which every ERISC of a router is fed alike.
-eth_chan_directions find_router_facing(const manifest::Router& router) {
-    const manifest::Field* field = manifest::find_erisc_field(router.fields_by_erisc, 0, "my_direction");
-    const auto* direction = field != nullptr && field->content.has_value()
-                                ? std::get_if<manifest::content::Enum>(&*field->content)
-                                : nullptr;
-    TT_FATAL(direction != nullptr, "Fabric decode: a 2D router's manifest entry has no my_direction field");
-    return static_cast<eth_chan_directions>(direction->value);
-}
 
 // The direction of a downstream edge: the kernel's EDGE_<n> is the sibling's compact index among the router's other
 // directions, plus one (Routing2DCodec::compact_index_on).

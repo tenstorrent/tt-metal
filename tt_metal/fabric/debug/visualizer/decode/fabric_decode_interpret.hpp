@@ -24,6 +24,9 @@
 #include <nlohmann/json.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_enum_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_packet_header.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_packet_path.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_route_view.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
@@ -42,6 +45,10 @@ struct InterpretContext {
     const manifest::Mesh& mesh;
     // The router the value is from, for its fields, such as each ERISC's telemetry_enabled and telemetry_stats_mask.
     const manifest::Router& router;
+    // Where the router is: its chip and its key there. A packet's path starts from it.
+    manifest::RouterRef router_ref;
+    // The rank's meshes and routers, which a packet's path is walked through.
+    const RouteView& routes;
     // The region's path below the router's node, such as "fields/erisc0/edm_status" or "l1_areas/fabric_telemetry".
     std::string_view path;
     // Which element of the region the value is: CodeProfilingTimerResult element i is timer bit i.
@@ -57,9 +64,11 @@ struct InterpretContext {
 std::optional<uint32_t> find_path_erisc(std::string_view path);
 
 // The context for the region at `path` of the router `ref` names, its ERISC from the path (find_path_erisc), at
-// element 0. The router's mesh is found in `facts` by `ref`; `router` must be from `facts`.
+// element 0. The router's mesh is found in `facts` by `ref`; `router` must be from `facts`, and `routes` built from
+// them.
 InterpretContext make_interpret_context(
     const manifest::ManifestFacts& facts,
+    const RouteView& routes,
     const manifest::RouterRef& ref,
     const manifest::Router& router,
     std::string_view path);
@@ -84,6 +93,20 @@ std::optional<std::string> find_enum_name(E value) {
         return manifest::lower_name(enumerator);
     }
 }
+
+namespace detail {
+
+// An enum value: its number, and the enumerator it names, null when it names none.
+template <typename E>
+json make_enum_json(E value) {
+    json out;
+    out["value"] = static_cast<std::underlying_type_t<E>>(value);
+    const std::optional<std::string> name = find_enum_name(value);
+    out["name"] = name.has_value() ? json(*name) : json(nullptr);
+    return out;
+}
+
+}  // namespace detail
 
 // Whether the peer's handshake reached this core: its local_value is MAGIC_HANDSHAKE_VALUE, which the peer writes.
 bool is_handshake_complete(const erisc::datamover::handshake::handshake_info_t& info);
@@ -176,10 +199,6 @@ struct Interpreter<routing_l1_info_t> {
 
 namespace detail {
 
-// A packet header's members every header type shares, from PacketHeaderBase. The command fields and the route come
-// with the route work.
-json make_packet_header_json(uint16_t payload_size_bytes, NocSendType noc_send_type, uint8_t src_ch_id);
-
 // Whether every byte of `value` is zero: a ring buffer slot no packet was ever written to, since routers zero every
 // header at startup.
 template <typename T>
@@ -188,30 +207,69 @@ bool is_all_zero(const T& value) {
     return std::ranges::all_of(bytes, [](std::byte byte) { return byte == std::byte{0}; });
 }
 
-// One ring buffer slot's header: null when it was never written, else its shared members.
+// One ring buffer slot's header, the members every header type shares and its command. The command fields are copied
+// out first: a 2D header is packed, and its members aren't bound to by reference.
 template <typename Header>
-json make_slot_json(const Header& header) {
-    if (is_all_zero(header)) {
-        return json(nullptr);
-    }
-    return make_packet_header_json(header.payload_size_bytes, header.noc_send_type, header.src_ch_id);
+json make_slot_json(const Header& header, const InterpretContext& context) {
+    const NocCommandFields command_fields = header.command_fields;
+    json out = make_packet_header_json(header.payload_size_bytes, header.noc_send_type, header.src_ch_id);
+    out["command"] = make_noc_command_json(command_fields, header.noc_send_type, context);
+    return out;
 }
 
 }  // namespace detail
 
-// Every 1D header type fabric can pick.
+// Every 1D header type fabric can pick. A slot is null when it was never written, else its shared members, its
+// command, its route (make_1d_route_json) and its path (make_1d_path_json).
 template <uint32_t ExtensionWords>
 struct Interpreter<LowLatencyPacketHeaderT<ExtensionWords>> {
-    static json make_json(const LowLatencyPacketHeaderT<ExtensionWords>& value, const InterpretContext& /*context*/) {
-        return detail::make_slot_json(value);
+    static json make_json(const LowLatencyPacketHeaderT<ExtensionWords>& value, const InterpretContext& context) {
+        if (detail::is_all_zero(value)) {
+            return json(nullptr);
+        }
+        json out = detail::make_slot_json(value, context);
+        std::array<uint32_t, ExtensionWords> extension_words{};
+        if constexpr (ExtensionWords > 0) {
+            for (uint32_t index = 0; index < ExtensionWords; ++index) {
+                extension_words[index] = value.routing_fields.route_buffer[index];
+            }
+        }
+        const auto actions = read_1d_hop_actions(value.routing_fields.value, extension_words);
+        out["route"] = make_1d_route_json(actions);
+        out["path"] = make_1d_path_json(actions, context);
+        return out;
     }
 };
 
-// Every 2D header type fabric can pick.
+// Every 2D header type fabric can pick. A slot is null when it was never written, else its shared members, its
+// command, its route (make_2d_route_json) and its path (make_2d_path_json).
 template <int RouteBufferSize>
 struct Interpreter<HybridMeshPacketHeaderT<RouteBufferSize>> {
-    static json make_json(const HybridMeshPacketHeaderT<RouteBufferSize>& value, const InterpretContext& /*context*/) {
-        return detail::make_slot_json(value);
+    static json make_json(const HybridMeshPacketHeaderT<RouteBufferSize>& value, const InterpretContext& context) {
+        if (detail::is_all_zero(value)) {
+            return json(nullptr);
+        }
+        json out = detail::make_slot_json(value, context);
+        std::array<uint8_t, RouteBufferSize> route_buffer{};
+        for (size_t index = 0; index < route_buffer.size(); ++index) {
+            route_buffer[index] = value.route_buffer[index];
+        }
+        // The header's mcast_params holds one hop count per planar direction, the ones before Z. make_2d_route_json's
+        // array has the same length, so a change to either is caught here rather than by dropping a count.
+        std::array<uint16_t, 4> mcast_params{};
+        static_assert(
+            std::extent_v<std::remove_reference_t<decltype(value.mcast_params)>> == mcast_params.size() &&
+                mcast_params.size() == eth_chan_directions::Z,
+            "DRIFT CAUGHT IN FABRIC VISUALIZER - DECODE: The header's mcast_params is one hop count per "
+            "eth_chan_directions direction before Z");
+        for (size_t direction = 0; direction < mcast_params.size(); ++direction) {
+            mcast_params[direction] = value.mcast_params[direction];
+        }
+        const FabricNodeId dst_start(MeshId{value.dst_start_mesh_id}, value.dst_start_chip_id);
+        const Route2DMaps maps = split_2d_route_maps(route_buffer, context.mesh);
+        out["route"] = make_2d_route_json(maps, dst_start, mcast_params);
+        out["path"] = make_2d_path_json(maps, context);
+        return out;
     }
 };
 

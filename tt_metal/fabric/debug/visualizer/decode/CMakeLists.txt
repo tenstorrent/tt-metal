@@ -11,7 +11,10 @@ target_sources(
         fabric_decode_findings.cpp
         fabric_decode_inputs.cpp
         fabric_decode_interpret.cpp
+        fabric_decode_packet_header.cpp
+        fabric_decode_packet_path.cpp
         fabric_decode_rank.cpp
+        fabric_decode_route_view.cpp
         fabric_decode_region_json.cpp
         fabric_decode_router_analysis.cpp
         fabric_decode_routing.cpp

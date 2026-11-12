@@ -24,16 +24,6 @@ namespace tt::tt_fabric::decode {
 
 namespace {
 
-// An enum value: its number, and the enumerator it names, null when it names none.
-template <typename E>
-json make_enum_json(E value) {
-    json out;
-    out["value"] = static_cast<std::underlying_type_t<E>>(value);
-    const std::optional<std::string> name = find_enum_name(value);
-    out["name"] = name.has_value() ? json(*name) : json(nullptr);
-    return out;
-}
-
 // A bitmask of a flag enum's enumerators: its number, the names of the one-bit enumerators set in it, and, only when
 // some are set, the bits no enumerator names.
 template <typename E>
@@ -116,7 +106,7 @@ json make_erisc_dynamic_entry_json(const EriscDynamicEntry& entry, const manifes
         return make_if_written_json(writes_telemetry_statistic(router, erisc, statistic), std::move(value));
     };
     json out;
-    out["router_state"] = if_written(DynamicStatistics::ROUTER_STATE, make_enum_json(entry.router_state));
+    out["router_state"] = if_written(DynamicStatistics::ROUTER_STATE, detail::make_enum_json(entry.router_state));
     out["tx_heartbeat"] = if_written(DynamicStatistics::HEARTBEAT_TX, read_timestamp(entry.tx_heartbeat));
     out["rx_heartbeat"] = if_written(DynamicStatistics::HEARTBEAT_RX, read_timestamp(entry.rx_heartbeat));
     return out;
@@ -166,7 +156,7 @@ json make_code_profiling_timer_json(uint32_t index) {
     if (index >= sizeof(uint32_t) * 8) {
         return json(nullptr);
     }
-    return make_enum_json(static_cast<CodeProfilingTimerType>(uint32_t{1} << index));
+    return detail::make_enum_json(static_cast<CodeProfilingTimerType>(uint32_t{1} << index));
 }
 
 }  // namespace
@@ -190,6 +180,7 @@ std::optional<uint32_t> find_path_erisc(std::string_view path) {
 
 InterpretContext make_interpret_context(
     const manifest::ManifestFacts& facts,
+    const RouteView& routes,
     const manifest::RouterRef& ref,
     const manifest::Router& router,
     std::string_view path) {
@@ -200,6 +191,8 @@ InterpretContext make_interpret_context(
         .fabric = facts.fabric,
         .mesh = *mesh,
         .router = router,
+        .router_ref = ref,
+        .routes = routes,
         .path = path,
         .erisc = find_path_erisc(path)};
 }
@@ -232,21 +225,21 @@ json Interpreter<std::byte>::make_region_json(
 }
 
 json Interpreter<EDMStatus>::make_json(EDMStatus value, const InterpretContext& /*context*/) {
-    return make_enum_json(value);
+    return detail::make_enum_json(value);
 }
 
 json Interpreter<TerminationSignal>::make_json(TerminationSignal value, const InterpretContext& /*context*/) {
-    return make_enum_json(value);
+    return detail::make_enum_json(value);
 }
 
 json Interpreter<connection_interface::ConnectionValue>::make_json(
     connection_interface::ConnectionValue value, const InterpretContext& /*context*/) {
-    return make_enum_json(value);
+    return detail::make_enum_json(value);
 }
 
 json Interpreter<CoordinatedEriscContextSwitchState>::make_json(
     CoordinatedEriscContextSwitchState value, const InterpretContext& /*context*/) {
-    return make_enum_json(value);
+    return detail::make_enum_json(value);
 }
 
 json Interpreter<erisc::datamover::handshake::handshake_info_t>::make_json(
@@ -316,28 +309,16 @@ json Interpreter<FabricTelemetry>::make_json(const FabricTelemetry& value, const
     json out;
     out["static_info"] = make_static_info_json(value.static_info);
     out["dynamic_info"] = make_dynamic_info_json(value.dynamic_info, context.router);
-    out["postcode"] = make_enum_json(static_cast<EDMStatus>(value.postcode));
+    out["postcode"] = detail::make_enum_json(static_cast<EDMStatus>(value.postcode));
     return out;
 }
 
 // Only what is the router core's own: the rest of the table is the chip's, written by make_chip_routing_table_json.
 json Interpreter<routing_l1_info_t>::make_json(const routing_l1_info_t& value, const InterpretContext& /*context*/) {
     json out;
-    out["state"] = make_enum_json(value.state_manager.state);
-    out["command"] = make_enum_json(value.state_manager.command);
+    out["state"] = detail::make_enum_json(value.state_manager.state);
+    out["command"] = detail::make_enum_json(value.state_manager.command);
     return out;
 }
-
-namespace detail {
-
-json make_packet_header_json(uint16_t payload_size_bytes, NocSendType noc_send_type, uint8_t src_ch_id) {
-    json out;
-    out["noc_send_type"] = make_enum_json(noc_send_type);
-    out["payload_size_bytes"] = payload_size_bytes;
-    out["src_ch_id"] = src_ch_id;
-    return out;
-}
-
-}  // namespace detail
 
 }  // namespace tt::tt_fabric::decode

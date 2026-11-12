@@ -19,6 +19,8 @@
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_packet_header.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_packet_path.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_region_json.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_routing.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_routing_table.hpp"
@@ -69,6 +71,7 @@ DecodeProvenance make_provenance(const DecodeRequest& request, const DecodeInput
 DecodedRouter decode_router(
     const RouterSnapshot& snapshot,
     const manifest::ManifestFacts& facts,
+    const RouteView& routes,
     std::vector<Finding>& findings,
     std::vector<RouterRoutingTable>& routing_tables) {
     const manifest::Arch& arch = facts.arch;
@@ -77,15 +80,15 @@ DecodedRouter decode_router(
     const manifest::Router& router = *captured.router;
     DecodedRouter decoded{.ref = captured.ref, .path = captured.path, .router = captured.router};
     manifest::for_each_router_region(router, [&](std::string_view path, const auto& region) {
-        const InterpretContext context = make_interpret_context(facts, captured.ref, router, path);
-        decoded.regions.push_back(DecodedRegion{
-            .path = std::string(path), .decoded = make_decoded_region_json(values, region, context)});
+        const InterpretContext context = make_interpret_context(facts, routes, captured.ref, router, path);
+        decoded.regions.push_back(
+            DecodedRegion{.path = std::string(path), .decoded = make_decoded_region_json(values, region, context)});
     });
     manifest::for_each_arch_area(arch, [&](std::string_view name, const manifest::content::L1& area) {
         const std::string path = make_arch_area_path(name);
-        const InterpretContext context = make_interpret_context(facts, captured.ref, router, path);
-        decoded.arch_areas.push_back(DecodedArchArea{
-            .name = std::string(name), .decoded = make_decoded_region_json(values, area, context)});
+        const InterpretContext context = make_interpret_context(facts, routes, captured.ref, router, path);
+        decoded.arch_areas.push_back(
+            DecodedArchArea{.name = std::string(name), .decoded = make_decoded_region_json(values, area, context)});
     });
     decoded.capture = summarize_capture(values);
     if (decoded.capture.status != RouterReadStatus::NOT_READ) {
@@ -202,8 +205,7 @@ void place_router(
     node["l1_areas"] = std::move(l1_areas);
     json analysis;
     analysis["capture"] = make_capture_json(router.capture);
-    analysis["activity"] =
-        router.activity.has_value() ? make_activity_json(*router.activity, protocol) : json(nullptr);
+    analysis["activity"] = router.activity.has_value() ? make_activity_json(*router.activity, protocol) : json(nullptr);
     analysis["directions"] = make_directions_json(router.directions);
     analysis["routing_table"] = make_router_routing_table_json(router.routing_table_copy);
     node["analysis"] = std::move(analysis);
@@ -220,6 +222,8 @@ json make_analysis_json(const DecodedRank& rank) {
     vocabulary["direction_table_entry"] = make_direction_table_entry_vocabulary_json();
     vocabulary["axis_code_2d"] = make_2d_axis_code_vocabulary_json();
     vocabulary["hop_action_1d"] = make_1d_hop_action_vocabulary_json();
+    vocabulary["action_2d"] = make_2d_action_vocabulary_json();
+    vocabulary["path_end"] = make_vocabulary_list_json<PathEnd>();
     json findings = json::array();
     for (const Finding& finding : rank.findings) {
         findings.push_back(make_finding_json(finding));
@@ -261,8 +265,9 @@ DecodedRank decode_rank(const DecodeRequest& request, const DecodeInputs& inputs
     const std::vector<RouterSnapshot> snapshots = make_router_snapshots(pairing, inputs.capture, arch.l1);
     rank.routers.reserve(snapshots.size());
     std::vector<RouterRoutingTable> routing_tables;
+    const RouteView routes(inputs.manifest.facts);
     for (const RouterSnapshot& snapshot : snapshots) {
-        rank.routers.push_back(decode_router(snapshot, inputs.manifest.facts, rank.findings, routing_tables));
+        rank.routers.push_back(decode_router(snapshot, inputs.manifest.facts, routes, rank.findings, routing_tables));
     }
     analyze_routers_routing_tables(rank, routing_tables, inputs.manifest.facts);
     return rank;
@@ -271,6 +276,7 @@ DecodedRank decode_rank(const DecodeRequest& request, const DecodeInputs& inputs
 json make_decoded_json(const DecodedRank& rank, const manifest::ManifestFacts& facts) {
     json manifest_json = make_manifest_json(facts, FieldsLayout::PER_ROUTER);
     const json arch_areas = manifest_json.at("arch").at("l1_areas");
+    const RouteView routes(facts);
     for (const DecodedRouter& router : rank.routers) {
         place_router(router, facts.arch.heartbeat_protocol, arch_areas, manifest_json);
     }
@@ -280,7 +286,7 @@ json make_decoded_json(const DecodedRank& rank, const manifest::ManifestFacts& f
             manifest_json.contains(chip_pointer),
             "Fabric decode: the manifest's JSON has no node for {}",
             manifest::chip_path(routing.chip));
-        manifest_json[chip_pointer]["analysis"]["routing"] = make_chip_routing_json(routing, facts);
+        manifest_json[chip_pointer]["analysis"]["routing"] = make_chip_routing_json(routing, facts, routes);
     }
 
     json out;

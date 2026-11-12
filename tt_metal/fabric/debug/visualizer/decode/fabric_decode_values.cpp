@@ -264,8 +264,11 @@ RouterValues::RouterValues(const RouterSnapshot& snapshot, const manifest::Arch&
             unread_);
     };
 
+    // Name the lambda types so overloaded holds copies; deduction would make it hold const references.
     manifest::for_each_router_region(
-        *snapshot.get_router().router, ttsl::overloaded{read_l1_region_at, read_stream_register_at});
+        *snapshot.get_router().router,
+        ttsl::overloaded<decltype(read_l1_region_at), decltype(read_stream_register_at)>{
+            read_l1_region_at, read_stream_register_at});
     // Every router core has its own copy of the areas the architecture fixes.
     manifest::for_each_arch_area(arch, [&](std::string_view name, const manifest::content::L1& area) {
         read_l1_region_at(make_arch_area_path(name), area);

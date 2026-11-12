@@ -77,7 +77,7 @@ RoutingAnalysis analyze_routing_tables(
 
 // A chip's analysis.routing: `{ "copies": [{ "routers", "read_router", "at", "table" }] }`, each `table` written by
 // make_chip_routing_table_json.
-json make_chip_routing_json(const ChipRouting& routing, const manifest::ManifestFacts& facts);
+json make_chip_routing_json(const ChipRouting& routing, const manifest::ManifestFacts& facts, const RouteView& routes);
 
 // A router's analysis.routing_table: `{ "copy": n }`, the index of its chip's copy that holds its table. Null when
 // the router has none.
