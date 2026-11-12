@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <optional>
@@ -102,8 +103,8 @@ struct MaxUtilConfig {
     // DRAM read transaction size. Larger values generally amortize NOC command
     // overhead better; Blackhole supports bursts up to 16 KiB.
     uint32_t eth_page_size = 1024;
-    // ETH loop count: 8x fewer loops than compute to match kernel duration.
-    uint32_t eth_num_wl_loops = 0;  // set by setup_eth_stream_config
+    // ETH DRAM run duration in wall-clock ticks (matches the compute window).
+    uint64_t eth_duration_ticks = 0;  // set by setup_eth_stream_config
 
     // DRAM utilization target percentage [1, 100].
     // 100 = maximum utilization (no wait between NOC page issues).
@@ -113,6 +114,11 @@ struct MaxUtilConfig {
     // Cycles to busy-wait between consecutive NOC page issues; derived from
     // eth_dram_util_pct by setup_eth_stream_config via kDramUtilToCyclesMap.
     uint32_t eth_noc_wait_cycles = 0;
+
+    // Host-measured seconds per main dispatch (0 = not measured). Device wall
+    // clocks tick at AICLK, which DVFS lowers under power limits, so long runs
+    // convert ticks to time with this instead of the nominal clock.
+    double dispatch_seconds = 0.0;
 
     // When true, compute kernels perform a super-sync barrier at program start.
     bool super_sync = false;
@@ -143,8 +149,7 @@ struct MaxUtilConfig {
     uint32_t eth_link_period_units = 0;  // phase-locked mode (from _UTILIZATION_PCT); 0 = off
     uint32_t eth_link_active_units = 0;
     uint32_t eth_link_num_slots = 8;
-    uint32_t eth_link_num_msgs = 0;           // set by setup_eth_link_config
-    uint32_t eth_link_num_msgs_override = 0;  // 0 = derive from compute duration
+    uint64_t eth_link_duration_ticks = 0;  // send window; set by setup_eth_link_config
     uint32_t eth_link_startup_delay_ticks = 0;
     struct EthLink {
         CoreCoord core;  // logical ETH core on this device
@@ -253,7 +258,6 @@ static bool is_power_of_two(uint32_t v) { return v != 0 && (v & (v - 1)) == 0; }
 //   <prefix>_PERIOD_512  phase period, units of 512 ticks, power of two
 //                        (default 256 ≈ 97 µs at 1.35 GHz).
 // Explicit BURST / IDLE_512 take precedence over UTILIZATION_PCT.
-static constexpr uint32_t kThrottleIdleUnitTicks = 512;
 static constexpr uint32_t kThrottleDefaultPeriodUnits = 256;
 
 struct ThrottleKnobs {
@@ -307,17 +311,6 @@ static ThrottleKnobs resolve_throttle_knobs(
     return k;
 }
 
-/// Fraction of time a generator is allowed to issue traffic.
-static double throttle_duty(uint32_t period_units, uint32_t active_units) {
-    return period_units == 0 ? 1.0 : static_cast<double>(active_units) / period_units;
-}
-
-/// Estimated per-direction full-rate throughput of one Blackhole Ethernet link
-/// with bidirectional traffic, in bytes per AICLK tick. Only used to size the
-/// per-dispatch message count so link traffic spans the compute window;
-/// override with MAX_UTIL_ETH_LINK_NUM_MSGS.
-static constexpr double kEthLinkEstBytesPerTick = 12.0;
-
 /// Applies the Tensix-DRAM and ETH-link power-virus knobs to @p cfg.
 static void apply_power_virus_knobs(MaxUtilConfig& cfg) {
     const auto tdram = resolve_throttle_knobs("MAX_UTIL_TDRAM", 8192, 64, 16384);
@@ -333,7 +326,6 @@ static void apply_power_virus_knobs(MaxUtilConfig& cfg) {
     cfg.eth_link_idle_units = link.idle_units;
     cfg.eth_link_period_units = link.period_units;
     cfg.eth_link_active_units = link.active_units;
-    cfg.eth_link_num_msgs_override = get_env_u32("MAX_UTIL_ETH_LINK_NUM_MSGS", 1, UINT32_MAX).value_or(0);
     cfg.eth_link_startup_delay_ticks = get_env_u32("MAX_UTIL_ETH_LINK_STARTUP_DELAY_TICKS", 0, UINT32_MAX).value_or(0);
 }
 
@@ -506,6 +498,8 @@ static std::vector<std::pair<CoreCoord, uint32_t>> assign_eth_cores_to_banks(IDe
 // active Ethernet cores are assignable.
 // ---------------------------------------------------------------------------
 
+static uint64_t estimate_compute_ticks(const MaxUtilConfig& cfg);  // defined after the FPU calibration map
+
 static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig& cfg) {
     if (cfg.eth_dram_util_pct == 0) {
         log_info(LogTest, "Device {}: ETH DRAM streaming disabled (MAX_UTIL_DRAM_UTILIZATION_PCT=0)", device->id());
@@ -552,13 +546,9 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 
     cfg.eth_pages_per_bank = (eth_l1_size - kEthL1StagingHeaderBytes) / page_size_bytes;
 
-    // ETH kernel runs 8x fewer loops than the compute kernel to match duration.
-    // Also scale by utilization percentage to match the compute kernel duration.
-    const uint32_t eth_max_util_loops = std::max(1u, cfg.num_wl_loops / 8);
-    cfg.eth_num_wl_loops = std::max(
-        1u,
-        static_cast<uint32_t>(
-            static_cast<uint64_t>(eth_max_util_loops) * static_cast<uint64_t>(cfg.eth_dram_util_pct) / 100));
+    // Run for the estimated compute window; the utilization knob throttles the
+    // issue rate, not the duration.
+    cfg.eth_duration_ticks = estimate_compute_ticks(cfg);
 
     cfg.eth_noc_wait_cycles = dram_pct_to_noc_wait_cycles(cfg.eth_dram_util_pct);
     const uint32_t matched_dram_pct = nearest_calibration_pct(kDramUtilToCyclesMap, cfg.eth_dram_util_pct);
@@ -787,7 +777,7 @@ static shared_ptr<Buffer> setup_tensix_dram_config(IDevice* device, MaxUtilConfi
 //   message count and allocates a DRAM buffer for per-link timing records.
 //   Returns nullptr when link traffic is disabled or no link qualifies.
 //
-//   Both ends compute identical num_msgs / num_slots from the shared env
+//   Both ends compute identical num_slots (L1 layout) from the shared env
 //   knobs, which the kernel's flow control requires.
 // ---------------------------------------------------------------------------
 
@@ -854,19 +844,9 @@ static shared_ptr<Buffer> setup_eth_link_config(
         eth_l1_size);
     cfg.eth_link_l1_size = (link_l1_bytes(cfg.eth_link_num_slots) + 63) & ~63u;
 
-    if (cfg.eth_link_num_msgs_override != 0) {
-        cfg.eth_link_num_msgs = cfg.eth_link_num_msgs_override;
-    } else {
-        const double ticks_per_msg = cfg.eth_link_xfer_bytes / kEthLinkEstBytesPerTick;
-        const double idle_ticks_per_msg = cfg.eth_link_burst == 0 ? 0.0
-                                                                  : static_cast<double>(cfg.eth_link_idle_units) *
-                                                                        kThrottleIdleUnitTicks / cfg.eth_link_burst;
-        const double msgs = static_cast<double>(estimate_compute_ticks(cfg)) *
-                            throttle_duty(cfg.eth_link_period_units, cfg.eth_link_active_units) /
-                            (ticks_per_msg + idle_ticks_per_msg);
-        cfg.eth_link_num_msgs =
-            static_cast<uint32_t>(std::clamp<double>(msgs, cfg.eth_link_num_slots, static_cast<double>(UINT32_MAX)));
-    }
+    // Duration-bounded: links run at SerDes speed regardless of AICLK, so a
+    // message count would finish early when the chip throttles.
+    cfg.eth_link_duration_ticks = estimate_compute_ticks(cfg);
 
     auto timing_buffer = BufferImpl::create(
         device, cfg.eth_links.size() * kEthLinkTimingPageBytes, kEthLinkTimingPageBytes, BufferType::DRAM);
@@ -876,12 +856,12 @@ static shared_ptr<Buffer> setup_eth_link_config(
 
     log_info(
         LogTest,
-        "Device {}: ETH link traffic – {} link(s) ({} up), {} msgs × {} B per side per dispatch, {} slots, "
+        "Device {}: ETH link traffic – {} link(s) ({} up), {} ticks × {} B messages per dispatch, {} slots, "
         "burst={} idle={}×512 ticks, phase={}/{}×512 ticks, L1={} B",
         device->id(),
         cfg.eth_links.size(),
         links_up,
-        cfg.eth_link_num_msgs,
+        cfg.eth_link_duration_ticks,
         cfg.eth_link_xfer_bytes,
         cfg.eth_link_num_slots,
         cfg.eth_link_burst,
@@ -1148,7 +1128,15 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             const uint32_t timing_bank = i % num_banks;
             const uint32_t timing_addr = cfg.eth_link_timing_buffer_addr + (i / num_banks) * kEthLinkTimingPageBytes;
             SetRuntimeArgs(
-                program, link_kernel, link.core, {l1_base, link.role, cfg.eth_link_num_msgs, timing_bank, timing_addr});
+                program,
+                link_kernel,
+                link.core,
+                {l1_base,
+                 link.role,
+                 static_cast<uint32_t>(cfg.eth_link_duration_ticks),
+                 static_cast<uint32_t>(cfg.eth_link_duration_ticks >> 32),
+                 timing_bank,
+                 timing_addr});
         }
     }
 
@@ -1170,10 +1158,11 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
                 .processor = use_erisc1 ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0,
                 .compile_args =
                     {
-                        cfg.eth_num_wl_loops,
+                        static_cast<uint32_t>(cfg.eth_duration_ticks),  // 0: duration lo
                         cfg.eth_pages_per_bank,
                         cfg.eth_page_size,
                         cfg.eth_noc_wait_cycles,  // 3: noc_wait_cycles (0 = max DRAM util)
+                        static_cast<uint32_t>(cfg.eth_duration_ticks >> 32),  // 4: duration hi
                     },
             };
             eth_test_common::set_arch_specific_eth_config(eth_cfg);
@@ -1191,13 +1180,11 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 
             log_info(
                 LogTest,
-                "ETH DRAM streaming: {} bank streams, {} enqueues × {} inner iterations "
-                "(compute loops={}, base ratio=1/8, scaled by DRAM utilization), "
+                "ETH DRAM streaming: {} bank streams, {} enqueues × {} ticks, "
                 "{} pages/bank × {} B/page ({}KB)",
                 assignments.size(),
                 cfg.num_iterations,
-                cfg.eth_num_wl_loops,
-                cfg.num_wl_loops,
+                cfg.eth_duration_ticks,
                 cfg.eth_pages_per_bank,
                 cfg.eth_page_size,
                 cfg.eth_page_size / 1024);
@@ -1378,6 +1365,32 @@ static bool log_fpu_utilization(IDevice* device, const MaxUtilConfig& cfg) {
 // log_eth_bw – reads per-core timing persisted in DRAM and logs bandwidth
 // ---------------------------------------------------------------------------
 
+/// Minimum host-timed dispatch length for converting ticks with host time;
+/// shorter runs are dominated by launch latency and use the nominal clock.
+static constexpr double kMinHostTimedSeconds = 2.0;
+
+struct TickClock {
+    double ghz;
+    std::string source;
+};
+
+/// Clock rate for converting a generator's elapsed ticks to time. Device wall
+/// clocks tick at AICLK, which DVFS drops (to 800 MHz on Blackhole) when the
+/// chip hits its power limit. For long runs the average rate is the busiest
+/// generator's ticks over the host-measured dispatch time; generators are
+/// sized to span the same window, so this is valid for all of them.
+static TickClock tick_clock(IDevice* device, const MaxUtilConfig& cfg, uint64_t max_elapsed_ticks) {
+    const double nominal = static_cast<double>(device->get_clock_rate_mhz()) / 1000.0;
+    if (cfg.dispatch_seconds < kMinHostTimedSeconds || max_elapsed_ticks == 0) {
+        return {nominal, "nominal AICLK"};
+    }
+    const double measured = static_cast<double>(max_elapsed_ticks) / (cfg.dispatch_seconds * 1e9);
+    if (measured >= nominal) {
+        return {nominal, "nominal AICLK"};
+    }
+    return {measured, measured < 0.95 * nominal ? "host-timed avg AICLK, THROTTLED" : "host-timed avg AICLK"};
+}
+
 static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_ptr<Buffer>& dram_buffer) {
     if (cfg.eth_dram_buffer_addr == 0 || dram_buffer == nullptr) {
         log_info(LogTest, "Device {}: ETH DRAM bandwidth validation skipped (no active ETH streams)", device->id());
@@ -1393,17 +1406,16 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
     detail::ReadFromBuffer(dram_buffer, readback);
 
     // Each stream reads cfg.eth_pages_per_bank pages from 1 bank per iteration.
-    uint64_t bytes_per_stream =
-        static_cast<uint64_t>(cfg.eth_num_wl_loops) * cfg.eth_pages_per_bank * cfg.eth_page_size;
+    const uint64_t bytes_per_iter = static_cast<uint64_t>(cfg.eth_pages_per_bank) * cfg.eth_page_size;
 
-    // Blackhole's active-ETH wall-clock counter runs in the device AICLK domain.
-    // Use the live clock rate because AICLK is DVFS-controlled (800 MHz idle,
-    // nominally 1.35 GHz while busy).
-    const double eth_wall_clock_ghz = static_cast<double>(device->get_clock_rate_mhz()) / 1000.0;
-
-    double total_bw_bpc = 0.0;  // bytes/cycle
-    uint32_t reported = 0;
-
+    struct Stream {
+        CoreCoord core;
+        uint32_t bank;
+        uint64_t elapsed;
+        uint64_t bytes;
+    };
+    std::vector<Stream> streams;
+    uint64_t max_elapsed = 0;
     for (const auto& [eth_core, bank_id] : assignments) {
         const size_t timing_offset = static_cast<size_t>(bank_id) * cfg.eth_page_size / sizeof(uint32_t);
         if (readback.size() < timing_offset + 4) {
@@ -1417,57 +1429,63 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
                 readback.size());
             continue;
         }
-
-        uint64_t t0 = (static_cast<uint64_t>(readback[timing_offset + 1]) << 32) | readback[timing_offset];
-        uint64_t t1 = (static_cast<uint64_t>(readback[timing_offset + 3]) << 32) | readback[timing_offset + 2];
-        if (t1 <= t0) {
+        const uint64_t elapsed =
+            (static_cast<uint64_t>(readback[timing_offset + 1]) << 32) | readback[timing_offset];
+        const uint64_t iters =
+            (static_cast<uint64_t>(readback[timing_offset + 3]) << 32) | readback[timing_offset + 2];
+        if (elapsed == 0 || iters == 0) {
             log_warning(
                 LogTest,
-                "Device {} ETH core ({},{}) bank {} – invalid timing (t0={}, t1={}), skipping",
+                "Device {} ETH core ({},{}) bank {} – invalid timing (elapsed={}, iterations={}), skipping",
                 device->id(),
                 eth_core.x,
                 eth_core.y,
                 bank_id,
-                t0,
-                t1);
+                elapsed,
+                iters);
             continue;
         }
-        uint64_t cycles = t1 - t0;
-        double bw_bpc = static_cast<double>(bytes_per_stream) / static_cast<double>(cycles);
-        double bw_gbps = bw_bpc * eth_wall_clock_ghz;
-        total_bw_bpc += bw_bpc;
-        ++reported;
+        streams.push_back({eth_core, bank_id, elapsed, iters * bytes_per_iter});
+        max_elapsed = std::max(max_elapsed, elapsed);
+    }
 
-        auto eth_noc0 = eth_noc0_coord(device, eth_core);
-        auto dram_noc0 = dram_noc0_coord(device, bank_id);
+    const auto clk = tick_clock(device, cfg, max_elapsed);
+    double total_bw_bpc = 0.0;  // bytes/cycle
+    for (const auto& st : streams) {
+        const double bw_bpc = static_cast<double>(st.bytes) / static_cast<double>(st.elapsed);
+        total_bw_bpc += bw_bpc;
+        auto eth_noc0 = eth_noc0_coord(device, st.core);
+        auto dram_noc0 = dram_noc0_coord(device, st.bank);
         log_info(
             LogTest,
             "Device {} ETH ({},{}) [NOC0 ({},{})] → bank {} [NOC0 ({},{})] "
             "BW: {:.3f} bytes/cycle  {:.2f} GB/s  ({} bytes, {} cycles)",
             device->id(),
-            eth_core.x,
-            eth_core.y,
+            st.core.x,
+            st.core.y,
             eth_noc0.x,
             eth_noc0.y,
-            bank_id,
+            st.bank,
             dram_noc0.x,
             dram_noc0.y,
             bw_bpc,
-            bw_gbps,
-            bytes_per_stream,
-            cycles);
+            bw_bpc * clk.ghz,
+            st.bytes,
+            st.elapsed);
     }
+    const size_t reported = streams.size();
 
     if (reported > 0) {
         log_info(
             LogTest,
             "Device {}: aggregate ETH-to-DRAM BW ({} banks): {:.3f} bytes/cycle  {:.2f} GB/s  "
-            "(@ {:.2f} GHz ETH wall clock)",
+            "(@ {:.2f} GHz, {})",
             device->id(),
             reported,
             total_bw_bpc,
-            total_bw_bpc * eth_wall_clock_ghz,
-            eth_wall_clock_ghz);
+            total_bw_bpc * clk.ghz,
+            clk.ghz,
+            clk.source);
     }
     return reported == assignments.size();
 }
@@ -1507,12 +1525,13 @@ static bool log_tensix_dram_bw(IDevice* device, const MaxUtilConfig& cfg) {
         log_warning(LogTest, "Device {}: no valid Tensix DRAM timing records", device->id());
         return false;
     }
-    const double ghz = static_cast<double>(device->get_clock_rate_mhz()) / 1000.0;
+    const auto clk = tick_clock(device, cfg, max_elapsed);
+    const double ghz = clk.ghz;
     const double bpc = static_cast<double>(total_bytes) / static_cast<double>(max_elapsed);
     log_info(
         LogTest,
         "Device {}: aggregate Tensix-to-DRAM BW ({} cores, {} banks): {:.2f} bytes/cycle  {:.2f} GB/s  "
-        "({} bytes, window {}..{} cycles @ {:.2f} GHz)",
+        "({} bytes, window {}..{} cycles @ {:.2f} GHz, {})",
         device->id(),
         core_range.size() - bad_cores,
         cfg.tdram_num_banks,
@@ -1521,7 +1540,8 @@ static bool log_tensix_dram_bw(IDevice* device, const MaxUtilConfig& cfg) {
         total_bytes,
         min_elapsed,
         max_elapsed,
-        ghz);
+        ghz,
+        clk.source);
     if (bad_cores > 0) {
         log_warning(LogTest, "Device {}: {} worker(s) reported no Tensix DRAM traffic", device->id(), bad_cores);
     }
@@ -1539,8 +1559,17 @@ static bool log_eth_link_bw(IDevice* device, const MaxUtilConfig& cfg, const sha
     }
     std::vector<uint32_t> readback;
     detail::ReadFromBuffer(timing_buffer, readback);
-    const double ghz = static_cast<double>(device->get_clock_rate_mhz()) / 1000.0;
     constexpr size_t words_per_page = kEthLinkTimingPageBytes / sizeof(uint32_t);
+    uint64_t max_link_elapsed = 0;
+    for (size_t i = 0; i < cfg.eth_links.size(); ++i) {
+        const size_t off = i * words_per_page;
+        if (readback.size() >= off + 2) {
+            max_link_elapsed =
+                std::max(max_link_elapsed, (static_cast<uint64_t>(readback[off + 1]) << 32) | readback[off]);
+        }
+    }
+    const auto clk = tick_clock(device, cfg, max_link_elapsed);
+    const double ghz = clk.ghz;
     bool ok = true;
     double total_tx_bpc = 0.0;
     for (size_t i = 0; i < cfg.eth_links.size(); ++i) {
@@ -1553,7 +1582,9 @@ static bool log_eth_link_bw(IDevice* device, const MaxUtilConfig& cfg, const sha
         const uint64_t elapsed = (static_cast<uint64_t>(readback[off + 1]) << 32) | readback[off];
         const uint32_t sent = readback[off + 2];
         const uint32_t received = readback[off + 3];
-        const bool complete = elapsed != 0 && sent == cfg.eth_link_num_msgs && received == cfg.eth_link_num_msgs;
+        // Each side drains the peer's traffic before exiting, so a record with
+        // traffic both ways means the link ran and shut down cleanly.
+        const bool complete = elapsed != 0 && sent != 0 && received != 0;
         ok &= complete;
         const double tx_bpc =
             elapsed == 0 ? 0.0 : static_cast<double>(sent) * cfg.eth_link_xfer_bytes / static_cast<double>(elapsed);
@@ -1576,10 +1607,12 @@ static bool log_eth_link_bw(IDevice* device, const MaxUtilConfig& cfg, const sha
     }
     log_info(
         LogTest,
-        "Device {}: aggregate ETH link TX BW ({} links): {:.2f} GB/s (RX is symmetric)",
+        "Device {}: aggregate ETH link TX BW ({} links): {:.2f} GB/s (RX is symmetric) (@ {:.2f} GHz, {})",
         device->id(),
         cfg.eth_links.size(),
-        total_tx_bpc * ghz);
+        total_tx_bpc * ghz,
+        ghz,
+        clk.source);
     return ok;
 }
 
@@ -1624,6 +1657,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
             LogTest, "Duty-cycle interleave: slow cos loops={} between each max-util dispatch", cfg.num_slow_wl_loops);
     }
 
+    const auto t_start = std::chrono::steady_clock::now();
     for (uint32_t i = 0; i < cfg.num_iterations; ++i) {
         bool is_last = (i == cfg.num_iterations - 1);
         if (has_slow_wl) {
@@ -1635,6 +1669,10 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
         }
     }
     distributed::Finish(cq);
+    if (!has_slow_wl) {
+        cfg.dispatch_seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count() / cfg.num_iterations;
+    }
 
     const bool fpu_on = cfg.fpu_utilization_pct != 0;
     bool valid_compute_output = !fpu_on || validate_compute_output(device, cfg);
@@ -1735,6 +1773,7 @@ static bool run_all_devices(
         log_info(LogTest, "Duty-cycle interleave active: slow cos between each max-util dispatch");
     }
 
+    const auto t_start = std::chrono::steady_clock::now();
     for (uint32_t i = 0; i < num_iterations; ++i) {
         bool is_last = (i == num_iterations - 1);
         bool is_log_iter = ((i + 1) % 100 == 0) || is_last;
@@ -1755,6 +1794,13 @@ static bool run_all_devices(
     }
     for (auto& run : runs) {
         distributed::Finish(run.mesh_device->mesh_command_queue());
+    }
+    const double dispatch_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count() / num_iterations;
+    for (auto& run : runs) {
+        if (run.cfg.num_slow_wl_loops == 0) {
+            run.cfg.dispatch_seconds = dispatch_seconds;
+        }
     }
 
     // Report FPU utilization and per-ETH-core DRAM bandwidth for every device.

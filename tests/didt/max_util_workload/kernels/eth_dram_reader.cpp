@@ -3,32 +3,39 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ETH DRAM streaming kernel: each ETH core reads from exactly ONE assigned DRAM
-// bank into ETH L1, times the run, and writes start/end wall-clock timestamps
-// to the first 16 bytes of the assigned bank's DRAM region. Persisting the
-// timing in DRAM is necessary because active-ETH L1 is reclaimed by firmware
-// after the kernel exits.
+// bank into ETH L1 for a fixed wall-clock duration, then writes its elapsed
+// ticks and iteration count to the first 16 bytes of the assigned bank's DRAM
+// region. Persisting the result in DRAM is necessary because active-ETH L1 is
+// reclaimed by firmware after the kernel exits.
+//
+// The run is duration-bounded (not a fixed amount of work) so it ends together
+// with the other generators even when it shares the ETH core with link traffic.
 //
 // One bank per core means summing per-core bandwidths gives total DRAM bandwidth.
 //
-// Compile-time args (indices 0..3):
-//   0: num_loops         – outer loop count
+// Compile-time args (indices 0..4):
+//   0: duration_ticks_lo – run duration in wall-clock ticks (low 32 bits)
 //   1: pages_per_bank    – pages read per iteration from the assigned bank
 //   2: page_size_bytes   – bytes per page
 //   3: noc_wait_cycles   – cycles to busy-wait between consecutive NOC page issues;
 //                          0 = no throttle (maximum DRAM utilization)
+//   4: duration_ticks_hi – run duration in wall-clock ticks (high 32 bits)
 //
 // Runtime args (indices 0..3):
 //   0: dram_src_addr       – base DRAM buffer address (interleaved across banks)
 //   1: eth_l1_staging_addr – ETH L1 unreserved base; first 64 bytes are reserved
 //   2: bank_id             – which DRAM bank this core is assigned to
 //   3: read_vc             – static NOC request VC for this stream
+//
+// Output (16 B): [elapsed_lo, elapsed_hi, iterations_lo, iterations_hi]
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "internal/ethernet/tt_eth_api.h"
 
 void kernel_main() {
-    constexpr uint32_t num_loops = get_compile_time_arg_val(0);
+    constexpr uint64_t duration_ticks =
+        (static_cast<uint64_t>(get_compile_time_arg_val(4)) << 32) | get_compile_time_arg_val(0);
     constexpr uint32_t pages_per_bank = get_compile_time_arg_val(1);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t noc_wait_cycles = get_compile_time_arg_val(3);
@@ -53,9 +60,13 @@ void kernel_main() {
     // the state only needs to be re-set if the source NOC address changes.
     noc_async_read_one_packet_set_state<true>(bank_noc_base, page_size_bytes, read_vc);
 
-    uint64_t t0 = eth_read_wall_clock();
+    // Only the low clock word is read: both ERISCs may be running, and reading
+    // the latched 64-bit clock here could disturb the link kernel's reads.
+    uint32_t prev = eth_risc_reg_read(ETH_RISC_WALL_CLOCK_0);
+    uint64_t elapsed = 0;
+    uint64_t iterations = 0;
 
-    for (uint32_t iter = 0; iter < num_loops; iter++) {
+    while (elapsed < duration_ticks) {
         uint32_t dst = l1_data_addr;
         for (uint32_t p = 0; p < pages_per_bank; p++) {
             noc_async_read_one_packet_with_state<true, true>(bank_noc_base + p * page_size_bytes, dst, read_vc);
@@ -72,16 +83,18 @@ void kernel_main() {
         }
         // Active-ETH kernels must service base-firmware routing while waiting.
         eth_noc_async_read_barrier();
+        iterations++;
+        const uint32_t now = eth_risc_reg_read(ETH_RISC_WALL_CLOCK_0);
+        elapsed += now - prev;
+        prev = now;
     }
 
-    uint64_t t1 = eth_read_wall_clock();
-
-    // Persist t0 and t1 as lo/hi uint32_t pairs in the assigned DRAM bank.
+    // Persist elapsed ticks and iteration count in the assigned DRAM bank.
     // The host cannot read these reliably from active-ETH L1 after completion.
-    timing_out[0] = static_cast<uint32_t>(t0 & 0xFFFFFFFFu);
-    timing_out[1] = static_cast<uint32_t>(t0 >> 32);
-    timing_out[2] = static_cast<uint32_t>(t1 & 0xFFFFFFFFu);
-    timing_out[3] = static_cast<uint32_t>(t1 >> 32);
+    timing_out[0] = static_cast<uint32_t>(elapsed);
+    timing_out[1] = static_cast<uint32_t>(elapsed >> 32);
+    timing_out[2] = static_cast<uint32_t>(iterations);
+    timing_out[3] = static_cast<uint32_t>(iterations >> 32);
     noc_async_write(eth_l1_staging_addr, bank_noc_base, 16);
     eth_noc_async_write_barrier();
 }

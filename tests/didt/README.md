@@ -166,8 +166,10 @@ Its raw knobs mirror the syseng ttx NOC power virus:
 | `<prefix>_PERIOD_512` | Phase period in units of 512 ticks, a power of two | 256 (~97 µs) |
 
 ETH-link-only knobs:
-- `MAX_UTIL_ETH_LINK_NUM_MSGS` sets the payloads per side per dispatch. By default it is derived from the compute duration.
 - `MAX_UTIL_ETH_LINK_STARTUP_DELAY_TICKS` adds a delay before the per-dispatch handshake.
+
+All generators run for the estimated compute window (in AICLK ticks), so they start and stop together. The ETH link and ETH-DRAM generators are duration-bounded too, because link speed does not scale with AICLK.
+Reported bandwidths for runs of 2 s or more convert ticks with the host-timed average AICLK, and lines are tagged `THROTTLED` when it fell below 95% of nominal.
 
 Ethernet link traffic runs only in `MaxUtilWorkload_AllDevices`, because both ends of a link must be dispatched together.
 Smoke and Stress log a skip.

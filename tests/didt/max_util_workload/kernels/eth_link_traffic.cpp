@@ -3,11 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Ethernet link traffic kernel (active ERISC0). The same kernel runs on both
-// ends of every link that is up; each side sends num_msgs payloads to its peer
-// and acks every payload it receives, so SerDes TX and RX toggle in both
-// directions. Flow control and handshake follow the ethernet ubench kernels
+// ends of every link that is up; each side sends payloads to its peer for a
+// fixed wall-clock duration and acks every payload it receives, so SerDes TX
+// and RX toggle in both directions. Flow control and handshake follow the
+// ethernet ubench kernels
 // (tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/
 //  ethernet_write_worker_latency_ubench_common.hpp).
+//
+// The run is duration-bounded rather than a fixed message count, so it spans
+// the same window as the other generators. Link throughput is set by the
+// SerDes, not AICLK, so a message count sized in AICLK ticks would finish early
+// when the chip throttles. When its window closes a side stops sending and
+// sends a FIN carrying its sent count. Both sides keep acking until the peer's
+// FIN has arrived, all of the peer's payloads are received and all of their own
+// payloads are acked. ETH packets are delivered in order, so FIN arrives after
+// the last payload.
 //
 // Throttling mirrors the syseng ttx NOC power virus knobs:
 //   burst      – payloads per burst; 0 = continuous
@@ -17,6 +27,8 @@
 // L1 layout from runtime arg l1_base (unreserved ETH L1):
 //   [0, 16)   handshake word (written by peer)
 //   [16, 32)  timing record staging, persisted to DRAM at the end
+//   [32, 48)  FIN word (written by peer): [magic, peer_sent, 0, 0]
+//   [48, 64)  FIN staging (sent to the peer's FIN word)
 //   [64, ...) region A: num_slots × (xfer_bytes + 16 B sync)
 //   [...]     region B: same size
 // Role 0 sends from region A and receives into region B; role 1 is mirrored,
@@ -36,9 +48,12 @@
 // Runtime args:
 //   0: l1_base
 //   1: role          – 0 or 1 (opposite on the peer)
-//   2: num_msgs      – payloads this side sends (identical on both sides)
-//   3: dram_timing_bank_id
-//   4: dram_timing_addr – DRAM address (in bank) for the 16 B timing record
+//   2: duration_lo   – send window in wall-clock ticks (low 32 bits)
+//   3: duration_hi
+//   4: dram_timing_bank_id
+//   5: dram_timing_addr – DRAM address (in bank) for the 16 B timing record
+//
+// Timing record: [elapsed_lo, elapsed_hi, sent, received]
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -59,6 +74,7 @@ static_assert(sizeof(slot_sync_t) == 16);
 constexpr uint32_t kIdleUnitTicks = 512;
 constexpr uint32_t kHeaderBytes = 64;
 constexpr uint32_t kRoutingInterval = 4096;
+constexpr uint32_t kFinMagic = 0xF1F1F1F1u;
 
 constexpr uint32_t num_slots = get_compile_time_arg_val(0);
 constexpr uint32_t xfer_bytes = get_compile_time_arg_val(1);
@@ -74,6 +90,10 @@ static_assert(xfer_bytes % 16 == 0, "xfer_bytes must be a multiple of 16");
 
 FORCE_INLINE uint32_t next(uint32_t p) { return (p + 1) & (num_slots - 1); }
 
+// Only the low wall-clock word is read: ERISC1 may run the ETH DRAM reader, and
+// interleaved reads of the latched 64-bit clock could pair a stale high word.
+FORCE_INLINE uint32_t wall_clock_l() { return eth_risc_reg_read(ETH_RISC_WALL_CLOCK_0); }
+
 FORCE_INLINE volatile slot_sync_t* sync_of(uint32_t slot_addr) {
     return reinterpret_cast<volatile slot_sync_t*>(slot_addr + xfer_bytes);
 }
@@ -83,12 +103,15 @@ FORCE_INLINE volatile slot_sync_t* sync_of(uint32_t slot_addr) {
 void kernel_main() {
     const uint32_t l1_base = get_arg_val<uint32_t>(0);
     const uint32_t role = get_arg_val<uint32_t>(1);
-    const uint32_t num_msgs = get_arg_val<uint32_t>(2);
-    const uint32_t dram_timing_bank_id = get_arg_val<uint32_t>(3);
-    const uint32_t dram_timing_addr = get_arg_val<uint32_t>(4);
+    const uint64_t duration_ticks = (static_cast<uint64_t>(get_arg_val<uint32_t>(3)) << 32) | get_arg_val<uint32_t>(2);
+    const uint32_t dram_timing_bank_id = get_arg_val<uint32_t>(4);
+    const uint32_t dram_timing_addr = get_arg_val<uint32_t>(5);
 
     const uint32_t handshake_addr = l1_base;
     volatile tt_l1_ptr uint32_t* timing = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + 16);
+    const uint32_t fin_addr = l1_base + 32;
+    volatile tt_l1_ptr uint32_t* fin_in = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fin_addr);
+    volatile tt_l1_ptr uint32_t* fin_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + 48);
     const uint32_t region_a = l1_base + kHeaderBytes;
     const uint32_t region_b = region_a + num_slots * slot_stride;
     const uint32_t tx_base = role == 0 ? region_a : region_b;
@@ -106,6 +129,11 @@ void kernel_main() {
         sync_of(tx_slot)->bytes_sent = 0;
         sync_of(rx_base + i * slot_stride)->bytes_sent = 0;
     }
+    // The peer only sends FIN after the handshake, so clearing it here is safe.
+    for (uint32_t w = 0; w < 4; w++) {
+        fin_in[w] = 0;
+        fin_out[w] = 0;
+    }
 
     if constexpr (startup_delay_ticks != 0) {
         eth_wait_cycles(startup_delay_ticks);
@@ -120,32 +148,52 @@ void kernel_main() {
         eth_receiver_channel_done(0);
     }
 
-    const uint64_t t0 = eth_read_wall_clock();
+    uint32_t prev_clk = wall_clock_l();
+    uint64_t elapsed = 0;  // ticks since the handshake
 
     uint32_t tx_wr = 0;  // next TX slot to send
     uint32_t tx_rd = 0;  // oldest TX slot awaiting ack
     uint32_t tx_inflight = 0;
     uint32_t sent = 0;
-    uint32_t acked = 0;
     uint32_t rx_rd = 0;  // next RX slot expected
     uint32_t received = 0;
 
+    bool sending = true;  // own send window still open
+    bool fin_sent = false;
     uint32_t burst_left = burst;
     bool idling = false;
     uint64_t idle_end = 0;
     uint32_t iter = 0;
 
-    while (acked < num_msgs || received < num_msgs) {
+    while (true) {
+        const uint32_t now = wall_clock_l();
+        elapsed += now - prev_clk;
+        prev_clk = now;
+
+        // --- send window closed: announce FIN once the TX queue is free ---
+        if (sending && elapsed >= duration_ticks) {
+            sending = false;
+        }
+        if (!sending && !fin_sent && !eth_txq_is_busy()) {
+            fin_out[0] = kFinMagic;
+            fin_out[1] = sent;
+            eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
+                reinterpret_cast<uint32_t>(fin_out), fin_addr, 16);
+            fin_sent = true;
+        }
+
         // --- TX: send next payload if a slot is free and we are not idling ---
-        if (idling && eth_read_wall_clock() >= idle_end) {
+        if (idling && elapsed >= idle_end) {
             idling = false;
             burst_left = burst;
         }
         bool in_phase = true;
         if constexpr (period_units != 0) {
-            in_phase = ((eth_read_wall_clock() / kIdleUnitTicks) & (period_units - 1)) < active_units;
+            // 2^32 / 512 is a multiple of period_units, so the low clock word
+            // gives a consistent phase across wrap-around.
+            in_phase = ((now / kIdleUnitTicks) & (period_units - 1)) < active_units;
         }
-        if (in_phase && !idling && sent < num_msgs && tx_inflight < num_slots && !eth_txq_is_busy()) {
+        if (sending && in_phase && !idling && tx_inflight < num_slots && !eth_txq_is_busy()) {
             const uint32_t slot = tx_base + tx_wr * slot_stride;
             sync_of(slot)->bytes_sent = xfer_bytes;
             eth_send_bytes_over_channel_payload_only_unsafe_one_packet(slot, slot, slot_stride);
@@ -155,7 +203,7 @@ void kernel_main() {
             if constexpr (burst != 0 && idle_units != 0) {
                 if (--burst_left == 0) {
                     idling = true;
-                    idle_end = eth_read_wall_clock() + static_cast<uint64_t>(idle_units) * kIdleUnitTicks;
+                    idle_end = elapsed + static_cast<uint64_t>(idle_units) * kIdleUnitTicks;
                 }
             }
         }
@@ -166,21 +214,23 @@ void kernel_main() {
             if (sync_of(tx_base + tx_rd * slot_stride)->bytes_sent == 0) {
                 tx_rd = next(tx_rd);
                 tx_inflight--;
-                acked++;
             }
         }
 
         // --- RX: ack incoming payload by zeroing its sync word on the peer ---
-        if (received < num_msgs) {
-            invalidate_l1_cache();
-            volatile slot_sync_t* rx_sync = sync_of(rx_base + rx_rd * slot_stride);
-            if (rx_sync->bytes_sent != 0 && !eth_txq_is_busy()) {
-                rx_sync->bytes_sent = 0;
-                const uint32_t sync_addr = reinterpret_cast<uint32_t>(rx_sync);
-                eth_send_bytes_over_channel_payload_only_unsafe_one_packet(sync_addr, sync_addr, sizeof(slot_sync_t));
-                rx_rd = next(rx_rd);
-                received++;
-            }
+        invalidate_l1_cache();
+        volatile slot_sync_t* rx_sync = sync_of(rx_base + rx_rd * slot_stride);
+        if (rx_sync->bytes_sent != 0 && !eth_txq_is_busy()) {
+            rx_sync->bytes_sent = 0;
+            const uint32_t sync_addr = reinterpret_cast<uint32_t>(rx_sync);
+            eth_send_bytes_over_channel_payload_only_unsafe_one_packet(sync_addr, sync_addr, sizeof(slot_sync_t));
+            rx_rd = next(rx_rd);
+            received++;
+        }
+
+        // --- done: own FIN out, own payloads all acked, peer finished and drained ---
+        if (fin_sent && tx_inflight == 0 && fin_in[0] == kFinMagic && received == fin_in[1]) {
+            break;
         }
 
         if (++iter == kRoutingInterval) {
@@ -189,14 +239,11 @@ void kernel_main() {
         }
     }
 
-    const uint64_t t1 = eth_read_wall_clock();
-
     // Let the final ack leave the TX queue before reusing L1 / exiting.
     while (eth_txq_is_busy()) {
     }
 
     // Persist timing in DRAM; active-ETH L1 is reclaimed after the kernel exits.
-    const uint64_t elapsed = t1 - t0;
     timing[0] = static_cast<uint32_t>(elapsed);
     timing[1] = static_cast<uint32_t>(elapsed >> 32);
     timing[2] = sent;
