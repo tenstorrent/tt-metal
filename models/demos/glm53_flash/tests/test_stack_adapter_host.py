@@ -2282,3 +2282,129 @@ def test_served_spec_declines_image_requests():
     assert do.num_valid.tolist() == [K, 0, 0, 0] and ad.spec_stats["enters"] == 1
     ad.release_request(0)
     assert "ttnn" not in sys.modules and "vllm" not in sys.modules
+
+
+# ------------------------------------------------- Stage 17: the deferred verify readback (supports_async_spec_decode)
+class _MockSpecDeferred(_MockSpec):
+    """+ SpecMTP's deferred record read: read_async copies the record at the enqueue point (no event on the CPU
+    stand-in), finish_read hands it back -- the generator must go through both"""
+
+    def read_async(self):
+        self.counters["async_reads"] = self.counters.get("async_reads", 0) + 1
+        return ("rec", dict(self._rec)), []
+
+    def finish_read(self, pending) -> dict:
+        assert pending[0] == "rec"
+        return pending[1]
+
+
+class _MockSpecAsyncBackend(_MockSpecBackend):
+    def allocate_decode_io(self, kv):
+        io = super().allocate_decode_io(kv)
+        self.spec = _MockSpecDeferred(self, self.K, self.good)
+        return io
+
+
+def _drain(ad, out):
+    """the plugin's async readback of one submission: read_decode_output(async_read=True) at the submission, then
+    process_decode_output_host at its finalize -> host ids"""
+    h, events = ad.read_decode_output(out, async_read=True)
+    assert events == []
+    return ad.process_decode_output_host(h, is_tokens=True)
+
+
+def test_spec_async_capability_knob():
+    """supports_async_spec_decode = GLM53_STACK_VLLM_SPEC_ASYNC=1 on a speculating launch that declares the ordinary
+    async decode (the resident-input chain); off by default"""
+    on = {"GLM53_STACK_VLLM_SPEC": "1", "GLM53_SPEC_K": "3", "GLM53_STACK_VLLM_SPEC_ASYNC": "1"}
+    assert gvs.spec_async_enabled(on, async_decode=True)
+    assert not gvs.spec_async_enabled(on, async_decode=False)
+    assert not gvs.spec_async_enabled(dict(on, GLM53_STACK_VLLM_SPEC_ASYNC="0"), async_decode=True)
+    assert not gvs.spec_async_enabled(dict(on, GLM53_STACK_VLLM_SPEC="0"), async_decode=True)
+    assert GLM53StackForCausalLM.model_capabilities["supports_async_spec_decode"] is gvs.SPEC_ASYNC is False
+
+
+def test_served_spec_async_readback():
+    """SPEC_DECODE_CONTRACT.md 4c with the deferred readback: the plugin's async verify (read_from_device=False)
+    returns a SpecReadback -- the step ran, slot 0's bookkeeping waits -- read_decode_output(async_read=True) hands it
+    back with its events and process_decode_output_host completes it into the [B, 1+K] argmax ids before the walk; the
+    committed stream equals plain greedy. Ordinary decodes overlap as in a non-speculating launch: a proposal at the
+    drain of a step whose successor is already in flight declines (the block's position is behind the slot's), the
+    next drain's enters. An entry point that reads slot state completes an outstanding verify itself."""
+    K = 3
+    backend = _MockSpecAsyncBackend(B, K, good=lambda step: (step % K) + 1)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ, spec=True, spec_async=True)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    prompt, table = _prompt(100, 7), _table([_blocks(0, 400)], B)
+    out, _ = ad.prefill_forward(_history([prompt]), page_table=table[:1], kv_cache=kv, prompt_lens=[100],
+                                start_pos=[0], empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
+    stream, pos = [int(out[0, 0])], 100
+    e0 = backend.spec.counters["enters"]
+    assert ad.spec_stats["seeds"] == 1 == e0  # (the MTP seed: enter + leave right after the prefill)
+    # ---- two ordinary decodes in flight (a reload step, then a resident chain step submitted before its drain)
+    kw = dict(page_table=table, kv_cache=kv, enable_trace=True, sampling_params=_greedy(B), read_from_device=False)
+    h1 = ad.decode_forward(torch.tensor([[stream[-1]], [0], [0], [0]]), torch.tensor([pos, -1, -1, -1]), **kw)
+    p1 = ad.read_decode_output(h1, async_read=True)
+    h2 = ad.decode_forward(torch.zeros(B, 1, dtype=torch.int32), torch.full((B,), -1), reload_inputs=False,
+                           reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False,
+                           **kw)  # fmt: skip
+    p2 = ad.read_decode_output(h2, async_read=True)
+    stream.append(int(ad.process_decode_output_host(p1[0], is_tokens=True)[0, 0]))
+    do = ad.propose_draft_tokens(K, *_block({0: ([stream[-1]], pos + 1)}, K))  # step 1's drain: step 2 in flight
+    assert do.num_valid.tolist() == [0] * B and backend.spec.counters["enters"] == e0
+    stream.append(int(ad.process_decode_output_host(p2[0], is_tokens=True)[0, 0]))
+    pos += 2
+    do = ad.propose_draft_tokens(K, *_block({0: ([stream[-1]], pos)}, K))  # step 2's drain: nothing in flight
+    assert do.num_valid.tolist() == [K, 0, 0, 0] and backend.spec.counters["enters"] == e0 + 1
+    # ---- deferred verifies
+    b = gen._binding(kv)
+    for i in range(5):
+        drafts = [int(v) for v in do.draft_token_ids[0].tolist()]
+        tok = torch.zeros(B, 1 + K, dtype=torch.int32)
+        p = torch.full((B, 1 + K), -1, dtype=torch.int32)
+        tok[0] = torch.tensor([stream[-1]] + drafts, dtype=torch.int32)
+        p[0] = torch.arange(pos, pos + 1 + K)
+        nv = torch.tensor([K, 0, 0, 0], dtype=torch.int32)
+        vo = ad.decode_forward(tok, p, num_valid_drafts=nv, accepted_counts=torch.ones(B, dtype=torch.int32),
+                               spec_mode="argmax_ids", reload_inputs=True, **kw)  # fmt: skip
+        rb = vo.argmax_ids
+        assert isinstance(rb, gvs.SpecReadback) and ad._spec_pending is rb and rb.ids is None
+        assert int(b.slots[0].seq_len) == pos and b.spec_pending is rb.handle  # bookkeeping deferred
+        if i == 2:  # a caller that never completes it: the next entry point does (here the proposal)
+            ids = None
+        else:
+            ids = _drain(ad, rb)
+            assert tuple(ids.shape) == (B, 1 + K) and ids is rb.ids and ad._spec_pending is None
+        nvd = torch.tensor([K, 0, 0, 0])
+        if ids is None:
+            n_acc = None
+        else:
+            committed, counts = accept_greedy_walk(ids, tok[:, 1:].clone(), nvd)
+            n_acc = int(counts[0])
+            new = [int(v) for v in committed[0, :n_acc].tolist()]
+        if ids is None:  # (what the walk would have committed: the device's record)
+            rec = backend.spec.read()
+            new = [int(v) for v in rec["committed"]]
+        do = ad.propose_draft_tokens(K, *_block({0: (new, pos + 1)}, K))
+        assert do.num_valid.tolist() == [K, 0, 0, 0] and ad._spec_pending is None and b.spec_pending is None
+        assert n_acc is None or n_acc == len(new) == ad._spec_n + 1
+        stream += new
+        pos += len(new)
+        assert int(b.slots[0].seq_len) == pos
+    assert ad.spec_stats["fused"] == ad.spec_stats["deferred"] == 5 and backend.spec.counters["async_reads"] == 5
+    assert stream == [(prompt[-1] + 1 + i) % VOCAB for i in range(len(stream))]  # = plain greedy
+    # ---- released with a verify outstanding: completed, then aborted
+    drafts = [int(v) for v in do.draft_token_ids[0].tolist()]
+    tok = torch.zeros(B, 1 + K, dtype=torch.int32)
+    tok[0] = torch.tensor([stream[-1]] + drafts, dtype=torch.int32)
+    p = torch.full((B, 1 + K), -1, dtype=torch.int32)
+    p[0] = torch.arange(pos, pos + 1 + K)
+    vo = ad.decode_forward(tok, p, num_valid_drafts=torch.tensor([K, 0, 0, 0]), spec_mode="argmax_ids",
+                           accepted_counts=torch.ones(B, dtype=torch.int32), reload_inputs=True, **kw)  # fmt: skip
+    assert isinstance(vo.argmax_ids, gvs.SpecReadback)
+    ad.release_request(0)
+    assert vo.argmax_ids.ids is not None and backend.spec.counters.get("aborts") == 1 and b.spec_pending is None
+    assert "ttnn" not in sys.modules

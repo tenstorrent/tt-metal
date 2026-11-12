@@ -558,6 +558,19 @@ class PendingTokens:
     pending: Any
 
 
+@dataclass
+class SpecPending:
+    """`spec_step_submit`'s handle (Stage 17, the deferred verify readback): the step was replayed and the copy of its
+    record enqueued behind it (`pending`, `events`: the backend spec step's read_async); `spec_step_collect` waits on the
+    events, parses the record and applies the slot's bookkeeping once (`rec` afterwards)."""
+
+    binding: Any
+    L: int
+    pending: Any
+    events: list
+    rec: Optional[dict] = None
+
+
 class _CacheBinding:
     """Generator bookkeeping for one KV cache: DecodeIO, host shadows of the persistent device inputs, traces, slots.
 
@@ -2310,7 +2323,15 @@ class Glm53Generator(_ReadinessGenerator):
         """one speculative step (verify + accept + draft, ONE trace replay) -> the record: n accepted drafts, the
         committed tokens a[0..n], the next drafts; slot 0's cache length += n + 1. page_row: slot 0's page-table row
         when the caller's changed (it must cover the K+1 verify positions)"""
+        return self.spec_step_collect(self.spec_step_submit(kv_cache, page_row=page_row))
+
+    def spec_step_submit(self, kv_cache, page_row: Optional[torch.Tensor] = None) -> SpecPending:
+        """spec_step's device half: the step's replay and the non-blocking read of its record (the backend spec step's
+        read_async -> (pending, events); one without it reads blocking) -> the handle spec_step_collect completes. Slot
+        0's bookkeeping (cache length, token rows) waits for the collect; every speculation entry point collects an
+        outstanding step first (_spec_settle), so a caller that never collects still sees a consistent slot."""
         b = self._binding(kv_cache)
+        self._spec_settle(b)
         sp = self.backend.spec
         if getattr(b, "spec", None) is None:
             raise RuntimeError("spec_step without spec_enter")
@@ -2320,7 +2341,30 @@ class Glm53Generator(_ReadinessGenerator):
         if L + 2 * sp.K + 1 > self._spec_limit(b):
             raise ValueError(f"speculative step at length {L}: the next step's positions pass the context")
         sp.step()
-        rec = sp.read()
+        read_async = getattr(sp, "read_async", None)
+        pending, events = read_async() if callable(read_async) else (sp.read(), [])
+        b.spec_pending = h = SpecPending(binding=b, L=L, pending=pending, events=list(events))
+        self.counters["spec_readback_async"] = self.counters.get("spec_readback_async", 0) + int(bool(events))
+        return h
+
+    def spec_step_collect(self, handle: SpecPending) -> dict:
+        """spec_step's host half (once per handle; later calls return the record): wait for the record's copy, parse
+        it (the backend spec step's finish_read), slot 0's cache length += n + 1, the bonus = the next input"""
+        if handle.rec is not None:
+            return handle.rec
+        b = handle.binding
+        if getattr(b, "spec_pending", None) is not handle:
+            raise RuntimeError("a speculative step handle that is not the binding's outstanding step")
+        if handle.events:
+            import ttnn
+
+            for ev in handle.events:
+                ttnn.event_synchronize(ev)
+        sp = self.backend.spec
+        finish = getattr(sp, "finish_read", None)
+        rec = finish(handle.pending) if callable(finish) else handle.pending
+        b.spec_pending = None
+        L = handle.L
         if rec["c"] != L and _MOCK_DEVICE:
             # mock: no kernel ran (zeros) -> no accepted draft, the bonus token only; that token must REJECT the block's
             # first draft (zeros too), else the runner's accept walk takes the K drafts the device did not commit and the
@@ -2341,12 +2385,19 @@ class Glm53Generator(_ReadinessGenerator):
         b.spec = dict(drafts=list(rec["drafts"]), bonus=int(rec["a"][n]))
         for k in ("spec_steps", "spec_tokens"):
             self.counters[k] = self.counters.get(k, 0) + (1 if k == "spec_steps" else n + 1)
+        handle.rec = rec
         return rec
+
+    def _spec_settle(self, b) -> None:
+        """collect the binding's outstanding speculative step (spec_step_submit), if any"""
+        h = getattr(b, "spec_pending", None)
+        if h is not None:
+            self.spec_step_collect(h)
 
     def spec_abort(self, kv_cache) -> None:
         """the speculating request ended (released): forget the speculation (its candidate rows are dead state)"""
         b = self._binding(kv_cache)
-        b.spec = None
+        b.spec, b.spec_pending = None, None  # (an outstanding step's record is dead state too)
         sp = getattr(self.backend, "spec", None)
         if sp is not None and callable(getattr(sp, "abort", None)):  # (SpecMTP.abort: the selector page back to row 0)
             sp.abort()
@@ -2361,6 +2412,7 @@ class Glm53Generator(_ReadinessGenerator):
         b = self._binding(kv_cache)
         if getattr(b, "spec", None) is None:
             return
+        self._spec_settle(b)
         rec = self.backend.spec.leave()
         b.pos_shadow = self.backend.read(b.io.cur_pos).to(torch.int64).reshape(-1)[: b.max_batch].clone()
         if _MOCK_DEVICE and int(b.pos_shadow[0]) != int(b.slots[0].seq_len):

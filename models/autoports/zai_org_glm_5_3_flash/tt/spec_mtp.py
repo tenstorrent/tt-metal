@@ -1143,7 +1143,26 @@ class SpecMTP:
     def read(self) -> dict:
         """the step record: n (accepted drafts), c (the step's base position), a (the K+1 verify argmax = the committed
         tokens a[0..n]), drafts (the next step's), steps"""
-        r = read_rows(self.mesh, self.rec).reshape(-1) & 0xFFFFFFFF
+        return self._parse(read_rows(self.mesh, self.rec))
+
+    def read_async(self):
+        """the record's device -> host copy enqueued behind the replays submitted so far (non-blocking) + an event
+        (Glm53Generator.spec_step_submit: the served verify's deferred readback); finish_read parses it once the event
+        completed. The mock cluster reads blocking."""
+        from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import MOCK
+
+        if MOCK:
+            return self.read(), []
+        return ttnn.from_device(self.rec, blocking=False), [ttnn.record_event(self.mesh)]
+
+    def finish_read(self, pending) -> dict:
+        if isinstance(pending, dict):  # (a blocking read's record)
+            return pending
+        d = ttnn.get_device_tensors(pending)[0] if int(self.mesh.get_num_devices()) > 1 else pending
+        return self._parse(ttnn.to_torch(d).to(torch.int64))
+
+    def _parse(self, r: torch.Tensor) -> dict:
+        r = r.reshape(-1) & 0xFFFFFFFF
         K = self.K
         n = int(r[0])
         return dict(n=n, c=int(r[1]) - (1 << 32) * (int(r[1]) >= (1 << 31)), a=[int(v) for v in r[2 : 3 + K]],

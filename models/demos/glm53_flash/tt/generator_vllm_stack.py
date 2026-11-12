@@ -6,8 +6,9 @@ the one full-width decode trace), host-sampled rows through full logits, no pref
 scheduling (every decode reloads its inputs). GLM53_STACK_PREFIX=1 (opt-in) adds vLLM's automatic
 prefix caching from the stack's device snapshot pool (``StackPrefixCache``). Image input:
 ``GLM53StackForConditionalGeneration`` at the bottom of this module (the same adapter + vLLM's ``SupportsMultiModal``
-and the upstream GLM-5.3-Flash processor). Speculative decode (opt-in GLM53_STACK_VLLM_SPEC=1 with GLM53_SPEC_K,
---no-async-scheduling): the backend's MTP step for the lone live greedy request (section "Stage 17: speculation").
+and the upstream GLM-5.3-Flash processor). Speculative decode (opt-in GLM53_STACK_VLLM_SPEC=1 with GLM53_SPEC_K;
+--no-async-scheduling, or async scheduling with GLM53_STACK_VLLM_SPEC_ASYNC=1: spec_async_enabled): the backend's MTP
+step for the lone live greedy request (section "Stage 17: speculation").
 
 Selected with ``TT_MODEL_CLASS_OVERRIDES="Glm5NextForCausalLM=<ADAPTER_TARGET>,Glm5NextForConditionalGeneration=
 <ADAPTER_TARGET>"``. The plugin opens the mesh BEFORE ``initialize_vllm_model`` (worker.py:274-281) with
@@ -116,6 +117,33 @@ def spec_enabled(env=os.environ) -> bool:
 
 
 SPEC = spec_enabled()
+SPEC_ASYNC_ENV = "GLM53_STACK_VLLM_SPEC_ASYNC"
+
+
+def spec_async_enabled(env=os.environ, async_decode: bool | None = None) -> bool:
+    """``supports_async_spec_decode`` (SPEC_DECODE_CONTRACT.md 4c): GLM53_STACK_VLLM_SPEC_ASYNC=1 (default off) on a
+    speculating launch that also declares the ordinary async decode (``supports_async_decode``: the resident-input
+    chain) -- the profile may then keep vLLM's async scheduling. A verify submitted with ``read_from_device=False``
+    returns ``SpecReadback`` (the step replayed, its record's copy enqueued behind it): ``read_decode_output`` hands
+    the record's event to the plugin, ``process_decode_output_host`` completes it into the ``[B, 1+K]`` argmax ids at
+    the plugin's finalize, before the accept walk; every speculation entry point completes an outstanding one first."""
+    a = ASYNC_DECODE if async_decode is None else bool(async_decode)
+    return spec_enabled(env) and a and env.get(SPEC_ASYNC_ENV, "0") == "1"
+
+
+SPEC_ASYNC = spec_async_enabled()
+
+
+@dataclasses.dataclass
+class SpecReadback:
+    """A deferred verify's answer (``VerifyOutput.argmax_ids`` of a ``read_from_device=False`` fused step): the
+    generator's ``SpecPending`` plus the plugin row it answers; ``ids`` once completed (``_spec_collect``)."""
+
+    handle: object
+    row: int
+    B: int
+    W: int
+    ids: torch.Tensor | None = None
 
 
 def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.environ):
@@ -472,14 +500,15 @@ class GLM53StackForCausalLM:
         "supports_device_penalties": False,
         "supports_device_grammar": False,
         "supports_async_decode": ASYNC_DECODE,
-        "supports_async_spec_decode": False,
+        "supports_async_spec_decode": SPEC_ASYNC,
         "supports_compact_host_logits": False,
         "supports_selective_host_readback": False,
         # MODEL_CAPABILITIES.md:126 device setup: worker.py:274-281 reads the class attribute before it opens the mesh
         "fabric_config": _fabric_capability(),
         # SPEC_DECODE_CONTRACT.md: the stack's speculative step serves one live user in generator slot 0 (GLM53_STACK_VLLM_SPEC,
         # default off): the model-owned drafter (custom_class) proposes on device; its state stays on device (no hidden
-        # feed); synchronous scheduling only (supports_async_spec_decode False: --no-async-scheduling)
+        # feed); synchronous scheduling (--no-async-scheduling) unless GLM53_STACK_VLLM_SPEC_ASYNC=1 declares the
+        # deferred verify readback (supports_async_spec_decode above: spec_async_enabled)
         "supports_spec_decode": SPEC,
         "spec_requirements": ["device_propose"] if SPEC else [],
     }
@@ -491,7 +520,7 @@ class GLM53StackForCausalLM:
     supports_multimodal = False  # vLLM's ``SupportsMultiModal`` flag: text only
 
     def __init__(self, generator, max_batch_size: int, max_seq_len: int, *, source=None, spec: bool | None = None,
-                 **vllm_kwargs):  # fmt: skip
+                 spec_async: bool | None = None, **vllm_kwargs):  # fmt: skip
         # ``**vllm_kwargs`` (``vllm_config`` / ``prefix``) is never used: the plugin constructs the adapter through
         # ``initialize_vllm_model``; vLLM >= 0.30's ``is_vllm_model`` wants the keyword accepted (see the shims below)
         self.gen = generator
@@ -509,7 +538,11 @@ class GLM53StackForCausalLM:
         self._greedy: dict = {}
         self._spec_n = None  # the last fused verify's accepted drafts (its proposal must continue exactly that)
         self._no_spec: set = set()  # generator slots whose request never speculates (_spec_admit)
-        self.spec_stats = dict(fused=0, fallback=0, committed=0, enters=0, proposals=0, declines=0, seeds=0)
+        self.spec_async = self.spec and (SPEC_ASYNC if spec_async is None else bool(spec_async))
+        self._spec_pending = None  # the outstanding deferred verify (SpecReadback) until _spec_collect
+        self._spec_lock = threading.Lock()  # (the plugin may finalize a verify off the engine thread)
+        self.spec_stats = dict(fused=0, fallback=0, committed=0, enters=0, proposals=0, declines=0, seeds=0,
+                               deferred=0)  # fmt: skip
 
     # ================================================================================= construction
     @classmethod
@@ -695,6 +728,7 @@ class GLM53StackForCausalLM:
         if mm and not self.supports_multimodal:
             raise NotImplementedError(f"multimodal prompt on the text-only stack adapter ({mm[0]})")
         kv = self._kv(kv_cache)
+        self._spec_settle()
         tokens = torch.as_tensor(tokens)
         if tokens.dim() == 1:
             tokens = tokens[None]
@@ -821,20 +855,20 @@ class GLM53StackForCausalLM:
         (model_runner.py:4239-4245)."""
         if "reset_batch" in kwargs:
             raise TypeError("legacy reset_batch keyword: this adapter declares decode_input_update_contract = 1")
+        self._spec_settle()
         if kwargs.get("spec_mode") is not None or kwargs.get("num_valid_drafts") is not None:
             if not self.spec:
                 raise NotImplementedError(
                     f"speculative decode is not enabled on the stack adapter ({SPEC_ENV}=1 with GLM53_SPEC_K)"
                 )
             if not reload_inputs:
-                raise ValueError(
-                    "a verify reloads its inputs (synchronous scheduling: supports_async_spec_decode False)"
-                )
+                raise ValueError("a verify reloads its inputs (DECODE_RELOAD_CONTRACT.md: its block is new every step)")
             return self._verify(
                 tokens, start_pos, num_valid_drafts=kwargs.get("num_valid_drafts"), spec_mode=kwargs.get("spec_mode"),
                 page_table=page_table, kv_cache=kv_cache, enable_trace=enable_trace, sampling_params=sampling_params,
                 slot_remap=slot_remap, reload_page_table=reload_page_table,
                 reload_sampling_params=reload_sampling_params, reset_sampling_state=reset_sampling_state,
+                read_from_device=read_from_device,
             )  # fmt: skip
         if self.spec:  # an ordinary decode continues every row from its committed state: no speculation under it
             self._spec_stop(self._kv(kv_cache))
@@ -1012,13 +1046,16 @@ class GLM53StackForCausalLM:
         self.spec_stats["seeds"] += 1
 
     def _verify(self, tokens, start_pos, *, num_valid_drafts, spec_mode, page_table, kv_cache, enable_trace,
-                sampling_params, slot_remap, reload_page_table, reload_sampling_params, reset_sampling_state):  # fmt: skip
+                sampling_params, slot_remap, reload_page_table, reload_sampling_params, reset_sampling_state,
+                read_from_device=True):  # fmt: skip
         """SPEC_DECODE_CONTRACT.md 4a: ``tokens`` / ``start_pos`` ``[B, 1+K]`` (column 0 the committed token, 1..K the
         drafts), ``num_valid_drafts [B]`` -> ``VerifyOutput(argmax_ids)``: the fused step's ``[B, 1+K]`` (return
         column j = the model's choice after column j; the lone row's K + 1 verify argmax ids, padding rows 0) when the
         block is exactly the speculating request's (its bonus at its cache length, the K drafts the device made, no
         other live row); else ``[B, 1]`` from an ordinary decode of column 0 (the plugin commits one token per row:
-        model_runner trims the drafts to the answered width)."""
+        model_runner trims the drafts to the answered width). ``read_from_device=False`` on a ``spec_async`` adapter
+        (the plugin's async verify): the fused step's ids come back as a ``SpecReadback`` (read_decode_output /
+        process_decode_output_host complete it); the fallback's ids are host ids (no read event)."""
         from models.demos.glm53_flash.tt.vllm_spec import contract_types
 
         if spec_mode != "argmax_ids":
@@ -1039,16 +1076,15 @@ class GLM53StackForCausalLM:
         r = self._fused_row(kv, alias, tok, pos, nv)
         if r is not None:
             rows = trim_page_rows(page_table)[:B] if page_table is not None else None
-            rec = self.gen.spec_step(kv, page_row=None if rows is None else rows[r])
-            ids = torch.zeros(B, W, dtype=torch.int32)
-            ids[r] = torch.tensor([int(v) for v in rec["a"][:W]], dtype=torch.int32)
-            self._alias, self._chain, self._spec_n = alias, [], int(rec["n"])
-            self.spec_stats["fused"] += 1
-            self.spec_stats["committed"] += int(rec["n"]) + 1
-            if self.spec_stats["fused"] % 256 == 0:
-                st = self.spec_stats
-                logger.info(f"GLM53 stack spec: {st} (tau {st['committed'] / max(1, st['fused']):.2f})")
-            return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids)
+            row = None if rows is None else rows[r]
+            self._alias, self._chain = alias, []
+            if (
+                self.spec_async and not read_from_device
+            ):  # the deferred readback: the record's copy rides behind the step
+                self._spec_pending = rb = SpecReadback(self.gen.spec_step_submit(kv, page_row=row), r, B, W)
+                return VerifyOutput(spec_mode="argmax_ids", argmax_ids=rb)
+            return VerifyOutput(spec_mode="argmax_ids", argmax_ids=self._spec_ids(self.gen.spec_step(kv, page_row=row),
+                                                                                  r, B, W))  # fmt: skip
         # not the speculating request's block: the ordinary decode of column 0, one committed token per row
         self._spec_stop(kv)
         self.spec_stats["fallback"] += 1
@@ -1081,6 +1117,35 @@ class GLM53StackForCausalLM:
             return None
         return r
 
+    def _spec_ids(self, rec: dict, r: int, B: int, W: int) -> torch.Tensor:
+        """a fused step's record -> the verify's ``[B, W]`` argmax ids (row r: the K + 1 verify argmax, padding rows 0)
+        + the adapter's bookkeeping (the accepted count its proposal must continue, the stats)"""
+        ids = torch.zeros(B, W, dtype=torch.int32)
+        ids[r] = torch.tensor([int(v) for v in rec["a"][:W]], dtype=torch.int32)
+        self._spec_n = int(rec["n"])
+        self.spec_stats["fused"] += 1
+        self.spec_stats["committed"] += int(rec["n"]) + 1
+        if self.spec_stats["fused"] % 256 == 0:
+            st = self.spec_stats
+            logger.info(f"GLM53 stack spec: {st} (tau {st['committed'] / max(1, st['fused']):.2f})")
+        return ids
+
+    def _spec_collect(self, rb: SpecReadback) -> torch.Tensor:
+        """complete a deferred verify (once; later calls return its ids)"""
+        with self._spec_lock:
+            if rb.ids is None:
+                rb.ids = self._spec_ids(self.gen.spec_step_collect(rb.handle), rb.row, rb.B, rb.W)
+                self.spec_stats["deferred"] += 1
+            if self._spec_pending is rb:
+                self._spec_pending = None
+            return rb.ids
+
+    def _spec_settle(self) -> None:
+        """every entry point that reads or moves slot state first completes an outstanding deferred verify (the plugin
+        completes it at its finalize; this covers a caller that never did)"""
+        if self._spec_pending is not None:
+            self._spec_collect(self._spec_pending)
+
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         """SPEC_DECODE_CONTRACT.md 4b (after every commit): ``DraftOutput([B, K] ids, num_valid [B])`` -- K drafts for
         the lone live greedy request in generator slot 0 (the bootstrap's when it is not speculating yet, else the ones
@@ -1099,6 +1164,7 @@ class GLM53StackForCausalLM:
         nvalid = torch.zeros(B, dtype=torch.int32)
         if not self.spec or self.kv_cache is None:
             return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
+        self._spec_settle()
         kv = self.kv_cache
         b = self.gen._binding(kv)
         live = [i for i in range(B) if int(cp[i, 0]) >= 0]
@@ -1110,8 +1176,8 @@ class GLM53StackForCausalLM:
             # _committed_positions -- column j at the verify input's position + 1 + j)
             ok = int(cp[r, last]) == int(b.slots[0].seq_len)
         sp = getattr(b, "spec", None)
-        if ok and sp is not None:
-            if self._spec_n is None or last != self._spec_n or int(ct[r, last]) != int(sp["bonus"]):
+        if ok and sp is not None:  # (_spec_n None: entered, no step yet -- a repeated proposal of the same state)
+            if (self._spec_n is not None and last != self._spec_n) or int(ct[r, last]) != int(sp["bonus"]):
                 raise RuntimeError(
                     f"proposal after a fused verify: the plugin committed {last + 1} tokens ending {int(ct[r, last])}, "
                     f"the device {self._spec_n + 1 if self._spec_n is not None else None} ending {sp['bonus']}"
@@ -1197,6 +1263,10 @@ class GLM53StackForCausalLM:
         readback (``sample_rows``) is not declared."""
         if sample_rows is not None:
             raise NotImplementedError("selective host readback is not declared by the stack adapter")
+        if isinstance(tt_out, SpecReadback):  # a deferred verify: the record's event, completed at the finalize
+            if async_read:
+                return tt_out, ([] if tt_out.ids is not None else list(tt_out.handle.events))
+            return self._spec_collect(tt_out)
         if _is_host_output(tt_out):
             return (tt_out, []) if async_read else tt_out
         if not isinstance(tt_out, DecodeOutput):
@@ -1210,6 +1280,8 @@ class GLM53StackForCausalLM:
         through. Compact host logits (``sample_rows``) are not declared."""
         if sample_rows is not None:
             raise NotImplementedError("compact host logits are not declared by the stack adapter")
+        if isinstance(tt_out, SpecReadback):  # a deferred verify -> its [B, 1+K] argmax ids (before the accept walk)
+            return self._spec_collect(tt_out)
         if _is_host_output(tt_out):
             return tt_out
         if isinstance(tt_out, DecodeOutput):
@@ -1230,6 +1302,7 @@ class GLM53StackForCausalLM:
         if not 0 <= int(slot) < self.max_batch:
             raise ValueError(f"release_request({slot}) outside the {self.max_batch} slots")
         g = self._alias[int(slot)]
+        self._spec_settle()
         if self.spec and g == 0 and getattr(self.gen._binding(self.kv_cache), "spec", None) is not None:
             self.gen.spec_abort(self.kv_cache)  # the speculating request ended: its candidate rows are dead state
             self._spec_n = None
