@@ -12,11 +12,15 @@
 namespace tt::scaleout_tools {
 
 NodeType get_node_type_from_string(const std::string& node_name) {
-    auto node_type = enchantum::cast<NodeType>(node_name, ttsl::ascii_caseless_comp);
+    auto node_type = try_get_node_type_from_string(node_name);
     if (!node_type.has_value()) {
         throw std::runtime_error("Invalid node type: " + std::string(node_name));
     }
     return *node_type;
+}
+
+std::optional<NodeType> try_get_node_type_from_string(const std::string& node_name) {
+    return enchantum::cast<NodeType>(node_name, ttsl::ascii_caseless_comp);
 }
 
 }  // namespace tt::scaleout_tools

@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 
@@ -25,6 +26,7 @@
 #include <tt-umd/types/arch.hpp>
 #include <board/board.hpp>
 #include <cabling_generator/cabling_generator.hpp>
+#include <node/node.hpp>
 
 // Add protobuf includes
 #include "protobuf/factory_system_descriptor.pb.h"
@@ -673,6 +675,34 @@ std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
     return validate_fsd_against_gsd_impl(generated_fsd, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output);
 }
 
+namespace {
+
+// Board id bits [35:32], as UMD reports them, for a host whose FSD node_type is `node_type`. Hosts with no
+// revision (custom node descriptors included) get 0, which discovery reads as BH Galaxy rev A/B.
+uint64_t board_id_revision_bits(std::string node_type) {
+    // FSDs written before torus node types were dropped name e.g. BH_GALAXY_REV_C_XY_TORUS; the revision is in
+    // the base name.
+    for (std::string_view suffix : {"_XY_TORUS", "_X_TORUS", "_Y_TORUS"}) {
+        if (node_type.ends_with(suffix)) {
+            node_type.resize(node_type.size() - suffix.size());
+            break;
+        }
+    }
+    const auto parsed = try_get_node_type_from_string(node_type);
+    if (!parsed.has_value()) {
+        return 0;
+    }
+    switch (get_node_type_board_revision(*parsed)) {
+        case BoardRevision::WH_GALAXY:
+        case BoardRevision::BH_GALAXY_REV_AB: return 1;
+        case BoardRevision::BH_GALAXY_REV_C: return 3;
+        case BoardRevision::UNSPECIFIED: return 0;
+    }
+    return 0;
+}
+
+}  // namespace
+
 std::string generate_cluster_descriptor_from_fsd(
     const std::string& fsd_filename, const std::string& output_dir, const std::string& base_filename) {
     // Read the FSD using protobuf
@@ -824,6 +854,7 @@ std::string generate_cluster_descriptor_from_fsd(
         if (!hostname.empty()) {
             cluster_desc["cluster_id"] = hostname;
         }
+        const uint64_t board_revision = board_id_revision_bits(fsd.hosts(host_idx).node_type());
         cluster_desc["arch"] = YAML::Node(YAML::NodeType::Map);
         for (ChipId local_chip_id = 0; local_chip_id < total_local_chips; ++local_chip_id) {
             cluster_desc["arch"][local_chip_id] = arch_str;
@@ -976,7 +1007,7 @@ std::string generate_cluster_descriptor_from_fsd(
                 throw std::runtime_error("No UPI found for board type: " + board_location.board_type());
             }
 
-            uint64_t encoded_board_id = (upi << 36) | unique_board_id;
+            uint64_t encoded_board_id = (upi << 36) | (board_revision << 32) | unique_board_id;
             unique_board_id++;
 
             std::vector<ChipId> chips_on_board;
