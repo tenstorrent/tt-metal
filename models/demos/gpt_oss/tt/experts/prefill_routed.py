@@ -30,6 +30,15 @@ LoFi and bf16 dest (kFp32DestAccEn = false in unified_routed_expert_ffn_program_
 compute_kernel_config, so this module does not pass one.
 
 Only one sequence per call (batch 1, leading dims all 1); anything else runs the dense prefill path.
+
+TP mode (the batch-1 fused decode model, MLP.indexed_decode with the K-GPTQ split decode streams): the routed experts
+hold no weights of their own. Every device runs all experts on its TP quarter of the intermediate dimension (768
+padded columns at TP 4), reading the rounded (K-GPTQ, tile-transposed bfloat4_b) part of the decode experts' gate|up
+and down streams through a host-built page table (stream_pages.py; unified_routed_expert_moe weight_pages). Every
+device computes every (token, expert) pair; its outputs are partial sums over its intermediate quarter, and the same
+closing reduction (all-reduce / reduce-scatter / per-user reduce) sums them. The down bias is non-zero on device 0
+only, so the sum adds it once. Placement (prefill_routed_placement.py) does not apply. The bf16 biases are the values
+decode adds (unpacked from the streams' bias tiles) and cached under their own names.
 """
 
 import hashlib
@@ -94,9 +103,15 @@ ROUTED_COMBINE_BLOCK = 3072
 # to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1; the reduced combine block is
 # bounded by ROUTED_COMBINE_BLOCK (3072 tokens: 17 MiB), which is under it.
 ROUTED_L1_CAP_BYTES = 72 << 20
-# Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
-ROUTED_PREFILL_WEIGHTS_VERSION = 1
+# Version of the routed-expert weight caches the weight-cache completion marker records (model_config.py). 2: the
+# fused decode model's routed experts read the decode streams (TP mode) and cache only their biases.
+ROUTED_PREFILL_WEIGHTS_VERSION = 2
+# Name version of the EP mode's cache files (unchanged by the TP mode).
+ROUTED_EP_FILES_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
+# TP mode: the bias cache files (the weights are the decode streams).
+ROUTED_TP_FILES_VERSION = 1
+ROUTED_TP_CACHE_SUBDIR = "experts_routed_tp"
 # GPT_OSS_PREFILL_KGPTQ=1: the bfloat4_b routed prefill experts read the same K-GPTQ weights as the decode experts
 # (GPT_OSS_DECODE_SPLIT_ROUND_DIR: layer_<L>.pt rounded on the bfloat4_b grid whose 16-value exponent groups run along
 # the INPUT dimension, inside one MXFP4 block). Each weight tile is stored transposed within itself, so its bfloat4_b
@@ -156,6 +171,51 @@ def routed_weights_dtype(layer_idx):
         return ttnn.bfloat8_b
     layers = {int(v) for v in spec.split(",") if v.strip() != ""}
     return ttnn.bfloat8_b if layer_idx is not None and int(layer_idx) in layers else ROUTED_WEIGHTS_DTYPE
+
+
+def decode_stream_kinds(layer_idx):
+    """(gate|up kind, down kind) of a layer's decode expert streams when both hold a rounded part the routed prefill
+    can read (stream_pages.STREAM_*), else None. Mirrors experts/weights.py _load_split_decode_expert_weights: split
+    streams (GPT_OSS_DECODE_EXPERTS_SPLIT) with GPT_OSS_DECODE_SPLIT_RANKS set carry the rounded part; round-only for
+    split_r0 with GPT_OSS_DECODE_SPLIT_ROUND_ONLY, separate for 0 < k ranks with GPT_OSS_DECODE_SPLIT_SEPARATE, else
+    full segments. GPT_OSS_DECODE_SPLIT_REST_PKG streams (normal-orientation package tiles) are not read."""
+    from ..fused_decode.config import (
+        DECODE_SPLIT_RANKS,
+        DECODE_SPLIT_REST_PKG,
+        DECODE_SPLIT_ROUND_ONLY,
+        DECODE_SPLIT_SEPARATE,
+        decode_experts_split,
+        decode_split_dtype,
+    )
+    from .stream_pages import STREAM_FULL, STREAM_ROUND_ONLY, STREAM_SEPARATE
+
+    if layer_idx is None or DECODE_SPLIT_RANKS is None or DECODE_SPLIT_REST_PKG:
+        return None
+    if decode_experts_split(str(int(layer_idx))) != frozenset(("gate_up", "down")):
+        return None
+    kinds = []
+    for stream in ("gate_up", "down"):
+        dtype = decode_split_dtype(int(layer_idx), stream)
+        if DECODE_SPLIT_ROUND_ONLY and dtype == "split_r0":
+            kinds.append(STREAM_ROUND_ONLY)
+        elif DECODE_SPLIT_SEPARATE and dtype not in ("split", "split_r0"):
+            kinds.append(STREAM_SEPARATE)
+        else:
+            kinds.append(STREAM_FULL)
+    return tuple(kinds)
+
+
+def routed_tp_stream_supported(layer_idx, decode_weights):
+    """Whether a layer's routed prefill experts read the decode streams (TP mode): the fused decode's expert streams
+    exist (decode_weights), the prefill reads the K-GPTQ experts (GPT_OSS_PREFILL_KGPTQ, the decode streams' rounded
+    part) in bfloat4_b on this layer, and both streams carry a rounded part (decode_stream_kinds)."""
+    return (
+        decode_weights is not None
+        and prefill_kgptq_enabled()
+        and layer_idx is not None
+        and routed_weights_dtype(layer_idx) == ttnn.bfloat4_b
+        and decode_stream_kinds(layer_idx) is not None
+    )
 
 
 def routed_expert_order(layer_idx, num_experts, num_devices):
@@ -359,11 +419,22 @@ def _bias_dims(num_experts, hidden_size, intermediate_size, state_dict):
 
 
 class RoutedPrefillExperts:
-    """Top-k routed prefill experts, local expert parallelism over the columns of a 1xN mesh."""
+    """Top-k routed prefill experts over the columns of a 1xN mesh: local expert parallelism with weights of their own
+    (EP mode), or every expert's TP shard read from the fused decode's expert streams (TP mode, decode_weights)."""
 
     def __init__(
-        self, mesh_device, hf_config, state_dict, ccl_manager, mesh_config, tensor_cache_path=None, layer_idx=None
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        ccl_manager,
+        mesh_config,
+        tensor_cache_path=None,
+        layer_idx=None,
+        decode_weights=None,
     ):
+        """decode_weights: the fused decode's DecodeExpertWeights (experts/weights.py) of this layer; when
+        routed_tp_stream_supported, the experts read them (TP mode) and state_dict is not used."""
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
@@ -374,7 +445,13 @@ class RoutedPrefillExperts:
         self.num_devices = mesh_device.shape[1]
         self.dispatch_group_size = 1
         self.num_dispatch_groups = self.num_devices
-        self.experts_per_chip = self.num_experts // self.num_devices
+        self.tp_stream = routed_tp_stream_supported(layer_idx, decode_weights)
+        if self.tp_stream:
+            assert mesh_config.decode.tp == self.num_devices, "TP mode needs the decode streams sharded over the row"
+        # TP mode: every expert is local (its TP shard) on every device.
+        self.experts_per_chip = self.num_experts if self.tp_stream else self.num_experts // self.num_devices
+        # Extra unified_routed_expert_moe arguments of the TP mode (the page-table weights); empty in EP mode.
+        self._table_kwargs = {}
         self.chunk_size = routed_prefill_chunk()
         # L1 address the expert op's circular buffers must end below (0: the whole L1); set by Model.set_prefill_l1_end
         # when buffers stay resident in L1 (DFlash), so the op fits its blocking around them.
@@ -388,7 +465,7 @@ class RoutedPrefillExperts:
         # GPT_OSS_PREFILL_KGPTQ: the bfloat4_b layers read the decode experts' K-GPTQ weights, tile-transposed.
         self.weights_tile_transposed = prefill_kgptq_enabled() and self.weights_dtype == ttnn.bfloat4_b
         kgptq_dir = ""
-        if self.weights_tile_transposed:
+        if self.weights_tile_transposed and not self.tp_stream:
             from ..weight_source import env_path
 
             kgptq_dir = env_path("GPT_OSS_DECODE_SPLIT_ROUND_DIR")
@@ -401,14 +478,28 @@ class RoutedPrefillExperts:
         # the contiguous per-device regions of offset_cumsum stay the identity; only the weights follow the order
         # (_load_weights_ordered). Mapping HF ids to slot ids on device instead (tables in HF ids) needs offset_cumsum
         # regions over all E experts, 32*(E - E/N) more dispatch rows: measured +0.6 ms TTFT at 128, +1.5 ms at 512.
-        self.expert_order = routed_expert_order(layer_idx, self.num_experts, self.num_devices)
+        # (TP mode: every device holds every expert's shard, so there is no placement.)
+        self.expert_order = (
+            None if self.tp_stream else routed_expert_order(layer_idx, self.num_experts, self.num_devices)
+        )
 
         # Device g's table row maps its own experts [g*E/N, (g+1)*E/N) to chip g and every other expert to -1: the
         # histogram mask of masked_bincount and the non-local skip of post_combine_reduce. Each pair is computed
         # once, on the device holding its expert. Width E + 1 (padding sentinel column). Per device: (1, E + 1).
+        # TP mode: every expert is local on every device (each device computes every pair on its shard; no slot is
+        # skipped). Its histogram table counts on device 0 only: offset_cumsum sums the histograms over the row, so
+        # the totals and the regions (one group of all E experts) are then those of one device's pairs, the same on
+        # every device.
         dispatch_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
         for g in range(self.num_devices):
             dispatch_table[g, g * self.experts_per_chip : (g + 1) * self.experts_per_chip] = g
+        count_table = dispatch_table
+        if self.tp_stream:
+            dispatch_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
+            for g in range(self.num_devices):
+                dispatch_table[g, : self.num_experts] = g
+            count_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
+            count_table[0, : self.num_experts] = 0
         self._consts = {}
         # The [C, C] prefix-sum operators are shared across layers (per device: [chunk, chunk], plus [8192, 8192] for
         # chunks of at most ROUTED_PREFIX_TRI_SMALL tokens). Each is built on first use.
@@ -490,12 +581,28 @@ class RoutedPrefillExperts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
         )
-        global_idx = ttnn.from_torch(
-            ExpertMapping.create_global_expert_idx_table(
+        # masked_bincount's table (the dispatch table itself in EP mode)
+        self.count_table = self.dispatch_table
+        if count_table is not dispatch_table:
+            self.count_table = ttnn.from_torch(
+                count_table,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
+            )
+        if self.tp_stream:
+            # local expert e is global expert e on every device: [N groups, 1 chip, E]
+            idx_table = torch.arange(self.num_experts, dtype=torch.int32).repeat(self.num_devices, 1, 1)
+        else:
+            idx_table = ExpertMapping.create_global_expert_idx_table(
                 experts_per_chip=self.experts_per_chip,
                 dispatch_group_size=self.dispatch_group_size,
                 num_dispatch_groups=self.num_dispatch_groups,
-            ),
+            )
+        global_idx = ttnn.from_torch(
+            idx_table,
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -503,11 +610,15 @@ class RoutedPrefillExperts:
         )
         self.global_expert_idx_table = ttnn.squeeze(ttnn.squeeze(global_idx, 0), 0)
 
+        if self.tp_stream:
+            self._init_tp_stream(decode_weights, decode_stream_kinds(layer_idx), tensor_cache_path)
+            return
+
         cache_dir = None
         if tensor_cache_path is not None:
             cache_dir = Path(tensor_cache_path) / f"{ROUTED_CACHE_SUBDIR}{mesh_device.shape[0]}x{mesh_device.shape[1]}"
         self.cache_dir = cache_dir
-        prefix = f"routed_v{ROUTED_PREFILL_WEIGHTS_VERSION}"
+        prefix = f"routed_v{ROUTED_EP_FILES_VERSION}"
         if self.weights_tile_transposed:
             # Own cache files per K-GPTQ source (the resolved path names the pinned Hub revision).
             prefix += "_kt" + hashlib.sha1(kgptq_dir.rstrip("/").encode()).hexdigest()[:10]
@@ -570,6 +681,133 @@ class RoutedPrefillExperts:
         self.gate_biases, self.up_biases, self.down_biases = self._load_biases(
             state_dict if has_weights else None, prefix
         )
+
+    def _init_tp_stream(self, decode_weights, kinds, tensor_cache_path):
+        """TP mode: the page table over the decode streams' rounded parts (stream_pages.py) and the bf16 biases."""
+        from ..fused_decode.stream import EXPERT_BANK_ROT
+        from . import stream_pages as sp
+
+        E, H, tile = self.num_experts, self.hidden_size, ttnn.TILE_SIZE
+        banks = self.mesh_device.dram_grid_size().x
+        inter_pad = decode_weights.intermediate_padded
+        assert H % tile == 0 and inter_pad % tile == 0, f"hidden {H} / padded intermediate {inter_pad} not whole tiles"
+        layouts = {
+            s: sp.split_stream_layout(s, kind, E, H, inter_pad, banks, EXPERT_BANK_ROT)
+            for s, kind in zip(("gate_up", "down"), kinds)
+        }
+        streams = {"gate_up": decode_weights.gate_up_stream, "down": decode_weights.down_stream}
+        for s, t in streams.items():
+            shard = t.memory_config().shard_spec.shape
+            assert t.dtype == ttnn.uint8 and shard[0] * shard[1] == layouts[s].bank_bytes, (
+                f"decode {s} stream: {t.dtype}, {shard[0] * shard[1]} bytes per bank; the {layouts[s].kind} layout "
+                f"has {layouts[s].bank_bytes}"
+            )
+        n_gu, n_dn = inter_pad // tile, H // tile
+        table = sp.stream_page_table(layouts["gate_up"], layouts["down"], n_gu, n_dn)  # [E, 2 * (2 n_gu + n_dn)]
+        # One page (row) per expert, the same table on every device (each device's streams have the same layout).
+        self.weight_pages = ttnn.from_torch(
+            sp.as_uint32_words(table),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self.weights_dtype = ttnn.bfloat4_b
+        self.weights_tile_transposed = True  # the rounded parts' tiles are stored transposed
+        self.routed_expert = types.SimpleNamespace(gate_projs=[], up_projs=[], down_projs=[])
+        self._table_kwargs = dict(
+            weight_pages=self.weight_pages,
+            gate_up_weight_source=streams["gate_up"],
+            down_weight_source=streams["down"],
+            gate_up_k_stride=sp.BFP4_BYTES,
+            down_k_stride=sp.BFP4_BYTES,
+            weights_n_gate_up=n_gu,
+            weights_n_down=n_dn,
+            weights_k_gate_up=layouts["gate_up"].k_tiles,
+            weights_k_down=layouts["down"].k_tiles,
+            weights_dtype=ttnn.bfloat4_b,
+        )
+        self.cache_dir = None
+        if tensor_cache_path is not None:
+            rows, cols = self.mesh_device.shape
+            self.cache_dir = Path(tensor_cache_path) / f"{ROUTED_TP_CACHE_SUBDIR}{rows}x{cols}"
+        self.gate_biases, self.up_biases, self.down_biases = self._load_tp_biases(streams, layouts, table, n_gu, n_dn)
+
+    def _load_tp_biases(self, streams, layouts, table, n_gu, n_dn):
+        """TP mode: one (1, N) bf16 TILE bias per expert and projection (gate / up: this device's n_gu * 32 padded
+        intermediate columns; down: hidden, zero except on device 0), holding the values decode adds. Cached under their
+        own names; without the cache files they are unpacked from the streams (_tp_stream_bias_values), so a warm start
+        needs no HF weights."""
+        E = self.num_experts
+        rows, cols = self.mesh_device.shape
+        projs = ("gate", "up", "down")
+        # The values depend on the checkpoint biases (the cache directory), the neuron orders and the padding.
+        key = "|".join(
+            [os.getenv(v, "").strip() for v in ("GPT_OSS_DECODE_SPLIT_ORDERS", "GPT_OSS_DECODE_SPLIT_ROUND_ORDERS")]
+            + [str(n_gu), str(n_dn), str(layouts["gate_up"].banks)]
+        )
+        prefix = f"routed_tp_v{ROUTED_TP_FILES_VERSION}_" + hashlib.sha1(key.encode()).hexdigest()[:10]
+        names = None
+        if self.cache_dir is not None:
+            names = {(e, p): str(self.cache_dir / f"{prefix}.local_{e}_{p}_bias") for e in range(E) for p in projs}
+        cached = names is not None and all(
+            os.path.isfile(f"{n}_dtype_BFLOAT16_layout_TILE.tensorbin") for n in names.values()
+        )
+        values = None
+        if not cached:
+            values = self._tp_stream_bias_values(streams, layouts, table, n_gu, n_dn)
+            if names is not None:
+                try:
+                    self.cache_dir.mkdir(parents=True, exist_ok=True)
+                    writable = os.access(self.cache_dir, os.W_OK)
+                except OSError:
+                    writable = False
+                if not writable:
+                    logger.warning(f"Routed prefill bias cache {self.cache_dir} is not writable; loading without it.")
+                    names = None
+        mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
+        out = {p: [] for p in projs}
+        for e in range(E):
+            for p in projs:
+                stacked = None
+                if values is not None:  # [devices, E, W] -> [rows, cols, 1, W], device (0, d) = TP shard d
+                    stacked = values[p][:, e].reshape(rows, cols, 1, -1).to(torch.bfloat16)
+                t = ttnn.as_tensor(
+                    stacked,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                    cache_file_name=None if names is None else names[(e, p)],
+                )
+                out[p].append(ttnn.squeeze(ttnn.squeeze(t, 0), 0))
+        return out["gate"], out["up"], out["down"]
+
+    def _tp_stream_bias_values(self, streams, layouts, table, n_gu, n_dn):
+        """{gate, up: [devices, E, n_gu * 32], down: [devices, E, n_dn * 32]} float32: the bias decode adds per column,
+        unpacked on the host from each device's stream bytes (the rounded part's bias tile, stream_pages.py)."""
+        from ..fused_decode import mxfp4_split as ms
+        from . import stream_pages as sp
+
+        E = self.num_experts
+        banks = layouts["gate_up"].banks
+        gate_e, up_e, down_e = sp.table_entries(table, n_gu, n_dn)
+        vals = {"gate": [], "up": [], "down": []}
+        for s, blocks in (("gate_up", (("gate", gate_e), ("up", up_e))), ("down", (("down", down_e),))):
+            # [devices, rows, banks * 64] uint8 (experts/weights.py _split_stream_tensor), mesh column = TP shard
+            host = ttnn.to_torch(streams[s], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1))[0]
+            for h in host:
+                bank_bytes = sp.bank_bytes_from_host(h.reshape(-1, h.shape[-1]), banks)
+                for proj, entries in blocks:
+                    v = sp.stream_column_biases(bank_bytes, entries, layouts[s].k_tiles, ms.unpack_bfp)
+                    vals[proj].append(v.reshape(E, -1))
+            del host
+        out = {p: torch.stack(v) for p, v in vals.items()}
+        # Row-parallel down: decode adds the down bias on the first TP device only, so the closing sum adds it once.
+        assert not out["down"][1:].any(), "decode down stream holds a non-zero bias off device 0"
+        return out
 
     def _cache_complete(self, prefix):
         if self.cache_dir is None or not self.cache_dir.is_dir():
@@ -731,7 +969,7 @@ class RoutedPrefillExperts:
         indices: [C, k] uint16 TILE. masked_bincount counts only this device's experts (dispatch table mask);
         offset_cumsum gathers the histograms over the mesh row, where the other devices contribute zero to them."""
         hist = ttnn.experimental.deepseek_prefill.masked_bincount(
-            indices, self.dispatch_table, self.num_experts, self.top_k
+            indices, self.count_table, self.num_experts, self.top_k
         )
         offsets, counts, region_offsets, all_offsets = ttnn.experimental.deepseek_prefill.offset_cumsum(
             hist,
@@ -985,6 +1223,7 @@ class RoutedPrefillExperts:
             output_row_major=True,
             zero_output_row=consts["spare"],
             weights_tile_transposed=self.weights_tile_transposed,
+            **self._table_kwargs,
         )  # [rows, H] bf16 ROW_MAJOR
         ttnn.deallocate(x_rm)
         ttnn.deallocate(tok_of_row)

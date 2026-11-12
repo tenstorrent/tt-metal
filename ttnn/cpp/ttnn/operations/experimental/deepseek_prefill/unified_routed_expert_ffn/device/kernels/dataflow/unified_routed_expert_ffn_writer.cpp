@@ -181,8 +181,27 @@ void kernel_main() {
     // Per-expert `up` base addresses follow output/start in the common arguments; COMMON_UP is its first index.
     // up_addr(e) = arg[COMMON_UP + e].
     constexpr uint32_t COMMON_UP = 2;
+#ifdef WEIGHT_PAGES
+    // Table-addressed weights: the common args after output/start are the gate/up source, the down source and the
+    // weight_pages table (instead of the per-expert up / down blocks). CT block after the down accessor: the k
+    // strides, this RISC's table scratch CB and the table accessor.
+    constexpr uint32_t COMMON_PAGES = COMMON_UP;
+    constexpr uint32_t pages_ct_offset = down_args.next_compile_time_args_offset();
+    constexpr uint32_t gu_k_stride = get_compile_time_arg_val(pages_ct_offset + 0);
+    constexpr uint32_t d_k_stride = get_compile_time_arg_val(pages_ct_offset + 1);
+    constexpr uint32_t cb_weight_pages = get_compile_time_arg_val(pages_ct_offset + 2);
+    constexpr auto pages_args = TensorAccessorArgs<pages_ct_offset + 3>();
+    const auto gu_src_acc = TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_PAGES + 0));
+    const auto d_src_acc = TensorAccessor(down_args, get_common_arg_val<uint32_t>(COMMON_PAGES + 1));
+    const auto pages_acc = TensorAccessor(pages_args, get_common_arg_val<uint32_t>(COMMON_PAGES + 2));
+    CircularBuffer cb_weight_pages_buf(cb_weight_pages);
+    cb_weight_pages_buf.reserve_back(1);
+    const uint32_t pages_l1 = cb_weight_pages_buf.get_write_ptr();
+    constexpr uint32_t kEntryBytes = 2 * sizeof(uint32_t);
+#else
     // DOWN_SPLIT: per-expert down base addresses follow the up block.
     constexpr uint32_t COMMON_DOWN = COMMON_UP + experts_per_chip;
+#endif
     // DOWN_SPLIT go/done sem ids follow the six per-core schedule arguments.
     constexpr uint32_t DOWN_SEM_RT = 6;
     // IN1_WRITER_MCAST runtime args (9) follow the DOWN_SPLIT sem pair.
@@ -265,8 +284,24 @@ void kernel_main() {
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+#ifdef WEIGHT_PAGES
+        // This expert's table row (this RISC's own copy): only the up / down sender cores read weights here. The
+        // previous expert's reads were all barriered before the row is overwritten.
+        if (is_up_sender) {
+            noc_up.async_read(
+                pages_acc,
+                CoreLocalMem<uint32_t>(pages_l1),
+                pages_acc.get_aligned_page_size(),
+                {.page_id = local_expert_id},
+                {});
+            noc_up.async_read_barrier();
+        }
+        const auto up_acc = unified_routed_expert_ffn::make_weight_table(
+            gu_src_acc, pages_l1 + N_gate_tiles_full * kEntryBytes, gu_k_stride);
+#else
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
+#endif
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
@@ -399,8 +434,13 @@ void kernel_main() {
             // corrupts the gate/up path from the second chunk on.
             if constexpr (writer_split_down) {
                 if (is_up_sender) {
+#ifdef WEIGHT_PAGES
+                    const auto down_acc = unified_routed_expert_ffn::make_weight_table(
+                        d_src_acc, pages_l1 + 2 * N_gate_tiles_full * kEntryBytes, d_k_stride);
+#else
                     const auto down_acc = TensorAccessor(
                         down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
+#endif
                     // cb_in1_down is double-buffered with one push per down K-block, and this
                     // RISC never pushes, so its write pointer is static: index the live slot
                     // off the block counter, exactly as the UP_SPLIT block does.
