@@ -352,12 +352,8 @@ ServerCachePruner::ScanResult ServerCachePruner::scan(std::int64_t now_epoch_sec
                     continue;
                 }
                 const auto last_used = last_used_epoch_seconds(variant);
-                if (!last_used || !idle_enough(*last_used, now_epoch_seconds)) {
-                    continue;
-                }
-                const std::uint64_t bytes = allocated_bytes(variant);
-                if (bytes > 0) {
-                    result.candidates.push_back({*last_used, bytes, variant});
+                if (last_used && idle_enough(*last_used, now_epoch_seconds)) {
+                    result.candidates.push_back({*last_used, variant});
                 }
             }
         }
@@ -402,13 +398,16 @@ ServerCachePruner::RemoveOutcome ServerCachePruner::remove(
         }
     }
 
+    // Sized only now, so the scan never walks a directory it keeps. Nothing can reach the trash, so
+    // this is what the delete frees, and remove_all visits every entry again anyway.
+    const std::uint64_t bytes = allocated_bytes(trash);
     fs::remove_all(trash, ec);
     RemoveOutcome outcome = RemoveOutcome::Deleted;
-    freed = candidate.bytes;
+    freed = bytes;
     if (ec) {
         // Count only what actually went. The rest stays as trash for the next run to retry.
         const std::uint64_t remaining = allocated_bytes(trash);
-        freed = candidate.bytes > remaining ? candidate.bytes - remaining : 0;
+        freed = bytes > remaining ? bytes - remaining : 0;
         error = "delete " + trash.string() + ": " + ec.message();
         outcome = RemoveOutcome::Failed;
     }
@@ -439,7 +438,7 @@ CachePruneResult ServerCachePruner::prune_once() {
     result.ran = true;
 
     // Re-measured as the run goes: concurrent compiles keep writing, and a file still open elsewhere
-    // frees nothing when deleted, so the sizes measured by the scan are only an estimate.
+    // frees nothing when deleted, so the size of what a delete removed is only an estimate.
     auto remeasure = [&](std::uint64_t estimated_freed) {
         try {
             space = disk_space_(root_);

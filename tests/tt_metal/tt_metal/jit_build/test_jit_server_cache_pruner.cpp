@@ -155,12 +155,15 @@ TEST_F(ServerCachePrunerTest, DeletesLeastRecentlyUsedFirstAcrossBuildKeysUntilE
     const fs::path third = make_kernel("1", "reader", "12", 30);
     const fs::path newest = make_kernel("2", "compute", "22", 20);
 
+    const std::uint64_t deleted_bytes = allocated_bytes(oldest) + allocated_bytes(second);
     // One byte more than the writer kernel takes up, so the second-oldest has to go too.
     auto pruner = make_pruner(0.0, allocated_bytes(oldest.parent_path()) + 1);
     const CachePruneResult result = pruner.prune_once();
 
     EXPECT_TRUE(result.ran);
     EXPECT_EQ(result.deleted, 2u);
+    // Each deleted directory is sized just before it goes.
+    EXPECT_EQ(result.freed_bytes, deleted_bytes);
     EXPECT_TRUE(result.reached_target);
     EXPECT_FALSE(fs::exists(oldest));
     EXPECT_FALSE(fs::exists(second));

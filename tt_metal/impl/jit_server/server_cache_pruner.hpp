@@ -185,7 +185,6 @@ public:
 private:
     struct Candidate {
         std::int64_t last_used_epoch_seconds = 0;
-        std::uint64_t bytes = 0;
         std::filesystem::path path;
     };
 
