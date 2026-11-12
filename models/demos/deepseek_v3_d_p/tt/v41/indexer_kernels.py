@@ -3,14 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Row-major selection kernels of the DeepSeek-V4.1 indexer (bead F10; ``tt/v41/kernels``, launched through
-``ttnn.generic_op``). Both work row by row on a DRAM-interleaved row-major bf16 tensor (one page per row), such as
-the indexer's score, so every chip's rows stay local (no collectives; replicated or sharded mesh tensors work).
+``ttnn.generic_op``). Both work row by row on a DRAM-interleaved row-major bf16 tensor (one page per row),
+such as
+the indexer's score, so every chip's rows stay local (no collectives; replicated or sharded mesh tensors
+work).
 
-* :func:`segment_max`: maxima of consecutive runs of 8 or 32 elements of every row in one read of the row, with each
+* :func:`segment_max`: maxima of consecutive runs of 8 or 32 elements of every row in one read of the row,
+with each
   row's newest element's run pinned to +inf (the candidate source's pin).
-* :func:`gather_runs`: per row, the runs of 8 or 32 elements named by a row of run ids, in id order (-inf for an id
+* :func:`gather_runs`: per row, the runs of 8 or 32 elements named by a row of run ids, in id order (-inf for
+an id
   past the row, e.g. the 0xFFFFFFFF sentinel).
-* :func:`candidate_scores`: a candidate index source's score of each query's candidate rows only (the rows of its
+* :func:`candidate_scores`: a candidate index source's score of each query's candidate rows only (the rows of
+its
   candidate blocks, in rank order), from the query, head weights and the row-major index-K cache: the same row
   layout ``gather_runs`` makes of a full score.
 """
@@ -67,8 +72,10 @@ def _check_row_major(t, dtype, what: str):
 
 
 def _pin_rows(pin, rows: int) -> int:
-    """The pin contract of a writer kernel: 0 for the per-chip ``query_first`` page ([1, 1, 1, 8]: ``q_i = query_first
-    + i``), else the entries of a per-row page ([1, 1, 1, P] with P >= rows: ``q_i = pin[i]``, the sentinel pins
+    """The pin contract of a writer kernel: 0 for the per-chip ``query_first`` page ([1, 1, 1, 8]: ``q_i =
+    query_first
+    + i``), else the entries of a per-row page ([1, 1, 1, P] with P >= rows: ``q_i = pin[i]``, the sentinel
+    pins
     nothing; the decode tile's ``newest`` rows)."""
     _check_row_major(pin, ttnn.uint32, "pin")
     assert pin.shape[2] == 1, tuple(pin.shape)
@@ -80,12 +87,18 @@ def _pin_rows(pin, rows: int) -> int:
 
 def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int, bound: bool = False):
     """Row-major bf16 ``x`` [1, 1, R, W] (DRAM-interleaved, W a multiple of 32) -> row-major bf16
-    [1, 1, R, round_up(W / seg, 32)]: output j of row i is ``max(x[i, seg * j : seg * (j + 1)])`` (-inf past W / seg),
-    except the row's pinned output: +inf at ``e // seg`` with ``e = (pin_base + q_i) & pin_mask`` when ``e < W``,
-    ``q_i`` the chunk query index of the chip's row i (``pin``: ``V41ChunkTables.query_first()``), or, with a per-row
-    ``pin`` (``_pin_rows``), ``q_i = pin[i]`` (none when it is the sentinel). ``bound``: the outputs after the pinned
-    one are -inf (the segments past the row's newest element: rows the query may not see; for an unmasked score,
-    ``TT_V41_PREFILL_INDEX_BOUND``). ``seg`` 8 or 32. One fused op (kernels/segmax_*): per 4096-element chunk a
+    [1, 1, R, round_up(W / seg, 32)]: output j of row i is ``max(x[i, seg * j : seg * (j + 1)])`` (-inf past W
+    / seg),
+    except the row's pinned output: +inf at ``e // seg`` with ``e = (pin_base + q_i) & pin_mask`` when ``e <
+    W``,
+    ``q_i`` the chunk query index of the chip's row i (``pin``: ``V41ChunkTables.query_first()``), or, with a
+    per-row
+    ``pin`` (``_pin_rows``), ``q_i = pin[i]`` (none when it is the sentinel). ``bound``: the outputs after the
+    pinned
+    one are -inf (the segments past the row's newest element: rows the query may not see; for an unmasked
+    score,
+    ``TT_V41_PREFILL_INDEX_BOUND``). ``seg`` 8 or 32. One fused op (kernels/segmax_*): per 4096-element chunk
+    a
     tilize and a MAX row reduce (for 8, after adding four column masks)."""
     assert seg in (8, 32)
     _check_row_major(x, ttnn.bfloat16, "segment_max input")
@@ -158,10 +171,13 @@ def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int, bound: bool = Fa
 
 
 def gather_runs(x, ids, run: int, pin=None, pin_base: int = 0):
-    """Row-major bf16 ``x`` [1, 1, R, W] and uint32 ``ids`` [1, 1, R, K] (both DRAM-interleaved) -> row-major bf16
+    """Row-major bf16 ``x`` [1, 1, R, W] and uint32 ``ids`` [1, 1, R, K] (both DRAM-interleaved) -> row-major
+    bf16
     [1, 1, R, K * run]: run r of row i is ``x[i, run * c : run * (c + 1)]`` for ``c = ids[i, r]``, -inf where
-    ``c >= W / run`` (the sentinel included). ``run`` 8 or 32 (16- or 64-byte runs). With ``pin`` (the per-chip
-    ``V41ChunkTables.query_first()`` page), the elements past the row's newest one, ``pin_base + pin[0] + i``, are
+    ``c >= W / run`` (the sentinel included). ``run`` 8 or 32 (16- or 64-byte runs). With ``pin`` (the
+    per-chip
+    ``V41ChunkTables.query_first()`` page), the elements past the row's newest one, ``pin_base + pin[0] + i``,
+    are
     -inf as well (the rows the query may not see; for an unmasked score, ``TT_V41_PREFILL_INDEX_BOUND``). One
     data-movement op (kernels/gather_runs.cpp) on both RISC-Vs of every core: each source row is read once,
     sequentially."""
@@ -218,11 +234,13 @@ def gather_runs(x, ids, run: int, pin=None, pin_base: int = 0):
 
 
 CANDSCORE_BLOCK = 8  # rows per candidate block (CANDIDATE_BLOCK_SIZE)
-# V41_CANDSCORE_SENTINEL=skip: candidate_scores's reader issues no read for a sentinel block id (the writer sets the
-# block's scores to -inf whatever was scored). ``read``, the default, reads the slot's block 0 for it: on a chip whose
-# rows are all idle (the padding ranks of a one-slot step, every sentinel) each core then reads that one page K
-# times, 86.6 us a launch against 20 for real ids.
-CANDSCORE_SKIP_SENTINEL = os.environ.get("V41_CANDSCORE_SENTINEL", "read") == "skip"
+# V41_CANDSCORE_SENTINEL=skip (the default now): candidate_scores's reader issues no read for a
+# sentinel block id (the writer sets the block's scores to -inf whatever was scored). ``read`` reads the
+# slot's
+# block 0 for it: on a chip whose rows are all idle (the padding ranks of a one-slot step, every sentinel)
+# each core
+# then reads that one page K times, 86.6 us a launch against 20 for real ids.
+CANDSCORE_SKIP_SENTINEL = os.environ.get("V41_CANDSCORE_SENTINEL", "skip") == "skip"
 
 
 def _largest_divisor(n: int, options=(8, 4, 2, 1)) -> int:
@@ -234,29 +252,47 @@ def candidate_scores(
 ):
     """A ratio-1 candidate index source's score over each query's candidate rows only.
 
-    ``q`` [1, 1, R, 32 * 128] bf16 row-major (the query's 32 heads, head-major, after RoPE and QDQ), ``w`` [1, 1, R, 32]
-    bf16 row-major (scaled head weights), ``k`` the index-K cache: [1, 1, T, 128] bf16 row-major (T a multiple of
-    8) or already as block pages [1, 1, P, 8 * 128] (the decode pool's ``index_k_blocks``: ``block_base`` the page of
-    the slot's block 0, no copy), ``ids`` [1, 1, R, K] uint32 row-major (candidate block ids, sentinel tail), all
+    ``q`` [1, 1, R, 32 * 128] bf16 row-major (the query's 32 heads, head-major, after RoPE and QDQ), ``w`` [1,
+    1, R, 32]
+    bf16 row-major (scaled head weights), ``k`` the index-K cache: [1, 1, T, 128] bf16 row-major (T a multiple
+    of
+    8) or already as block pages [1, 1, P, 8 * 128] (the decode pool's ``index_k_blocks``: ``block_base`` the
+    page of
+    the slot's block 0, no copy), ``ids`` [1, 1, R, K] uint32 row-major (candidate block ids, sentinel tail),
+    all
     DRAM-interleaved; ``pin`` the per-chip ``V41ChunkTables.query_first()`` or a per-row page (``_pin_rows``:
-    ``p_i = start + pin[i]``, every row visible to a sentinel entry); ``start`` the chunk start; ``rows_visible``
-    the index-K rows any query of the chunk can see (a multiple of 8, at most the rows from the slot's block 0).
-    -> bf16 row-major [1, 1, R, K * 8]: element 8 r + j of row i is ``sum_h w[i, h] * relu(q[i, h]. k[t])`` for
+    ``p_i = start + pin[i]``, every row visible to a sentinel entry); ``start`` the chunk start;
+    ``rows_visible``
+    the index-K rows any query of the chunk can see (a multiple of 8, at most the rows from the slot's block
+    0).
+    -> bf16 row-major [1, 1, R, K * 8]: element 8 r + j of row i is ``sum_h w[i, h] * relu(q[i, h]. k[t])``
+    for
     ``t = 8 ids[i, r] + j``, -inf where ``ids[i, r]`` is the sentinel or ``t > p_i`` (the query's position,
-    ``start + query_first + i``), i.e. ``gather_runs(score, ids, 8)`` of the full masked score. A row-major cache
-    is first copied into blocks of 8 rows per page ([rows_visible / 8, 8 * 128]: a whole block is one 2 KB DRAM
-    read; random 256-byte row reads are bound by the DRAM request rate, measured 20 ms vs ~5 ms of bandwidth for
-    640 x 16,384 rows); then one op (kernels/candscore_*): per query its candidate blocks are gathered and tilized,
-    ``relu(Q @ K^T)`` rounded to bf16 per head, and the heads summed by ``W @ S`` in fp32 (HiFi4). ``base_page``
+    ``start + query_first + i``), i.e. ``gather_runs(score, ids, 8)`` of the full masked score. A row-major
+    cache
+    is first copied into blocks of 8 rows per page ([rows_visible / 8, 8 * 128]: a whole block is one 2 KB
+    DRAM
+    read; random 256-byte row reads are bound by the DRAM request rate, measured 20 ms vs ~5 ms of bandwidth
+    for
+    640 x 16,384 rows); then one op (kernels/candscore_*): per query its candidate blocks are gathered and
+    tilized,
+    ``relu(Q @ K^T)`` rounded to bf16 per head, and the heads summed by ``W @ S`` in fp32 (HiFi4).
+    ``base_page``
     (uint32 row-major [1, 1, 1, P], P >= 32): the page of the slot's block 0 is read from its word 1 on device
     instead of ``block_base`` (the one-live-row capture: the live user is a per-step input, not
-    a constant of the capture); ``ids``, ``pin`` and ``rows_visible`` stay the slot's own, as with ``block_base``.
+    a constant of the capture); ``ids``, ``pin`` and ``rows_visible`` stay the slot's own, as with
+    ``block_base``.
     ``live`` (the live rows of a decode tile scored in one launch): a list of ``(tile row, block
-    base)``, one per live row; ``ids`` is then [1, 1, L * s, K / s] (``s`` a power of two: rows ``l s .. l s + s - 1``
-    hold live row ``l``'s K blocks in rank order, so the output reshaped to [1, 1, L, K * 8] is a row per live row),
-    row ``l s + j`` is scored with the query, head weights and pin of tile row ``live[l][0]`` of ``q``, ``w`` and the
-    per-row ``pin`` page (which keep the tile's rows) against the block pages from ``live[l][1]`` on: what ``L``
-    calls with each row's query repeated over ``s`` rows and its own ``block_base`` compute, on ``L * s`` rows of
+    base)``, one per live row; ``ids`` is then [1, 1, L * s, K / s] (``s`` a power of two: rows ``l s .. l s +
+    s - 1``
+    hold live row ``l``'s K blocks in rank order, so the output reshaped to [1, 1, L, K * 8] is a row per live
+    row),
+    row ``l s + j`` is scored with the query, head weights and pin of tile row ``live[l][0]`` of ``q``, ``w``
+    and the
+    per-row ``pin`` page (which keep the tile's rows) against the block pages from ``live[l][1]`` on: what
+    ``L``
+    calls with each row's query repeated over ``s`` rows and its own ``block_base`` compute, on ``L * s`` rows
+    of
     one launch."""
     for t, dtype, what in ((q, ttnn.bfloat16, "query"), (w, ttnn.bfloat16, "weights"), (k, ttnn.bfloat16, "index-K")):
         _check_row_major(t, dtype, f"candidate_scores {what}")
@@ -385,16 +421,21 @@ def candidate_scores(
 RANGE_CHUNK = 8  # key tile rows (of 32 keys) per range_scores chunk: 64 KB of keys read, 512 B of score written
 RANGE_ROWS = int(os.environ.get("V41_RANGE_ROWS", "32"))  # rows (cores) a range_scores launch splits the keys over
 SPLIT_MIN_WIDTH = 512  # a split row must hold a top-k of INDEX_TOPK (topk_large_indices: n >= k)
-# up to this width the score is one row: the one-core selection over it (~4.5 us per 1K columns for a top-k, as much
-# again for the block maxima) costs less than the split selection's merge (~25 small ops, ~3 ms a 40-layer step at
+# up to this width the score is one row: the one-core selection over it (~4.5 us per 1K columns for a top-k,
+# as much
+# again for the block maxima) costs less than the split selection's merge (~25 small ops, ~3 ms a 40-layer
+# step at
 # 16K)
 SPLIT_ONE_ROW_MAX_WIDTH = 1 << 16
 
 
 def split_geometry(width: int, rows: int | None = None) -> tuple[int, int, int, int]:
-    """The split layout of a ``width``-wide score over ``rows`` rows -> (rows, chunks, chunks per row, row width):
-    the key tile rows in chunks of RANGE_CHUNK, chunk ``c`` at row ``c % rows``, slot ``c // rows``; the rows are a
-    power of two, at most RANGE_ROWS, and wide enough for a top-k of SPLIT_MIN_WIDTH. Element ``(r, j)`` of the
+    """The split layout of a ``width``-wide score over ``rows`` rows -> (rows, chunks, chunks per row, row
+    width):
+    the key tile rows in chunks of RANGE_CHUNK, chunk ``c`` at row ``c % rows``, slot ``c // rows``; the rows
+    are a
+    power of two, at most RANGE_ROWS, and wide enough for a top-k of SPLIT_MIN_WIDTH. Element ``(r, j)`` of
+    the
     layout is key ``((j // CW) * rows + r) * CW + j % CW`` with ``CW = RANGE_CHUNK * 32``; slots past the last
     chunk are -inf."""
     assert width % 32 == 0, width
@@ -423,24 +464,36 @@ def range_scores(
     row: int | None = None,
     live: list | None = None,
 ):
-    """One user's query of the decode tile against the visible prefix of its own index keys, in the pool's tiled
+    """One user's query of the decode tile against the visible prefix of its own index keys, in the pool's
+    tiled
     form (the single-query scorer of the densely scored sources).
 
-    ``q`` [1, 1, R, 32 * 128] bf16 row-major and ``w`` [1, 1, R, 32] bf16 row-major (``TtV41Indexer.decode_query``;
+    ``q`` [1, 1, R, 32 * 128] bf16 row-major and ``w`` [1, 1, R, 32] bf16 row-major
+    (``TtV41Indexer.decode_query``;
     row ``row`` is read, default ``user``: a verify row of speculative decode is a tile row of its user's keys
-    other than the user's own, with its own pin entry), ``k`` [U, 1, width, 128] bf16 TILE_LAYOUT DRAM-interleaved (the pool's ``index_k[src]``:
-    user ``u``'s key tile row ``g`` is the tile pages ``(u * width / 32 + g) * 4 + d``), ``pin`` [1, 1, 1, P] uint32
+    other than the user's own, with its own pin entry), ``k`` [U, 1, width, 128] bf16 TILE_LAYOUT
+    DRAM-interleaved (the pool's ``index_k[src]``:
+    user ``u``'s key tile row ``g`` is the tile pages ``(u * width / 32 + g) * 4 + d``), ``pin`` [1, 1, 1, P]
+    uint32
     row-major with ``P > user`` (the step's ``newest`` page: entry ``user`` the user's newest visible row, the
-    sentinel for none). -> bf16 row-major [1, 1, rows, row width] in the split layout of ``split_geometry(width,
-    rows)``: key ``t``'s element is ``sum_h w[user, h] * relu(q[user, h]. k[user, t])`` (``candidate_scores``'s
-    arithmetic) for ``t <= newest``, -inf past it (and everywhere for the sentinel). Chunk ``c`` of key tile rows is
-    scored by core ``c % rows`` into slot ``c // rows`` of its row; the bound is read on device, so only the visible
-    chunks are read and computed and the op is trace-safe. One op (kernels/rangescore_*). ``dyn``: the user and its
-    newest row are words 0 and 2 of ``pin`` (a per-step host page; ``user`` is ignored): the one-live-row capture's
+    sentinel for none). -> bf16 row-major [1, 1, rows, row width] in the split layout of
+    ``split_geometry(width,
+    rows)``: key ``t``'s element is ``sum_h w[user, h] * relu(q[user, h]. k[user, t])``
+    (``candidate_scores``'s
+    arithmetic) for ``t <= newest``, -inf past it (and everywhere for the sentinel). Chunk ``c`` of key tile
+    rows is
+    scored by core ``c % rows`` into slot ``c // rows`` of its row; the bound is read on device, so only the
+    visible
+    chunks are read and computed and the op is trace-safe. One op (kernels/rangescore_*). ``dyn``: the user
+    and its
+    newest row are words 0 and 2 of ``pin`` (a per-step host page; ``user`` is ignored): the one-live-row
+    capture's
     selection of the live user alone, whichever slot it is. ``live``:
     a list of ``(user, row)``, the live rows of the tile (``user`` and ``row`` are ignored) -> bf16 row-major
-    [1, 1, L * rows, row width], live row ``l``'s split layout at rows ``l * rows .. (l + 1) * rows - 1`` (what
-    ``TtV41Indexer.select_split_rows`` takes), bit-equal to the ``L`` single launches' outputs concatenated, in
+    [1, 1, L * rows, row width], live row ``l``'s split layout at rows ``l * rows .. (l + 1) * rows - 1``
+    (what
+    ``TtV41Indexer.select_split_rows`` takes), bit-equal to the ``L`` single launches' outputs concatenated,
+    in
     one launch: its ``L * rows`` (live row, split row) units go round the first ``min(L * rows, grid)`` cores,
     each core working its units one after another."""
     for t, what in ((q, "query"), (w, "weights")):
@@ -464,7 +517,8 @@ def range_scores(
     chunk = RANGE_CHUNK
     nrows, _, per_row, row_width = split_geometry(width, rows)
     device = q.device()
-    # a unit is one split row of one live row: (key user, split row, query row, output row); unit i on core i mod
+    # a unit is one split row of one live row: (key user, split row, query row, output row); unit i on core i
+    # mod
     # the launch's cores, so a core's units are spread over the live rows
     units = [(user_l, r, row_l, l * nrows + r) for l, (user_l, row_l) in enumerate(live) for r in range(nrows)]
     coords, core_set = _cores(device, len(units))
@@ -478,10 +532,13 @@ def range_scores(
         ttnn.DRAM_MEMORY_CONFIG,
     )
     reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    # every core's runtime arguments padded to RANGE_MAX_UNITS units: the program-cache key holds
-    # the cores and the compile-time arguments but not each core's argument count, and a cache hit
-    # re-applies a core's arguments only up to the length the entry's first call gave it, so 4 live
-    # rows then 16 on the same cores hung the device; with one fixed length a hit carries every unit
+    # every core's runtime arguments padded to RANGE_MAX_UNITS units: the program-cache key holds the cores
+    # and the
+    # compile-time arguments but not each core's argument count, and a cache hit re-applies a core's arguments
+    # only
+    # up to the length the entry's first call gave it, so 4 live rows then 16 on the same cores hung the
+    # device;
+    # with one fixed length a hit carries every unit
     pad = [0] * (3 * RANGE_MAX_UNITS)
     for i, (cx, cy) in enumerate(coords):
         mine = units[i :: len(coords)]

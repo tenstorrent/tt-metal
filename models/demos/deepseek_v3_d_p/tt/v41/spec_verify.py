@@ -3,45 +3,65 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The verify step of speculative decode: a slot's ``1 + K`` tokens (the
-committed next token, then ``K`` drafts) as ``1 + K`` rows of the batched decode tile, at consecutive positions, in
+committed next token, then ``K`` drafts) as ``1 + K`` rows of the batched decode tile, at consecutive
+positions, in
 one step; the host accepts the longest matching prefix and commits.
 
-``TtV41VerifyDecoder`` is the batched decoder (``tt/v41/batch_decode.py``) with the per-row pool addresses as step
+``TtV41VerifyDecoder`` is the batched decoder (``tt/v41/batch_decode.py``) with the per-row pool addresses as
+step
 inputs instead of the tile row = pool slot rule:
 
 * the window ring has ``RING + ROWS`` slots per layer and a position's slot is ``position % ring_slots``
-  (``V41DecodePool.position_rings``: the join places the carry by position), so the later rows' writes never land
-  in an earlier row's window; each row's 128 window slots are a step input (``wslots``, the slots of its positions
+  (``V41DecodePool.position_rings``: the join places the carry by position), so the later rows' writes never
+  land
+  in an earlier row's window; each row's 128 window slots are a step input (``wslots``, the slots of its
+  positions
   ``p - 127 .. p``) offset on device by its user's row base per layer;
-* every write scatters by an absolute row (``ring<layer>``, ``comp<source>``, ``key<source>``: ``scatter_rows`` with
-  stride 0 over the 32 index words, the sentinel on idle rows), the selection's pins and the attention's visible
-  bounds come per row from its position, so a rejected row's writes sit past every committed pin and are rewritten
+* every write scatters by an absolute row (``ring<layer>``, ``comp<source>``, ``key<source>``:
+``scatter_rows`` with
+  stride 0 over the 32 index words, the sentinel on idle rows), the selection's pins and the attention's
+  visible
+  bounds come per row from its position, so a rejected row's writes sit past every committed pin and are
+  rewritten
   when the position is really processed;
-* a ratio-2 row pools with the previous row's projections of the same step (rows shifted by one, a block's first
-  row with its slot's carry) and the step keeps every row's projections in a scratch; the next step's first ops
-  scatter the committed row's into the slot's carry (``carry<source>`` index: the only state a rejection undoes);
-* the index selection loops over the live rows (``range_scores`` with the row apart from the user; the candidate
+* a ratio-2 row pools with the previous row's projections of the same step (rows shifted by one, a block's
+first
+  row with its slot's carry) and the step keeps every row's projections in a scratch; the next step's first
+  ops
+  scatter the committed row's into the slot's carry (``carry<source>`` index: the only state a rejection
+  undoes);
+* the index selection loops over the live rows (``range_scores`` with the row apart from the user; the
+candidate
   scorer with the row's pin and blocks);
 * the Engram ids of row ``j`` come from the slot's history extended by the block's first ``j`` tokens.
 
-The sampler takes every row's argmax (or, for a slot with sampling parameters, the served sampler's draw on every
+The sampler takes every row's argmax (or, for a slot with sampling parameters, the served sampler's draw on
+every
 one of its rows: the match rule, exact for greedy drafts); ``decode`` returns each slot's rows'
 tokens and leaves the slot where it was; ``commit(slot, accepted)`` advances it (the drafts
-up to the first mismatch and the bonus token are the step's output). A slot stepping with ``K = 0`` is a plain row of the same graph. One live slot
-per rank at most (its rows are ``u .. u + K`` of its rank's tile, within the MoE's real rows), the captures keyed by
+up to the first mismatch and the bonus token are the step's output). A slot stepping with ``K = 0`` is a plain
+row of the same graph. One live slot
+per rank at most (its rows are ``u .. u + K`` of its rank's tile, within the MoE's real rows), the captures
+keyed by
 the live rows' layout.
 
-With a drafter attached (``attach_drafter``; its rings at the pool's ``ring_slots``, position-based) a step with
-``K >= 1`` drafts runs the drafter inside its own graph after the sampler (``TtDSparkDrafter.fused_draft``): every
-verify row's tap (computed in the step) is written to the drafter's rings at the row's slot and the drafter proposes
-on every accept outcome's block at once, so ``decode`` also returns, in ``drafts[slot][a]``, the five drafts that
+With a drafter attached (``attach_drafter``; its rings at the pool's ``ring_slots``, position-based) a step
+with
+``K >= 1`` drafts runs the drafter inside its own graph after the sampler (``TtDSparkDrafter.fused_draft``):
+every
+verify row's tap (computed in the step) is written to the drafter's rings at the row's slot and the drafter
+proposes
+on every accept outcome's block at once, so ``decode`` also returns, in ``drafts[slot][a]``, the five drafts
+that
 follow accepting ``a`` of the block; the round's host side is the accept,
 the commit and the next step's inputs.
 
 Under ``V41_DECODE_C1_MOE=1`` (the c1 capture) the MoEs run the live
-slot's ``1 + K`` rows through ``C1Moe`` (``rows=1 + K``: the rows gathered to every chip, a selected expert computed
+slot's ``1 + K`` rows through ``C1Moe`` (``rows=1 + K``: the rows gathered to every chip, a selected expert
+computed
 on all of them at once, the weights masking the rows that did not select it) instead of the 32-row tile; the
-sublayer norms follow ``V41_DECODE_NORM`` and the host inputs ``V41_DECODE_HOST_INPUTS`` as the batched step's. The
+sublayer norms follow ``V41_DECODE_NORM`` and the host inputs ``V41_DECODE_HOST_INPUTS`` as the batched
+step's. The
 index selection is per live row either way (``V41_DECODE_C1_INDEX``'s pages are not read).
 """
 
@@ -76,8 +96,10 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
     C1_ROWS = C1_SELECT_ROWS  # the c1 MoE on 1 + K rows, K <= 3
 
     def __init__(self, *args, real_rows: int | None = None, **kwargs):
-        """``real_rows``: the MoE tile's real rows a rank (``padding_config``, the decode routing), decoupled from
-        the pool's slots (``users_per_rank``) so that every slot of a rank can hold a block: ``users_per_rank x
+        """``real_rows``: the MoE tile's real rows a rank (``padding_config``, the decode routing), decoupled
+        from
+        the pool's slots (``users_per_rank``) so that every slot of a rank can hold a block: ``users_per_rank
+        x
         (1 + K)`` for ``K`` drafts a slot, at most 32 (the earlier geometry realised the rows through a
         pool of as many slots). Default: the slots (the c1 geometry: one block a rank, its draft rows past the
         slots' with the c1 MoE)."""
@@ -111,8 +133,10 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         )
         self._windows: dict[int, ttnn.Tensor] = {}
         self._uoff: dict[int, ttnn.Tensor] = {}
-        # with a seeder on the model: the drafter's tap of every tile row, [1, 1, ROWS, n_taps * hidden/tp] bf16 per
-        # chip (the hc-mean block inputs of the tap layers, chip-major), computed inside the step and kept at a fixed
+        # with a seeder on the model: the drafter's tap of every tile row, [1, 1, ROWS, n_taps * hidden/tp]
+        # bf16 per
+        # chip (the hc-mean block inputs of the tap layers, chip-major), computed inside the step and kept at
+        # a fixed
         # address per capture (``taps`` after a step: the drafter's ``stage(tap32=)`` input)
         self.taps = None
         self.capture_taps: dict[str, ttnn.Tensor] = {}
@@ -121,25 +145,29 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         self.drafts: dict[int, list[list[int]]] = {}  # slot -> per accept outcome a: the five drafts after it
         self.draft_layout: tuple | None = None  # (user, blocks) of the fused draft call this step, or None
         self.draft_rows: tuple | None = None  # the live slot's tile rows this step (``block_rows``)
-        # the merged index selection of the live rows (V41_VR_MERGE=rows, the default; ``row`` is the per-row chain
+        # the merged index selection of the live rows (V41_VR_MERGE=rows, the default; ``row`` is the per-row
+        # chain
         # ): per (tile rows, split rows R) the replicated index page that stacks the rows'
-        # pins, built before any capture (``prepare_merge``; a constant allocated after a capture may be overwritten
+        # pins, built before any capture (``prepare_merge``; a constant allocated after a capture may be
+        # overwritten
         # by its replay)
         self.merge_rows = os.environ.get("V41_VR_MERGE", "rows") == "rows"
         self._stack_idx: dict[tuple, ttnn.Tensor] = {}
-        # V41_VR_MERGE_BLOCKS=rows: the candidate consumers' selection of the live rows in one chain a source
-        # (``TtV41Indexer.select_rows_in_blocks``) instead of ``select_user_in_blocks`` once a
-        # live row (``row``, the default); no constant of its own
-        self.merge_blocks = os.environ.get("V41_VR_MERGE_BLOCKS", "row") == "rows"
-        # V41_VR_MERGE_SCORES=rows: the densely scored live rows in one ``range_scores`` launch that writes their
-        # stacked split layouts instead of a launch a row and a concat (``row``, the default);
-        # taken where the merged selection is (a prepared stack page)
-        self.merge_scores = os.environ.get("V41_VR_MERGE_SCORES", "row") == "rows"
+        # V41_VR_MERGE_BLOCKS=rows (the default now): the candidate consumers' selection of the
+        # live rows in one chain a source (``TtV41Indexer.select_rows_in_blocks``) instead of
+        # ``select_user_in_blocks`` once a live row (``row``); no constant of its own
+        self.merge_blocks = os.environ.get("V41_VR_MERGE_BLOCKS", "rows") == "rows"
+        # V41_VR_MERGE_SCORES=rows (the default now): the densely scored live rows in one ``range_scores``
+        # launch that writes their stacked split layouts instead of a launch a row and a concat
+        # (``row``); taken where the merged selection is (a prepared stack page)
+        self.merge_scores = os.environ.get("V41_VR_MERGE_SCORES", "rows") == "rows"
         self._published: tuple | None = None  # (tile rows, ids [1, 1, L, K]) the candidate source published stacked
 
     def attach_drafter(self, drafter, users: list[int] | None = None, max_k: int = 3) -> None:
-        """Run ``drafter`` (a ``TtDSparkDrafter`` at this pool's ``ring_slots``) inside the steps with drafts; its
-        constants for the live user indices ``users`` (default: every one) and ``K <= max_k`` are allocated now."""
+        """Run ``drafter`` (a ``TtDSparkDrafter`` at this pool's ``ring_slots``) inside the steps with drafts;
+        its
+        constants for the live user indices ``users`` (default: every one) and ``K <= max_k`` are allocated
+        now."""
         assert drafter.ring_slots == self.ring_slots, (drafter.ring_slots, self.ring_slots)
         assert drafter.users in (1, self.users), (drafter.users, self.users)
         assert self.model.dspark is not None, "the fused draft call needs the model's seeder (dspark_weights)"
@@ -156,9 +184,12 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         self.prepare_merge(layouts)
 
     def prepare_merge(self, layouts: list[tuple]) -> None:
-        """The stacked pin index pages of every live-row layout (``block_rows`` tuples) the merged selection may
-        see, for every split geometry of the pool's index sources: entry ``l * R + r`` is layout row ``l``'s tile
-        row (a replicated uint32 row-major constant; the merged path takes a layout only when its page exists)."""
+        """The stacked pin index pages of every live-row layout (``block_rows`` tuples) the merged selection
+        may
+        see, for every split geometry of the pool's index sources: entry ``l * R + r`` is layout row ``l``'s
+        tile
+        row (a replicated uint32 row-major constant; the merged path takes a layout only when its page
+        exists)."""
         if not self.merge_rows:
             return
         widths = {self.pool.slots[src].cap + 32 for src in self.pool.slots if src >= 0}
@@ -184,8 +215,10 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         return self.moe_real_rows() // self.users
 
     def block_rows(self, u: int, k: int, one_slot: bool) -> tuple:
-        """The tile rows of user ``u``'s block of ``1 + k`` tokens: its own row, then ``k`` rows. With the c1 MoE
-        and one live slot the draft rows are the tile's rows past the users' (``users .. users + k - 1``: the c1
+        """The tile rows of user ``u``'s block of ``1 + k`` tokens: its own row, then ``k`` rows. With the c1
+        MoE
+        and one live slot the draft rows are the tile's rows past the users' (``users .. users + k - 1``: the
+        c1
         MoE gathers any rows; the 32-row MoE dispatches the real rows only), else the slot's own rows
         ``u s .. u s + k`` for the stride ``s = real_rows / users_per_rank`` (``s = 1`` without decoupled real
         rows: ``u .. u + k``, within the slots' rows)."""
@@ -200,10 +233,13 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         assert rows[-1] < ROWS and k < self.C1_ROWS, (rows, k)
         return rows
 
-    # --- the step's layout ---------------------------------------------------------------------------------------
+    # --- the step's layout
+    # ---------------------------------------------------------------------------------------
     def variant(self, tokens: dict) -> str:
-        """The capture key: the live slots' count (one: the c1 MoE), the set of (user, rows) layouts over the ranks
-        (the graph is one program on every rank: a rank's live rows are its inputs, the sentinel elsewhere; the
+        """The capture key: the live slots' count (one: the c1 MoE), the set of (user, rows) layouts over the
+        ranks
+        (the graph is one program on every rank: a rank's live rows are its inputs, the sentinel elsewhere;
+        the
         user index and the row count are baked in) and whether the drafter runs."""
         layouts = sorted({(slot % self.users, len(block)) for slot, block in tokens.items()})
         parts = [f"{u}.{rows}" for u, rows in layouts]
@@ -211,15 +247,18 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         return ("vd:" if self._fused_layout(tokens) else "v:") + f"{c1}{len(tokens)}:" + ",".join(parts)
 
     def _fused_layout(self, tokens: dict) -> tuple | None:
-        """(user, blocks) of the fused draft call for ``tokens``: one live slot per live rank, every one at the same
-        user index and block length (the drafter's graph is one per rank); else None (no drafts proposed: a step
+        """(user, blocks) of the fused draft call for ``tokens``: one live slot per live rank, every one at
+        the same
+        user index and block length (the drafter's graph is one per rank); else None (no drafts proposed: a
+        step
         of several slots a rank, or of slots at different user indices, runs as plain or verify rows alone).
-        ``draft_plain``: a step of one token a slot proposes too (``blocks = 1``: the served round's first step)."""
+        ``draft_plain``: a step of one token a slot proposes too (``blocks = 1``: the served round's first
+        step)."""
         if self.drafter is None or not tokens:
             return None
         ranks = [slot // self.users for slot in tokens]
         if len(set(ranks)) != len(ranks):
-            return None  # several slots a rank: the standalone draft call after the step 
+            return None  # several slots a rank: the standalone draft call after the step
         layouts = {(slot % self.users, len(block)) for slot, block in tokens.items()}
         if len(layouts) != 1:
             assert all(len(block) == 1 for block in tokens.values()), f"one (user, rows) layout a step: {layouts}"
@@ -228,7 +267,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         return (user, rows) if rows > 1 or self.draft_plain else None
 
     def join(self, slot: int, tokens: torch.Tensor, state, segment=None) -> None:
-        """``TtV41BatchDecoder.join`` (``segment``: one prompt of a packed chunk, ``TT_V41_PACK``; its segments are
+        """``TtV41BatchDecoder.join`` (``segment``: one prompt of a packed chunk, ``TT_V41_PACK``; its
+        segments are
         ratio-aligned, so it brings no compressor carry) and the multi-slot step's carry row."""
         super().join(slot, tokens, state, segment)
         self.pending_carry.pop(slot, None)
@@ -250,9 +290,11 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                     ttnn.deallocate(dst_rows)
             ttnn.deallocate(idx)
 
-    # --- host inputs ---------------------------------------------------------------------------------------------
+    # --- host inputs
+    # ---------------------------------------------------------------------------------------------
     def _layout(self, tokens: dict, order: list[int], live_rows: int) -> dict:
-        """The step's row layout for ``tokens`` (slot -> block; ``order`` the slots sorted): the slots' tile rows,
+        """The step's row layout for ``tokens`` (slot -> block; ``order`` the slots sorted): the slots' tile
+        rows,
         the live (row, user) pairs, the draft rows, and the entries' rank, row, block index and user as index
         tensors (one entry a tile row)."""
         users = self.users
@@ -275,7 +317,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             rows_of[slot] = rows
             live += [(row, u) for row in rows if (row, u) not in live]  # one selection per tile row
         e = torch.tensor(entries, dtype=torch.int64).view(-1, 4)
-        # the Engram rows' flat index, block row j of every slot in ``order`` for each j (``hash_.step``'s order)
+        # the Engram rows' flat index, block row j of every slot in ``order`` for each j (``hash_.step``'s
+        # order)
         flat = [(slot // users) * ROWS + rows_of[slot][j] for j in range(live_rows) for slot in order]
         return {
             "rows": rows_of,
@@ -289,7 +332,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         }
 
     def _step_key(self, tokens: dict) -> tuple:
-        """(the slots in order, the layout key, the live rows, the slots' positions, the fused layout): what the
+        """(the slots in order, the layout key, the live rows, the slots' positions, the fused layout): what
+        the
         position half of the host inputs depends on."""
         order = sorted(tokens)
         live_rows = max((len(block) for block in tokens.values()), default=1)
@@ -299,7 +343,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
 
     def prepare_next(self, tokens: dict) -> None:
         """Build the position half of the next step's host inputs now (the served round
-        calls it while the draft replay runs; ``tokens``: slot -> a block of the next step's length, the tokens
+        calls it while the draft replay runs; ``tokens``: slot -> a block of the next step's length, the
+        tokens
         themselves not needed) and keep it for the next ``decode`` of the same slots, layout and positions;
         another step recomputes it. Reads the pending carries without consuming them."""
         order, key, live_rows, positions, fused = self._step_key(tokens)
@@ -326,7 +371,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         for slot in order:
             committed = self.pending_carry.get(slot)
             if committed is not None:
-                # scratch row ``committed`` -> the carry row ``_compress`` reads for this block's first row: its
+                # scratch row ``committed`` -> the carry row ``_compress`` reads for this block's first row:
+                # its
                 # own tile row (``k0 * first`` is row-aligned), which is the slot's user row ``u`` in the c1
                 # geometry and ``u s`` with decoupled real rows
                 for src in carry_rows:
@@ -350,7 +396,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         rope["ropec"] = self.rope_tables.rows(True, positions)
         rope["ropeg"] = self.rope_tables.rows(True, positions // 2 * 2)
         tick("rope")
-        # the ring: a position's slot, as an absolute row of every layer's KV tensor (idle rows the sentinel); the
+        # the ring: a position's slot, as an absolute row of every layer's KV tensor (idle rows the sentinel);
+        # the
         # layers at once (forty ``where`` calls a step before)
         slot_of = positions % self.ring_slots
         layers = self.model.layers
@@ -364,7 +411,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         ring = torch.where(active.unsqueeze(0), base, torch.full_like(base, SENTINEL32)).to(torch.int32)
         for i, layer in enumerate(layers):
             ints[f"ring{layer}"] = ring[i]
-        # the window: each row's 128 slots (positions p - 127 .. p), offset on device by the user's row base per layer
+        # the window: each row's 128 slots (positions p - 127 .. p), offset on device by the user's row base
+        # per layer
         wslots = (positions.view(sp, ROWS, 1) - (RING - 1) + torch.arange(RING).view(1, 1, RING)) % self.ring_slots
         wslots = torch.where(active.view(sp, ROWS, 1), wslots, torch.zeros_like(wslots))
         for src, slot in pool.slots.items():
@@ -394,7 +442,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         tick("addresses")
         wide = {}
         if self.drafter is not None and fused is None:
-            # no fused call this step (the multi-slot round: the standalone call drafts after it): the packer's
+            # no fused call this step (the multi-slot round: the standalone call drafts after it): the
+            # packer's
             # layout is fixed, so its rows travel as constants (the RoPE of 256 positions
             # and the block rows were built and uploaded for nothing)
             if self._no_draft_rows is None:
@@ -408,10 +457,13 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             wide["dcos"] = wide["dsin"] = zeros
             tick("draft_rows")
         elif self.drafter is not None:
-            # the fused draft call's rows: every verify row's ring slot and fp32 RoPE pair (the ring write), the
-            # block rows' bf16 pair (block a's row i at p + a + 1 + i; the rows past the blocks at p + 1 + row)
+            # the fused draft call's rows: every verify row's ring slot and fp32 RoPE pair (the ring write),
+            # the
+            # block rows' bf16 pair (block a's row i at p + a + 1 + i; the rows past the blocks at p + 1 +
+            # row)
             user, blocks = fused
-            # the ring row of every verify row's tap: the user's ring with rings per slot (``TtDSparkDrafter(users=)``)
+            # the ring row of every verify row's tap: the user's ring with rings per slot
+            # (``TtDSparkDrafter(users=)``)
             ring_row = slot_of + (user_of * self.drafter.ring_slots if self.drafter.users > 1 else 0)
             ints["dring"] = torch.where(active, ring_row, torch.full_like(slot_of, SENTINEL32)).to(torch.int32)
             cos, sin = cos_sin(cfg, False, positions.flatten())
@@ -431,7 +483,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         tick = self._tick("in")
         order, key, live_rows, positions, fused = self._step_key(tokens)
         self.live_rows = live_rows
-        # the step's row layout depends on the slots and their block lengths alone: the entries' (rank, row, j,
+        # the step's row layout depends on the slots and their block lengths alone: the entries' (rank, row,
+        # j,
         # user) and the slots' rows are built once per layout and kept; the tokens and the
         # positions are the step's
         layout = self._layouts.get(key)
@@ -462,10 +515,12 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             ints["c1sel"], ints["c1put"] = pre["ints"]["c1sel"], pre["ints"]["c1put"]
         floats = {}
         if self.sample_on_device:
-            # the argmax on every row by default; a slot with sampling parameters (``sampling``: slot -> (k, p,
+            # the argmax on every row by default; a slot with sampling parameters (``sampling``: slot -> (k,
+            # p,
             # temperature), temperature 0 greedy) samples on every one of its rows as the batched step does on
             # one: the served sampler's draw on row j given the block's first j + 1 tokens, and ``accept``'s
-            # "the draw equals the next draft" is the exact match rule for greedy drafts (the committed stream has the sequential served sampler's law; at temperature 0 it is the greedy
+            # "the draw equals the next draft" is the exact match rule for greedy drafts (the committed stream
+            # has the sequential served sampler's law; at temperature 0 it is the greedy
             # longest prefix)
             ints["k"] = torch.ones(sp, ROWS, dtype=torch.int32)
             floats["p"] = torch.zeros(sp, ROWS, dtype=torch.float32)
@@ -510,9 +565,11 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             tick("engram_rows")
         return inputs
 
-    # --- one step ------------------------------------------------------------------------------------------------
+    # --- one step
+    # ------------------------------------------------------------------------------------------------
     def decode(self, tokens: dict, sampling: dict | None = None) -> dict:
-        """``tokens``: slot -> its block (the committed next token, then its drafts) -> slot -> the argmax of each
+        """``tokens``: slot -> its block (the committed next token, then its drafts) -> slot -> the argmax of
+        each
         of its rows. The slots do not advance: ``commit`` does. A slot given one token as an int (the batched
         decoder's contract: the generator's warm-up) gets its argmax back as an int and advances by one."""
         scalar = {slot for slot, block in tokens.items() if not isinstance(block, (list, tuple))}
@@ -581,7 +638,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         return out
 
     def commit(self, slot: int, accepted: int) -> None:
-        """After ``decode``: ``accepted`` of the slot's drafts matched (the rows ``0 .. accepted`` are committed):
+        """After ``decode``: ``accepted`` of the slot's drafts matched (the rows ``0 .. accepted`` are
+        committed):
         the slot advances by ``accepted + 1``, its Engram history follows, and the next step commits row
         ``accepted``'s ratio-2 projections as its carry."""
         rows = self.rows[slot]
@@ -593,16 +651,20 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
 
     @staticmethod
     def accept(block: list[int], argmax: list[int]) -> tuple[int, list[int]]:
-        """The acceptance rule on a block ``[x, d_1 .. d_K]`` and its rows' tokens (the argmaxes, or the sampled
-        draws): the accepted count ``a`` (the drafts ``d_1 .. d_a`` equal the tokens of rows ``0 .. a - 1``) and
-        the emitted tokens ``argmax[0 .. a]`` (the accepted drafts and the bonus). With sampled rows this is the
+        """The acceptance rule on a block ``[x, d_1 .. d_K]`` and its rows' tokens (the argmaxes, or the
+        sampled
+        draws): the accepted count ``a`` (the drafts ``d_1 .. d_a`` equal the tokens of rows ``0 .. a - 1``)
+        and
+        the emitted tokens ``argmax[0 .. a]`` (the accepted drafts and the bonus). With sampled rows this is
+        the
         match rule (``round_match``): exact against sequential served sampling."""
         a = 0
         while a < len(block) - 1 and block[a + 1] == argmax[a]:
             a += 1
         return a, argmax[: a + 1]
 
-    # --- the graph -----------------------------------------------------------------------------------------------
+    # --- the graph
+    # -----------------------------------------------------------------------------------------------
     def _commit_carries(self) -> None:
         """The previous step's committed rows' projections into the slots' carry rows (``carry<source>``)."""
         for src, (k0, s0) in self.pool.carry.items():
@@ -685,7 +747,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         return _Trace(controller, logits, 0, blocks)
 
     def _window_rows(self, layer: int):
-        """``sparse_sdpa`` window rows of the step ``[1, 1, ROWS, RING]`` uint32: each row's slots offset by its
+        """``sparse_sdpa`` window rows of the step ``[1, 1, ROWS, RING]`` uint32: each row's slots offset by
+        its
         user's row base in ``layer``'s KV tensor."""
         if layer not in self._windows:
             pool = self.pool
@@ -697,7 +760,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         return self._windows[layer]
 
     def _user_offsets(self, src: int):
-        """``[1, 1, ROWS, 1]`` int32 tiled: each row's offset of its user's compressed row 0 in ``src``'s pool."""
+        """``[1, 1, ROWS, 1]`` int32 tiled: each row's offset of its user's compressed row 0 in ``src``'s
+        pool."""
         if src not in self._uoff:
             self._uoff[src] = ttnn.typecast(self.inputs[f"uoff{src}"], ttnn.int32)
         return self._uoff[src]
@@ -788,7 +852,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
 
     def _compress(self, compressor, x, layer: int):
         """As the batched step's, with a row pooling against the previous row's projections unless it is its
-        block's first row (then its slot's carry), and this step's projections kept in the scratch for ``commit``."""
+        block's first row (then its slot's carry), and this step's projections kept in the scratch for
+        ``commit``."""
         if compressor.ratio == 1:
             kv = compressor._project(x, compressor.wkv, ttnn.bfloat16)
             return ttnn.rms_norm(kv, weight=compressor.norm, epsilon=compressor.eps)
