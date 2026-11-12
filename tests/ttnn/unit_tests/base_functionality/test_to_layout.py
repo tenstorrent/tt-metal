@@ -553,6 +553,35 @@ def test_to_layout_same_layout_dtype_change_sharded_to_different_shard_grid(devi
     assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_to_layout_same_layout_row_major_block_float_raises(device, dtype):
+    torch_input = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with pytest.raises(RuntimeError, match="to_layout"):
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+
+
+def test_to_layout_same_layout_dtype_change_sharded_unaligned_page(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 4)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=False,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_config
+    )
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
 def test_to_layout_same_layout_dtype_change_sub_core_grids(device):
     torch.manual_seed(0)
     shape = (1, 1, 64, 64)
