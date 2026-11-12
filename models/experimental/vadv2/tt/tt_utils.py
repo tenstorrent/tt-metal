@@ -68,6 +68,13 @@ def fused_msda(
     """
     value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+    if num_valid_queries_tensor is None:
+        # Given its query counts as a device tensor, the op passes each core only its index instead of
+        # every tile it runs, so its runtime args stay within the limit on small grids.
+        bs, num_queries = reference_points.shape[0], reference_points.shape[1]
+        num_valid_queries_tensor = ttnn.full(
+            (bs,), num_queries, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=reference_points.device()
+        )
     if reference_points.dtype != ttnn.float32:
         reference_points = ttnn.typecast(reference_points, ttnn.float32)
     return ttnn.experimental.fused_msda_from_offsets(
