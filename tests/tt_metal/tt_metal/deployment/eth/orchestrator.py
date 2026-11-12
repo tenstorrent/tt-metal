@@ -269,7 +269,7 @@ def main() -> None:
     general, hosts = parse_config(hostsini)
 
     dbpath = opts.d if opts.d else "cluster.db"
-    db: sqlite3.Connection = sqlite3.connect(dbpath)
+    db: sqlite3.Connection = sqlite3.connect(f"file:{dbpath}?mode=rw")
 
     hostnames = opts.m.split(",")  # TODO validation
     hs = []
