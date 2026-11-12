@@ -61,6 +61,8 @@ public:
 
     void configure_for_dispatch() override;
 
+    MasterRouterCandidate describe_master_router_candidate() const override;
+
     void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
 
     void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;

@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -138,10 +139,22 @@ void FabricBuilder::create_routers() {
 
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
-    if (!routers_.empty()) {
-        master_router_chan_ = routers_.begin()->first;
-        builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
+}
+
+void FabricBuilder::choose_master_router() {
+    TT_FATAL(!routers_.empty(), "Fabric chip {} has no routers to choose a local handshake master from", device_->id());
+
+    std::vector<MasterRouterCandidate> candidates;
+    candidates.reserve(routers_.size());
+
+    // Describe the master router candidates for each router
+    for (const auto& [eth_chan, router_builder] : routers_) {
+        candidates.push_back(router_builder->describe_master_router_candidate());
     }
+
+    // Pick and set the local handshake master router
+    master_router_chan_ = pick_local_handshake_master_router(candidates);
+    builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
 }
 
 std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_connection_pairs() const {

@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
+#include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"   // MasterRouterCandidate
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"          // ChipRoutingFacts
 #include <tt-umd/types/core_coordinates.hpp>                        // CoreType
 
@@ -126,6 +127,12 @@ public:
     RoutingDirection get_routing_direction() const { return location_.direction; }
     bool is_dispatch_link() const { return location_.is_dispatch_link; }
     const RouterLocation& get_location() const { return location_; }
+
+    /**
+     * What the choice of the chip's local handshake master needs to know about this router.
+     * Call only after connect_routers(): it reads the router's final downstream connections.
+     */
+    virtual MasterRouterCandidate describe_master_router_candidate() const = 0;
 
     // ============ Build Methods ============
 
