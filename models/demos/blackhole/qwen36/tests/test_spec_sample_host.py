@@ -17,6 +17,7 @@ import pytest
 import torch
 from vllm_tt_plugin.spec_decode import accept_greedy_drafts
 
+import ttnn
 from models.common.sampling.generator import MAX_UINT32, _hash_request_seed_to_device_seed
 from models.demos.blackhole.qwen36.tests.sampling_reference import chi_square_p, target_probs
 from models.demos.blackhole.qwen36.tt import spec_engine
@@ -152,7 +153,8 @@ def engine():
     model = SimpleNamespace(
         mtp=SimpleNamespace(attention=SimpleNamespace()),
         num_devices=8,
-        mesh_device=MagicMock(),
+        # MTPBlockEngine builds a compute kernel config from the mesh's arch, which needs the real enum.
+        mesh_device=MagicMock(**{"arch.return_value": ttnn.device.Arch.BLACKHOLE}),
         args=SimpleNamespace(vocab_size=32, max_batch_size=B, dim=64),
         layers=[SimpleNamespace(is_full_attention=False, attention=SimpleNamespace())],
         gdn_blocks=SimpleNamespace(verify_tokens=K + 1, set_verify_blocks=lambda s: None),
