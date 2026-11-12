@@ -237,6 +237,18 @@ void write_program_command_sequence(
     bool stall_before_program,
     bool send_binary = true);
 
+// write_program_command_sequence for a traced program whose config may go out before something its launch waits for
+// (the caller places the config where nothing still running uses it): writes the preamble, runtime args, config and
+// binary, then calls before_launch (which writes its own commands, such as a sub-device manager switch), then the
+// stall (when stall_first), the launch and the go messages.
+void write_program_command_sequence_around(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool stall_first,
+    bool send_binary,
+    const std::function<void()>& before_launch);
+
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
@@ -253,6 +265,18 @@ void reset_worker_dispatch_state_on_device(
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     bool reset_launch_msg_state,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
+
+// reset_worker_dispatch_state_on_device in two steps: the reset commands are the same on every device of a mesh.
+vector_aligned<uint32_t> build_worker_dispatch_reset_commands(
+    distributed::MeshDevice* mesh_device,
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    bool reset_launch_msg_state);
+void write_worker_dispatch_reset_commands(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    ttsl::Span<const uint32_t> reset_commands,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
 void set_num_worker_sems_on_dispatch(

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/buffers/buffer_impl.hpp"
+#include <map>
+#include <set>
+#include <tt_stl/cleanup.hpp>
 #include <tt_stl/fmt.hpp>
 #include "fd_mesh_command_queue.hpp"
 
@@ -163,6 +166,68 @@ dispatch_telemetry_types::SMCDispatchCoreCoords build_smc_dispatch_core_coords(D
                                ? pack_logical_dispatch_core(dcm.dispatcher_s_core(chip, channel, cq_id))
                                : dispatch_telemetry_types::INVALID_SMC_DISPATCH_CORE_COORDS;
     return coords;
+}
+
+// Writes `commands` to one device as one fetch queue entry, after a sub-device manager switch's held-back commands,
+// if any.
+void write_fetch_entry(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    const vector_aligned<uint32_t>& commands,
+    const std::shared_ptr<const std::vector<uint32_t>>& deferred) {
+    const uint32_t size = commands.size() * sizeof(uint32_t);
+    const uint32_t deferred_size = deferred ? deferred->size() * sizeof(uint32_t) : 0;
+    manager.issue_queue_reserve(deferred_size + size, cq_id);
+    const uint32_t write_ptr = manager.get_issue_queue_write_ptr(cq_id);
+    if (deferred) {
+        manager.cq_write(deferred->data(), deferred_size, write_ptr);
+    }
+    manager.cq_write(commands.data(), size, write_ptr + deferred_size);
+    manager.issue_queue_push_back(deferred_size + size, cq_id);
+    manager.fetch_queue_reserve_back(cq_id);
+    manager.fetch_queue_write(deferred_size + size, cq_id);
+}
+
+// The largest extent of [start, end) clear of the `busy` ranges, whose ends are aligned up to `alignment`, as
+// {start, size}.
+std::pair<uint32_t, uint32_t> largest_free_extent(
+    uint32_t start, uint32_t end, std::vector<std::pair<uint32_t, uint32_t>> busy, uint32_t alignment) {
+    std::sort(busy.begin(), busy.end());
+    std::pair<uint32_t, uint32_t> best{start, 0};
+    uint32_t cursor = start;
+    for (const auto& [lo, hi] : busy) {
+        if (lo > cursor && lo - cursor > best.second) {
+            best = {cursor, lo - cursor};
+        }
+        cursor = std::max(cursor, tt::align(hi, alignment));
+    }
+    if (end > cursor && end - cursor > best.second) {
+        best = {cursor, end - cursor};
+    }
+    return best;
+}
+
+// Dispatch commands that wait until each sub-device's worker completion count reaches the given one.
+vector_aligned<uint32_t> completion_wait_commands(
+    MetalContext& metal_ctx, const std::map<uint32_t, uint32_t>& count_per_sub_device) {
+    const bool distributed_dispatcher = metal_ctx.get_dispatch_query_manager().distributed_dispatcher();
+    DeviceCommandCalculator calculator(metal_ctx);
+    for (size_t i = 0; i < count_per_sub_device.size(); i++) {
+        if (distributed_dispatcher) {
+            calculator.add_dispatch_wait();
+        }
+        calculator.add_dispatch_wait();
+    }
+    HostMemDeviceCommand command_sequence(metal_ctx, calculator.write_offset_bytes());
+    for (const auto& [sub_device, count] : count_per_sub_device) {
+        const uint32_t stream = metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device);
+        if (distributed_dispatcher) {
+            command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM, 0, stream, count, 1);
+        }
+        command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM, 0, stream, count);
+    }
+    const auto* words = static_cast<const uint32_t*>(command_sequence.data());
+    return {words, words + command_sequence.size_bytes() / sizeof(uint32_t)};
 }
 
 }  // namespace
@@ -1274,6 +1339,17 @@ void FDMeshCommandQueue::reset_worker_state(
     uint32_t num_sub_devices,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     ttsl::Span<const uint32_t> workers_per_sub_device) {
+    if (trace_id_.has_value()) {
+        // A manager switch during capture (one hardware CQ, MeshDeviceImpl::check_switch_during_capture): record_end
+        // writes it into the trace, so nothing is sent to the devices here. Host dispatch state is left alone: capture
+        // doesn't use it, and record_end restores the state from before the capture.
+        trace_nodes_.push_back(MeshTraceNode{
+            .sub_device_manager_switch = SubDeviceManagerSwitch{
+                .from_manager_id = mesh_device_->get_active_sub_device_manager_id(),
+                .workers_per_sub_device = {workers_per_sub_device.begin(), workers_per_sub_device.end()},
+                .core_go_message_mapping = core_go_message_mapping}});
+        return;
+    }
     for (auto* device : mesh_device_->impl().get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
@@ -1322,17 +1398,33 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     std::rotate(sub_device_setup_commands_.begin(), cached, std::next(cached));
     cached = sub_device_setup_commands_.begin();
+    // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes and retains all barriers.
+    // The reset is the same on every device: build it once. With one hardware CQ, when it and the setup fit one fetch,
+    // each device holds them back for its next program, which takes them into its own fetch queue entry when it is
+    // packed for several devices (write_program_commands_to_devices); any other command writes them first
+    // (SystemMemoryManager::issue_queue_reserve). With more CQs they go out now: another CQ's programs may need this
+    // CQ's reset of the shared launch message state.
+    const auto reset_commands = program_dispatch::build_worker_dispatch_reset_commands(
+        mesh_device_,
+        expected_num_workers_completed_,
+        cq_shared_state_->worker_launch_message_buffer_state,
+        reset_launch_msg_state);
+    const uint32_t max_fetch_size =
+        MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map().max_prefetch_command_size();
+    const bool defer = mesh_device_->num_hw_cqs() == 1;
     for (size_t i = 0; i < devices.size(); ++i) {
-        // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes
-        // and retains all barriers; batching changes only host submission granularity.
-        program_dispatch::reset_worker_dispatch_state_on_device(
-            mesh_device_,
-            devices[i]->sysmem_manager(),
-            id_,
-            expected_num_workers_completed_,
-            cq_shared_state_->worker_launch_message_buffer_state,
-            reset_launch_msg_state,
-            cached->device_batches[i]);
+        const auto& batches = cached->device_batches[i];
+        const size_t setup_size = batches.empty() ? 0 : batches.front().size();
+        if (defer && batches.size() <= 1 && (reset_commands.size() + setup_size) * sizeof(uint32_t) <= max_fetch_size) {
+            auto commands = std::make_shared<std::vector<uint32_t>>(reset_commands.begin(), reset_commands.end());
+            if (!batches.empty()) {
+                commands->insert(commands->end(), batches.front().begin(), batches.front().end());
+            }
+            devices[i]->sysmem_manager().defer_commands(std::move(commands), id_);
+            continue;
+        }
+        program_dispatch::write_worker_dispatch_reset_commands(
+            devices[i]->sysmem_manager(), id_, reset_commands, batches);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
@@ -1353,6 +1445,7 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
+    const uint32_t max_fetch_size = program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size();
     if (host_transfer_stats_->enabled() && !devices.empty()) {
         const auto target = this->get_target_device_type();
         if (target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule) {
@@ -1363,18 +1456,19 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     }
     if (devices.size() > 1) {
         const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
-        if (size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
+        if (size <= max_fetch_size) {
             // Every local device receives the same bytes. Pack the fragments once before the device copies.
             static thread_local vector_aligned<uint32_t> packed;
             program_dispatch::pack_program_command_sequence(
                 program_cmd_seq, stall_first, stall_before_program, true, packed);
             for (auto* device : devices) {
                 auto& manager = device->sysmem_manager();
-                manager.issue_queue_reserve(size, id_);
-                manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
-                manager.issue_queue_push_back(size, id_);
-                manager.fetch_queue_reserve_back(id_);
-                manager.fetch_queue_write(size, id_);
+                // A sub-device manager switch's held-back commands share the program's fetch queue entry.
+                std::shared_ptr<const std::vector<uint32_t>> deferred;
+                if (manager.deferred_commands_size(id_) + size <= max_fetch_size) {
+                    deferred = manager.take_deferred_commands(id_);
+                }
+                write_fetch_entry(manager, id_, packed, deferred);
             }
             return;
         }
@@ -1643,7 +1737,167 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
+namespace {
+
+// Where a traced program's config or binary sits in one core type's kernel config ring.
+struct ConfigRange {
+    uint32_t core_type_index = 0;
+    uint32_t addr = 0;
+    uint32_t size = 0;
+
+    bool overlaps(const ConfigRange& other) const {
+        return core_type_index == other.core_type_index && addr < other.addr + other.size && other.addr < addr + size;
+    }
+};
+
+// What SimpleTraceAllocator places for a program, per core type: its non-binary config and, on Tensix, its separately
+// placed binary. Before allocation (allocated = false), sizes only.
+std::vector<ConfigRange> config_ranges(const Hal& hal, const TraceNode& node, bool allocated = true) {
+    std::vector<ConfigRange> ranges;
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        auto core_type = hal.get_programmable_core_type(index);
+        if (!hal.has_programmable_core_type(core_type) || core_type == HalProgrammableCoreType::IDLE_ETH) {
+            continue;
+        }
+        const ProgramConfig& program_config = node.program->get_program_config(index);
+        const bool separate_binary =
+            core_type == HalProgrammableCoreType::TENSIX && hal.get_core_kernel_stored_in_config_buffer(core_type);
+        const uint32_t non_binary_size =
+            separate_binary ? program_config.kernel_text_offset : node.program->get_program_config_sizes()[index];
+        ranges.push_back(
+            {index, allocated ? node.dispatch_metadata.nonbinary_kernel_config_addrs[index].addr : 0, non_binary_size});
+        if (separate_binary && program_config.kernel_text_size > 0) {
+            ranges.push_back(
+                {index,
+                 allocated ? node.dispatch_metadata.binary_kernel_config_addrs[index].addr : 0,
+                 program_config.kernel_text_size});
+        }
+    }
+    return ranges;
+}
+
+// Whether a program can write its config and binaries ahead of a switch: everything it writes is in a kernel config
+// ring whose running users are tracked (binaries stored outside it, such as active ethernet ones, go to a fixed address
+// a running kernel may use; idle ethernet config is not tracked by config_ranges), and it has no cross-node DFB config,
+// whose rewrite is ordered only within a segment.
+bool can_write_config_ahead_of_switch(const Hal& hal, const TraceNode& node) {
+    if (!node.cross_node_config_pages.empty()) {
+        return false;
+    }
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        auto core_type = hal.get_programmable_core_type(index);
+        if (!hal.has_programmable_core_type(core_type)) {
+            continue;
+        }
+        if (core_type == HalProgrammableCoreType::IDLE_ETH && node.program->get_program_config_sizes()[index] > 0) {
+            return false;
+        }
+        if (!hal.get_core_kernel_stored_in_config_buffer(core_type) &&
+            node.program->get_program_config(index).kernel_text_size > 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A traced program of the segment before a sub-device manager switch.
+struct SegmentProgram {
+    SubDeviceId sub_device_id;
+    // The sub-device's completion count once this program has finished.
+    uint32_t finished_count = 0;
+    std::vector<ConfigRange> config;
+};
+
+// A switch recorded in the trace, written while the segment after it is encoded. To overlap the switch, that segment's
+// first program writes its config before it, into ring space the previous segment's programs leave free.
+struct PendingManagerSwitch {
+    size_t switch_node = 0;
+    DispatchArray<uint32_t> workers_completed{};
+    DispatchArray<LaunchMessageRingBufferState> launch_message_buffer_state{};
+    // The last program on each sub-device may still run while the next segment writes its first program's config.
+    std::vector<SegmentProgram> running;
+    // Every earlier program has finished by then, or is waited for (write_config_space_waits).
+    std::vector<SegmentProgram> earlier;
+};
+
+void split_running_programs(std::vector<SegmentProgram> programs, PendingManagerSwitch& pending) {
+    std::set<SubDeviceId> seen;
+    for (auto it = programs.rbegin(); it != programs.rend(); ++it) {
+        (seen.insert(it->sub_device_id).second ? pending.running : pending.earlier).push_back(std::move(*it));
+    }
+}
+
+// The largest part of each kernel config ring the running programs leave free.
+std::vector<SimpleTraceAllocator::RingbufferConfig> free_ringbuffer_configs(
+    const std::vector<SimpleTraceAllocator::RingbufferConfig>& ringbuffer_configs,
+    const PendingManagerSwitch& pending,
+    uint32_t alignment) {
+    std::vector<SimpleTraceAllocator::RingbufferConfig> free_configs;
+    free_configs.reserve(ringbuffer_configs.size());
+    for (uint32_t index = 0; index < ringbuffer_configs.size(); index++) {
+        const auto [start, size] = ringbuffer_configs[index];
+        std::vector<std::pair<uint32_t, uint32_t>> used;
+        for (const auto& program : pending.running) {
+            for (const auto& range : program.config) {
+                if (range.core_type_index == index && range.size > 0) {
+                    used.emplace_back(range.addr, range.addr + range.size);
+                }
+            }
+        }
+        const auto [free_start, free_size] = largest_free_extent(start, start + size, std::move(used), alignment);
+        free_configs.push_back({free_start, free_size});
+    }
+    return free_configs;
+}
+
+// Whether each program alone fits in the given rings (SimpleTraceAllocator reuses ring space between programs).
+bool programs_fit(
+    const Hal& hal,
+    const std::vector<TraceNode*>& trace_nodes,
+    const std::vector<SimpleTraceAllocator::RingbufferConfig>& ringbuffer_configs) {
+    const uint32_t alignment = hal.get_alignment(HalMemType::L1);
+    for (const auto* node : trace_nodes) {
+        std::vector<uint32_t> needed(ringbuffer_configs.size(), 0);
+        for (const auto& range : config_ranges(hal, *node, /*allocated=*/false)) {
+            needed[range.core_type_index] += tt::align(range.size, alignment);
+        }
+        for (uint32_t index = 0; index < ringbuffer_configs.size(); index++) {
+            if (needed[index] > ringbuffer_configs[index].size) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Makes the dispatcher wait for every earlier program whose config `ranges` overwrite. The running programs never
+// overlap them (free_ringbuffer_configs), so in practice these have long finished.
+void write_config_space_waits(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    const PendingManagerSwitch& pending,
+    const std::vector<ConfigRange>& ranges) {
+    std::map<uint32_t, uint32_t> wait_counts;
+    for (const auto& program : pending.earlier) {
+        const bool overlaps = std::any_of(program.config.begin(), program.config.end(), [&](const ConfigRange& a) {
+            return std::any_of(ranges.begin(), ranges.end(), [&](const ConfigRange& b) { return a.overlaps(b); });
+        });
+        if (overlaps) {
+            auto& count = wait_counts[*program.sub_device_id];
+            count = std::max(count, program.finished_count);
+        }
+    }
+    if (wait_counts.empty()) {
+        return;
+    }
+    write_fetch_entry(manager, cq_id, completion_wait_commands(manager.metal_context(), wait_counts), /*deferred=*/{});
+}
+
+}  // namespace
+
 void FDMeshCommandQueue::record_end() {
+    // Like record_begin: encoding views each segment's sub-device manager in turn.
+    auto lock = lock_api_function_();
     MetalContext& metal_ctx = MetalContext::instance(mesh_device_->impl().get_context_id());
     const auto& hal = metal_ctx.hal();
 
@@ -1678,7 +1932,66 @@ void FDMeshCommandQueue::record_end() {
     size_t max_trace_size = 0;
     std::set<SubDeviceId> sub_device_ids;
     std::optional<std::unordered_map<SubDeviceId, TraceWorkerDescriptor>> overall_trace_worker_descriptors;
+    // A capture that switched sub-device managers is encoded in segments split at the switches, each like a trace of
+    // its own under the manager it ran in, since a switch drains the workers and resets their state. The capture
+    // starts and ends in the same manager (begin/end_mesh_trace find the trace under the active one).
+    struct Segment {
+        MeshCoordinateRange range;
+        size_t begin = 0;
+        size_t end = 0;
+        SubDeviceManagerId manager_id;
+        bool first = false;
+        bool last = false;
+    };
+    const SubDeviceManagerId end_manager_id = mesh_device_->get_active_sub_device_manager_id();
+    auto restore_manager_view = ttsl::make_cleanup(
+        [this, end_manager_id]() { mesh_device_->impl().set_active_sub_device_manager_view(end_manager_id); });
+    std::vector<Segment> segments;
     for (const auto& range : device_ranges) {
+        size_t begin = 0;
+        for (size_t end = 0; end <= trace_nodes_.size(); end++) {
+            if (end < trace_nodes_.size() && !trace_nodes_[end].sub_device_manager_switch) {
+                continue;
+            }
+            const bool last = end == trace_nodes_.size();
+            segments.push_back(
+                {range,
+                 begin,
+                 end,
+                 last ? end_manager_id : trace_nodes_[end].sub_device_manager_switch->from_manager_id,
+                 begin == 0,
+                 last});
+            begin = end + 1;
+        }
+    }
+    const bool has_manager_switches = segments.size() > device_ranges.size();
+    // As load_sub_device_manager sends it outside a trace: wait for the previous manager's workers, reset their launch
+    // message read pointers, then set up the next manager's worker counts and GO mailboxes. Like every traced command
+    // of a device range, the setup is built once for the range: its cores are in virtual coordinates, the same on
+    // every device.
+    std::optional<PendingManagerSwitch> pending_switch;
+    auto write_manager_switch = [&](const Segment& next, SystemMemoryManager& sysmem_manager) {
+        const auto& manager_switch = *trace_nodes_[pending_switch->switch_node].sub_device_manager_switch;
+        mesh_device_->impl().set_active_sub_device_manager_view(manager_switch.from_manager_id);
+        program_dispatch::reset_worker_dispatch_state_on_device(
+            mesh_device_,
+            sysmem_manager,
+            this->id_,
+            pending_switch->workers_completed,
+            pending_switch->launch_message_buffer_state,
+            /*reset_launch_msg_state=*/true,
+            program_dispatch::build_sub_device_setup_commands(
+                static_cast<Device*>(  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                    internal::get_device(*mesh_device_, next.range.start_coord())),
+                manager_switch.workers_per_sub_device,
+                manager_switch.core_go_message_mapping,
+                /*reset_launch_msg_state=*/true));
+        mesh_device_->impl().set_active_sub_device_manager_view(next.manager_id);
+        pending_switch.reset();
+    };
+    for (const auto& segment : segments) {
+        const auto& range = segment.range;
+        mesh_device_->impl().set_active_sub_device_manager_view(segment.manager_id);
         // NOTE: TraceNode objects may be shared across device ranges (when a program's device range
         // spans multiple partition ranges). Each iteration of this loop mutates
         // node.dispatch_metadata (sync_count, prefetcher_cache_info, etc.) on shared nodes. This is
@@ -1694,7 +2007,8 @@ void FDMeshCommandQueue::record_end() {
         };
         DispatchArray<UnusedNodeData> unused_nodes;
 
-        for (auto& mesh_node : trace_nodes_) {
+        for (size_t mesh_node_idx = segment.begin; mesh_node_idx < segment.end; mesh_node_idx++) {
+            auto& mesh_node = trace_nodes_[mesh_node_idx];
             bool used = false;
             for (auto& [device_range, node] : mesh_node.trace_nodes) {
                 if (!device_range.intersects(range)) {
@@ -1727,14 +2041,37 @@ void FDMeshCommandQueue::record_end() {
             }
             ringbuffer_configs.push_back({start, size});
         }
-        SimpleTraceAllocator allocator{ringbuffer_configs};
-        allocator.allocate_trace_programs(hal, trace_nodes);
+        // After a switch, the segment's first program can write its config before it, while the previous manager's
+        // last programs may still run, if every program of the segment fits in the ring space those leave free.
+        // Otherwise the switch drains first and the segment gets the whole ring.
+        bool overlap_switch = false;
+        if (pending_switch.has_value() && !trace_nodes.empty() &&
+            can_write_config_ahead_of_switch(hal, *trace_nodes.front())) {
+            auto free_configs =
+                free_ringbuffer_configs(ringbuffer_configs, *pending_switch, hal.get_alignment(HalMemType::L1));
+            if (programs_fit(hal, trace_nodes, free_configs)) {
+                SimpleTraceAllocator allocator{free_configs};
+                allocator.allocate_trace_programs(hal, trace_nodes);
+                // Its config needs no stall: it goes to ring space no running program uses, and earlier programs that
+                // used it are waited for (write_config_space_waits). Its stall_first then orders only its launch.
+                overlap_switch = true;
+            }
+        }
+        if (!overlap_switch) {
+            SimpleTraceAllocator allocator{ringbuffer_configs};
+            allocator.allocate_trace_programs(hal, trace_nodes);
+        }
 
         // Each device range produces an independent trace byte stream, so reset the prefetcher
         // cache manager to give each range a clean slate.
-        this->reset_prefetcher_cache_manager();
+        if (segment.first) {
+            this->reset_prefetcher_cache_manager();
+        }
 
         auto& sysmem_manager_for_trace = internal::get_device(*mesh_device_, range.start_coord())->sysmem_manager();
+        if (pending_switch.has_value() && !overlap_switch) {
+            write_manager_switch(segment, sysmem_manager_for_trace);
+        }
         auto& worker_launch_message_buffer_state = cq_shared_state_->worker_launch_message_buffer_state;
         for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
             worker_launch_message_buffer_state[sub_device_id].reset();
@@ -1744,23 +2081,22 @@ void FDMeshCommandQueue::record_end() {
         // number of expected workers matches across all devices. We do this at the beginning of the trace, becaue the
         // last program in the trace may continue running after the trace ends, so we can't do adjustments after it.
         // TODO: Use a single command to update the expected number of workers, rather than repeated commands.
+        // With an overlapped switch they are written after it, just before the first program's launch.
+        struct UnusedNodeGoSignal {
+            SubDeviceId sub_device;
+            uint32_t expected_num_workers = 0;
+            uint32_t mcast_wptr = 0;
+        };
+        std::vector<UnusedNodeGoSignal> unused_node_go_signals;
         for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
             for (uint32_t i = 0; i < unused_nodes[sub_device_id].unused_nodes_multicast; i++) {
                 SubDeviceId sub_device{static_cast<uint8_t>(sub_device_id)};
                 auto& trace_worker_descriptor = trace_worker_descriptors[sub_device];
                 auto& worker_launch_msg_state = worker_launch_message_buffer_state[sub_device_id];
-                program_dispatch::ProgramDispatchMetadata go_signal_md;
-                go_signal_md.prefetcher_cache_info.is_cached = true;
-                write_go_signal_sequence(
-                    this->id_,
-                    this->mesh_device_,
-                    sub_device,
-                    sysmem_manager_for_trace,
-                    trace_worker_descriptor.num_completion_worker_cores,
-                    /*send_mcast=*/true,
-                    worker_launch_msg_state.get_mcast_wptr(),
-                    go_signal_md,
-                    std::nullopt);
+                unused_node_go_signals.push_back(
+                    {sub_device,
+                     trace_worker_descriptor.num_completion_worker_cores,
+                     worker_launch_msg_state.get_mcast_wptr()});
 
                 trace_worker_descriptor.num_completion_worker_cores +=
                     mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device);
@@ -1768,12 +2104,32 @@ void FDMeshCommandQueue::record_end() {
                 trace_worker_descriptor.num_traced_programs_needing_go_signal_multicast++;
             }
         }
+        auto write_unused_node_go_signals = [&]() {
+            for (const auto& go_signal : unused_node_go_signals) {
+                program_dispatch::ProgramDispatchMetadata go_signal_md;
+                go_signal_md.prefetcher_cache_info.is_cached = true;
+                write_go_signal_sequence(
+                    this->id_,
+                    this->mesh_device_,
+                    go_signal.sub_device,
+                    sysmem_manager_for_trace,
+                    go_signal.expected_num_workers,
+                    /*send_mcast=*/true,
+                    go_signal.mcast_wptr,
+                    go_signal_md,
+                    std::nullopt);
+            }
+        };
+        if (!overlap_switch) {
+            write_unused_node_go_signals();
+        }
         DispatchArray<uint32_t> starting_workers_completed{};
         // SimpleTraceAllocator assumes the sync starts at 0, so keep track of the number of allocations to add.
         for (auto& [sub_device_id, trace_worker_descriptor] : trace_worker_descriptors) {
             starting_workers_completed[*sub_device_id] = trace_worker_descriptor.num_completion_worker_cores;
         }
 
+        std::vector<SegmentProgram> segment_programs;
         for (uint32_t node_idx = 0; node_idx < trace_nodes.size(); node_idx++) {
             auto& node = *trace_nodes[node_idx];
             auto sub_device_id = node.sub_device_id;
@@ -1841,13 +2197,30 @@ void FDMeshCommandQueue::record_end() {
             }
 
             // Issue dispatch commands for this program
-            program_dispatch::write_program_command_sequence(
-                cached_program_command_sequence,
-                sysmem_manager_for_trace,
-                this->id_,
-                node.dispatch_metadata.stall_first,
-                node.dispatch_metadata.stall_before_program,
-                node.dispatch_metadata.send_binary);
+            if (overlap_switch && node_idx == 0) {
+                // Config and binary first, into ring space the previous manager's running programs don't use; then
+                // the switch, this segment's GO signals and the launch.
+                write_config_space_waits(
+                    sysmem_manager_for_trace, this->id_, *pending_switch, config_ranges(hal, node));
+                program_dispatch::write_program_command_sequence_around(
+                    cached_program_command_sequence,
+                    sysmem_manager_for_trace,
+                    this->id_,
+                    node.dispatch_metadata.stall_first,
+                    node.dispatch_metadata.send_binary,
+                    [&]() {
+                        write_manager_switch(segment, sysmem_manager_for_trace);
+                        write_unused_node_go_signals();
+                    });
+            } else {
+                program_dispatch::write_program_command_sequence(
+                    cached_program_command_sequence,
+                    sysmem_manager_for_trace,
+                    this->id_,
+                    node.dispatch_metadata.stall_first,
+                    node.dispatch_metadata.stall_before_program,
+                    node.dispatch_metadata.send_binary);
+            }
 
             // Update wptrs for tensix launch message in the device class
             if (mesh_node.multicast_go_signals) {
@@ -1855,6 +2228,30 @@ void FDMeshCommandQueue::record_end() {
                 trace_worker_descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
             }
             trace_worker_descriptors[sub_device_id].num_completion_worker_cores += num_workers;
+            if (!segment.last) {
+                segment_programs.push_back(
+                    {sub_device_id,
+                     trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
+                     config_ranges(hal, node)});
+            }
+        }
+
+        if (!segment.last) {
+            pending_switch = PendingManagerSwitch{
+                .switch_node = segment.end, .launch_message_buffer_state = worker_launch_message_buffer_state};
+            for (const auto& [sub_device_id, trace_worker_descriptor] : trace_worker_descriptors) {
+                pending_switch->workers_completed[*sub_device_id] = trace_worker_descriptor.num_completion_worker_cores;
+            }
+            split_running_programs(std::move(segment_programs), *pending_switch);
+            continue;
+        }
+        if (has_manager_switches) {
+            // The last switch reset every sub-device of the end manager on device, so the replay starts them all from a
+            // reset, used by the trace or not.
+            for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
+                trace_worker_descriptors[SubDeviceId{static_cast<uint8_t>(sub_device_id)}].reset_launch_msg_at_start =
+                    true;
+            }
         }
 
         auto& bypass_data = sysmem_manager_for_trace.get_bypass_data();

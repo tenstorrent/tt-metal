@@ -37,6 +37,30 @@ void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
     this->reservation_.push_back({});
 }
 
+bool WorkerConfigBufferMgr::has_buffers(const std::vector<std::pair<uint32_t, uint32_t>>& buffers) const {
+    if (buffers.size() != this->base_addrs_.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < buffers.size(); i++) {
+        if (this->base_addrs_[i] != buffers[i].first || this->end_addrs_[i] != buffers[i].first + buffers[i].second) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void WorkerConfigBufferMgr::reset() {
+    for (auto& entry : this->entries_) {
+        std::fill(entry.begin(), entry.end(), ConfigBufferEntry{0, 0, 0});
+    }
+    std::fill(this->alloc_index_.begin(), this->alloc_index_.end(), 0);
+    std::fill(this->free_index_.begin(), this->free_index_.end(), 0);
+    for (size_t i = 0; i < this->base_addrs_.size(); i++) {
+        this->entries_[0][i].addr = this->base_addrs_[i];
+    }
+    std::fill(this->reservation_.begin(), this->reservation_.end(), ConfigBufferEntry{});
+}
+
 // First part of returned pair is true if reserving size bytes requires a sync on some core type
 // The vector contains whether or not the core type needs a sync and if so the sync value
 // To avoid allocs in a perf path, returns a reference to internal data
