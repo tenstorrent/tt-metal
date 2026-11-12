@@ -24,6 +24,7 @@ from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.parallel_embedding import TtParallelEmbedding
 from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.vision import format as media_format
 
 from ..test_factory import parametrize_mesh_with_fabric
 
@@ -39,7 +40,10 @@ class Store:
 
     @staticmethod
     def value(rows: torch.Tensor) -> bytes:
-        return rows.to(torch.bfloat16).view(torch.int16).numpy().tobytes()
+        buf = memoryview(bytearray(media_format.stored_nbytes(*rows.shape)))
+        media_format.Header("image").write(buf)
+        media_format.embeddings(buf, rows.shape[1])[:] = rows.to(torch.bfloat16).view(torch.int16).numpy()
+        return bytes(buf)
 
     def fetch_batch(self, requests) -> list:
         return [memoryview(self.values[FetchRequest(*r).media_key]) for r in requests]
