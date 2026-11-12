@@ -64,13 +64,13 @@ def test_prepare_rejects(expect_error, kind, image, message):
     ids=["patch_size", "spatial_merge_size"],
 )
 def test_media_rejects_another_patch_geometry(expect_error, vision):
-    """MiniMaxM3Media raises ValueError for a vision_config whose patches are not the ones that prepare makes."""
+    """A vision_config with another patch size or merge size raises ValueError."""
     with expect_error(ValueError, "vision_config has patch_size"):
         MiniMaxM3Media({**CONFIG, "vision_config": vision})
 
 
 def test_prepare_takes_read_only_and_flipped_images(monkeypatch):
-    """prepare takes a read-only image without a warning, and a flipped or channel-swapped view as it takes a copy."""
+    """prepare takes a read-only image with no warning, and a flipped or channel-swapped view like its copy."""
     from_numpy = torch.from_numpy
 
     def from_numpy_warns_every_time(array):  # torch itself warns about a read-only array once per process
@@ -147,14 +147,13 @@ def test_load_after_load(expect_error):
 
 
 def test_load_needs_the_callers_chip(tmp_path, expect_error):
-    """Without stub_embeddings, load raises ValueError for a mesh_device of None: it opens no chip of its own."""
+    """Without stub_embeddings, load raises ValueError for a mesh_device of None. It opens no chip itself."""
     with expect_error(ValueError, "mesh_device is None"):
         MiniMaxM3Media(CONFIG).load(None, str(tmp_path), "image", {})
 
 
 def test_encode_writes_every_item_of_a_call():
-    """One encode call with two images of different sizes writes each image's header and its own rows into its slot,
-    all of them, as a call with that image alone does."""
+    """An encode call of two images writes each slot in full, header and rows, as a call of that image alone does."""
     from models.demos.minimax_m3.vision.media import _stub_rows
 
     media = MiniMaxM3Media(CONFIG)
@@ -174,8 +173,10 @@ def test_encode_writes_every_item_of_a_call():
 
 
 def test_encode_checks_its_slots_and_state_first(expect_error):
-    """encode raises ValueError for a slot that is not its item's stored size before it writes into any slot, and
-    RuntimeError before load and after close."""
+    """encode raises ValueError for a slot of the wrong size before it writes any slot.
+
+    It raises RuntimeError before load and after close.
+    """
     media = MiniMaxM3Media(CONFIG)
     item = media.prepare("image", rgb(100, 60))
     good = memoryview(bytearray(b"\x01" * media.stored_nbytes(item)))
@@ -193,8 +194,10 @@ def test_encode_checks_its_slots_and_state_first(expect_error):
 
 
 def test_encode_counts_slot_sizes_in_bytes(expect_error):
-    """encode takes a slot of another format, a uint16 memoryview for example, by its size in bytes, and writes it as
-    it writes a slot of bytes. A slot one byte short raises ValueError."""
+    """encode sizes a slot in bytes: a uint16 slot of the right size is written like a byte slot.
+
+    A slot one byte short raises ValueError.
+    """
     media = MiniMaxM3Media(CONFIG)
     media.load(None, "", "image", {"stub_embeddings": True})
     item = media.prepare("image", rgb(100, 60))
@@ -210,9 +213,10 @@ def test_encode_counts_slot_sizes_in_bytes(expect_error):
 
 @pytest.mark.parametrize("chained", [False, True], ids=["raised", "chained"])
 def test_failed_load_frees_what_it_put_on_the_chip(tmp_path, monkeypatch, expect_error, chained):
-    """If building the encoder fails, load frees the device tensors that the failed call's frames hold (the exception's
-    traceback keeps those frames, and so does the traceback of an exception it chains) before it raises: they are
-    freed while the caller still holds the error, and the caller's chip is not closed."""
+    """If building the encoder fails, load frees its device tensors before it raises, also for a chained error.
+
+    The caller's chip stays open.
+    """
     ttnn = pytest.importorskip("ttnn")
     from models.demos.minimax_m3.vision import encoder as encoder_module
 
@@ -244,8 +248,10 @@ def test_failed_load_frees_what_it_put_on_the_chip(tmp_path, monkeypatch, expect
 
 
 def test_failed_warmup_frees_the_encoder(tmp_path, monkeypatch, expect_error):
-    """If a warm-up fails after the encoder is built, load frees the encoder and its device tensors before it raises:
-    they are freed while the caller still holds the error, and the caller's chip is not closed."""
+    """If a warm-up fails, load frees the encoder and its device tensors before it raises.
+
+    The caller's chip stays open.
+    """
     ttnn = pytest.importorskip("ttnn")
     from models.demos.minimax_m3.vision import encoder as encoder_module
 
@@ -278,10 +284,10 @@ def test_failed_warmup_frees_the_encoder(tmp_path, monkeypatch, expect_error):
 
 @pytest.mark.parametrize("failing", ["forward", "read"])
 def test_failed_encode_keeps_no_device_tensors_past_close(tmp_path, monkeypatch, expect_error, failing):
-    """If the encoder's forward or the read of its tokens fails, encode clears the locals of the failed call's frames
-    before it raises, as load does: a close while the caller still holds the error, in a finally for example, frees the
-    encoder and the failed call's device tensors and leaves the caller's chip open. The tokens of a failed read are
-    still freed, once."""
+    """After a failed forward or read, close frees the encoder and that call's tensors while the caller holds the error.
+
+    The chip stays open, and the tokens of a failed read are freed once.
+    """
     ttnn = pytest.importorskip("ttnn")
     from models.demos.minimax_m3.vision import encoder as encoder_module
 
@@ -339,7 +345,6 @@ def test_failed_encode_keeps_no_device_tensors_past_close(tmp_path, monkeypatch,
     ],
 )
 def test_load_rejects_bad_warmup_sizes(tmp_path, expect_error, warmup_sizes, message):
-    """A warmup_sizes that is not a list of sizes, or a warm-up size that no resized image has, raises ValueError before
-    load imports ttnn or builds the encoder."""
+    """A warmup_sizes that is not a list of resized image sizes raises ValueError before load imports ttnn."""
     with expect_error(ValueError, message):
         MiniMaxM3Media(CONFIG).load(None, str(tmp_path), "image", {"warmup_sizes": warmup_sizes})

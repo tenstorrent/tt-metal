@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Fixtures and a hook for the vision encoder's device tests (unit/test_vision_*_vs_ref.py), and the ensure_gc of
-every test here.
+Fixtures and a hook for the vision encoder's device tests (unit/test_vision_*_vs_ref.py).
 
 The reference is Hugging Face's vision tower and projector, with eager attention, at the checkpoint's sizes. Its
 weights are seeded random values, so no checkpoint is needed. Weights and inputs are bf16 values, as the chip holds
 them, so the tests measure the chip's arithmetic and not the rounding of its inputs. The reference fixtures are
-session scoped and cache what they build.
+session scoped and cache what they build. ensure_gc replaces models/conftest.py's fixture for every test here.
 """
 from __future__ import annotations
 

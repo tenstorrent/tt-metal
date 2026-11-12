@@ -272,8 +272,10 @@ def test_vision_patch_rows_read_only():
 
 
 def test_vision_preprocess_imports_without_ttnn():
-    """preprocess.py, image_input.py and the media module import in a fresh interpreter where importing ttnn fails,
-    and import no transformers."""
+    """preprocess.py, image_input.py and the media module import without ttnn, and import no transformers.
+
+    They must not even try to import ttnn: a guarded import would still load it where it is installed.
+    """
     code = "\n".join(
         [
             "import sys",

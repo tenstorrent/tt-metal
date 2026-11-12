@@ -3,10 +3,10 @@
 
 """MiniMax-M3 media module for the encoder service: image checks, resize, token expansion and stored values.
 
-load builds the TT vision encoder (encoder.py) on the chip that the service gives it, and encode writes each image's
-stored value: the media kind header, then the image's vision tokens. With the encoder config's
-model_options.stub_embeddings, encode writes deterministic stub embeddings instead and no chip is used. Only load
-imports ttnn, so a process that only prepares media runs without it.
+load builds the vision encoder (encoder.py) on the chip that the service opened. encode runs it on each image and
+writes the image's stored value: a header, then the image's vision tokens. With model_options.stub_embeddings, encode
+writes stand-in embeddings instead and needs no chip. Only load and encode import ttnn, so a process that only
+prepares images runs without it.
 """
 
 import gc
@@ -35,10 +35,11 @@ from models.demos.minimax_m3.vision import format as media_format
 # either), so prepare gives only images that the encoder's check_pixels takes.
 IMAGE_START = 200029  # "]<]start of image[>[" in the MiniMax-M3 tokenizer
 IMAGE_END = 200030  # "]<]end of image[>["
-# Resized images, (height, width) in pixels, that load runs once so that the chip's programs for their patch counts
-# are compiled before the first request: 576 tokens (672 x 672, and 16:9 photos resized to 896 x 504) and 540 tokens
-# (4:3 photos resized to 756 x 560). The programs depend on the patch count only; an image of another count compiles
-# them on its first encode, 15 to 42 s with an empty kernel cache. model_options.warmup_sizes replaces this list.
+# Sizes of resized images, (height, width) in pixels, that load encodes once to compile their programs early.
+# (672, 672) gives 576 tokens, as does a large 16:9 photo, such as 1920 x 1080, resized to (504, 896). A large 4:3
+# photo, such as 4032 x 3024, resizes to (560, 756): 540 tokens.
+# The programs depend only on the token count. An image of another count compiles them on its first encode.
+# model_options.warmup_sizes replaces this list.
 WARMUP_SIZES = ((672, 672), (560, 756))
 
 
@@ -74,8 +75,11 @@ def smart_resize(height: int, width: int) -> tuple[int, int]:
 
 
 def _warmup_sizes(options: dict) -> list[tuple[int, int]]:
-    """options["warmup_sizes"] (default WARMUP_SIZES): a list of [height, width] sizes of resized images, each one
-    that the encoder takes (check_size). Raises ValueError otherwise, before load imports ttnn."""
+    """Return options["warmup_sizes"] as a list of (height, width) tuples, WARMUP_SIZES by default.
+
+    It must be a list of [height, width] sizes in pixels of resized images that the encoder takes (check_size).
+    Raises ValueError otherwise.
+    """
     sizes = options.get("warmup_sizes", WARMUP_SIZES)
     if not isinstance(sizes, (list, tuple)):
         raise ValueError(f"warmup_sizes must be a list of [height, width] sizes, got {sizes!r}")
@@ -92,8 +96,10 @@ def _warmup_sizes(options: dict) -> list[tuple[int, int]]:
 
 
 def _clear_frames(error: BaseException) -> None:
-    """Clear the locals of the frames that error's traceback keeps, and those of the exceptions it chains: the frames
-    of a failed load or encode hold the encoder's device tensors. The tracebacks keep their lines, not their locals."""
+    """Clear the local variables of the frames in error's traceback, and in those of the errors it chains.
+
+    The frames of a failed load or encode hold the encoder's device tensors. The tracebacks still show their lines.
+    """
     pending, seen = [error], set()
     while pending:
         error = pending.pop()
@@ -105,7 +111,10 @@ def _clear_frames(error: BaseException) -> None:
 
 
 def _stub_rows(item: M3Image, hidden: int) -> np.ndarray:
-    """Deterministic stand-in embeddings of item, bf16 bit patterns [n_tokens, hidden], seeded by its pixels."""
+    """Return stand-in embeddings for item, seeded by its pixels: bf16 bits as uint16, [n_tokens, hidden].
+
+    encode writes them with model_options.stub_embeddings, so that load and encode run without a chip.
+    """
     digest = hashlib.sha256(np.asarray(item.pixels.shape).tobytes() + item.pixels.tobytes()).digest()
     seed = int.from_bytes(digest[:8], "little")
     rows = torch.randn(item.n_tokens, hidden, generator=torch.Generator().manual_seed(seed)) * 0.02
@@ -153,13 +162,22 @@ class MiniMaxM3Media:
         return media_format.stored_nbytes(item.n_tokens, self.hidden)
 
     def load(self, mesh_device, weights_path: str, kind: str, options: dict) -> None:
-        """Get ready to encode: stub embeddings with options["stub_embeddings"], else the TT vision encoder with the
-        vision weights of the MiniMax-M3 checkpoint in weights_path, on mesh_device, a mesh of one chip that the caller
-        opens (with device_params) and closes. The encoder raises ValueError for a mesh of more chips before it reads
-        a weight. Then load encodes one blank image of each warm-up size (options["warmup_sizes"], default
-        WARMUP_SIZES) to compile the chip's programs. Raises ValueError for a weights_path that is not a directory, a
-        bad warm-up size or a mesh_device of None (load opens no chip) before it imports ttnn. If building the encoder
-        or a warm-up fails, load frees what it put on the chip and raises the error."""
+        """Build the vision encoder on mesh_device and compile its programs for the warm-up sizes.
+
+        Args:
+            mesh_device: a mesh of one chip, which the caller opens with device_params and closes.
+            weights_path: the MiniMax-M3 checkpoint directory.
+            kind: "image", the only kind.
+            options: model_options. "warmup_sizes" lists the [height, width] sizes to compile, WARMUP_SIZES by
+                default. "stub_embeddings" makes encode write stand-in embeddings, with no chip.
+
+        Raises:
+            ValueError: before load imports ttnn, for another kind, a weights_path that is not a directory, a bad
+                warm-up size or a mesh_device of None. The encoder raises it too, for a mesh of several chips.
+            RuntimeError: for a second load before close.
+
+        If the build or a warm-up fails, load frees what it put on the chip before it raises.
+        """
         if kind not in self.placeholder_token_ids:
             raise ValueError(f"MiniMax-M3 does not accept {kind}")
         if self._stub or self._encoder is not None:
@@ -187,14 +205,16 @@ class MiniMaxM3Media:
         self._encoder = encoder
 
     def encode(self, items: list[M3Image], out: list[memoryview]) -> None:
-        """Write each item's stored value into its slot in out: format.Header("image"), then the item's vision tokens,
-        bf16 [n_tokens, hidden].
+        """Write each item's stored value into its slot in out: format.Header("image"), then its vision tokens.
 
-        Raises ValueError for a slot that is not stored_nbytes(item) bytes before it writes into any slot. A slot may
-        be a memoryview of any format, uint16 for example: its size is counted in bytes. The slots of a call that
-        raises hold no defined value: the caller must not use them. If the chip work fails, encode frees that call's
-        device tensors before it raises. The error's frames then hold none of the encoder's tensors, so close frees
-        them even while the caller still holds the error. Raises RuntimeError before load or after close.
+        out holds one slot per item. A slot is a writable, C-contiguous memoryview of stored_nbytes(item) bytes, in any
+        format. The tokens are bf16, [n_tokens, hidden]. If encode raises, the caller must not use the slots of that
+        call. If the chip work fails, encode frees that call's device tensors before it raises. close then frees the
+        encoder even while the caller still holds the error.
+
+        Raises:
+            ValueError: for a slot of the wrong size, before encode writes anything.
+            RuntimeError: before load or after close.
         """
         for item, buf in zip(items, out, strict=True):
             size = self.stored_nbytes(item)
@@ -214,8 +234,10 @@ class MiniMaxM3Media:
                 self._encode_into(item, rows)
 
     def _encode_into(self, item: M3Image, rows: np.ndarray) -> None:
-        """The vision tokens of item, read from the chip straight into rows (format.embeddings of its value). If
-        forward or the read fails, it clears the failed call's frames before it raises, as load does."""
+        """Run the encoder on item and read its vision tokens from the chip straight into rows, the rows of its slot.
+
+        If forward or the read fails, it clears the failed call's frames before it raises, as load does.
+        """
         import ttnn
         from models.demos.minimax_m3.vision.encoder import read_embeddings
 

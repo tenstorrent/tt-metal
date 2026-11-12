@@ -6,10 +6,9 @@ Device tests of TtMiniMaxM3VisionEncoder (vision/encoder.py) against the 2-layer
 test_vision_encoder_vs_ref checks forward's output on noise images of the CI grids. M3_VISION_ALL_GRIDS=1 adds 84x56
 pixels (h4w6), a size small images resize to. test_vision_encoder_load_and_encode uses the encoder as load() and
 encode() do: one warm-up image, then two images read into their slots of one shared buffer.
-test_vision_media_load_and_encode runs the media module's load(), prepare() and encode() on a chip opened with the
-module's device_params, as the service opens it. Its load() warms up one size, so encode() compiles nothing. The
-reference has seeded random weights. Only the media test writes them to a small checkpoint. The encoder's host
-tests are in test_vision_encoder_api.py.
+test_vision_media_load_and_encode runs the media module's load(), with one warm-up size, then prepare() and encode().
+Its chip is opened with the module's device_params, as the service opens it. The reference has seeded random weights;
+only the media test writes them to a checkpoint. The encoder's host tests are in test_vision_encoder_api.py.
 """
 from __future__ import annotations
 
@@ -148,12 +147,12 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
     "mesh_device, device_params", [pytest.param((1, 1), MEDIA_DEVICE_PARAMS, id="1x1")], indirect=True
 )
 def test_vision_media_load_and_encode(mesh_device, device_params, vision_reference, tmp_path, monkeypatch):
-    """The media module runs the encoder as the service calls it, on a chip opened with the media module's
-    device_params as the service opens it: load() from a checkpoint directory (on that chip, which close() leaves
-    open) with a 224x224 warm-up, which compiles programs; prepare() of an RGB image that resizes to 224x224 (h16w16);
-    encode() into a stored value, which compiles none. The value holds the image's header and then its n_tokens
-    rows, bit for bit the forward of the prepared pixels by the encoder that load() built, at PCC >= 0.9998 against
-    the reference."""
+    """The media module's load(), prepare() and encode() store the encoder's own tokens after the image's header.
+
+    The chip is opened with the module's device_params, as the service opens it. load() reads the reference's weights
+    from a checkpoint and warms up 224x224, so encoding a 224x224 image compiles nothing. The stored tokens equal the
+    encoder's forward bit for bit, and match the reference at PCC >= 0.9998.
+    """
     from transformers import MiniMaxM3VLConfig
 
     reference = vision_reference(NUM_LAYERS)
