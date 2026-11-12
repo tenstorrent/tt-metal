@@ -29,6 +29,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
+from helpers.pack_sweep import NEW_ARMS, SHIM_CONFIG, sweep_templates
 from helpers.tile_constants import get_tile_params
 
 F = DataFormat
@@ -48,7 +49,7 @@ ARMS = [
     (5, 0),
     (6, 0),
     (8, 2),
-]  # pk-limit5: (8, 2) W under the cb0ac rule in a CB of two blocks (bit 15); (4|5|6, 0) main per tile in steady / init / reconfigure (bit 14)  # (state, form)
+] + NEW_ARMS  # pack_sweep.py: arm ids; pk-limit5: (8, 2) W under the cb0ac rule in a CB of two blocks (bit 15); (4|5|6, 0) main per tile in steady / init / reconfigure (bit 14)  # (state, form)
 BYTES = {F.Float32: 4, F.Int32: 4, F.UInt32: 4, F.Float16_b: 2}
 BFP_DATA = {F.Bfp8_b: 16, F.Bfp8: 16, F.Bfp4_b: 8, F.Bfp4: 8, F.Bfp2_b: 4, F.Bfp2: 4}
 
@@ -111,7 +112,6 @@ def test_perf_pack_block_sweep2(
     perf_report, case, arm, run_types, loop_factor, is_perf
 ):
     fam, fin, fout, dims_t, dest_acc, dest_sync, block_tiles = case
-    state, form = arm
     formats = InputOutputFormat(fin, fout)
     face_r, nfr, nfc = get_tile_params(dims_t)
     faces = nfr * nfc
@@ -153,10 +153,11 @@ def test_perf_pack_block_sweep2(
                 + ("plain" if (faces == 4 and face_r == 16) else "closed")
             ),
             PACK_SRC_FROM_OUTPUT(),
+            *sweep_templates(arm, block_tiles, faces, face_r, fidelity="LoFi"),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
-            DEST_INDEX((state << 12) | (form << 8)),
+            DEST_INDEX((arm[0] << 12) | (arm[1] << 8)),
             RELU_CONFIG(0),
             NUM_FACES(num_faces=faces),
             TEST_FACE_DIMS(face_r),
@@ -178,6 +179,7 @@ def test_perf_pack_block_sweep2(
             **stim_kw,
         ),
         "dest_acc": dest_acc,
+        **SHIM_CONFIG,
         "unpack_to_dest": fin.is_32_bit() and dest_acc == DestAccumulation.Yes,
     }
     create_test_or_perf_config(

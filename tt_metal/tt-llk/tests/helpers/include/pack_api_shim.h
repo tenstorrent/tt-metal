@@ -23,6 +23,13 @@
 #ifndef PACK_API_SHIM_OUT
 #define PACK_API_SHIM_OUT 16
 #endif
+// An optional second output of the same tile geometry and its destination format, from the same DEST format.
+#ifndef PACK_API_SHIM_OUT2
+#define PACK_API_SHIM_OUT2 64
+#endif
+#ifndef PACK_API_SHIM_OUT2_FORMAT
+#define PACK_API_SHIM_OUT2_FORMAT PACK_OUT
+#endif
 #ifndef PACK_API_SHIM_NUM_FACES
 #define PACK_API_SHIM_NUM_FACES 4
 #endif
@@ -45,15 +52,16 @@
 #define SAN_HOOK(...)
 #endif
 
-// The JIT's arrays (genfiles.cpp): 255 for an unused CB, the output's values at PACK_API_SHIM_OUT, CB 0 and 1 the inputs.
+// The JIT's arrays (genfiles.cpp): 255 for an unused CB, the outputs' values at PACK_API_SHIM_OUT(2), CB 0 and 1 the inputs.
 #define PACK_API_SHIM_ROW(f)                                                                                                                               \
     f(0), f(1), f(2), f(3), f(4), f(5), f(6), f(7), f(8), f(9), f(10), f(11), f(12), f(13), f(14), f(15), f(16), f(17), f(18), f(19), f(20), f(21), f(22), \
         f(23), f(24), f(25), f(26), f(27), f(28), f(29), f(30), f(31), f(32), f(33), f(34), f(35), f(36), f(37), f(38), f(39), f(40), f(41), f(42), f(43), \
         f(44), f(45), f(46), f(47), f(48), f(49), f(50), f(51), f(52), f(53), f(54), f(55), f(56), f(57), f(58), f(59), f(60), f(61), f(62), f(63)
-#define PACK_API_SHIM_OUT_OR(i, out, other) ((i) == PACK_API_SHIM_OUT ? (out) : (other))
+#define PACK_API_SHIM_OUT_OR(i, out, other) ((i) == PACK_API_SHIM_OUT || (i) == PACK_API_SHIM_OUT2 ? (out) : (other))
+#define PACK_API_SHIM_OUT_FMT(i)            ((i) == PACK_API_SHIM_OUT2 ? PACK_API_SHIM_OUT2_FORMAT : PACK_OUT)
 #define PACK_API_SHIM_SRC(i)                PACK_API_SHIM_OUT_OR(i, PACK_IN, 255)
-#define PACK_API_SHIM_DST(i)                PACK_API_SHIM_OUT_OR(i, PACK_OUT, 255)
-#define PACK_API_SHIM_UNPACK(i)             ((i) == 0 ? UNPACK_A_IN : ((i) == 1 ? UNPACK_B_IN : PACK_API_SHIM_OUT_OR(i, PACK_OUT, 255)))
+#define PACK_API_SHIM_DST(i)                PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_OUT_FMT(i), 255)
+#define PACK_API_SHIM_UNPACK(i)             ((i) == 0 ? UNPACK_A_IN : ((i) == 1 ? UNPACK_B_IN : PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_OUT_FMT(i), 255)))
 #define PACK_API_SHIM_FACES(i)              PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_NUM_FACES, 4)
 #define PACK_API_SHIM_FACE_R(i)             PACK_API_SHIM_OUT_OR(i, PACK_API_SHIM_FACE_R_DIM, 16)
 #define PACK_API_SHIM_ZERO(i)               0
@@ -75,10 +83,11 @@ constexpr std::uint8_t pack_num_faces_r_dim[64] = {PACK_API_SHIM_ROW(PACK_API_SH
 constexpr std::uint8_t pack_num_faces_c_dim[64] = {PACK_API_SHIM_ROW(PACK_API_SHIM_FACES_C)};
 constexpr std::uint8_t unpack_src_format[64]    = {PACK_API_SHIM_ROW(PACK_API_SHIM_UNPACK)};
 
-// The firmware's cb_interface, sized to the CBs up to the output: the metal header's 64 entries would take 2 KB of the
+// The firmware's cb_interface, sized to the CBs up to the last output: the metal header's 64 entries would take 2 KB of the
 // kernel's local data, which production leaves to the firmware.
-extern "C" CBInterface pack_api_shim_cb_interface[PACK_API_SHIM_OUT + 1];
-__attribute__((used)) CBInterface pack_api_shim_cb_interface[PACK_API_SHIM_OUT + 1];
+#define PACK_API_SHIM_LAST_CB (PACK_API_SHIM_OUT2 < 64 && PACK_API_SHIM_OUT2 > PACK_API_SHIM_OUT ? PACK_API_SHIM_OUT2 : PACK_API_SHIM_OUT)
+extern "C" CBInterface pack_api_shim_cb_interface[PACK_API_SHIM_LAST_CB + 1];
+__attribute__((used)) CBInterface pack_api_shim_cb_interface[PACK_API_SHIM_LAST_CB + 1];
 asm(".globl cb_interface\n.set cb_interface, pack_api_shim_cb_interface");
 
 #include "../llk_io/llk_outputs.h"
@@ -117,7 +126,8 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
 #define PACK_API_SHIM_PR 0
 #endif
 
-// The kernel's compute API traits (pack_math_context.h, the PR's): a matmul API header, a pack-thread SFPU init header.
+// The kernel's compute API traits (pack_math_context.h): a matmul API header, a pack-thread SFPU init header. Main's LLK has
+// no pack contexts, so on main they set nothing.
 #if PACK_API_SHIM_PR && defined(PACK_API_SHIM_MATMUL)
 namespace ckernel::packer
 {
@@ -189,6 +199,73 @@ inline void main_pack_block(const std::uint32_t start_tile_index, const std::uin
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr);
 #endif
     }
+}
+
+// Main's llk_pack_init (llk_pack_tile_api.h, both overloads; its llk_pack_init_impl is _llk_pack_init_ alone).
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+inline void main_pack_init(const std::uint32_t pack_output, const std::uint32_t num_tiles = 1, [[maybe_unused]] const std::uint32_t input_operand = 0)
+{
+    const std::uint32_t output_id = get_output_id(pack_output);
+    if constexpr (!skip_addrmod_config)
+    {
+        LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+    }
+    bool is_input_8bit_format = false;
+    if constexpr (pack_mode == PackMode::Tilize)
+    {
+        is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
+    }
+    _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+        pack_src_format[output_id],
+        get_output_face_r_dim(output_id),
+        get_output_tile_c_dim(output_id),
+        get_output_num_faces(output_id),
+        num_tiles,
+        is_input_8bit_format);
+}
+
+// The compute API's llk_pack_init (llk_pack_tile_api.h lines 32 and 63): the PR's llk_pack_init_impl (llk_pack_block_tile.h) on the PR's LLK.
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+inline void pack_init(const std::uint32_t pack_output, const std::uint32_t num_tiles = 1, [[maybe_unused]] const std::uint32_t input_operand = 0)
+{
+#if PACK_API_SHIM_PR
+    const std::uint32_t output_id = get_output_id(pack_output);
+    if constexpr (!skip_addrmod_config)
+    {
+        LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+    }
+    bool is_input_8bit_format = false;
+    if constexpr (pack_mode == PackMode::Tilize)
+    {
+        is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
+    }
+    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+        pack_src_format[output_id],
+        get_output_face_r_dim(output_id),
+        get_output_tile_c_dim(output_id),
+        get_output_num_faces(output_id),
+        num_tiles,
+        is_input_8bit_format);
+#else
+    main_pack_init<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(pack_output, num_tiles, input_operand);
+#endif
+}
+
+// The compute API's llk_pack_reconfig_data_format(new_output) (llk_pack_common_api.h line 173, the same body on main).
+template <bool is_fp32_dest_acc_en>
+inline void pack_reconfig_data_format(const std::uint32_t new_output)
+{
+    const std::uint32_t output_id  = get_output_id(new_output);
+    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
+    const std::uint32_t num_faces  = get_output_num_faces(output_id);
+    LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        get_local_cb_interface(output_id).fifo_page_size,
+        tile_c_dim,
+        num_faces,
+        false /* partial_face */);
 }
 
 #if PACK_API_SHIM_PR

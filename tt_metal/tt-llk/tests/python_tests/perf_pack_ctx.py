@@ -34,6 +34,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
+from helpers.pack_sweep import NEW_ARMS, SHIM_CONFIG, sweep_templates
 from helpers.tile_constants import get_tile_params
 from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
@@ -53,7 +54,7 @@ ARMS = [
     (5, 0),
     (6, 0),
     (8, 2),
-]  # pk-limit5: (8, 2) W under the cb0ac rule in a CB of two blocks (bit 15); (5, 0), (6, 0) main per tile in init, reconfigure (DST_INDEX bit 14)  # (state, form); (0, 3) main per-tile pack (no byte-wise destination write)
+] + NEW_ARMS  # pack_sweep.py: arm ids; pk-limit5: (8, 2) W under the cb0ac rule in a CB of two blocks (bit 15); (5, 0), (6, 0) main per tile in init, reconfigure (DST_INDEX bit 14)  # (state, form); (0, 3) main per-tile pack (no byte-wise destination write)
 BYTES = {F.Float32: 4, F.Float16_b: 2, F.Float16: 2}
 BFP_DATA = {F.Bfp8_b: 16, F.Bfp4_b: 8, F.Bfp4: 8}
 CTX = {
@@ -189,6 +190,7 @@ def _kwargs(case, arm, loop_factor):
             MATH_FIDELITY(fid),
             PACK_CTX(kind),
             PACK_SRC_FROM_OUTPUT(),
+            *sweep_templates(arm, block_tiles, faces, face_r),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -214,6 +216,7 @@ def _kwargs(case, arm, loop_factor):
             **stim_kw,
         ),
         "dest_acc": dest_acc,
+        **SHIM_CONFIG,
         "unpack_to_dest": ctx == "sfpu"
         and fin.is_32_bit()
         and dest_acc == DestAccumulation.Yes,
@@ -251,7 +254,7 @@ def test_pack_ctx_equiv(case, arm):
     off_b = ((((BLOCKS + 1) // 2) * n * pa) + 1023) & ~1023
     regions = (
         [(base, BLOCKS * n * pa)]
-        if state != 2
+        if (state & 3) != 2
         else [
             (base, ((BLOCKS + 1) // 2) * n * pa),
             (base + off_b, (BLOCKS // 2) * n * pb),

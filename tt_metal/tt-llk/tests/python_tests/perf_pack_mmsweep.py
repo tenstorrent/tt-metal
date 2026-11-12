@@ -33,6 +33,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
+from helpers.pack_sweep import SHIM_CONFIG, sweep_templates
 from helpers.tile_constants import get_tile_params
 from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
@@ -86,13 +87,13 @@ def page_bytes(fmt, r, faces):
 
 
 @dataclass
-class PACK_CTX(TemplateParameter):
-    """context/closed A/closed B (the pack_block_sweep column)"""
+class PACK_MM_CTX(TemplateParameter):
+    """context/closed A/closed B (the mm_sweep_ctx column; pack_ctx's pack_block_sweep)"""
 
-    pack_block_sweep: str
+    mm_sweep_ctx: str
 
     def convert_to_cpp(self) -> str:
-        c, a, b = self.pack_block_sweep.split("/")
+        c, a, b = self.mm_sweep_ctx.split("/")
         kt = int(c[-1])
         c = c[:-1]
         kind, op = (c[:2], c[2:]) if c.startswith("x") else ("mm", "abs")
@@ -200,11 +201,22 @@ PAIRS += [(c, (a[0] + 4, 0)) for c, a in list(PAIRS) if a in ((1, 0), (2, 0))]
 PAIRS += [
     (c, (8, 2)) for c, a in list(PAIRS) if a == (0, 2)
 ]  # pk-limit5: W under the cb0ac rule in a CB of two blocks (bit 15)
+# pack_sweep.py: W after an init, A's W after a reconfigure, W in a CB of one block and the tables steady, where the cell measures that state's block
+PAIRS += [
+    (c, n)
+    for c, a in list(PAIRS)
+    for o, n in (
+        ((1, 1), (1, 2)),
+        ((2, 1), (2, 4)),
+        ((0, 2), (16, 2)),
+        ((0, 2), (0, 5)),
+    )
+    if a == o
+]
 
 
 def _kwargs(case, arm, loop_factor):
     ctx, fid, fin, fout, dims_t, dest_acc, dest_sync, block_tiles = case
-    state, form = arm
     formats = InputOutputFormat(fin, fout)
     face_r, nfr, nfc = get_tile_params(dims_t)
     faces = nfr * nfc
@@ -249,12 +261,15 @@ def _kwargs(case, arm, loop_factor):
             TILIZE(),
             DEST_SYNC(dest_sync),
             MATH_FIDELITY(fid),
-            PACK_CTX(kind),
+            PACK_MM_CTX(kind),
             PACK_SRC_FROM_OUTPUT(),
+            *sweep_templates(
+                arm, block_tiles, faces, face_r, matmul=True, sfpu=ctx.startswith("xp")
+            ),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
-            DEST_INDEX((state << 12) | (form << 8)),
+            DEST_INDEX((arm[0] << 12) | (arm[1] << 8)),
             RELU_CONFIG(0),
             NUM_FACES(num_faces=faces),
             TEST_FACE_DIMS(face_r),
@@ -277,8 +292,9 @@ def _kwargs(case, arm, loop_factor):
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": False,
+        **SHIM_CONFIG,
     }
-    return kwargs, (pa, pb, block_tiles, state)
+    return kwargs, (pa, pb, block_tiles, arm[0] & 3)
 
 
 @pytest.mark.perf
