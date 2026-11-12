@@ -106,7 +106,9 @@ static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in 
 constexpr uint32_t PROFILER_STALL_ZONE_ID = TT_ZONE_STALL_ID;
 
 // Wire encode, duplicated from spsc_packet.h because the JIT build lacks that include path. word0 = type(5) |
-// low27. A zone ships whole at close: a 2-word ZONE_S when its end is within 2^16 cycles of the lane cursor
+// low27, the low27 carrying a 16-bit descriptor id (hostdev/observability_event_descriptor.h: the id is an address the
+// host rebases at image load, so it reaches here as a plain register value, never a compile-time constant). A zone
+// ships whole at close: a 2-word ZONE_S when its end is within 2^16 cycles of the lane cursor
 // and its duration fits 16 bits, else a 3-word ZONE_ATOMIC (id | end timer_low | duration) that re-anchors
 // the cursor, or a 5-word ZONE_L when the duration overflows 32 bits. Lane identity and the timer's high half
 // are host-reconstructed from stickies.
@@ -260,7 +262,7 @@ struct profileScopeStall {
     FORCE_INLINE ~profileScopeStall() { stall_zone_close(start_hi, start_lo); }
 };
 
-// Out of line so there is one copy rather than one per zone site. Waits for the caller's words and the zone's
+// Out of line so there is one copy rather than one per event. Waits for the caller's words and the zone's
 // own closing half, so the reserve is whole again for the next stall.
 __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     if constexpr (myRiscID < SPSC_STALL_COUNT_MAX) {
@@ -298,7 +300,7 @@ constexpr uint32_t ZONE_CLOSE_WORDS = std::max(SPSC_ATOMIC_ZONE_WORDS + 1, SPSC_
 // Duration >= 2^32 cycles (~3.2 s), which the 32-bit duration word cannot carry: one ZONE_L packet of two full
 // 64-bit values; no sticky, cursor untouched on both sides. The decoder normalizes it to a START/END pair
 // whose in-the-past START trips the order-regression diagnostic once, kept as visibility: a >3.2 s on-device
-// zone is a wedge. Out of line: the always_inline zone sites can never take it.
+// zone is a wedge. Out of line: the always_inline events can never take it.
 __attribute__((noinline)) void mark_zone_long(
     uint32_t timer_id, uint32_t start_hi, uint32_t start_lo, uint32_t end_hi, uint32_t end_lo) {
     ring_ensure_room(SPSC_ZONE_L_WORDS);
@@ -421,17 +423,18 @@ __attribute__((noinline)) void finish_profiler() { publish_tail(); }
 // The constructor touches nothing but the wall clock; the whole zone ships at close with the start as member
 // state, 8 B per open zone. Hold exactly these two words: anything more is register pressure across the user
 // code inside the zone, and a globals-maxed kernel on the 192-256 B loader stack floor gets tight around
-// 10-20 open zones (see stackCanaryScope).
-template <uint32_t timer_id>
+// 10-20 open zones (see stackCanaryScope). Event is the type TT_EVENT_DESCRIPTOR_DEFINE_ID declares where the event
+// is written; its descriptor_id() is two instructions at the close, so the id is carried by the type, not by a member.
+template <typename Event>
 struct profileScope {
     uint32_t start_hi, start_lo;
     FORCE_INLINE profileScope() { read_wall_clock(start_hi, start_lo); }
-    FORCE_INLINE ~profileScope() { mark_zone_close(timer_id, start_hi, start_lo); }
+    FORCE_INLINE ~profileScope() { mark_zone_close(Event::descriptor_id(), start_hi, start_lo); }
 };
 
 // profileScope gated on a bool evaluated once at entry; false reads no clock and writes nothing. A constant argument
 // folds to the plain zone or to no code.
-template <uint32_t timer_id>
+template <typename Event>
 struct profileScopeIf {
     bool on;
     uint32_t start_hi, start_lo;
@@ -442,7 +445,7 @@ struct profileScopeIf {
     }
     FORCE_INLINE ~profileScopeIf() {
         if (on) {
-            mark_zone_close(timer_id, start_hi, start_lo);
+            mark_zone_close(Event::descriptor_id(), start_hi, start_lo);
         }
     }
 };
@@ -496,7 +499,7 @@ struct stackCanaryScope {
     FORCE_INLINE stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
     FORCE_INLINE ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
-            record_event(STACK_CANARY_DEAD_ID);
+            record_event(STACK_CANARY_DEAD_ID::descriptor_id());
         }
     }
 };
@@ -510,8 +513,21 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #include "perf_counters.hpp"
 #include "internal/profiler/synchronization_event_profiler.hpp"
 
-#define DeviceZoneScopedN(name)                \
-    TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name); \
+// Scoped zones. Each macro takes exactly the fields of its metadata type
+// (observability/api/observability_event_meta.h), which is what the host gets back for the zone; the device only ever
+// sends the id. All arguments are compile-time constants.
+#define DeviceZoneScopedN(name)                                               \
+    TT_OBSERVABILITY_EVENT(hash, ::tt::observability_event::EventMeta{name}); \
+    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+
+// `color` is 0xRRGGBB.
+#define DeviceZoneScopedNC(name, color)                                                  \
+    TT_OBSERVABILITY_EVENT(hash, ::tt::observability_event::ZoneColorMeta{name, color}); \
+    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+
+// `color` is 0xRRGGBB; `unit` is a kernel_profiler::TimeUnit, the unit a consumer should present the duration in.
+#define DeviceZoneScopedNCU(name, color, unit)                                                \
+    TT_OBSERVABILITY_EVENT(hash, ::tt::observability_event::ZoneUnitMeta{name, color, unit}); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 #define DeviceZoneScopedNIf(name, active)      \
@@ -521,16 +537,16 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 // DeviceTimestampedData carries a payload; DeviceRecordEvent is a bare 2-word marker. Both have a compile-time
 // tag and an ELF-resolvable name. The DRAM backend's DeviceRecordEvent takes a runtime uint16 id; here the wire
 // names every point marker from the ELF, so the argument is a compile-time name like the other macros'.
-#define DeviceTimestampedData(name, data)               \
-    {                                                   \
-        TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name);      \
-        kernel_profiler::time_stamped_data(hash, data); \
+#define DeviceTimestampedData(name, data)                                \
+    {                                                                    \
+        TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name);                       \
+        kernel_profiler::time_stamped_data(hash::descriptor_id(), data); \
     }
 
-#define DeviceRecordEvent(name)                    \
-    {                                              \
-        TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name); \
-        kernel_profiler::record_event(hash);       \
+#define DeviceRecordEvent(name)                               \
+    {                                                         \
+        TT_EVENT_DESCRIPTOR_DEFINE_ID(hash, name);            \
+        kernel_profiler::record_event(hash::descriptor_id()); \
     }
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
@@ -567,6 +583,10 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #define DeviceZoneScopedMainChildN(name) (void(name))
 
 #define DeviceZoneScopedN(name) (void(name))
+
+#define DeviceZoneScopedNC(name, color) (void(name), void(sizeof(color)))
+
+#define DeviceZoneScopedNCU(name, color, unit) (void(name), void(sizeof(color)), void(sizeof(unit)))
 
 #define DeviceZoneScopedNIf(name, active) (void(name), void(sizeof(active)))
 
