@@ -70,8 +70,11 @@ constexpr std::uint8_t pack_num_faces_r_dim[64] = {PACK_API_SHIM_ROW(PACK_API_SH
 constexpr std::uint8_t pack_num_faces_c_dim[64] = {PACK_API_SHIM_ROW(PACK_API_SHIM_FACES_C)};
 constexpr std::uint8_t unpack_src_format[64]    = {PACK_API_SHIM_ROW(PACK_API_SHIM_UNPACK)};
 
-// Defined here, as the firmware defines it for a compute kernel.
-CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
+// The firmware's cb_interface, sized to the CBs up to the output: the metal header's 64 entries would take 2 KB of the
+// kernel's local data, which production leaves to the firmware.
+extern "C" CBInterface pack_api_shim_cb_interface[PACK_API_SHIM_OUT + 1];
+__attribute__((used)) CBInterface pack_api_shim_cb_interface[PACK_API_SHIM_OUT + 1];
+asm(".globl cb_interface\n.set cb_interface, pack_api_shim_cb_interface");
 
 #include "../llk_io/llk_outputs.h"
 
