@@ -86,6 +86,7 @@ from .target_config import TestTargetConfig
 from .test_variant_parameters import (
     IN_TILE_DIMS,
     NUM_FACES,
+    PACK_API_GEOMETRY,
     RuntimeParameter,
     TemplateParameter,
 )
@@ -1083,6 +1084,19 @@ class TestConfig:
         # the matmul tests' pack thread runs production's pack_block (pack_api_shim.h) with compile-time formats: production's LTO
         if compile_time_formats and os.path.basename(str(test_name)) in TestConfig.MATMUL_PACK_SHIM_TESTS:
             self.kernel_flags += [f for f in ("-flto=1", "-flto-partition=one") if f not in self.kernel_flags]
+        # math_matmul_test's output geometry is a run-time parameter: the shim's descriptor values as a template, so variants split per geometry as production's descriptors do
+        if compile_time_formats and os.path.basename(str(test_name)) == "math_matmul_test.cpp":
+            geo = {type(p).__name__: p for p in templates + runtimes}
+            faces, dims, partial = geo.get("NUM_FACES"), geo.get("IN_TILE_DIMS"), geo.get("PARTIAL_FACE")
+            geometry = PACK_API_GEOMETRY(
+                faces.num_faces if faces else 4,
+                min(dims.in0_r_dim, 16) if dims else 16,
+                bool(partial and partial.partial_face_pack),
+            )
+            templates.append(geometry)
+            # a PerfConfig builds each run type from its run_configs
+            for run_templates, _, _ in getattr(self, "run_configs", []):
+                run_templates.append(geometry)
 
         # Artefact directory is always relative to ARTEFACTS_DIR. An absolute
         # test_name is the C++ driver path; keep a sources/<basename> artefact
@@ -1817,11 +1831,19 @@ class TestConfig:
                     )
                 if type(parameter).__name__ == "NUM_TILES_IN_BLOCK":
                     header_content.append(f"constexpr std::uint32_t MATMUL_CONST_NTB = {parameter.num_tiles_in_block};")
-            # the perf output CB of the shim's matmul tests: the whole blocks that fit the 64 KB PERF_OUTPUT ring (perf.h, 16 x 4096 B)
+            # the perf output CB of the shim's matmul tests, pages per id for the W model: the whole blocks that fit the 64 KB PERF_OUTPUT
+            # ring (perf.h, 16 x 4096 B) in pages of TILE_SIZE_PACK (math_matmul_test: of a result tile); golden runs and math_matmul_test's
+            # L1 accumulation groups (MATMUL_L1_FUNC) bind the result tiles instead (no define)
             if self.compile_time_formats and os.path.basename(str(self.test_name)) in TestConfig.MATMUL_PACK_SHIM_TESTS:
                 by_name = {type(p).__name__: p for p in self.runtimes}
-                tiles = by_name["NUM_TILES_IN_BLOCK"].num_tiles_in_block if "NUM_TILES_IN_BLOCK" in by_name else by_name["CRK_TILE_DIMM"].r_dimm * by_name["CRK_TILE_DIMM"].c_dimm
-                header_content.append(f"#define MATMUL_PERF_CB_PAGES {tiles * max(1, 16 * 4096 // 16 // (tiles * self.pack_size))}")
+                if os.path.basename(str(self.test_name)) == "math_matmul_test.cpp":
+                    tiles, page = by_name["NUM_TILES_IN_BLOCK"].num_tiles_in_block, self.variant_stimuli.buf_res_tile_size // 16
+                    ring = by_name["LOOP_FACTOR"].loop_factor > 1 and not any("MATMUL_L1_FUNC" in h for h in header_content)
+                else:
+                    tiles, page = by_name["CRK_TILE_DIMM"].r_dimm * by_name["CRK_TILE_DIMM"].c_dimm, self.pack_size
+                    ring = by_name["LOOP_FACTOR"].loop_factor > 1 and not any("MATMUL_FUNC_BLOCKS 1" in h for h in header_content)
+                if ring:
+                    header_content.append(f"#define MATMUL_PERF_CB_PAGES {tiles * max(1, 16 * 4096 // 16 // (tiles * page))}")
 
         if self.compile_time_formats:
             header_content.extend(self.generate_compile_time_data_formats())
