@@ -29,8 +29,9 @@ def enabled() -> bool:
 
 
 def retained_rings() -> int:
-    """Retained snapshot rings per chip (24.4 MB each at 39 sliding layers, 36 blocks, BFP8)."""
-    return int(os.environ.get("MUSE_PREFIX_SNAPSHOTS", 24)) if enabled() else 0
+    """Retained snapshot rings per chip (24.4 MB each at 39 sliding layers, 36 blocks, BFP8; keep at least the lane count + a few,
+    since every turn of a conversation adds a snapshot and the superseded ones leave only by LRU)."""
+    return int(os.environ.get("MUSE_PREFIX_SNAPSHOTS", 32)) if enabled() else 0
 
 
 def chain_hashes(tokens, salt: bytes = b"") -> list:
@@ -43,6 +44,15 @@ def chain_hashes(tokens, salt: bytes = b"") -> list:
         prev = h.digest()
         out.append(prev)
     return out
+
+
+@dataclass
+class PrefillResume:
+    """Device-side inputs of a prefill that resumes at position `start` (> 0)."""
+
+    start: int
+    ring: int  # ring index of the slot whose sliding caches already hold the window before `start`
+    full_fill_pt: object  # ttnn int32 [1, W] fill table of the full-attention layers (fill_row_without_cached)
 
 
 @dataclass
