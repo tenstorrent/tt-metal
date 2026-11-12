@@ -34,7 +34,7 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test, result_tensor
 
 
-def _get_block_config(formats, dest_acc, tile_count):
+def _get_block_config(formats, dest_acc, unpack_to_dest, tile_count):
     configured_dest_acc = dest_acc if dest_acc is not None else DestAccumulation.No
     configured_dest_acc = effective_dest_acc(
         formats.input_format,
@@ -44,8 +44,7 @@ def _get_block_config(formats, dest_acc, tile_count):
     tiles_per_block = min(
         tile_count,
         max_dest_tiles(
-            configured_dest_acc == DestAccumulation.Yes
-            or formats.input_format.is_32_bit(),
+            configured_dest_acc == DestAccumulation.Yes or unpack_to_dest,
             DestSync.Half,
         ),
     )
@@ -132,7 +131,7 @@ def test_unpack_tilize_int8(
 
 @pytest.mark.parametrize(
     "formats",
-    input_output_formats([DataFormat.Float16_b], same=True),
+    input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
 )
 def test_unpack_tilize_partial_block(formats):
     unpack_tilize(formats, input_dimensions=[96, 96])
@@ -170,7 +169,9 @@ def unpack_tilize(
             src_A, input_dimensions, formats.output_format, num_faces=num_faces
         )
 
-    num_blocks, num_tiles_in_block = _get_block_config(formats, dest_acc, tile_cnt_A)
+    num_blocks, num_tiles_in_block = _get_block_config(
+        formats, dest_acc, unpack_to_dest, tile_cnt_A
+    )
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")

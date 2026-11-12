@@ -223,7 +223,6 @@ __attribute__((aligned(32))) void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // Keep PACK_ISOLATE focused on pack work and preserve stable perf comparisons.
-            // tt-metal #63690 tracks aligning isolate accounting with L1_TO_L1 block traversal.
             static constexpr std::uint32_t max_tiles_dest = get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
