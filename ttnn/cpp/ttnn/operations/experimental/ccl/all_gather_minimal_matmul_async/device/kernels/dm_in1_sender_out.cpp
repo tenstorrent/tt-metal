@@ -9,6 +9,9 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#ifdef AGMM_MCAST
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#endif
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
@@ -218,7 +221,18 @@ void kernel_main() {
     CircularBuffer cb_in2(cb_id_in2);
 #endif
 
+#ifdef AGMM_MCAST
+    // Each in1 block goes down the column from its row-0 injector in one multicast write (CB addresses advance in
+    // lockstep on every core).
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in1_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in1_mcast_rt_offset")>
+        in1_mcast_args;
+    auto in1_tx = in1_mcast_args.optional_sender(noc_obj);
+    auto in1_rx = in1_mcast_args.optional_receiver(noc_obj);
+#else
     in1_valid_sem.set(VALID);
+#endif
 
     const uint64_t in1_unicast_data_base_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, 0);
 
@@ -512,16 +526,28 @@ void kernel_main() {
                         n_tile_end);
 #endif
                 } else {
+#ifdef AGMM_MCAST
+                    in1_rx->receive();
+#else
                     in1_receiver_sem.set(INVALID);
                     in1_sender_sem.up(noc_obj, in1_sender_noc_x, in1_sender_noc_y, 1);
                     in1_receiver_sem.wait(VALID);
+#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_in1.push_back(in1_block_num_tiles);
 
-                if (!is_sink_core) {
+#ifdef AGMM_MCAST
+                if constexpr (is_injector_core) {
+                    in1_tx->send(in1_start_address, in1_start_address, in1_block_num_tiles * in1_tile_size);
+                }
+                constexpr bool relay_chain = false;
+#else
+                constexpr bool relay_chain = true;
+#endif
+                if (relay_chain && !is_sink_core) {
                     in1_sender_sem.wait(1);
                     in1_sender_sem.set(0);
 
