@@ -15,8 +15,9 @@
 // R3 W-split (w_split): before a block's output, the writer runs the cross-core combine of that block. The
 // combine is a row-wise reduce-scatter: row i of the block is combined by its owner, slot o = i / q
 // (q = combine_rows = ceil(block_rows / G)), which holds local row l = i % q.
-//   gather   — every core of the row-group writes its cb_partial tile of row i (Σx² over its W slice) into the
-//              owner's cb_gather at tile l*G + slot, then bumps each owner's gather semaphore once. An owner
+//   gather   — every core of the row-group writes its cb_partial tiles of owner o's rows (Σx² over its W slice,
+//              contiguous in cb_partial) into o's cb_gather at tiles [slot*q, slot*q + n_o) — slot-major, so
+//              it is ONE contiguous write per owner — then bumps each owner's gather semaphore once. An owner
 //              waits for the G-1 remote arrivals (cumulative count over the blocks it owns rows in) and
 //              publishes the full G*q quantum to its compute kernel (which reduces its n_own rows).
 //   relay    — each owner's compute reduces its rows (·1/W, +eps, rsqrt) into cb_rstd_root; with more than one
@@ -26,13 +27,15 @@
 //              only owner) into cb_rstd of every core of the group (loopback included); receivers just receive.
 //              cb_rstd's producer is the writer on every core.
 // Addresses: cb_gather / cb_rstd / cb_rstd_gather are allocated on every core and walked identically (whole
-// quantum per block), so the local write pointer IS the remote one. Only faces 0 and 2 (column 0) of a partial /
-// rstd tile cross the NoC.
+// quantum per block), so the local write pointer IS the remote one. Partials / rstd rows move as whole contiguous
+// tile runs (one NoC write per owner) rather than per-tile column-0 faces: with many rows per block the per-write
+// issue cost, not the bytes, bounds the gather.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
@@ -133,30 +136,37 @@ void kernel_main() {
             if (n_own > 0) {
                 cb_reserve_back(cb_gather, group_size * combine_rows);  // this core's compute released block-1
             }
-            // ---- gather: partial of row i -> owner (i / q)'s cb_gather tile (i % q)*G + slot ----
-            // A partial is column-0-valid, and column 0 lives only in faces 0 and 2: only those two faces cross
-            // the NoC. Faces 1/3 of the gathered tiles are never read (rstd post-op scoped to faces 0/2, the
-            // normalize multiply broadcasts column 0).
-            cb_wait_front(cb_partial, rows_this_block);
-            const uint32_t src = get_read_ptr(cb_partial);
-            for (uint32_t i = 0; i < rows_this_block; ++i) {
-                const uint32_t s = src + i * partial_bytes;
-                const uint32_t owner = i / combine_rows;
-                const uint64_t d =
-                    slot_noc(owner, gather_base + ((i % combine_rows) * group_size + slot) * partial_bytes);
-                noc_async_write(s, d, face_bytes);
-                noc_async_write(s + 2 * face_bytes, d + 2 * face_bytes, face_bytes);
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cb_partial, rows_this_block);
-            for (uint32_t o = 0; o < num_owners; ++o) {
-                if (o != slot) {
-                    noc_semaphore_inc(slot_noc(o, gather_sem_addr), 1);
+            // ---- gather: owner o's rows of this core's partials -> o's cb_gather tiles [slot*q, slot*q + n_o) ----
+            {
+                DeviceZoneScopedN("W_SEND");
+                // Pipelined with the partial reduce (one output tile per push): owner o's rows go out as soon as they
+                // are packed, so the NoC transfer of owners 0..o-1 overlaps the reduce of the later rows.
+                for (uint32_t o = 0; o < num_owners; ++o) {
+                    const uint32_t lo = o * combine_rows;
+                    const uint32_t n_o = (rows_this_block - lo < combine_rows) ? (rows_this_block - lo) : combine_rows;
+                    cb_wait_front(cb_partial, lo + n_o);
+                    const uint32_t src = get_read_ptr(cb_partial) + lo * partial_bytes;
+                    const uint32_t dst = gather_base + slot * combine_rows * partial_bytes;
+                    // A partial is column-0-valid, and column 0 lives only in faces 0 and 2: only those two faces
+                    // cross the NoC (the row all-to-all on one NoC ring is bandwidth-bound — bytes x hops).
+                    for (uint32_t t = 0; t < n_o; ++t) {
+                        const uint32_t s_t = src + t * partial_bytes;
+                        const uint64_t d_t = slot_noc(o, dst + t * partial_bytes);
+                        noc_async_write(s_t, d_t, face_bytes);
+                        noc_async_write(s_t + 2 * face_bytes, d_t + 2 * face_bytes, face_bytes);
+                    }
+                    if (o != slot) {
+                        noc_async_write_barrier();  // the owner's partials have landed before its count moves
+                        noc_semaphore_inc(slot_noc(o, gather_sem_addr), 1);
+                    }
                 }
+                noc_async_write_barrier();
+                noc_async_atomic_barrier();
+                cb_pop_front(cb_partial, rows_this_block);
             }
-            noc_async_atomic_barrier();
             if (n_own > 0) {
                 ++owned_blocks;
+                DeviceZoneScopedN("W_SEMWAIT");
                 noc_semaphore_wait_min(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr), (group_size - 1) * owned_blocks);
                 cb_push_back(cb_gather, group_size * combine_rows);
@@ -172,12 +182,8 @@ void kernel_main() {
             if constexpr (combine_rows < block_rows) {
                 if (num_owners > 1) {
                     if (n_own > 0) {
-                        for (uint32_t t = 0; t < n_own; ++t) {
-                            const uint32_t s = mcast_src + t * rstd_bytes;
-                            const uint64_t d = slot_noc(0, rstd_gather_base + (own_lo + t) * rstd_bytes);
-                            noc_async_write(s, d, face_bytes);
-                            noc_async_write(s + 2 * face_bytes, d + 2 * face_bytes, face_bytes);
-                        }
+                        noc_async_write(
+                            mcast_src, slot_noc(0, rstd_gather_base + own_lo * rstd_bytes), n_own * rstd_bytes);
                         noc_async_write_barrier();
                         cb_pop_front(cb_rstd_root, combine_rows);
                         if (!is_root) {

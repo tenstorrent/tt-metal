@@ -317,12 +317,20 @@ void kernel_main() {
                     ? 0
                     : ((rows_this_block - own_lo < combine_rows) ? (rows_this_block - own_lo) : combine_rows);
             if (n_own > 0) {
+                {
+                    DeviceZoneScopedN("Z_GWAIT");
+                    gather.wait_front(group_size * combine_rows);
+                }
                 DeviceZoneScopedN("Z_COMBINE");
-                // combine_block: the G gathered partials of each owned row are column-0-valid -> sum the tiles,
-                // skip the within-tile collapse, then the rstd post-op.
+                // combine_block: cb_gather holds a (G x q) slot-major tile grid (contributor j's rows at
+                // [j*q, j*q + q)); the partials are column-0-valid -> sum each tile column over the G slots
+                // (REDUCE_COL, within-tile collapse skipped), then the rstd post-op. The whole q-column grid is
+                // reduced even when this core owns n_own < q rows (the unused columns are never read), so both
+                // cb_gather and cb_rstd_root move in uniform per-block quanta that keep them at their base —
+                // contributors address cb_gather remotely.
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
-                    ReduceDim::REDUCE_ROW,
+                    ReduceDim::REDUCE_COL,
                     cb_gather,
                     cb_reduce_mask,
                     cb_rstd_root,
@@ -334,18 +342,10 @@ void kernel_main() {
                     gather,
                     mask,
                     rstd_root,
-                    ReduceInputBlockShape::of(n_own, group_size),
+                    ReduceInputBlockShape::of(group_size, combine_rows),
                     ReduceInputMemoryLayout::contiguous(),
                     NoAccumulation{},
                     [](uint32_t dst_idx) { rstd_post_op(dst_idx); });
-                // Uniform quanta: the writer pushes G*q gathered pages and consumes q rstd pages per owned block
-                // (keeps both CBs block-aligned at their base, which remote writers address).
-                if (n_own < combine_rows) {
-                    gather.wait_front((combine_rows - n_own) * group_size);
-                    gather.pop_front((combine_rows - n_own) * group_size);
-                    rstd_root.reserve_back(combine_rows - n_own);
-                    rstd_root.push_back(combine_rows - n_own);
-                }
             }
             // x·γ follows the combine (which the whole group waits on), overlapping the relay / multicast.
             shadow_block(x, gamma, normed, rows_this_block);
