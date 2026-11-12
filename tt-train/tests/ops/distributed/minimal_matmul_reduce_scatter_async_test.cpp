@@ -84,6 +84,7 @@ struct Block {
 
 struct RunOptions {
     bool transpose_b = false;
+    bool bidirectional = false;
     std::optional<Block> block;
     uint32_t num_calls = kCalls;
 };
@@ -218,7 +219,9 @@ void expect_close(const Problem& p, const ttnn::Tensor& out) {
 std::vector<tt::tt_metal::GlobalSemaphore> make_semaphores(ttnn::distributed::MeshDevice* device) {
     const auto grid = device->compute_with_storage_grid_size();
     const tt::tt_metal::CoreRangeSet cores(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-    return {ttnn::global_semaphore::create_global_semaphore(device, cores, 0)};
+    return {
+        ttnn::global_semaphore::create_global_semaphore(device, cores, 0),
+        ttnn::global_semaphore::create_global_semaphore(device, cores, 0)};
 }
 
 std::optional<MinimalMatmulConfig> make_config(const std::optional<Block>& block) {
@@ -272,7 +275,8 @@ ttnn::Tensor call_op(
         std::nullopt,
         std::nullopt,
         in.transpose_a,
-        opt.transpose_b);
+        opt.transpose_b,
+        opt.bidirectional);
 }
 
 void run(const Problem& p, const DeviceInputs& in, const RunOptions& opt) {
@@ -296,7 +300,8 @@ std::string describe(const RunOptions& opt) {
                 std::to_string(opt.block->N_block) + "/" + std::to_string(opt.block->subblock_h) + "x" +
                 std::to_string(opt.block->subblock_w);
     }
-    return "transpose_b=" + std::to_string(opt.transpose_b) + " block=" + block;
+    return "transpose_b=" + std::to_string(opt.transpose_b) + " bidirectional=" + std::to_string(opt.bidirectional) +
+           " block=" + block;
 }
 
 uint32_t ring_size() {
@@ -316,10 +321,30 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, TinyShapes) {
             for (const uint32_t N : {32U, 320U}) {
                 const Problem p = make_problem({M, K, N}, ring_size());
                 const DeviceInputs in = upload(p, false);
-                const RunOptions opt{};
-                SCOPED_TRACE(testing::Message() << "M=" << M << " K=" << K << " N=" << N << " " << describe(opt));
-                run(p, in, opt);
+                for (const bool bidirectional : {false, true}) {
+                    const RunOptions opt{.bidirectional = bidirectional};
+                    SCOPED_TRACE(testing::Message() << "M=" << M << " K=" << K << " N=" << N << " " << describe(opt));
+                    run(p, in, opt);
+                }
             }
+        }
+    }
+}
+
+TEST_F(MinimalMatmulReduceScatterAsyncTest, BothRings) {
+    const std::array<std::pair<Shape, Block>, 4> cases = {{
+        {{512, 64, 384}, {2, 2, 1, 1, 1}},
+        {{512, 64, 704}, {2, 2, 1, 1, 1}},
+        {{1024, 256, 2048}, {4, 4, 2, 2, 1}},
+        {{2048, 512, 2560}, {4, 4, 1, 4, 1}},
+    }};
+    for (const auto& [s, block] : cases) {
+        const Problem p = make_problem(s, ring_size());
+        for (const bool transpose_b : {false, true}) {
+            const DeviceInputs in = upload(p, transpose_b);
+            const RunOptions opt{.transpose_b = transpose_b, .bidirectional = true, .block = block};
+            SCOPED_TRACE(testing::Message() << "M=" << s.M << " K=" << s.K << " N=" << s.N << " " << describe(opt));
+            run(p, in, opt);
         }
     }
 }
@@ -330,10 +355,12 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, Small) {
         std::nullopt, Block{4, 4, 4, 2, 2}, Block{2, 8, 6, 1, 3}, Block{4, 4, 2, 2, 1}};
     for (const bool transpose_b : {false, true}) {
         const DeviceInputs in = upload(p, transpose_b);
-        for (const auto& block : blocks) {
-            const RunOptions opt{.transpose_b = transpose_b, .block = block};
-            SCOPED_TRACE(describe(opt));
-            run(p, in, opt);
+        for (const bool bidirectional : {false, true}) {
+            for (const auto& block : blocks) {
+                const RunOptions opt{.transpose_b = transpose_b, .bidirectional = bidirectional, .block = block};
+                SCOPED_TRACE(describe(opt));
+                run(p, in, opt);
+            }
         }
     }
 }
@@ -343,9 +370,15 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, RowsNotMultipleOfBlocks) {
         const Problem p = make_problem(s, ring_size());
         for (const bool transpose_b : {false, true}) {
             const DeviceInputs in = upload(p, transpose_b);
-            const RunOptions opt{.transpose_b = transpose_b, .block = Block{4, 4, 4, 2, 2}, .num_calls = 2};
-            SCOPED_TRACE(testing::Message() << "M=" << s.M << " " << describe(opt));
-            run(p, in, opt);
+            for (const bool bidirectional : {false, true}) {
+                const RunOptions opt{
+                    .transpose_b = transpose_b,
+                    .bidirectional = bidirectional,
+                    .block = Block{4, 4, 4, 2, 2},
+                    .num_calls = 2};
+                SCOPED_TRACE(testing::Message() << "M=" << s.M << " " << describe(opt));
+                run(p, in, opt);
+            }
         }
     }
 }
@@ -365,7 +398,7 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, SharedSemaphoresAcrossShapes) {
         layers.push_back({std::move(p), std::move(in), {make_buffer(s), make_buffer(s)}});
     }
     const auto semaphores = make_semaphores(device);
-    const RunOptions opt{.transpose_b = true};
+    const RunOptions opt{.transpose_b = true, .bidirectional = true};
     constexpr uint32_t kRounds = 3;
     std::vector<std::pair<uint32_t, ttnn::Tensor>> outputs;
     for (uint32_t round = 0; round < kRounds; ++round) {
@@ -388,7 +421,7 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, ProgramCacheHitWithOtherBuffersAndSe
     const DeviceInputs in = upload(p, true);
     const std::array<std::vector<tt::tt_metal::GlobalSemaphore>, 2> semaphores = {
         make_semaphores(device), make_semaphores(device)};
-    const RunOptions opt{.transpose_b = true};
+    const RunOptions opt{.transpose_b = true, .bidirectional = true};
     size_t entries_after_first = 0;
     for (uint32_t i = 0; i < 2; ++i) {
         SCOPED_TRACE(testing::Message() << "call " << i);
@@ -412,9 +445,13 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, TransposeATinyShapes) {
                 const Problem p = make_problem({M, K, N}, ring_size(), false, true);
                 for (const bool transpose_b : {false, true}) {
                     const DeviceInputs in = upload(p, transpose_b);
-                    const RunOptions opt{.transpose_b = transpose_b, .num_calls = 2};
-                    SCOPED_TRACE(testing::Message() << "M=" << M << " K=" << K << " N=" << N << " " << describe(opt));
-                    run(p, in, opt);
+                    for (const bool bidirectional : {false, true}) {
+                        const RunOptions opt{
+                            .transpose_b = transpose_b, .bidirectional = bidirectional, .num_calls = 2};
+                        SCOPED_TRACE(
+                            testing::Message() << "M=" << M << " K=" << K << " N=" << N << " " << describe(opt));
+                        run(p, in, opt);
+                    }
                 }
             }
         }
@@ -427,10 +464,12 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, TransposeASmall) {
         std::nullopt, Block{4, 4, 4, 2, 2}, Block{2, 8, 6, 1, 3}, Block{4, 4, 2, 2, 1}};
     for (const bool transpose_b : {false, true}) {
         const DeviceInputs in = upload(p, transpose_b);
-        for (const auto& block : blocks) {
-            const RunOptions opt{.transpose_b = transpose_b, .block = block};
-            SCOPED_TRACE(describe(opt));
-            run(p, in, opt);
+        for (const bool bidirectional : {false, true}) {
+            for (const auto& block : blocks) {
+                const RunOptions opt{.transpose_b = transpose_b, .bidirectional = bidirectional, .block = block};
+                SCOPED_TRACE(describe(opt));
+                run(p, in, opt);
+            }
         }
     }
 }
@@ -439,8 +478,25 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, TransposeARowsNotMultipleOfBlocks) {
     for (const Shape& s : {Shape{8320, 256, 640}, Shape{1664, 160, 352}}) {
         const Problem p = make_problem(s, ring_size(), false, true);
         const DeviceInputs in = upload(p, false);
-        const RunOptions opt{.block = Block{4, 4, 4, 2, 2}, .num_calls = 2};
-        SCOPED_TRACE(testing::Message() << "M=" << s.M << " " << describe(opt));
+        for (const bool bidirectional : {false, true}) {
+            const RunOptions opt{.bidirectional = bidirectional, .block = Block{4, 4, 4, 2, 2}, .num_calls = 2};
+            SCOPED_TRACE(testing::Message() << "M=" << s.M << " " << describe(opt));
+            run(p, in, opt);
+        }
+    }
+}
+
+TEST_F(MinimalMatmulReduceScatterAsyncTest, TransposeABothRings) {
+    const std::array<std::pair<Shape, Block>, 3> cases = {{
+        {{512, 64, 704}, {2, 2, 1, 1, 1}},
+        {{1024, 256, 2048}, {4, 4, 2, 2, 1}},
+        {{2048, 512, 2560}, {4, 4, 1, 4, 1}},
+    }};
+    for (const auto& [s, block] : cases) {
+        const Problem p = make_problem(s, ring_size(), false, true);
+        const DeviceInputs in = upload(p, false);
+        const RunOptions opt{.bidirectional = true, .block = block};
+        SCOPED_TRACE(testing::Message() << "M=" << s.M << " K=" << s.K << " N=" << s.N << " " << describe(opt));
         run(p, in, opt);
     }
 }
@@ -470,7 +526,7 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, TransposeAProgramCache) {
     const DeviceInputs transposed_in = upload(transposed, false);
     const std::array<std::vector<tt::tt_metal::GlobalSemaphore>, 2> semaphores = {
         make_semaphores(device), make_semaphores(device)};
-    const RunOptions opt{};
+    const RunOptions opt{.bidirectional = true};
     expect_close(plain, call_op(plain_in, make_buffer(s), semaphores[0], opt));
     const size_t entries_plain = device->num_program_cache_entries();
     expect_close(transposed, call_op(transposed_in, make_buffer(s), semaphores[0], opt));

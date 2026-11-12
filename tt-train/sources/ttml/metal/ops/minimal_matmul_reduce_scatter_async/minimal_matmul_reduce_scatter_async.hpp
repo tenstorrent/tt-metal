@@ -23,5 +23,6 @@ ttnn::Tensor minimal_matmul_reduce_scatter_async(
     std::optional<const ttnn::DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool transpose_a = false,
-    bool transpose_b = false);
+    bool transpose_b = false,
+    bool bidirectional = true);
 }

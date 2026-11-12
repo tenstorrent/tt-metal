@@ -133,6 +133,10 @@ void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_m
         "The reduce-scatter needs a ring of at least 2 devices, got ring_size={}.",
         attrs.ring_size);
     TT_FATAL(
+        attrs.num_directions == 1 || attrs.ring_size > 2,
+        "A ring of 2 devices has the same neighbour in both directions, so both senders of a link would share one "
+        "fabric router channel; pass bidirectional=false");
+    TT_FATAL(
         M % (attrs.ring_size * TILE_HEIGHT) == 0,
         "M ({}) must be a multiple of ring_size * {} = {}, so every device keeps a tile-aligned slice of rows",
         M,
@@ -155,8 +159,8 @@ void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_m
         buffer.dtype());
 
     TT_FATAL(
-        attrs.semaphores.size() == 1,
-        "multi_device_global_semaphore must hold 1 semaphore, got {}",
+        attrs.semaphores.size() == 2,
+        "multi_device_global_semaphore must hold 2 semaphores (one per ring direction), got {}",
         attrs.semaphores.size());
     const ttnn::CoreCoord device_grid = x.device()->compute_with_storage_grid_size();
     const ttnn::CoreRange all_cores({0, 0}, {device_grid.x - 1, device_grid.y - 1});
@@ -166,6 +170,14 @@ void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_m
             "multi_device_global_semaphore must be created on the whole compute grid {}",
             all_cores.str());
     }
+    const ttnn::CoreCoord matmul_grid =
+        attrs.config.has_value() ? attrs.config->compute_with_storage_grid_size : device_grid;
+    TT_FATAL(
+        attrs.num_directions <= matmul_grid.x - 1,
+        "{} fabric senders (one per ring direction) need that many cores past column 0 in the matmul grid's bottom "
+        "row, which has {}",
+        attrs.num_directions,
+        matmul_grid.x - 1);
     TT_FATAL(attrs.cluster_axis.has_value(), "cluster_axis must be set: it names the ring the rows are scattered over");
     TT_FATAL(
         ttnn::ccl::is_axis_wrap_wired(*x.device(), attrs.cluster_axis.value()),
@@ -208,7 +220,8 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     bool transpose_a,
-    bool transpose_b) {
+    bool transpose_b,
+    bool bidirectional) {
     using OperationType =
         ttml::metal::ops::minimal_matmul_reduce_scatter_async::MinimalMatmulReduceScatterAsyncDeviceOperation;
     auto* device = input_tensor.device();
@@ -220,6 +233,7 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
         mesh_shape.dims());
     const uint32_t ring_size =
         cluster_axis.has_value() ? mesh_shape[cluster_axis.value()] : static_cast<uint32_t>(device->num_devices());
+    const uint32_t num_directions = bidirectional ? 2 : 1;
     const auto arch = device->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, false, true, true);
@@ -232,6 +246,7 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
             .compute_kernel_config = kernel_config_val,
             .ring_size = ring_size,
             .cluster_axis = cluster_axis,
+            .num_directions = num_directions,
             .semaphores = multi_device_global_semaphore,
             .transpose_a = transpose_a,
             .transpose_b = transpose_b},

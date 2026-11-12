@@ -19,12 +19,14 @@ struct SliceLayout {
     uint32_t M_blocks = 0;
     uint32_t n_piece = 0;
     uint32_t N_blocks = 0;
+    uint32_t num_dirs = 1;
     uint32_t n_first = 0;
 
     mmrs::Span m_share(uint32_t m_core) const;
     mmrs::Span n_share(uint32_t n_core) const;
     mmrs::Span m_block(uint32_t mb) const;
     mmrs::Span n_block(uint32_t n_core, uint32_t nb) const;
+    uint32_t blocks_per_step(uint32_t dir) const;
 };
 
 SliceLayout make_slice_layout(
@@ -35,6 +37,7 @@ SliceLayout make_slice_layout(
     uint32_t n_cores,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles,
+    uint32_t num_dirs,
     bool narrow_first_n_share = false);
 
 uint64_t padded_work_per_core(

@@ -128,8 +128,10 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
         ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, mesh_coordinate, axis);
     const std::optional<ttnn::MeshCoordinate> forward_coord =
         ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, mesh_coordinate, 1, topology, axis);
+    const std::optional<ttnn::MeshCoordinate> backward_coord =
+        ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, mesh_coordinate, -1, topology, axis);
     TT_FATAL(
-        forward_coord.has_value(),
+        forward_coord.has_value() && backward_coord.has_value(),
         "Device {} has no ring neighbour on mesh axis {}",
         mesh_coordinate,
         axis.value_or(0));
@@ -189,6 +191,7 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     const uint32_t sink_row =
         build_core_order_for_axis({0, 0}, false, grid_size.y, large_input_noc, false, {0, 0}).first.back().y;
 
+    const uint32_t num_dirs = operation_attributes.num_directions;
     const SliceLayout layout = make_slice_layout(
         M_tiles,
         N_tiles,
@@ -197,6 +200,7 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
         in1_parallel_axis_cores,
         M_block_tiles,
         N_block_tiles,
+        num_dirs,
         transpose_a);
     const uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
     const uint32_t K_blocks = padded_K_tiles / K_block_tiles;
@@ -278,7 +282,8 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
-    const uint32_t go_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    const std::array<uint32_t, 2> go_semaphore_ids = {
+        tt::tt_metal::CreateSemaphore(program, core_grid, 0), tt::tt_metal::CreateSemaphore(program, core_grid, 0)};
 
     const bool in0_is_output_writer = !transpose_core_grid;
     const bool in1_is_output_writer = transpose_core_grid;
@@ -313,11 +318,13 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
             static_cast<uint32_t>(is_injector),
             ring_size,
             layout.slice_tiles,
+            num_dirs,
             static_cast<uint32_t>(transpose_b),
             static_cast<uint32_t>(sink_other),
             other_sender_sem,
             other_receiver_sem,
-            go_semaphore_id,
+            go_semaphore_ids[0],
+            go_semaphore_ids[1],
             static_cast<uint32_t>(transpose_a),
         };
         tt::tt_metal::TensorAccessorArgs(*own_input.buffer()).append_to(args);
@@ -427,8 +434,13 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
         create_compute(ttnn::CoreRangeSet(core_grid), layout.n_piece, false);
     }
 
-    const ttnn::CoreCoord send_core{1, sink_row};
-    const SenderPlacement sender_placement = {send_core, device->worker_core_from_logical_core(send_core)};
+    std::array<SenderPlacement, 2> sender_by_dir;
+    for (uint32_t dir = 0; dir < num_dirs; ++dir) {
+        const ttnn::CoreCoord core{1 + ((dir * (grid_size.x - 1)) / num_dirs), sink_row};
+        sender_by_dir[dir] = {core, device->worker_core_from_logical_core(core)};
+    }
+    const std::array<bool, 2> dir_active = {
+        layout.blocks_per_step(mmrs::kForward) > 0, layout.blocks_per_step(mmrs::kBackward) > 0};
 
     const uint32_t k_blocks_per_core =
         tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
@@ -436,7 +448,9 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     auto cores = corerange_to_cores(core_grid, num_cores, true);
     std::vector<shared_variables_t::CoreKernels> core_kernel_list;
     core_kernel_list.reserve(cores.size());
-    const auto landed_sem_addr = static_cast<uint32_t>(operation_attributes.semaphores[0].address());
+    const std::array<uint32_t, 2> landed_sem_addrs = {
+        static_cast<uint32_t>(operation_attributes.semaphores[0].address()),
+        static_cast<uint32_t>(operation_attributes.semaphores[1].address())};
     std::vector<ttnn::CoreCoord> virtual_cores;
     virtual_cores.reserve(cores.size());
     for (uint32_t core_index = 0; core_index < cores.size(); ++core_index) {
@@ -489,10 +503,14 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
                     n_share.size,
                     defer_write_k_block,
                     ring_index,
-                    landed_sem_addr,
-                    static_cast<uint32_t>(sender_placement.virtual_core.x),
-                    static_cast<uint32_t>(sender_placement.virtual_core.y),
+                    landed_sem_addrs[0],
+                    landed_sem_addrs[1],
                 };
+                for (uint32_t dir = 0; dir < 2; ++dir) {
+                    const bool has_sender = dir < num_dirs;
+                    const ttnn::CoreCoord sender = has_sender ? sender_by_dir[dir].virtual_core : ttnn::CoreCoord{0, 0};
+                    args.insert(args.end(), {static_cast<uint32_t>(sender.x), static_cast<uint32_t>(sender.y)});
+                }
                 return args;
             };
 
@@ -521,66 +539,77 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     }
 
     std::vector<shared_variables_t::Sender> senders;
-    const auto forward_route = std::get<0>(ttnn::ccl::get_forward_backward_line_unicast_configuration(
-        mesh_coordinate, forward_coord, std::nullopt, device));
+    const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
+        mesh_coordinate, forward_coord, backward_coord, device);
     const auto src_node_id = device->get_fabric_node_id(mesh_coordinate);
 
-    tt::tt_metal::create_cb(
-        tt::CBIndex::c_4,
-        program,
-        send_core,
-        kSendSlotAlignBytes,
-        ((grid_send_slots * slot_bytes) / kSendSlotAlignBytes) + 1,
-        tt::DataFormat::UInt32);
-    tt::tt_metal::create_cb(
-        tt::CBIndex::c_6, program, send_core, kReadyStrideBytes, num_producers, tt::DataFormat::UInt32);
-    std::vector<uint32_t> send_ct = {
-        out_tile_size,
-        tiles_per_packet,
-        grid_send_slots,
-        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-        N_tiles,
-        layout.slice_tiles,
-        layout.m_piece,
-        layout.M_blocks,
-        layout.N_blocks,
-        ring_size,
-        go_semaphore_id};
-    send_ct.insert(send_ct.end(), forward_route.begin(), forward_route.end());
-    tt::tt_metal::TensorAccessorArgs(*ring_buffer.buffer()).append_to(send_ct);
-    auto send_id = tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + "dataflow/send_on_grid.cpp",
-        send_core,
-        tt::tt_metal::DataMovementConfig{
-            .processor = large_input_risc, .noc = large_input_noc, .compile_args = send_ct});
-    std::vector<uint32_t> send_rt = {ring_buffer.buffer()->address(), landed_sem_addr, ring_index};
-    tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-        *device,
-        src_node_id,
-        {device->get_fabric_node_id(forward_coord.value())},
-        {0U},
-        program,
-        send_id,
-        send_core,
-        send_rt,
-        tt::tt_fabric::FabricApiType::Linear);
-    send_rt.push_back(num_producers);
-    for (uint32_t core_index = 0; core_index < cores.size(); ++core_index) {
-        const auto& core = cores[core_index];
-        const mmrs::Span m_share = layout.m_share(transpose_core_grid ? core.x : core.y);
-        const mmrs::Span n_share = layout.n_share(transpose_core_grid ? core.y : core.x);
-        send_rt.insert(
-            send_rt.end(),
-            {static_cast<uint32_t>(virtual_cores[core_index].x),
-             static_cast<uint32_t>(virtual_cores[core_index].y),
-             m_share.start,
-             m_share.size,
-             n_share.start,
-             n_share.size});
+    for (uint32_t dir = 0; dir < num_dirs; ++dir) {
+        if (!dir_active[dir]) {
+            continue;
+        }
+        const auto& neighbour = dir == mmrs::kForward ? forward_coord : backward_coord;
+        const ttnn::CoreCoord send_core = sender_by_dir[dir].core;
+
+        tt::tt_metal::create_cb(
+            tt::CBIndex::c_4,
+            program,
+            send_core,
+            kSendSlotAlignBytes,
+            ((grid_send_slots * slot_bytes) / kSendSlotAlignBytes) + 1,
+            tt::DataFormat::UInt32);
+        tt::tt_metal::create_cb(
+            tt::CBIndex::c_6, program, send_core, kReadyStrideBytes, num_producers, tt::DataFormat::UInt32);
+        std::vector<uint32_t> send_ct = {
+            out_tile_size,
+            tiles_per_packet,
+            grid_send_slots,
+            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+            N_tiles,
+            layout.slice_tiles,
+            layout.m_piece,
+            layout.M_blocks,
+            layout.N_blocks,
+            num_dirs,
+            dir,
+            ring_size,
+            go_semaphore_ids[dir]};
+        const auto& route = dir == mmrs::kForward ? forward_route : backward_route;
+        send_ct.insert(send_ct.end(), route.begin(), route.end());
+        tt::tt_metal::TensorAccessorArgs(*ring_buffer.buffer()).append_to(send_ct);
+        auto send_id = tt::tt_metal::CreateKernel(
+            program,
+            std::string(kKernelDir) + "dataflow/send_on_grid.cpp",
+            send_core,
+            tt::tt_metal::DataMovementConfig{
+                .processor = large_input_risc, .noc = large_input_noc, .compile_args = send_ct});
+        std::vector<uint32_t> send_rt = {ring_buffer.buffer()->address(), landed_sem_addrs[dir], ring_index};
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            *device,
+            src_node_id,
+            {device->get_fabric_node_id(neighbour.value())},
+            {0U},
+            program,
+            send_id,
+            send_core,
+            send_rt,
+            tt::tt_fabric::FabricApiType::Linear);
+        send_rt.push_back(num_producers);
+        for (uint32_t core_index = 0; core_index < cores.size(); ++core_index) {
+            const auto& core = cores[core_index];
+            const mmrs::Span m_share = layout.m_share(transpose_core_grid ? core.x : core.y);
+            const mmrs::Span n_share = layout.n_share(transpose_core_grid ? core.y : core.x);
+            send_rt.insert(
+                send_rt.end(),
+                {static_cast<uint32_t>(virtual_cores[core_index].x),
+                 static_cast<uint32_t>(virtual_cores[core_index].y),
+                 m_share.start,
+                 m_share.size,
+                 n_share.start,
+                 n_share.size});
+        }
+        tt::tt_metal::SetRuntimeArgs(program, send_id, send_core, send_rt);
+        senders.push_back({.core = send_core, .kernel = send_id, .dir = dir});
     }
-    tt::tt_metal::SetRuntimeArgs(program, send_id, send_core, send_rt);
-    senders.push_back({.core = send_core, .kernel = send_id});
 
     return {
         std::move(program), shared_variables_t{.cores = std::move(core_kernel_list), .senders = std::move(senders)}};
@@ -595,7 +624,9 @@ void MinimalMatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
     const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
     const uint32_t buffer_addr = tensor_args.persistent_buffer.buffer()->address();
-    const auto landed_sem_addr = static_cast<uint32_t>(operation_attributes.semaphores[0].address());
+    const std::array<uint32_t, 2> landed_sem_addrs = {
+        static_cast<uint32_t>(operation_attributes.semaphores[0].address()),
+        static_cast<uint32_t>(operation_attributes.semaphores[1].address())};
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto vars_it = cached_workload.shared_variables.find(range);
@@ -618,7 +649,8 @@ void MinimalMatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             args[kRtInputAddrIdx] = input_addr;
             args[kRtOutputAddrIdx] = out_addr;
             args[kRtBufferAddrIdx] = buffer_addr;
-            args[kRtLandedSemIdx] = landed_sem_addr;
+            args[kRtLandedSemIdx] = landed_sem_addrs[0];
+            args[kRtLandedSemIdx + 1] = landed_sem_addrs[1];
         };
         for (const auto& [core, in0_kernel, in1_kernel] : vars.cores) {
             if (in0_kernel.has_value()) {
@@ -631,7 +663,7 @@ void MinimalMatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
         for (const auto& sender : vars.senders) {
             auto& sender_args = core_args(sender.kernel, sender.core);
             sender_args[kRtSenderBufferAddrIdx] = buffer_addr;
-            sender_args[kRtSenderLandedSemIdx] = landed_sem_addr;
+            sender_args[kRtSenderLandedSemIdx] = landed_sem_addrs[sender.dir];
         }
     }
 }

@@ -25,7 +25,8 @@ void expect_steps_cover_output_once(const SliceLayout& layout, uint32_t ring_ind
     std::vector<uint32_t> owners(static_cast<size_t>(M_tiles) * layout.N_tiles, 0);
     for (uint32_t step = 0; step < layout.ring_size; ++step) {
         for (uint32_t nb = 0; nb < layout.N_blocks; ++nb) {
-            const uint32_t slice = mmrs::step_slice(step, ring_index, layout.ring_size);
+            const uint32_t dir = mmrs::block_direction(nb, layout.num_dirs);
+            const uint32_t slice = mmrs::step_slice(step, ring_index, layout.ring_size, dir);
             for (uint32_t mc = 0; mc < layout.m_cores; ++mc) {
                 for (uint32_t nc = 0; nc < layout.n_cores; ++nc) {
                     const mmrs::Span m_share = layout.m_share(mc);
@@ -72,15 +73,36 @@ TEST(MinimalMatmulReduceScatterSliceLayoutTest, BalancedSpansTileTheRange) {
 TEST(MinimalMatmulReduceScatterSliceLayoutTest, RingStepsChainAndEndOnOwnSlice) {
     for (const uint32_t r : kRingSizes) {
         for (uint32_t d = 0; d < r; ++d) {
-            std::set<uint32_t> seen;
-            for (uint32_t t = 0; t < r; ++t) {
-                seen.insert(mmrs::step_slice(t, d, r));
+            for (const uint32_t dir : {mmrs::kForward, mmrs::kBackward}) {
+                std::set<uint32_t> seen;
+                for (uint32_t t = 0; t < r; ++t) {
+                    seen.insert(mmrs::step_slice(t, d, r, dir));
+                }
+                EXPECT_EQ(seen.size(), r) << "ring " << r << " device " << d << " dir " << dir;
+                EXPECT_EQ(mmrs::step_slice(r - 1, d, r, dir), d);
+                const uint32_t next = dir == mmrs::kForward ? (d + 1) % r : (d + r - 1) % r;
+                for (uint32_t t = 0; t + 1 < r; ++t) {
+                    EXPECT_EQ(mmrs::step_slice(t + 1, next, r, dir), mmrs::step_slice(t, d, r, dir));
+                }
             }
-            EXPECT_EQ(seen.size(), r) << "ring " << r << " device " << d;
-            EXPECT_EQ(mmrs::step_slice(r - 1, d, r), d);
-            const uint32_t next = (d + 1) % r;
-            for (uint32_t t = 0; t + 1 < r; ++t) {
-                EXPECT_EQ(mmrs::step_slice(t + 1, next, r), mmrs::step_slice(t, d, r));
+        }
+    }
+}
+
+TEST(MinimalMatmulReduceScatterSliceLayoutTest, DirectionsSplitTheNBlocks) {
+    for (const uint32_t num_dirs : {1U, 2U}) {
+        for (uint32_t N_blocks = 1; N_blocks <= 7; ++N_blocks) {
+            std::vector<uint32_t> hits(N_blocks, 0);
+            for (const uint32_t dir : {mmrs::kForward, mmrs::kBackward}) {
+                for (uint32_t i = 0; i < mmrs::blocks_in_direction(N_blocks, num_dirs, dir); ++i) {
+                    const uint32_t nb = mmrs::nth_block_in_direction(i, num_dirs, dir);
+                    ASSERT_LT(nb, N_blocks);
+                    EXPECT_EQ(mmrs::block_direction(nb, num_dirs), dir);
+                    hits[nb]++;
+                }
+            }
+            for (uint32_t nb = 0; nb < N_blocks; ++nb) {
+                EXPECT_EQ(hits[nb], 1U) << "num_dirs " << num_dirs << " N_blocks " << N_blocks << " nb " << nb;
             }
         }
     }
@@ -92,13 +114,16 @@ TEST(MinimalMatmulReduceScatterSliceLayoutTest, StepsCoverEveryOutputTileOnce) {
             for (const uint32_t N_tiles : kNTiles) {
                 for (const uint32_t cores : kCoreCounts) {
                     for (const uint32_t block : kBlockTiles) {
-                        for (const bool narrow : {false, true}) {
-                            const SliceLayout layout =
-                                make_slice_layout(slice_tiles * r, N_tiles, r, cores, cores + 1, block, block, narrow);
-                            SCOPED_TRACE(
-                                testing::Message() << "ring " << r << " slice " << slice_tiles << " N " << N_tiles
-                                                   << " cores " << cores << " block " << block << " narrow " << narrow);
-                            expect_steps_cover_output_once(layout, r - 1);
+                        for (const uint32_t num_dirs : {1U, 2U}) {
+                            for (const bool narrow : {false, true}) {
+                                const SliceLayout layout = make_slice_layout(
+                                    slice_tiles * r, N_tiles, r, cores, cores + 1, block, block, num_dirs, narrow);
+                                SCOPED_TRACE(
+                                    testing::Message()
+                                    << "ring " << r << " slice " << slice_tiles << " N " << N_tiles << " cores "
+                                    << cores << " block " << block << " dirs " << num_dirs << " narrow " << narrow);
+                                expect_steps_cover_output_once(layout, r - 1);
+                            }
                         }
                     }
                 }
@@ -116,8 +141,8 @@ TEST(MinimalMatmulReduceScatterSliceLayoutTest, NarrowFirstShareTakesAColumnPerB
     };
     for (const Case& c : {Case{128, 11, 12, 10}, Case{128, 10, 13, 11}, Case{344, 11, 32, 28}}) {
         SCOPED_TRACE(testing::Message() << "N " << c.N_tiles << " cores " << c.n_cores);
-        const SliceLayout plain = make_slice_layout(4 * 32, c.N_tiles, 4, 10, c.n_cores, 8, 8);
-        const SliceLayout narrow = make_slice_layout(4 * 32, c.N_tiles, 4, 10, c.n_cores, 8, 8, true);
+        const SliceLayout plain = make_slice_layout(4 * 32, c.N_tiles, 4, 10, c.n_cores, 8, 8, 2);
+        const SliceLayout narrow = make_slice_layout(4 * 32, c.N_tiles, 4, 10, c.n_cores, 8, 8, 2, true);
         EXPECT_EQ(plain.n_piece, c.n_piece);
         EXPECT_EQ(narrow.n_piece, c.n_piece);
         EXPECT_EQ(narrow.N_blocks, plain.N_blocks);
@@ -129,5 +154,5 @@ TEST(MinimalMatmulReduceScatterSliceLayoutTest, NarrowFirstShareTakesAColumnPerB
 }
 
 TEST(MinimalMatmulReduceScatterSliceLayoutTest, RejectsRowsThatDoNotSplitOverTheRing) {
-    EXPECT_ANY_THROW(make_slice_layout(10, 8, 4, 10, 11, 8, 8));
+    EXPECT_ANY_THROW(make_slice_layout(10, 8, 4, 10, 11, 8, 8, 1));
 }

@@ -7,6 +7,9 @@
 #include <cstdint>
 
 namespace mmrs {
+inline constexpr uint32_t kForward = 0;
+inline constexpr uint32_t kBackward = 1;
+
 struct Span {
     uint32_t start = 0;
     uint32_t size = 0;
@@ -30,8 +33,24 @@ constexpr Span n_block(uint32_t nb, uint32_t width, uint32_t N_blocks) {
     return balanced_span(nb, width, N_blocks);
 }
 
-constexpr uint32_t step_slice(uint32_t step, uint32_t ring_index, uint32_t ring_size) {
-    return (ring_index + (2 * ring_size) - 1 - step) % ring_size;
+constexpr uint32_t step_slice(uint32_t step, uint32_t ring_index, uint32_t ring_size, uint32_t dir) {
+    return dir == kForward ? (ring_index + (2 * ring_size) - 1 - step) % ring_size
+                           : (ring_index + 1 + step) % ring_size;
+}
+
+constexpr uint32_t block_direction(uint32_t nb, uint32_t num_dirs) {
+    return num_dirs == 2 ? nb % 2 : kForward;
+}
+
+constexpr uint32_t blocks_in_direction(uint32_t N_blocks, uint32_t num_dirs, uint32_t dir) {
+    if (num_dirs == 1) {
+        return dir == kForward ? N_blocks : 0;
+    }
+    return dir == kForward ? (N_blocks + 1) / 2 : N_blocks / 2;
+}
+
+constexpr uint32_t nth_block_in_direction(uint32_t i, uint32_t num_dirs, uint32_t dir) {
+    return num_dirs == 2 ? (2 * i) + dir : i;
 }
 
 template <bool transpose_a>

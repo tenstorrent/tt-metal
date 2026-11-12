@@ -18,7 +18,8 @@ ttnn::Tensor minimal_matmul_reduce_scatter_async(
     std::optional<const ttnn::DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     bool transpose_a,
-    bool transpose_b) {
+    bool transpose_b,
+    bool bidirectional) {
     return ttnn::prim::ttml_minimal_matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,
@@ -30,6 +31,7 @@ ttnn::Tensor minimal_matmul_reduce_scatter_async(
         dtype,
         compute_kernel_config,
         transpose_a,
-        transpose_b);
+        transpose_b,
+        bidirectional);
 }
 }  // namespace ttml::metal

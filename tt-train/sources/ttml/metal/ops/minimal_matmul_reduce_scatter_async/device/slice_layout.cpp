@@ -29,6 +29,10 @@ mmrs::Span SliceLayout::n_block(uint32_t n_core, uint32_t nb) const {
     return mmrs::n_block(nb, n_share(n_core).size, N_blocks);
 }
 
+uint32_t SliceLayout::blocks_per_step(uint32_t dir) const {
+    return mmrs::blocks_in_direction(N_blocks, num_dirs, dir) * M_blocks;
+}
+
 SliceLayout make_slice_layout(
     uint32_t M_tiles,
     uint32_t N_tiles,
@@ -37,6 +41,7 @@ SliceLayout make_slice_layout(
     uint32_t n_cores,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles,
+    uint32_t num_dirs,
     bool narrow_first_n_share) {
     TT_FATAL(ring_size >= 1, "ring_size must be >= 1, got {}", ring_size);
     TT_FATAL(
@@ -51,6 +56,7 @@ SliceLayout make_slice_layout(
         "M_block_tiles ({}) and N_block_tiles ({}) must be >= 1",
         M_block_tiles,
         N_block_tiles);
+    TT_FATAL(num_dirs == 1 || num_dirs == 2, "num_dirs must be 1 or 2, got {}", num_dirs);
 
     SliceLayout layout;
     layout.ring_size = ring_size;
@@ -62,6 +68,7 @@ SliceLayout make_slice_layout(
     layout.M_blocks = tt::div_up(layout.m_piece, M_block_tiles);
     layout.n_piece = tt::div_up(N_tiles, n_cores);
     layout.N_blocks = tt::div_up(layout.n_piece, N_block_tiles);
+    layout.num_dirs = num_dirs;
     layout.n_first = mmrs::balanced_span(0, N_tiles, n_cores).size;
     if (!narrow_first_n_share || n_cores < 2) {
         return layout;

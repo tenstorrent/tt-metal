@@ -33,11 +33,13 @@ void kernel_main() {
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(16);
     constexpr uint32_t ring_size = get_compile_time_arg_val(17);
     constexpr uint32_t slice_tiles = get_compile_time_arg_val(18);
-    constexpr bool transpose_b = get_compile_time_arg_val(19) == 1;
-    constexpr bool sink_in0 = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t in0_sender_semaphore_id = get_compile_time_arg_val(21);
-    constexpr uint32_t in0_receiver_semaphore_id = get_compile_time_arg_val(22);
-    constexpr uint32_t go_semaphore_id = get_compile_time_arg_val(23);
+    constexpr uint32_t num_dirs = get_compile_time_arg_val(19);
+    constexpr bool transpose_b = get_compile_time_arg_val(20) == 1;
+    constexpr bool sink_in0 = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t in0_sender_semaphore_id = get_compile_time_arg_val(22);
+    constexpr uint32_t in0_receiver_semaphore_id = get_compile_time_arg_val(23);
+    constexpr uint32_t go_fwd_semaphore_id = get_compile_time_arg_val(24);
+    constexpr uint32_t go_bwd_semaphore_id = get_compile_time_arg_val(25);
 
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
@@ -56,14 +58,19 @@ void kernel_main() {
     RingWriterArgs ring;
     ring.defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     ring.ring_index = get_arg_val<uint32_t>(argidx++);
-    ring.landed_sem_addr = get_arg_val<uint32_t>(argidx++);
-    ring.sender_noc_x = get_arg_val<uint32_t>(argidx++);
-    ring.sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    ring.go_sem_addr = get_semaphore(go_semaphore_id);
+    for (uint32_t dir = 0; dir < 2; dir++) {
+        ring.landed_sem_addr[dir] = get_arg_val<uint32_t>(argidx++);
+    }
+    for (uint32_t dir = 0; dir < 2; dir++) {
+        ring.sender_noc_x[dir] = get_arg_val<uint32_t>(argidx++);
+        ring.sender_noc_y[dir] = get_arg_val<uint32_t>(argidx++);
+    }
+    ring.go_sem_addr[0] = get_semaphore(go_fwd_semaphore_id);
+    ring.go_sem_addr[1] = get_semaphore(go_bwd_semaphore_id);
     const uint32_t in0_upstream_noc_x = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
     const uint32_t in0_upstream_noc_y = sink_in0 ? get_arg_val<uint32_t>(argidx++) : 0;
 
-    constexpr auto in1_args = TensorAccessorArgs<25>();
+    constexpr auto in1_args = TensorAccessorArgs<27>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -91,7 +98,8 @@ void kernel_main() {
 
     for (uint32_t step = 0; step < ring_size; step++) {
         for (uint32_t nb = 0; nb < N_blocks; nb++) {
-            const uint32_t slice = mmrs::step_slice(step, ring.ring_index, ring_size);
+            const uint32_t dir = mmrs::block_direction(nb, num_dirs);
+            const uint32_t slice = mmrs::step_slice(step, ring.ring_index, ring_size, dir);
 
             for (uint32_t mb = 0; mb < M_blocks; mb++) {
                 const BlockRegion region = block_region<slice_tiles, m_piece, M_blocks, N_blocks>(slice, mb, nb, share);
@@ -157,13 +165,13 @@ void kernel_main() {
                     if constexpr (is_output_writer) {
                         writer.at_k_block(k_block);
                         if (k_block == K_num_blocks - 1) {
-                            writer.fetch_incoming(step, region);
+                            writer.fetch_incoming(step, dir, region);
                         }
                     }
                 }
 
                 if constexpr (is_output_writer) {
-                    writer.end_block(step, region, is_last_block);
+                    writer.end_block(step, dir, region, is_last_block);
                 }
             }
         }

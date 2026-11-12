@@ -162,10 +162,10 @@ inline void read_incoming_block(
 struct RingWriterArgs {
     uint32_t ring_index = 0;
     uint32_t defer_write_k_block = 0;
-    uint32_t landed_sem_addr = 0;
-    uint32_t sender_noc_x = 0;
-    uint32_t sender_noc_y = 0;
-    uint32_t go_sem_addr = 0;
+    uint32_t landed_sem_addr[2] = {};
+    uint32_t sender_noc_x[2] = {};
+    uint32_t sender_noc_y[2] = {};
+    uint32_t go_sem_addr[2] = {};
 };
 
 template <
@@ -193,24 +193,25 @@ public:
         }
     }
 
-    void fetch_incoming(uint32_t step, const BlockRegion& region) {
+    void fetch_incoming(uint32_t step, uint32_t dir, const BlockRegion& region) {
         signal_ready();
         if (step == 0) {
             return;
         }
         if (!region.empty()) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args_.landed_sem_addr), ++consumed_);
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args_.landed_sem_addr[dir]), ++consumed_[dir]);
         }
         read_incoming_block<M_block_tiles, N_block_tiles>(buffer_, kIncomingCb, tile_bytes_, N_tiles_, region);
     }
 
-    void end_block(uint32_t step, const BlockRegion& region, bool last) {
+    void end_block(uint32_t step, uint32_t dir, const BlockRegion& region, bool last) {
         if (last) {
             write_block<M_block_tiles, N_block_tiles, true>(
                 out_, kOutCb, tile_bytes_, N_tiles_, own_first_row(), region);
             return;
         }
-        deferred_ = {.region = region, .staged = step + 1 < ring_size, .pending = true};
+        deferred_ = {.region = region, .dir = dir, .staged = step + 1 < ring_size, .pending = true};
     }
 
     void finish() {
@@ -220,8 +221,10 @@ public:
         Noc noc;
         noc.async_write_barrier();
         signal_ready();
-        if (consumed_ > 0) {
-            noc_semaphore_inc(get_noc_addr(args_.landed_sem_addr), -consumed_);
+        for (uint32_t dir = 0; dir < 2; dir++) {
+            if (consumed_[dir] > 0) {
+                noc_semaphore_inc(get_noc_addr(args_.landed_sem_addr[dir]), -consumed_[dir]);
+            }
         }
     }
 
@@ -231,6 +234,7 @@ private:
 
     struct Deferred {
         BlockRegion region;
+        uint32_t dir = 0;
         bool staged = false;
         bool pending = false;
     };
@@ -243,7 +247,7 @@ private:
         if (deferred_.staged) {
             write_block<M_block_tiles, N_block_tiles, false>(
                 buffer_, kOutCb, tile_bytes_, N_tiles_, 0, deferred_.region);
-            unsignalled_++;
+            unsignalled_[deferred_.dir]++;
         } else {
             write_block<M_block_tiles, N_block_tiles, false>(
                 out_, kOutCb, tile_bytes_, N_tiles_, own_first_row(), deferred_.region);
@@ -252,18 +256,24 @@ private:
     }
 
     void signal_ready() {
-        if (unsignalled_ == 0) {
+        if (unsignalled_[0] == 0 && unsignalled_[1] == 0) {
             return;
         }
         Noc noc;
         noc.async_write_barrier();
-        if (ready_addr_ == 0) {
-            auto* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args_.go_sem_addr);
-            noc_semaphore_wait_min(go, 1);
-            ready_addr_ = *go;
+        for (uint32_t dir = 0; dir < 2; dir++) {
+            if (unsignalled_[dir] == 0) {
+                continue;
+            }
+            if (ready_addr_[dir] == 0) {
+                auto* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args_.go_sem_addr[dir]);
+                noc_semaphore_wait_min(go, 1);
+                ready_addr_[dir] = *go;
+            }
+            noc_semaphore_inc(
+                get_noc_addr(args_.sender_noc_x[dir], args_.sender_noc_y[dir], ready_addr_[dir]), unsignalled_[dir]);
+            unsignalled_[dir] = 0;
         }
-        noc_semaphore_inc(get_noc_addr(args_.sender_noc_x, args_.sender_noc_y, ready_addr_), unsignalled_);
-        unsignalled_ = 0;
     }
 
     const OutAccessor& out_;
@@ -272,7 +282,7 @@ private:
     uint32_t N_tiles_;
     RingWriterArgs args_;
     Deferred deferred_;
-    uint32_t consumed_ = 0;
-    uint32_t unsignalled_ = 0;
-    uint32_t ready_addr_ = 0;
+    uint32_t consumed_[2] = {};
+    uint32_t unsignalled_[2] = {};
+    uint32_t ready_addr_[2] = {};
 };

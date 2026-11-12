@@ -22,6 +22,7 @@ struct MinimalMatmulReduceScatterAsyncProgramFactory {
         struct Sender {
             ttnn::CoreCoord core;
             tt::tt_metal::KernelHandle kernel{};
+            uint32_t dir = 0;
         };
         std::vector<Sender> senders;
     };

@@ -34,6 +34,8 @@ template <
     uint32_t m_piece,
     uint32_t M_blocks,
     uint32_t N_blocks,
+    uint32_t num_dirs,
+    uint32_t dir,
     uint32_t tiles_per_packet>
 class UnitCursor {
 public:
@@ -86,7 +88,7 @@ public:
     }
 
 private:
-    static constexpr uint32_t kBlocksPerStep = N_blocks * M_blocks;
+    static constexpr uint32_t kBlocksPerStep = mmrs::blocks_in_direction(N_blocks, num_dirs, dir) * M_blocks;
     static constexpr uint32_t kUnitsPerProducer = (ring_size - 1) * kBlocksPerStep;
 
     void next_unit() {
@@ -104,9 +106,9 @@ private:
     bool load() {
         const uint32_t step = j_ / kBlocksPerStep;
         const uint32_t within = j_ % kBlocksPerStep;
-        const uint32_t nb = within / M_blocks;
+        const uint32_t nb = mmrs::nth_block_in_direction(within / M_blocks, num_dirs, dir);
         const uint32_t mb = within % M_blocks;
-        const uint32_t slice = mmrs::step_slice(step, ring_index_, ring_size);
+        const uint32_t slice = mmrs::step_slice(step, ring_index_, ring_size, dir);
         const CoreShare share = producers_[p_].share;
         region_ = block_region<slice_tiles, m_piece, M_blocks, N_blocks>(slice, mb, nb, share);
         tiles_ = region_.rows * region_.cols;
@@ -145,13 +147,15 @@ void kernel_main() {
     constexpr uint32_t m_piece = get_compile_time_arg_val(6);
     constexpr uint32_t M_blocks = get_compile_time_arg_val(7);
     constexpr uint32_t N_blocks = get_compile_time_arg_val(8);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(9);
-    constexpr uint32_t go_semaphore_id = get_compile_time_arg_val(10);
+    constexpr uint32_t num_dirs = get_compile_time_arg_val(9);
+    constexpr uint32_t dir = get_compile_time_arg_val(10);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(11);
+    constexpr uint32_t go_semaphore_id = get_compile_time_arg_val(12);
     constexpr uint32_t packet_bytes = tiles_per_packet * tile_size;
     constexpr uint32_t packets_per_batch = slot_packets / 2;
     constexpr ccl_routing_utils::line_unicast_route_info_t route =
-        ccl_routing_utils::get_line_unicast_route_info_from_args<11>();
-    constexpr auto buffer_args = TensorAccessorArgs<11 + ccl_routing_utils::num_line_unicast_args>();
+        ccl_routing_utils::get_line_unicast_route_info_from_args<13>();
+    constexpr auto buffer_args = TensorAccessorArgs<13 + ccl_routing_utils::num_line_unicast_args>();
 
     size_t argidx = 0;
     const uint32_t buffer_addr = get_arg_val<uint32_t>(argidx++);
@@ -179,7 +183,7 @@ void kernel_main() {
     FabricWriter<tile_size, packet_size_bytes, tt::tt_fabric::WorkerToFabricEdmSender> fabric(
         noc, &connection.get(0).sender, route.dst_chip_id, route.dst_mesh_id);
 
-    using Cursor = UnitCursor<ring_size, slice_tiles, m_piece, M_blocks, N_blocks, tiles_per_packet>;
+    using Cursor = UnitCursor<ring_size, slice_tiles, m_piece, M_blocks, N_blocks, num_dirs, dir, tiles_per_packet>;
     Cursor reader(producers, num_producers, ring_index, N_tiles);
     Cursor sender(producers, num_producers, ring_index, N_tiles);
     uint32_t read_slot = 0;
