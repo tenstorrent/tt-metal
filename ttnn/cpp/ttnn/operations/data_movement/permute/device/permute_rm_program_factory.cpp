@@ -305,7 +305,13 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
                             cb_data_format_output == tt::DataFormat::UInt32;
     // Style B compute config: build ComputeGen1Config directly, matching the legacy
     // ComputeConfigDescriptor{.fp32_dest_acc_en=...} (all other fields at legacy defaults).
+    // RECONSTRUCTED: Quasar is Gen2 and rejects a ComputeGen1Config at program build;
+    // the fields are the same either way. quasar::reduce calls ttnn::transpose, which
+    // lands here, so without this GlobalAveragePool aborts with
+    // "KernelSpec 'compute' targets Gen2 ... holds a ComputeGen1Config".
     ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeGen2Config compute_cfg_gen2{.enable_32_bit_dest = fp32_dest_acc_en};
+    const bool qsr_gen2 = input_tensor.device()->arch() == tt::ARCH::QUASAR;
     // Metal 2.0 requires an explicit unpack_modes entry for every Float32 DFB the compute
     // kernel consumes when enable_32_bit_dest = true. The compute kernel consumes SRC_CB
     // (via tilize) and TILIZE_CB (self-loop). UnpackToDest, not UnpackToSrc: SrcA/SrcB are
@@ -333,7 +339,9 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
                  .dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args = {{"x_block_size", x_block_size}, {"w_block_size", w_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_blocks"}},
-        .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+        .hw_config = qsr_gen2 ? (compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes,
+                                     ComputeHardwareConfig{compute_cfg_gen2})
+                                  : ComputeHardwareConfig{std::move(compute_cfg)},
     };
 
     // ---- Varargs (core-invariant) ----

@@ -134,6 +134,17 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
     if (fp32_llk_acc && input.dtype() != DataType::UINT8) {
         compute_cfg.unpack_modes.emplace(INPUT_DFB, UnpackMode::UnpackToDest);
     }
+    // Quasar is Gen2 and rejects a ComputeGen1Config at program build; the fields are the
+    // same either way. Mirrors the idiom upstream already uses in
+    // interleaved_to_sharded_program_factory.cpp.
+    ComputeHardwareConfig compute_hw_cfg{compute_cfg};
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        ComputeGen2Config gen2;
+        gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+        gen2.unpack_modes = compute_cfg.unpack_modes;
+        compute_hw_cfg = ComputeHardwareConfig{gen2};
+    }
+
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp",
@@ -152,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
         .compile_time_args =
             {{"per_core_block_cnt", num_tiles_per_shard / num_tiles_per_row},
              {"per_core_block_tile_cnt", num_tiles_per_row}},
-        .hw_config = ComputeHardwareConfig{compute_cfg},
+        .hw_config = compute_hw_cfg,
     };
 
     ProgramSpec spec{

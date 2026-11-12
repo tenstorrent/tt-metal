@@ -187,11 +187,17 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // unpack_to_dest_mode vector was Default everywhere except v[c_0] = UnpackToDestFp32 when
     // fp32_llk_acc — c_0 is this factory's staging buffer, i.e. the tilize input DFB (Default ==
     // UnpackToSrc is expressed by omitting the entry).
-    ComputeGen1Config compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
+    // RECONSTRUCTED: Quasar is Gen2 and rejects a ComputeGen1Config at program build. See the
+    // sibling factories -- a Gen1 config here fails on Quasar with "KernelSpec 'compute' targets
+    // Gen2 ... holds a ComputeGen1Config". Both alternatives carry the same fields.
+    ComputeHardwareConfig compute_hw =
+        a.device()->arch() == tt::ARCH::QUASAR
+            ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_llk_acc}}
+            : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_llk_acc}};
     if (fp32_llk_acc) {
-        compute_gen1.unpack_modes = ComputeUnpackModes{{STAGE, UnpackMode::UnpackToDest}};
+        std::visit([&](auto& c) { c.unpack_modes = ComputeUnpackModes{{STAGE, UnpackMode::UnpackToDest}}; },
+                   compute_hw);
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
 
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,

@@ -225,6 +225,17 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
             compute_cfg.unpack_modes.emplace(MID_DFB, UnpackMode::UnpackToDest);
             compute_cfg.unpack_modes.emplace(MID_VIEW_DFB, UnpackMode::UnpackToDest);
         }
+    // Quasar is Gen2 and rejects a ComputeGen1Config at program build; the fields are the
+    // same either way. Mirrors the idiom upstream already uses in
+    // interleaved_to_sharded_program_factory.cpp.
+    ComputeHardwareConfig compute_hw_cfg{compute_cfg};
+    if (a.device()->arch() == tt::ARCH::QUASAR) {
+        ComputeGen2Config gen2;
+        gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+        gen2.unpack_modes = compute_cfg.unpack_modes;
+        compute_hw_cfg = ComputeHardwareConfig{gen2};
+    }
+
         return KernelSpec{
             .unique_id = id,
             .source = "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/retile.cpp",
@@ -268,7 +279,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
                  {"mid_page_size", mid_page_size}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_input_blocks", "num_real_input_rows", "num_real_output_rows"}},
-            .hw_config = ComputeHardwareConfig{compute_cfg},
+            .hw_config = compute_hw_cfg,
         };
     };
 

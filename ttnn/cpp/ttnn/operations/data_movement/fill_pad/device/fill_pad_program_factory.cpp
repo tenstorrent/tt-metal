@@ -252,7 +252,21 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
              {"elem_size", input_element_size_bytes},
              {"fill_bits", fill_bits}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_right", "num_bottom", "num_corner"}},
-        .hw_config = ComputeHardwareConfig{std::move(compute_hw)},
+        // Quasar is Gen2 and rejects a ComputeGen1Config at program build; the fields are the
+        // same either way. Located by backtrace, not inference: quasar::mean ->
+        // fill_implicit_tile_padding -> fill_pad -> FillPadDeviceOperation, which is why
+        // ResNet-50's GlobalAveragePool (seg119) aborted with
+        // "KernelSpec 'compute' targets Gen2 ... holds a ComputeGen1Config".
+        .hw_config =
+            [&]() -> ComputeHardwareConfig {
+                if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+                    ComputeGen2Config gen2;
+                    gen2.enable_32_bit_dest = compute_hw.enable_32_bit_dest;
+                    gen2.unpack_modes = compute_hw.unpack_modes;
+                    return ComputeHardwareConfig{gen2};
+                }
+                return ComputeHardwareConfig{std::move(compute_hw)};
+            }(),
     };
     compute_spec.compiler_options.defines = mask_defines;
     compute_spec.compiler_options.opt_level = KernelBuildOptLevel::O3;  // legacy ComputeConfig defaults to O3
