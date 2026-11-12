@@ -735,6 +735,22 @@ class Qwen36Model:
         ttnn.deallocate(x)
         return out
 
+    def vision_rows_host(self, vision_tokens):
+        """Packed vision rows as HOST bf16 [num_tokens, Hg] (a torch tensor is returned as is; a device tensor, hidden-
+        fractured on a mesh, is gathered).
+
+        The MTP serving path keeps vision rows on the host from the tower on (rc1e, d30u20 11-11): a device tensor
+        allocated after trace capture can share DRAM with trace intermediates, and the splice used to read it back once
+        per prefill SEGMENT, i.e. after the first segment's trace replay had overwritten it -> the last image of a
+        multi-segment multimodal prefill came back as another image / garbage. Host rows cannot be clobbered."""
+        if vision_tokens is None or isinstance(vision_tokens, torch.Tensor):
+            return vision_tokens if vision_tokens is None else vision_tokens.to(torch.bfloat16)
+        if self.num_devices > 1:
+            return ttnn.to_torch(
+                vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)
+            ).to(torch.bfloat16)
+        return ttnn.to_torch(vision_tokens).to(torch.bfloat16)
+
     def _set_vision_merge(self, ids_host, vision_tokens, vis_row_offset=0):
         """Stage the persistent vision buffers for the next forward (host -> device copy only; no
         program compiles). ``vision_tokens`` None clears the mask (where becomes identity); otherwise
@@ -774,12 +790,9 @@ class Qwen36Model:
         # the hidden fracture, so the round-trip gather->place->reshard preserves the per-device
         # columns. ConcatMeshToTensor(dim=1) over the 2D [rows, dim/TP] is the inverse of the
         # dims=(None,-1) hidden shard used on re-upload.
-        if tp:
-            vis_host = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
-                torch.bfloat16
-            )
-        else:
-            vis_host = ttnn.to_torch(vision_tokens).to(torch.bfloat16)  # [num_image_tokens, Hg]
+        # Host rows (torch, the MTP serving path: see vision_rows_host) are used as they are; a device tensor is read
+        # back here (the legacy paths).
+        vis_host = self.vision_rows_host(vision_tokens)
         seg = vis_host[vis_row_offset : vis_row_offset + n]
         if tp:
             shard = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape)
@@ -1479,6 +1492,8 @@ class Qwen36Model:
         """
         if vision_tokens is None:
             return x
+        if isinstance(vision_tokens, torch.Tensor):  # host rows (MTP serving path): this on-device splice needs them on device
+            vision_tokens = self.vision_model.upload_rows(vision_tokens)
 
         orig_shape = tuple(x.shape)
         hidden = orig_shape[-1]

@@ -141,3 +141,51 @@ def test_upload_waits_for_the_write_before_releasing_the_host_rows(monkeypatch):
     out = DropInVisionTransformer.upload_rows(me, torch.zeros(1024, H, dtype=torch.bfloat16))
     assert out == "DEV"
     assert order == [("host", (1024, H)), ("write", "HOST"), ("record", "MESH"), ("wait", "EV")]
+
+
+def test_host_rows_mode_never_uploads(gen):
+    """MTP serving path (rc1e): rows stay on the host; a device tensor made after trace capture could be overwritten
+    by a trace replay between prefill segments (d30u20 11-11: last image of a multi-segment prefill wrong)."""
+    m = _model()
+    fail = lambda pv, grid: pytest.fail("encode() must not run")  # noqa: E731
+    out = Qwen36ForCausalLM._vision_cached(gen, m, "image", _req([1, 2]), fail, ids=["a", "b"], host_rows=True)
+    again = Qwen36ForCausalLM._vision_cached(gen, m, "image", _req([2, 1]), fail, ids=["b", "a"], host_rows=True)
+    assert isinstance(out, torch.Tensor) and m.uploads == []
+    assert out[:, 0].tolist() == [1.0] * 4 + [2.0] * 4 and again[:, 0].tolist() == [2.0] * 4 + [1.0] * 4
+    assert len(m.tower) == 1
+
+
+def test_host_rows_with_the_cache_off(monkeypatch):
+    monkeypatch.setenv("QWEN36_MM_VISION_CACHE", "0")
+    g = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
+    m = _model()
+    out = Qwen36ForCausalLM._vision_cached(
+        g, m, "image", _req([3, 4]), lambda pv, grid: pytest.fail("encode() must not run"), host_rows=True
+    )
+    assert out[:, 0].tolist() == [3.0] * 4 + [4.0] * 4 and m.uploads == [] and len(m.tower) == 1
+
+
+def test_set_vision_merge_places_host_rows_without_a_device_read(monkeypatch):
+    import ttnn
+
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+
+    staged = []
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **k: t.clone())
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda src, dst: staged.append((dst, src)))
+    monkeypatch.setattr(ttnn, "to_torch", lambda *a, **k: pytest.fail("host rows must not be read back from device"))
+    m = types.SimpleNamespace(
+        _vis_buf=types.SimpleNamespace(shape=(1, 8, H)),
+        _vis_mask_buf="MASK",
+        num_devices=1,
+        args=types.SimpleNamespace(dim=H),
+    )
+    m._vision_placeholder_token_id = lambda: 7
+    m.vision_rows_host = lambda vt: Qwen36Model.vision_rows_host(m, vt)
+    rows = torch.arange(5, dtype=torch.bfloat16).reshape(5, 1).repeat(1, H)  # row r = value r
+    ids = torch.tensor([[1, 1, 7, 7, 1, 1, 1, 1]])
+    Qwen36Model._set_vision_merge(m, ids, rows, vis_row_offset=3)
+    vis = [s for d, s in staged if d is m._vis_buf][0]
+    mask = [s for d, s in staged if d == "MASK"][0]
+    assert vis[0, 2:4, 0].tolist() == [3.0, 4.0] and mask[0, :, 0].tolist() == [0, 0, 1, 1, 0, 0, 0, 0]
+    assert Qwen36Model.vision_rows_host(m, None) is None

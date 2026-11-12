@@ -487,7 +487,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
         return None
 
-    def _vision_cached(self, model, modality, visual, encode, ids=None):
+    def _vision_cached(self, model, modality, visual, encode, ids=None, host_rows=False):
         """QWEN36_MM_VISION_CACHE=N (default 0 = off): LRU of the vision-tower output of the last N ITEMS (images or
         videos), as HOST bf16 rows, keyed per item by its content hash (``ids``: vLLM's identifiers, one per item) or,
         without ids, by a host hash of the item's pixels + grid. A request whose items all hit skips the tower; a miss
@@ -498,13 +498,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         Fixes 8c2faf2ec95, which kept the returned DEVICE tensor in the LRU: prefill_paged_slots deallocates its vision
         tensor after the prefill, so a hit spliced freed / reused DRAM (wrong answers, HTTP 200). That cache was also
         keyed by the whole request's item set, so a conversation that adds an image missed every turn.
-        The model-global grid stash is set to this call's full grid list, as get_*_features does."""
+        The model-global grid stash is set to this call's full grid list, as get_*_features does.
+        ``host_rows`` True (the MTP serving path): return the packed rows as a HOST bf16 tensor instead of uploading them
+        (Qwen36Model.vision_rows_host: a device tensor made after trace capture can be overwritten by a trace replay
+        between prefill segments); with the cache off the tower still runs once over all items."""
         import collections
         import hashlib
 
         cap = int(os.environ.get("QWEN36_MM_VISION_CACHE", "0") or 0)
         pixel_values, grid_thw = visual
         if cap <= 0:
+            if host_rows:
+                return torch.cat(model.get_visual_features_host(modality, pixel_values, grid_thw), dim=0)
             return encode(pixel_values, grid_thw)
         cache = getattr(self, "_vision_lru", None)
         if cache is None:
@@ -560,7 +565,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             model._req_image_grid_thw, model._req_video_grid_thw = grid_thw, None
         if (stats[0] + stats[1]) // 50 != (stats[0] + stats[1] - len(rows)) // 50:
             logger.info(f"qwen36 vision cache: {stats[0]} item hits / {stats[1]} misses, {len(cache)} items cached")
-        return model.upload_vision_rows(torch.cat(rows, dim=0))
+        packed = torch.cat(rows, dim=0)
+        return packed if host_rows else model.upload_vision_rows(packed)
 
     def _mm_vision_for(self, model, kwargs, u, tokens):
         """QWEN36_MM_PREFIX_CACHE: the MMVision of user ``u``'s image prompt (None = serve it on the plain multimodal path).
@@ -602,6 +608,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 (pixel_values, grid_thw),
                 model.get_image_features,
                 ids=ids[first:],
+                host_rows=True,
             )
 
         return MMVision(tokens, items, pv_items, grid_items, encode)
@@ -1576,6 +1583,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 rows.append(out.float().reshape(-1))
                 continue
             vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
+            if vision_tokens is not None and hasattr(model, "vision_rows_host"):
+                # rows to host right after the tower, before any trace replay (see Qwen36Model.vision_rows_host)
+                vision_tokens = model.vision_rows_host(vision_tokens)
             if nonfinal[i]:
                 assert starts is not None, "non-final prefill chunk without start_pos"
                 out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], final=False)
