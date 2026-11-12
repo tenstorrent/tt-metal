@@ -634,3 +634,84 @@ def test_perf_eltwise_binary_sfpu_quant_byte(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),
     )
+
+
+# The six float compares and the two integer compares. They are excluded from FLOAT_SWEEP
+# (a random sweep gives Eq/Ne a constant golden), so they are measured here on the same
+# crafted stimuli their functional tests use; perf runs check no golden either way.
+@pytest.mark.perf
+@parametrize(
+    **_func.EQ_NE_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_eq_ne(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_eq_ne(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.FLOAT_COMPARISON_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_float_comparison(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_float_comparison(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.EQ_NE_INT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_eq_ne_int(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_eq_ne_int(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
