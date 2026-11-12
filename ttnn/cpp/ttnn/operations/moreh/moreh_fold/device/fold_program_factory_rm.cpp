@@ -83,7 +83,7 @@ ttnn::device_operation::ProgramArtifacts MorehFoldOperation::MultiCore::create_p
     uint32_t aligned_output_cb_page_size = tt::round_up(output_cb_page_size, 32u);
 
     // For DRAM reads, we need DRAM-aligned size
-    bool src_is_dram = input.buffer()->buffer_type() == BufferType::DRAM;
+    bool src_is_dram = input.memory_config().buffer_type() == BufferType::DRAM;
     bool is_blackhole = (device->arch() == tt::ARCH::BLACKHOLE);
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t dram_aligned_input_cb_page_size = tt::align(input_cb_page_size, dram_alignment);

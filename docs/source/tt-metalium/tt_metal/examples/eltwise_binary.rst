@@ -40,7 +40,7 @@ Initializing Metalium is almost the same as before. To recap, we need to
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t n_tiles = 64;
@@ -128,15 +128,15 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
 .. code-block:: cpp
 
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader = CreateKernel(
         program,
         "eltwise_binary/kernels/dataflow/read_tiles.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer = CreateKernel(
         program,
         "eltwise_binary/kernels/dataflow/write_tile.cpp",

@@ -1612,6 +1612,10 @@ jobs:
                 echo "U07M7QZ0BQA"
                 return 0
                 ;;
+              "jyuanTT")
+                echo "U0A1JMYFVNV"
+                return 0
+                ;;
               "blozano-tt")
                 echo "U07J3K6KS1K"
                 return 0
@@ -2175,6 +2179,10 @@ jobs:
                   ;;
                 "jvegaTT")
                   echo "U07M7QZ0BQA"
+                  return 0
+                  ;;
+                "jyuanTT")
+                  echo "U0A1JMYFVNV"
                   return 0
                   ;;
                 "blozano-tt")
