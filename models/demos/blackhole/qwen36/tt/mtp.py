@@ -17,6 +17,7 @@ from loguru import logger
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.tt_transformers.tt.common import Mode
 
@@ -417,6 +418,34 @@ class Qwen36MTP:
         ttnn.deallocate(cat)
         return fused
 
+    def _embed_rows(self, token_ids):
+        """The token embedding of ``token_ids`` ([B,1] or [1,B] uint32) as [1,1,B,dim/tp] TILE in DRAM: a row-major
+        lookup viewed as one [1,1,B,dim/tp] row block, zero-padded to whole 32-row tiles in row major (a pad of B < 32
+        rows inside the tilize takes a slow path), tilized, and viewed back to B logical rows (a metadata view). A TILE
+        lookup would pad every id to a tile of its own and need a reshape copy to gather the rows; both give the same
+        bf16 rows (pure data movement)."""
+        rows = int(token_ids.shape[0]) * int(token_ids.shape[-1])
+        rm = ttnn.embedding(
+            token_ids, self.embd.weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        width = int(rm.shape[-1])
+        view = ttnn.reshape(rm, (1, 1, rows, width))
+        pad_rows = -rows % ttnn.TILE_SIZE
+        if pad_rows:
+            full = ttnn.pad(view, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
+            tiled = ttnn.to_layout(full, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.reshape(tiled, ttnn.Shape([1, 1, rows, width]), ttnn.Shape([1, 1, rows + pad_rows, width]))
+            if out is not tiled and not tpc.aliases(out, tiled):
+                ttnn.deallocate(tiled)
+            ttnn.deallocate(full)
+        else:
+            out = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # A reshape is a metadata alias or a copy; deallocate is a no-op on an already-freed buffer, so freeing both
+        # handles frees each buffer once.
+        ttnn.deallocate(view)
+        ttnn.deallocate(rm)
+        return out
+
     def forward_decode(
         self,
         hidden_states,
@@ -446,8 +475,7 @@ class Qwen36MTP:
         returns the RAW block output, which callers discard (not a valid chain value).
         """
         mode = Mode.DECODE
-        tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
-        tok_emb = ttnn.reshape(tok_emb, (1, 1, tok_emb.shape[0] * tok_emb.shape[1], tok_emb.shape[-1]))
+        tok_emb = self._embed_rows(token_ids)  # [1,1,B,dim/tp]
         fused = self._fuse(tok_emb, hidden_states, mode)
         ttnn.deallocate(tok_emb)
 
