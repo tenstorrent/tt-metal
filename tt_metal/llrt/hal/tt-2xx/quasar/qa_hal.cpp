@@ -540,6 +540,7 @@ void Hal::initialize_qa(
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
     this->core_info_.push_back(quasar::create_idle_eth_mem_map());
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
+    this->has_cce_dram_cores_ = enable_cce_programmable_cores;
     if (enable_cce_programmable_cores) {
         this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DRAM)] =
             quasar::create_dram_mem_map(cce_l1_noc_offset);

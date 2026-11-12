@@ -33,7 +33,7 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
         "Cannot build a DRAM sender mapping for a mesh with no local devices (shape {}); a submesh whose slots are "
         "all owned by another host/rank has no device to resolve the senders' endpoint roles against.",
         mesh_device->shape());
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+    if (MetalContext::instance(mesh_device->impl().get_context_id()).hal().has_cce_dram_cores()) {
         TT_THROW(
             "DRAM sender mappings for worker receivers are not supported on Quasar: each DRAM view has one CCE "
             "sender and there are no worker receivers");

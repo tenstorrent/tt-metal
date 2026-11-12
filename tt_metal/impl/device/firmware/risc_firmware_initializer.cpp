@@ -48,17 +48,17 @@ namespace tt::tt_metal {
 
 namespace {
 
-tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
+tt::umd::RiscType dram_core_reset_riscs(const Hal& hal) {
     // Harts only. RiscType::ALL also holds the CCE uncore and, on deassert, reprograms the DMRISC
     // remap. SMC firmware owns both on full Grendel, and chippy owns both on the Mimir-local path.
-    return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL_NEO_DMS : tt::umd::RiscType::BRISC;
+    return hal.has_cce_dram_cores() ? tt::umd::RiscType::ALL_NEO_DMS : tt::umd::RiscType::BRISC;
 }
 
 // At exit, reset only the CCE harts and leave the uncore running, matching the state chippy bring-up leaves.
 // A full reset would also reset the uncore, and then TL1 and the DMRISC remap stay unreachable to the host
 // until another process's CreateDevice releases the uncore again.
-tt::umd::RiscType dram_core_teardown_reset_riscs(ARCH arch) {
-    return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL_DATA_MOVEMENT : tt::umd::RiscType::BRISC;
+tt::umd::RiscType dram_core_teardown_reset_riscs(const Hal& hal) {
+    return hal.has_cce_dram_cores() ? tt::umd::RiscType::ALL_DATA_MOVEMENT : tt::umd::RiscType::BRISC;
 }
 
 // Port this core uses to reach Mimir `dest`. Local GDDR stays on D2D0: that is the window
@@ -607,7 +607,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     assert_tensix_workers_impl(device_id);
-    assert_dram_cores(device_id, dram_core_reset_riscs(cluster_.arch()));
+    assert_dram_cores(device_id, dram_core_reset_riscs(hal_));
     assert_dispatch_cores(device_id);
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         assert_inactive_ethernet_cores(device_id);
@@ -621,7 +621,7 @@ void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id) {
         assert_active_ethernet_cores_to_reset(device_id);
     }
     assert_inactive_ethernet_cores(device_id);
-    assert_dram_cores(device_id, dram_core_teardown_reset_riscs(cluster_.arch()));
+    assert_dram_cores(device_id, dram_core_teardown_reset_riscs(hal_));
     assert_dispatch_cores(device_id);
 }
 
@@ -1390,8 +1390,7 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core(
-                tt_cxy_pair(device_id, virtual_core), dram_core_reset_riscs(cluster_.arch()));
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), dram_core_reset_riscs(hal_));
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_class_num_fw_binaries(core_type_idx, processor_class);
@@ -1664,7 +1663,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 virtual_dram_core,
                 dram_launch_msg.view(),
                 dram_go_msg.view());
-            if (cluster_.arch() == ARCH::QUASAR) {
+            if (hal_.has_cce_dram_cores()) {
                 const auto dram_channel = dram_channel_for_translated_core(soc_d, virtual_dram_core);
                 TT_FATAL(dram_channel.has_value(), "DRAM core {} has no programmable view", virtual_dram_core.str());
                 const CceSpaRoutes routes = cce_spa_routes_for_channel(soc_d, *dram_channel);
@@ -1697,7 +1696,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
     for (const auto& dram_core : dram_not_done_cores) {
-        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), dram_core_reset_riscs(cluster_.arch()));
+        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), dram_core_reset_riscs(hal_));
     }
     for (const auto& dispatch_core : dispatch_not_done_cores) {
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dispatch_core), tt::umd::RiscType::ALL);

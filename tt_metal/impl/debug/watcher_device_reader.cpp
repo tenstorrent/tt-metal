@@ -90,7 +90,7 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
                 processor_index,
                 core_type,
                 num_processors - 1);
-            if (hal.get_arch() == tt::ARCH::QUASAR) {
+            if (hal.has_cce_dram_cores()) {
                 static const char* const names[] = {
                     "drisc0", "drisc1", "drisc2", "drisc3", "drisc4", "drisc5", "drisc6", "drisc7"};
                 return names[processor_index];

@@ -1965,7 +1965,7 @@ std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
-    if (metal_env().get_hal().get_arch() == tt::ARCH::QUASAR) {
+    if (metal_env().get_hal().has_cce_dram_cores()) {
         TT_THROW(
             "Quasar DRAM views have no unused subchannel: each view's CCE is its sender, (bank_id, 0). Use "
             "dram_sender_logical_cores instead.");
@@ -2003,7 +2003,7 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
     const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
-    if (metal_env().get_hal().get_arch() == tt::ARCH::QUASAR) {
+    if (metal_env().get_hal().has_cce_dram_cores()) {
         return {soc_desc.get_logical_core_for_dram_view(static_cast<int>(bank_id))};
     }
 
