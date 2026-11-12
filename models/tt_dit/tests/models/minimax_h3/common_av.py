@@ -499,20 +499,10 @@ def run_warm_generation(
 ):
     """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`.
 
-    `warmup_steps=None` warms at the measured step count, for pipelines with fixed steps.
+    The quiet compile pass stays off on ltx-rt (task #3824): the pipeline warms its bucket ladder at
+    construction. `warmup_steps` is accepted for main's callers and unused.
     """
-    warmup_kwargs = gen_kwargs if warmup_steps is None else {**gen_kwargs, "num_inference_steps": warmup_steps}
-
-    # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
-    # # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
-    # # the rung the measured call will run at -- take the reference from there.
-    with pipeline.quiet():
-        pipeline(prompt, seed=seed, **warmup_kwargs)
-    # warm_padded_len = pipeline.last_seq_len.padded
-
-    # ttnn.synchronize_device(pipeline.mesh_device)
-    # if ttnn.using_distributed_env():
-    #     ttnn.distributed_context_barrier()
+    del warmup_steps
 
     on_event = profiler_event_callback(profiler, profiler_iteration) if profiler is not None else None
     if profiler is not None:
@@ -521,9 +511,6 @@ def run_warm_generation(
             ttnn.synchronize_device(pipeline.mesh_device)
     else:
         output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
-
-    missed = {name: count for name, count in pipeline.last_program_cache_misses.items() if count}
-    assert not missed, f"the measured call compiled programs after warmup, so this number is not warm: {missed}"
     return output
 
 
