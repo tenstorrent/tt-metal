@@ -9,6 +9,7 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
+#include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 
@@ -20,6 +21,19 @@ enum class BinaryBitwiseOp : std::uint8_t {
     OR = 1,
     XOR = 2,
 };
+
+// Programs ADDR_MOD_6 with dest.incr = SFP_ROWS so the store in calculate_sfpu_binary_bitwise advances
+// the destination by one SFPU pass (what dst_reg++ did), in place of a separate TTINCRWC per pass.
+// Quasar's shared SFPU init only programs ADDR_MOD_7 (incr = 0); this is additive. Called by
+// binary_bitwise_tile_init (and the tt-llk harness init) for the three bitwise ops.
+inline void binary_bitwise_init() {
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = ckernel::math::SFP_ROWS},
+    }
+        .set(ADDR_MOD_6);
+}
 
 template <
     bool APPROXIMATION_MODE,
@@ -52,8 +66,9 @@ inline void calculate_sfpu_binary_bitwise(
             result = a ^ b;
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() = result;
-        sfpi::dst_reg++;
+        // The store advances the destination by one SFPU pass through ADDR_MOD_6 (dest += SFP_ROWS, what
+        // dst_reg++ does), programmed by binary_bitwise_init; it replaces the separate TTINCRWC per pass.
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>(ADDR_MOD_6) = result;
     }
 }
 

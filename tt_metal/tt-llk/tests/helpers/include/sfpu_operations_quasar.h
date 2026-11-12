@@ -1655,6 +1655,12 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         calculate_gcd_init();
     }
+    else if constexpr (OP == BinaryOp::BITWISE_AND || OP == BinaryOp::BITWISE_OR || OP == BinaryOp::BITWISE_XOR)
+    {
+        // The kernel's store-side dest increment depends on ADDR_MOD_6 (dest += SFP_ROWS). Mirrors
+        // binary_bitwise_tile_init.
+        binary_bitwise_init();
+    }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
     // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
 }
