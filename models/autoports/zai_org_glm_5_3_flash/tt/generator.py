@@ -683,6 +683,25 @@ def mtp_prefill_span(chunk_start: int, n_valid: int, prompt_len: int) -> tuple:
     return lo, max(0, hi - lo)
 
 
+def mtp_fill_inputs(chunk_start: int, n_valid: int, c: int, block: int, ids, row, scratch) -> tuple:
+    """the in-trace MTP fill's inputs for one prefill chunk of the armed request (pure; TPPrefill._mtp_write): tok [c] =
+    the prompt token after each row's position for the rows mtp_prefill_span fills (0 after them: the last prompt
+    position's row and the padding are rewritten by the speculative step before any read), pages [c / block] = the
+    slot's page-table row entries of the pages holding valid rows of the chunk, `scratch` (no request's pages) for the
+    rest. -> (tok, pages, rows filled)"""
+    ids = torch.as_tensor(ids).reshape(-1)
+    row = torch.as_tensor(row).reshape(-1)
+    _, n = mtp_prefill_span(chunk_start, n_valid, int(ids.numel()))
+    tok = torch.zeros(int(c), dtype=torch.int64)
+    tok[:n] = ids[chunk_start + 1 : chunk_start + 1 + n]
+    pages = torch.as_tensor(scratch).reshape(-1)[: int(c) // block].clone().to(torch.int64)
+    for j in range(int(c) // block):
+        p = chunk_start // block + j
+        if p * block < chunk_start + n_valid and p < int(row.numel()):
+            pages[j] = int(row[p])
+    return tok, pages, n
+
+
 GLM53_DECODE_LOOKAHEAD = os.environ.get("GLM53_DECODE_LOOKAHEAD", "1") == "1"  # generate_batch: step i + 1 enqueued
 # before step i's tokens are collected (backends with read_async / collect)
 

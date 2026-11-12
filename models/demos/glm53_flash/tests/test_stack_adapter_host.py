@@ -49,6 +49,7 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     Glm53Generator,
     ModelBackend,
     PendingTokens,
+    mtp_fill_inputs,
     mtp_prefill_span,
     spec_widths,
 )
@@ -1869,6 +1870,31 @@ def test_mtp_prefill_span_covers_the_prompt():
         got += list(range(p0, p0 + n))
     assert got == list(range(L - 1))
     assert mtp_prefill_span(256, 44, 300) == (256, 43) and mtp_prefill_span(0, 1, 1) == (0, 0)
+
+
+def test_mtp_fill_inputs_chunks():
+    """the in-trace MTP fill's per-chunk inputs (TPPrefill._mtp_write): over a 300-token prompt in 128-row chunks (the
+    last one in a 128 bucket with 44 valid rows) every MTP position 0 .. L - 2 gets the prompt token after it exactly
+    once, at the slot's page of that position; pages without a valid row of the chunk -- and rows past the row's
+    coverage -- go to scratch pages (an unarmed or padded page never lands on a request's)"""
+    L, c, blk = 300, 128, 64
+    ids = torch.arange(1000, 1000 + L)
+    row = torch.arange(40, 40 + 5)  # the slot's 5 pages (positions 0 .. 319)
+    scratch = torch.tensor([900, 901])
+    filled = {}
+    for s0 in range(0, L, c):
+        nv = min(c, L - s0)
+        tok, pages, n = mtp_fill_inputs(s0, nv, c, blk, ids, row, scratch)
+        assert n == mtp_prefill_span(s0, nv, L)[1]
+        for i in range(n):
+            filled[s0 + i] = (int(tok[i]), int(pages[i // blk]))
+        assert bool((tok[n:] == 0).all())
+    assert sorted(filled) == list(range(L - 1))
+    assert all(t == 1000 + p + 1 and pg == 40 + p // blk for p, (t, pg) in filled.items())
+    _, pages, _ = mtp_fill_inputs(256, 44, 128, blk, ids, row, scratch)  # positions 256..299: page 4 valid, 5 padding
+    assert pages.tolist() == [44, 901]
+    _, pages, n = mtp_fill_inputs(256, 44, 128, blk, ids, row[:4], scratch)  # a row short of the chunk: scratch
+    assert pages.tolist() == [900, 901] and n == 43
 
 
 @pytest.mark.parametrize("K", [1, 3])

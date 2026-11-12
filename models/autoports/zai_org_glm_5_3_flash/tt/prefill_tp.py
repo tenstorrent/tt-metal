@@ -1794,13 +1794,19 @@ class TPPrefill:
         self._shared_cache, self._ep = {}, None
         self.max_seq = int(kv.blocks_per_seq) * BLOCK
         self.dsa = os.environ.get("GLM53_PF_DSA", "0") == "1"  # P3 DSA indexer (off: the P2 dense-only path)
-        # Stage 17 M0 (GLM53_SPEC_K with the MTP drafter; GLM53_SPEC_MTP_PREFILL=0: off): every chunk row's final-norm
-        # hidden (the head's h: RMSNorm(mean of the 4 streams) * norm.weight, bf16) into a per-bucket tap inside the
-        # trace -- the MTP-cache prefill's input (StackBackend._mtp_prefill_chunk). Off: the forward is unchanged
-        self.mtp_tap_on = (int(os.environ.get("GLM53_SPEC_K", "0") or 0) > 0
-                           and (os.environ.get("GLM53_SPEC_KIND") or os.environ.get("GLM53_SPEC_DRAFTER", "mtp")) == "mtp"
-                           and os.environ.get("GLM53_SPEC_MTP_PREFILL", "1") == "1")  # fmt: skip
-        self._mtp_taps, self._mtp_norm = {}, None
+        # Stage 17 (GLM53_SPEC_K with the MTP drafter): the MTP layer's latent cache filled by the prefill.
+        # GLM53_SPEC_MTP_PREFILL: "1" (default) = "trace": IN the bucket's trace, every chunk row's MTP latent in one
+        # pass (_mtp_fill: h = the head's final-norm hidden, x0 = eh_proj(enorm(E[next token]) | hnorm(h)), latent =
+        # kv_a_norm(kv_a(RMSNorm(x0))) -- the MTP block's cache rows depend on its input alone) paged into the MTP cache
+        # at the chunk's pages (mtp_req: the armed request's next tokens; otherwise scratch pages); "launch" = M0's
+        # 4-row MTP launches after the replay over a per-bucket final-norm tap; "0" = off. Off: the forward is unchanged
+        mtp_k = (int(os.environ.get("GLM53_SPEC_K", "0") or 0) > 0
+                 and (os.environ.get("GLM53_SPEC_KIND") or os.environ.get("GLM53_SPEC_DRAFTER", "mtp")) == "mtp")  # fmt: skip
+        pf = os.environ.get("GLM53_SPEC_MTP_PREFILL", "1")
+        self.mtp_mode = "" if not mtp_k or pf == "0" else ("launch" if pf == "launch" else "trace")
+        self.mtp_tap_on = self.mtp_mode == "launch"
+        self.mtp_req = None  # "trace": dict(slot, ids, rows) of the request whose chunks fill the MTP cache
+        self._mtp_taps, self._mtp_norm, self._mtp_in = {}, None, {}
         # GLM53_DSA_SHARD (StackBackend.dsa_shard_owners: (C chips, local blocks per chip, blocks per 128-token unit);
         # tt/dsa_shard.py ShardMap): the latent cache and the pooled-key store are PER CHIP (unit u of a slot on chip
         # u % C at local block / page u // C); the prefill writes each unit to its owner only (ChunkInputs.lat_idx /
@@ -2731,7 +2737,9 @@ class TPPrefill:
             self._sparse_now = None
         self._fresh_now = False
         self._pad_now = None
-        if self.mtp_tap_on:  # Stage 17 M0: every row's final-norm hidden -> the bucket's tap (head or not)
+        if self.mtp_mode == "trace":  # Stage 17: every row's MTP latent -> the MTP cache (head or not)
+            self._mtp_fill(x, c, sp)
+        elif self.mtp_mode == "launch":  # Stage 17 M0: every row's final-norm hidden -> the bucket's tap (head or not)
             self._mtp_tap_write(x, c, sp)
         row = self.last_row(x, ci, sp) if head else None  # head=False: a non-final chunk (no last row, no head)
         if id(x) not in self.persistent:
@@ -3277,8 +3285,100 @@ class TPPrefill:
         return t
 
     def _mtp_tap_write(self, x, c: int, sp: bool) -> None:
+        """x (the final residual) -> h (_mtp_h) -> gathered (sp) -> the tap"""
+        hb = self._mtp_h(x)
+        g = self.gather(hb, sp)  # sp: [1, 1, c, 4096] on every chip (rank order = row order); rep: hb itself
+        ttnn.copy(g, self.mtp_tap(c))
+        if g is not hb:
+            ttnn.deallocate(hb)
+        ttnn.deallocate(g)
+
+    def mtp_inputs(self, c: int) -> dict:
+        """bucket c's MTP-fill inputs (written by the host before every replay, _mtp_write): tok [1, c] uint32 = the token
+        after each row's position (sp: sharded on dim -1 as ci.tokens), pt [1, c / 64] int32 = the MTP cache pages of the
+        chunk's rows (the MTP layer's replicated cache: PHYSICAL global block ids; scratch pages when not armed)"""
+        if int(c) not in self._mtp_in:
+            sp = self.mode(c) == "sp"
+            shard = ttnn.ShardTensorToMesh(self.mesh, dim=-1) if self.ndev > 1 else None
+            scr = self.b.spec.pf_scratch_pages(c // BLOCK)
+            rm = lambda v, dt, mp: ttnn.from_torch(v, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh,  # noqa
+                                                   memory_config=DRAM, mesh_mapper=mp)  # fmt: skip
+            self._mtp_in[int(c)] = dict(
+                tok=rm(torch.zeros(1, c, dtype=torch.int32), ttnn.uint32, shard if sp else self.repl),
+                pt=rm(scr.reshape(1, -1).to(torch.int32), ttnn.int32, self.repl), armed=False,
+            )  # fmt: skip
+        return self._mtp_in[int(c)]
+
+    def _mtp_write(self, c: int, slot: int, chunk_start: int, n_valid: int) -> None:
+        """the MTP-fill inputs of this replay: the armed request (mtp_req, its slot): row i (position chunk_start + i <
+        L - 1) takes the prompt token at chunk_start + i + 1, its pages are the slot's PHYSICAL pages holding the chunk's
+        valid rows (the row past them -- the last prompt position, the padding -- is rewritten by the speculative step
+        before any read); every other replay writes the scratch pages (an unarmed chunk never touches a request's)"""
+        ins = self.mtp_inputs(c)
+        req = self.mtp_req
+        armed = req is not None and int(req["slot"]) == int(slot)
+        if not armed and not ins["armed"]:
+            return  # (still the scratch pages and zero tokens)
+        from models.autoports.zai_org_glm_5_3_flash.tt.generator import mtp_fill_inputs
+
+        scratch = self.b.spec.pf_scratch_pages(c // BLOCK)
+        tok, pages = torch.zeros(c, dtype=torch.int64), scratch
+        if armed:
+            tok, pages, n = mtp_fill_inputs(chunk_start, n_valid, c, BLOCK, req["ids"], self.page_row(slot), scratch)
+            req["rows"] += n
+        sp = self.mode(c) == "sp"
+        put = lambda v, dt, dst, mp: ttnn.copy_host_to_device_tensor(  # noqa: E731
+            ttnn.from_torch(v, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp), dst)  # fmt: skip
+        put(tok.reshape(1, -1).to(torch.int32), ttnn.uint32, ins["tok"],
+            ttnn.ShardTensorToMesh(self.mesh, dim=-1) if sp and self.ndev > 1 else self.repl)  # fmt: skip
+        put(pages.reshape(1, -1).to(torch.int32), ttnn.int32, ins["pt"], self.repl)
+        ins["armed"] = armed
+
+    def _mtp_fill(self, x, c: int, sp: bool) -> None:
+        """Stage 17: the chunk's MTP latents into the MTP cache, in the trace (this chip's rows; the gathered latents
+        paged on every chip -- the MTP cache is replicated): h = _mtp_h(x); x0 = eh_proj(enorm(E[tok]) | hnorm(h)) (MkEh's
+        programs A / B); hn = RMSNorm(x0) * input_layernorm (the MTP block's identity mHC pre: h = x0); latent =
+        RMSNorm(kv_a(hn)) * kv_a_layernorm (MlaPrefill's: q_a | kv_a's columns [q_lora, q_lora + kv_lora)) -> bf16 ->
+        paged_fill_cache(MTP cache, the chunk's MTP pages). The cache rows depend on the block's input only (no
+        attention, no MoE): one pass per chunk instead of c / 4 MTP-layer launches."""
+        w = self.b.spec.pf_weights()
+        ins = self.mtp_inputs(c)
+        ckc, eps = _ckc_fp32(self.mesh), self.cfg.rms_norm_eps
+        h = self._mtp_h(x)
+        r = int(h.shape[-2])
+        e = ttnn.embedding(ins["tok"], w["table"], layout=ttnn.TILE_LAYOUT, dtype=BF16)  # [1, r, 4096]
+        e2 = ttnn.reshape(e, (1, 1, r, HIDDEN))
+        en = ttnn.rms_norm(e2, weight=w["enorm"], epsilon=eps, compute_kernel_config=ckc)
+        ttnn.deallocate(e)
+        hn = ttnn.rms_norm(h, weight=w["hnorm"], epsilon=eps, compute_kernel_config=ckc)
+        ttnn.deallocate(h)
+        hcat = ttnn.concat([en, hn], dim=-1)  # [1, 1, r, 8192]: enorm(e) | hnorm(h) (MkEh's hcat columns)
+        ttnn.deallocate(en)
+        ttnn.deallocate(hn)
+        x0 = pf_mm(w["eh"], hcat)  # [1, 1, r, 4096]
+        ttnn.deallocate(hcat)
+        xin = ttnn.rms_norm(x0, weight=w["in_norm"], epsilon=eps, compute_kernel_config=ckc)
+        ttnn.deallocate(x0)
+        qk = pf_mm(w["qa_kva"], xin)
+        ttnn.deallocate(xin)
+        cl = ttnn.slice(qk, (0, 0, 0, w["q_lora"]), (1, 1, r, w["q_lora"] + w["kv_lora"]))
+        ttnn.deallocate(qk)
+        lat = ttnn.rms_norm(cl, weight=w["kva_norm"], epsilon=eps, compute_kernel_config=ckc)
+        ttnn.deallocate(cl)
+        cache = self.b.spec.mtp_cache
+        if lat.dtype != cache.dtype:
+            lat_ = ttnn.typecast(lat, cache.dtype)
+            ttnn.deallocate(lat)
+            lat = lat_
+        g = self.gather(lat, sp)  # [1, 1, c, 512] on every chip
+        ttnn.experimental.paged_fill_cache(cache, g, ins["pt"], batch_idx=0)
+        if g is not lat:
+            ttnn.deallocate(lat)
+        ttnn.deallocate(g)
+
+    def _mtp_h(self, x):
         """x (the final residual: comp [1, 1, r, 16384], sm [1, 4, r, 4096]; sp: this chip's r = c / N rows) -> h =
-        RMSNorm(mean of the 4 streams) * norm.weight (MkHead's h, fp32 math) bf16 -> gathered (sp) -> the tap"""
+        RMSNorm(mean of the 4 streams) * norm.weight (MkHead's h, fp32 math) bf16 [1, 1, r, 4096] (this chip's rows)"""
         if self._mtp_norm is None:
             from models.autoports.zai_org_glm_5_3_flash.tt.mk_head import norm_host
 
@@ -3303,11 +3403,7 @@ class TPPrefill:
         ttnn.deallocate(mean)
         hb = ttnn.typecast(h, BF16)
         ttnn.deallocate(h)
-        g = self.gather(hb, sp)  # sp: [1, 1, c, 4096] on every chip (rank order = row order); rep: hb itself
-        ttnn.copy(g, self.mtp_tap(c))
-        if g is not hb:
-            ttnn.deallocate(hb)
-        ttnn.deallocate(g)
+        return hb
 
     def row_buf(self):
         if getattr(self, "_row_buf", None) is None:
@@ -3838,6 +3934,8 @@ class TPPrefill:
             self.counters["slot_ops"] += 1
         carries = self.write_inputs(c, tokens, slot=slot, chunk_start=chunk_start, n_valid=n_valid, state_src=src,
                                     state_snap=snap, snap_at=snap_at)  # fmt: skip
+        if self.mtp_mode == "trace":  # Stage 17: the MTP-fill inputs (the armed request's next tokens / pages)
+            self._mtp_write(c, slot, chunk_start, n_valid)
         t1 = time.perf_counter()
         self._check_window(c, t, "prefill")
         self.replay(c, t=t, head=head)

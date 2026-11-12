@@ -2526,27 +2526,35 @@ class StackBackend(ModelBackend):
     # ------------------------------------------------------------------ Stage 17 M0: the MTP-cache prefill
     def arm_mtp_prefill(self, slot: int, prompt) -> bool:
         """the speculating request's prompt (all of it: a chunk's last MTP row takes the next chunk's first token): every
-        TP prefill chunk of `slot` until disarm_mtp_prefill also fills the MTP layer's latent cache from the prefill's
-        final-norm tap (SpecMTP.prefill_mtp: positions 0 .. L - 2; L - 1 is the bootstrap's). False: no MTP drafter /
-        no tap (GLM53_SPEC_MTP_PREFILL=0) -- the drafts then attend a cache without the prompt."""
+        TP prefill chunk of `slot` until disarm_mtp_prefill also fills the MTP layer's latent cache, positions 0 .. L - 2
+        (L - 1 is the bootstrap's). TPPrefill.mtp_mode "trace" (default): inside the chunk's replay (TPPrefill.mtp_req ->
+        _mtp_write / _mtp_fill); "launch" (M0): SpecMTP.prefill_mtp's 4-row launches after the replay over the
+        final-norm tap. False: no MTP drafter / GLM53_SPEC_MTP_PREFILL=0 -- the drafts then attend a cache without
+        the prompt."""
         sp = getattr(self, "spec", None)
         tpp = getattr(self, "tpp", None)
-        if (
-            sp is None
-            or getattr(sp, "mtp", None) is None
-            or tpp is None
-            or not getattr(tpp, "mtp_tap_on", False)
-            or 32 % int(getattr(sp, "mw_cu", 1))
-        ):  # (SpecMTP.prefill_mtp: launches inside the tap's tile rows)
-            self._mtp_pf = None
+        self._mtp_pf = None
+        mode = getattr(tpp, "mtp_mode", "") if tpp is not None else ""
+        if sp is None or getattr(sp, "mtp", None) is None or not mode:
             return False
-        self._mtp_pf = dict(slot=int(slot), ids=torch.as_tensor(prompt, dtype=torch.int64).reshape(-1).clone(), rows=0)
+        ids = torch.as_tensor(prompt, dtype=torch.int64).reshape(-1).clone()
+        if mode == "trace":
+            tpp.mtp_req = dict(slot=int(slot), ids=ids, rows=0)
+            return True
+        if 32 % int(getattr(sp, "mw_cu", 1)):  # (SpecMTP.prefill_mtp: launches inside the tap's tile rows)
+            return False
+        self._mtp_pf = dict(slot=int(slot), ids=ids, rows=0)
         return True
 
     def disarm_mtp_prefill(self) -> int:
         """-> the MTP rows the armed prefill filled (0: none / not armed)"""
         a, self._mtp_pf = getattr(self, "_mtp_pf", None), None
-        return int(a["rows"]) if a else 0
+        rows = int(a["rows"]) if a else 0
+        tpp = getattr(self, "tpp", None)
+        if tpp is not None and getattr(tpp, "mtp_req", None) is not None:
+            rows += int(tpp.mtp_req["rows"])
+            tpp.mtp_req = None
+        return rows
 
     def _mtp_prefill_chunk(self, slot: int, chunk_start: int, n_valid: int, bucket) -> None:
         """after a TP prefill chunk's replay (bucket = TPPrefill.prefill's): its MTP rows (generator.mtp_prefill_span)

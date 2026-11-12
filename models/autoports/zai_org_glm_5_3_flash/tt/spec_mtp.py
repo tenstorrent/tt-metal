@@ -536,11 +536,16 @@ class SpecMTP:
         dsa = [i for i, e in enumerate(be.seq) if e["sparse"] == "dsa"]
         share = be.seq[dsa[0]]["tp"] if dsa else None
         self.mtp = self.mtp_cache = self.eh = self.w_mtp = None
+        self.pf_scratch, self._pfw = (0, 0), None
         if drafter == "mtp":
             self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=tuple(sorted({cu, ch})), share=share)
             l1_debug("after MtpLayer", self.mesh)
-            self.mtp_cache = self.mtp.attn.allocate_cache(kv.num_blocks if self.shard is None
-                                                          else self.shard[0] * self.shard[1])  # fmt: skip
+            # (+ scratch pages past the request blocks: the TP prefill's in-trace MTP fill writes an unarmed chunk's
+            # rows there -- TPPrefill._mtp_write; one bucket's worth of the largest GLM53_PREFILL_BUCKETS bucket)
+            nb = kv.num_blocks if self.shard is None else self.shard[0] * self.shard[1]
+            bmax = max(int(v) for v in os.environ.get("GLM53_PREFILL_BUCKETS", "256,512,2048").split(",") if v.strip())
+            self.pf_scratch = (int(nb), max(1, -(-bmax // int(self.mtp.attn.block_size))))
+            self.mtp_cache = self.mtp.attn.allocate_cache(nb + self.pf_scratch[1])
             self.eh = MkEh(mesh, self.source, cfg, self.ocfg)
             for t in sorted({cu, ch}):
                 self.eh.buffers(t)
@@ -923,6 +928,28 @@ class SpecMTP:
         else:
             ttnn.execute_trace(self.mesh, trace, cq_id=0, blocking=False)
 
+    def pf_scratch_pages(self, n: int) -> torch.Tensor:
+        """n MTP cache pages no request holds (the in-trace MTP fill of an unarmed chunk)"""
+        assert 0 < int(n) <= self.pf_scratch[1], ("MTP fill: a bucket past the scratch pages (GLM53_PREFILL_BUCKETS)",
+                                                  n, self.pf_scratch)  # fmt: skip
+        return self.pf_scratch[0] + torch.arange(int(n), dtype=torch.int64)
+
+    def pf_weights(self) -> dict:
+        """the weights of the TP prefill's in-trace MTP fill (TPPrefill._mtp_fill): the embedding table, enorm / hnorm /
+        the MTP block's input_layernorm as [1, 1, 1, 4096] bf16 rows, eh_proj (MkEh's DSLinear), the MTP attention's
+        q_a | kv_a DSLinear and kv_a_layernorm (pf_mm / rms_norm, as MlaPrefill); loaded at the first (eager, compile)
+        call, before any capture"""
+        if self._pfw is None:
+            assert self.drafter == "mtp" and self.mtp is not None, "the MTP fill: the MTP drafter"
+            row = lambda name: ttnn.from_torch(self.source.host(MTP_L, name).float().reshape(1, 1, 1, HIDDEN),  # noqa
+                                               dtype=BF16, layout=ttnn.TILE_LAYOUT, device=self.mesh,
+                                               memory_config=DRAM, mesh_mapper=_repl(self.mesh))  # fmt: skip
+            a = self.mtp.attn
+            self._pfw = dict(table=self.be.embed.table, enorm=row("enorm.weight"), hnorm=row("hnorm.weight"),
+                             in_norm=row("input_layernorm.weight"), eh=self.eh.ds, qa_kva=a.ds_qa_kva,
+                             kva_norm=a.kva_norm, q_lora=int(a.q_lora), kv_lora=int(a.kv_lora))  # fmt: skip
+        return self._pfw
+
     def _pf_taps(self) -> dict:
         """{bucket: tap} of the TP prefill's MTP taps (allocated by its compile forwards; none: {})"""
         tpp = getattr(self.be, "tpp", None)
@@ -996,8 +1023,10 @@ class SpecMTP:
             write_rows(self.mesh, t_, far, ttnn.int32)
         self._step()
         l1_debug("prepare: after step", self.mesh)
-        if self.drafter == "mtp":  # the MTP-cache prefill's own program (MkEh EH_ROW0), every row inactive: compiled
-            # here, before any capture (a first compile at the first request would allocate after the captures)
+        if self.drafter == "mtp" and os.environ.get("GLM53_SPEC_MTP_PREFILL", "1") == "launch":
+            # M0's MTP-cache prefill launches (MkEh EH_ROW0), every row inactive: compiled here, before any capture (a
+            # first compile at the first request would allocate after the captures); the default in-trace fill
+            # (TPPrefill._mtp_fill) compiles with the prefill buckets
             self._mtp_prefill_launch(self.eh.buffers(self.mw_cu)[0], 0, [], 0)
             l1_debug("prepare: after the MTP prefill launch", self.mesh)
         ttnn.synchronize_device(self.mesh)
