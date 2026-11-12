@@ -40,7 +40,8 @@ inline void check_input_and_gamma_shapes(const ttnn::Tensor& input, const ttnn::
     check_shape(gamma, op, "Gamma", ttnn::Shape({1U, 1U, 1U, input_shape[-1]}));
 }
 
-// Every core sends its partial to every other core of its row-group, so the exchange grows as num_slices^2.
+// Upper bound on num_slices. Every core of a row-group shares its partial row sum with all the others, so each core
+// receives num_slices tiles per row and keeps two rows of them in L1: exchange time and L1 both grow with num_slices.
 constexpr uint32_t kMaxRowSlices = 16U;
 // A sliced row costs S + kRowSliceExchangeCostTiles extra tiles of work: S to sum the gathered partials, plus the NOC
 // writes and semaphore wait of the exchange. 4 is an unmeasured estimate: that round trip takes a few us, against ~1 us
