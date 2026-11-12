@@ -431,9 +431,6 @@ public:
         if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
-        // -march: the tt-qsr32-tensix base ISA plus zve32f and zvl128b (VLEN >= 128).
-        //   Appended after common_flags' -mcpu, so it overrides the arch while keeping the
-        //   tt-qsr32-tensix tuning.
         // -fno-lto: with -flto the RVV builtins are re-expanded by the link-stage LTRANS units,
         //   which do not carry the vector -march, breaking codegen at link time (observed on
         //   Blackhole with sfpi 7.70.0). Compile-only: the link stays stock, this object just
@@ -442,7 +439,7 @@ public:
         //   -Warray-bounds false positives at -O3 under -Werror (also observed on Blackhole).
         // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reached through
         //   explicit intrinsics; keep the auto-vectorizers off scalar kernel/LLK code.
-        return "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb -fno-lto "
+        return "-mcpu==tt-qsr32-vector-tensix -fno-lto "
                "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
     }
 

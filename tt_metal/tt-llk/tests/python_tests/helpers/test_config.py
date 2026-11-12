@@ -140,8 +140,8 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
-    QUASAR_VECTOR_MARCH: ClassVar[str] = (
-        "-march=rv32im_zmmul_zaamo_zve32f_zvl128b_xtttensixqsr_xttzbkb"
+    QUASAR_VECTOR_MCPU: ClassVar[str] = (
+        "-mcpu=tt-qsr32-vector-tensix"
     )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
@@ -1918,7 +1918,7 @@ class TestConfig:
                 # Only TRISC0 has the vector unit on Quasar. The flag is after
                 # ARCH_COMPUTE so it overrides the march implied by -mcpu.
                 if self.requires_vector_ext and name == "unpack":
-                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MCPU}"
 
                 # Only counters on compiles counter code, with its L1 selection (mux group on tt-1xx, l1_client
                 # event on Quasar); counters off keeps each zone's rendezvous alone (counters.h).
