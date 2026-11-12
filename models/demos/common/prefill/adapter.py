@@ -153,6 +153,8 @@ class PrefillModelAdapter(ABC):
     dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
+    # Can build missing TTNN weight-cache pieces from the HF checkpoint (PREFILL_WEIGHT_CATEGORIES).
+    supports_weight_categories: bool = False
     tp_shard_kv_default: bool = False
     # The runtime implements prefill_forward; without it a forward of several chunks runs prefill_chunk per chunk.
     supports_packed_forward: bool = False

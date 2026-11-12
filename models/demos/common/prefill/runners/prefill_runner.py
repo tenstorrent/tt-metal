@@ -54,6 +54,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     open_mesh_device,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import CapturedCall
 
@@ -115,7 +116,7 @@ _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
-CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+CHUNK_SIZE = prefill_chunk_tokens()
 # Tokens per forward, a multiple of the chunk size: FORWARD_CHUNKS chunks per forward, metadata in prefill_chunk.
 FORWARD_TOKENS_BUDGET = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
 assert (

@@ -62,7 +62,7 @@ export PREFILL_TTNN_CACHE="${PREFILL_TTNN_CACHE:?set to the TTNN weight cache ro
 export TT_METAL_CACHE="${TT_METAL_CACHE:-/tmp/tt-metal-cache-${MODE}-$(id -un)}"
 
 export PREFILL_MANIFEST="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tt/runners/manifests/mistral4.json"
-export PREFILL_CHUNK_SIZE=5120        # analyze_prefill_throughput.py assumes this
+# PREFILL_CHUNK_SIZE (default: utils/chunk_config.py) is read by the runner, producer and analyze_prefill_throughput.py
 export PREFILL_NUM_USERS=1            # one long request: 2 slots would double the KV budget here
 export PREFILL_KV_ONLY_LAST_LAYER=1   # throughput, not TTFT -- no final norm/LM head, no token
 export PREFILL_USE_TRACE=1

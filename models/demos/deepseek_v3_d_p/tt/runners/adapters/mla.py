@@ -136,6 +136,17 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         topology = per_axis_topology()
         logger.info(f"Per-axis CCL topology (sp, tp) = {topology}")
 
+        from models.demos.deepseek_v3_d_p.tt.runners.weight_categories import (
+            WEIGHT_CATEGORIES_ENV,
+            weight_categories_from_env,
+        )
+
+        weight_categories = weight_categories_from_env()
+        assert not weight_categories or self.supports_weight_categories, (
+            f"{WEIGHT_CATEGORIES_ENV} is set but model {self.name!r} cannot build its weight cache from the "
+            "checkpoint (supports_weight_categories=False)"
+        )
+
         runtime_config = TtPrefillRuntimeConfig(
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
@@ -163,6 +174,10 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
+            weight_categories=weight_categories,
+            hf_model_path=os.environ.get("PREFILL_HF_MODEL")
+            or os.environ.get(self.env_var, "")
+            or self.hf_model_default,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

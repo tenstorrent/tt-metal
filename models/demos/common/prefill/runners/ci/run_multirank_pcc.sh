@@ -41,7 +41,8 @@ manifest_env() {
 
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 
-CHUNK_SIZE=5120
+# Same value the runner and producer resolve: $PREFILL_CHUNK_SIZE, else chunk_config.py's default.
+CHUNK_SIZE="$(PYTHONPATH="${TT_METAL_HOME}" python3 -c 'from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens; print(prefill_chunk_tokens())')"
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
