@@ -4067,17 +4067,98 @@ inline void _topk_xl_split_stamp_(const std::uint32_t tile_offset, const std::ui
     _topk_xl_add_lsb_indices_rt_<K, ADDR_MOD_3>(chunk_id);
 }
 
-// Local sort up to its first transpose; `macros` needs the row's _topk_xl_split_sfpu_init_ to have programmed them.
-template <bool macros = false>
-inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const bool ascending)
+/**
+ * @brief Local sort of one chunk up to its first face transpose: runs of 32, 64 and 128 down each column, then runs of
+ * 256 across each lane's even and odd column.
+ *
+ * row_scale_factor = K / 512 is the number of 32-row blocks in each Dest column (1, 2 or 4). Per column the function
+ * sorts those blocks, then for K >= 1024 runs row_scale_factor / 2 rounds of the stride-32 step groups and of the
+ * stride-16 W32 sort, and for K = 2048 the canonical big block. The length-256 pass then runs 2 · row_scale_factor
+ * stride-2 groups.
+ *
+ * @tparam K: Elements per chunk, values = <512/1024/2048>
+ * @tparam macros: Use the fused SFPLOADMACRO bodies, which @ref _topk_xl_split_sfpu_init_ must have programmed; only
+ *         K = 512 runs without them
+ * @param tile_offset: Dst offset of the chunk's first tile
+ * @param ascending: Direction of the first run
+ * @note PACK half of the split local sort; MATH runs the face transpose that follows.
+ */
+template <std::uint32_t K, bool macros = true>
+inline void _topk_xl_split_sort_head_(const std::uint32_t tile_offset, const bool ascending)
 {
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024 or 2048");
+    static_assert(K == 512 || macros, "K = 1024 and 2048 always use the fused macros");
+    constexpr int row_scale_factor = split_row_scale<K>;
+    // Blaze keeps `dir` across the stride-32 and stride-16 rounds when there is only one of each (K = 1024).
+    constexpr bool flip_per_round = !topk_xl_blaze_compat || (row_scale_factor >> 1) > 1;
+
     _topk_xl_split_begin_(tile_offset);
-    bool dir                            = ascending;
+    bool dir = ascending;
 
     for (int col = 0; col < 2; col++)
     {
         sort_32_rows<detail::ReplayMode::RECORD>(ascending, dir);
+        if constexpr (row_scale_factor > 1)
+        {
+            dir = !dir;
+        }
+        for (int i = 1; i < row_scale_factor; i++)
+        {
+            sort_32_rows<detail::ReplayMode::REPLAY>(ascending, dir);
+            dir = !dir;
+        }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+        if constexpr (row_scale_factor >= 2)
+        {
+            for (int i = 0; i < (row_scale_factor >> 1); i++)
+            {
+#if TOPK_XL_FUSED_MACRO
+                // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction,
+                // so each pair re-prologues (see `step_group_pipelined`).
+                topk_xl_fused_macro::prologue_loads_rt<32>(dir);
+                topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
+                topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+#else
+                fused_step_group<32, 16>(dir);
+                fused_step_group<32, 48>(dir);
+#endif
+                if constexpr (flip_per_round)
+                {
+                    dir = !dir;
+                }
+            }
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+            for (int i = 0; i < (row_scale_factor >> 1); i++)
+            {
+#if TOPK_XL_FUSED_MACRO
+                if constexpr (row_scale_factor >= 4)
+                {
+                    topk_xl_fused_macro::len32_groups(2, dir);
+                }
+                else
+#endif
+                {
+                    window_sort_rows<
+                        detail::WindowSize::THIRTY_TWO,
+                        detail::Stride::SIXTEEN,
+                        detail::Stride::ONE,
+                        detail::GroupOffset::ONE_FACE,
+                        detail::DstAdvance::TWO_FACES>(2, dir);
+                }
+                if constexpr (flip_per_round)
+                {
+                    dir = !dir;
+                }
+            }
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        }
+
+        if constexpr (row_scale_factor >= 4)
+        {
+            canonical_big_block_with_replay<row_scale_factor>(dir);
+        }
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
         dir = !dir;
     }
@@ -4087,10 +4168,14 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
 #if TOPK_XL_FUSED_MACRO
     if constexpr (macros)
     {
-        // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
+        // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only
+        // writes LREGs that are dead by then.
         topk_xl_fused_macro::prologue_loads_rt<2>(dir);
         topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
-        lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
+        for (int i = 1; i < 2 * row_scale_factor; i++)
+        {
+            lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
+        }
     }
     else
 #endif
@@ -4100,177 +4185,12 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
             detail::Stride::SIXTEEN,
             detail::Stride::SIXTEEN,
             detail::GroupOffset::ODD_COLUMNS,
-            detail::DstAdvance::ONE_FACE>(2, dir);
+            detail::DstAdvance::ONE_FACE>(2 * row_scale_factor, dir);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int col = 0; col < 2; col++)
     {
-        canonical_big_block_with_replay<1>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1);
-}
-
-// Local sort up to its first transpose: _topk_xl_local_sort_generic_<1024>'s first part, with the macros of the row's
-// _topk_xl_split_sfpu_init_.
-inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, const bool ascending)
-{
-    _topk_xl_split_begin_(tile_offset);
-    bool dir                            = ascending;
-
-    for (int col = 0; col < 2; col++)
-    {
-        sort_32_rows<detail::ReplayMode::RECORD>(ascending, dir);
-        dir = !dir;
-        for (int i = 1; i < 2; i++)
-        {
-            sort_32_rows<detail::ReplayMode::REPLAY>(ascending, dir);
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-#if TOPK_XL_FUSED_MACRO
-        // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
-        // `step_group_pipelined`).
-        topk_xl_fused_macro::prologue_loads_rt<32>(dir);
-        topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
-        topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
-#else
-        fused_step_group<32, 16>(dir);
-        fused_step_group<32, 48>(dir);
-#endif
-        if constexpr (!topk_xl_blaze_compat)
-        {
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::SIXTEEN,
-            detail::Stride::ONE,
-            detail::GroupOffset::ONE_FACE,
-            detail::DstAdvance::TWO_FACES>(2, dir);
-        if constexpr (!topk_xl_blaze_compat)
-        {
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        dir = !dir;
-    }
-
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 8);
-#if TOPK_XL_FUSED_MACRO
-    // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
-    topk_xl_fused_macro::prologue_loads_rt<2>(dir);
-    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
-    for (int i = 1; i < 4; i++)
-    {
-        lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
-    }
-#else
-    window_sort_rows<
-        detail::WindowSize::THIRTY_TWO,
-        detail::Stride::SIXTEEN,
-        detail::Stride::SIXTEEN,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE>(4, dir);
-#endif
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<2>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-    }
-    TTI_SFPCONFIG(0x0000, 0xF, 1);
-}
-
-// Local sort up to its first transpose.
-inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, const bool ascending)
-{
-    _topk_xl_split_begin_(tile_offset);
-    bool dir                            = ascending;
-
-    for (int col = 0; col < 2; col++)
-    {
-        sort_32_rows<detail::ReplayMode::RECORD>(ascending, dir);
-        dir = !dir;
-        for (int i = 1; i < 4; i++)
-        {
-            sort_32_rows<detail::ReplayMode::REPLAY>(ascending, dir);
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        for (int i = 0; i < 2; i++)
-        {
-#if TOPK_XL_FUSED_MACRO
-            // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
-            // `step_group_pipelined`).
-            topk_xl_fused_macro::prologue_loads_rt<32>(dir);
-            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
-            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
-#else
-            fused_step_group<32, 16>(dir);
-            fused_step_group<32, 48>(dir);
-#endif
-            dir = !dir;
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-#if TOPK_XL_FUSED_MACRO
-        topk_xl_fused_macro::len32_groups(2, dir);
-        dir = !dir;
-        topk_xl_fused_macro::len32_groups(2, dir);
-        dir = !dir;
-#else
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::SIXTEEN,
-            detail::Stride::ONE,
-            detail::GroupOffset::ONE_FACE,
-            detail::DstAdvance::TWO_FACES>(2, dir);
-        dir = !dir;
-        window_sort_rows<
-            detail::WindowSize::THIRTY_TWO,
-            detail::Stride::SIXTEEN,
-            detail::Stride::ONE,
-            detail::GroupOffset::ONE_FACE,
-            detail::DstAdvance::TWO_FACES>(2, dir);
-        dir = !dir;
-#endif
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
-        canonical_big_block_with_replay<4>(dir);
-        set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        dir = !dir;
-    }
-
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 8);
-#if TOPK_XL_FUSED_MACRO
-    // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
-    topk_xl_fused_macro::prologue_loads_rt<2>(dir);
-    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
-    for (int i = 1; i < 8; i++)
-    {
-        lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
-    }
-#else
-    window_sort_rows<
-        detail::WindowSize::THIRTY_TWO,
-        detail::Stride::SIXTEEN,
-        detail::Stride::SIXTEEN,
-        detail::GroupOffset::ODD_COLUMNS,
-        detail::DstAdvance::ONE_FACE>(8, dir);
-#endif
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (int col = 0; col < 2; col++)
-    {
-        canonical_big_block_with_replay<4>(dir);
+        canonical_big_block_with_replay<row_scale_factor>(dir);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
     TTI_SFPCONFIG(0x0000, 0xF, 1);
@@ -4280,18 +4200,9 @@ template <int sort_len>
 inline void _topk_xl_split_stride2_sort_(const bool dir)
 {
     static_assert(sort_len == 4 || sort_len == 8 || sort_len == 16, "sort_len must be 4, 8 or 16");
-    if constexpr (sort_len == 4)
-    {
-        window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
-    }
-    else if constexpr (sort_len == 8)
-    {
-        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
-    }
-    else
-    {
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
-    }
+    // The even and odd column's 16-runs sort the same way, so 16 uses window 32 rather than 16.
+    constexpr auto window = sort_len == 16 ? detail::WindowSize::THIRTY_TWO : static_cast<detail::WindowSize>(sort_len);
+    window_sort<window, static_cast<detail::Stride>(sort_len / 2), detail::Stride::ONE>(dir);
 }
 
 // The stride-2 pass between two transposes.
@@ -4299,7 +4210,7 @@ inline void _topk_xl_split_stride2_sort_(const bool dir)
 // `macros` must match what `_topk_xl_split_sfpu_init_` was given: the sort_len 8 and 16 paths below
 // host their first swap layer on `SFPLOADMACRO` and finish by putting the step-group configuration
 // back, which only a caller initialised with macros expects. The default is OFF and such a caller
-// opts in, as `_topk_xl_split_sort_head_512_<macros>` already does.
+// opts in, as `_topk_xl_split_sort_head_<512, macros>` already does.
 template <std::uint32_t K, int sort_len, bool macros = false>
 inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool dir)
 {

@@ -376,18 +376,7 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
     {
         case 0:
             sfpu::_topk_xl_split_stamp_<K>(tile_offset, chunk);
-            if constexpr (K == 2048)
-            {
-                sfpu::_topk_xl_split_sort_head_2048_(tile_offset, ascending);
-            }
-            else if constexpr (K == 1024)
-            {
-                sfpu::_topk_xl_split_sort_head_1024_(tile_offset, ascending);
-            }
-            else
-            {
-                sfpu::_topk_xl_split_sort_head_512_<true /*macros*/>(tile_offset, ascending);
-            }
+            sfpu::_topk_xl_split_sort_head_<K, true /*macros*/>(tile_offset, ascending);
             break;
         case 1:
             sfpu::_topk_xl_split_stride2_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
