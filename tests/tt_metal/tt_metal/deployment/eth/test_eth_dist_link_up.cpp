@@ -20,7 +20,7 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDist00LinkUp) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernet00LinkUpDist) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }

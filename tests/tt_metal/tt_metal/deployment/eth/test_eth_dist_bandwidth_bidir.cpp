@@ -92,7 +92,7 @@ static bool run_test_bandwidth_bidir(
     return pass;
 }
 
-TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDist02BandwidthBidir) {
+TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidirDist) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }

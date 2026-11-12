@@ -11,7 +11,7 @@ class TestCase(str, Enum):
 
 
 class DistTestCase(str, Enum):
-    BANDWIDTH_BIDIR = "Dist02BandwidthBidir"  # TODO
+    BANDWIDTH_BIDIR = "BandwidthBidirDist"
 
 
 def prepare_filter(tests: list[TestCase | DistTestCase]) -> str:
