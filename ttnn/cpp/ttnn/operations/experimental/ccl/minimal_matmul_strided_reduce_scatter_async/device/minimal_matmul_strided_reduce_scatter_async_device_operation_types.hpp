@@ -50,6 +50,11 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
 
     const CoreCoord reduce_scatter_core_grid_offset;
 
+    // Column slices (MINIMAX_H3_MK_S2L_ONE_GATHER): with addcmul_tile_row_map, the gate is a column slice of a
+    // wider tile-row table starting at this tile column (a reader compile-time arg, hence hashed). 0 = the table
+    // is exactly the gate.
+    const uint32_t addcmul_b_col_offset_tiles = 0;
+
     // Compile-time attributes select exactly the program-structure-affecting fields for the default
     // program-cache reflection hash + canonical key.
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -68,7 +73,8 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
         "num_buffers_per_channel",
         "chunk_width_in_mm_blocks",
         "mm_window_blocks",
-        "reduce_scatter_core_grid_offset");
+        "reduce_scatter_core_grid_offset",
+        "addcmul_b_col_offset_tiles");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(matmul_struct),
@@ -86,7 +92,8 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
             std::cref(num_buffers_per_channel),
             std::cref(chunk_width_in_mm_blocks),
             std::cref(mm_window_blocks),
-            std::cref(reduce_scatter_core_grid_offset));
+            std::cref(reduce_scatter_core_grid_offset),
+            addcmul_b_col_offset_tiles);
     }
 };
 

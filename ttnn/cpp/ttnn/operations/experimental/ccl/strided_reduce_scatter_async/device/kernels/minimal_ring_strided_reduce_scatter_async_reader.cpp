@@ -200,7 +200,10 @@ void kernel_main() {
     constexpr uint32_t ct_idx_b_map = ct_idx_addcmul_base + 2 + ct_offset_a + ct_offset_b;
     constexpr uint32_t addcmul_b_map_cb = get_compile_time_arg_val(ct_idx_b_map);
     constexpr uint32_t addcmul_b_table_Ht = get_compile_time_arg_val(ct_idx_b_map + 1);
-    constexpr auto addcmul_b_map_args = TensorAccessorArgs<ct_idx_b_map + 2>();
+    // Table width in tiles and the gate's first tile column (column slices: several tables side by side).
+    constexpr uint32_t addcmul_b_table_Wt = get_compile_time_arg_val(ct_idx_b_map + 2);
+    constexpr uint32_t addcmul_b_col_off = get_compile_time_arg_val(ct_idx_b_map + 3);
+    constexpr auto addcmul_b_map_args = TensorAccessorArgs<ct_idx_b_map + 4>();
     const auto addcmul_b_map_addrgen = TensorAccessor(addcmul_b_map_args, addcmul_b_map_address);
     CircularBuffer cb_addcmul_b_map(addcmul_b_map_cb);
     noc_obj.async_read(
@@ -404,8 +407,9 @@ void kernel_main() {
                                             b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
 #if defined(ADDCMUL_B_TILE_ROW_MAP)
                                         const uint32_t b_gate_idx =
-                                            b * (addcmul_b_table_Ht * slice_Wt) +
-                                            addcmul_b_tile_row_map[slice_row] * slice_Wt + col_in_slice;
+                                            b * (addcmul_b_table_Ht * addcmul_b_table_Wt) +
+                                            addcmul_b_tile_row_map[slice_row] * addcmul_b_table_Wt +
+                                            addcmul_b_col_off + col_in_slice;
 #elif defined(ADDCMUL_B_BROADCAST)
                                         const uint32_t b_gate_idx = b * slice_Wt + col_in_slice;
 #else

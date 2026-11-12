@@ -170,6 +170,7 @@ class ParallelFeedForward(Module):
         transpose_core_grid: bool | None = None,
         mmrs_config=None,
         addcmul_b_tile_row_map: ttnn.Tensor | None = None,
+        addcmul_b_col_offset_tiles: int = 0,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -183,6 +184,8 @@ class ParallelFeedForward(Module):
         `addcmul_b_tile_row_map`: see `RowParallelLinear.forward_fused_addcmul` (forwarded only when given).
         """
         map_kwargs = {} if addcmul_b_tile_row_map is None else {"addcmul_b_tile_row_map": addcmul_b_tile_row_map}
+        if addcmul_b_col_offset_tiles:
+            map_kwargs["addcmul_b_col_offset_tiles"] = addcmul_b_col_offset_tiles
         ff1_out = self.ff1(
             x,
             compute_kernel_config=compute_kernel_config,

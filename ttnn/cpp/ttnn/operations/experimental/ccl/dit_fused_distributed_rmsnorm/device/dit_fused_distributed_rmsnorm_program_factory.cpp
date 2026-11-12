@@ -1296,6 +1296,16 @@ ProgramDescriptor build_program_descriptor(
         reader_defines["AFFINE_TILE_ROW_MAP"] = "1";
         reader_compile_args.push_back(tile_row_map_cb_id);
         TensorAccessorArgs(tile_row_map->buffer()).append_to(reader_compile_args);
+        // Column slices (MINIMAX_H3_MK_S2L_ONE_GATHER): weight / bias are column slices of one wider table. Only
+        // then a define + 3 CT args; otherwise the reader compiles exactly as before.
+        const uint32_t table_W = has_weight ? weight->padded_shape()[-1] : W;
+        if (args.weight_col_offset_tiles != 0 || args.bias_col_offset_tiles != 0 || table_W != W ||
+            (has_bias && bias->padded_shape()[-1] != W)) {
+            reader_defines["AFFINE_TABLE_COLS"] = "1";
+            reader_compile_args.push_back(table_W / TILE_WIDTH);
+            reader_compile_args.push_back(args.weight_col_offset_tiles);
+            reader_compile_args.push_back(args.bias_col_offset_tiles);
+        }
     }
 
     // Kernels are pushed in the order pinned by dit_fused_distributed_rmsnorm_dynamic (reader, writer,

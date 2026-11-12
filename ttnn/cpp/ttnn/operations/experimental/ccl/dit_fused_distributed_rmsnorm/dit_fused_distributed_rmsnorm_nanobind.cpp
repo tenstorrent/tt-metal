@@ -32,6 +32,9 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
             `row_capacity` (per-device rows, multiple of 32): the largest row count one cached program serves.
             The live row count becomes a runtime argument, so inputs of any row count up to the capacity hit the
             same program; the stats buffer must be created with the same value. None: one program per row count.
+
+            `weight_col_offset_tiles` / `bias_col_offset_tiles` (with the map): weight and bias are column slices of
+            one wider table, read at those tile offsets.
         )doc",
         &ttnn::experimental::dit_fused_distributed_rmsnorm,
         nb::arg("input_tensor"),
@@ -55,7 +58,9 @@ void bind_dit_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("affine_tile_row_map") = nb::none(),
-        nb::arg("row_capacity") = nb::none());
+        nb::arg("row_capacity") = nb::none(),
+        nb::arg("weight_col_offset_tiles") = 0,
+        nb::arg("bias_col_offset_tiles") = 0);
 
     ttnn::bind_function<"dit_fused_distributed_layernorm", "ttnn.experimental.">(
         mod,

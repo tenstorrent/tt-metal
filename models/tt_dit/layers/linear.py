@@ -718,6 +718,7 @@ class RowParallelLinear(Module):
         use_persistent_buffer: bool = True,
         mmrs_config=None,
         addcmul_b_tile_row_map: ttnn.Tensor | None = None,
+        addcmul_b_col_offset_tiles: int = 0,
     ) -> ttnn.Tensor:
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
 
@@ -736,6 +737,10 @@ class RowParallelLinear(Module):
         """
         # Only forward the map when given, so the default call is unchanged.
         map_kwargs = {} if addcmul_b_tile_row_map is None else {"addcmul_tile_row_map": addcmul_b_tile_row_map}
+        if addcmul_b_col_offset_tiles:
+            # MINIMAX_H3_MK_S2L_ONE_GATHER: addcmul_b is a column slice (from this tile column) of a wider table.
+            assert addcmul_b_tile_row_map is not None, "a gate column offset needs the tile-row map"
+            map_kwargs["addcmul_b_col_offset_tiles"] = addcmul_b_col_offset_tiles
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(

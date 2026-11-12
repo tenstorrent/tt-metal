@@ -70,6 +70,9 @@ Tensor dit_fused_distributed_rmsnorm(
     ttnn::experimental::DitFusedNormType norm_type = ttnn::experimental::DitFusedNormType::RMS,
     const std::optional<const Tensor>& reciprocals = std::nullopt,
     const std::optional<const Tensor>& affine_tile_row_map = std::nullopt,
-    std::optional<uint32_t> row_capacity = std::nullopt);
+    std::optional<uint32_t> row_capacity = std::nullopt,
+    // Column slices (MINIMAX_H3_MK_S2L_ONE_GATHER): weight / bias column offsets (tiles) into one wider table.
+    uint32_t weight_col_offset_tiles = 0,
+    uint32_t bias_col_offset_tiles = 0);
 
 }  // namespace ttnn::prim

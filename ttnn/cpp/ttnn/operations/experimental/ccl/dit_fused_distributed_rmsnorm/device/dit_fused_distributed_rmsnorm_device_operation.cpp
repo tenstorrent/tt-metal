@@ -271,11 +271,20 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             weight->dtype() == DataType::BFLOAT16 || weight->dtype() == DataType::FLOAT32,
             "Weight dtype must be BFLOAT16 or FLOAT32, got {}",
             weight->dtype());
-        TT_FATAL(
-            weight->padded_shape()[-1] == padded[3],
-            "Weight last dim ({}) must equal input H per device ({})",
-            weight->padded_shape()[-1],
-            padded[3]);
+        if (args.weight_col_offset_tiles == 0 && weight->padded_shape()[-1] == padded[3]) {
+            // today's layout
+        } else {
+            // Column slices (MINIMAX_H3_MK_S2L_ONE_GATHER): a wider tile-row table read at a column offset.
+            TT_FATAL(
+                tile_row_map.has_value() && weight->logical_shape()[-2] > 1,
+                "a weight column offset / wider weight table needs affine_tile_row_map and a per-token table");
+            TT_FATAL(
+                weight->padded_shape()[-1] >= padded[3] + args.weight_col_offset_tiles * TILE_WIDTH,
+                "Weight table width ({}) must cover the input H ({}) at column offset {} tiles",
+                weight->padded_shape()[-1],
+                padded[3],
+                args.weight_col_offset_tiles);
+        }
         // Per-token weight has shape [N, H] (or [..., N, H]); broadcast is
         // [1, H]. Distinguish via the logical (not padded) seqlen dim.
         const auto& w_logical = weight->logical_shape();
@@ -296,11 +305,26 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             bias->dtype() == DataType::BFLOAT16 || bias->dtype() == DataType::FLOAT32,
             "Bias dtype must be BFLOAT16 or FLOAT32, got {}",
             bias->dtype());
-        TT_FATAL(
-            bias->padded_shape()[-1] == padded[3],
-            "Bias last dim ({}) must equal input H per device ({})",
-            bias->padded_shape()[-1],
-            padded[3]);
+        if (args.bias_col_offset_tiles == 0 && bias->padded_shape()[-1] == padded[3] &&
+            weight->padded_shape()[-1] == padded[3]) {
+            // today's layout
+        } else {
+            // Column slices: weight and bias come from ONE table (the reader has one table width).
+            TT_FATAL(
+                tile_row_map.has_value() && bias->logical_shape()[-2] > 1,
+                "a bias column offset / wider bias table needs affine_tile_row_map and a per-token table");
+            TT_FATAL(
+                bias->padded_shape()[-1] == weight->padded_shape()[-1],
+                "with a column offset, weight and bias must share one table width ({} vs {})",
+                weight->padded_shape()[-1],
+                bias->padded_shape()[-1]);
+            TT_FATAL(
+                bias->padded_shape()[-1] >= padded[3] + args.bias_col_offset_tiles * TILE_WIDTH,
+                "Bias table width ({}) must cover the input H ({}) at column offset {} tiles",
+                bias->padded_shape()[-1],
+                padded[3],
+                args.bias_col_offset_tiles);
+        }
         const auto& b_logical = bias->logical_shape();
         const auto b_n = b_logical[-2];
         TT_FATAL(
@@ -520,6 +544,8 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         per_token_bias,
         per_batch_weight,
         per_batch_bias,
+        args.weight_col_offset_tiles,  // column slices of one wider table (reader CT args)
+        args.bias_col_offset_tiles,
         hash_spec_without_rows(input),
         hash_spec_without_rows(weight),
         hash_spec_without_rows(bias),
@@ -559,7 +585,9 @@ Tensor dit_fused_distributed_rmsnorm(
     ttnn::experimental::DitFusedNormType norm_type,
     const std::optional<const Tensor>& reciprocals,
     const std::optional<const Tensor>& affine_tile_row_map,
-    std::optional<uint32_t> row_capacity) {
+    std::optional<uint32_t> row_capacity,
+    uint32_t weight_col_offset_tiles,
+    uint32_t bias_col_offset_tiles) {
     using OperationType = ttnn::experimental::prim::DitFusedDistributedRmsnormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -586,6 +614,8 @@ Tensor dit_fused_distributed_rmsnorm(
         kernel_config_val,
         norm_type,
         row_capacity);
+    operation_attributes.weight_col_offset_tiles = weight_col_offset_tiles;
+    operation_attributes.bias_col_offset_tiles = bias_col_offset_tiles;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,

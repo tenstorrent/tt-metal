@@ -40,7 +40,9 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
     const DitFusedNormType norm_type,
     const std::optional<const ttnn::Tensor>& reciprocals,
     const std::optional<const ttnn::Tensor>& affine_tile_row_map,
-    const std::optional<uint32_t> row_capacity) {
+    const std::optional<uint32_t> row_capacity,
+    uint32_t weight_col_offset_tiles,
+    uint32_t bias_col_offset_tiles) {
     return ttnn::prim::dit_fused_distributed_rmsnorm(
         input_tensor,
         cluster_axis,
@@ -64,7 +66,9 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
         norm_type,
         reciprocals,
         affine_tile_row_map,
-        row_capacity);
+        row_capacity,
+        weight_col_offset_tiles,
+        bias_col_offset_tiles);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
@@ -138,7 +142,9 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<const ttnn::Tensor>& affine_tile_row_map,
-    const std::optional<uint32_t> row_capacity) {
+    const std::optional<uint32_t> row_capacity,
+    uint32_t weight_col_offset_tiles,
+    uint32_t bias_col_offset_tiles) {
     return dit_fused_distributed_norm_impl(
         input_tensor,
         cluster_axis,
@@ -162,7 +168,9 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
         DitFusedNormType::RMS,
         /*reciprocals=*/std::nullopt,
         affine_tile_row_map,
-        row_capacity);
+        row_capacity,
+        weight_col_offset_tiles,
+        bias_col_offset_tiles);
 }
 
 ttnn::Tensor dit_fused_distributed_layernorm(
@@ -209,7 +217,9 @@ ttnn::Tensor dit_fused_distributed_layernorm(
         DitFusedNormType::LAYERNORM,
         reciprocals,
         /*affine_tile_row_map=*/std::nullopt,
-        row_capacity);
+        row_capacity,
+        /*weight_col_offset_tiles=*/0,
+        /*bias_col_offset_tiles=*/0);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(

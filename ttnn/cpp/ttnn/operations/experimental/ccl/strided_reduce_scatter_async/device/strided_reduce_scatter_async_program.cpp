@@ -257,7 +257,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
     const std::optional<const Tensor>& mm_progress_counters,
-    const std::optional<const Tensor>& addcmul_b_tile_row_map) {
+    const std::optional<const Tensor>& addcmul_b_tile_row_map,
+    uint32_t addcmul_b_col_offset_tiles) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -729,6 +730,10 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             sender_reader_compile_args.push_back(addcmul_b_map_cb_index);
             sender_reader_compile_args.push_back(
                 addcmul_input_tensor2->padded_shape()[-2] / tt::constants::TILE_HEIGHT);
+            // Table width in tiles + the gate's column offset (column slices; = slice width and 0 for a plain table).
+            sender_reader_compile_args.push_back(
+                addcmul_input_tensor2->padded_shape()[-1] / tt::constants::TILE_WIDTH);
+            sender_reader_compile_args.push_back(addcmul_b_col_offset_tiles);
             tt::tt_metal::TensorAccessorArgs(addcmul_b_tile_row_map->buffer()).append_to(sender_reader_compile_args);
         }
     }

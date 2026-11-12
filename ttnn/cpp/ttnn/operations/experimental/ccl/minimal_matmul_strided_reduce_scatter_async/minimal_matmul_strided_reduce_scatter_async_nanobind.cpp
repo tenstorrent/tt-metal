@@ -79,6 +79,8 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`addcmul_tile_row_map` (Optional[ttnn.Tensor]): Tile-row map for the gate (uint32 / int32 ROW_MAJOR
               [1, 1, 1, T], one page). With it, addcmul_input_tensor2 is a small table [R, N/ring_size] and output
               tile row r takes the gate from table tile row map[r]. Bit-identical to the equivalent per-token gate.
+            * :attr:`addcmul_b_col_offset_tiles` (int): with the map, the gate is the column slice of a wider table
+              that starts at this tile column (several modulation tables side by side). Default 0.
             * :attr:`mm_progress_counters` (Optional[ttnn.Tensor]): Caller-owned scratch for the MM->RS
               per-core progress counters: a uint32 ROW_MAJOR tensor of shape [num_cores, slots], L1
               HEIGHT_SHARDED with shard [1, slots] over a core grid covering the RS worker cores, where
@@ -132,7 +134,8 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("mm_progress_counters") = nb::none(),
         nb::arg("mm_window_blocks") = nb::none(),
         nb::arg("mm_credit_counters") = nb::none(),
-        nb::arg("addcmul_tile_row_map") = nb::none());
+        nb::arg("addcmul_tile_row_map") = nb::none(),
+        nb::arg("addcmul_b_col_offset_tiles") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

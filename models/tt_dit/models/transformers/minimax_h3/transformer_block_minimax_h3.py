@@ -48,6 +48,15 @@ def onehot_identity(rows: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     return bf16_tensor(F.pad(torch.eye(rows), (0, width - rows)), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
+_LOGGED: set[str] = set()
+
+
+def _log_once(key: str, line: str) -> None:
+    if key not in _LOGGED:
+        _LOGGED.add(key)
+        print(line, flush=True)
+
+
 _GATE_MAP_LOGGED: set[tuple[bool, bool]] = set()
 
 
@@ -187,6 +196,17 @@ class MiniMaxH3TransformerBlock(Module):
         # of the per-token `onehot @ table` [S_local, hidden_local], and the fused to_out / ff2 MM + RS read gate
         # tile (map[r], c) of that table. Bit-identical (the same bf16 table rows).
         self._s4_gate_tilerow = os.environ.get("MINIMAX_H3_MK_S4_GATE_TILEROW", "0") == "1"
+        # MINIMAX_H3_MK_S2L_ONE_GATHER=1 (one wide modulation table, default off; needs the gate tile-row map and the
+        # folded norm weight): the six tables are kept side by side as ONE [rows, 6 * hidden_local] table (same bytes
+        # in the modulation cache), each block does one `selector @ table` gather instead of six, and the norms /
+        # fused MM + RS gates read their column slice of it. Bit-identical (the same bf16 rows).
+        s2l_requested = os.environ.get("MINIMAX_H3_MK_S2L_ONE_GATHER", "0") == "1"
+        self._s2l_one_gather = s2l_requested and self._s4_gate_tilerow and self._fold_norm_weight
+        if s2l_requested and not self._s2l_one_gather:
+            _log_once(
+                "s2l-off",
+                "[MINIMAX_H3_MK_S2L] ignored: needs MINIMAX_H3_MK_S4_GATE_TILEROW=1 and MINIMAX_H3_FOLD_NORM_WEIGHT=1",
+            )
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
         # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
@@ -285,6 +305,12 @@ class MiniMaxH3TransformerBlock(Module):
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
             tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
+        if self._s2l_one_gather:
+            # One wide modulation table (MINIMAX_H3_MK_S2L_ONE_GATHER): columns
+            # [param * hidden_local, (param + 1) * hidden_local) = the
+            # narrow table `param` above, copied exactly. Same bytes as the six, so the modulation cache stays the
+            # same size; the narrow tables are sliced back out only on paths without a tile-row map.
+            return [ttnn.concat(tables, dim=-1)]
         return tables
 
     def _gather_rows(self, table: ttnn.Tensor, selector: ttnn.Tensor) -> ttnn.Tensor:
@@ -378,17 +404,52 @@ class MiniMaxH3TransformerBlock(Module):
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
         tables = self._modulation_tables(temb) if modulation_tables is None else modulation_tables
+        # One wide modulation table (MINIMAX_H3_MK_S2L_ONE_GATHER): `tables` is one wide table; table(param) slices a
+        # narrow one back out (only paths without the tile-row map need that), and the tile-row paths read column
+        # slices of one gather (`wide_rows`).
+        wide = self._s2l_one_gather and len(tables) == 1
+        h_tiles = self.hidden_local // 32
+        narrow: dict[int, ttnn.Tensor] = {}
+
+        def table(param: int) -> ttnn.Tensor:
+            if not wide:
+                return tables[param]
+            if param not in narrow:
+                rows = tables[0].shape[0]
+                lo = param * self.hidden_local
+                narrow[param] = ttnn.slice(tables[0], [0, lo], [rows, lo + self.hidden_local])
+            return narrow[param]
 
         if onehot is None:
             onehot = self.onehot_table(adaln_indices, temb.shape[2])
 
         def modulation(param: int) -> ttnn.Tensor:
-            return self._gather_rows(tables[param], onehot)
+            return self._gather_rows(table(param), onehot)
 
         tile_map = tilerow[0] if tilerow is not None else None
 
         def norm_modulation(param: int) -> ttnn.Tensor:
-            return modulation(param) if tilerow is None else self._gather_rows(tables[param], tilerow[1])
+            return modulation(param) if tilerow is None else self._gather_rows(table(param), tilerow[1])
+
+        # One wide table: its single gather through the tile-row selector, and per-param column offsets.
+        s2l = wide and tilerow is not None
+        if s2l:
+            _log_once("s2l-on", "[MINIMAX_H3_MK_S2L] one adaLN gather per block (wide table, column slices)")
+        wide_box: list[ttnn.Tensor | None] = [None]
+
+        def wide_rows() -> ttnn.Tensor:
+            if wide_box[0] is None:
+                wide_box[0] = self._gather_rows(tables[0], tilerow[1])
+            return wide_box[0]
+
+        def affine_kwargs(scale: int, shift: int) -> dict:
+            if s2l:
+                return {
+                    "dynamic_weight": wide_rows(),
+                    "dynamic_bias": wide_rows(),
+                    "dynamic_col_offsets_tiles": (scale * h_tiles, shift * h_tiles),
+                }
+            return {"dynamic_weight": norm_modulation(scale), "dynamic_bias": norm_modulation(shift)}
 
         # Gate tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW): a gate goes through the tile-row map only where the
         # fused MM + RS reads it (it is a table of tile rows there, not a per-token tensor); every other path keeps
@@ -405,8 +466,7 @@ class MiniMaxH3TransformerBlock(Module):
         residual = spatial_1BND
         normed = self.norm1(
             spatial_1BND,
-            dynamic_weight=norm_modulation(_SCALE_MSA),
-            dynamic_bias=norm_modulation(_SHIFT_MSA),
+            **affine_kwargs(_SCALE_MSA, _SHIFT_MSA),
             dynamic_weight_includes_static=self._fold_norm_weight,
             dynamic_tile_row_map=tile_map,
         )
@@ -418,16 +478,20 @@ class MiniMaxH3TransformerBlock(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             addcmul_residual=residual,
-            addcmul_gate=modulation(_GATE_MSA) if attn_gate_map is None else norm_modulation(_GATE_MSA),
+            addcmul_gate=(
+                modulation(_GATE_MSA)
+                if attn_gate_map is None
+                else (wide_rows() if s2l else norm_modulation(_GATE_MSA))
+            ),
             **({} if attn_gate_map is None else {"addcmul_gate_tile_row_map": attn_gate_map}),
+            **({"addcmul_gate_col_offset": _GATE_MSA * h_tiles} if attn_gate_map is not None and s2l else {}),
         )
 
         # 2. Modulated feed-forward.
         residual = spatial_1BND
         normed = self.norm2(
             spatial_1BND,
-            dynamic_weight=norm_modulation(_SCALE_MLP),
-            dynamic_bias=norm_modulation(_SHIFT_MLP),
+            **affine_kwargs(_SCALE_MLP, _SHIFT_MLP),
             dynamic_weight_includes_static=self._fold_norm_weight,
             dynamic_tile_row_map=tile_map,
         )
@@ -466,7 +530,7 @@ class MiniMaxH3TransformerBlock(Module):
             return self.ff.forward_fused_addcmul(
                 normed,
                 residual,
-                norm_modulation(_GATE_MLP) if gate_map_on else modulation(_GATE_MLP),
+                (wide_rows() if s2l else norm_modulation(_GATE_MLP)) if gate_map_on else modulation(_GATE_MLP),
                 compute_kernel_config=lofi.compute_config("ff1", self.mm_compute_kernel_config),
                 ff2_compute_kernel_config=lofi.compute_config("ff2", self.mm_compute_kernel_config),
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
@@ -475,6 +539,7 @@ class MiniMaxH3TransformerBlock(Module):
                 mmrs_config=self._mmrs_pin,
                 **self._ff1_kwargs(normed),
                 **({"addcmul_b_tile_row_map": tile_map} if gate_map_on else {}),
+                **({"addcmul_b_col_offset_tiles": _GATE_MLP * h_tiles} if gate_map_on and s2l else {}),
             )
         _log_gate_map_once(to_out=attn_gate_map is not None, ff2=False)
         ff_out = self.ff(

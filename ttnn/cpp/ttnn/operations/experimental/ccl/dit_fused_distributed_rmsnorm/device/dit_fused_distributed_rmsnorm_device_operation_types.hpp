@@ -55,6 +55,10 @@ struct DitFusedDistributedRmsnormParams {
     // Largest folded row count (batch * N per device, multiple of 32) one cached program serves; it
     // pins the worker set and the stats scratch. Absent: one program per row count.
     std::optional<uint32_t> row_capacity;
+    // Column slices (MINIMAX_H3_MK_S2L_ONE_GATHER): per-token weight / bias read from a wider tile-row table at
+    // a column offset (in tiles): tile (map[r], offset + c). 0 / 0 with a table as wide as the input = today's layout.
+    uint32_t weight_col_offset_tiles = 0;
+    uint32_t bias_col_offset_tiles = 0;
 
     DitFusedDistributedRmsnormParams(
         float epsilon,
@@ -89,7 +93,7 @@ struct DitFusedDistributedRmsnormParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(12);
+        attrs.reserve(14);
         attrs.emplace_back("epsilon", epsilon);
         attrs.emplace_back("num_heads_per_device", num_heads_per_device);
         attrs.emplace_back("per_head_norm", per_head_norm);
@@ -102,6 +106,8 @@ struct DitFusedDistributedRmsnormParams {
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         attrs.emplace_back("row_capacity", row_capacity);
+        attrs.emplace_back("weight_col_offset_tiles", weight_col_offset_tiles);
+        attrs.emplace_back("bias_col_offset_tiles", bias_col_offset_tiles);
         return attrs;
     }
 };

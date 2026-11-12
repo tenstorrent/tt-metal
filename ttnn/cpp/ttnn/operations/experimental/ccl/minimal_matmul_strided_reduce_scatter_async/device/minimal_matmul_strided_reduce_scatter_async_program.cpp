@@ -231,7 +231,9 @@ FusedProgram minimal_matmul_strided_reduce_scatter_async_program(
     /* Fused concat (concat-free): second in0 source (suffix half of K; input_tensor is the prefix). */
     const std::optional<const Tensor>& mm_optional_input_tensor = std::nullopt,
     /* Gate tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW) for the addcmul gate (RS reader only). */
-    const std::optional<const Tensor>& addcmul_tile_row_map = std::nullopt) {
+    const std::optional<const Tensor>& addcmul_tile_row_map = std::nullopt,
+    /* Column slices (MINIMAX_H3_MK_S2L_ONE_GATHER): the gate's column offset (tiles) into a wider table. */
+    uint32_t addcmul_b_col_offset_tiles = 0) {
     tt::tt_metal::ProgramDescriptor program{};
 
     // Derive matmul geometry parameters for the RS factory.
@@ -299,7 +301,8 @@ FusedProgram minimal_matmul_strided_reduce_scatter_async_program(
         addcmul_input_tensor1,
         addcmul_input_tensor2,
         mm_progress_counters,
-        addcmul_tile_row_map);
+        addcmul_tile_row_map,
+        addcmul_b_col_offset_tiles);
 
     // =========================================================================
     // STEP 2: Create the Matmul program SECOND
@@ -408,7 +411,9 @@ tt::tt_metal::WorkloadDescriptor MinimalMatmulStridedReduceScatterAsyncProgramFa
             /* Fused concat: second in0 source */
             tensor_args.mm_optional_input_tensor,
             /* Gate tile-row map (MINIMAX_H3_MK_S4_GATE_TILEROW) */
-            tensor_args.addcmul_tile_row_map);
+            tensor_args.addcmul_tile_row_map,
+            /* Column slices: gate column offset */
+            attributes.addcmul_b_col_offset_tiles);
 
         auto park = [&](const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& mesh_buffer) {
             if (!mesh_buffer) {

@@ -52,7 +52,10 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt,
     // Largest per-device row count (batch * N, multiple of 32) one cached program and its stats buffer
     // serve (create the buffer with the same row_capacity). Absent: one program per row count.
-    std::optional<uint32_t> row_capacity = std::nullopt);
+    std::optional<uint32_t> row_capacity = std::nullopt,
+    // MINIMAX_H3_MK_S2L_ONE_GATHER: weight / bias are column slices of one wider tile-row table at these tile offsets.
+    uint32_t weight_col_offset_tiles = 0,
+    uint32_t bias_col_offset_tiles = 0);
 
 // Fused distributed Welford LayerNorm for DiT attention: (x - mean) * rsqrt(var + eps)
 // with optional weight/bias, over the same fabric-all-gather device op as RMSNorm.

@@ -91,7 +91,9 @@ build_ring_strided_reduce_scatter_async_program_artifacts(
     const std::optional<const Tensor>& mm_progress_counters = std::nullopt,
     // Optional tile-row map for the addcmul gate (b): gate tile (r, c) is read from tile (map[r], c) of a small
     // expanded table instead of a full per-token [M, D/tp] gate. ROW_MAJOR uint32 / int32, one page, >= M/32 entries.
-    const std::optional<const Tensor>& addcmul_b_tile_row_map = std::nullopt);
+    const std::optional<const Tensor>& addcmul_b_tile_row_map = std::nullopt,
+    // With the map: b is a column slice of a wider table starting at this tile column.
+    uint32_t addcmul_b_col_offset_tiles = 0);
 
 // Cache-hit refresh (ring): rewrites the three kernels' common runtime args, nothing per core.
 // slice_Ht is the reduce-scattered height in tiles (the activations', not the windowed MM output's).

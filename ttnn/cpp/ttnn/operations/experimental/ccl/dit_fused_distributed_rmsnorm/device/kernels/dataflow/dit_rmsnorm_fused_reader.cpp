@@ -108,6 +108,17 @@ void kernel_main() {
     constexpr uint32_t tile_row_map_cb = get_compile_time_arg_val(recip_args.next_compile_time_args_offset());
     constexpr auto tile_row_map_args = TensorAccessorArgs<recip_args.next_compile_time_args_offset() + 1>();
 #endif
+#ifdef AFFINE_TABLE_COLS
+    // Column slices (MINIMAX_H3_MK_S2L_ONE_GATHER): weight / bias are column slices of one wider tile-row table.
+    constexpr uint32_t affine_table_ct_idx = tile_row_map_args.next_compile_time_args_offset();
+    constexpr uint32_t affine_table_cols = get_compile_time_arg_val(affine_table_ct_idx);
+    constexpr uint32_t weight_col_off = get_compile_time_arg_val(affine_table_ct_idx + 1);
+    constexpr uint32_t bias_col_off = get_compile_time_arg_val(affine_table_ct_idx + 2);
+#else
+    constexpr uint32_t affine_table_cols = num_tile_cols;
+    constexpr uint32_t weight_col_off = 0;
+    constexpr uint32_t bias_col_off = 0;
+#endif
 
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t weight_addr = get_common_arg_val<uint32_t>(1);
@@ -276,7 +287,7 @@ void kernel_main() {
                 cb_weight.reserve_back(tiles_in_block);
                 uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    const uint32_t w_idx = affine_tile_row * num_tile_cols + col_tile + i;
+                    const uint32_t w_idx = affine_tile_row * affine_table_cols + weight_col_off + col_tile + i;
                     noc.async_read(
                         weight_accessor,
                         CoreLocalMem<uint32_t>(weight_wr_ptr),
@@ -296,7 +307,7 @@ void kernel_main() {
                 cb_bias.reserve_back(tiles_in_block);
                 uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    const uint32_t b_idx = affine_tile_row * num_tile_cols + col_tile + i;
+                    const uint32_t b_idx = affine_tile_row * affine_table_cols + bias_col_off + col_tile + i;
                     noc.async_read(
                         bias_accessor, CoreLocalMem<uint32_t>(bias_wr_ptr), bias_page_bytes, {.page_id = b_idx}, {});
                     bias_wr_ptr += bias_tile_bytes;

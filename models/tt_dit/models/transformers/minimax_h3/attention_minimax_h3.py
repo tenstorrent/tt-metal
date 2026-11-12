@@ -1109,7 +1109,7 @@ class MiniMaxH3Attention(Module):
         return has_row_parallel_mmrs_config(rows, k, self.hidden_size, core_grid)
 
     def _to_out_row_parallel(
-        self, spatial_1BND, addcmul_residual, addcmul_gate, addcmul_gate_tile_row_map=None
+        self, spatial_1BND, addcmul_residual, addcmul_gate, addcmul_gate_tile_row_map=None, addcmul_gate_col_offset=0
     ) -> ttnn.Tensor:
         """Local heads [1, 1, N, inner / tp] @ row shard [inner / tp, hidden] -> TP reduce-scatter on hidden.
 
@@ -1126,6 +1126,8 @@ class MiniMaxH3Attention(Module):
                 map_kwargs = (
                     {} if addcmul_gate_tile_row_map is None else {"addcmul_b_tile_row_map": addcmul_gate_tile_row_map}
                 )
+                if addcmul_gate_col_offset:
+                    map_kwargs["addcmul_b_col_offset_tiles"] = addcmul_gate_col_offset
                 return self.to_out.forward_fused_addcmul(
                     x,
                     addcmul_residual,
@@ -1160,6 +1162,7 @@ class MiniMaxH3Attention(Module):
         addcmul_gate: ttnn.Tensor | None = None,
         cu_window_seqlens: ttnn.Tensor | None = None,
         addcmul_gate_tile_row_map: ttnn.Tensor | None = None,
+        addcmul_gate_col_offset: int = 0,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured hidden_size on TP; fractured N on SP when `is_sequence_parallel`,
@@ -1175,7 +1178,8 @@ class MiniMaxH3Attention(Module):
             tensor), plain-SDPA (non-ring) path only.
         addcmul_gate_tile_row_map: gate tile-row map (`MINIMAX_H3_MK_S4_GATE_TILEROW`): `addcmul_gate` is the small
             expanded gate table and this is the adaLN tile-row map; only the fused row-parallel to_out takes it
-            (`row_parallel_gate_fusable`).
+            (`row_parallel_gate_fusable`). `addcmul_gate_col_offset` (MINIMAX_H3_MK_S2L_ONE_GATHER): the gate is the
+            column slice of a wider table starting at this tile column.
 
         Returns the attention output with the same distribution as the input.
         """
@@ -1327,7 +1331,11 @@ class MiniMaxH3Attention(Module):
 
         if self.to_out_row_parallel:
             return self._to_out_row_parallel(
-                spatial_1BND, addcmul_residual, addcmul_gate, addcmul_gate_tile_row_map=addcmul_gate_tile_row_map
+                spatial_1BND,
+                addcmul_residual,
+                addcmul_gate,
+                addcmul_gate_tile_row_map=addcmul_gate_tile_row_map,
+                addcmul_gate_col_offset=addcmul_gate_col_offset,
             )
         if addcmul_gate_tile_row_map is not None:
             raise ValueError("a tile-row-mapped gate needs the fused row-parallel to_out (row_parallel_gate_fusable)")

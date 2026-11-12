@@ -217,7 +217,11 @@ class DistributedRMSNorm(Module):
         dynamic_weight_includes_static=False,
         dynamic_tile_row_map=None,
         row_capacity=None,
+        dynamic_col_offsets_tiles=None,
     ) -> ttnn.Tensor:
+        # dynamic_col_offsets_tiles: (weight, bias) tile-column offsets when dynamic_weight / dynamic_bias are column
+        # slices of one wider tile-row table (with dynamic_tile_row_map; MINIMAX_H3_MK_S2L_ONE_GATHER). None = today's
+        # call.
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
         #   True  -> RMSNorm INDEPENDENTLY over each head's head_dim (per-head QK-norm, e.g.
@@ -262,6 +266,14 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         extra = {} if dynamic_tile_row_map is None else {"affine_tile_row_map": dynamic_tile_row_map}
+        if dynamic_col_offsets_tiles is not None:
+            if dynamic_tile_row_map is None or not (dynamic_weight_includes_static or self.weight is None):
+                msg = (
+                    "dynamic_col_offsets_tiles needs dynamic_tile_row_map and a dynamic weight that already includes "
+                    "the static one"
+                )
+                raise ValueError(msg)
+            extra["weight_col_offset_tiles"], extra["bias_col_offset_tiles"] = dynamic_col_offsets_tiles
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).

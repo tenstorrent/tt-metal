@@ -51,6 +51,9 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<uint32_t> mm_window_blocks = std::nullopt,
     const std::optional<const Tensor>& mm_credit_counters = std::nullopt,
     // Optional tile-row map for the gate (gate tile-row map): see MinimalMatmulStridedReduceScatterAsyncInputs.
-    const std::optional<const Tensor>& addcmul_tile_row_map = std::nullopt);
+    const std::optional<const Tensor>& addcmul_tile_row_map = std::nullopt,
+    // Column slices (MINIMAX_H3_MK_S2L_ONE_GATHER): the gate's column offset (tiles) into a wider table (with
+    // the map).
+    uint32_t addcmul_b_col_offset_tiles = 0);
 
 }  // namespace ttnn::experimental

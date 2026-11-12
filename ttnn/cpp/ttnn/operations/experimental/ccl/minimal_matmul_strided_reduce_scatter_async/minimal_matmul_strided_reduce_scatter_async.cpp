@@ -37,7 +37,8 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<const Tensor>& mm_progress_counters,
     std::optional<uint32_t> mm_window_blocks,
     const std::optional<const Tensor>& mm_credit_counters,
-    const std::optional<const Tensor>& addcmul_tile_row_map) {
+    const std::optional<const Tensor>& addcmul_tile_row_map,
+    uint32_t addcmul_b_col_offset_tiles) {
     // Unpack: single Tensor, or [prefix, suffix] virtually concatenated over K (concat-free).
     ttnn::Tensor main_input;
     std::optional<ttnn::Tensor> second_input;
@@ -85,7 +86,8 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
         mm_window_blocks,
         mm_credit_counters,
         second_input,
-        addcmul_tile_row_map);
+        addcmul_tile_row_map,
+        addcmul_b_col_offset_tiles);
 
     return {std::move(all_outputs[0]), std::move(all_outputs[2])};
 }
