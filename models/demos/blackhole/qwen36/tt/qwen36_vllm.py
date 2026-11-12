@@ -216,12 +216,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         """
         video = self._gather_user_visual(kwargs, "pixel_values_videos", "video_grid_thw")
         if video is not None:
-            self._warn_unwarmed_vision_bucket(video[1])
+            self._check_vision_bucket(video[1])
             return model.get_video_features(*video)
 
         image = self._gather_user_visual(kwargs, "pixel_values", "image_grid_thw")
         if image is not None:
-            self._warn_unwarmed_vision_bucket(image[1])
+            self._check_vision_bucket(image[1])
             return model.get_image_features(*image)
 
         return None
@@ -252,17 +252,23 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         self._vision_warmed_bucket = buckets[-1]
         logger.info(f"Vision tower warmed for patch buckets {list(buckets)}")
 
-    def _warn_unwarmed_vision_bucket(self, grid_thw):
+    def _check_vision_bucket(self, grid_thw):
+        """Refuse a visual input whose patch bucket warmup_vision did not compile.
+
+        Running it would create vision programs after trace capture, and a later request of the same size would hang
+        the device until a reset. Raising fails this request at once, with the cause in the log. No check when
+        warmup_vision did not run (tests, demos)."""
         warmed = getattr(self, "_vision_warmed_bucket", None)
         if not warmed:
             return
         n = int(torch.as_tensor(grid_thw).reshape(-1, 3).prod(dim=1).max())
         bucket = (n // _VISION_BUCKET + 1) * _VISION_BUCKET
         if bucket > warmed:
-            logger.warning(
-                f"A visual input of {n} patches runs the vision tower in bucket {bucket}, above the {warmed} warmed "
-                "before trace capture; a later trace replay can hang the device. Launch with --mm-processor-kwargs "
-                "max_pixels to bound the inputs the warmup covers."
+            raise ValueError(
+                f"Vision input of {n} patches needs vision bucket {bucket}, above the largest bucket warmed before "
+                f"trace capture ({warmed} patches); running it would compile the vision tower after capture and can "
+                "hang the device. Launch vLLM with --mm-processor-kwargs '{\"max_pixels\": N}' (for example 1048576) "
+                "so that every accepted input fits a warmed bucket."
             )
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):

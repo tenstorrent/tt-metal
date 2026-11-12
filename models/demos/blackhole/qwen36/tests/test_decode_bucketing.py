@@ -475,6 +475,31 @@ def test_vision_warmup_covers_each_patch_bucket_once(monkeypatch):
     assert wrapper._vision_warmed_bucket == 8192
 
 
+def test_visual_input_above_the_warmed_vision_bucket_is_refused(monkeypatch, expect_error):
+    """An image or video whose patch bucket was not warmed raises before the vision tower runs; an input inside the
+    warmed buckets runs."""
+    Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
+    gen = SimpleNamespace(_vision_warmed_bucket=8192, _gather_user_visual=Qwen36ForCausalLM._gather_user_visual)
+    gen._check_vision_bucket = lambda grid: Qwen36ForCausalLM._check_vision_bucket(gen, grid)
+    ran = []
+    model = SimpleNamespace(
+        get_image_features=lambda pixels, grid: ran.append(("image", int(grid.prod()))) or "rows",
+        get_video_features=lambda pixels, grid: ran.append(("video", int(grid.prod()))) or "rows",
+    )
+
+    def vision_tokens(kind, t, h, w):
+        pixel_key = "pixel_values" if kind == "image" else "pixel_values_videos"
+        kwargs = {pixel_key: [torch.zeros(t * h * w, 8)], f"{kind}_grid_thw": [torch.tensor([[t, h, w]])]}
+        return Qwen36ForCausalLM._compute_vision_tokens(gen, model, kwargs)
+
+    assert vision_tokens("image", 1, 80, 102) == "rows"  # 8160 patches: bucket 8192
+    with expect_error(ValueError, "Vision input of 8192 patches needs vision bucket 10240"):
+        vision_tokens("image", 1, 64, 128)
+    with expect_error(ValueError, "max_pixels"):
+        vision_tokens("video", 4, 64, 64)
+    assert ran == [("image", 8160)]
+
+
 def test_prefill_prepare_is_idempotent_and_record_requires_it(monkeypatch, expect_error):
     """prepare_prefill_trace_chunked re-runs only for new args; record needs a prior prepare."""
     released, prepared = [], []
