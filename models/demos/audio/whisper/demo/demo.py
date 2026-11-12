@@ -9,6 +9,7 @@ from os.path import isfile, join
 from typing import List, Optional, Union
 
 import jiwer
+import numpy as np
 import pytest
 import torch
 from datasets import load_dataset, load_from_disk
@@ -47,6 +48,26 @@ available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 def load_input_paths(folder_path):
     files = [os.path.join(folder_path, f) for f in listdir(folder_path) if isfile(join(folder_path, f))]
     return files
+
+
+def read_wav_as_float(path):
+    """Read a wav file as (sampling_rate, mono float32 samples in [-1, 1]).
+
+    scipy returns integer PCM wavs as int16/int32/uint8 arrays, but the Whisper feature extractor
+    (and the Hugging Face dataset path) expects floating point audio in [-1, 1].
+    """
+    sampling_rate, data = wavfile.read(path)
+    if np.issubdtype(data.dtype, np.integer):
+        info = np.iinfo(data.dtype)
+        if data.dtype == np.uint8:
+            data = (data.astype(np.float32) - 128.0) / 128.0
+        else:
+            data = data.astype(np.float32) / float(-info.min)
+    else:
+        data = data.astype(np.float32)
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    return sampling_rate, data
 
 
 def pad_input_32(tensor, value):
@@ -262,7 +283,7 @@ def run_demo_whisper_for_audio_classification_inference(
             else:
                 input_file_path = input_data[i + j]
                 logger.info(f"Input path: {input_file_path}")
-                sampling_rate, audio_array = wavfile.read(input_file_path)
+                sampling_rate, audio_array = read_wav_as_float(input_file_path)
 
             # Feature extraction
             inputs = feature_extractor(
@@ -359,7 +380,7 @@ def run_demo_whisper_for_conditional_generation_inference(
             for j in range(current_batch_size):
                 input_file_path = input_data[i + j]
                 logger.info(f"Input path: {input_file_path}")
-                samplerate, data = wavfile.read(input_file_path)
+                samplerate, data = read_wav_as_float(input_file_path)
                 current_batch.append((samplerate, data))
 
             # Slice generation_params to match the current batch size (it may have been
