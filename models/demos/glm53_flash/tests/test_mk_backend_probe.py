@@ -189,6 +189,25 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
                     logger.info(f"MK_BACKEND_MARKS: layer {layers[i]} ({backend.seq[i]['sparse']}): {marks}")
                 except Exception as e:  # noqa: BLE001
                     logger.info(f"MK_BACKEND_MARKS: layer {layers[i]}: unreadable ({e})")
+        # GLM53_STACK_PROBE_DUMP=<file.pt>: EVERY chip's raw stack probe rows (the marks above are chip 0's medians) +
+        # the reader placement, for perf_reader_place_report.py (per-chip / per-bank lateness of the weight streams)
+        dump = os.environ.get("GLM53_STACK_PROBE_DUMP")
+        if dump:
+            out = []
+            for r, stk in kv.stacks[0]:
+                if stk is None or getattr(stk, "probe", None) is None:
+                    continue
+                try:
+                    L0 = stk.layers[0]
+                    per_chip = [ttnn.to_torch(t).reshape(stk.n, L0.PROBE_ROWS, 16).to(torch.int64) & 0xFFFFFFFF
+                                for t in ttnn.get_device_tensors(stk.probe)]  # fmt: skip
+                    out.append(dict(layers=[layers[i] for i in r], sparse=[backend.seq[i]["sparse"] for i in r],
+                                    assign=[((int(c.x), int(c.y)), int(b), int(k)) for c, b, k in L0.readers.assign],
+                                    k_cores=len(L0.place["k"]), probe=torch.stack(per_chip)))  # fmt: skip
+                except Exception as e:  # noqa: BLE001
+                    logger.info(f"MK_BACKEND_PROBE_DUMP: stack {list(r)} unreadable ({e})")
+            torch.save(out, dump)
+            logger.info(f"MK_BACKEND_PROBE_DUMP: {dump} ({len(out)} stacks)")
     t0 = time.perf_counter()
     tr = backend.capture_decode(io, kv, WIDTH)
     ttnn.synchronize_device(mesh_device)

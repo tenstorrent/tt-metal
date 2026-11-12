@@ -19,6 +19,7 @@ import pytest
 import torch
 from loguru import logger
 
+from models.autoports.zai_org_glm_5_3_flash.tt import reader_place as RP
 from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
 
 D = 512
@@ -1627,6 +1628,85 @@ def test_native_width_fabric_policy():
     r = subprocess.run([sys.executable, "-c", _NATIVE_FAB_CHILD], cwd=str(root), env=env, capture_output=True,
                        text=True, timeout=300)  # fmt: skip
     assert r.returncode == 0 and "NATIVE_FAB_OK" in r.stdout, (r.returncode, r.stdout[-2000:], r.stderr[-4000:])
+# ---- the DRAM-bank reader placement on a heterogeneously harvested Galaxy (tt/reader_place.py, GLM53_MK_READER_PLACE)
+GRID = (12, 10)  # the 8x4 Galaxy's common compute grid (logical)
+# per bank: (side, optimal logical row); the west banks' worker column is logical 0 on every chip, the east banks' is the
+# first active column east of physical x 9 = 7 - (the chip's harvested columns west of it): 5, 6 or 7
+_BANK_ROWS = {0: 9, 1: 1, 2: 7, 3: 3, 4: 9, 5: 1, 6: 7, 7: 3}
+
+
+def _galaxy_opts(seed: int = 0, chips: int = 32, east=(5, 6, 7)):
+    rng = random.Random(seed)
+    per = []
+    for _ in range(chips):
+        ex = rng.choice(east)
+        per.append({b: (0 if b < 4 else ex, _BANK_ROWS[b]) for b in range(8)})
+    return [per[0]] + per  # [reference chip, then every chip]
+
+
+def _port_like(ref: dict, grid: tuple, readers: int) -> list:
+    """mk_readers._port_assignments on plain tuples: the reference chip's optimal core per bank, then per bank the
+    nearest free core by logical Manhattan distance (ties: the lower x, then the lower y)"""
+    out = [(ref[b], b, 0) for b in sorted(ref)]
+    taken = {c for c, _, _ in out}
+    free = [(x, y) for x in range(grid[0]) for y in range(grid[1]) if (x, y) not in taken]
+    mine = {b: [ref[b]] for b in sorted(ref)}
+    for idx in range(1, readers):
+        for b in sorted(ref):
+            best = min(free, key=lambda xy: min(abs(xy[0] - x) + abs(xy[1] - y) for x, y in mine[b]))
+            free.remove(best)
+            mine[b].append(best)
+            out.append((best, b, idx))
+    return out
+
+
+@pytest.mark.parametrize("mode", RP.MODES)
+@pytest.mark.parametrize("readers", [1, 2, 3, 4])
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_reader_place_noc0_east_everywhere(mode, readers, seed):
+    """every placed reader sits at or east of its bank's optimal column and at or below its optimal row on EVERY chip
+    (NOC 0 read data never wraps); one core per (bank, index); the port's order (index-major, bank-minor)"""
+    opts = _galaxy_opts(seed)
+    chips = opts[1:]
+    a = RP.plan(opts, GRID, readers, mode)
+    assert [(b, i) for _, b, i in a] == [(b, i) for i in range(readers) for b in range(8)]
+    assert len({c for c, _, _ in a}) == len(a) == 8 * readers
+    assert all(0 <= x < GRID[0] and 0 <= y < GRID[1] for (x, y), _, _ in a)
+    assert RP.wrapped(a, chips) == [0] * len(chips)
+    assert RP.north(a, chips) == [0] * len(chips)
+    base = RP.mesh_base(opts, list(range(8)))
+    assert [c for c, _, i in a if i == 0] == [base[b] for b in range(8)]
+    if mode == "row":  # the bank's readers along its row at +x (4 per side fit in a 12-wide row)
+        for b in range(8):
+            cells = sorted(c for c, bb, _ in a if bb == b)
+            assert [c[1] for c in cells] == [base[b][1]] * readers
+            assert [c[0] for c in cells] == list(range(base[b][0], base[b][0] + readers))
+
+
+def test_reader_place_port_wraps_on_heterogeneous_chips():
+    """the port's placement (the reference chip's optimal cores + nearest logical neighbours) puts readers west of /
+    above their bank's optimal core on chips harvested unlike the reference: the case GLM53_MK_READER_PLACE removes"""
+    opts = _galaxy_opts(0)
+    chips = opts[1:]
+    port = _port_like(opts[0], GRID, 3)
+    w, n = RP.wrapped(port, chips), RP.north(port, chips)
+    assert max(w) > 0 and sum(n) > 0, (w, n)
+    # a homogeneous mesh whose east column is the reference's: the port's base readers are fine, its extras still go
+    # west / north (ties to the lower x, then the lower y)
+    homo = _galaxy_opts(0, east=(6,))
+    port_h = _port_like(homo[0], GRID, 3)
+    assert RP.wrapped([c for c in port_h if c[2] == 0], homo[1:]) == [0] * 32
+    assert max(RP.wrapped(port_h, homo[1:])) + max(RP.north(port_h, homo[1:])) > 0
+
+
+def test_reader_place_errors():
+    opts = _galaxy_opts(0)
+    with expect_error(ValueError, "outside the 2 x 2 grid"):
+        RP.plan(opts, (2, 2), 1, "row")  # the east banks' base column is past a 2-wide grid
+    with expect_error(ValueError, "no free core for bank"):
+        RP.plan(_galaxy_opts(0, east=(1,)), (2, 10), 3, "row")  # 24 readers on 20 cores
+    with expect_error(ValueError, "GLM53_MK_READER_PLACE='diag'"):
+        RP.plan(opts, GRID, 2, "diag")
 
 
 def test_zz_no_ttnn_was_imported_by_the_suite():

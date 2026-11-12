@@ -45,11 +45,64 @@ MK_READER_REV = 4  # 4: phase-relative args, MK_SPLIT hook, per-phase output CB
 def reader_assignments(device, readers: int, placement_name: str) -> list:
     """[(logical core, bank, index in bank)]: ttnn's bank-adjacent DS reader placement (1..3 per bank); for more, the 3
     placed ones plus, per bank, the free cores nearest (logical Manhattan distance) to that bank's readers, taken round
-    robin over the banks so every bank's extra readers stay as close as the grid allows."""
+    robin over the banks so every bank's extra readers stay as close as the grid allows.
+    GLM53_MK_READER_PLACE=row | col (tt/reader_place.py): a mesh-wide NOC-0-aware placement from EVERY chip's optimal
+    bank -> worker assignment instead (unset: the port's placement below, unchanged). GLM53_MK_READER_CENSUS=1 prints
+    the per-chip optimal columns / rows and how many of the placed readers sit west of / above their bank's optimal
+    core on each chip (NOC 0 read data wraps around the torus to reach them), once per (mode, readers) per process."""
     # tenstorrent/tt-metal has no DramReaderPlacement / dram_bank_reader_assignments (the fork's DRAM-streaming
     # matmul): the bank-adjacent core per bank comes from the public optimal assignment (one per bank, NOC 0) and the
     # remaining readers are the nearest free cores, as below; `placement_name` is kept for the call sites
     del placement_name
+    mode = os.environ.get("GLM53_MK_READER_PLACE", "")
+    census = os.environ.get("GLM53_MK_READER_CENSUS") == "1"
+    if not mode and not census:
+        return _port_assignments(device, readers)
+    from models.autoports.zai_org_glm_5_3_flash.tt import reader_place as RP
+
+    opts = _optimal_per_chip(device)
+    port = _port_assignments(device, readers)
+    if mode:
+        grid = device.compute_with_storage_grid_size()
+        cells = RP.plan(opts, (int(grid.x), int(grid.y)), max(1, int(readers)), mode)
+        out = [(ttnn.CoreCoord(x, y), b, i) for (x, y), b, i in cells]
+    else:
+        out = port
+    if census and (mode, int(readers)) not in _CENSUS_DONE:
+        _CENSUS_DONE.add((mode, int(readers)))
+        chips = opts[1:] or opts
+        plain = lambda a: [((int(c.x), int(c.y)), int(b), int(i)) for c, b, i in a]  # noqa: E731
+        banks = sorted(opts[0])
+        ox = {b: sorted({o[b][0] for o in chips}) for b in banks}
+        oy = {b: sorted({o[b][1] for o in chips}) for b in banks}
+        print(f"MK_READER_CENSUS: mode {mode or 'port'} readers {readers} chips {len(chips)} opt_x {ox} opt_y {oy} "
+              f"assign {plain(out)} wrapped_per_chip {RP.wrapped(plain(out), chips)} north_per_chip "
+              f"{RP.north(plain(out), chips)} | port {plain(port)} port_wrapped_per_chip "
+              f"{RP.wrapped(plain(port), chips)} port_north_per_chip {RP.north(plain(port), chips)}", flush=True)  # fmt: skip
+    return out
+
+
+_CENSUS_DONE: set = set()
+
+
+def _optimal_per_chip(device) -> list:
+    """[the reference chip's {bank: (x, y)}, then every mesh coordinate's (row-major)]: ttnn's optimal NOC 0 bank ->
+    worker assignment per chip (MeshDevice's (noc, coord) overload; a single device: the reference alone)"""
+    ref = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    opts = [{int(b): (int(c.x), int(c.y)) for b, c in enumerate(ref)}]
+    try:
+        R, C = int(device.shape[0]), int(device.shape[1])
+    except Exception:  # noqa: BLE001  (a single device)
+        return opts
+    for r in range(R):
+        for c in range(C):
+            a = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0, ttnn.MeshCoordinate(r, c))
+            opts.append({int(b): (int(v.x), int(v.y)) for b, v in a.items()})
+    return opts
+
+
+def _port_assignments(device, readers: int) -> list:
+    """the port's placement (reader_assignments without GLM53_MK_READER_PLACE)"""
     bank_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     out = [(ttnn.CoreCoord(int(c.x), int(c.y)), int(b), 0) for b, c in enumerate(bank_workers)]
     if readers <= 1:
