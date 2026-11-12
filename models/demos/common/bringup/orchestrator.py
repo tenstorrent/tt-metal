@@ -276,7 +276,12 @@ def now() -> str:
 
 def rel(spec: Spec, p) -> str:
     p = Path(p)
-    return str(p.resolve().relative_to(spec.repo)) if p.is_absolute() else str(p)
+    if not p.is_absolute():
+        return str(p)
+    try:  # (a forked run's spec sits beside its worktree, not in it: runs.fork)
+        return str(p.resolve().relative_to(spec.repo))
+    except ValueError:
+        return str(p)
 
 
 # ---------------------------------------------------------------- agent definitions and command
