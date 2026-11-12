@@ -1,4 +1,4 @@
-# L1 Ledger: rms_norm (regime R1 row-resident + R6 HEIGHT_SHARDED in place)
+# L1 Ledger: rms_norm (regime R1 row-resident + R6 HEIGHT_SHARDED in place + R3 W-split)
 
 Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (from
 `op_design.md` Blocking Model): **rows** (extent `r = block_rows`), **w** (whole row per core,
@@ -135,3 +135,29 @@ cross-core = 0; core-local L1 = x read twice from L1 (sumsq, normalize), interme
 > layers onto (the reader already addresses gamma by chunk offset). R3 (W-split + combine) moves
 > the same DRAM bytes as R1 plus a per-block gather/multicast; it is deferred because every Phase 0
 > shape fits R1's residency predicate and its benefit is occupancy, not traffic.
+
+## R3 W-split (Refinement 4) — CB deltas and data-movement budget
+
+A row-group of `G` cores shares each tile-row; core `slot` owns the W slice
+`[w_elem_start, w_elem_end)` (`core_w_tiles` tiles, its own CT kernel group when the slice width or its
+partial-tile width differs — e.g. the ragged last shard column). Placement: **WIDTH/BLOCK_SHARDED TILE** →
+`cb_x` / `cb_out` are the resident shards (row stride = shard tile width, `K = 1` preferred, as R6);
+**WIDTH/BLOCK_SHARDED RM** → LOCAL_STICKS restride of the granule-wide slice sticks (as R6 RM);
+**interleaved** (only when `F(1, K_floor) > B` for the whole row, or the `FORCE_W_SPLIT` test hook) →
+the R1 streaming CBs over the slice, `G = ceil(Wc / ceil(Wc / grid.x))` cores per grid row.
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_partial` (R3) | `r` | `rows_this_block` | `{rows: spans → r, w: collapsed (slice Σx², col-0 valid), w_chunk: streams}` | DEST width (`interm_fmt`) — leaves DEST once, no L1 accumulation | compute | writer | partial reduce → gather, per block | concurrent with `cb_sumsq` only inside the reduce call (input vs output) — could alias `cb_sumsq` in principle, but it is consumed by a different kernel (writer) while compute moves on; separate ring keeps one producer/one consumer |
+| `cb_gather` (R3) | `G·r` | `G·rows_this_block` (root only; contributors only use its address) | `{rows: spans → r, w: spans → G partials, w_chunk: —}` | DEST width | writer (root: after all G arrivals) | compute (root) | gather → combine, per block | must exist at the same L1 address on every core (contributors write into the root's copy by their own write pointer) → allocated on every core; sized exactly `G·r` so every block starts at base. Largest R3 term: `G·r·s_f` (e.g. G = 32, bf16: 64 KiB at r = 1). Float32 pages under 16-bit DEST doubled it and failed `13×777×1023` WIDTH (budget 96 KiB with both 650 KiB shards resident) |
+| `cb_rstd_root` (R3) | `r` | `rows_this_block` | `{rows: spans → r}` | DEST width | compute (root) | writer (root) | combine → multicast, per block | separate from `cb_rstd`: the multicast's loopback writes the root's own `cb_rstd`, so `cb_rstd` has one producer (the writer) on every core |
+| `cb_rstd` (R3) | `r` | as R1 | as R1 | as R1 | **writer** (rstd multicast receive / loopback) | compute | as R1 | as R1 |
+
+`F_R3(r, K) = F(r, K) + r·s_f (partial) + G·r·s_f (gather) + r·s_f (rstd_root)`; the block selector
+(`_select_blocks` / `_select_resident_blocks`) solves against it unchanged.
+
+Data movement (R3): x 1 DRAM crossing (interleaved) / 0 (sharded); out 1 / 0; gamma: each core reads
+only its slice → 1 per row-group per block. Cross-core per block per row-group: `(G − 1)·rows`
+partial tiles unicast to the root (+ 1 semaphore increment per contributor) and one multicast of `rows`
+rstd tiles to the `G` group cores. Semaphores: `SEM_GATHER` (cumulative count, never reset — the root
+waits for `(G − 1)·(block + 1)`), plus the `ttnn.Mcast` channel's data-ready / consumer-ready pair.

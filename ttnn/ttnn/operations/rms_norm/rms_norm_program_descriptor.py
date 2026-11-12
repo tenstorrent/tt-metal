@@ -206,8 +206,8 @@ def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int, x_depth: int = 1
     if not g.x_resident:
         f += STREAM_DEPTH * c * g.s_o  # cb_out | cb_out_rm (resident output shard when x_resident)
     if g.w_split:
-        f += r * g.s_sq  # cb_partial
-        f += g.group_size * r * g.s_sq  # cb_gather (allocated on every core so its address is uniform)
+        f += r * g.s_f  # cb_partial
+        f += g.group_size * r * g.s_f  # cb_gather (allocated on every core so its address is uniform)
         f += r * g.s_f  # cb_rstd_root
     return f
 
@@ -488,11 +488,12 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     if g.has_gamma or g.is_rm:
         cbs.append(_cb(CB_NORMED, block_rows * w_chunk_tiles, g.s_f, interm, all_cores))
     if g.w_split:
-        # Partials stay in the Float32 sumsq format: the root sums G of them.
-        cbs.append(_cb(CB_PARTIAL, block_rows, g.s_sq, g.sumsq_fmt, all_cores))
+        # Partials leave DEST once (no L1 accumulation), so their pages follow the DEST width like cb_rstd: a
+        # Float32 page under 16-bit DEST stores nothing extra and doubles cb_gather (G tiles per row).
+        cbs.append(_cb(CB_PARTIAL, block_rows, g.s_f, interm, all_cores))
         # Every core allocates cb_gather (sized G*block_rows so each block starts at the CB base) so its L1
         # address — which contributors write into on the root — is the same on every core.
-        cbs.append(_cb(CB_GATHER, g.group_size * block_rows, g.s_sq, g.sumsq_fmt, all_cores))
+        cbs.append(_cb(CB_GATHER, g.group_size * block_rows, g.s_f, interm, all_cores))
         cbs.append(_cb(CB_RSTD_ROOT, block_rows, g.s_f, interm, all_cores))
 
     # x / out placement as seen by the dataflow kernels (single source for reader and writer).

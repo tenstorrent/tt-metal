@@ -85,3 +85,47 @@
 - Golden test progress: slice of `test_op_loose` (INTERLEAVED + HEIGHT_SHARDED) plus the cartesian `test_op` for 2x1x100x47 / 4x8x32x256 (non-W/B-sharded): 349 passed, 42 xfailed, 1 failed. The failure is the excepted `(1,1,32,32768)` case, which needs R3 (Refinement 4). Unit dir: 303 passed, 19 skipped, 0 failed.
 - Issues encountered: none. The NoC-estimator CLI is not built in this tree, so `ttnn.clone` served as the measured DRAM roofline.
 - Tests added: `test_rms_norm_prefill_perf.py` (exact-config prefill cases, PCC 0.9995) and `test_rms_norm_dram_roofline.py` (clone roofline, for `--profile`).
+
+## Refinement 4 — Cross-core W-split (regime R3): logical W-split on interleaved + WIDTH_SHARDED + BLOCK_SHARDED
+- Date: 2026-11-12
+- What was done:
+  - **SUPPORTED**: `memory_layout` += `WIDTH_SHARDED`, `BLOCK_SHARDED`; sharded output follows the input's shard spec (any sharded layout).
+  - **Host**: work planning now yields one record per core: a tile-row run plus a W slice `[w_elem_start, w_elem_end)`, its row-group, slot and root. Regimes:
+    - **R1** (interleaved, `_r1_fits`): unchanged split.
+    - **R6** (sharded, one W slice): HEIGHT as before. WIDTH/BLOCK grids with a single slice use the same path.
+    - **R3** (WIDTH/BLOCK with ≥ 2 slices): shard (i, j) → row-group i, slot j, root = j = 0. BLOCK requires ROW_MAJOR orientation.
+    - **R3, interleaved logical split**: taken only when R1 cannot hold one whole row (`F(1, K_floor) > B`). `G = ceil(Wc / ceil(Wc / grid.x))` cores per grid row; tile-rows are split evenly over `min(grid.y, Rt)` row-groups.
+    - The interleaved predicate is pinned (no grid-size or row-count term). `FORCE_W_SPLIT` is a test hook.
+  - `core_w_tiles` and the slice's partial-tile width stay compile-time. There is one reader/writer/compute triple per distinct `(core_w_tiles, w_partial)`, e.g. the ragged last shard column or RM granule slices.
+  - **Compute**: `rstd_block` splits into two steps:
+    - `partial_block`: `reduce<SUM, ROW, AccumulateViaAdd, Collapse>`, no post-op → `cb_partial`.
+    - On the root, `combine_block`: `reduce<…, AccumulateViaAdd, ReduceWithinTile::Skip>` over `(rows, G)` with the existing rsqrt post-op → `cb_rstd_root`.
+  - **Writer**: per block, every core unicasts its `rows` partial tiles into the root's `cb_gather` at slot `row·G + slot`. Contributors then increment the root's gather semaphore. The root waits for a cumulative count of `(G−1)·(block+1)` and pushes the gather.
+  - The root multicasts `cb_rstd_root` into every group core's `cb_rstd` with the multicast helper: host `ttnn.Mcast` (NOC_1, fixed sender = slot 0, one channel over all groups) + `attach()`; kernel `McastArgs::optional_sender().send()` / `optional_receiver().receive()`. Loopback fills the root's own `cb_rstd`, so `cb_rstd` has one producer (the writer) on every core.
+  - **Reader/writer**: RM chunks are addressed by slice element range. Local-shard offsets are slice-relative. Chunks lying wholly past a narrow slice are no-ops. The RM gamma segment read is aligned down to the 64 B DRAM read alignment, and the relayout skips the slack, because RM shard slices start on any 16 B granule.
+  - Resident drain/push counts use the row stride (= shard tile width).
+  - **CBs**: `cb_partial`, `cb_gather` (G·r pages, on every core so its address is uniform) and `cb_rstd_root` are new. Pages follow the DEST width; see Issues for why. Ledger updated (`l1_ledger.md` R3 section).
+  - Reused: R1/R6 kernels, block selector, sumsq/normalize/scale/untilize phases, resident-shard CBs, LOCAL_STICKS restride path. Added: the R3 combine (compute + writer), work planner, kernel groups.
+- Accuracy achieved: all focused cases pass `helpers.TOLERANCES`:
+  - bf16 WIDTH/BLOCK, TILE/RM, poisoned padding, pinned perf geometries.
+  - 32×32768 interleaved, fp32 DEST.
+  - Forced interleaved R3 runs: partial W, RM, RM gamma.
+- Golden test progress (targeted slices; the harness full run is the record):
+  - WIDTH/BLOCK + `32x32768` loose cases: 193/196 pass, 3 skipped (infeasible shard geometry), 0 fail.
+  - Cartesian WIDTH/BLOCK, fp32 input + fp32 gamma: 210/210 pass.
+  - Cartesian, bf8b + bf16/DEST-off with bf16 gamma: 290/290 pass.
+  - Cartesian, bf16/DEST-on: 601 pass, 0 fail before the slice hit the session time cap.
+  - Unit dir: 322 passed, 0 failed.
+- Perf (device ns, Blackhole p150b, not a target of this refinement):
+  - Interleaved 32×32768 (R3, 12 cores, HiFi4 / fp32 DEST): 33.6 µs.
+  - WIDTH 32×7168 `[32,256]×(7,4)`: 6.18 µs (HiFi4; `achievable_ns` 5.48 µs at HiFi2).
+  - BLOCK 640×6144 `[64,704]×(9,10)`: 14.3 µs (`achievable_ns` 19.0 µs).
+- Issues encountered:
+  1. A kernel group made only of receivers (the last slice column) hit the mcast `sender()` static assert → switched to the role-polymorphic `optional_sender` / `optional_receiver`.
+  2. `13×777×1023` WIDTH (325 tile-rows × 32 one-tile slices) did not fit: the input + output shards leave a 96 KiB CB budget, and a Float32 `cb_gather` alone was 128 KiB. Partial/gather pages now follow the DEST width: a partial leaves DEST once, so Float32 pages under 16-bit DEST held no extra bits. That halves the gather and the cell passes.
+  3. Stall shadow (x·γ during the rstd wait) is **not built**. It needs a block-wide x·γ buffer, which does not fit next to resident shards that already fill L1. It also changes the rounding order. Left for Refinements 5/6, together with tuning the combine (`tensix_all_reduce` reduce-scatter / tree for large G).
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_w_split.py`. 19 cases:
+  - WIDTH/BLOCK auto + pinned perf geometries + pad-poison.
+  - Regime-pinned predicate test (32768 → R3, 16384 → R1).
+  - 32×32768 interleaved.
+  - `FORCE_W_SPLIT` interleaved cases (TILE/RM, partial W, RM gamma, 3 row-groups).
