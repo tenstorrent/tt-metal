@@ -1403,7 +1403,7 @@ class TestJobOwnership:
         import mmap
         import socket
 
-        from ttnn.distributed.ttrun import remove_stale_mpi_shm_segments
+        from ttnn.distributed.ttrun import LaunchedJob
 
         # The third piece of P11: before launching, tt-run removes this user's Open MPI shared-memory segments
         # that no live process maps (what a killed job leaves behind), and keeps the ones a running job still maps.
@@ -1417,7 +1417,7 @@ class TestJobOwnership:
             os.ftruncate(fd, 4096)
             mm = mmap.mmap(fd, 4096)
 
-            remove_stale_mpi_shm_segments()
+            LaunchedJob.remove_stale_mpi_shm_segments()
 
             assert not stale.exists(), "the stale segment was not removed"
             assert live.exists(), "a segment a live process maps must be kept"
