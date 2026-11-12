@@ -681,6 +681,10 @@ class MiniMaxH3Pipeline:
         self._last_layout_key: tuple | None = None
         self._last_tilerow_kwargs: dict = {}
         self.levels_once = os.environ.get("MINIMAX_H3_LEVELS_ONCE", "0") == "1"
+        # MINIMAX_H3_ENCODER_RESIDENT=1: the text encoder keeps its TP-sharded weights resident on every chip instead
+        # of FSDP-sharding them over the other mesh axis and all-gathering every layer on every encode. Same weights,
+        # same matmuls. Its weight cache has its own subfolder (no `_FSDP` suffix), so the first run builds it.
+        self.encoder_resident = os.environ.get("MINIMAX_H3_ENCODER_RESIDENT", "0") == "1"
         self.audio_beside_video = os.environ.get("MINIMAX_H3_AUDIO_BESIDE_VIDEO", "0") == "1"
         self._levels_all: dict[tuple[str, int], StateTensor] = {}
         self._levels_warm_steps = int(os.environ.get("MINIMAX_H3_LEVELS_ONCE_WARM_STEPS", "16"))
@@ -870,14 +874,17 @@ class MiniMaxH3Pipeline:
         # on every device and no length-keyed `mesh_partition` program. On Wormhole and on the dynamic-length path.
         self._shard_assembly_indices = (is_wormhole_b0() or self.dynamic_length) and self.sp_factor > 1
 
-        self._host_log("building the Qwen3-VL text encoder")
+        self._host_log(
+            "building the Qwen3-VL text encoder"
+            + (" with resident weights (MINIMAX_H3_ENCODER_RESIDENT, no FSDP)" if self.encoder_resident else "")
+        )
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
             self.weights_dir / "text_encoder",
             mesh_device=self.mesh_device,
             parallel_config=self.encoder_parallel_config,
             ccl_manager=self.encoder_ccl_manager,
-            is_fsdp=True,
+            is_fsdp=not self.encoder_resident,
             load_weights=False,
             kv_gather_capacity=padded_sequence_length(self.arena_caps.prompt, self.sp_factor),
             use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
@@ -1264,7 +1271,7 @@ class MiniMaxH3Pipeline:
             self.weights_dir / "text_encoder",
             parallel_config=self.encoder_parallel_config,
             mesh_device=self.mesh_device,
-            is_fsdp=True,
+            is_fsdp=not self.encoder_resident,
         )
         return self._text_encoder
 
