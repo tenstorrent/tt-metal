@@ -51,8 +51,11 @@ from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 # How many recent image grids keep their RoPE tables in DRAM, at least 1. Not tuned, as the tables are small.
 ROPE_CACHE_GRIDS = 16
 # tt-metal's error for an op whose circular buffers would overlap a tensor in L1 (ProgramImpl's check of the circular
-# buffer region). It reaches Python as a RuntimeError with this line in its message.
-L1_CLASH = re.compile(r"Statically allocated circular buffers in program \d+ clash with L1 buffers[^\n]*")
+# buffer region). It reaches Python as a RuntimeError with this line in its message. The groups leave out the program
+# id, which is new for each program, so a clash that lasts gives the same reason for every image.
+L1_CLASH = re.compile(r"(Statically allocated circular buffers) in program \d+ (clash with L1 buffers[^\n]*)")
+# Every DRAM_FALLBACK_WARN_EVERY-th fallback to DRAM_PLACEMENT is a warning, even with the last warning's reason.
+DRAM_FALLBACK_WARN_EVERY = 100
 
 # Weight names: transformers 5.12's MiniMaxM3VLModel names, as loader.load_vision_state_dict gives them.
 _TOWER = "vision_tower."
@@ -173,7 +176,8 @@ class M3VLVisionModel(LightweightModule):
         # block_placement proves they fit, the MLP's hidden activations in block shards where those fit;
         # "l1_interleaved" the same without the shards and "dram" every activation in DRAM, both for comparison.
         self.activations = "l1"
-        self._logged_dram_fallback = False
+        self._dram_fallbacks = 0  # fallbacks to DRAM_PLACEMENT so far
+        self._warned_fallback = None  # the reason of the last fallback logged as a warning
 
     @classmethod
     def from_state_dict(
@@ -297,8 +301,8 @@ class M3VLVisionModel(LightweightModule):
     def placement(self, x_tt: ttnn.Tensor) -> BlockPlacement:
         """The BlockPlacement a forward gives the blocks for the pixel values x_tt (push_pixel_values):
         DRAM_PLACEMENT with activations "dram", else block_placement's. Where that keeps activations in L1 and
-        l1_free_for_activations finds the device's L1 not as the placement's proof takes it, DRAM_PLACEMENT, and the
-        first time a warning with the reason."""
+        l1_free_for_activations finds the device's L1 not as the placement's proof takes it, DRAM_PLACEMENT, logged
+        by _log_dram_fallback."""
         if self.activations == "dram" or not self.blocks:
             return DRAM_PLACEMENT
         placement = block_placement(self.blocks[0], x_tt.padded_shape[-2], self.activations)
@@ -307,11 +311,22 @@ class M3VLVisionModel(LightweightModule):
         free, why_not = l1_free_for_activations(self.device)
         if free:
             return placement
-        # A warning the first time, and every fallback after it at debug level, with its own reason.
-        log = logger.debug if self._logged_dram_fallback else logger.warning
-        log(f"the vision blocks keep their activations in DRAM: {why_not}")
-        self._logged_dram_fallback = True
+        self._log_dram_fallback(why_not)
         return DRAM_PLACEMENT
+
+    def _log_dram_fallback(self, reason: str) -> None:
+        """Log a fallback to DRAM_PLACEMENT with its reason and the model's running count of fallbacks.
+
+        It is a warning when the reason differs from the last warning's, and at every DRAM_FALLBACK_WARN_EVERY-th
+        fallback. Other repeats are logged at debug level.
+        """
+        self._dram_fallbacks += 1
+        message = f"the vision blocks keep their activations in DRAM (fallback {self._dram_fallbacks}): {reason}"
+        if reason != self._warned_fallback or self._dram_fallbacks % DRAM_FALLBACK_WARN_EVERY == 0:
+            self._warned_fallback = reason
+            logger.warning(message)
+        else:
+            logger.debug(message)
 
     def _tower_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
         """Run forward_tower's device ops on pixel values from push_pixel_values, leaving x_tt allocated.
@@ -330,8 +345,9 @@ class M3VLVisionModel(LightweightModule):
                 raise
             # The failed run's frames hold the tensors it made: clearing them frees those tensors before the rerun.
             traceback.clear_frames(error.__traceback__)
-            reason = f"placement {placement.name} at {x_tt.padded_shape[-2]} rows failed: {clash.group(0)}"
-        logger.warning(f"the vision blocks keep their activations in DRAM for this image: {reason}")
+            line = " ".join(clash.groups())  # tt-metal's line without the program id
+            reason = f"placement {placement.name} at {x_tt.padded_shape[-2]} rows failed: {line}"
+        self._log_dram_fallback(reason)
         return self._run_tower(x_tt, image_grid_thw, DRAM_PLACEMENT)
 
     def _run_tower(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor, placement: BlockPlacement) -> ttnn.Tensor:

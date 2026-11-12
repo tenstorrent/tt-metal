@@ -75,7 +75,7 @@ from models.demos.minimax_m3.tt.vision.common import (
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
-from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
+from models.demos.minimax_m3.tt.vision.model import DRAM_FALLBACK_WARN_EVERY, M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 
 from .vision_helpers import (
@@ -912,6 +912,22 @@ def test_vision_block_placement_calls(monkeypatch, patches):
             assert sum(event[0] == "alloc" for event in events) == 2, events
 
 
+@contextlib.contextmanager
+def _fallback_logs():
+    """Collect the (level name, message) of each DRAM fallback that the model logs inside the context."""
+    logs = []
+
+    def sink(message):
+        if "keep their activations in DRAM" in message.record["message"]:
+            logs.append((message.record["level"].name, message.record["message"]))
+
+    handler = logger.add(sink, level="DEBUG")
+    try:
+        yield logs
+    finally:
+        logger.remove(handler)
+
+
 def _clash_model(monkeypatch):
     """Build the 4-block model on 12x10 for the clash tests, with values tracked and an empty L1.
 
@@ -932,21 +948,21 @@ def _clash_model(monkeypatch):
 def test_vision_l1_clash_falls_back_to_dram(monkeypatch, activations):
     """A circular-buffer clash at any op of an L1 forward makes the forward run the image again in DRAM.
 
-    The clash is raised once, at each op in turn. The output must hold what the DRAM forward's holds, and a warning must
-    name the clash. The failed run's tensors must be freed before the rerun, and only the output may outlive the call.
+    The clash is raised once, at each op in turn. The output must hold what the DRAM forward's holds, and the log must
+    name the clash: a warning the first time, then debug lines for the same reason. The failed run's tensors must be
+    freed before the rerun, and only the output may outlive the call.
     """
     recorder, model, x_tt, grid_thw, want = _clash_model(monkeypatch)
     model.activations = activations
     placement = model.placement(x_tt)
     assert placement is not DRAM_PLACEMENT
-    warnings = []
-    sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
-    try:
+    with _fallback_logs() as logs:
         for failing in range(len(TOWER_ROLES)):
             case = (activations, TOWER_ROLES[failing])
             recorder.events.clear()
             made = len(recorder.made)
-            recorder.raise_at = {failing: RuntimeError(CLASH_MESSAGE)}
+            # tt-metal gives each program a new id, so each clash names another program.
+            recorder.raise_at = {failing: RuntimeError(CLASH_MESSAGE.replace("program 7", f"program {7 + failing}"))}
             out = model.forward_device(x_tt, grid_thw)
             assert out.value == want and not _in_l1(out.memory_config()), case
             ops = [event[1] for event in recorder.events if event[0] == "call"]
@@ -959,11 +975,11 @@ def test_vision_l1_clash_falls_back_to_dram(monkeypatch, activations):
             assert rerun_l1 == 2, case  # the rerun keeps its activations in DRAM: only the RoPE copies are in L1
             assert not recorder._live, case
             assert [ref() for ref in recorder.made[made:] if ref() is not None] == [out], case
-            assert len(warnings) == failing + 1, case
-            assert f"placement {placement.name} at 2304 rows failed: Statically allocated" in warnings[-1], case
-            assert "clash with L1 buffers on core range" in warnings[-1], case
-    finally:
-        logger.remove(sink)
+            [(level, line)] = logs[failing:]
+            assert level == ("WARNING" if failing == 0 else "DEBUG"), case
+            reason = f"placement {placement.name} at 2304 rows failed: Statically allocated circular buffers"
+            assert f"(fallback {failing + 1}): {reason}" in line, case
+            assert "clash with L1 buffers on core range" in line and "program" not in line, case
 
 
 def test_vision_l1_clash_other_errors_raise(monkeypatch, expect_error):
@@ -1016,9 +1032,8 @@ def test_vision_l1_free_for_activations(monkeypatch):
     the top PROOF_L1_FOREIGN_BYTES of the bank, and a larger bank pass; 110 or 130 banks, a bank 2 KB short of
     PROOF_L1_BANK_BYTES, a tensor 2 KB lower and a small tensor low in the bank, which leaves the largest free block
     above it, do not. M3VLVisionModel.placement then gives DRAM_PLACEMENT at 2304 patches with "l1" and
-    "l1_interleaved", logs a warning the first time and every later fallback, with its reason, at debug level, and
-    the forward puts only the RoPE tables' copies in L1. With "dram", or where the rule gives DRAM_PLACEMENT, it does
-    not read the memory view."""
+    "l1_interleaved", logs each new reason as a warning and its repeat at debug level, and the forward puts only the
+    RoPE tables' copies in L1. With "dram", or where the rule gives DRAM_PLACEMENT, it does not read the memory view."""
     recorder = _Recorder(monkeypatch)
     model = _model(recorder, (12, 10))
     bank, foreign = PROOF_L1_BANK_BYTES, PROOF_L1_FOREIGN_BYTES
@@ -1035,14 +1050,7 @@ def test_vision_l1_free_for_activations(monkeypatch):
         (_memory_view(120, bank, [(bank - foreign - 2048, 2048)]), False),
         (low_tensor, False),
     ]
-    warnings, debugs = [], []
-    sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
-    debug_sink = logger.add(
-        lambda message: debugs.append(message.record["message"]),
-        level="DEBUG",
-        filter=lambda record: record["level"].name == "DEBUG",
-    )
-    try:
+    with _fallback_logs() as logs:
         for view, free in views:
 
             def memory_view(device, buffer_type, view=view):
@@ -1060,13 +1068,17 @@ def test_vision_l1_free_for_activations(monkeypatch):
             model.activations = activations
             events = recorder.forward(model, 2304)
             assert sum(event[0] == "alloc" for event in events) == 2, (activations, events)
-    finally:
-        logger.remove(sink)
-        logger.remove(debug_sink)
-    assert len(warnings) == 1 and "110 L1 banks for 120 cores" in warnings[0], warnings
-    fallbacks = [line for line in debugs if "keep their activations in DRAM" in line]
-    for reason in ("110 L1 banks for 120 cores", "130 L1 banks for 120 cores", "per L1 bank, under", "below the top"):
-        assert any(reason in line for line in fallbacks), (reason, fallbacks)
+    # Each view that fails gives one reason, for "l1" then "l1_interleaved"; the forwards repeat the last one.
+    reasons = (
+        "110 L1 banks for 120 cores",
+        "130 L1 banks for 120 cores",
+        "per L1 bank, under",
+        "67584 B below the top",
+    )
+    reasons += (f"{bank - 32 * 1024} B below the top",)
+    assert [level for level, _ in logs] == ["WARNING", "DEBUG"] * len(reasons) + ["DEBUG"] * 2, logs
+    for n, (_, line) in enumerate(logs):
+        assert reasons[min(n // 2, len(reasons) - 1)] in line, (n, line)
 
     def no_memory_view(device, buffer_type):
         raise AssertionError("read the L1 memory view")
@@ -1077,3 +1089,24 @@ def test_vision_l1_free_for_activations(monkeypatch):
         assert model.placement(SimpleNamespace(padded_shape=(1, 1, 352, 1184))) is DRAM_PLACEMENT  # 324 patches
     model.activations = "dram"
     assert model.placement(SimpleNamespace(padded_shape=(1, 1, 2304, 1184))) is DRAM_PLACEMENT
+
+
+def test_vision_dram_fallback_warnings(monkeypatch):
+    """A DRAM fallback is a warning when its reason differs from the last warning's, and every 100th time.
+
+    Other repeats are logged at debug level. Each line gives the model's running count of fallbacks.
+    """
+    model = _model(_Recorder(monkeypatch), (12, 10))
+    views = {"a": _memory_view(110, PROOF_L1_BANK_BYTES), "b": _memory_view(130, PROOF_L1_BANK_BYTES)}
+    reasons = {"a": "110 L1 banks for 120 cores", "b": "130 L1 banks for 120 cores"}
+    order = "aabba" + "a" * 200
+    assert DRAM_FALLBACK_WARN_EVERY == 100
+    with _fallback_logs() as logs:
+        for key in order:
+            monkeypatch.setattr(ttnn, "get_memory_view", lambda device, buffer_type, view=views[key]: view)
+            assert model.placement(SimpleNamespace(padded_shape=(1, 1, 2304, 1184))) is DRAM_PLACEMENT
+    assert len(logs) == len(order), logs
+    warned = [n for n, (level, _) in enumerate(logs, start=1) if level == "WARNING"]
+    assert warned == [1, 3, 5, 100, 200], warned
+    for n, ((level, line), key) in enumerate(zip(logs, order), start=1):
+        assert level in ("WARNING", "DEBUG") and f"(fallback {n}): {reasons[key]}" in line, (n, level, line)
