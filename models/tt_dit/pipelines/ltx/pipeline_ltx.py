@@ -185,6 +185,21 @@ def euler_step(
 # =============================================================================
 
 
+def _renamed_keyword(kwargs: dict, old: str, new: str, value: bool | None) -> bool | None:
+    """``value``, or what the caller passed under the keyword's former name ``old``, removed from ``kwargs``."""
+    if old not in kwargs:
+        return value
+    legacy = kwargs.pop(old)
+    if value is not None and bool(value) != bool(legacy):
+        msg = f"create_pipeline got {new}={value!r} and its deprecated name {old}={legacy!r}; pass only {new}"
+        raise TypeError(msg)
+    logger.warning(
+        f"LTX create_pipeline: `{old}` is deprecated, pass `{new}`. `{old}` will be removed after "
+        "tt-inference-server passes trace at construction (TDM-130 follow-up)."
+    )
+    return legacy
+
+
 class LTXPipeline(Pipeline):
     """
     LTX-2 text-to-audio-video generation pipeline.
@@ -426,7 +441,7 @@ class LTXPipeline(Pipeline):
         mode: str = "av",
         pipeline_class: type["LTXPipeline"] | None = None,
         run_warmup: bool = False,
-        trace: bool = False,
+        trace: bool | None = None,
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
@@ -438,7 +453,11 @@ class LTXPipeline(Pipeline):
         ``checkpoint_name`` / ``gemma_path`` accept local paths or HuggingFace
         repo strings (auto-downloaded on first use). Subclass-specific kwargs
         (e.g. ``distilled_lora_path``) flow through ``extra_pipeline_kwargs``.
+
+        ``dynamic_load`` and ``traced`` are the deprecated names of ``offload_weights`` and ``trace``.
         """
+        offload_weights = _renamed_keyword(extra_pipeline_kwargs, "dynamic_load", "offload_weights", offload_weights)
+        trace = bool(_renamed_keyword(extra_pipeline_kwargs, "traced", "trace", trace))
         mesh_shape = tuple(mesh_device.shape)
         device_configs: dict[tuple[int, int], dict] = {}
         if ttnn.device.is_blackhole():
