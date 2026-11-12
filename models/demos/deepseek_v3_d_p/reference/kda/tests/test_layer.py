@@ -11,6 +11,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     assert_equal,
+    nrmse,
 )
 
 
@@ -30,11 +31,14 @@ def test_split_forward_matches_full_forward_without_mutating_input_state(use_ful
         torch.cat((first_output, last_output), dim=1),
         name="split layer output",
         pcc_threshold=0.99999,
+        nrmse_threshold=1e-06,
     )
     for index, (full_tensor, split_tensor) in enumerate(
         zip(full_state.__dict__.values(), split_state.__dict__.values())
     ):
-        assert_accurate(full_tensor, split_tensor, name=f"split layer state {index}", pcc_threshold=0.99999)
+        assert_accurate(
+            full_tensor, split_tensor, name=f"split layer state {index}", pcc_threshold=0.99999, nrmse_threshold=1e-06
+        )
     for input_tensor, snapshot in zip(first_state.__dict__.values(), input_state_snapshot):
         assert_equal(snapshot, input_tensor, name="reference input state unchanged")
 
@@ -53,6 +57,26 @@ def test_reference_layer_is_bit_identical() -> None:
                 getattr(actual_state, field),
                 name=f"{field} iteration {iteration}",
             )
+
+
+@pytest.mark.parametrize("use_full_rank_gate", [False, True])
+def test_reference_layer_computes_in_requested_dtype(use_full_rank_gate: bool) -> None:
+    config = make_config(use_full_rank_gate=use_full_rank_gate)
+    weights = random_weights(config)
+    hidden_states = torch.randn(1, 9, config.hidden_size, generator=torch.Generator().manual_seed(47)).bfloat16()
+
+    default_output, default_state = kda_forward_reference(hidden_states, weights, config)
+    explicit_output, explicit_state = kda_forward_reference(hidden_states, weights, config, dtype=torch.float32)
+    golden_output, golden_state = kda_forward_reference(hidden_states, weights, config, dtype=torch.float64)
+
+    assert_bit_identical(default_output, explicit_output, name="default dtype output")
+    assert golden_output.dtype == torch.float64
+    for field in default_state.__dataclass_fields__:
+        assert_bit_identical(getattr(default_state, field), getattr(explicit_state, field), name=f"default {field}")
+        assert getattr(golden_state, field).dtype == torch.float64, field
+    # FP32 and FP64 compute the same function; they differ only by FP32 rounding.
+    error = nrmse(golden_output, default_output).item()
+    assert error < 1e-5, error
 
 
 def test_reference_layer_validates_weights(expect_error) -> None:

@@ -32,11 +32,6 @@ namespace tt::tt_metal::experimental {
 // must guarantee that your kernel logic outside of the TensorAccessor itself
 // tolerates any relaxations that you declare.
 //
-// NOTE: The TensorSpecRelaxations structure is under active development and will
-// change. We are starting with a crude "bag of bools" approach, introducing new
-// relaxations as they are needed. This will be replaced with a more structured
-// construct after the set of required relaxations is better understood.
-//
 // ============================================================================
 struct TensorSpecRelaxations {
     // Permit tensor arguments whose logical_shape differs from the declared shape.
@@ -57,6 +52,8 @@ struct TensorSpecRelaxations {
     //    set, dynamic_tensor_shape wins.
     //  - dynamic_tensor_shape requires that the logical rank remain constant. To
     //    further relax the logical rank, additionally set relax_logical_rank.
+    //  - dynamic_tensor_shape requires that the TensorLayout alignment remain constant. To
+    //    further relax the alignment, additionally set relax_tensor_layout_alignment.
     //  - dynamic_tensor_shape assumes that an interleaved row-major tensor's page
     //    size may vary with shape. To tighten, additionally set match_page_size.
     //
@@ -92,6 +89,27 @@ struct TensorSpecRelaxations {
     //    (The "rank" carried by the TensorAccessor is not the logical rank, but the physical
     //     "squeezed" rank of the memory layout.)
     bool relax_logical_rank = false;
+
+    // Permit tensor arguments with a different TensorLayout alignment than the declared one.
+    // This is intended to be used in conjunction with dynamic_tensor_shape.
+    // (The flag is inert if dynamic_tensor_shape is not set.)
+    //
+    // NOTE: This is the alignment returned by TensorLayout::get_alignment(), which determines how the
+    // logical shape is padded. It is NOT the allocator alignment that aligned_page_size refers to.
+    //
+    // A non-default alignment can add padding beyond the default, so this flag admits tensor
+    // arguments that are padded differently from the declared one.
+    //
+    // CAUTION: With this flag set, the padded shape is no longer a function of the logical shape.
+    // Your kernel and host logic must take the page count from the tensor argument's padded shape or
+    // physical volume, NEVER derive it from the logical shape.
+    //
+    // Effects:
+    //  - Validation checks are relaxed.
+    //  - TensorAccessor configuration is completely unchanged.
+    //    (Alignment reaches the TensorAccessor only through the padded shape and the ROW-MAJOR page
+    //     size, both of which dynamic_tensor_shape already handles.)
+    bool relax_tensor_layout_alignment = false;
 
     // Require that the tensor argument's page size matches that of the TensorParameter.
     // This is intended to be used in conjunction with dynamic_tensor_shape.

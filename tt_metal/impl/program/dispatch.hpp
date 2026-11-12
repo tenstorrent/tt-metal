@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <circular_buffer.hpp>
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
-#include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -25,11 +23,10 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
-
 namespace tt::tt_metal {
 class Device;
 class IDevice;
+class LaunchMessageRingBufferState;
 class MetalContext;
 class Program;
 class Semaphore;
@@ -106,10 +103,12 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size);
 
-// On WH/BH, DFBs are initialised via setup_local_cb_read_write_interfaces and require
-// local_cb_mask to be a proper slot bitmask (one bit per DFB id).  Call this after
-// finalize_dfbs so the mask is set correctly for every kernel group.
+// Write each kernel group's DFBs into its launch message's local_cb_mask. On WH/BH, DFBs are initialised via
+// setup_local_cb_read_write_interfaces and need a slot bitmask (one bit per DFB device slot); on Quasar the firmware
+// reads the DFB count. Call this after finalize_cbs and finalize_dfbs: finalize_cbs sizes the CB config region from
+// local_cb_mask, which must not count DFBs.
 void finalize_dfb_masks(
+    const MetalContext& metal_ctx,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
 
@@ -154,9 +153,8 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
         per_core_cross_node_dfbs,
     uint8_t num_program_slots);
 
-// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the
-// pipe's active credit lane count, resolved from the program's attachment at build time so a
-// relay / Attach that armed lanes after this core's participant record was added is picked up.
+// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the bound
+// pipe's credit lane count, which the participant record copied from the pipe at bind.
 std::vector<uint32_t> build_prefetcher_pipe_config_payload(
     const detail::ProgramImpl& program,
     const std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>& sparse_participants);
@@ -198,26 +196,16 @@ void update_program_dispatch_commands(
     detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
-    SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
-    ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
-    uint8_t cq_id);
+    ProgramBinaryStatus program_binary_status);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
-    SubDeviceId sub_device_id,
-    ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
-    uint8_t cq_id);
+    ProgramBinaryStatus program_binary_status);
 
 TraceNode create_trace_node(
     detail::ProgramImpl& program,
@@ -262,8 +250,8 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
@@ -272,9 +260,6 @@ void set_num_worker_sems_on_dispatch(
     uint8_t cq_id,
     uint32_t num_worker_sems,
     ttsl::Span<const uint32_t> workers_per_sub_device);
-
-void set_go_signal_noc_data_on_dispatch(
-    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
 
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
@@ -290,9 +275,7 @@ ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
 // Immutable setup batches, each bounded by the device's maximum fetch size.
 std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
-    uint8_t cq_id,
     ttsl::Span<const uint32_t> workers_per_sub_device,
-    const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     bool reset_launch_msg_state);
 

@@ -37,6 +37,8 @@
 
 namespace ckernel {
 
+// Every op (MUL, ADD, SUB) accumulates both passes into dest, so the output tiles must be zero on entry: a freshly
+// released dest section, or sdpa_bcast_col_reuse_preamble<true>, which zeroes the whole dest half / all of dest.
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     std::uint32_t num_tiles,
@@ -45,7 +47,7 @@ ALWI void sdpa_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
     UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false, false, icb0)));
     MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY, dense>(
-        icb0, icb0, false)));
+        icb0, icb0)));
 }
 
 template <bool clear_dest = false>
@@ -213,16 +215,16 @@ inline void init_fast_approx_exp_constants() {
     constexpr float A_scaled = A * scale_fp32;
     constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(THRESHOLD_scaled));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0xA, sfpu::Converter::lo16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0x8, sfpu::Converter::hi16(THRESHOLD_scaled));
     TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(A_scaled));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(A_scaled));
+    TTI_SFPLOADI(0, 0xA, sfpu::Converter::lo16(A_scaled));
+    TTI_SFPLOADI(0, 0x8, sfpu::Converter::hi16(A_scaled));
     TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(B_minus_C));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(B_minus_C));
+    TTI_SFPLOADI(0, 0xA, sfpu::Converter::lo16(B_minus_C));
+    TTI_SFPLOADI(0, 0x8, sfpu::Converter::hi16(B_minus_C));
     TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 }
 
@@ -311,11 +313,18 @@ template <
     // output_granularity = number of O·V output tiles produced per FPU->SFPU signal.
     std::uint32_t output_granularity = 1,
     bool mm_pack_init = true,
-    // separate_v=false: single-CB (MLA) layout — V is read from cb_k at stride num_tiles_k.
+    // separate_v=false: single-CB layout — V is read from cb_k at stride num_tiles_k.
     // separate_v=true:  two-CB (GQA) layout — V is read from its own cb_v at stride num_tiles_v
     //                   (V tiles contiguous in cb_v), and cb_v is waited on / popped separately.
     bool separate_v = false,
-    bool configure_mask_extent = false>
+    bool configure_mask_extent = false,
+    // Offset of V within each single-CB row; separate V buffers require zero.
+    std::uint32_t v_tile_offset = 0,
+    // QK contraction width; zero uses the full num_tiles_k row.
+    std::uint32_t qk_contract_tiles = 0,
+    // Fidelity of the running-max correction O <- O * (corr - 1) + O; the default follows MATH_FIDELITY.
+    // At LoFi, cancellation when corr is small can leave earlier chunks over-weighted.
+    std::uint32_t corr_fidelity_sel = SDPA_FIDELITY_PROGRAM_DEFAULT>
 void compute_sdpa_chunk(
     std::uint32_t cb_q,
     std::uint32_t cb_k,
@@ -332,6 +341,7 @@ void compute_sdpa_chunk(
     bool mask_chunk,
     std::uint32_t ov_kt_dim = chunk_size) {
     constexpr std::uint16_t scale_bf16 = scale_fp32 >> 16;
+    constexpr std::uint32_t qk_kt = qk_contract_tiles ? qk_contract_tiles : num_tiles_k;
     static_assert(DST_ACCUM_MODE == false, "compute_sdpa_chunk: FP32 destination accumulation mode is not supported");
     static_assert(
         num_tiles_v % output_granularity == 0,
@@ -339,34 +349,41 @@ void compute_sdpa_chunk(
     static_assert(
         chunk_size % qk_signal_granularity == 0,
         "compute_sdpa_chunk: chunk_size must be divisible by qk_signal_granularity");
-    // The custom-MM unpacks issue a single MOP of (kt_dim/2)-1 iterations and only support an even
-    // kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in the unpack LLK headers). With
-    // kt_dim < 2 the count underflows to ~4 billion and the unpacker hangs silently. Fail at compile
-    // time instead. OV matmul: kt_dim = chunk_size (Sk_chunk_t); QK matmul: kt_dim = num_tiles_k (DHt).
+    // OV matmul: kt_dim = chunk_size (Sk_chunk_t). Its reuse-dest unpack runs a MOP over K-tile pairs
+    // plus a replay tail for an odd last tile, so odd chunk sizes work. A 1-tile chunk does not: the
+    // chunk computes a wrong running max on device (SdpaChunkSizeCompileLimits pins the rejection).
     static_assert(
-        chunk_size >= 2 && chunk_size % 2 == 0,
-        "compute_sdpa_chunk: chunk_size (Sk_chunk_t = OV-matmul kt_dim) must be even and >= 2; "
-        "k_chunk_size of 32 gives Sk_chunk_t=1, which underflows the OV custom-MM unpack MOP and hangs");
+        chunk_size >= 2,
+        "compute_sdpa_chunk: chunk_size (Sk_chunk_t) must be >= 2; k_chunk_size of 32 gives Sk_chunk_t=1, "
+        "which computes a wrong running max");
+    // QK matmul: kt_dim = qk_kt. Kept even and >= 2 (pinned by SdpaChunkMergedKvCompileLimits).
     static_assert(
-        num_tiles_k >= 2 && num_tiles_k % 2 == 0,
-        "compute_sdpa_chunk: num_tiles_k (QK-matmul kt_dim) must be even and >= 2 for the custom-MM unpack");
+        qk_kt >= 2 && qk_kt % 2 == 0,
+        "compute_sdpa_chunk: QK contraction must be even and >= 2 for the custom-MM unpack");
+    static_assert(qk_kt <= num_tiles_k, "compute_sdpa_chunk: QK contraction must fit inside the K row");
+    static_assert(
+        separate_v ? v_tile_offset == 0 : v_tile_offset <= num_tiles_k && num_tiles_v <= num_tiles_k - v_tile_offset,
+        "compute_sdpa_chunk: v_tile_offset requires the single-CB layout and V must fit inside the row");
     static_assert(
         chunk_size / qk_signal_granularity + 1 <= 15,
         "compute_sdpa_chunk: QK posts (chunk_size/qk_signal_granularity)+1 must fit the 4-bit semaphore");
     static_assert(
         chunk_size / exp_signal_granularity + 1 <= 15,
         "compute_sdpa_chunk: bcast-sub posts (chunk_size/exp_signal_granularity)+1 must fit the 4-bit semaphore");
+    // On the last chunk the OV matmul posts one output group per output_granularity tiles while the
+    // bcast-mul/dummy post of this chunk may still be outstanding (PACK consumes it only after reduce-sum),
+    // so the semaphore must hold both; SEMPOST saturates at 15 and a lost post hangs the pack loop.
     static_assert(
-        num_tiles_v / output_granularity <= 15,
-        "compute_sdpa_chunk: num_tiles_v / output_granularity must be with tensix semaphore range");
+        num_tiles_v / output_granularity + 1 <= 15,
+        "compute_sdpa_chunk: output posts (num_tiles_v/output_granularity)+1 must fit the 4-bit semaphore");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k, qk_signal_granularity, configure_mask_extent>(
-        cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
+    sdpa_custom_mm_block<transpose_k, qk_signal_granularity, configure_mask_extent, num_tiles_k>(
+        cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, qk_kt, chunk_size, mask_chunk);
 
     // Reduce Max (SFPU)
     PACK((llk_math_sfpu_sdpa_reduce_max_row<
@@ -395,10 +412,24 @@ void compute_sdpa_chunk(
 #else
         constexpr bool skip_addrmod = false;
 #endif
-        sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v, skip_addrmod>(cb_q);
+        if constexpr (corr_fidelity_sel == SDPA_FIDELITY_PROGRAM_DEFAULT) {
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v, skip_addrmod>(cb_q);
+        } else {
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init_fidelity<
+                sdpa_fidelity_from_sel<corr_fidelity_sel>(),
+                num_tiles_v>(cb_q);
+        }
         MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
         sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
-        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true, 1>(mm2_dst_offset);
+        if constexpr (corr_fidelity_sel == SDPA_FIDELITY_PROGRAM_DEFAULT) {
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true, 1>(mm2_dst_offset);
+        } else {
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles_fidelity<
+                sdpa_fidelity_from_sel<corr_fidelity_sel>(),
+                num_tiles_v,
+                true,
+                1>(mm2_dst_offset);
+        }
         // FPU has consumed the tile
         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
         // Reset to 0
@@ -424,7 +455,7 @@ void compute_sdpa_chunk(
         }
     }
 
-    // MM (FPU). Single-CB (MLA): V is read from cb_k at stride num_tiles_k. Two-CB (GQA):
+    // MM (FPU). Single-CB: V starts at v_tile_offset in cb_k, at stride num_tiles_k. Two-CB (GQA):
     // V lives in its own cb_v (contiguous, stride num_tiles_v) and must be waited on
     // separately. separate_v is compile-time, so ov_cb / in1_k_stride fold to constants.
     if constexpr (separate_v) {
@@ -443,7 +474,7 @@ void compute_sdpa_chunk(
         cb_q,
         ov_cb,
         0,
-        0,
+        v_tile_offset,
         mm1_dst_offset,
         mm2_dst_offset,
         transpose_v,

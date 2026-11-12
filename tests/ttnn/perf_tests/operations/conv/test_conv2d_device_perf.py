@@ -8,7 +8,7 @@ import re
 import torch
 import ttnn
 from loguru import logger
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 from tracy.common import clear_profiler_runtime_artifacts
 from tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler

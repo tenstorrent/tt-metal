@@ -69,7 +69,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = input;
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_FATAL(
@@ -224,7 +224,7 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
         out_shape.push_back(operation_attributes.output_tensor_end[i] + 1);
     }
     Shape output_shape(std::move(out_shape));
-    DataType output_dtype = input_tensor_a.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.dtype();
+    DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor_a.dtype());
     if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded() &&
         input_tensor_a.shard_spec().has_value()) {
         uint32_t fused_height = output_shape.volume() / output_shape[-1];
@@ -279,8 +279,7 @@ UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
     const auto& input_tensor = input;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
-    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
-    uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
+    const uint32_t num_tiles = input_tensor.physical_volume() / (tile_width * tile_height);
     int compute_cycles = 0;
     const int max_tiles_per_row = 8;
     const int latency_untilize = 390;      // measured latency for untilize_block

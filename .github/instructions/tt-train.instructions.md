@@ -10,6 +10,7 @@ excludeAgent: "cloud-agent"
 
 - **Gradient accumulation correctness**: if a change touches backward pass or gradient accumulation, verify that gradients are not silently zeroed, double-counted, or accumulated with wrong scaling.
 - **Optimizer state mutation**: optimizer state tensors (momentum, variance buffers) must be updated in-place consistently. A change that allocates a new tensor instead of updating in-place will silently ignore accumulated statistics.
+- **In-place writes to a tensor's value**: code that writes an `autograd::Tensor`'s value in place (a parameter or optimizer state) must take `get_value_for_update()` and keep the view alive until the write is enqueued. Writing through a `get_value()` handle leaves the other precision's cached copy stale with no error (#41657). A new in-place write path needs a test that reads the other view after the step (see `tt-train/docs/MIXED_PRECISION.md`).
 - **Config backward compatibility**: renaming or removing fields in YAML training configs breaks downstream consumers (tt-training-service, console). Config name changes require a deprecated-alias mapping that keeps old names working during a transition period (30–60 days minimum).
 - **Training script exit codes**: training scripts and model example scripts (`examples/`, `models/`) must propagate non-zero exit codes on failure. A `main()` that catches all exceptions and exits 0 makes CI appear green on a broken training run — silent success is a footgun in automated pipelines.
 - **`ttnn.all_reduce` tensor placement**: after `ttnn.all_reduce` in multi-device training code (DDP, GRPO, RL loops), verify that the output tensor's `.placement[cluster_axis]` is set to `Replicate`. Missing this causes incorrect gradient synchronization across devices with no error message.
@@ -31,7 +32,7 @@ excludeAgent: "cloud-agent"
 
 - **Naming clarity**: kernel variables like "block", "chunk", "step" must be used consistently. If `total_blocks` actually means `active_steps * num_chunks`, rename or add a clarifying comment.
 - **Overlap opportunities**: when a kernel reads then computes sequentially, ask whether double-buffering or pipelining (read chunk N+1 while computing chunk N) is feasible.
-- **Dest reuse**: if a compute kernel packs an intermediate to a CB only to immediately unpack it for the next op, flag the opportunity to use `binary_dest_reuse_tiles` to keep the result in DST registers.
+- **Dest reuse**: if a compute kernel packs an intermediate to a CB only to immediately unpack it for the next op, flag the opportunity to use `{add,sub,mul}_reuse_dest_tiles` to keep the result in DST registers.
 - **Shared dataflow utilities**: before writing new tile-read loops, check if `read_tiles_by_row()` or similar utilities in `dataflow_utils.hpp` already cover the pattern. If the kernel has special needs (strided reads, mcast, transpose-on-read), document why the fork is necessary.
 - **Unnecessary init/uninit pairs**: flag redundant `_init` / `_uninit` calls in compute kernels. Reconfigs must match the actual CB data formats being used — wrong source/dest CB in a `reconfigure_*` call is a silent correctness bug.
 - **Scalar constants**: prefer `add_unary_tile(idst, param)` over generating an entire constant tile in a reader CB when only a scalar value is needed.

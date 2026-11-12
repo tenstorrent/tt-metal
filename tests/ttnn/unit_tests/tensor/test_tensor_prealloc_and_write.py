@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 @pytest.mark.parametrize("shape", [(1, 10, 64, 96), (32, 1, 64, 64), (32, 3, 256, 256), (16, 1, 1024, 1024)])

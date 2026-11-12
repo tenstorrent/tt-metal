@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from loguru import logger
 
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 import nbformat
 import pytest
 from nbconvert.preprocessors import ExecutePreprocessor

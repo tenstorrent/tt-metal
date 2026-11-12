@@ -16,9 +16,12 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 #include "tensor_impl.hpp"
 
@@ -49,7 +52,7 @@ HostTensor pad_bfloat8_b(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            experimental::tensor_layout_from_padded_shape(
                 DataType::FLOAT32,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -65,7 +68,7 @@ HostTensor pad_bfloat8_b(
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
     TensorSpec output_spec(
         float_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        experimental::tensor_layout_from_padded_shape(
             DataType::BFLOAT8_B,
             tensor.tensor_spec().page_config(),
             MemoryConfig{},
@@ -93,7 +96,7 @@ HostTensor unpad_bfloat8_b(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            experimental::tensor_layout_from_padded_shape(
                 DataType::FLOAT32,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -111,7 +114,7 @@ HostTensor unpad_bfloat8_b(
         std::move(output_uint32_buffer),
         TensorSpec(
             float_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            experimental::tensor_layout_from_padded_shape(
                 DataType::BFLOAT8_B,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -138,7 +141,7 @@ HostTensor pad_bfloat4_b(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            experimental::tensor_layout_from_padded_shape(
                 DataType::FLOAT32,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -154,7 +157,7 @@ HostTensor pad_bfloat4_b(
     auto output_uint32_buffer = HostBuffer(std::move(output_packed_data));
     TensorSpec output_spec(
         float_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        experimental::tensor_layout_from_padded_shape(
             DataType::BFLOAT4_B,
             tensor.tensor_spec().page_config(),
             MemoryConfig{},
@@ -181,7 +184,7 @@ HostTensor unpad_bfloat4_b(
         std::move(input_float_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            experimental::tensor_layout_from_padded_shape(
                 DataType::FLOAT32,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -199,7 +202,7 @@ HostTensor unpad_bfloat4_b(
         std::move(output_uint32_buffer),
         TensorSpec(
             float_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            experimental::tensor_layout_from_padded_shape(
                 DataType::BFLOAT4_B,
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -299,7 +302,7 @@ HostTensor pad_impl(
         std::move(transformed_buffer),
         TensorSpec(
             tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            experimental::tensor_layout_from_padded_shape(
                 tensor.dtype(),
                 PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
@@ -332,6 +335,13 @@ HostTensor pad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, 
     // would actually compile (float8_e4m3 is a 1-byte trivially-copyable type with a float
     // constructor), but leaving this as an explicit throw documents the intentional scope.
     TT_THROW("pad: FP8_E4M3 is not supported");
+}
+
+template <>
+HostTensor pad_impl<tensor_impl::mx_tiles>(
+    const HostTensor& tensor, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&, float) {
+    // pad() requires ROW_MAJOR and MX tensors are TILE-only, so this is unreachable in practice.
+    TT_THROW("pad: {} is not supported", tensor.dtype());
 }
 
 template <typename T>
@@ -412,6 +422,13 @@ template <>
 HostTensor unpad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
     // See pad_impl<float8_e4m3>: not wired up, no current op needs it.
     TT_THROW("unpad: FP8_E4M3 is not supported");
+}
+
+template <>
+HostTensor unpad_impl<tensor_impl::mx_tiles>(
+    const HostTensor& tensor, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
+    // See pad_impl<mx_tiles>: unpad() requires ROW_MAJOR and MX tensors are TILE-only.
+    TT_THROW("unpad: {} is not supported", tensor.dtype());
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE

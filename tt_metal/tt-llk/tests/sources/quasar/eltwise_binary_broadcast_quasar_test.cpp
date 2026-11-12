@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -37,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
         const auto bfd_a =
@@ -46,11 +47,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
-        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, INPUT_NUM_TILES_IN_BLOCK);
+        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, tensor_shape, INPUT_NUM_TILES_IN_BLOCK);
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -69,14 +70,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else // UNPACK_ISOLATE, L1_CONGESTION, L1_TO_L1
+        else // UNPACK_ISOLATE, L1_TO_L1
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
                     const std::uint32_t start_l1_tile_idx = block * INPUT_NUM_TILES_IN_BLOCK;
-                    _llk_unpack_binary_broadcast_operands_(start_l1_tile_idx /*start_l1_tile_idx_0*/, start_l1_tile_idx /*start_l1_tile_idx_1*/);
+                    _llk_unpack_binary_broadcast_operands_(start_l1_tile_idx /*start_l1_tile_idx_0*/, start_l1_tile_idx /*start_l1_tile_idx_1*/, tensor_shape);
                 }
             }
         }
@@ -109,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -117,17 +118,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
-        _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(tensor_shape);
+        _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(
+            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape, ACC_TO_DEST);
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             const std::uint32_t srcb_only_clears = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 0u : num_faces - 1u;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -191,10 +193,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
-        ZONE_SCOPED("INIT")
-        // PACK_ISOLATE / L1_CONGESTION: no math↔pack dest-dvalid handshake.
+        START_PERF_MEASURE("INIT")
+        // PACK_ISOLATE: no math↔pack dest-dvalid handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -210,12 +212,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)

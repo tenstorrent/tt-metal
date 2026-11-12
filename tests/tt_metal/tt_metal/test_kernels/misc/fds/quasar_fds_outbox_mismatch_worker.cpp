@@ -5,8 +5,11 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
+using fds_outbox::kFormsAlias;
+using fds_outbox::kFormsAreOneAddress;
 using fds_outbox::kMatchedGo;
 using fds_outbox::kMismatchedGo;
 using fds_outbox::kTokenArmed;
@@ -19,12 +22,16 @@ constexpr uint32_t kTimeoutMatched = 0x5A5A0061;
 
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
-    constexpr uint32_t dispatch_mask = get_named_compile_time_arg_val("dispatch_mask");
+    constexpr uint32_t dispatch_mask = overlay::fds_signalling::dispatch_lane_mask;
     constexpr uint32_t silence_iterations = get_named_compile_time_arg_val("silence_iterations");
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");
     static_assert(kTokenDelivered < kReadyTokenA, "step tokens must stay below the ready tokens");
 
     fds_kernel::status_ptr status = fds_kernel::begin_worker(l1_address, kNumSlots);
+    if constexpr (kFormsAreOneAddress) {
+        fds_kernel::finish(status, l1_address, kNumSlots, kFormsAlias);
+        return;
+    }
 
     uint32_t go_inst = 0;
     if (!fds_kernel::received_go(status, l1_address, kNumSlots, dispatch_mask, kSessionGo, poll_iterations, go_inst)) {

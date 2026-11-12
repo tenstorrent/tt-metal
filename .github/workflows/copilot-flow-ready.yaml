@@ -233,7 +233,12 @@ jobs:
                 let lastFlowLabelEvent = null;
                 for (const ev of timeline) {
                   if (typeof ev.event !== 'string') continue;
-                  if (ev.event.startsWith('copilot_work_')) lastWork = ev;
+                  // Events posted via the Copilot CODE REVIEW app are not coding-agent
+                  // sessions: its `copilot_work_started` is never matched by a finished
+                  // event, and a lone reviewer `copilot_work_finished_failure` (#57754)
+                  // must not produce a failure notice. Denylist: no app field still counts.
+                  const viaApp = (ev.performed_via_github_app?.slug || '').toLowerCase();
+                  if (ev.event.startsWith('copilot_work_') && viaApp !== 'copilot-pull-request-reviewer') lastWork = ev;
                   if (ev.event === 'ready_for_review' || ev.event === 'convert_to_draft') lastDraftChange = ev;
                   if ((ev.event === 'labeled' || ev.event === 'unlabeled') && ev.label?.name === FLOW_LABEL) lastFlowLabelEvent = ev;
                 }

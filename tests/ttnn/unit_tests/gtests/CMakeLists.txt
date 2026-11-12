@@ -100,6 +100,13 @@ add_library(unit_tests_ttnn_basic OBJECT)
 add_library(TTNN::Test::Basic ALIAS unit_tests_ttnn_basic)
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
 target_sources(unit_tests_ttnn_basic PRIVATE ${UNIT_TESTS_TTNN_BASIC_SOURCES})
+# Declares ttnn::experimental, which changes unqualified `experimental::` lookup in files sharing its unity unit.
+set_source_files_properties(
+    test_command_list.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
     unit_tests_ttnn_basic
@@ -110,12 +117,27 @@ target_link_libraries(
 )
 tt_reuse_precompile_headers(unit_tests_ttnn_basic TTNN::TestPCH)
 
+add_library(unit_tests_ttnn_kernel_lib OBJECT)
+add_library(TTNN::Test::KernelLib ALIAS unit_tests_ttnn_kernel_lib)
+TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_kernel_lib)
+target_sources(unit_tests_ttnn_kernel_lib PRIVATE ${UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES})
+target_include_directories(unit_tests_ttnn_kernel_lib PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(
+    unit_tests_ttnn_kernel_lib
+    PRIVATE
+        test_common_libs
+        test_common_utils
+        TTNN::CPP
+)
+tt_reuse_precompile_headers(unit_tests_ttnn_kernel_lib TTNN::TestPCH)
+
 add_executable(unit_tests_ttnn)
 target_link_libraries(
     unit_tests_ttnn
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
+        TTNN::Test::KernelLib
 )
 
 # unit_tests_ttnn_ccl
@@ -191,7 +213,6 @@ target_link_libraries(
     test_ccl_multi_cq_multi_device
     PRIVATE
         Boost::asio
-        Boost::lockfree
         test_common_utils
 )
 

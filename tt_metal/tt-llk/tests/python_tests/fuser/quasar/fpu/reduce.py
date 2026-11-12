@@ -11,6 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.reduce import reduce_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
+from fuser.quasar.fpu.common import fidelity_source_formats
 from helpers.llk_params import ReduceDimension, ReducePool
 
 
@@ -35,19 +36,20 @@ class ReduceFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        integer = compute_unit.src_a.data_format.is_integer()
-        if integer and not config.dest_acc.value:
+        if compute_unit.src_a.data_format.is_integer() and not config.dest_acc.value:
             raise ValueError("Quasar integer Reduce requires dest_acc: true")
-        is_int_fpu_en = str(integer).lower()
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
+        src_a_format, src_b_format = fidelity_source_formats(
+            config, operation, compute_unit
+        )
         return (
             f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
-            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}>"
-            f"({compute_unit.src_a.tile_shape.cpp_value});\n"
+            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}>"
+            f"({src_a_format}, {src_b_format}, {compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 
     def calculate(
@@ -57,11 +59,10 @@ class ReduceFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        is_int_fpu_en = str(compute_unit.src_a.data_format.is_integer()).lower()
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
         return (
-            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {is_int_fpu_en}>"
+            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}>"
             f"({block.tile_id_dest}, {compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 

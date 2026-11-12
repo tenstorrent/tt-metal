@@ -66,8 +66,8 @@ enum class EntryType : std::uint32_t
 
 constexpr std::uint32_t TRISC_ID = llk_barrier::THREAD_ID;
 
-constexpr std::uint32_t BUFFER_LENGTH  = 0x400; // 1024 entries per core
-constexpr std::uint32_t ZONE_END_WORDS = 2;     // words written per ZONE_END on scope exit
+constexpr std::uint32_t BUFFER_LENGTH = 0x400; // 1024 entries per core
+constexpr std::uint32_t ZONE_WORDS    = 4;     // words a zone writes on scope exit: its ZONE_START and ZONE_END
 // Quasar: 4 TRISCs (UNPACK, MATH, PACK, SFPU); Wormhole/Blackhole: 3 TRISCs
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t NUM_CORES   = 4;
@@ -80,16 +80,11 @@ static_assert(llk_barrier::NUM_THREADS == NUM_CORES, "llk_barrier::NUM_THREADS d
 
 constexpr std::uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH * sizeof(std::uint32_t));
 
-constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
-constexpr std::uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(std::uint32_t));
+constexpr std::uint32_t EPOCH_ADDR = BUFFERS_START - sizeof(std::uint32_t);
 
-constexpr std::uint32_t EPOCH_ADDR = BARRIER_START - sizeof(std::uint32_t);
+using buffer_ptr_t = std::uint32_t (*)[BUFFER_LENGTH];
+using epoch_ptr_t  = volatile std::uint32_t*;
 
-using barrier_ptr_t = volatile std::uint32_t (*)[NUM_CORES];
-using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
-using epoch_ptr_t   = volatile std::uint32_t*;
-
-extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
 extern epoch_ptr_t epoch_ptr;
 extern std::uint32_t write_idx;
@@ -100,20 +95,14 @@ __attribute__((always_inline)) inline void sync_threads()
     llk_barrier::rendezvous(llk_barrier::is_action_thread());
 }
 
-// Only Quasar still uses these, but BARRIER_END anchors BUFFERS_START, so reclaiming them moves every buffer.
-
 __attribute__((always_inline)) inline void reset()
 {
-    barrier_ptr          = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
     buffer               = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
     epoch_ptr            = reinterpret_cast<epoch_ptr_t>(EPOCH_ADDR);
     write_idx            = 0;
     reserved_words_count = 0;
 
     *epoch_ptr = 0;
-
-    // The Quasar rendezvous uses a relative generation, which needs a uniform start.
-    (*barrier_ptr)[TRISC_ID] = 0;
 
     memset(buffer[TRISC_ID], 0, BUFFER_LENGTH * sizeof(buffer[TRISC_ID][0]));
 }
@@ -127,9 +116,8 @@ __attribute__((always_inline)) inline bool is_buffer_full()
     return (BUFFER_LENGTH - (write_idx + reserved_words_count)) < 4;
 }
 
-__attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
+__attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16, std::uint64_t timestamp)
 {
-    std::uint64_t timestamp      = ckernel::read_wall_clock();
     std::uint32_t timestamp_high = static_cast<std::uint32_t>(timestamp >> 32);
 
     std::uint32_t type_numeric = static_cast<std::uint32_t>(type);
@@ -149,7 +137,8 @@ template <std::uint16_t id16>
 class zone_scoped
 {
 private:
-    bool is_opened = false;
+    bool is_opened                = false;
+    std::uint64_t start_timestamp = 0;
 
 public:
     zone_scoped(const zone_scoped&)            = delete;
@@ -163,8 +152,9 @@ public:
         if (!is_buffer_full())
         {
             is_opened = true;
-            write_entry(EntryType::ZONE_START, id16);
-            reserved_words_count += ZONE_END_WORDS;
+            reserved_words_count += ZONE_WORDS;
+            ckernel::fence_compiler(); // the bookkeeping stores stay before the start read
+            start_timestamp = ckernel::read_wall_clock();
         }
         ckernel::fence_compiler();
     }
@@ -174,10 +164,12 @@ public:
         ckernel::fence_compiler();
         if (is_opened)
         {
-            write_entry(EntryType::ZONE_END, id16);
-            reserved_words_count -= ZONE_END_WORDS;
+            const std::uint64_t end_timestamp = ckernel::read_wall_clock();
+            ckernel::fence_compiler(); // both records are written after the end read, so no store lands in the window
+            reserved_words_count -= ZONE_WORDS;
+            write_entry(EntryType::ZONE_START, id16, start_timestamp);
+            write_entry(EntryType::ZONE_END, id16, end_timestamp);
         }
-        ckernel::fence_compiler();
     }
 };
 
@@ -185,7 +177,7 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16)
 {
     if (!is_buffer_full())
     {
-        write_entry(EntryType::TIMESTAMP, id16);
+        write_entry(EntryType::TIMESTAMP, id16, ckernel::read_wall_clock());
     }
 }
 
@@ -193,7 +185,7 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 {
     if (!is_buffer_full())
     {
-        write_entry(EntryType::TIMESTAMP_DATA, id16);
+        write_entry(EntryType::TIMESTAMP_DATA, id16, ckernel::read_wall_clock());
         write_data(data);
     }
 }

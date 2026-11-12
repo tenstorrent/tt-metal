@@ -6,6 +6,7 @@
 #include "context/metal_context.hpp"
 #include "experimental/metal2_host_api/data_movement_hardware_config.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -13,7 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include <cstdint>
@@ -276,7 +277,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceDFBSizeOverride) {
 
     const distributed::MeshTraceId trace_id_a = capture_trace();
 
-    // No untraced run after the override: only trace capture re-serializes the DFB config.
+    // No untraced run after the override, so trace B's capture is the first to serialize the new size.
     params.dfb_run_overrides.push_back({.dfb = DFB, .entry_size = capture_b_entry_size});
     experimental::SetProgramRunArgs(prog, params);
     const distributed::MeshTraceId trace_id_b = capture_trace();

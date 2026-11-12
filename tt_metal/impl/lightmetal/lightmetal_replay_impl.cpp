@@ -459,7 +459,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDealloc
         cmd->global_id());
 
     log_debug(tt::LogMetalTrace, "LightMetalReplay(BufferDeallocate) global_id: {}", cmd->global_id());
-    DeallocateBuffer(*buffer);  // Buffer& expected.
+    buffer->impl().deallocate(*buffer);
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd) {

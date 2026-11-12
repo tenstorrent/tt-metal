@@ -4,8 +4,9 @@
 
 #include "tt_metal/impl/event/dispatch.hpp"
 
+#include <algorithm>
 #include <tt_stl/span.hpp>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <utility>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "device.hpp"
 #include "device/device_manager.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -22,13 +24,12 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -36,7 +37,9 @@ namespace tt::tt_metal::event_dispatch {
 
 namespace {
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
-    return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    const uint32_t num_workers =
+        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    return std::max<uint32_t>(num_workers, device->num_hw_cqs());
 }
 }  // namespace
 
@@ -54,8 +57,8 @@ void issue_record_event_commands(
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = event_id;
 
-    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
-    const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
+    MetalContext& metal_ctx = manager.metal_context();
+    const uint32_t l1_alignment = manager.env_impl().get_hal().get_alignment(HalMemType::L1);
     const uint32_t num_worker_counters = sub_device_ids.size();
     const uint32_t num_cqs_per_dispatch_core =
         metal_ctx.get_dispatch_query_manager().cq_dispatch_layout().num_cqs_per_core;
@@ -108,15 +111,13 @@ void issue_record_event_commands(
                 wait_flags,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index],
-                cq_id);
+                expected_num_workers_completed[offset_index]);
         } else {
             command_sequence.add_dispatch_wait(
                 wait_flags,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index],
-                cq_id);
+                expected_num_workers_completed[offset_index]);
         }
     }
 
@@ -162,7 +163,7 @@ void issue_record_event_commands(
 
 void issue_wait_for_event_commands(
     uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id) {
-    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    MetalContext& metal_ctx = sysmem_manager.metal_context();
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_wait();
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
@@ -179,7 +180,7 @@ void issue_wait_for_event_commands(
         event_cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
 
     command_sequence.add_dispatch_wait(
-        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id, cq_id);
+        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 
@@ -195,14 +196,15 @@ void read_completion_queue(
     uint16_t channel,
     uint32_t addr,
     const SystemMemoryManager& sysmem_manager) {
-    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    MetalContext& metal_ctx = sysmem_manager.metal_context();
+    auto& cluster = sysmem_manager.env_impl().get_cluster();
     if (sysmem_manager.is_dram_backed()) {
         const uint32_t dram_channel =
             metal_ctx.device_manager()->get_active_device(device_id)->allocator_impl()->get_dram_channel_from_bank_id(
                 sysmem_manager.get_dram_region_bank_id());
-        metal_ctx.get_cluster().read_dram_vec(dst, size_bytes, device_id, dram_channel, addr);
+        cluster.read_dram_vec(dst, size_bytes, device_id, dram_channel, addr);
     } else {
-        metal_ctx.get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
+        cluster.read_sysmem(dst, size_bytes, addr, device_id, channel);
     }
 }
 
@@ -215,7 +217,7 @@ void read_events_from_completion_queue(
     SystemMemoryManager& sysmem_manager) {
     // For mock devices, the sysmem_manager is a stubbed singleton
     // Mock cluster.read_sysmem returns zeros, so validate that and handle gracefully
-    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().is_mock_or_emulated()) {
+    if (sysmem_manager.env_impl().get_cluster().is_mock_or_emulated()) {
         sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
         return;
     }

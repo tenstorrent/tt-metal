@@ -139,47 +139,42 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
     try:
         yield
     finally:
-        report_path.mkdir(parents=True, exist_ok=True)
-
-        if enable_graph_report:
-            if not ttnn.graph.is_graph_capture_active():
-                logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
-            else:
-                if ttnn.distributed_context_is_initialized():
-                    rank = int(ttnn.distributed_context_get_rank())
-                    world_size = int(ttnn.distributed_context_get_size())
-                else:
-                    rank, world_size = 0, 1
-                if world_size > 1:
-                    json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
-                else:
-                    json_path = report_path / "graph_capture.json"
-                ttnn.graph.end_graph_capture_to_file(str(json_path))
-                if ttnn.distributed_context_is_initialized():
-                    ttnn.distributed_context_barrier()
-                if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
-                    import_report(report_path, report_path)
-                    (report_path / "graph_capture.json").unlink(missing_ok=True)
-                    for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
-                        p.unlink(missing_ok=True)
-                if ttnn.distributed_context_is_initialized():
-                    ttnn.distributed_context_barrier()
-
-            if enable_detailed_buffer_report:
-                ttnn.graph.disable_detailed_buffer_tracing()
-        elif enable_comparison_mode and ttnn.graph.has_comparison_records():
-            ttnn.graph.flush_comparison_records_to_db(report_path)
-
-        if ttnn.distributed_context_is_initialized():
+        # Looked up at teardown: a test that opens its own device can initialize the distributed context.
+        distributed = ttnn.distributed_context_is_initialized()
+        if distributed:
             rank = int(ttnn.distributed_context_get_rank())
             world_size = int(ttnn.distributed_context_get_size())
         else:
             rank, world_size = 0, 1
-        if world_size > 1:
-            config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
-        else:
-            config_path = report_path / "config.json"
-        ttnn.save_config_to_json_file(config_path)
+        # graph_capture.json / config.json for a single process, graph_capture_<r>_of_<N>.json and so on for each rank.
+        rank_suffix = _rank_file_suffix(rank, world_size) if world_size > 1 else ""
+        report_path.mkdir(parents=True, exist_ok=True)
+        try:
+            if enable_graph_report:
+                if not ttnn.graph.is_graph_capture_active():
+                    logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+                else:
+                    ttnn.graph.end_graph_capture_to_file(str(report_path / f"graph_capture{rank_suffix}.json"))
+                    if distributed:
+                        ttnn.distributed_context_barrier()
+                    try:
+                        if rank == 0:
+                            import_report(report_path, report_path)
+                            (report_path / "graph_capture.json").unlink(missing_ok=True)
+                            for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
+                                p.unlink(missing_ok=True)
+                    finally:
+                        # Release the other ranks even if rank 0's import raised, or they wait here forever.
+                        if distributed:
+                            ttnn.distributed_context_barrier()
+            elif enable_comparison_mode and ttnn.graph.has_comparison_records():
+                ttnn.graph.flush_comparison_records_to_db(report_path)
+        finally:
+            # Also when rank 0's import raised: tracing left on would leak into later tests, and the config is still
+            # worth having next to the captures a failed import leaves in place.
+            if enable_graph_report and enable_detailed_buffer_report:
+                ttnn.graph.disable_detailed_buffer_tracing()
+            ttnn.save_config_to_json_file(report_path / f"config{rank_suffix}.json")
 
 
 def sanitize_git_remote_url(url: str) -> str:
@@ -264,7 +259,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
 # 3.4 - storage_type on tensors; buffer_type is NULL for host tensors instead of 0 (DRAM)
-DATABASE_SCHEMA_VERSION = "3.4"
+# 3.5 - sub-device topology and operation/program execution placement: sub_device_managers, sub_devices, operation_executions, execution_sub_devices
+DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -272,6 +268,11 @@ COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
 _OPERATION_ID_STRIDE_PER_RANK_FILE = 10000
+
+# operation_executions.execution_id is operation_id * this stride + a per-operation index, so ids
+# stay unique wherever operation_id is. Bounds an operation to this many program executions, i.e.
+# this many devices in one rank's local mesh.
+_EXECUTION_ID_STRIDE_PER_OPERATION = 1024
 
 
 def _schema_version_tuple(ver: str) -> tuple[int, ...]:
@@ -309,37 +310,119 @@ def _report_rank(report, path: Path) -> int:
     return int(r)
 
 
-def _discover_report_json_files(report_path: Path) -> list[Path]:
+class _ReportFile(NamedTuple):
+    """A capture file to import. ``rank`` and ``world_size`` come from a ``graph_capture_<r>_of_<N>.json`` name
+    (``rank`` is the 0-based distributed rank, one less than ``<r>``); both are None for any other name."""
+
+    path: Path
+    rank: Optional[int] = None
+    world_size: Optional[int] = None
+
+
+def _rank_file_suffix(rank: int, world_size: int) -> str:
+    """``_<r>_of_<N>``, numbering the 0-based distributed ``rank`` from 1, as every per-rank report file name does."""
+    return f"_{rank + 1}_of_{world_size}"
+
+
+def _rank_capture_name(rank: int, world_size: int) -> str:
+    """File name the pytest fixture writes for 0-based distributed ``rank`` of ``world_size`` ranks."""
+    return f"graph_capture{_rank_file_suffix(rank, world_size)}.json"
+
+
+# Matches main capture names, in any case and with zero padding so that duplicates of one rank are caught, but not
+# their sidecars (graph_capture_1_of_2.python_io.json).
+_RANK_CAPTURE_NAME_RE = re.compile(r"^graph_capture_(\d+)_of_(\d+)\.json$", re.IGNORECASE)
+
+
+def _parse_report_file(path: Path) -> _ReportFile:
+    m = _RANK_CAPTURE_NAME_RE.match(path.name)
+    if m is None:
+        return _ReportFile(path)
+    return _ReportFile(path, int(m.group(1)) - 1, int(m.group(2)))
+
+
+def _discover_report_json_files(report_path: Path) -> list[_ReportFile]:
     """
     List graph capture JSON files to import.
 
     Prefer ``graph_capture_<rank>_of_<world>.json`` (multi-host). The loose glob
     ``graph_capture_*_of_*.json`` also matches sidecars like
-    ``graph_capture_0_of_1.python_io.json`` (a list, not a report dict), so we
-    keep only names that match the main capture file pattern.
+    ``graph_capture_1_of_2.python_io.json`` (a list, not a report dict), so we
+    keep only names that match the main capture file pattern. Those captures must
+    come from a single run and cover every rank (see ``_check_rank_captures_complete``).
 
     Otherwise all ``*.json`` except ``config.json`` and ``*.python_io.json``.
     """
     if report_path.is_file():
-        return [report_path]
-    loose = sorted(report_path.glob("graph_capture_*_of_*.json"))
-    main_captures = [p for p in loose if re.match(r"^graph_capture_\d+_of_\d+\.json$", p.name, re.IGNORECASE)]
-    if main_captures:
-
-        def _capture_sort_key(p: Path):
-            m = re.match(r"^graph_capture_(\d+)_of_(\d+)\.json$", p.name, re.IGNORECASE)
-            return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
-
-        return sorted(main_captures, key=_capture_sort_key)
+        return [_parse_report_file(report_path)]
+    rank_captures = [
+        rf for rf in map(_parse_report_file, report_path.glob("graph_capture_*_of_*.json")) if rf.rank is not None
+    ]
+    if rank_captures:
+        _check_rank_captures_complete(report_path, rank_captures)
+        return sorted(rank_captures, key=lambda rf: rf.rank)
     skip = {"config.json"}
-    return sorted(
-        p
-        for p in report_path.glob("*.json")
+    return [
+        _ReportFile(p)
+        for p in sorted(report_path.glob("*.json"))
         if p.name not in skip
         and not p.name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
         and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
         and p.name != COMPARISON_RECORDS_FALLBACK_NAME
-    )
+    ]
+
+
+# Missing ranks named in the error before it falls back to a count, so a bogus world size can't build a huge message.
+_MAX_MISSING_CAPTURES_LISTED = 8
+
+
+def _check_rank_captures_complete(report_path: Path, rank_captures: list[_ReportFile]) -> None:
+    """Raise unless the ``graph_capture_<r>_of_<N>.json`` captures hold every rank of one run exactly once.
+
+    Rank 0 merges whatever capture files it can see in its own report directory, so a rank whose file landed
+    elsewhere (a host-local report directory, or a timestamped directory name that differs between hosts)
+    would otherwise just be missing from the DB with no error. Leftover or copied files would be merged in
+    just as silently, so ranks outside the run and ranks named twice are rejected too.
+    """
+    world_sizes = sorted({rf.world_size for rf in rank_captures})
+    if len(world_sizes) > 1:
+        raise ValueError(
+            f"Graph capture files in {report_path} come from runs with different world sizes {world_sizes}; "
+            "remove the stale graph_capture_*_of_*.json files before importing"
+        )
+    world_size = world_sizes[0]
+    out_of_range = sorted(rf.path.name for rf in rank_captures if not 0 <= rf.rank < world_size)
+    if out_of_range:
+        raise ValueError(
+            f"Graph capture files in {report_path} name ranks outside 1..{world_size}: {', '.join(out_of_range)}"
+        )
+    paths_by_rank = defaultdict(list)
+    for rf in rank_captures:
+        paths_by_rank[rf.rank].append(rf.path.name)
+    repeated = [sorted(names) for _, names in sorted(paths_by_rank.items()) if len(names) > 1]
+    if repeated:
+        raise ValueError(
+            f"Graph capture files in {report_path} name the same rank more than once: "
+            + "; ".join(" and ".join(names) for names in repeated)
+        )
+    num_missing = world_size - len(paths_by_rank)
+    if num_missing:
+        missing = (rank for rank in range(world_size) if rank not in paths_by_rank)
+        missing_names = [
+            _rank_capture_name(rank, world_size) for _, rank in zip(range(_MAX_MISSING_CAPTURES_LISTED), missing)
+        ]
+        if num_missing > len(missing_names):
+            missing_names.append(f"and {num_missing - len(missing_names)} more")
+        raise ValueError(
+            f"Graph capture files for {num_missing} of {world_size} ranks are missing from {report_path}: "
+            f"{', '.join(missing_names)}. Every rank must write to the same report directory (a filesystem shared "
+            "by all hosts, and the same report_path on every rank)"
+        )
+
+
+def _unchanged_database_note(db_path: Path, db_existed: bool) -> str:
+    """Tail for an import error message: an earlier import's database is still there, and this one did not change it."""
+    return f". {db_path} was not updated" if db_existed else ""
 
 
 def _remove_stale_database_if_needed(db_path: Path) -> None:
@@ -425,6 +508,55 @@ def _tensor_row_from_params(tensor_id, params: dict, rank: int) -> _TensorRow:
         rank=rank,
         storage_type=storage_type,
     )
+
+
+# Tensors whose buffers are live during an import: (device_id, address) -> [(buffer_type, tensor_id), ...].
+_LiveTensors = dict[tuple[Optional[int], int], list[tuple[Optional[int], int]]]
+
+
+def _add_live_tensor(
+    live_tensors: _LiveTensors,
+    device_id: Optional[int],
+    address: int,
+    buffer_type: Optional[int],
+    tensor_id: int,
+) -> None:
+    """Record that ``tensor_id`` now lives at ``address`` on ``device_id``.
+
+    ``live_tensors`` maps (device_id, address) to [(buffer_type, tensor_id), ...], most recent last. DRAM and L1
+    addresses overlap, so an address can hold one live tensor per buffer type; ``buffer_type`` is None when the
+    capture didn't record it. A tensor seen at a slot another tensor still holds replaces it, as the earlier one's
+    buffer must have been freed without the capture seeing it.
+    """
+    entries = live_tensors.setdefault((device_id, address), [])
+    entries[:] = [entry for entry in entries if entry[0] != buffer_type]
+    entries.append((buffer_type, tensor_id))
+
+
+def _take_live_tensor(
+    live_tensors: _LiveTensors, device_id: Optional[int], address: int, buffer_type: Optional[int]
+) -> Optional[int]:
+    """Return the tensor whose buffer at ``address`` on ``device_id`` is being freed, and forget it, or None.
+
+    Each owning buffer records one deallocation, so once freed the tensor can't own a later buffer at that address,
+    such as a scratch buffer that no tensor names. Prefers a tensor of the freed buffer's type, then one whose type
+    wasn't recorded; a deallocation with no buffer type takes the most recent tensor at the address.
+    """
+    entries = live_tensors.get((device_id, address))
+    if not entries:
+        return None
+    if buffer_type is None:
+        index = len(entries) - 1
+    else:
+        index = next((i for i, entry in enumerate(entries) if entry[0] == buffer_type), None)
+        if index is None:
+            index = next((i for i, entry in enumerate(entries) if entry[0] is None), None)
+        if index is None:
+            return None
+    tensor_id = entries.pop(index)[1]
+    if not entries:
+        del live_tensors[(device_id, address)]
+    return tensor_id
 
 
 def _tid_int(tid):
@@ -695,6 +827,59 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             name text,
             value text,
             rank int NOT NULL DEFAULT 0
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sub_device_managers (
+            device_id int,
+            sub_device_manager_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, sub_device_manager_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sub_devices (
+            device_id int,
+            sub_device_manager_id int,
+            sub_device_id int,
+            worker_core_ranges text,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, sub_device_manager_id, sub_device_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS operation_executions (
+            execution_id int,
+            operation_id int,
+            device_id int,
+            physical_device_id int,
+            runtime_id int,
+            global_call_count int,
+            command_queue_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(execution_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_sub_devices (
+            execution_id int,
+            device_id int,
+            sub_device_manager_id int,
+            sub_device_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(execution_id, device_id, sub_device_manager_id, sub_device_id, rank)
         )
     """
     )
@@ -1190,6 +1375,10 @@ def import_graph(
     stack_traces_batch = []
     operations_batch = []
     operation_arguments_batch = []
+    sub_device_managers_batch = []
+    sub_devices_batch = []
+    operation_executions_batch = []
+    execution_sub_devices_batch = []
     input_tensors_batch = []
     output_tensors_batch = []
     tensors_batch = []
@@ -1227,6 +1416,9 @@ def import_graph(
     operation_counter = 1
     tensor_ids_seen = set()
     active_buffers = []
+    # Tensors whose buffers are live, so a buffer_deallocate is credited to the tensor living at the freed address,
+    # not to whichever one first used it. See _take_live_tensor.
+    live_tensors: _LiveTensors = {}
     current_op_nodes = []
     op_nesting_depth = 0
     # Counts only non-filtered, non-nested ops so filtered wrappers are transparent
@@ -1412,6 +1604,69 @@ def import_graph(
             operation_id = base_operation_id + operation_counter
             operations_batch.append((operation_id, name, duration_s, rank))
 
+            execution_index = 0
+            for execution_node in current_op_nodes:
+                execution_node_type = execution_node.get("node_type")
+
+                # Sub-device topology is snapshotted per manager by the producer, so it covers
+                # sub-devices that never ran an operation. Deriving it from executions would not.
+                if execution_node_type == "sub_device_manager":
+                    manager_params = execution_node.get("params") or {}
+                    device_id = int(manager_params["device_id"])
+                    manager_id = int(manager_params["sub_device_manager_id"])
+                    sub_device_managers_batch.append((device_id, manager_id, rank))
+                    for sub_device in json.loads(manager_params.get("sub_devices") or "[]"):
+                        sub_devices_batch.append(
+                            (
+                                device_id,
+                                manager_id,
+                                int(sub_device["sub_device_id"]),
+                                json.dumps(sub_device.get("worker_core_ranges", [])),
+                                rank,
+                            )
+                        )
+                    continue
+
+                if execution_node_type != "program_execution":
+                    continue
+                execution_params = execution_node.get("params") or {}
+                # Derive the id from operation_id, which is already unique across ranks and merged
+                # files. Deriving it from the graph node counter instead would collide across files,
+                # because node counters routinely exceed _OPERATION_ID_STRIDE_PER_RANK_FILE.
+                if execution_index >= _EXECUTION_ID_STRIDE_PER_OPERATION:
+                    logger.warning(
+                        f"operation_id={operation_id} has more than {_EXECUTION_ID_STRIDE_PER_OPERATION} "
+                        f"program executions; dropping the remainder to keep execution_id unique"
+                    )
+                    break
+                execution_id = operation_id * _EXECUTION_ID_STRIDE_PER_OPERATION + execution_index
+                execution_index += 1
+                device_id = int(execution_params["device_id"])
+                physical_device_id = int(execution_params.get("physical_device_id", device_id))
+                manager_id = int(execution_params["sub_device_manager_id"])
+                # Absent when capture could not place the program on a sub-device. The execution
+                # still gets its operation_executions row -- which chip ran the operation is worth
+                # reporting on its own -- and only the execution_sub_devices link is omitted, so
+                # an unplaced execution reads as unknown rather than as sub-device 0.
+                raw_sub_device_id = execution_params.get("sub_device_id")
+
+                operation_executions_batch.append(
+                    (
+                        execution_id,
+                        operation_id,
+                        device_id,
+                        physical_device_id,
+                        int(execution_params["runtime_id"]),
+                        int(execution_params["global_call_count"]),
+                        int(execution_params["command_queue_id"]),
+                        rank,
+                    )
+                )
+                if raw_sub_device_id is not None:
+                    execution_sub_devices_batch.append(
+                        (execution_id, device_id, manager_id, int(raw_sub_device_id), rank)
+                    )
+
             if start_node:
                 graph_counter_to_op_id[start_node["counter"]] = operation_id
 
@@ -1588,7 +1843,16 @@ def import_graph(
             tensor_id = params.get("tensor_id", "")
             if tensor_id and tensor_id not in tensor_ids_seen:
                 tensor_ids_seen.add(tensor_id)
-                tensors_batch.append(_tensor_row_from_params(tensor_id, params, rank))
+                tensor_row = _tensor_row_from_params(tensor_id, params, rank)
+                tensors_batch.append(tensor_row)
+                if tensor_row.address is not None:
+                    _add_live_tensor(
+                        live_tensors,
+                        tensor_row.device_id,
+                        tensor_row.address,
+                        tensor_row.buffer_type,
+                        _tid_int(tensor_id),
+                    )
 
                 device_tensors_str = params.get("device_tensors")
                 if device_tensors_str:
@@ -1626,23 +1890,35 @@ def import_graph(
         elif node_type == "buffer_deallocate":
             # Resolve address: prefer direct param, fall back to connected buffer_allocate
             dealloc_address = None
+            dealloc_params = params
             if "address" in params:
                 dealloc_address = int(params["address"])
             else:
                 for conn_id in node.get("connections", []):
                     if conn_id < len(graph) and graph[conn_id].get("node_type") == "buffer_allocate":
-                        dealloc_address = int(graph[conn_id].get("params", {}).get("address", 0))
+                        dealloc_params = graph[conn_id].get("params", {})
+                        dealloc_address = int(dealloc_params.get("address", 0))
                         break
-            if dealloc_address is not None:
-                active_buffers = [b for b in active_buffers if b[1] != dealloc_address]
+            dealloc_device_id = _int_param(dealloc_params, "device_id")
+            dealloc_buffer_type = _int_param(dealloc_params, "buffer_type")
 
-            # Find the tensor that owns the deallocated address
             dealloc_tensor_id = None
             if dealloc_address is not None:
-                for t in tensors_batch:
-                    if t.address == dealloc_address:
-                        dealloc_tensor_id = _tid_int(t.tensor_id)
-                        break
+                # Only the freed buffer: not a buffer of another type, or on another device, at the same address. A
+                # free that doesn't say which device or type matches any.
+                active_buffers = [
+                    b
+                    for b in active_buffers
+                    if not (
+                        b[1] == dealloc_address
+                        and dealloc_device_id in (None, b[0])
+                        and dealloc_buffer_type in (None, b[3])
+                    )
+                ]
+                # The tensor that owns the deallocated address
+                dealloc_tensor_id = _take_live_tensor(
+                    live_tensors, dealloc_device_id, dealloc_address, dealloc_buffer_type
+                )
 
             if not function_stack:
                 # Synthesize a deallocate operation if not inside a function_start/end pair
@@ -1897,6 +2173,26 @@ def import_graph(
         cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?, ?)""", stack_traces_rows)
     if operations_batch:
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?, ?)""", operations_batch)
+    if sub_device_managers_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO sub_device_managers VALUES (?, ?, ?)""",
+            sub_device_managers_batch,
+        )
+    if sub_devices_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO sub_devices VALUES (?, ?, ?, ?, ?)""",
+            sub_devices_batch,
+        )
+    if operation_executions_batch:
+        cursor.executemany(
+            """INSERT OR REPLACE INTO operation_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            operation_executions_batch,
+        )
+    if execution_sub_devices_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO execution_sub_devices VALUES (?, ?, ?, ?, ?)""",
+            execution_sub_devices_batch,
+        )
     if operation_arguments_batch:
         cursor.executemany("""INSERT INTO operation_arguments VALUES (?, ?, ?, ?)""", operation_arguments_batch)
     if input_tensors_batch:
@@ -1968,6 +2264,9 @@ def import_graph(
 
     return {
         "operations": len(operations_batch),
+        "operation_executions": len(operation_executions_batch),
+        "sub_device_managers": len(set(sub_device_managers_batch)),
+        "sub_devices": len(set(sub_devices_batch)),
         "tensors": len(tensors_batch),
         "device_tensors": len(device_tensors_batch),
         "buffers": len(buffers_batch),
@@ -2120,13 +2419,29 @@ def import_report(
 
     Returns:
         Path to created database
+
+    Raises:
+        ValueError: If the ``graph_capture_<r>_of_<N>.json`` captures in a directory don't hold every rank of one
+            run exactly once (a rank missing, ranks from runs of different sizes, a rank outside 1..N, or a rank
+            named twice), if a capture's metadata rank or world size disagrees with its file name, or if one of
+            those captures has an unsupported version. No database is created, and one with the current schema that
+            was already in ``output_dir`` is left as it was. When the error comes after the import has started, files
+            written beside the database for the captures already read (``*.tensor_lifetime.json``, the cluster
+            descriptor and mesh mapping YAMLs, SVGs) are kept.
     """
     report_path = Path(report_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / db_name
 
+    # Before touching any existing DB, so a bad set of captures leaves the output directory as it was.
+    try:
+        report_files = _discover_report_json_files(report_path)
+    except ValueError as e:
+        raise ValueError(f"{e}{_unchanged_database_note(db_path, db_path.exists())}") from e
+
     _remove_stale_database_if_needed(db_path)
+    db_existed = db_path.exists()
 
     # Create graphs directory if generating SVGs
     graphs_dir = None
@@ -2136,6 +2451,7 @@ def import_report(
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    imported = False
 
     try:
         _prev_trace = sys.gettrace()
@@ -2145,8 +2461,6 @@ def import_report(
 
         create_database_schema(cursor)
         save_database_schema_version(cursor)
-
-        report_files = _discover_report_json_files(report_path)
 
         total_stats = {
             "files": 0,
@@ -2170,7 +2484,8 @@ def import_report(
         # shifts ids by _OPERATION_ID_STRIDE_PER_RANK_FILE so they stay unique in the merged DB.
         import_index_by_rank: dict[int, int] = {}
 
-        for idx, rpath in enumerate(sorted(report_files)):
+        # Keep the discovery order: a plain sort would put graph_capture_10_of_16 before graph_capture_2_of_16.
+        for idx, (rpath, file_rank, file_world_size) in enumerate(report_files):
             stats = {}
             with open(rpath, "r") as f:
                 report = json.load(f)
@@ -2184,6 +2499,12 @@ def import_report(
 
             version = report.get("version", 0)
             if version != SUPPORTED_REPORT_VERSION:
+                if file_rank is not None:
+                    # Skipping it would leave that rank out of a merge that _check_rank_captures_complete passed.
+                    raise ValueError(
+                        f"{rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}"
+                        + _unchanged_database_note(db_path, db_existed)
+                    )
                 logger.warning(f"{rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}")
                 continue
 
@@ -2192,6 +2513,12 @@ def import_report(
             import_index_by_rank[rank] = file_index_for_rank + 1
 
             report_world_size = int((report.get("metadata") or {}).get("world_size", 1))
+            if file_rank is not None and (rank, report_world_size) != (file_rank, file_world_size):
+                raise ValueError(
+                    f"{rpath} holds the capture of {_rank_capture_name(rank, report_world_size)} according to its "
+                    f"metadata (rank {rank} of world size {report_world_size})"
+                    + _unchanged_database_note(db_path, db_existed)
+                )
 
             devices_data = report.get("devices", [])
             # Normalize device IDs to 0-based sequential indices so the visualizer
@@ -2290,7 +2617,7 @@ def import_report(
 
             # Save cluster descriptor YAML if present
             if "cluster_descriptor" in report and report["cluster_descriptor"]:
-                cd_suffix = f"_{rank + 1}_of_{report_world_size}" if report_world_size > 1 else ""
+                cd_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
                 cluster_path = output_dir / f"cluster_descriptor{cd_suffix}.yaml"
                 if not cluster_path.exists():  # Only write once
                     with open(cluster_path, "w") as f:
@@ -2299,10 +2626,8 @@ def import_report(
 
             # Save mesh coordinate mapping if present (matches old save_mesh_descriptor behavior)
             if "mesh_coordinate_mapping" in report and report["mesh_coordinate_mapping"]:
-                if report_world_size > 1:
-                    mesh_name = f"physical_chip_mesh_coordinate_mapping_{rank + 1}_of_{report_world_size}.yaml"
-                else:
-                    mesh_name = "physical_chip_mesh_coordinate_mapping.yaml"
+                mesh_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
+                mesh_name = f"physical_chip_mesh_coordinate_mapping{mesh_suffix}.yaml"
                 mesh_path = output_dir / mesh_name
                 if not mesh_path.exists():  # Only write once
                     with open(mesh_path, "w") as f:
@@ -2467,11 +2792,17 @@ def import_report(
         if generate_svgs:
             summary.append(f"  - {total_stats['svgs']} SVG visualizations in {graphs_dir}/")
         logger.info("\n".join(summary))
+        imported = True
 
     finally:
         sys.settrace(_prev_trace)
         sys.setprofile(_prev_profile)
         conn.close()
+        # A failed import commits no rows (sqlite3 commits the CREATE TABLE IF NOT EXISTS statements at once, but the
+        # rows wait for the commit), so a DB with the current schema is left as it was; one this call created holds
+        # only the schema and would pass for a report, so remove it.
+        if not imported and not db_existed:
+            db_path.unlink(missing_ok=True)
 
     return db_path
 
@@ -2488,7 +2819,8 @@ Examples:
     # Import single report
     python -m ttnn.graph_report report.json ./visualizer_db/
 
-    # Merge all graph_capture_*_of_*.json under a directory (multi-host)
+    # Merge all graph_capture_*_of_*.json under a directory (multi-host).
+    # Fails if any rank's capture is missing, or the captures come from different runs.
     python -m ttnn.graph_report ./reports/ ./visualizer_db/
 
     # Import with SVG visualization generation

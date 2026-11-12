@@ -254,13 +254,21 @@ class CCLManager:
             for _ in range(2):
                 # Device-native, uninitialized allocation: the all-gather fully
                 # overwrites this buffer, so no zero-init is needed.
-                output_buffer = ttnn.allocate_tensor_on_device(
-                    ttnn.Shape(output_buffer_shape),
-                    dtype,
-                    ttnn.TILE_LAYOUT,
-                    self.mesh_device,
-                    ttnn.DRAM_MEMORY_CONFIG,
-                )
+                try:
+                    output_buffer = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(output_buffer_shape),
+                        dtype,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh_device,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                except RuntimeError:
+                    # The caller's live tensors are still on device here, so this is the exact
+                    # picture at the failure (no-op unless MINIMAX_H3_DRAM_PROBE=1).
+                    from ..utils import dram_probe
+
+                    dram_probe.report(f"OOM allocating ag ping-pong {cache_key} ({len(buffers)} of 2 done)")
+                    raise
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
@@ -882,7 +890,9 @@ class CCLManager:
         mesh_axis: int | None,
         use_hyperparams: bool,
         use_persistent_buffer: bool = False,
+        num_workers_per_link: int | None = None,
     ) -> ttnn.Tensor:
+        """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count)."""
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -897,6 +907,8 @@ class CCLManager:
             dim += 4 - rank
 
         params = self.get_ag_hyperparams(tensor.shape) if use_hyperparams else {}
+        if num_workers_per_link is not None:
+            params["num_workers_per_link"] = num_workers_per_link
 
         tensor = ttnn.experimental.all_gather_async(
             tensor,

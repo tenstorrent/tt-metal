@@ -4,56 +4,27 @@
 
 #include "polynorm_bw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::polynorm3_bw::device {
 
 void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
     const PolyNorm3BWAttributes&, const PolyNorm3BWTensorArgs& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "PolyNormBackward operation requires {} to be on Device. Input storage type: {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(
-            tensor.buffer() != nullptr,
-            "Operands to PolyNormBackward need to be allocated in buffers on the device. Buffer is null. Tensor name "
-            "{}",
-            name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "PolyNormBackward operation requires tensor to be in Tile layout. {} tensor layout: {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "PolyNormBackward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "PolyNormBackward operation requires Interleaved memory layout. {} memory layout: `{}`",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
-    check_tensor(tensor_args.input, "Input");
-    check_tensor(tensor_args.dL_dout, "dL_dout");
-    check_tensor(tensor_args.weight, "Weight");
+    check_device_tensor(tensor_args.input, "PolyNormBackward", "Input");
+    check_device_tensor(tensor_args.dL_dout, "PolyNormBackward", "dL_dout");
+    check_device_tensor(tensor_args.weight, "PolyNormBackward", "Weight");
 
     const auto input_shape = tensor_args.input.logical_shape().to_array_4D();
     const auto expected_packed_partials_shape = ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], 128U});
 
     if (tensor_args.preallocated_dL_dx.has_value()) {
         const auto& preallocated_dL_dx = tensor_args.preallocated_dL_dx.value();
-        check_tensor(preallocated_dL_dx, "Preallocated dL_dx");
-        TT_FATAL(
-            preallocated_dL_dx.buffer()->buffer_type() == ttnn::BufferType::DRAM,
-            "Preallocated dL_dx buffer must be in DRAM. Buffer type: {}",
-            enchantum::to_string(preallocated_dL_dx.buffer()->buffer_type()));
+        check_device_tensor(
+            preallocated_dL_dx,
+            "PolyNormBackward",
+            "Preallocated dL_dx",
+            {.buffer_type = tt::tt_metal::BufferType::DRAM});
         TT_FATAL(
             preallocated_dL_dx.logical_shape() == tensor_args.input.logical_shape(),
             "Preallocated dL_dx logical shape {} does not match expected shape {}",
@@ -67,27 +38,11 @@ void PolyNorm3BackwardDeviceOperation::validate_on_program_cache_miss(
     }
     if (tensor_args.preallocated_packed_partials.has_value()) {
         const auto& packed_partials = tensor_args.preallocated_packed_partials.value();
-        TT_FATAL(
-            packed_partials.storage_type() == ttnn::StorageType::DEVICE,
-            "Preallocated packed partials must be on Device. Storage type: {}",
-            enchantum::to_string(packed_partials.storage_type()));
-        TT_FATAL(
-            packed_partials.buffer() != nullptr,
-            "Preallocated packed partials must be allocated in device buffers. Buffer is null.");
-        TT_FATAL(
-            packed_partials.layout() == tt::tt_metal::Layout::TILE,
-            "Preallocated packed partials must be tile layout.");
-        TT_FATAL(
-            packed_partials.dtype() == tt::tt_metal::DataType::FLOAT32,
-            "Preallocated packed partials must be FLOAT32.");
-        TT_FATAL(
-            packed_partials.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "Preallocated packed partials must use Interleaved memory layout. Memory layout: `{}`",
-            enchantum::to_string(packed_partials.memory_config().memory_layout()));
-        TT_FATAL(
-            packed_partials.buffer()->buffer_type() == ttnn::BufferType::DRAM,
-            "Preallocated packed partials buffer must be in DRAM. Buffer type: {}",
-            enchantum::to_string(packed_partials.buffer()->buffer_type()));
+        check_device_tensor(
+            packed_partials,
+            "PolyNormBackward",
+            "Preallocated packed partials",
+            {.dtypes = {tt::tt_metal::DataType::FLOAT32}, .buffer_type = tt::tt_metal::BufferType::DRAM});
         TT_FATAL(
             packed_partials.logical_shape() == expected_packed_partials_shape,
             "Preallocated packed partials logical shape {} does not match expected shape {}",

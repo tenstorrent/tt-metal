@@ -276,18 +276,27 @@ TEST(SlidingWindowWorkPlan, WorkItemsWalkTheRangesInOrder) {
 // groups written, Q chunk at local tile 0 on device 0. Two slabs: group 3 lands in slab 1, group 4
 // in slab 0; absolute origins are unaffected by the wrap.
 TEST(SlidingWindowWorkPlan, PinnedDevice0Geometry) {
-    constexpr auto circular = build_sliding_q_work_plan(0, 4, 0, 8, 4, 128, 32, 16, 4, 160, 2);
+    // Oldest first (the K-split order): the predecessor's halo tail, then the local slab.
+    constexpr auto circular = build_sliding_q_work_plan(0, 4, 0, 8, 4, 128, 32, 16, 4, 160, 2, nullptr, false);
     static_assert(circular.source_range_count == 2);
     EXPECT_EQ(circular.source_ranges[0].source_ring_id, 3u);
     EXPECT_EQ(circular.source_ranges[0].first_k_chunk, 3u);
     EXPECT_EQ(circular.source_ranges[1].first_k_chunk, 0u);
     EXPECT_EQ(circular.source_ranges[0].first_global_k_chunk, 31u);
     EXPECT_EQ(circular.source_ranges[1].first_global_k_chunk, 32u);
-    constexpr auto unbounded = build_sliding_q_work_plan(0, 4, 0, 8, 4, 128, 32, 40, 4, 160, 0);
+    constexpr auto unbounded = build_sliding_q_work_plan(0, 4, 0, 8, 4, 128, 32, 40, 4, 160, 0, nullptr, false);
     EXPECT_EQ(unbounded.source_ranges[0].first_k_chunk, 7u);
     EXPECT_EQ(unbounded.source_ranges[1].first_k_chunk, 8u);
     EXPECT_EQ(unbounded.source_ranges[0].first_global_k_chunk, 31u);
     EXPECT_EQ(unbounded.source_ranges[1].first_global_k_chunk, 32u);
+    // Local first (the default): the same ranges with the local slab moved to the front, so the reader can start on
+    // it before the halo lands.
+    constexpr auto local_first = build_sliding_q_work_plan(0, 4, 0, 8, 4, 128, 32, 16, 4, 160, 2);
+    static_assert(local_first.source_range_count == 2);
+    EXPECT_EQ(local_first.source_ranges[0].source_ring_id, 0u);
+    EXPECT_EQ(local_first.source_ranges[0].first_global_k_chunk, 32u);
+    EXPECT_EQ(local_first.source_ranges[1].source_ring_id, 3u);
+    EXPECT_EQ(local_first.source_ranges[1].first_global_k_chunk, 31u);
 }
 
 TEST(SlidingWindowWorkPlan, RotatedQueriesCoverExactlyTheirCausalWindows) {

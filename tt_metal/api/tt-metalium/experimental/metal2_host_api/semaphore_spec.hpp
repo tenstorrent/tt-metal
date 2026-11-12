@@ -4,10 +4,7 @@
 
 #pragma once
 
-#include <cstdint>
 #include <string>
-#include <variant>
-#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
@@ -22,15 +19,16 @@ namespace tt::tt_metal::experimental {
 // A SemaphoreSpec is a descriptor for a Tenstorrent semaphore,
 // which can be used for inter-kernel instance synchronization.
 //
-// INSTANCING: One SRAM ("L1") cell per node in the set of target_nodes.
+// INSTANCING: One semaphore cell per node in the set of target_nodes.
+//             (May be backed by a hardware semaphore register or reserved SRAM.)
 //
 // PLACEMENT: Specified directly via target_nodes. Unlike DFBs, semaphores are
 //   remote resources for kernels. Placement cannot be inferred from kernel
 //   bindings.
 //
-// BINDING SCOPE: Any kernel can bind to any semaphore in the ProgramSpec,
-//   regardless of location. Any kernel instance can signal or wait on any
-//   semaphore instance.
+// BINDING SCOPE: Any DM kernel can bind to any semaphore in the ProgramSpec,
+//   regardless of location; any kernel instance can signal any semaphore
+//   instance.
 //
 // ============================================================================
 

@@ -13,7 +13,7 @@ from tracy.process_model_log import (
     get_latest_ops_log_filename,
     get_profiler_folder,
 )
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 from tracy.compare_ops_logs import compare_ops_logs
 from tracy.common import (
     generate_logs_folder,
@@ -327,6 +327,22 @@ class TestCppPostProc:
         compare_ops_logs(python_ops_perf_report=python_ops_perf_report, cpp_ops_perf_report=cpp_ops_perf_report)
 
 
+repeated_op_test = {
+    "name": "RepeatedOp",
+    "command": "pytest tests/ttnn/tracy/test_various_ops_profile.py::test_repeated_op_profile",
+}
+
+
+@pytest.mark.parametrize("run_test", [pytest.param(repeated_op_test, id=repeated_op_test["name"])], indirect=True)
+class TestRepeatedOpProfile:
+    def test_program_cache_hit_reported_per_call(self, run_test_do_post_proc):
+        res, _request = run_test_do_post_proc
+        op_rows = res[res["OP TYPE"] != "signpost"]
+        add_rows = op_rows[op_rows["OP CODE"].astype(str).str.lower().str.contains("binary")]
+        cache_hits = [str(value).strip().lower() in ("true", "1") for value in add_rows["PROGRAM CACHE HIT"]]
+        assert cache_hits == [False, True, True], f"Unexpected PROGRAM CACHE HIT values: {cache_hits}"
+
+
 matmul_test_perf_counters = {
     "name": "Matmul_perf_counters",
     "command": "pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul[tile_count=1375-side=width]",
@@ -348,47 +364,38 @@ class TestPerfCountersSingleOp:
             "SFPU Util Min (%)": 0.0,
             "SFPU Util Median (%)": 0.0,
             "SFPU Util Max (%)": 0.0,
+            "SFPU Util Avg (%)": 0.0,
             "Avg SFPU util on full grid (%)": 0.0,
             "FPU Util Min (%)": 0.0,
             "FPU Util Median (%)": 0.0,
             "FPU Util Max (%)": 0.0,
+            "FPU Util Avg (%)": 0.0,
             "Avg FPU util on full grid (%)": 0.0,
             "MATH Util Min (%)": 0.0,
             "MATH Util Median (%)": 0.0,
             "MATH Util Max (%)": 0.0,
+            "MATH Util Avg (%)": 0.0,
             "Avg Math util on full grid (%)": 0.0,
-            "Unpacker0 Write Efficiency Min (%)": 0.0,
-            "Unpacker0 Write Efficiency Median (%)": 0.0,
-            "Unpacker0 Write Efficiency Max (%)": 0.0,
-            "Unpacker0 Write Efficiency Avg (%)": 0.0,
-            "Unpacker1 Write Efficiency Min (%)": 0.0,
-            "Unpacker1 Write Efficiency Median (%)": 0.0,
-            "Unpacker1 Write Efficiency Max (%)": 0.0,
-            "Unpacker1 Write Efficiency Avg (%)": 0.0,
-            "Unpacker Write Efficiency Min (%)": 0.0,
-            "Unpacker Write Efficiency Median (%)": 0.0,
-            "Unpacker Write Efficiency Max (%)": 0.0,
-            "Unpacker Write Efficiency Avg (%)": 0.0,
             "Packer Efficiency Min (%)": 0.0,
             "Packer Efficiency Median (%)": 0.0,
             "Packer Efficiency Max (%)": 0.0,
             "Packer Efficiency Avg (%)": 0.0,
-            "FPU Execution Efficiency Min (%)": 0.0,
-            "FPU Execution Efficiency Median (%)": 0.0,
-            "FPU Execution Efficiency Max (%)": 0.0,
-            "FPU Execution Efficiency Avg (%)": 0.0,
+            "FPU Execution Efficiency Min (ratio)": 0.0,
+            "FPU Execution Efficiency Median (ratio)": 0.0,
+            "FPU Execution Efficiency Max (ratio)": 0.0,
+            "FPU Execution Efficiency Avg (ratio)": 0.0,
             "Math Pipeline Utilization Min (%)": 0.0,
             "Math Pipeline Utilization Median (%)": 0.0,
             "Math Pipeline Utilization Max (%)": 0.0,
             "Math Pipeline Utilization Avg (%)": 0.0,
-            "Math-to-Pack Handoff Efficiency Min (%)": 0.0,
-            "Math-to-Pack Handoff Efficiency Median (%)": 0.0,
-            "Math-to-Pack Handoff Efficiency Max (%)": 0.0,
-            "Math-to-Pack Handoff Efficiency Avg (%)": 0.0,
-            "Unpacker-to-Math Data Flow Min (%)": 0.0,
-            "Unpacker-to-Math Data Flow Median (%)": 0.0,
-            "Unpacker-to-Math Data Flow Max (%)": 0.0,
-            "Unpacker-to-Math Data Flow Avg (%)": 0.0,
+            "Math-to-Pack Handoff Efficiency Min (ratio)": 0.0,
+            "Math-to-Pack Handoff Efficiency Median (ratio)": 0.0,
+            "Math-to-Pack Handoff Efficiency Max (ratio)": 0.0,
+            "Math-to-Pack Handoff Efficiency Avg (ratio)": 0.0,
+            "Unpacker-to-Math Data Flow Min (ratio)": 0.0,
+            "Unpacker-to-Math Data Flow Median (ratio)": 0.0,
+            "Unpacker-to-Math Data Flow Max (ratio)": 0.0,
+            "Unpacker-to-Math Data Flow Avg (ratio)": 0.0,
             # INSTRN_THREAD thread stall rates
             "Thread 0 Stall Rate Min (%)": 0.0,
             "Thread 0 Stall Rate Avg (%)": 0.0,

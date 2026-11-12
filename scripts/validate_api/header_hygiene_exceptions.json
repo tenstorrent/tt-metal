@@ -1,17 +1,10 @@
 [
   {
-    "source": "tt-metalium/distributed.hpp",
-    "include": "tt-metalium/experimental/sockets/mesh_socket.hpp",
-    "owner": "@tenstorrent/metalium-api-owners",
-    "reason": "Existing socket exposure in the stable distributed umbrella header.",
-    "remove_when": "Consumers include the experimental socket header explicitly and distributed.hpp drops this include."
-  },
-  {
     "source": "tt-metalium/mesh_device_view.hpp",
-    "include": "tt-metalium/experimental/fabric/routing_table_generator.hpp",
+    "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
-    "reason": "Existing stable mesh view dependency on experimental fabric routing types.",
-    "remove_when": "The stable mesh view interface no longer requires the experimental routing header."
+    "reason": "Existing stable mesh view dependency on experimental fabric types (FabricNodeId, MeshId).",
+    "remove_when": "The stable mesh view interface no longer requires the experimental fabric types header."
   },
   {
     "source": "tt-metalium/program_descriptors.hpp",
@@ -29,10 +22,10 @@
   },
   {
     "source": "tt-metalium/system_mesh.hpp",
-    "include": "tt-metalium/experimental/fabric/routing_table_generator.hpp",
+    "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
-    "reason": "Existing stable system mesh dependency on experimental fabric routing types.",
-    "remove_when": "The stable system mesh interface no longer requires the experimental routing header."
+    "reason": "Existing stable system mesh dependency on experimental fabric types (FabricNodeId).",
+    "remove_when": "The stable system mesh interface no longer requires the experimental fabric types header."
   },
   {
     "source": "tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp",

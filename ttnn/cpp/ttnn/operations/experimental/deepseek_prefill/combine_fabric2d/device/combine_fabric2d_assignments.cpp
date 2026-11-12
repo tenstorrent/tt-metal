@@ -8,6 +8,8 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
+
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 namespace {
@@ -91,12 +93,46 @@ std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t 
 
 }  // namespace
 
-std::vector<cmbf2d::ChunkDescriptor> forwarding_chunks(
+std::vector<std::pair<int32_t, int32_t>> forwarding_classes(uint32_t dg_size) {
+    return chunks_in_forwarder_ref_frame(dg_size);
+}
+
+uint32_t vc_after_hop(uint32_t vc, uint32_t dg_size) {
+    const auto classes = forwarding_classes(dg_size);
+    const auto [src, dst] = classes[vc];
+    if (dst == 1) {
+        return ::cmbf2d::VC_NONE;  // delivered on the next chip, not queued there
+    }
+    // One hop on: the origin is one further behind and the destination one nearer.
+    for (uint32_t v = 0; v < classes.size(); v++) {
+        if (classes[v].first == src - 1 && classes[v].second == dst - 1) {
+            return v;
+        }
+    }
+    TT_FATAL(false, "combine_fabric2d: class ({},{}) has no successor channel", src, dst);
+    return ::cmbf2d::VC_NONE;
+}
+
+uint32_t vc_for_own(uint32_t distance, uint32_t dg_size) {
+    if (distance <= 1) {
+        return ::cmbf2d::VC_NONE;  // our neighbour's own output; never queued
+    }
+    const auto classes = forwarding_classes(dg_size);
+    for (uint32_t v = 0; v < classes.size(); v++) {
+        if (classes[v].first == -1 && classes[v].second == static_cast<int32_t>(distance) - 1) {
+            return v;
+        }
+    }
+    TT_FATAL(false, "combine_fabric2d: own distance {} has no channel", distance);
+    return ::cmbf2d::VC_NONE;
+}
+
+std::vector<::cmbf2d::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
-    std::vector<cmbf2d::ChunkDescriptor> chunks;
+    std::vector<::cmbf2d::ChunkDescriptor> chunks;
     for (const auto& [src, dst] : chunks_in_forwarder_ref_frame(ring_extent)) {
-        const uint32_t origin = cmbf2d::ring_step(stream, my_dg_index, src, ring_extent);
-        chunks.push_back(cmbf2d::stream_chunk(
+        const uint32_t origin = ::cmbf2d::ring_step(stream, my_dg_index, src, ring_extent);
+        chunks.push_back(::cmbf2d::stream_chunk(
             stream, origin, static_cast<uint32_t>(dst - src), ring_extent, stream_count(num_links)));
     }
     return chunks;
@@ -120,11 +156,12 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
             auto& list = per_stream[stream];
 
             auto own = [&](uint32_t distance) {
-                const cmbf2d::ChunkDescriptor chunk =
-                    cmbf2d::stream_chunk(stream, my_dg_index, distance, extent, stream_count(num_links));
+                const ::cmbf2d::ChunkDescriptor chunk =
+                    ::cmbf2d::stream_chunk(stream, my_dg_index, distance, extent, stream_count(num_links));
                 list.push_back(Assignment{
                     .dst_chip_id = ring_chip_ids[chunk.dst_dg_index],
                     .dst_dg_index = chunk.dst_dg_index,
+                    .distance = distance,
                     .split_idx = chunk.split_idx,
                     .split_count = chunk.split_count});
             };

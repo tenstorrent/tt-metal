@@ -2086,16 +2086,17 @@ def test_to_memory_config_rm_legacy_2d_sharded_to_interleaved(
         ([160, 131072], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 131072], [32, 65536], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 65536], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
+        # Multi-subblock rows (512 KiB pages) with a partial last shard column of 98304 elements (1.5 subblocks).
         (
-            [160, 5210112],
+            [96, 229376],
             [32, 131072],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # Test for uneven sharding and unaligned shard width
         (
-            [160, 5210112],
-            [96, 1302529],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [48, 393216],
+            [32, 98305],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
     ],
 )
@@ -2129,10 +2130,11 @@ def test_to_memory_config_rm_interleaved_to_nd_sharded_large_row(
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, grid",
     [
+        # Width-sharded shards of 1.5 subblocks.
         (
-            [160, 5210112],
-            [160, 434176],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [32, 393216],
+            [32, 98304],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
     ],
 )
@@ -2169,16 +2171,17 @@ def test_to_memory_config_rm_interleaved_to_legacy_2D_sharded_large_row(
         ([160, 131072], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 131072], [32, 65536], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 65536], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
+        # Multi-subblock rows (512 KiB pages) with a partial last shard column of 98304 elements (1.5 subblocks).
         (
-            [160, 5210112],
+            [96, 229376],
             [32, 131072],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # Test for uneven sharding and unaligned shard width
         (
-            [160, 5210112],
-            [96, 1302529],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [48, 393216],
+            [32, 98305],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
     ],
 )
@@ -2838,3 +2841,17 @@ def test_to_memory_config_interleaved_to_sharded_with_resident_l1(device):
         assert_equal(torch_input, ttnn.to_torch(output_tensor))
     finally:
         ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize("shape, expected_shard_shape", [((1, 1, 96, 64), (64, 64)), ((8, 1, 33, 32), (256, 32))])
+def test_create_sharded_memory_config_height_sharded_tile_layout_pads_to_tiles(device, shape, expected_shard_shape):
+    memory_config = ttnn.create_sharded_memory_config_(
+        shape, ttnn.CoreGrid(x=2, y=1), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, tile_layout=True
+    )
+    assert tuple(memory_config.shard_spec.shape) == expected_shard_shape
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert_equal(torch_input, ttnn.to_torch(tensor))

@@ -125,7 +125,7 @@ inline void quant_family_init(const std::uint32_t zero_point) {
             TTI_SFP_STOCH_RND(
                 p_sfpu::sfp_stochrnd_rnd_mod::NearEven,
                 0 /* imm8 descale */,
-                0 /* lreg_b (unused on fp32 path) */,
+                p_sfpu::LCONST_0 /* lreg_b (unused on fp32 path) */,
                 p_sfpu::LREG0,
                 p_sfpu::LREG0,
                 (1 << 3) | p_sfpu::sfp_stochrnd_mod::FP32_TO_INT8);

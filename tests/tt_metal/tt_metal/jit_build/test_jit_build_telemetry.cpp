@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -35,6 +36,39 @@ TEST(JitBuildCacheTests, DistinctHashesRunSeparately) {
     EXPECT_TRUE(cache.build_once(1, [&] { ++runs; }));
     EXPECT_TRUE(cache.build_once(2, [&] { ++runs; }));
     EXPECT_EQ(runs, 2);
+}
+
+TEST(JitBuildCacheTests, NoWaitReportsInProgress) {
+    auto& cache = JitBuildCache::inst();
+    cache.clear();
+    std::promise<void> started;
+    std::promise<void> release;
+    auto release_future = release.get_future();
+    std::thread owner([&] {
+        cache.build_once(3, [&] {
+            started.set_value();
+            release_future.wait();
+        });
+    });
+    started.get_future().wait();
+
+    EXPECT_EQ(
+        cache.build_once_no_wait(3, [] { FAIL() << "duplicate build ran"; }),
+        JitBuildCache::BuildOnceStatus::InProgress);
+    release.set_value();
+    owner.join();
+    EXPECT_EQ(
+        cache.build_once_no_wait(3, [] { FAIL() << "cached build ran"; }),
+        JitBuildCache::BuildOnceStatus::AlreadyBuilt);
+}
+
+TEST(JitBuildCacheTests, NoWaitFailureCanRetry) {
+    auto& cache = JitBuildCache::inst();
+    cache.clear();
+    EXPECT_THROW(cache.build_once_no_wait(4, [] { throw std::runtime_error("failed"); }), std::runtime_error);
+    int runs = 0;
+    EXPECT_TRUE(cache.build_once(4, [&] { ++runs; }));
+    EXPECT_EQ(runs, 1);
 }
 
 class BuildCacheTelemetryTest : public ::testing::Test {
@@ -209,8 +243,8 @@ class JitBuildWindowTest : public BuildCacheTelemetryTest {
 protected:
     void SetUp() override {
         auto& tel = BuildCacheTelemetry::inst();
-        // disable()/enable() rebuilds impl_, which is where the window endpoints live, so this
-        // clears any span noted by an earlier test.
+        // disable()/enable() rebuilds impl_, which holds the window endpoints, busy clocks and
+        // tightest programs, so this clears any state noted by an earlier test.
         tel.disable();
         tel.enable();
     }
@@ -335,17 +369,22 @@ TEST_F(JitBuildWindowTest, NoBuildActivityRecordsNoWindow) {
 
 TEST_F(JitBuildWindowTest, ScopedBuildWindowContributesOnScopeExit) {
     const uint32_t count_before = window_snapshot().count;
+    const auto& busy = BuildCacheTelemetry::inst().get_or_register_metric(std::string(kJitBuildBusy));
+    const uint32_t busy_before = busy.snapshot().count;
     {
         ScopedBuildWindow window;
         BuildCacheTelemetry::inst().dump_metrics();
         EXPECT_EQ(window_snapshot().count, count_before) << "an open window has no end yet, so nothing to report";
     }
     EXPECT_GE(dump_and_get_window_ms(), 0.0);
+    EXPECT_EQ(busy.snapshot().count, busy_before + 1) << "the scope is also one busy stretch";
 }
 
 TEST_F(JitBuildWindowTest, ScopedBuildWindowContributesWhenScopeThrows) {
     // JitBuildState::build() throws on compile failure, and a failed build still occupied wall
     // clock time that belongs inside the window.
+    const auto& busy = BuildCacheTelemetry::inst().get_or_register_metric(std::string(kJitBuildBusy));
+    const uint32_t busy_before = busy.snapshot().count;
     EXPECT_THROW(
         {
             ScopedBuildWindow window;
@@ -354,6 +393,7 @@ TEST_F(JitBuildWindowTest, ScopedBuildWindowContributesWhenScopeThrows) {
         std::runtime_error);
 
     EXPECT_GE(dump_and_get_window_ms(), 0.0);
+    EXPECT_EQ(busy.snapshot().count, busy_before + 1) << "a failed build is busy time too";
 }
 
 TEST_F(JitBuildWindowTest, WindowIsNotRecordedWhileTelemetryIsDisabled) {
@@ -368,6 +408,98 @@ TEST_F(JitBuildWindowTest, WindowIsNotRecordedWhileTelemetryIsDisabled) {
 
     tel.enable();
     EXPECT_EQ(window_snapshot().count, count_before);
+}
+
+// --- Busy clocks and kernel config buffer headroom ---
+
+TEST_F(JitBuildWindowTest, BusyCountsOverlapOnceSkipsIdleGapsAndRecordsPeak) {
+    using namespace std::chrono_literals;
+    auto& tel = BuildCacheTelemetry::inst();
+    const auto& busy = tel.get_or_register_metric(std::string(kJitBuildBusy));
+    const TelemetryTokenData before = busy.snapshot();
+
+    // Two overlapping builds over [0, 40 ms], 60 ms idle, then one build over [100, 120 ms].
+    const auto t0 = std::chrono::steady_clock::now();
+    tel.note_busy_start(kJitBuildBusy);
+    tel.note_busy_start(kJitBuildBusy);
+    tel.note_busy_end(kJitBuildBusy, t0, t0 + 30ms);
+    tel.note_busy_end(kJitBuildBusy, t0 + 10ms, t0 + 40ms);
+    tel.note_busy_start(kJitBuildBusy);
+    tel.note_busy_end(kJitBuildBusy, t0 + 100ms, t0 + 120ms);
+    tel.dump_metrics();
+
+    const TelemetryTokenData after = busy.snapshot();
+    EXPECT_EQ(after.count - before.count, 2u) << "one sample per busy stretch";
+    EXPECT_NEAR(after.total - before.total, 60.0, 1e-9);
+    // Two builds are open at once during [10, 30 ms].
+    EXPECT_DOUBLE_EQ(tel.get_or_register_metric("jit_build_peak_in_flight").snapshot().total, 2.0);
+}
+
+TEST_F(JitBuildWindowTest, BusyStretchSpansEarliestStartToLatestEndInAnyCloseOrder) {
+    using namespace std::chrono_literals;
+    auto& tel = BuildCacheTelemetry::inst();
+    constexpr std::string_view kClock = "test.busy_out_of_order";
+    const auto& busy = tel.get_or_register_metric(std::string(kClock));
+    const double before_ms = busy.snapshot().total;
+
+    // Threads timestamp before taking the telemetry lock, so the build over [0, 40 ms] can report
+    // before the one inside it over [5, 30 ms], which then closes the stretch.
+    const auto t0 = std::chrono::steady_clock::now();
+    tel.note_busy_start(kClock);
+    tel.note_busy_start(kClock);
+    tel.note_busy_end(kClock, t0, t0 + 40ms);
+    tel.note_busy_end(kClock, t0 + 5ms, t0 + 30ms);
+
+    EXPECT_NEAR(busy.snapshot().total - before_ms, 40.0, 1e-9);
+}
+
+TEST_F(JitBuildWindowTest, BusyEndWithoutStartIsIgnored) {
+    using namespace std::chrono_literals;
+    auto& tel = BuildCacheTelemetry::inst();
+    constexpr std::string_view kClock = "test.busy_unmatched_end";
+    const auto& busy = tel.get_or_register_metric(std::string(kClock));
+    const double before_ms = busy.snapshot().total;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    tel.note_busy_end(kClock, t0, t0);  // the clock was never started
+    tel.note_busy_start(kClock);
+    tel.note_busy_end(kClock, t0, t0 + 10ms);
+    tel.note_busy_end(kClock, t0, t0 + 20ms);  // one end too many
+    tel.note_busy_start(kClock);
+    tel.note_busy_end(kClock, t0 + 30ms, t0 + 40ms);
+
+    EXPECT_NEAR(busy.snapshot().total - before_ms, 20.0, 1e-9);
+}
+
+namespace {
+// Notes a TENSIX program with `headroom` bytes left of 1000. Appends `headroom` to `built` when its
+// breakdown is built.
+void note_headroom(uint32_t headroom, std::vector<uint32_t>& built) {
+    BuildCacheTelemetry::inst().note_program_headroom("TENSIX", headroom, 1000, [&built, headroom] {
+        built.push_back(headroom);
+        return SummaryRows{};
+    });
+}
+}  // namespace
+
+TEST_F(JitBuildWindowTest, HeadroomBreakdownBuiltOnlyOnNewMinimum) {
+    std::vector<uint32_t> built;
+    note_headroom(500, built);
+    note_headroom(200, built);
+    note_headroom(300, built);  // more headroom than the minimum
+    note_headroom(200, built);  // ties the minimum
+    EXPECT_EQ(built, (std::vector<uint32_t>{500, 200}));
+}
+
+TEST_F(JitBuildWindowTest, ThrowingHeadroomBreakdownKeepsThePreviousMinimum) {
+    std::vector<uint32_t> built;
+    note_headroom(200, built);
+    EXPECT_THROW(
+        BuildCacheTelemetry::inst().note_program_headroom(
+            "TENSIX", 100, 1000, []() -> SummaryRows { throw std::runtime_error("breakdown failed"); }),
+        std::runtime_error);
+    note_headroom(150, built);  // a new minimum only if 100 was not recorded
+    EXPECT_EQ(built, (std::vector<uint32_t>{200, 150}));
 }
 
 }  // namespace tt::tt_metal

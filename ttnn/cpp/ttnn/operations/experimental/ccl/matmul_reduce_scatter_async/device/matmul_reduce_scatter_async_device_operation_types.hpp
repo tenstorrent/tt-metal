@@ -20,18 +20,15 @@ struct MatmulReduceScatterAsyncParams {
     ReduceScatterMinimalAsyncParams reduce_scatter_params;
     ttnn::prim::MatmulParams matmul_struct;
     CoreCoord reduce_scatter_core_grid_offset;
-    std::vector<IDevice*> devices;
 
     // Constructor required because operation structs are not default constructible.
     MatmulReduceScatterAsyncParams(
         ReduceScatterMinimalAsyncParams reduce_scatter_params,
         ttnn::prim::MatmulParams matmul_struct,
-        CoreCoord reduce_scatter_core_grid_offset,
-        std::vector<IDevice*> devices) :
+        CoreCoord reduce_scatter_core_grid_offset) :
         reduce_scatter_params(std::move(reduce_scatter_params)),
         matmul_struct(std::move(matmul_struct)),
-        reduce_scatter_core_grid_offset(reduce_scatter_core_grid_offset),
-        devices(std::move(devices)) {}
+        reduce_scatter_core_grid_offset(reduce_scatter_core_grid_offset) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "reduce_scatter_core_grid_offset");
     auto attribute_values() const {

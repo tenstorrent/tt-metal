@@ -15,6 +15,7 @@ from fuser.operand import BfdResource
 
 
 class MatmulUnpacker(Unpacker):
+    reverse_operands = True
     granularity = InvocationGranularity.BLOCK
     per_block_init = True
 
@@ -37,7 +38,7 @@ class MatmulUnpacker(Unpacker):
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         rt_dim = block.block_rows
         ct_dim = block.block_cols
-        return f"_perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+        return f"_perf_unpack_matmul_mock<PerfRunType::L1_TO_L1>(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
 
     def perf_clear_valid(
         self,
@@ -50,7 +51,7 @@ class MatmulUnpacker(Unpacker):
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         rt_dim = block.block_rows
         ct_dim = block.block_cols
-        return f"_perf_math_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+        return f"_perf_math_matmul_mock<PerfRunType::L1_TO_L1>(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
 
     def init(
         self,

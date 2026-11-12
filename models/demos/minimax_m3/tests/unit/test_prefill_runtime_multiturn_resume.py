@@ -9,7 +9,8 @@ chunk [5088, 9088) starts mid-slab AND is ragged. The same 9088 tokens prefilled
 5120) are the reference, compared per layer on the device cache read back in natural order (K, V and, on the MSA
 layers, index_k). This runs the whole runtime path the lower-level tests bypass: make_chunk_input's input rotation,
 the KV write + indexed RoPE at rotated positions, the dense ring-joint and MSA cache reads, and the MoE padding
-config for a rotated ragged chunk (layer 3's MoE feeds layer 4's KV).
+config for a rotated ragged chunk (layer 3's MoE feeds layer 4's KV). chunk1024 repeats it at 1024-token chunks
+(resume at 992, turn 2 [992, 1792)), where every first chunk is a cold MSA chunk below the 2048-token top-k window.
 
 A third slot feeds turn 2 WITHOUT the input rotation (the contiguous shard the runtime used before), which must
 diverge -- so the test keeps its power to catch a regression in the input plumbing.
@@ -30,18 +31,14 @@ from models.common.utility_functions import comp_pcc
 from ..test_factory import parametrize_mesh_with_fabric
 
 NUM_LAYERS = 5
-CHUNK = 5120
-TURN1_END = 5119
-RESUME = TURN1_END // ttnn.TILE_SIZE * ttnn.TILE_SIZE  # 5088: where the prefill scheduler resumes turn 2
-TOTAL = 9088  # turn 2 = one ragged chunk [5088, 9088)
-CAPACITY = 3 * CHUNK  # holds RESUME + CHUNK
 PCC = 0.99
 SLOT_RESUMED, SLOT_ONE_PASS, SLOT_UNROTATED = 0, 1, 2
 
 
 @pytest.mark.timeout(1800)  # 5-layer real-weight build + 6 chunks + 3 slot read-backs exceed the default 300s
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-def test_prefill_runtime_multiturn_resume(mesh_device, device_params, reset_seeds):
+@pytest.mark.parametrize("chunk_size,turn2_len", [(5120, 4000), (1024, 800)], ids=["chunk5120", "chunk1024"])
+def test_prefill_runtime_multiturn_resume(mesh_device, device_params, chunk_size, turn2_len, reset_seeds):
     if not os.getenv("HF_MODEL"):
         pytest.skip("needs real MiniMax-M3 weights (HF_MODEL + a warm TT_CACHE_PATH tilized cache)")
     from models.demos.minimax_m3.tt.attention.kv_cache import allocate_kv_caches
@@ -58,12 +55,17 @@ def test_prefill_runtime_multiturn_resume(mesh_device, device_params, reset_seed
     if not weight_cache_is_complete(cache_path, hf_config, NUM_LAYERS, ttnn.bfloat4_b):
         pytest.skip(f"tilized weight cache for the first {NUM_LAYERS} layers is not complete at {cache_path}")
 
+    turn1_end = chunk_size - 1
+    resume = turn1_end // ttnn.TILE_SIZE * ttnn.TILE_SIZE  # where the prefill scheduler resumes turn 2
+    total = resume + turn2_len  # turn 2 = one ragged chunk [resume, total)
+    capacity = 3 * chunk_size  # holds resume + chunk_size
+
     rows, cols = tuple(mesh_device.shape)
     cfg = TtPrefillRuntimeConfig(
         num_layers=NUM_LAYERS,
-        max_seq_len=CAPACITY,
+        max_seq_len=capacity,
         mesh_shape=(rows, cols),
-        chunk_size=CHUNK,
+        chunk_size=chunk_size,
         num_users=3,
         expert_weight_dtype=ttnn.bfloat4_b,
         weight_cache_path=cache_path,
@@ -71,31 +73,31 @@ def test_prefill_runtime_multiturn_resume(mesh_device, device_params, reset_seed
     )
     runtime = TtPrefillRuntime(mesh_device, hf_config, {}, cfg)
     kv_cache = allocate_kv_caches(
-        mesh_device, num_layers=NUM_LAYERS, max_seq_len=CAPACITY, num_users=3, head_dim=hf_config.head_dim
+        mesh_device, num_layers=NUM_LAYERS, max_seq_len=capacity, num_users=3, head_dim=hf_config.head_dim
     )
 
     gen = torch.Generator().manual_seed(0)
-    tokens = torch.randint(0, hf_config.vocab_size, (TOTAL,), generator=gen).tolist()
+    tokens = torch.randint(0, hf_config.vocab_size, (total,), generator=gen).tolist()
 
     def prefill(slot, start, end, rotate=True):
-        chunk = tokens[start : start + CHUNK]
-        chunk = chunk + [0] * (CHUNK - len(chunk))
+        chunk = tokens[start : start + chunk_size]
+        chunk = chunk + [0] * (chunk_size - len(chunk))
         inp = runtime.make_chunk_input(chunk, start if rotate else 0)
         runtime.prefill_chunk(inp, kv_cache, slot_id=slot, actual_start=start, actual_end=end)
 
-    prefill(SLOT_RESUMED, 0, TURN1_END)
-    prefill(SLOT_RESUMED, RESUME, TOTAL)
-    prefill(SLOT_ONE_PASS, 0, CHUNK)
-    prefill(SLOT_ONE_PASS, CHUNK, TOTAL)
-    prefill(SLOT_UNROTATED, 0, TURN1_END)
-    prefill(SLOT_UNROTATED, RESUME, TOTAL, rotate=False)
+    prefill(SLOT_RESUMED, 0, turn1_end)
+    prefill(SLOT_RESUMED, resume, total)
+    prefill(SLOT_ONE_PASS, 0, chunk_size)
+    prefill(SLOT_ONE_PASS, chunk_size, total)
+    prefill(SLOT_UNROTATED, 0, turn1_end)
+    prefill(SLOT_UNROTATED, resume, total, rotate=False)
     ttnn.synchronize_device(mesh_device)
 
     # One host read per slot (k, v, index_k for every layer), un-rotated to natural order per layer.
     def natural(slot):
         blocks = runtime.read_slot_kv(kv_cache, slot)
         return [
-            [naturalize_kv_block(blk[layer], TOTAL, cfg.sp_factor, CHUNK, CAPACITY) for blk in blocks]
+            [naturalize_kv_block(blk[layer], total, cfg.sp_factor, chunk_size, capacity) for blk in blocks]
             for layer in range(NUM_LAYERS)
         ]
 
@@ -105,7 +107,7 @@ def test_prefill_runtime_multiturn_resume(mesh_device, device_params, reset_seed
         names = ("k", "v", "index_k") if layer >= 3 else ("k", "v")
         for name, r, g, b in zip(names, ref_all[layer], got_all[layer], bad_all[layer]):
             _, p = comp_pcc(r.float(), g.float(), PCC)
-            _, p_bad = comp_pcc(r[..., RESUME:, :].float(), b[..., RESUME:, :].float(), PCC)
+            _, p_bad = comp_pcc(r[..., resume:, :].float(), b[..., resume:, :].float(), PCC)
             logger.info(f"[multiturn] layer {layer} {name}: resumed pcc={p:.5f} (unrotated turn 2: {p_bad:.5f})")
             worst, worst_unrotated = min(worst, p), min(worst_unrotated, p_bad)
     logger.info(f"[multiturn] worst resumed pcc={worst:.5f}, worst unrotated pcc={worst_unrotated:.5f}")

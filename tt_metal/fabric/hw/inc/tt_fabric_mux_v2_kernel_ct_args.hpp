@@ -35,6 +35,12 @@ constexpr uint32_t forwarder_service_burst_size =
 constexpr uint32_t shared_trid_ring_capacity = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_shared_trid_ring_capacity");
 constexpr uint32_t forwarder_ready_sem_id = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_forwarder_ready_sem_id");
 constexpr uint32_t manager_init_done_sem_id = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_manager_init_done_sem_id");
+// In program-local L1 (FabricMuxV2Config::place_in_program_local_l1), the region addresses above are offsets into the
+// circular buffer at program_local_l1_cb_index, and the mux publishes that buffer's address in semaphore
+// l1_base_semaphore_id for its clients.
+constexpr bool in_program_local_l1 = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_in_program_local_l1") == 1;
+constexpr uint32_t program_local_l1_cb_index = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_program_local_l1_cb_index");
+constexpr uint32_t l1_base_semaphore_id = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_l1_base_semaphore_id");
 
 static_assert(num_buffers_per_channel > 0, "FabricMuxV2 num_buffers_per_channel must be greater than zero");
 static_assert(num_channels > 0, "FabricMuxV2 num_channels must be greater than zero");

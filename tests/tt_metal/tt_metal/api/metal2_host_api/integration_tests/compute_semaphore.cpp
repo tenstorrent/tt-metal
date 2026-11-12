@@ -19,7 +19,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 
-#include "impl/metal2_host_api/semaphore_scope.hpp"
+#include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"

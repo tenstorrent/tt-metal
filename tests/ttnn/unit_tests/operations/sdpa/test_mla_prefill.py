@@ -12,8 +12,9 @@ from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import run_flash_mla_p
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope",
     # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope
     [
-        (2, 1024, 128, 1, 512, 64),  # large head count
-        (2, 4096, 64, 1, 256, 0),  # zero d_rope
+        # Full-size shapes (seq_len 1k/4k) run in tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill.py
+        (2, 256, 128, 1, 512, 64),  # large head count
+        (2, 512, 64, 1, 256, 0),  # zero d_rope
     ],
 )
 @pytest.mark.parametrize(
