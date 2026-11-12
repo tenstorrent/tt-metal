@@ -96,12 +96,3 @@ class UnpackReduceTilize(Unpacker):
             f"_llk_unpack_reduce_col_tilizeA_strided_"
             f"({tensor_shape}, {l1_row_idx}, {block.tile_id_src_b});\n"
         )
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

@@ -170,12 +170,6 @@ class PlannedBlock:
     def block_for(self, node: Node) -> BlockData:
         cols, rows = self.region.node_shape(node.block_tiles_x, node.block_tiles_y)
         return BlockData(
-            block_origin_x=(
-                self.region.x.var if self.region.x.looped else self.region.x.origin
-            ),
-            block_origin_y=(
-                self.region.y.var if self.region.y.looped else self.region.y.origin
-            ),
             block_cols=cols,
             block_rows=rows,
         )

@@ -20,7 +20,6 @@ from fuser.validator import (
     ELTWISE_DIMS,
     IN0_REQUIRED,
     IN1_REQUIRED,
-    INT32_NEEDS_UNPACK_TO_DEST,
     L1_ACC_FORMAT_SUPPORTED,
     LOFI_ONLY,
     MATMUL_DIMS,
@@ -42,7 +41,6 @@ from fuser.validator import (
     SCALAR_BCAST_NO_TRANSPOSE_FACES,
     SRC_A_DIMS,
     SUB_BCAST_COL_REQUIRED,
-    SUPPORTED_SRC_A_TILE,
     TRANSPOSE_NEEDS_FULL_TILE,
     TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
@@ -89,7 +87,7 @@ from .unpacker.unpack_ab import UnpackerAB
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(),
-        [IN0_REQUIRED, INT32_NEEDS_UNPACK_TO_DEST, NO_TRANSPOSE_UNPACK_TO_DEST],
+        [IN0_REQUIRED, NO_TRANSPOSE_UNPACK_TO_DEST],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
@@ -128,7 +126,6 @@ UNPACKER_MAP = {
 _eltwise_checks = [
     DEST_TO_SRCA_NEEDS_ACC,
     *eltwise_unpacker_rules,
-    SUPPORTED_SRC_A_TILE,
     TRANSPOSE_NEEDS_FULL_TILE,
     NO_UNPACK_TO_DEST,
     NO_COL_ROW_BCAST_32X16,
@@ -162,7 +159,6 @@ FPU_MAP = {
         [
             NO_REUSE_DEST,
             forced_unpackers("UnpackerA", "UnpackerTilizeA"),
-            SUPPORTED_SRC_A_TILE,
             DATACOPY_TILE_32X32_ONLY,
         ],
     ),
@@ -184,7 +180,6 @@ FPU_MAP = {
             NO_REUSE_DEST,
             REDUCE_PARAMS_REQUIRED,
             forced_unpackers("ReduceUnpacker"),
-            SUPPORTED_SRC_A_TILE,
         ],
     ),
     "ReduceBlockMax": (

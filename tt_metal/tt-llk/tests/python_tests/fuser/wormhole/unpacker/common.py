@@ -5,25 +5,16 @@
 from typing import TYPE_CHECKING
 
 from fuser.fpu_node import FpuNode
-from helpers.format_config import DataFormat
 
 if TYPE_CHECKING:
     from fuser.fuser_config import GlobalConfig
     from fuser.l1_operation import L1Operation
 
 
-def is_datacopy_node(compute_node: FpuNode) -> bool:
-    return False
-
-
-def hw_configure_unpack(
-    compute_node: FpuNode,
-    dest_acc: str,
-    unpack_A_src: DataFormat,
-    unpack_A_dst: DataFormat,
-    unpack_B_src: DataFormat,
-    unpack_B_dst: DataFormat,
-) -> str:
+def hw_configure_unpack(config: "GlobalConfig", compute_node: FpuNode) -> str:
+    dest_acc = config.dest_acc.cpp_enum_value
+    unpack_A_src, unpack_A_dst = compute_node.unpack_A_src, compute_node.unpack_A_dst
+    unpack_B_src, unpack_B_dst = compute_node.unpack_B_src, compute_node.unpack_B_dst
     operand_a, operand_b = compute_node.unpacker.physical_operands(compute_node)
     face_r_dim_a = operand_a.tile_shape.face_r_dim
     num_faces_a = operand_a.tile_shape.total_num_faces()
@@ -43,19 +34,15 @@ def hw_configure_unpack(
 
 
 def configure_unpack(
-    compute_node: FpuNode,
-    dest_acc: str,
-    old_A_src: DataFormat,
-    new_A_src: DataFormat,
-    new_A_dst: DataFormat,
-    old_B_src: DataFormat,
-    new_B_src: DataFormat,
-    new_B_dst: DataFormat,
-    srca_changed: bool,
-    srcb_changed: bool,
-    srca_tile_changed: bool,
-    srcb_tile_changed: bool,
+    config: "GlobalConfig", compute_node: FpuNode, previous: FpuNode
 ) -> str:
+    dest_acc = config.dest_acc.cpp_enum_value
+    old_A_src, old_B_src = previous.unpack_A_src, previous.unpack_B_src
+    new_A_src, new_A_dst = compute_node.unpack_A_src, compute_node.unpack_A_dst
+    new_B_src, new_B_dst = compute_node.unpack_B_src, compute_node.unpack_B_dst
+    srca_changed, srcb_changed, srca_tile_changed, srcb_tile_changed = (
+        compute_node.unpack_changes(previous)
+    )
     code = ""
     operand_a, operand_b = compute_node.unpacker.physical_operands(compute_node)
 

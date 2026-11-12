@@ -97,12 +97,3 @@ class ReduceUnpacker(Unpacker):
             f"_llk_unpack_reduce_<{reduce_pool}, {reduce_dim}>({block.tile_id_src_a}, {block.tile_id_src_b}, "
             f"{compute_unit.src_a.tile_shape.cpp_value});\n"
         )
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

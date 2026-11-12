@@ -12,15 +12,12 @@ Index = Union[int, str]
 class BlockData:
     """Per-block metadata used by fused unpack/math/pack loops.
 
-    Coordinates are in tile units. block_origin_* is the block's top-left tile in
-    the output grid; block_cols/block_rows are its size in tiles (tail blocks
-    included). The remaining fields are per-call indices: each unit's *_call fills
+    Coordinates are in tile units. block_cols/block_rows are the block's size in
+    tiles (tail blocks included). The remaining fields are per-call indices: each unit's *_call fills
     the ones it needs (as C++ loop-var expressions) before every emit, so they
     stay None until set and are only meaningful for the emitting unit.
     """
 
-    block_origin_x: Index
-    block_origin_y: Index
     block_cols: Index
     block_rows: Index
     tile_id_dest: Optional[Index] = None

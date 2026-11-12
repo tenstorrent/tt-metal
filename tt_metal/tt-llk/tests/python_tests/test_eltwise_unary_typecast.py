@@ -16,9 +16,7 @@ import struct
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
-    BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
-    QUASAR_DATA_FORMAT_ENUM_VALUES,
-    WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+    ARCH_DATA_FORMAT_ENUM_VALUES,
     DataFormat,
     InputOutputFormat,
 )
@@ -78,11 +76,7 @@ _EXCLUDED_PAIRS = {
 # Formats the current architecture's data-format enum actually supports. Used to
 # drop unsupported pairs at collection time so we never generate tests we would
 # otherwise have to skip in the test body.
-_ARCH_SUPPORTED_FORMATS = {
-    ChipArchitecture.WORMHOLE: WORMHOLE_DATA_FORMAT_ENUM_VALUES,
-    ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
-    ChipArchitecture.QUASAR: QUASAR_DATA_FORMAT_ENUM_VALUES,
-}[get_chip_architecture()]
+_ARCH_SUPPORTED_FORMATS = ARCH_DATA_FORMAT_ENUM_VALUES[get_chip_architecture()]
 
 # Every directed pair ttnn.typecast exercises end-to-end, restricted to pairs
 # whose input and output formats are both supported on the current architecture.

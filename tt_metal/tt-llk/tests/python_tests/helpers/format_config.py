@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple, Union
 import ml_dtypes
 import numpy as np
 
+from .chip_architecture import ChipArchitecture
 from .tile_constants import SRCS_SLICE_32B_ELEMENT_COUNT, SRCS_SLICE_ELEMENT_COUNT
 
 # ============================================================================
@@ -722,6 +723,12 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Int16: 9,
     DataFormat.Int4: 23,
     DataFormat.UInt4: 25,
+}
+
+ARCH_DATA_FORMAT_ENUM_VALUES = {
+    ChipArchitecture.WORMHOLE: WORMHOLE_DATA_FORMAT_ENUM_VALUES,
+    ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
+    ChipArchitecture.QUASAR: QUASAR_DATA_FORMAT_ENUM_VALUES,
 }
 
 

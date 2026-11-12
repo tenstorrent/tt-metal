@@ -7,6 +7,7 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 import torch
+from helpers.constraints import quasar_sfpu_hardware_format
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
 from helpers.pack import (
     pack_bfp8_b,
@@ -139,9 +140,6 @@ class Operand:
 
         self._raw_data = raw_data
 
-    def set_data(self, raw_data: torch.Tensor):
-        self._raw_data = raw_data
-
     @property
     def raw_data(self) -> Optional[torch.Tensor]:
         if self._raw_data is None and not self.is_output:
@@ -233,11 +231,7 @@ class Operand:
         result_name: Optional[str] = None,
     ) -> str:
         assignment = f"const auto {result_name} = " if result_name else ""
-        data_format = (
-            DataFormat.Int16
-            if self.data_format == DataFormat.UInt16
-            else self.data_format
-        )
+        data_format = quasar_sfpu_hardware_format(self.data_format)
         return (
             f"{assignment}ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "

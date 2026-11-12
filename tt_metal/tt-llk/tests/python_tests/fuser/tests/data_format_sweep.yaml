@@ -1,0 +1,25 @@
+# Validate each architecture's supported L1 format pairs and Dst modes.
+dest_acc: all
+skip_for_perf: true
+
+operands:
+  - name: input
+    tile_dims: all
+    dims: [32, 32]
+    format: all
+  - name: output
+    tile_dims: all
+    dims: [32, 32]
+    format: all
+
+operations:
+  - dest_sync: all
+    math:
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        in0: input
+        unpack_to_dest: all
+    pack:
+      - output: output
+        packer: Packer

@@ -11,7 +11,6 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.datacopy import datacopy_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from helpers.llk_params import DataFormat
 from helpers.tile_shape import cpp_tensor_shape
 
 
@@ -38,26 +37,12 @@ class DatacopyFpu(Fpu):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
         tensor_shape = cpp_tensor_shape(operation.tile_shape)
-        _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
-        is_int_fpu_en = (
-            "true"
-            if (
-                (
-                    compute_unit.src_a is not None
-                    and compute_unit.src_a.data_format in _int_fpu_formats
-                )
-                or (
-                    compute_unit.src_b is not None
-                    and compute_unit.src_b.data_format in _int_fpu_formats
-                )
-            )
-            else "false"
-        )
+        is_int_fpu_en = compute_unit.int_fpu_en
 
         return (
             f"    // Operation {stage}: Datacopy FPU\n"
             f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}, {pack_mode}>(\n"
-            f"        {tensor_shape}, {config.sentinel.math_format}\n"
+            f"        {tensor_shape}, {compute_unit.unpack_A_dst.cpp_underlying_value}\n"
             f"    );\n"
         )
 
@@ -74,10 +59,12 @@ class DatacopyFpu(Fpu):
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
         tensor_shape = cpp_tensor_shape(operation.tile_shape)
+        src_format = compute_unit.unpack_A_src.cpp_underlying_value
+        dst_format = compute_unit.unpack_A_dst.cpp_underlying_value
 
         return (
             f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, {dest_sync}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
-            f"        {block.tile_id_dest}, {config.sentinel.math_format}, {config.sentinel.math_format}, {tensor_shape}\n"
+            f"        {block.tile_id_dest}, {src_format}, {dst_format}, {tensor_shape}\n"
             f"    );\n"
         )
 

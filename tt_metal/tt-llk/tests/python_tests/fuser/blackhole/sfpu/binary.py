@@ -47,10 +47,10 @@ class BinarySfpu(Sfpu):
             "sfpu_operations.h",
         ]
 
-    def _format_arg(self, config: GlobalConfig) -> str:
+    def _format_arg(self, node: SfpuNode) -> str:
         if self.operation == MathOperation.SfpuAddTopRow:
             return "0"
-        return config.sentinel.sfpu_format
+        return node.dest_format.cpp_underlying_value
 
     def init(
         self,
@@ -64,7 +64,7 @@ class BinarySfpu(Sfpu):
         approx_mode = self.approx_mode.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         iterations = self.iterations
-        format = self._format_arg(config)
+        format = self._format_arg(compute_unit)
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
@@ -86,7 +86,7 @@ class BinarySfpu(Sfpu):
         src1 = block.dest_src0
         src2 = block.dest_src1
         dst = block.tile_id_dest
-        format = self._format_arg(config)
+        format = self._format_arg(compute_unit)
         vector_mode = self._vector_mode(operation)
         sign_magnitude = str(self.sign_magnitude).lower()
 

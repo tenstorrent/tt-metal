@@ -109,12 +109,3 @@ class UnpackerAB(Unpacker):
 
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return f"_llk_unpack_binary_operands_({block.tile_id_src_a}, {block.tile_id_src_b}, {tensor_shape});\n"
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

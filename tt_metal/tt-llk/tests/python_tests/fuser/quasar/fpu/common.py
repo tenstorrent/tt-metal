@@ -4,7 +4,6 @@
 
 from typing import TYPE_CHECKING
 
-from helpers.format_config import DataFormat
 from helpers.llk_params import DestSync, PerfRunType
 
 if TYPE_CHECKING:
@@ -13,35 +12,30 @@ if TYPE_CHECKING:
     from fuser.l1_operation import L1Operation
 
 
-def fidelity_source_formats(
-    config: "GlobalConfig", operation: "L1Operation", compute_unit: "FpuNode"
-) -> tuple[str, str]:
-    output_format = operation._get_pack_nodes()[0].output.data_format
-    _, src_a, _, src_b, _, _ = config.sentinel._infer_node_formats(
-        config, compute_unit, output_format, operation
-    )
-    src_a, src_b = compute_unit.unpacker.physical_order(src_a, src_b)
+def fidelity_source_formats(compute_unit: "FpuNode") -> tuple[str, str]:
+    src_a, src_b = compute_unit.unpack_A_dst, compute_unit.unpack_B_dst
     return src_a.cpp_enum_value, src_b.cpp_enum_value
 
 
-def hw_configure_math(dest_acc: str, math_fmt: DataFormat) -> str:
+def hw_configure_math(dest_acc: str, alu_formats) -> str:
+    src_a, src_b = alu_formats
     return (
         f"_llk_math_srcAB_hw_configure_<{dest_acc}>(\n"
-        f"    {math_fmt.cpp_enum_value}, {math_fmt.cpp_enum_value}\n"
+        f"    {src_a.cpp_enum_value}, {src_b.cpp_enum_value}\n"
         f");\n"
     )
 
 
 def configure_math(
     dest_acc: str,
-    old_math: DataFormat,
-    new_math: DataFormat,
+    old_formats,
+    new_formats,
 ) -> str:
-    math_fmt = new_math.cpp_enum_value
+    src_a, src_b = (fmt.cpp_enum_value for fmt in new_formats)
     return (
         f"_configure_alu_formats_<{dest_acc}>(\n"
-        f"    {math_fmt}, {math_fmt},\n"
-        f"    _is_src_fmt_int32_dest_compatible_({math_fmt}) && {dest_acc}, DataFormat::Invalid\n"
+        f"    {src_a}, {src_b},\n"
+        f"    _is_src_fmt_int32_dest_compatible_({src_a}) && {dest_acc}, DataFormat::Invalid\n"
         f");\n"
     )
 

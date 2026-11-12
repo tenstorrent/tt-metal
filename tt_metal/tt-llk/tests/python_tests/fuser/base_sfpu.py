@@ -39,6 +39,9 @@ class Sfpu:
     granularity = InvocationGranularity.NONE
     input_count = 1
 
+    def supports_dest_format(self, dest_format) -> bool:
+        return True
+
     @staticmethod
     def _vector_mode(operation: "L1Operation") -> str:
         num_faces = operation.tile_shape.total_num_faces()
@@ -81,6 +84,3 @@ class Sfpu:
     def get_headers(self) -> List[str]:
         """Return headers that declare this SFPU's generated calls."""
         return []
-
-    def __str__(self) -> str:
-        return f"{self.__name__}"

@@ -47,9 +47,7 @@ class EltwiseFpu(Fpu):
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         op = self.operation.cpp_enum_value
         tensor_shape = operation.tile_shape.cpp_value
-        src_a_format, src_b_format = fidelity_source_formats(
-            config, operation, compute_unit
-        )
+        src_a_format, src_b_format = fidelity_source_formats(compute_unit)
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
@@ -88,15 +86,6 @@ class EltwiseFpu(Fpu):
             f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {reuse_dest}>"
             f"({block.tile_id_dest}, {tensor_shape});\n"
         )
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""
 
     def __str__(self) -> str:
         return f"EltwiseFpu({self.operation})"

@@ -8,6 +8,9 @@ if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
+from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import quasar_sfpu_hardware_format
+
 from .base_sfpu import Sfpu
 from .block_data import BlockData
 from .indexing import KernelInvocation
@@ -19,7 +22,14 @@ class SfpuNode:
 
     def __init__(self, sfpu: Sfpu, index_spec=None):
         self.sfpu = sfpu
+        self.dest_format = None
         self.index_spec = index_spec
+
+    def alu_formats(self, config: "GlobalConfig"):
+        fmt = self.dest_format
+        if config.architecture == ChipArchitecture.QUASAR:
+            fmt = quasar_sfpu_hardware_format(fmt)
+        return fmt, fmt
 
     def sfpu_init(
         self,
@@ -29,7 +39,6 @@ class SfpuNode:
     ):
         if config.skip_math_init:
             return ""
-        config.sentinel.configure_sfpu(config, operation, self)
         return self.sfpu.init(operation, config, self, block)
 
     def sfpu_call(

@@ -14,10 +14,10 @@ from typing_extensions import deprecated
 from .constraints import (
     _quasar_effective_sfpu_format,
     _quasar_fpu_source_format,
-    _quasar_sfpu_hardware_format,
     is_valid_quasar_fpu_path,
     is_valid_quasar_packer_conversion,
     is_valid_quasar_unpack_to_dest,
+    quasar_sfpu_hardware_format,
 )
 from .data_format_inference import _dest_acc_flag, effective_dest_acc
 from .format_config import (
@@ -606,7 +606,7 @@ def _resolve_quasar_typecast_variant(
         return None
 
     if output_format.is_integer():
-        pack_src = _quasar_sfpu_hardware_format(output_format)
+        pack_src = quasar_sfpu_hardware_format(output_format)
     elif dest_acc == DestAccumulation.Yes:
         pack_src = DataFormat.Float32
     else:

@@ -45,7 +45,7 @@ class PackUntilize(Packer):
 
         return (
             f"_llk_pack_untilize_init_<{block_ct_dim}, {full_ct_dim}>(\n"
-            f"    {config.sentinel.pack_src_format}, {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
+            f"    {pack_node.pack_src_format.cpp_underlying_value}, {pack_node.pack_dst_format.cpp_underlying_value}, {face_r_dim}, {num_faces}\n"
             f");\n"
         )
 
@@ -74,4 +74,4 @@ class PackUntilize(Packer):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        return f"_llk_pack_untilize_uninit_({config.sentinel.pack_src_format});\n"
+        return f"_llk_pack_untilize_uninit_({pack_node.pack_src_format.cpp_underlying_value});\n"

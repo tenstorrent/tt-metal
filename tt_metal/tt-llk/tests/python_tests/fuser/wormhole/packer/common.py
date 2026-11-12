@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from fuser.block_data import BlockData
 from fuser.operand import Operand
-from helpers.format_config import DataFormat
 from helpers.golden_generators import PackGolden
 
 if TYPE_CHECKING:
@@ -16,12 +15,10 @@ if TYPE_CHECKING:
 
 
 def hw_configure_pack(
-    output: Operand,
-    dest_acc: str,
-    pack_src: DataFormat,
-    pack_dst: DataFormat,
-    pack_mode: str = "PackMode::Default",
+    config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
 ) -> str:
+    output, pack_src, pack_dst = node.output, node.pack_src_format, node.pack_dst_format
+    dest_acc = config.dest_acc.cpp_enum_value
     return (
         f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
         f"    {pack_src.cpp_underlying_value}, {pack_dst.cpp_underlying_value}, {output.tile_size}, {output.tile_shape.face_r_dim}, {output.tile_shape.total_num_faces()}\n"
@@ -30,14 +27,15 @@ def hw_configure_pack(
 
 
 def configure_pack(
-    output: Operand,
-    dest_acc: str,
-    pack_src: DataFormat,
-    pack_dst: DataFormat,
+    config: "GlobalConfig", node: "PackNode", previous: "PackNode"
 ) -> str:
+    if not node.pack_changed(previous):
+        return ""
+    output, pack_src, pack_dst = node.output, node.pack_src_format, node.pack_dst_format
+    dest_acc = config.dest_acc.cpp_enum_value
     return (
         f"_llk_pack_reconfig_data_format_<{dest_acc}>(\n"
-        f"    {pack_src.cpp_underlying_value}, {pack_dst.cpp_underlying_value}, {output.tile_size}\n"
+        f"    {pack_src.cpp_underlying_value}, {pack_dst.cpp_underlying_value}, {output.tile_size}, {output.tile_shape.face_r_dim}, {output.tile_shape.total_num_faces()}\n"
         f");\n"
     )
 
@@ -45,7 +43,7 @@ def configure_pack(
 def relu_config(
     config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
 ) -> str:
-    pack_src_format = config.sentinel._pack_src
+    pack_src_format = node.pack_src_format
 
     relu_config_val = PackGolden.generate_relu_config(
         node.pack_relu, node.relu_threshold, pack_src_format

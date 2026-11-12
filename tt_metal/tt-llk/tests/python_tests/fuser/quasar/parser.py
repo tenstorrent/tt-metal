@@ -13,12 +13,11 @@ ReduceBlockMaxRuntime, SubBcastColCustom.
 from typing import Annotated, ClassVar, List, Union
 
 from fuser.fpu_node import FpuNode
-from fuser.fuser_config import GlobalConfig
 from fuser.validator import (
+    BINARY_SFPU_CHECKS,
     ELTWISE_DIMS,
     IN0_REQUIRED,
     IN1_REQUIRED,
-    INT32_NEEDS_UNPACK_TO_DEST,
     L1_ACC_FORMAT_SUPPORTED,
     LOFI_ONLY,
     MATMUL_DIMS,
@@ -37,6 +36,7 @@ from fuser.validator import (
     SUB_BCAST_COL_REQUIRED,
     TRANSPOSE_NEEDS_FULL_TILE,
     TRANSPOSE_WITHIN_FACE_REQUIRED,
+    UNARY_SFPU_CHECKS,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
     OperationSchemaBase,
@@ -51,11 +51,10 @@ from fuser.validator import (
     require_src_a_tiles,
     require_src_b_tiles,
 )
-from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import is_valid_quasar_fpu_path
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
-    DestAccumulation,
     MathFidelity,
     MathOperation,
     ReduceDimension,
@@ -89,41 +88,6 @@ from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unary_broadcast import UnaryBroadcastUnpacker
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
-
-
-def _validate_math_fidelities(operation, config):
-    wide_formats = {DataFormat.Float16, DataFormat.Tf32, DataFormat.Float32}
-    config.sentinel.prepare_operation(config, operation)
-    output_format = operation._get_pack_nodes()[0].output.data_format
-    errors = []
-    for index, node in enumerate(operation.math_nodes, start=1):
-        if not isinstance(node, FpuNode) or node.math_fidelity == MathFidelity.LoFi:
-            continue
-        if not isinstance(node.fpu, (EltwiseFpu, MatmulFpu, ReduceFpu)):
-            continue
-        formats = config.sentinel._infer_node_formats(
-            config, node, output_format, operation
-        )
-        src_a, src_b = formats[1], formats[3]
-        if node.unpacker is not None:
-            src_a, src_b = node.unpacker.physical_order(src_a, src_b)
-        allowed = [MathFidelity.LoFi]
-        if src_a in wide_formats:
-            allowed.append(MathFidelity.HiFi2)
-        if src_b in wide_formats:
-            allowed.append(MathFidelity.HiFi3)
-        if src_a in wide_formats and src_b in wide_formats:
-            allowed.append(MathFidelity.HiFi4)
-        if node.math_fidelity not in allowed:
-            errors.append(
-                f"Math node {index} (Fpu)\n    Quasar "
-                f"{node.math_fidelity.name} has redundant fidelity phases for "
-                f"SrcA={src_a.name}, SrcB={src_b.name}; "
-                f"allowed fidelities: {', '.join(f.name for f in allowed)}"
-            )
-    if errors:
-        raise ValueError("\n".join(errors))
-
 
 _broadcast_required = reject(
     lambda s, a, b: s.broadcast_type == BroadcastType.None_,
@@ -179,7 +143,6 @@ UNPACKER_MAP = {
         lambda s: UnpackerA(reuse_dest=s.reuse_dest),
         [
             IN0_REQUIRED,
-            INT32_NEEDS_UNPACK_TO_DEST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
             TRANSPOSE_NEEDS_FULL_TILE,
@@ -551,6 +514,13 @@ TERNARY_SFPU_OPS = {
 }
 
 
+_sfpu_tile_checks = [
+    reject(
+        lambda s, tile, acc: tile.face_r_dim != 16, "Quasar SFPU requires 16-row faces"
+    ),
+]
+
+
 class FpuMathSchema(FpuMathSchemaBase):
     _fpu_map: ClassVar = FPU_MAP
     _unpacker_map: ClassVar = UNPACKER_MAP
@@ -561,11 +531,28 @@ class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
     _sfpu_cls: ClassVar = UnarySfpu
     _sfpu_ops: ClassVar = UNARY_SFPU_OPS
     _dropout_ops: ClassVar = {"Dropout"}
+    _checks: ClassVar = [
+        *_sfpu_tile_checks,
+        reject(
+            lambda s, tile, acc: tile.tile_dims != (32, 32)
+            and s.iterations not in ("tile", tile.total_tile_size() // 32),
+            "Quasar UnarySfpu on tiny tiles requires whole-tile iterations; use iterations: tile",
+        ),
+        *UNARY_SFPU_CHECKS,
+    ]
 
 
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_cls: ClassVar = BinarySfpu
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
+    _checks: ClassVar = [
+        *_sfpu_tile_checks,
+        reject(
+            lambda s, tile, acc: tile.tile_dims != (32, 32) and s.iterations != 32,
+            "Quasar BinarySfpu on tiny tiles requires whole-tile iterations; use iterations: 32",
+        ),
+        *BINARY_SFPU_CHECKS,
+    ]
     _sign_magnitude_ops: ClassVar = {
         "SfpuElwadd",
         "SfpuElwmul",
@@ -581,6 +568,7 @@ class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):
 class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):
     _sfpu_cls: ClassVar = TernarySfpu
     _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
+    _checks: ClassVar = [*_sfpu_tile_checks, *BINARY_SFPU_CHECKS]
 
 
 class QuasarTopKSfpuMathSchema(TopKSfpuMathSchema):
@@ -615,37 +603,58 @@ PackEntrySchema = Union[
 class OperationSchema(OperationSchemaBase):
     dest_consuming_operations: ClassVar = frozenset({"TransposeDest"})
 
-    def _validate_sfpu_tile_shape(self, tile_shape, schemas):
-        for schema in schemas:
-            if not isinstance(schema, (UnarySfpuMathSchema, BinarySfpuMathSchema)):
-                continue
-            if tile_shape.face_r_dim != 16:
-                raise ValueError("Quasar SFPU requires 16-row faces")
-            if tile_shape.tile_dims == (32, 32):
-                continue
-            if isinstance(schema, UnarySfpuMathSchema):
-                allowed_iterations = ("tile", tile_shape.total_tile_size() // 32)
-                recommended = "tile"
-            elif isinstance(schema, TernarySfpuMathSchema):
-                continue  # Ternary iterations are already per face and fixed at eight.
-            else:
-                # Binary iterations: 32 supplies eight row-pair iterations to each selected face.
-                allowed_iterations = (32,)
-                recommended = 32
-            if schema.iterations not in allowed_iterations:
-                raise ValueError(
-                    f"Quasar {schema.type} on tiny tiles requires whole-tile iterations; "
-                    f"use iterations: {recommended}"
-                )
-
     math: List[MathSchema] = Field(..., min_length=1)
     pack: List[PackEntrySchema] = Field(..., min_length=1)
 
-    def to_l1_operation(self, operands, dest_acc=False):
-        operation = super().to_l1_operation(operands, dest_acc)
-        config = GlobalConfig(
-            architecture=ChipArchitecture.QUASAR,
-            dest_acc=DestAccumulation(dest_acc),
-        )
-        _validate_math_fidelities(operation, config)
-        return operation
+    def validate_formats(self, operation, config):
+        wide_formats = {DataFormat.Float16, DataFormat.Tf32, DataFormat.Float32}
+        errors = []
+        for index, node in enumerate(operation.math_nodes, start=1):
+            if not isinstance(node, FpuNode):
+                continue
+            if node.src_a is None:
+                fpu_formats = {node.dest_format}
+            elif node.unpack_to_dest.value:
+                fpu_formats = set()
+            else:
+                fpu_formats = {o.data_format for o in (node.src_a, node.src_b) if o}
+            if DataFormat.UInt16 in fpu_formats:
+                errors.append(
+                    f"Math node {index} (Fpu)\n    Quasar FPU can't handle UInt16."
+                )
+                continue
+            if (
+                isinstance(node.fpu, DatacopyFpu)
+                and not node.unpack_to_dest.value
+                and not is_valid_quasar_fpu_path(
+                    node.unpack_A_src,
+                    node.unpack_A_dst,
+                    node.dest_format,
+                    config.dest_acc,
+                )
+            ):
+                errors.append(
+                    f"Math node {index} (Fpu)\n    Quasar FPU datacopy cannot move "
+                    f"{node.unpack_A_dst.name} to {node.dest_format.name}"
+                )
+            if node.math_fidelity == MathFidelity.LoFi:
+                continue
+            if not isinstance(node.fpu, (EltwiseFpu, MatmulFpu, ReduceFpu)):
+                continue
+            src_a, src_b = node.unpack_A_dst, node.unpack_B_dst
+            allowed = [MathFidelity.LoFi]
+            if src_a in wide_formats:
+                allowed.append(MathFidelity.HiFi2)
+            if src_b in wide_formats:
+                allowed.append(MathFidelity.HiFi3)
+            if src_a in wide_formats and src_b in wide_formats:
+                allowed.append(MathFidelity.HiFi4)
+            if node.math_fidelity not in allowed:
+                errors.append(
+                    f"Math node {index} (Fpu)\n    Quasar "
+                    f"{node.math_fidelity.name} has redundant fidelity phases for "
+                    f"SrcA={src_a.name}, SrcB={src_b.name}; "
+                    f"allowed fidelities: {', '.join(f.name for f in allowed)}"
+                )
+        if errors:
+            raise ValueError("\n".join(errors))

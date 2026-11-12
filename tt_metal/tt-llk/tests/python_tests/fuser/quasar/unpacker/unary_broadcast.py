@@ -80,12 +80,3 @@ class UnaryBroadcastUnpacker(Unpacker):
             f"_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, false>"
             f"({block.tile_id_src_a});\n"
         )
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

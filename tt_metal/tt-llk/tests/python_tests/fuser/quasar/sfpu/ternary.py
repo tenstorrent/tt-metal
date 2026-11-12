@@ -6,6 +6,9 @@ from fuser.blackhole.sfpu.ternary import TernarySfpu as BaseTernarySfpu
 
 
 class TernarySfpu(BaseTernarySfpu):
+    def supports_dest_format(self, dest_format) -> bool:
+        return True  # Quasar where is typed through SFPI, not a DataFormat argument.
+
     def get_headers(self):
         return [
             "llk_math_common.h",
