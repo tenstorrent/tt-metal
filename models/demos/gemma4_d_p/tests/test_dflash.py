@@ -44,7 +44,7 @@ def reference_kv(config, state, features, positions):
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": 32 * 1024 * 1024})
 @pytest.mark.parametrize(
     "checkpoint,chunk_size,sequence_parallel",
-    [(False, 8192, False), (True, 8192, False), (False, 6656, False), (False, 8192, True), (True, 8192, True)],
+    [(False, 4096, False), (True, 4096, False), (False, 6656, False), (False, 4096, True), (True, 4096, True)],
     ids=["synthetic", "checkpoint", "chunk6656", "synthetic-sequence-parallel", "checkpoint-sequence-parallel"],
 )
 def test_dflash_slots_and_trace(mesh_device, checkpoint, chunk_size, sequence_parallel, monkeypatch, tmp_path):
