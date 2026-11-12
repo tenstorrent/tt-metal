@@ -25,8 +25,28 @@ class DriscL1Allocation;
 
 namespace experimental {
 
+class GlobalCircularBuffer;
+enum class SenderCoreType : uint8_t;
+
 namespace global_circular_buffer_dram_sender {
-struct GlobalCircularBufferDramSenderInternals;
+struct GlobalCircularBufferDramSenderInternals {
+    static GlobalCircularBuffer make_dram_sender(
+        distributed::MeshDevice& mesh_device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        std::vector<std::vector<CoreCoord>> receiver_logical_cores_per_sender,
+        uint32_t size,
+        BufferType buffer_type,
+        CoreType receiver_core_type);
+
+    static SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb);
+    static DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb);
+    static DeviceAddr pages_sent_receiver_l1_base(const GlobalCircularBuffer& gcb);
+    static DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
+    static std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
+    static std::shared_ptr<DriscL1Allocation> receiver_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
+    static const std::vector<std::vector<CoreCoord>>& receiver_logical_cores_per_sender(
+        const GlobalCircularBuffer& gcb);
+};
 }  // namespace global_circular_buffer_dram_sender
 
 // Impl-only backing state for tt-metalium/global_circular_buffer.hpp's GlobalCircularBuffer.
@@ -68,6 +88,8 @@ private:
     void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
     // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
     void initialize_dram_sender_state_block(uint32_t max_num_receivers_per_sender);
+    // Checks the size against the DRISC L1 receiver zone, allocates it, and writes the config pages.
+    void allocate_dram_receiver_zone();
     // Writes each DRAM receiver's config page (dram_receiver_config_page.hpp) with zeroed credit lines.
     void write_dram_receiver_config_pages();
     bool has_dram_receivers() const { return receiver_core_type_ == CoreType::DRAM; }
@@ -84,6 +106,7 @@ private:
         std::vector<std::vector<CoreCoord>> receiver_logical_cores_per_sender,
         uint32_t size,
         BufferType buffer_type,
+        CoreType receiver_core_type,
         DramSenderTag);
 
     // GlobalCircularBufferImpl is implemented as a wrapper around a sharded buffer
