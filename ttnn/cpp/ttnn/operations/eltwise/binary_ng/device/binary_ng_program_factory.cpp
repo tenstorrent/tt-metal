@@ -190,7 +190,8 @@ public:
             shard_shape[1]);
 
         const auto [D, N, C, Ht, Wt] = get_shape_dims(tensor);
-        const auto unrolled_Ht = D * N * C * Ht;
+        const auto& padded_shape = tensor.padded_shape();
+        const uint32_t unrolled_Ht = padded_shape.volume() / (padded_shape[-2] * padded_shape[-1]) * Ht;
         last_shard_shape = {
             shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
