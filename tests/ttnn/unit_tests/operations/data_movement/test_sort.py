@@ -987,6 +987,49 @@ def test_fp32_input_uint16_preallocated_index_rejected(device, expect_error):
         ttnn.sort(x, dim=-1, out=(out_v, out_i))
 
 
+@pytest.mark.parametrize("shape, dim", [([TILE_HEIGHT, 65537], -1), ([65537, TILE_WIDTH], 0)])
+def test_bf16_input_uint16_preallocated_index_rejected_for_wide_sort_dim(shape, dim, device, expect_error):
+    """UINT16 indices hold the positions 0 to 65535, so a sort dimension of more than 65536 elements needs UINT32."""
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    x = ttnn.from_torch(
+        t, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+    )
+    out_v = ttnn.zeros(
+        shape, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out_i = ttnn.zeros(
+        shape, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    with expect_error(RuntimeError, "must be UINT32 when the sort dimension has more than 65536 elements"):
+        ttnn.sort(x, dim=dim, out=(out_v, out_i))
+
+
+def test_bf16_input_uint16_preallocated_index_at_widest_sort_dim(device):
+    """A 65536-element sort dimension still fits UINT16 indices: they come back a permutation that reproduces the
+    sorted values."""
+    shape = [TILE_HEIGHT, 65536]
+    torch.manual_seed(0)
+    t = torch.randn(shape, dtype=torch.bfloat16)
+    x = ttnn.from_torch(
+        t, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+    )
+    out_v = ttnn.zeros(
+        shape, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out_i = ttnn.zeros(
+        shape, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    ttnn.sort(x, dim=-1, out=(out_v, out_i))
+
+    values = ttnn.to_torch(out_v)
+    indices = ttnn.to_torch(out_i).to(torch.int64) & 0xFFFF
+    assert torch.equal(values, torch.sort(t, dim=-1).values)
+    assert torch.equal(torch.sort(indices, dim=-1).values, torch.arange(shape[-1]).expand(shape))
+    assert torch.equal(torch.gather(t, -1, indices), values)
+
+
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_width_sharded(layout, device):
     torch.manual_seed(0)
