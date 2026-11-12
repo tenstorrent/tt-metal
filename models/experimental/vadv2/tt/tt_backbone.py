@@ -116,6 +116,9 @@ class TtResnet50:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ceil_mode=False,
             )
+            # On a small grid max_pool2d returns NHWC rather than flattened rows, and joining that on
+            # dim 2 would interleave the two halves' images row by row.
+            x0, x1 = (ttnn.reshape(half, (1, 1, -1, half.shape[-1])) for half in (x0, x1))
             x = ttnn.concat((x0, x1), dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             x = ttnn.max_pool2d(
