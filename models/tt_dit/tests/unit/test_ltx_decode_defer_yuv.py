@@ -28,6 +28,7 @@ def _decode_latents():
         "logger": SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None),
         "Watchdog": lambda name: contextlib.nullcontext(),
         "log_dram": lambda *a, **k: None,
+        "cap_torch_threads_to_half_the_cpus": lambda: (lambda fn: fn),
     }
     # Execute the production method, with only its device dependencies replaced.
     exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), namespace)

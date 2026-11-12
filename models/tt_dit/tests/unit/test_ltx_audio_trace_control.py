@@ -32,7 +32,7 @@ def definitions(path, names, namespace=None, class_name=None):
     if class_name:
         nodes = next(n for n in nodes if isinstance(n, ast.ClassDef) and n.name == class_name).body
     selected = [n for n in nodes if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
-    ns = dict(namespace or {})
+    ns = {"cap_torch_threads_to_half_the_cpus": lambda: (lambda fn: fn), **(namespace or {})}
     source = "from __future__ import annotations\n" + ast.unparse(ast.Module(selected, type_ignores=[]))
     exec(compile(source, str(path), "exec"), ns)
     return ns
