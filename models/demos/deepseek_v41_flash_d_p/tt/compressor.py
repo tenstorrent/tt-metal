@@ -371,6 +371,19 @@ class AttnTable:
         self._put(carry, self.base)
         self._put(kv_rm, self.base + WINDOW)
 
+    def rows_copy(self, a: int, b: int) -> ttnn.Tensor:
+        """DECODER_SKIP=decode (P.51): a copy of the history rows of groups [a, b) as stored (bfp4_rows: their 320 B
+        records; bf16: the rows), for ``restore`` (device; never a full-range slice, K-1)."""
+        assert 0 <= a < b <= self.hist and b - a < self.buf.shape[-2], (a, b, self.hist)
+        w = self.buf.shape[-1]
+        return ttnn.slice(self.buf, [0, 0, a, 0], [1, 1, b, w], memory_config=DRAM, sub_core_grids=sub_cores(self.buf))
+
+    def restore(self, rows: ttnn.Tensor, a: int) -> None:
+        """Writes ``rows_copy``'s rows back at group ``a`` (consumed): the table's rows there as they were."""
+        n, w = rows.shape[-2], self.buf.shape[-1]
+        ttnn.bringup.slice_write(rows, self.buf, [0, 0, a, 0], [1, 1, a + n, w], [1, 1, 1, 1], max_grid=max_grid())
+        dealloc(rows)
+
     def load_host(self, rows: torch.Tensor, g0: int) -> None:
         """Host boundary: compressed rows [n, 512] of groups [g0, g0 + n) (a loaded prefix). CKV_FORMAT=bfp4_rows:
         encoded on the device like a chunk's rows (the served rows hold bfp4-rounded values: the same records), n
@@ -964,9 +977,26 @@ class TtCompressor:
             g = masked
         return g
 
-    def write(self, ckv: ttnn.Tensor, k: ttnn.Tensor, start: int, end: int, caches: TtCompressCaches) -> None:
+    def write(
+        self,
+        ckv: ttnn.Tensor,
+        k: ttnn.Tensor,
+        start: int,
+        end: int,
+        caches: TtCompressCaches,
+        write_from: int | None = None,
+    ) -> None:
         """The chunk's groups complete by actual_end ((j + 1) r <= end) into the served caches; the other rows of the
-        chunk (an incomplete last group, pad) written as zeros. Does not consume its inputs."""
+        chunk (an incomplete last group, pad) written as zeros. Does not consume its inputs. ``write_from`` (P.51,
+        DECODER_SKIP=decode: the engine's global_write_start): no row of a position below it is written (``_write_from``),
+        nothing at all when it is at or past ``end``."""
+        lo = int(start) if write_from is None else max(int(start), int(write_from))
+        if lo >= end:
+            return
+        if lo > start:
+            for t, cache in ((ckv, caches.ckv), (k, caches.index_k)):
+                self._write_from(t, start, lo, end, cache)
+            return
         valid = end // self.ratio - start // self.ratio  # complete groups of the chunk
         for t, cache in ((ckv, caches.ckv), (k, caches.index_k)):
             table = cache.table
@@ -988,6 +1018,79 @@ class TtCompressor:
                 rm = self._gathered(t, valid)
                 cache.write(rm, start, end)
             dealloc(rm)
+
+    def _write_from(self, t: ttnn.Tensor, start: int, lo: int, end: int, cache: TtServedRows) -> None:
+        """DECODER_SKIP=decode (P.51), an encoder replay chunk [start, end) whose rows below ``lo`` (global_write_start,
+        start < lo < end) are the cached prefix's: t (as ``write``'s, not consumed) -> the served cache gets only the
+        groups of [lo, end): the chunk's natural-order rows shifted up by (lo - start) / r (rows from lo on first; the
+        rows moved to the end lie at positions >= start + S >= ceil32(end), zeroed as pad, never written: the cache
+        write stops at ceil32(end)) and written as a chunk at ``lo`` (the write path of any 32-aligned start: the
+        server's order, the bf16 / fp8 / bfp8 copies). The attention table (private, not served) is written as today
+        and its rows of groups [start / r, lo / r) put back as they were, so attention keeps reading the cached rows
+        there. The gathered path (never the P.11 pack path), the same bytes as ``write`` for the groups it writes."""
+        r = self.ratio
+        assert start % 32 == 0 and lo % 32 == 0 and start < lo < end, (start, lo, end)
+        g = self._gathered_tile(t, end // r - start // r)  # [1, 1, S / r, w] TILE natural order, pad rows zero
+        table, src = cache.table, g
+        if table is not None:
+            a = start // r
+            old = table.rows_copy(a, lo // r)
+            if table.bfp4:  # CKV_FORMAT=bfp4_rows: the records, and their rounded bf16 values for the served rows
+                src = table.append_tiles(g, a)
+            else:
+                full = to_rm(g, memory_config=DRAM)
+                table.append(full, a)
+                if full is not g:
+                    dealloc(full)
+            table.restore(old, a)
+        rm = to_rm(src, memory_config=DRAM)
+        if src is not g and rm is not src:
+            dealloc(src)
+        n, w, off = rm.shape[-2], rm.shape[-1], (lo - start) // r
+        head = ttnn.slice(rm, [0, 0, off, 0], [1, 1, n, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
+        tail = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, off, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
+        rot = ttnn.concat([head, tail], dim=2, memory_config=DRAM, sub_core_grids=sub_cores(head))
+        for x in (head, tail):
+            dealloc(x)
+        if rm is not g:
+            dealloc(rm)
+        if g is not t:
+            dealloc(g)
+        tile = ttnn.to_layout(rot, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(rot))
+        if tile is not rot:
+            dealloc(rot)
+        masked = self._mask_rows(tile, end // r - lo // r)  # rows of groups past end (the moved rows too) -> 0
+        if masked is not tile:
+            dealloc(tile)
+        shifted = to_rm(masked, memory_config=DRAM)
+        if shifted is not masked:
+            dealloc(masked)
+        cache.write(shifted, lo, end, table=False)
+        dealloc(shifted)
+
+    def _mask_rows(self, g: ttnn.Tensor, valid: int) -> ttnn.Tensor:
+        """g [1, 1, n, w] bf16 TILE (not consumed) with rows at or past ``valid`` zero (``g`` itself when none are)."""
+        total = g.shape[-2]
+        if valid >= total:
+            return g
+        full = total == self.tables.iota.shape[-2]
+        iota = (
+            self.tables.iota
+            if full
+            else ttnn.slice(
+                self.tables.iota,
+                [0, 0, 0, 0],
+                [1, 1, total, 1],
+                memory_config=DRAM,
+                sub_core_grids=sub_cores(self.tables.iota),
+            )
+        )
+        keep = ttnn.lt(iota, float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
+        if not full:
+            dealloc(iota)
+        out = ttnn.multiply(g, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(g))
+        dealloc(keep)
+        return out
 
     def _write_packed(self, t: ttnn.Tensor, start: int, end: int, valid: int, cache: TtServedRows) -> None:
         """CKV_PACK_BEFORE_GATHER=on (P.11; CKV_FORMAT=bfp4_rows, start % S == 0): t [1, 1, W / r, 512] bf16 TILE (the SP

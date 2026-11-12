@@ -40,7 +40,7 @@ the re-index aliases and the 128-row window snapshot real (both were "to do" in 
 - Shards are ND `[1, 1, 32 / r, width]` ROW_MAJOR, round-robin over every DRAM bank: record j in bank j % banks at
   `base + (j // banks) x record bytes`.
 - The snapshot holds every layer, including the decoder layers 20-39, because prefill runs all 40 layers on every
-  chunk by default (`DECODER_SKIP=off`).
+  chunk by default (`DECODER_SKIP=off`). Under `DECODER_SKIP=decode` (P.51) only layers 0-19's are written.
 - Only the KV sources (2, 8, 14, 20) carry compressed KV. The re-index layers 24, 28, 32, 36 read layer 20's index
   keys, so they get alias entries in config 4 and no bytes.
 
@@ -92,7 +92,21 @@ All in `tt/settings.py` (environment variable `DS41_<NAME>`). Verified by callin
 | `INDEX_K_SERVED` | `fp8_row192` | `bf16`: index rows are bf16 x 128 (256 B), records 4,096 / 8,192 B, and `4_index_k_r1` covers layer 20 only (no re-index entries) |
 | `CKV_FORMAT` | `bf16` | `bfp4_rows`: changes what attention reads and the values' precision, **not the table**. The served records stay bf16 rows (holding 4-bit-rounded values). Checked: `served_configs` gives the same table |
 | `PREFILL_END` | `cap` | `end`: prefill computes and writes every position up to the engine's actual_end (P.42's path); the served bytes below cap are the same (P.49 test), the table is the same |
+| `DECODER_SKIP` | `off` | `decode` (P.51): the table is the same; prefill serves history [0, P) and the snapshot of layers 0-19 at P (P = (N - 128) // KV_BLOCK_SIZE x KV_BLOCK_SIZE, tt-d-gen's stop); layers 20-39's snapshot records are not written (decode rebuilds those windows). A chunk's global_write_start keeps every history record below it unwritten |
 | `KV_BLOCK_SIZE` | 64 | Changes only cap (and so which window rows the snapshot holds and how many history records decode reads). Set it to the deployed worker's value |
+
+## Changed in P.51 (2026-11-12, owner-authorized contract change, decode's proposal; behind `DECODER_SKIP=decode`, default off)
+
+- **Prefill stops at P and never runs layers 21-39.** tt-d-gen (not yet changed) will stop prefill at
+  P = (N - 128) // KV_BLOCK_SIZE x KV_BLOCK_SIZE and send chunks with actual_end <= P; decode runs [P, N) through all
+  40 layers. Under `DECODER_SKIP=decode` prefill runs layers 0-19 and layer 20's KV / index head; every layer is still
+  acked once a chunk.
+- **Served:** configs 1-4 for [0, P) as before; `0_window_kv` holds valid rows only for layers 0-19 (rows [P - 128, P)
+  at p % 128). Layers 20-39's 4 snapshot records keep whatever the slot held (zeros on a fresh slot): decode must not
+  read them. The table itself (configs, entries, layers, sizes) is unchanged.
+- **global_write_start (new header field).** No history record (configs 1-4) of a position below it is written by
+  the chunk; positions in [actual_start, global_write_start) are an encoder replay (layers 0-19, windows truncated at
+  actual_start). Missing = actual_start.
 
 ## Changed in P.49 (2026-11-12, owner-authorized contract change; pending the owner's acceptance)
 

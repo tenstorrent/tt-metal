@@ -671,3 +671,65 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   results/FIX.5_profile.json is 627 KB but tracked since Oct 27 and written once (not appended): left as is.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.27 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
+
+## P.51 (perf, attempt 1): DECODER_SKIP=decode (Kartik's cut), per-position encoder replay below global_write_start
+- Expected per chunk (written before any code change; perf_guide sections 1-2). A serving chunk under decode runs
+  layers 0-19 in full, layer 20's KV projection only (attn_hc .. compressor, P.30's kv_only) and skips layers 21-39.
+  P.30 measured that skipped chunk at 83.6 vs 167.9 ms device at 51200; with today's ~189 ms device (P.42 off) I
+  expect ~95-100 ms device a non-replay chunk (-~90 ms, about half), host about -45 % (19.x of 40 layers' launches
+  gone; ~-90 ms of host dispatch if the chunk stays host-bound). A replay chunk (first chunk of a prefix hit) costs
+  the same as a normal one (the replay rows are computed; only their history writes are skipped) plus one row shift
+  a KV-source cache write (~2 x 6 small ops, < 1 ms). The framework's A/B (quick rung, p51200) drives the model with
+  last unset, as the harness always has: there decode runs every layer, the same path as off, so expected 0 there;
+  the skip shows only on chunks the serving runtime marks (and with BRINGUP_CHUNK_LAST=0, which I time separately).
+- What changed. Setting `DECODER_SKIP` gains `decode` (default stays `off`; keep_default). Model (tt/model.py):
+  decode builds the decoder list as exact does (layer 20 = kv_only, 21-39 skipped on a chunk marked last=False);
+  `begin_chunk(.., write_start=g)`: g > start -> replay (every window truncated at start, the `_window_policy` replay
+  branch now also for decode), `write_from(start)` = max(start, g); the compressor step skips a chunk wholly below g
+  and passes `write_from` to `TtCompressor.write`; `kv_only` returns at once when g >= end; decode writes layers
+  0-19's snapshot on every chunk (`_snap`); `last_start` / `_check_last_start` act for exact / replay128 only;
+  `use_decoder_skip` takes decode / off on any model loaded with a skip mode. g > start under another mode, or with
+  WINDOW_KV_KEEP=full, raises. tt/compressor.py `_write_from`: the chunk's gathered natural-order rows rotated up by
+  (g - start) / r (slice + concat in ROW_MAJOR), the moved rows masked to zero (they lie at positions >= start + S >=
+  ceil32(end), which update_padded_kv_cache's valid_global never writes anyway), written as a chunk at g through the
+  usual any-start path (server order, bf16 / fp8 / bfp8 copies, `_region`); the private attention table is written as
+  today and its rows of groups [start / r, g / r) put back (`AttnTable.rows_copy` / `restore`). Adapter
+  (tt/runners/adapter.py): `prefill_chunk(.., global_write_start=None)` (None -> actual_start), under decode every
+  chunk last=False; acks unchanged (every layer, after a sync).
+- Decisions. (a) The skip acts where the caller marks the chunk (the serving runtime always does under decode); the
+  framework harness (ladder, determinism, profile) passes last unset and so runs every layer under decode too: those
+  gates measure the off path (bit-identical code path), and BRINGUP_CHUNK_LAST=0 times the skipped chunk. (b) The
+  window ring (snapshot128's working rows) is written for replayed positions: it is not served, and the next chunk's
+  carry / the snapshot need it; the brief's attention.py cache.write lines are ring writes under snapshot128 and the
+  served full slab only under WINDOW_KV_KEEP=full, where a replay is refused. (c) Layers 20-39's snapshot records are
+  not written under decode (stated in serving_contract.md / migration_configs.md). (d) test_contract and
+  test_adapter_acks check layers 20-39's windows / ring state, which decode no longer computes: they run on off
+  (DS41-240), as the brief's item (5) says.
+- Gotcha: `devjob wait` blocks past a 2-minute tool call; run it as a background task.
+- Results (8x4, 40 layers). tests/test_decoder_skip_decode.py (one model load, decode vs off in-process, 3 slots, 6.8
+  min): (1) served_bytes_differ 0 of 20,912 records (history [0, P) + layers 0-19's snapshot), N 300 / 4320 / 5248 /
+  7320 / 10368 (P 128 / 4160 / 5120 / 7168 / 10240) x novel / code; decoder_snapshot_written 0; acks once per layer
+  per chunk, both modes. (2) Prefix hit (Xp 4096, replay chunk [3968, 7168), g 4096): replay_rows_written 0 (both
+  prompts); rows [4096, 7168) vs a fresh decode prefill, novel: history min PCC 0.9952 (1_compress_kv_r2 L14), max rel
+  0.098; layers 0-19's snapshot min PCC 0.9920 (L18), max rel 0.126; code: worst PCC 0.9733 (snapshot L18), max rel
+  0.231. Against the golden (novel; server_rules.state_threshold, official drift for dumped layers' windows): replay
+  0 checks over the limits, fresh 0; e.g. 3_compress_kv_r1 L20 PCC replay 0.99295 / fresh 0.99326, 1_compress_kv_r2
+  L14 0.98947 / 0.98975, snapshot L14 0.99008 / 0.99148.
+- Gate check (default env = off; 1428 s): test_ladder (determinism 0, err_final_hidden 0.1321, top5 1.0, every
+  err_layer / err_state within its limit), test_decoder_skip_decode, test_contract (contract_checks_failed 0,
+  acks_early 0), test_adapter_acks: all pass; chunk_wall_ms / device_ms_total MISSING (the orchestrator's A/B
+  profile supplies them).
+- `orchestrator measure --task P.51` (change on = decode; the harness's chunks with last unset, so the off path):
+  determinism 0; quick L00 0.0195 ... L38 0.1167, L39 0.9115 (limit 1.533, DS41-188), host_transfers_per_layer 0, wall
+  180.9; p51200 chunk_wall_ms 204.9 (spread 4.7), device_ms_total 185.11.
+- The skipped chunk (decode, BRINGUP_CHUNK_LAST=0, p51200, one profiled process): device_ms_total 93.38 vs 185.11
+  (-91.7 ms, -49.5 %; expected ~95-100), profiled wall 110.8 vs 196.4 (-85.6 ms); experts 53.11 vs 103.06, attention
+  23.60 vs 48.09, indexer 1.38 vs 6.80, compressor 2.01 vs 1.96 (layer 20's KV head stays). In the adapter test (wall
+  with a sync before each of the 40 acks) 5120-row chunks at positions 0 / 5120: decode ~176 ms vs off ~282-300 ms.
+- Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py`;
+  the skipped chunk's time: `DS41_DECODER_SKIP=decode DS41_ENGRAM_TABLE=resident BRINGUP_CHUNK_LAST=0 BRINGUP_POS=51200
+  BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py`.
+- For the owner: tasks.yaml P.51 has no `ab_nonlast: true`, so the orchestrator's A/B times only chunks with last
+  unset (identical on both sides); adding it would put the skipped chunk (p51200_nonlast) in the table. Open:
+  tt-d-gen's prefix-hit request must carry the slot's id history below actual_start for the engram tail (the same
+  slot has it; a migrated prefix needs load_tokens), as for every follow-up today.
