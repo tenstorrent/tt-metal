@@ -33,8 +33,10 @@ uint64_t ns_since(Clock::time_point start) {
 // one still reacts within microseconds.
 class Backoff {
 public:
-    void pause() {
-        if (spins_ < kSpinsBeforeSleep) {
+    // `may_sleep` is false while a transfer is moving: MPI progresses only inside the polling calls, so sleeping
+    // between polls starves it.
+    void pause(bool may_sleep) {
+        if (!may_sleep || spins_ < kSpinsBeforeSleep) {
             ++spins_;
             std::this_thread::yield();
         } else {
@@ -56,7 +58,7 @@ bool wait_until(Pred&& pred, const std::atomic<bool>& stop) {
         if (stop.load(std::memory_order_acquire)) {
             return false;
         }
-        backoff.pause();
+        backoff.pause(/*may_sleep=*/true);
     }
     return true;
 }
@@ -146,7 +148,7 @@ public:
         for (const auto& p : parts) {
             requests.push_back(ctx_->isend(ttsl::Span<std::byte>(p.data, p.bytes), peer_, multihost::Tag{tag_}));
         }
-        return complete_all(requests, stop);
+        return complete_all(requests, stop, /*idle=*/false);
     }
 
     bool recv_transfer(uint32_t& seq, const std::vector<Part>& parts, const std::atomic<bool>& stop) override {
@@ -155,7 +157,7 @@ public:
         std::vector<multihost::RequestPtr> head;
         head.push_back(ctx_->irecv(
             ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&seq_), sizeof(seq_)), peer_, multihost::Tag{tag_}));
-        if (!complete_all(head, stop)) {
+        if (!complete_all(head, stop, /*idle=*/true)) {
             return false;
         }
         seq = seq_;
@@ -164,12 +166,13 @@ public:
         for (const auto& p : parts) {
             requests.push_back(ctx_->irecv(ttsl::Span<std::byte>(p.data, p.bytes), peer_, multihost::Tag{tag_}));
         }
-        return complete_all(requests, stop);
+        return complete_all(requests, stop, /*idle=*/false);
     }
 
 private:
     // Polls the requests so a stop request is honoured; on stop the unfinished ones are cancelled.
-    static bool complete_all(std::vector<multihost::RequestPtr>& requests, const std::atomic<bool>& stop) {
+    static bool complete_all(
+        std::vector<multihost::RequestPtr>& requests, const std::atomic<bool>& stop, bool idle) {
         Backoff backoff;
         std::vector<bool> done(requests.size(), false);
         size_t remaining = requests.size();
@@ -191,7 +194,7 @@ private:
                 }
                 return false;
             }
-            backoff.pause();
+            backoff.pause(idle);
         }
         return true;
     }
