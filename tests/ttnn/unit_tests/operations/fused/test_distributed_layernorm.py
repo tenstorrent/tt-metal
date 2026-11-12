@@ -410,3 +410,37 @@ def test_post_all_gather_row_wider_than_l1_buffers(device, shape, affine, is_rms
         expected = expected + beta
     got = ttnn.to_torch(tt_out).float()
     torch.testing.assert_close(got, expected, rtol=0.05, atol=0.1)
+
+
+@pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+def test_post_all_gather_chunks_leave_room_for_many_fp32_stats(device, is_rmsnorm):
+    # 64 contributors' FP32 stats take 256 KB (RMSNorm) or 512 KB (LayerNorm) of L1 next to the row chunks.
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    contributors = 64
+    shape = (1, 1, 32, 32768)
+    inp = torch.randn(shape).bfloat16().float()
+
+    tiles_per_contributor = 1 if is_rmsnorm else 2
+    stats = torch.zeros(shape[:-1] + (contributors * tiles_per_contributor * 32,))
+    for k, part in enumerate(inp.chunk(contributors, dim=-1)):
+        base = k * tiles_per_contributor * 32
+        stats[..., base : base + 1] = part.pow(2).sum(-1, keepdim=True)
+        if not is_rmsnorm:
+            stats[..., base + 32 : base + 33] = part.sum(-1, keepdim=True)
+
+    tt_inp = ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_stats = ttnn.from_torch(stats, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    post_all_gather = ttnn.rms_norm_post_all_gather if is_rmsnorm else ttnn.layer_norm_post_all_gather
+    # FP32 stats need fp32_dest_acc_en, which also makes the per-row statistics buffers FP32.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+    )
+    tt_out = post_all_gather(tt_inp, tt_stats, epsilon=epsilon, compute_kernel_config=compute_kernel_config)
+
+    if is_rmsnorm:
+        expected = inp * torch.rsqrt(inp.pow(2).mean(-1, keepdim=True) + epsilon)
+    else:
+        expected = torch.nn.functional.layer_norm(inp, (shape[-1],), eps=epsilon)
+    got = ttnn.to_torch(tt_out).float()
+    torch.testing.assert_close(got, expected, rtol=0.05, atol=0.1)
