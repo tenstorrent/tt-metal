@@ -236,9 +236,9 @@ class _QuasarArgsMixin:
         return self._fit(cfg, mode, seq_len, self.prefill_len_cutoff, self.dim)
 
     def get_lm_head_input_mem_config(self, mode, prefetcher=None):
-        # On grids below 8x8 the width-sharded prefill input collides with the LM-head matmul's L1 buffers.
-        gx, gy = self._device_grid()
-        if mode == Mode.PREFILL and gx * gy < 64:
+        # Quasar matmul cannot take a sharded in0 (QUASAR_GAPS Q4), and on grids below 8x8 the width-sharded input
+        # would also collide with the LM-head matmul's L1 buffers (G3): keep the prefill input in DRAM.
+        if mode == Mode.PREFILL and (is_quasar() or self._small_grid()):
             return ttnn.DRAM_MEMORY_CONFIG
         return super().get_lm_head_input_mem_config(mode, prefetcher)
 
