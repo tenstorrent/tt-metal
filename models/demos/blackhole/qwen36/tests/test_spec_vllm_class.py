@@ -102,8 +102,14 @@ class PluginRunner:
     def _table(self, last_pos):
         """[1, width] int32 table covering positions up to last_pos + (1+K) + (K+1) lookahead, zero padded."""
         need = min(self.width, math.ceil((last_pos + (1 + K) + (K + 1)) / self.bs))
+        new = []
         while len(self.blocks) < need:
-            self.blocks.append(self.free.pop())
+            new.append(self.free.pop())
+            self.blocks.append(new[-1])
+        if new:
+            # vLLM's new_block_ids_to_zero: a new attention block can hold another request's GDN state, whose float32
+            # bytes the verify's attention reads as NaN or Inf at the positions it masks.
+            self.m.zero_kv_cache_blocks(self.kv, new)
         return torch.tensor([self.blocks + [0] * (self.width - len(self.blocks))], dtype=torch.int32)
 
     def _pick(self, logits_row):
