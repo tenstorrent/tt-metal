@@ -342,6 +342,46 @@ cache read-only and set `TT_CACHE_PATH` to it). Two things to know:
   miss cannot start a full checkpoint download) seed `$HF_HOME/hub/models--XiaomiMiMo--MiMo-V2.6-Flash-MOPD` with
   `refs/main` and a snapshot link to the mounted checkpoint.
 
+## OpenRouter's provider checks: two failures (2026-11-12)
+
+OpenRouter's onboarding run against the deployed image (tt-metal ec294657718, vllm-tt-plugin 88e5ca8, vLLM 0.30.0)
+failed two checks. Both were reproduced on bhg2 with that code (one row engine, `serve_mm_eval.sh`), and both are fixed
+in the proxy (`serving/lb.py` and tt-inference-server's `engine_proxy.py`); the engine is unchanged. The two requests
+are conformance cases now (`openrouter_audio_transcription`, `openrouter_youtube_url`; 57 cases).
+
+**input-audio-transcription: an empty completion.** The request is a system prompt ("You are a transcription engine.
+Reply with only the exact words spoken in the audio, with no commentary."), a user turn holding only a 2 s WAV (8-bit,
+22.05 kHz), streamed, temperature 1, top_p 0.95, no `reasoning` field, so thinking is at its default (on). The answer
+had the transcription in `reasoning` and nothing in `content`.
+
+* On the device: 50 of 50 answers that way (and 24 of 24 not streamed, 20 of 24 without the system prompt); with
+  thinking off, 24 of 24 have the transcription as content. The raw tokens are `<think><think>the words<|im_end|>`
+  (sometimes one `<think>`), also at temperature 0: the block is never closed.
+* It is the checkpoint, not the port. The fp32 host reference on the same 48-token prompt, teacher-forced along that
+  answer (`reference/answer_audio_fp32.py`, log-probabilities): after `assistant\n`, `<think>` 0.00; after
+  `<think>`, `<think>` -0.01, `This` -5.38, `</think>` -16.78; after the words, `<|im_end|>` 0.00. The device has
+  `<think>` -0.35 and `This` -1.27 at the second position and the same tokens elsewhere.
+* Only transcription-only audio requests do this. An audio question that needs reasoning, an image with the same kind
+  of system prompt and text prompts all give `<think>...</think>answer`.
+* vLLM's `mimo` reasoning parser (0.30's, and 0.32's, which the plugin backports to 0.31) files an unclosed block
+  under reasoning, so moving to vLLM 0.31 does not change it.
+* The fix: a chat answer that stops with `finish_reason` "stop", blank content, no tool call and text in reasoning
+  gets that text as its content too (`AnswerFromReasoning`; `TT_PROXY_ANSWER_FROM_REASONING=0` turns it off).
+  Streamed, it is one content delta before the last event. Through the fixed proxy: 50 of 50 streamed and 16 of 16
+  not streamed have the transcription as content.
+* Not covered: a request with `include_reasoning: false` (or `reasoning.exclude`), where vLLM drops the reasoning
+  before the proxy sees it; that answer stays empty. Not checked: the RL checkpoint (the one OpenRouter's other
+  providers serve), which is not on bhg2, and whether those providers pass the check by answering without thinking.
+
+**input-youtube-url: 400 "Could not open video stream".** The request's `video_url` is a YouTube watch link. The proxy
+downloaded the watch page (HTML) and the engine's video decoder rejected it. A 400 does not count against uptime, but
+the message named a decoder. The proxy now refuses `youtube.com` / `youtu.be` / `youtube-nocookie.com` links by name
+before resolving them, and any URL that answers `text/html` or `application/xhtml+xml`, with a 400 that says to send
+the file itself or a base64 data URI. YouTube links stay unsupported.
+
+API conformance through each fixed proxy in front of the same engine: 57 of 57 (`lb.py`), 57 of 57
+(`engine_proxy.py`). Through the proxy as deployed, `openrouter_audio_transcription` fails and the other 56 pass.
+
 ## Not done
 
 * The text benchmarks (GPQA-Diamond, tau2) are out of scope for now.
