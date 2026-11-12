@@ -132,11 +132,11 @@ void SwigluElemwiseBwProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>&) {
     // Only the buffer addresses change between hits. The outputs come from the return value, which is right for an
     // in-place call (dL_dlinear1 is linear1), a distinct preallocated output and a newly allocated one alike.
-    const uint32_t linear1_addr = tensor_args.linear1.buffer()->address();
-    const uint32_t gate_addr = tensor_args.gate.buffer()->address();
-    const uint32_t dL_dprod_addr = tensor_args.dL_dprod.buffer()->address();
-    const uint32_t dL_dlinear1_addr = output.dL_dlinear1.buffer()->address();
-    const uint32_t dL_dgate_addr = output.dL_dgate.buffer()->address();
+    const uint32_t linear1_addr = tensor_args.linear1.mesh_buffer().address();
+    const uint32_t gate_addr = tensor_args.gate.mesh_buffer().address();
+    const uint32_t dL_dprod_addr = tensor_args.dL_dprod.mesh_buffer().address();
+    const uint32_t dL_dlinear1_addr = output.dL_dlinear1.mesh_buffer().address();
+    const uint32_t dL_dgate_addr = output.dL_dgate.mesh_buffer().address();
 
     const auto& linear1 = tensor_args.linear1;
     const auto split = compute_tile_row_work_split(linear1);

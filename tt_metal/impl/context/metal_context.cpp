@@ -13,6 +13,7 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include "simulator_termination.hpp"
 #include "context_types.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "context/metal_env_accessor.hpp"
@@ -500,11 +501,16 @@ void MetalContext::destroy_all_instances(bool check_device_count) {
 
 void MetalContext::register_handlers_locked() {
     if (!registered_handlers) {
+        // Registered first so it runs after destroy_all_instances.
+        install_simulator_termination_handler();
         std::atexit([]() {
             // Don't check device count because the destruction order is complicated and we can't guarantee that the
             // client isn't holding onto devices on process exit.
             MetalContext::destroy_all_instances(false);
         });
+        // Registered last so it runs before destroy_all_instances, and a signal arriving during that
+        // teardown bounds it instead of starting a second exit.
+        install_simulator_exit_guard();
         registered_handlers = true;
     }
 }
@@ -582,7 +588,12 @@ DispatchCoreConfig MetalContext::resolve_dispatch_core_config(
 }
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
-    TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
+    if (!dispatch_core_manager_) {
+        constexpr const char* reason = "Trying to get dispatch_core_manager before initializing it.";
+        // The context is already unusable. Throwing lets gtest continue and hold the Zebu job.
+        (void)release_simulator_session(1 /*exit_code*/, reason);
+        TT_FATAL(false, "{}", reason);
+    }
     return *dispatch_core_manager_;
 }
 

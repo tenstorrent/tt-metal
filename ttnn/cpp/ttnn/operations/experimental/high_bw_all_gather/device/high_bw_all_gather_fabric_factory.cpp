@@ -561,7 +561,7 @@ ChipShardPageGeometry derive_shard_page_geometry(
     for (int32_t i = dim; i < tensor_rank; ++i) {
         geometry.pages_per_outer_slice *= length_in_pages(i);
     }
-    const uint32_t num_pages = input.buffer()->num_pages();
+    const uint32_t num_pages = input.mesh_buffer().num_pages();
     geometry.pages_per_cache_slot = selected_batch ? num_pages / shape[0] : num_pages;
     TT_FATAL(
         geometry.num_outer_slices * geometry.pages_per_outer_slice == geometry.pages_per_cache_slot,
@@ -638,20 +638,20 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> common_args(
     uint32_t shards_arrived_counter_address,
     uint32_t downstream_started_counter_address) {
     std::vector<uint32_t> reader{
-        tensor_args.input_tensor.buffer()->address(),
-        output.buffer()->address(),
+        tensor_args.input_tensor.mesh_buffer().address(),
+        output.mesh_buffer().address(),
         shards_arrived_counter_address,
-        tensor_args.has_batch_index_metadata() ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u,
+        tensor_args.has_batch_index_metadata() ? tensor_args.input_batch_index_tensor->mesh_buffer().address() : 0u,
         args.batch_slot_num_layers,
         args.batch_slot_layer_idx,
         host_cache_slot_first_page(args, geometry),
         geometry.pages_per_cache_slot};
     std::vector<uint32_t> sender{
-        output.buffer()->address(), shards_arrived_counter_address, downstream_started_counter_address};
+        output.mesh_buffer().address(), shards_arrived_counter_address, downstream_started_counter_address};
     // the chip shard geometry: [0] prefix tensor address [1] valid pages per outer slice (host) [2] outer slices [3]
     // pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab
     const std::array<uint32_t, 8> geometry_block{
-        tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u,
+        tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->mesh_buffer().address() : 0u,
         host_valid_pages_per_outer_slice(args, geometry),
         geometry.num_outer_slices,
         geometry.pages_per_outer_slice,
@@ -742,7 +742,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     }
 
-    const uint32_t page_bytes = input.buffer()->aligned_page_size();
+    const uint32_t page_bytes = input.mesh_buffer().aligned_page_size();
     const uint32_t fabric_payload_bytes = static_cast<uint32_t>(args.packet_size);
     // a page larger than the payload is a chunk of its own, sent as several packets
     const uint32_t pages_per_fabric_chunk = std::max<uint32_t>(1, fabric_payload_bytes / page_bytes);

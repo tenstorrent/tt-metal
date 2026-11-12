@@ -286,11 +286,11 @@ void SoftmaxBackwardFactory::override_runtime_arguments(
     ttnn::Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     auto& reader_common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIdx);
-    reader_common_args[kSoftmaxOutputAddrIdx] = tensor_args.softmax_output.buffer()->address();
-    reader_common_args[kUpstreamGradAddrIdx] = tensor_args.upstream_grad.buffer()->address();
+    reader_common_args[kSoftmaxOutputAddrIdx] = tensor_args.softmax_output.mesh_buffer().address();
+    reader_common_args[kUpstreamGradAddrIdx] = tensor_args.upstream_grad.mesh_buffer().address();
 
     auto& writer_common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIdx);
-    writer_common_args[kOutputAddrIdx] = tensor_return_value.buffer()->address();
+    writer_common_args[kOutputAddrIdx] = tensor_return_value.mesh_buffer().address();
 }
 
 TTML_ASSERT_DESCRIPTOR_OVERRIDE(SoftmaxBackwardDeviceOperation, SoftmaxBackwardFactory);
