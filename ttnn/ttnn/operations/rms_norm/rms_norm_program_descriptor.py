@@ -46,11 +46,14 @@ CB_IDS = [CB_X_RM, CB_X, CB_REDUCE_MASK, CB_SUMSQ, CB_RSTD, CB_GAMMA, CB_NORMED,
 # R3 (W-split) only:
 CB_PARTIAL = 9  # this core's per-row Σx² over its W slice (col-0 valid), handed to the writer
 CB_GATHER = 10  # root: the G partials of each row, gathered by the writers (tile (row, slot) at row*G + slot)
-CB_RSTD_ROOT = 11  # root: combined rstd, handed to the writer to multicast into every cb_rstd of the group
+CB_RSTD_ROOT = 11  # combine owner: its rows' combined rstd, handed to the writer (relay to the root / multicast)
+CB_RSTD_GATHER = 12  # root: every owner's rstd rows (row i at tile i), the multicast source (multi-owner blocks)
 
-# Semaphores (R3): the gather counter on the root; the rstd multicast channel allocates from SEM_MCAST_BASE.
+# Semaphores (R3): the partial-gather counter on every combine owner, the rstd-relay counter on the root; the
+# rstd multicast channel allocates from SEM_MCAST_BASE.
 SEM_GATHER = 0
-SEM_MCAST_BASE = 1
+SEM_RSTD_GATHER = 1
+SEM_MCAST_BASE = 2
 MCAST_PREFIX = "rstd_mcast"
 
 # x / out placement (dataflow CT arg):
@@ -94,6 +97,14 @@ R3_OCCUPANCY_RATIO = 1.2
 R3_STREAM_CHUNK_TILES = 0
 # Stall shadow (R3, TILE + gamma): x·γ while the combine is in flight; only ·rstd remains after rstd arrives.
 R3_GAMMA_SHADOW = True
+# Resident multi-row shards (BLOCK grids) take the shadow only from this many tile-rows per block: below it the
+# gamma read (re-read by every core of a grid column) outlasts sumsq + combine and the shadow would expose it.
+R3_SHADOW_RESIDENT_MIN_ROWS = 4
+# R3 combine distribution (row-wise reduce-scatter, catalog `tensix_all_reduce`): the rows of a block are split
+# over the row-group's G cores in runs of combine_rows = ceil(block_rows / G); core o combines rows
+# [o*q, (o+1)*q) (G partials each + the rstd post-op) and relays its rstd rows to the root, which multicasts the
+# whole block. False = the root combines every row (q = block_rows; one combine owner).
+R3_SCATTER_COMBINE = True
 # FORCE_W_SPLIT is a test hook (regime-pinned tests flip it to exercise R3 on shapes R1 can hold).
 FORCE_W_SPLIT = False
 
@@ -204,6 +215,13 @@ def _n_sq(g: _Geometry, core_w_tiles: int) -> int:
     return (1 if core_w_tiles - p > 0 else 0) + p
 
 
+def _combine_rows(g: _Geometry, r: int) -> int:
+    """Rows per combine owner (q) for a block of r tile-rows — single source for CB sizes and kernel CT args."""
+    if not g.w_split:
+        return 0
+    return math.ceil(r / g.group_size) if R3_SCATTER_COMBINE else r
+
+
 def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int, x_depth: int = 1) -> int:
     """F(r, K) of l1_ledger.md (sum over the CBs this layout/gamma variant allocates)."""
     c = math.ceil(core_w_tiles / K)
@@ -225,8 +243,11 @@ def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int, x_depth: int = 1
         f += STREAM_DEPTH * c * g.s_o  # cb_out | cb_out_rm (resident output shard when x_resident)
     if g.w_split:
         f += r * g.s_f  # cb_partial
-        f += g.group_size * r * g.s_f  # cb_gather (allocated on every core so its address is uniform)
-        f += r * g.s_f  # cb_rstd_root
+        q = _combine_rows(g, r)
+        f += g.group_size * q * g.s_f  # cb_gather (allocated on every core so its address is uniform)
+        f += q * g.s_f  # cb_rstd_root
+        if q < r:
+            f += r * g.s_f  # cb_rstd_gather (root's multicast source; uniform address)
     return f
 
 
@@ -512,13 +533,14 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
             raise
         g.gamma_shadow = False  # the block-wide cb_normed does not fit: normalize then scale after rstd
         block_rows, w_chunk_tiles, num_w_chunks, x_block_depth = _select_blocks(g, core_w_tiles, rows_cap, budget)
-    if g.gamma_shadow and g.x_resident and block_rows > 1:
+    if g.gamma_shadow and g.x_resident and 1 < block_rows < R3_SHADOW_RESIDENT_MIN_ROWS:
         # Resident multi-row shards (BLOCK grids): gamma is the only DRAM traffic and every core of a grid column
         # re-reads the same slice — measured 8 us on 640x7168 [64,1024]x(7,10), longer than sumsq + combine. The
         # shadow would pull that read onto the critical path; scaling after rstd keeps it hidden. Dropping the
         # shadow only shrinks cb_normed, so the selected blocking still fits.
         g.gamma_shadow = False
     row_stride_tiles = num_w_chunks * w_chunk_tiles
+    combine_rows = _combine_rows(g, block_rows)  # q: rows per combine owner (R3)
 
     # ---------------- circular buffers ----------------
     interm = g.interm_fmt  # compute-intermediate format (DEST width)
@@ -562,8 +584,12 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
         cbs.append(_cb(CB_PARTIAL, block_rows, g.s_f, interm, all_cores))
         # Every core allocates cb_gather (sized G*block_rows so each block starts at the CB base) so its L1
         # address — which contributors write into on the root — is the same on every core.
-        cbs.append(_cb(CB_GATHER, g.group_size * block_rows, g.s_f, interm, all_cores))
-        cbs.append(_cb(CB_RSTD_ROOT, block_rows, g.s_f, interm, all_cores))
+        # Each combine owner receives G partials for each of its <= combine_rows rows; the writer always pushes
+        # the full G*combine_rows quantum so every block starts at the CB base (contributors address it remotely).
+        cbs.append(_cb(CB_GATHER, g.group_size * combine_rows, g.s_f, interm, all_cores))
+        cbs.append(_cb(CB_RSTD_ROOT, combine_rows, g.s_f, interm, all_cores))
+        if combine_rows < block_rows:
+            cbs.append(_cb(CB_RSTD_GATHER, block_rows, g.s_f, interm, all_cores))
 
     # x / out placement as seen by the dataflow kernels (single source for reader and writer).
     if not g.is_sharded:
@@ -579,6 +605,11 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     x_addr = x.buffer_address()
     gamma_addr = gamma.buffer_address() if g.has_gamma else 0
     out_addr = out.buffer_address()
+    # R3: NoC coords of each row-group's cores by slot (combine owners are addressed by slot).
+    group_noc = {}
+    for w in sorted(work, key=lambda w: w.slot):
+        v = device.worker_core_from_logical_core(w.core)
+        group_noc.setdefault(w.group, []).append(v.x | (v.y << 16))
     kernel_groups = {}
     for w in work:
         kernel_groups.setdefault((w.core_w_tiles, w.w_partial), []).append(w)
@@ -600,8 +631,8 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
             writer_rt[c.x][c.y] = [
                 out_addr, w.start, w.n, w.w_tile_start, w.stick_base, w.stick_end, w.w_elem_start, w.w_elem_end,
                 is_root, w.slot, root_v.x, root_v.y,
-            ]  # fmt: skip
-            compute_rt[c.x][c.y] = [w.n, is_root]
+            ] + (group_noc[w.group] if g.w_split else [])  # fmt: skip
+            compute_rt[c.x][c.y] = [w.n, w.slot]
 
         blocking_ct = [block_rows, w_chunk_tiles, num_w_chunks, group_w_tiles]
         reader_ct = (
@@ -634,6 +665,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
             + blocking_ct
             + [g.tensor_w_tiles, int(g.is_rm), g.W, g.num_valid_sticks, g.out_elem, placement, g.stick_page_bytes]
             + [int(g.w_split), g.group_size, CB_PARTIAL, CB_GATHER, CB_RSTD_ROOT, SEM_GATHER]
+            + [combine_rows, CB_RSTD_GATHER, SEM_RSTD_GATHER]
         )
         writer_ct.extend(ttnn.TensorAccessorArgs(out).get_compile_time_args())
         compute_ct = (
@@ -641,6 +673,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
             + blocking_ct
             + [group_partial, int(g.has_gamma), int(g.is_rm), _f32_bits(1.0 / g.W), _f32_bits(epsilon)]
             + [int(g.w_split), g.group_size, CB_PARTIAL, CB_GATHER, CB_RSTD_ROOT, int(g.gamma_shadow)]
+            + [combine_rows]
         )
 
         readers.append(
@@ -674,6 +707,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     semaphores = []
     if g.w_split:
         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0))
+        semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_RSTD_GATHER, core_ranges=all_cores, initial_value=0))
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
     if g.w_split:
         # rstd broadcast: one multicast group per row-group (consecutive runs of G cores in shard / row-major

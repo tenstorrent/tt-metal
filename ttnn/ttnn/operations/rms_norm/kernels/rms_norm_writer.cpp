@@ -12,17 +12,22 @@
 //   LOCAL_STICKS — RM: the valid sticks of each untilized row-chunk are copied into this core's output
 //                  shard (self-aimed L1 write; the shard's stick count need not be a multiple of 32).
 //
-// R3 W-split (w_split): before a block's output, the writer runs the cross-core combine of that block:
-//   gather   — every core of the row-group writes its cb_partial tiles (one per row, Σx² over its W slice)
-//              into the root's cb_gather at slot row*G + slot, then bumps the root's gather semaphore.
-//              The root (slot 0, also a worker) waits for the G-1 remote arrivals (cumulative count, no
-//              reset) and publishes the block's G*rows tiles to its compute kernel.
-//   rstd     — the root's compute reduces the gathered partials (·1/W, +eps, rsqrt) into cb_rstd_root; the
-//              root's writer multicasts them into cb_rstd of every core of the group (loopback included, so
-//              the root's own cb_rstd is filled by the same send); receivers just receive. cb_rstd's
-//              producer is the writer on every core.
-// Addresses: cb_gather / cb_rstd are allocated on every core and every core walks them identically (whole
-// CB per block), so the local write pointer IS the remote one.
+// R3 W-split (w_split): before a block's output, the writer runs the cross-core combine of that block. The
+// combine is a row-wise reduce-scatter: row i of the block is combined by its owner, slot o = i / q
+// (q = combine_rows = ceil(block_rows / G)), which holds local row l = i % q.
+//   gather   — every core of the row-group writes its cb_partial tile of row i (Σx² over its W slice) into the
+//              owner's cb_gather at tile l*G + slot, then bumps each owner's gather semaphore once. An owner
+//              waits for the G-1 remote arrivals (cumulative count over the blocks it owns rows in) and
+//              publishes the full G*q quantum to its compute kernel (which reduces its n_own rows).
+//   relay    — each owner's compute reduces its rows (·1/W, +eps, rsqrt) into cb_rstd_root; with more than one
+//              owner, every owner writes those rows into the root's cb_rstd_gather at tile i and bumps the
+//              root's relay semaphore.
+//   rstd     — the root multicasts the block's rstd rows (cb_rstd_gather, or its own cb_rstd_root when it is the
+//              only owner) into cb_rstd of every core of the group (loopback included); receivers just receive.
+//              cb_rstd's producer is the writer on every core.
+// Addresses: cb_gather / cb_rstd / cb_rstd_gather are allocated on every core and walked identically (whole
+// quantum per block), so the local write pointer IS the remote one. Only faces 0 and 2 (column 0) of a partial /
+// rstd tile cross the NoC.
 
 #include <cstdint>
 
@@ -53,9 +58,12 @@ void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(23);
     constexpr uint32_t cb_rstd_root = get_compile_time_arg_val(24);
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(25);
+    constexpr uint32_t combine_rows = get_compile_time_arg_val(26);  // q: rows per combine owner
+    constexpr uint32_t cb_rstd_gather = get_compile_time_arg_val(27);
+    constexpr uint32_t sem_rstd_gather_id = get_compile_time_arg_val(28);
     constexpr bool out_resident = placement == 1;
     constexpr bool out_local_sticks = placement == 2;
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<29>();
     constexpr auto rstd_mcast = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("rstd_mcast_ct_offset"),
         get_named_compile_time_arg_val("rstd_mcast_rt_offset")>();
@@ -72,6 +80,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t slot = get_arg_val<uint32_t>(9);
     [[maybe_unused]] const uint32_t root_x = get_arg_val<uint32_t>(10);
     [[maybe_unused]] const uint32_t root_y = get_arg_val<uint32_t>(11);
+    constexpr uint32_t group_noc_arg = 12;  // R3: G words, NoC (x | y << 16) of the row-group's cores by slot
 
     constexpr uint32_t chunk_elems = w_chunk_tiles * 32;
     constexpr uint32_t row_stride_tiles = num_w_chunks * w_chunk_tiles;
@@ -86,14 +95,23 @@ void kernel_main() {
 
     // ---- R3 combine state ----
     [[maybe_unused]] uint32_t gather_base = 0;
-    [[maybe_unused]] uint64_t root_sem_noc = 0;
-    [[maybe_unused]] volatile tt_l1_ptr uint32_t* sem_ptr = nullptr;
+    [[maybe_unused]] uint32_t rstd_gather_base = 0;
+    [[maybe_unused]] uint32_t gather_sem_addr = 0;
+    [[maybe_unused]] uint32_t rstd_sem_addr = 0;
+    [[maybe_unused]] uint32_t owned_blocks = 0;     // blocks this core combined rows in (gather semaphore target)
+    [[maybe_unused]] uint32_t relays_expected = 0;  // root: cumulative remote owners relaying rstd rows
     if constexpr (w_split) {
-        gather_base = get_write_ptr(cb_gather);  // == the root's: every block fills the whole CB from its base
-        const uint32_t sem_addr = get_semaphore(sem_gather_id);
-        root_sem_noc = get_noc_addr(root_x, root_y, sem_addr);
-        sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+        gather_base = get_write_ptr(cb_gather);  // == every owner's: each owned block pushes the whole CB
+        if constexpr (combine_rows < block_rows) {
+            rstd_gather_base = get_write_ptr(cb_rstd_gather);  // raw scratch on the root, never pushed
+        }
+        gather_sem_addr = get_semaphore(sem_gather_id);
+        rstd_sem_addr = get_semaphore(sem_rstd_gather_id);
     }
+    auto slot_noc = [&](uint32_t s, uint32_t l1_addr) -> uint64_t {
+        const uint32_t xy = get_arg_val<uint32_t>(group_noc_arg + s);
+        return get_noc_addr(xy & 0xFFFF, xy >> 16, l1_addr);
+    };
     Noc noc;
 
     const uint32_t num_blocks = (num_tile_rows + block_rows - 1) / block_rows;
@@ -103,45 +121,90 @@ void kernel_main() {
             (num_tile_rows - first_row < block_rows) ? (num_tile_rows - first_row) : block_rows;
 
         if constexpr (w_split) {
-            // ---- gather: this core's partials -> root's cb_gather, tile (row i, slot) at i*G + slot ----
             constexpr uint32_t partial_bytes = get_tile_size(cb_partial);
-            if (is_root) {
-                cb_reserve_back(cb_gather, group_size * rows_this_block);  // root compute released block-1
+            constexpr uint32_t face_bytes = partial_bytes / 4;
+            // Owners of this block: slots 0 .. num_owners-1; this core owns n_own rows from row slot*q.
+            const uint32_t num_owners = (rows_this_block + combine_rows - 1) / combine_rows;
+            const uint32_t own_lo = slot * combine_rows;
+            const uint32_t n_own =
+                own_lo >= rows_this_block
+                    ? 0
+                    : ((rows_this_block - own_lo < combine_rows) ? (rows_this_block - own_lo) : combine_rows);
+            if (n_own > 0) {
+                cb_reserve_back(cb_gather, group_size * combine_rows);  // this core's compute released block-1
             }
+            // ---- gather: partial of row i -> owner (i / q)'s cb_gather tile (i % q)*G + slot ----
+            // A partial is column-0-valid, and column 0 lives only in faces 0 and 2: only those two faces cross
+            // the NoC. Faces 1/3 of the gathered tiles are never read (rstd post-op scoped to faces 0/2, the
+            // normalize multiply broadcasts column 0).
             cb_wait_front(cb_partial, rows_this_block);
             const uint32_t src = get_read_ptr(cb_partial);
-            // A partial is column-0-valid, and column 0 lives only in faces 0 and 2: only those two faces
-            // cross the NoC (half the root's incast — G-1 contributors converge on one core's L1). Faces 1/3
-            // of the gathered tiles are never read: the combine's sums there stay in faces 1/3, the rstd
-            // post-op is scoped to faces 0/2 and the normalize multiply broadcasts column 0.
-            constexpr uint32_t face_bytes = partial_bytes / 4;
             for (uint32_t i = 0; i < rows_this_block; ++i) {
                 const uint32_t s = src + i * partial_bytes;
-                const uint64_t d = get_noc_addr(root_x, root_y, gather_base + (i * group_size + slot) * partial_bytes);
+                const uint32_t owner = i / combine_rows;
+                const uint64_t d =
+                    slot_noc(owner, gather_base + ((i % combine_rows) * group_size + slot) * partial_bytes);
                 noc_async_write(s, d, face_bytes);
                 noc_async_write(s + 2 * face_bytes, d + 2 * face_bytes, face_bytes);
             }
             noc_async_write_barrier();
             cb_pop_front(cb_partial, rows_this_block);
-            if (is_root) {
-                noc_semaphore_wait_min(sem_ptr, (group_size - 1) * (block + 1));
-                cb_push_back(cb_gather, group_size * rows_this_block);
-            } else {
-                noc_semaphore_inc(root_sem_noc, 1);
-                noc_async_atomic_barrier();
+            for (uint32_t o = 0; o < num_owners; ++o) {
+                if (o != slot) {
+                    noc_semaphore_inc(slot_noc(o, gather_sem_addr), 1);
+                }
+            }
+            noc_async_atomic_barrier();
+            if (n_own > 0) {
+                ++owned_blocks;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr), (group_size - 1) * owned_blocks);
+                cb_push_back(cb_gather, group_size * combine_rows);
             }
 
-            // ---- rstd: root multicasts the combined rstd into every group core's cb_rstd ----
+            // ---- relay: owners' rstd rows -> root's cb_rstd_gather (multi-owner blocks only) ----
             constexpr uint32_t rstd_bytes = get_tile_size(cb_rstd);
+            uint32_t mcast_src = 0;
+            if (n_own > 0) {
+                cb_wait_front(cb_rstd_root, combine_rows);  // n_own rows + (q - n_own) unused pages
+                mcast_src = get_read_ptr(cb_rstd_root);
+            }
+            if constexpr (combine_rows < block_rows) {
+                if (num_owners > 1) {
+                    if (n_own > 0) {
+                        for (uint32_t t = 0; t < n_own; ++t) {
+                            const uint32_t s = mcast_src + t * rstd_bytes;
+                            const uint64_t d = slot_noc(0, rstd_gather_base + (own_lo + t) * rstd_bytes);
+                            noc_async_write(s, d, face_bytes);
+                            noc_async_write(s + 2 * face_bytes, d + 2 * face_bytes, face_bytes);
+                        }
+                        noc_async_write_barrier();
+                        cb_pop_front(cb_rstd_root, combine_rows);
+                        if (!is_root) {
+                            noc_semaphore_inc(slot_noc(0, rstd_sem_addr), 1);
+                            noc_async_atomic_barrier();
+                        }
+                    }
+                    if (is_root) {
+                        relays_expected += num_owners - 1;
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rstd_sem_addr), relays_expected);
+                        mcast_src = rstd_gather_base;
+                    }
+                }
+            }
+
+            // ---- rstd: root multicasts the block's rstd rows into every group core's cb_rstd ----
             cb_reserve_back(cb_rstd, rows_this_block);
             const uint32_t rstd_dst = get_write_ptr(cb_rstd);  // same on every core of the group
             // Role-polymorphic pipes: a kernel group may hold only receivers (a ragged last slice column).
             if (is_root) {
-                cb_wait_front(cb_rstd_root, rows_this_block);
                 auto sender = rstd_mcast.optional_sender(noc);
                 ASSERT(sender.has_value());
-                sender->send(get_read_ptr(cb_rstd_root), rstd_dst, rows_this_block * rstd_bytes);
-                cb_pop_front(cb_rstd_root, rows_this_block);
+                sender->send(mcast_src, rstd_dst, rows_this_block * rstd_bytes);
+                if (num_owners == 1 || combine_rows == block_rows) {
+                    cb_pop_front(cb_rstd_root, combine_rows);  // single owner: multicast straight from it
+                }
             } else {
                 auto receiver = rstd_mcast.optional_receiver(noc);
                 ASSERT(receiver.has_value());

@@ -17,9 +17,11 @@
 // R3 W-split (w_split): rstd_block becomes
 //     partial_block             cb_sumsq -> cb_partial       reduce<SUM, ROW, AccumulateViaAdd>, no post-op
 //                                                            (Σx² over this core's W slice; writer gathers it)
-//     [root] combine_block      cb_gather -> cb_rstd_root    reduce<..., AccumulateViaAdd, Skip> over
-//                                                            (rows, G) + post-op (·1/W, +eps, rsqrt)
-// and cb_rstd is filled by the writer (rstd multicast from the root), then normalize runs as in R1.
+//     [owner] combine_block     cb_gather -> cb_rstd_root    reduce<..., AccumulateViaAdd, Skip> over
+//                                                            (n_own, G) + post-op (·1/W, +eps, rsqrt)
+// where the block's rows are split over the group (reduce-scatter): slot o owns rows [o*q, (o+1)*q),
+// q = combine_rows. cb_rstd is filled by the writer (owners relay to the root, the root multicasts), then
+// normalize runs as in R1.
 // Stall shadow (gamma_shadow: R3, TILE + gamma): between partial_block and the rstd wait (on the root: after
 // combine_block), shadow_block computes x·γ for the whole block into cb_normed and releases cb_x. After rstd
 // arrives, only cb_normed·rstd -> cb_out remains on the critical path.
@@ -35,6 +37,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -74,6 +77,8 @@ constexpr uint32_t cb_rstd_root = get_compile_time_arg_val(22);
 // Stall shadow (R3, TILE + gamma): x·γ is computed into a block-wide cb_normed while the cross-core combine is
 // in flight, so only the ·rstd multiply remains after rstd arrives.
 constexpr bool gamma_shadow = get_compile_time_arg_val(23) != 0;
+// R3 row-wise reduce-scatter combine: this core (slot o) combines rows [o*q, (o+1)*q) of each block.
+constexpr uint32_t combine_rows = get_compile_time_arg_val(24);
 
 constexpr uint32_t row_stride_tiles = num_w_chunks * w_chunk_tiles;
 constexpr bool has_partial = w_partial_elems != 0;
@@ -203,7 +208,7 @@ ALWI void shadow_block(XDFB& x, GammaDFB& gamma, NormedDFB& normed, uint32_t row
 
 void kernel_main() {
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
-    [[maybe_unused]] const bool is_root = get_arg_val<uint32_t>(1) != 0;
+    [[maybe_unused]] const uint32_t slot = get_arg_val<uint32_t>(1);  // R3: index in the row-group (0 = root)
 
     compute_kernel_hw_startup(cb_x, cb_x, cb_rstd);
 
@@ -245,67 +250,75 @@ void kernel_main() {
 
         // ---- sumsq_block: per row, Σ_t x_t² over the n_full whole tiles into ONE L1-accumulated tile,
         //      chunk by chunk as the reader lands them; then the squared partial tail tile (if any). ----
-        for (uint32_t i = 0; i < rows_this_block; ++i) {
-            const uint32_t row_base = i * row_stride_tiles;
-            if constexpr (n_full > 0) {
-                sumsq.reserve_back(1);
-                for (uint32_t k = 0; k < num_w_chunks; ++k) {
-                    const uint32_t lo = k * w_chunk_tiles;
-                    if (lo >= n_full) {
-                        break;
+        {
+            DeviceZoneScopedN("Z_SUMSQ");
+            for (uint32_t i = 0; i < rows_this_block; ++i) {
+                const uint32_t row_base = i * row_stride_tiles;
+                if constexpr (n_full > 0) {
+                    sumsq.reserve_back(1);
+                    for (uint32_t k = 0; k < num_w_chunks; ++k) {
+                        const uint32_t lo = k * w_chunk_tiles;
+                        if (lo >= n_full) {
+                            break;
+                        }
+                        const uint32_t hi = (lo + w_chunk_tiles < n_full) ? (lo + w_chunk_tiles) : n_full;
+                        x.wait_front(row_base + lo + w_chunk_tiles);  // cumulative: this row-chunk has landed
+                        if (k == 0) {
+                            eltwise_chain(
+                                IterationShape::tiles(hi - lo),
+                                SquareX{x, x, row_base + lo, row_base + lo},
+                                PackSumsq<L1Accumulation::Enabled>{sumsq});
+                        } else {
+                            eltwise_chain(
+                                IterationShape::tiles(hi - lo),
+                                SquareX{x, x, row_base + lo, row_base + lo},
+                                PackSumsq<L1Accumulation::AddToExisting>{sumsq});
+                        }
                     }
-                    const uint32_t hi = (lo + w_chunk_tiles < n_full) ? (lo + w_chunk_tiles) : n_full;
-                    x.wait_front(row_base + lo + w_chunk_tiles);  // cumulative: this row-chunk has landed
-                    if (k == 0) {
-                        eltwise_chain(
-                            IterationShape::tiles(hi - lo),
-                            SquareX{x, x, row_base + lo, row_base + lo},
-                            PackSumsq<L1Accumulation::Enabled>{sumsq});
-                    } else {
-                        eltwise_chain(
-                            IterationShape::tiles(hi - lo),
-                            SquareX{x, x, row_base + lo, row_base + lo},
-                            PackSumsq<L1Accumulation::AddToExisting>{sumsq});
-                    }
+                    sumsq.push_back(1);
                 }
-                sumsq.push_back(1);
-            }
-            if constexpr (has_partial) {
-                const uint32_t tail = row_base + core_w_tiles - 1;
-                x.wait_front(row_base + row_stride_tiles);
-                eltwise_chain(IterationShape::one_tile(), SquareX{x, x, tail, tail}, PackSquaredTail{sumsq});
+                if constexpr (has_partial) {
+                    const uint32_t tail = row_base + core_w_tiles - 1;
+                    x.wait_front(row_base + row_stride_tiles);
+                    eltwise_chain(IterationShape::one_tile(), SquareX{x, x, tail, tail}, PackSquaredTail{sumsq});
+                }
             }
         }
-
         // ---- rstd_block: one reduce over (rows_this_block × n_sq); the masked tail is folded in by the
         //      helper's AccumulateViaAdd partial path; post-op turns Σx² into 1/sqrt(Σx²/W + eps). ----
         constexpr auto partial = has_partial ? ReducePartialScaler::only_partial() : ReducePartialScaler::none();
         if constexpr (w_split) {
             // partial_block: Σx² over this core's slice, no post-op (the combine owns ·1/W, +eps, rsqrt).
-            compute_kernel_lib::reduce<
-                PoolType::SUM,
-                ReduceDim::REDUCE_ROW,
-                cb_sumsq,
-                cb_reduce_mask,
-                cb_partial,
-                ReduceInputPolicy::BulkWaitBulkPop,
-                ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                ReduceFp32Mode::Fast,
-                ReduceAlgorithm::AccumulateViaAdd,
-                ReduceWithinTile::Collapse>(
-                sumsq,
-                mask,
-                partial_sums,
-                ReduceInputBlockShape::of(rows_this_block, n_sq),
-                ReduceInputMemoryLayout::contiguous(),
-                NoAccumulation{},
-                NoOp{},
-                partial);
-            if (!is_root) {
-                shadow_block(x, gamma, normed, rows_this_block);  // during the gather / combine / multicast
+            {
+                DeviceZoneScopedN("Z_PARTIAL");
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_ROW,
+                    cb_sumsq,
+                    cb_reduce_mask,
+                    cb_partial,
+                    ReduceInputPolicy::BulkWaitBulkPop,
+                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Fast,
+                    ReduceAlgorithm::AccumulateViaAdd,
+                    ReduceWithinTile::Collapse>(
+                    sumsq,
+                    mask,
+                    partial_sums,
+                    ReduceInputBlockShape::of(rows_this_block, n_sq),
+                    ReduceInputMemoryLayout::contiguous(),
+                    NoAccumulation{},
+                    NoOp{},
+                    partial);
             }
-            if (is_root) {
-                // combine_block: the G gathered partials of each row are column-0-valid -> sum the tiles,
+            const uint32_t own_lo = slot * combine_rows;
+            const uint32_t n_own =
+                own_lo >= rows_this_block
+                    ? 0
+                    : ((rows_this_block - own_lo < combine_rows) ? (rows_this_block - own_lo) : combine_rows);
+            if (n_own > 0) {
+                DeviceZoneScopedN("Z_COMBINE");
+                // combine_block: the G gathered partials of each owned row are column-0-valid -> sum the tiles,
                 // skip the within-tile collapse, then the rstd post-op.
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
@@ -321,13 +334,21 @@ void kernel_main() {
                     gather,
                     mask,
                     rstd_root,
-                    ReduceInputBlockShape::of(rows_this_block, group_size),
+                    ReduceInputBlockShape::of(n_own, group_size),
                     ReduceInputMemoryLayout::contiguous(),
                     NoAccumulation{},
                     [](uint32_t dst_idx) { rstd_post_op(dst_idx); });
-                // The root's shadow follows its combine (which everyone waits on), overlapping the multicast.
-                shadow_block(x, gamma, normed, rows_this_block);
+                // Uniform quanta: the writer pushes G*q gathered pages and consumes q rstd pages per owned block
+                // (keeps both CBs block-aligned at their base, which remote writers address).
+                if (n_own < combine_rows) {
+                    gather.wait_front((combine_rows - n_own) * group_size);
+                    gather.pop_front((combine_rows - n_own) * group_size);
+                    rstd_root.reserve_back(combine_rows - n_own);
+                    rstd_root.push_back(combine_rows - n_own);
+                }
             }
+            // x·γ follows the combine (which the whole group waits on), overlapping the relay / multicast.
+            shadow_block(x, gamma, normed, rows_this_block);
         } else {
             compute_kernel_lib::reduce<
                 PoolType::SUM,
@@ -364,7 +385,11 @@ void kernel_main() {
             continue;
         }
         x.wait_front(rows_this_block * row_stride_tiles);
-        rstd.wait_front(rows_this_block);
+        {
+            DeviceZoneScopedN("Z_RSTDWAIT");
+            rstd.wait_front(rows_this_block);
+        }
+        DeviceZoneScopedN("Z_NORM");
         for (uint32_t k = 0; k < num_w_chunks; ++k) {
             eltwise_chain(
                 IterationShape::grid(rows_this_block, w_chunk_tiles),
