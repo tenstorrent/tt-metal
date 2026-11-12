@@ -8,15 +8,18 @@ if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
+from helpers.data_format_inference import infer_math_format
+from helpers.format_config import DataFormat
 from helpers.llk_params import (
     AccToDest,
     BroadcastType,
     ClearFP32DstAcc,
     DataCopyType,
     EltwiseBinaryReuseDestType,
-    EnforceFP32Accumulation,
     MathFidelity,
     PerfRunType,
+    ReduceDimension,
+    ReducePool,
     Transpose,
     UnpackToDest,
 )
@@ -43,12 +46,14 @@ class FpuNode:
         broadcast_type: BroadcastType = BroadcastType.None_,
         reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
-        enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No,
         acc_to_dest: AccToDest = AccToDest.No,
         unpack_to_dest: UnpackToDest = UnpackToDest.No,
         index_spec=None,
     ):
         self.fpu = fpu
+        self.unpack_A_src = self.unpack_A_dst = None
+        self.unpack_B_src = self.unpack_B_dst = None
+        self.dest_format = None
         self.unpacker = unpacker
         self.index_spec = index_spec
         self.src_a = src_a
@@ -58,9 +63,66 @@ class FpuNode:
         self.broadcast_type = broadcast_type
         self.reuse_dest = reuse_dest
         self.math_fidelity = math_fidelity
-        self.enforce_fp32_accumulation = enforce_fp32_accumulation
         self.acc_to_dest = acc_to_dest
         self.unpack_to_dest = unpack_to_dest
+
+    @property
+    def src_format(self):
+        """Register format family SrcA and SrcB share; the FPU computes in it."""
+        a, b = self.unpack_A_dst, self.unpack_B_dst
+        if self.unpacker is not None:
+            a, b = self.unpacker.physical_order(a, b)
+        return infer_math_format(a, b)
+
+    def alu_formats(self, config: "GlobalConfig"):
+        reduce_dim = getattr(self.fpu, "reduce_dim", None)
+        reduce_pool = getattr(self.fpu, "reduce_pool", None)
+        if (
+            self.src_a is None
+            or self.reuse_dest != EltwiseBinaryReuseDestType.NONE
+            or reduce_dim == ReduceDimension.Scalar
+            or (reduce_dim, reduce_pool) == (ReduceDimension.Row, ReducePool.Max)
+        ):
+            return self.src_format, self.src_format
+        a, b = self.unpack_A_dst, self.unpack_B_dst
+        return infer_math_format(a), infer_math_format(b)
+
+    @property
+    def int_fpu_en(self) -> str:
+        int_formats = (DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32)
+        registers = (self.unpack_A_dst, self.unpack_B_dst)
+        return str(any(fmt in int_formats for fmt in registers)).lower()
+
+    @property
+    def unpack_shapes(self):
+        return tuple(
+            (operand.tile_shape.face_r_dim, operand.tile_shape.total_num_faces())
+            for operand in self.unpacker.physical_operands(self)
+        )
+
+    def unpack_changes(self, previous):
+        """Return (A changed, B changed, A shape changed, B shape changed) since previous."""
+        a_shape, b_shape = (
+            new != old for new, old in zip(self.unpack_shapes, previous.unpack_shapes)
+        )
+        a_changed = a_shape or (self.unpack_A_src, self.unpack_A_dst) != (
+            previous.unpack_A_src,
+            previous.unpack_A_dst,
+        )
+        b_changed = b_shape or (self.unpack_B_src, self.unpack_B_dst) != (
+            previous.unpack_B_src,
+            previous.unpack_B_dst,
+        )
+        return a_changed, b_changed, a_shape, b_shape
+
+    def configure_unpack(self, config, previous=None):
+        from .arch_common import unpack_common
+
+        if previous is None:
+            return unpack_common.hw_configure_unpack(config, self)
+        if config.skip_unpack_init:
+            return ""
+        return unpack_common.configure_unpack(config, self, previous)
 
     @property
     def data_copy_type(self) -> DataCopyType:

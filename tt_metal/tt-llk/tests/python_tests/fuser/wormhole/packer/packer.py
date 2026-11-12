@@ -34,7 +34,7 @@ class Packer(BasePacker):
         num_faces = pack_node.output.tile_shape.total_num_faces()
         return (
             f"    _llk_pack_init_<PackMode::Default, false /* zero_output */>(\n"
-            f"        {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
+            f"        {pack_node.pack_dst_format.cpp_underlying_value}, {face_r_dim}, {num_faces}\n"
             f"    );\n"
         )
 

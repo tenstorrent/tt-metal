@@ -15,7 +15,7 @@ def sub_bcast_col_custom_golden(call, state, node, operation, config):
             node.fpu.operation,
             tensor_a,
             tensor_b,
-            config.sentinel.golden_math_format,
+            node.src_format,
             node.math_fidelity,
             tile_shape=operation.tile_shape,
         ).reshape(dimensions)

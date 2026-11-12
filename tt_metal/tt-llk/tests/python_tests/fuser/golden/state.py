@@ -182,12 +182,11 @@ class Inputs:
 
 
 class GoldenState:
-    def __init__(self, dest: DestBank, relu_configs=None):
+    def __init__(self, dest: DestBank):
         self.dest = dest
         self.inputs: Optional[Inputs] = None
         self.source_registers = SourceRegisters()
         self.output = None
-        self.relu_configs = {} if relu_configs is None else relu_configs
 
     def begin_fpu(self, inputs: Inputs) -> None:
         self.inputs = inputs

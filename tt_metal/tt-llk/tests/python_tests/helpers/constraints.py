@@ -340,7 +340,7 @@ _QUASAR_PACK_OUTPUTS = {
 }
 
 
-def _quasar_sfpu_hardware_format(fmt: DataFormat) -> DataFormat:
+def quasar_sfpu_hardware_format(fmt: DataFormat) -> DataFormat:
     """Map an SFPU-visible logical format to its Quasar hardware encoding."""
     return DataFormat.Int16 if fmt == DataFormat.UInt16 else fmt
 
@@ -348,7 +348,7 @@ def _quasar_sfpu_hardware_format(fmt: DataFormat) -> DataFormat:
 def _quasar_dest_hardware_format(fmt: DataFormat) -> DataFormat:
     if fmt == DataFormat.Tf32:
         return DataFormat.Float32
-    return _quasar_sfpu_hardware_format(fmt)
+    return quasar_sfpu_hardware_format(fmt)
 
 
 def _quasar_effective_sfpu_format(fmt: DataFormat) -> DataFormat:
@@ -359,7 +359,7 @@ def _quasar_effective_sfpu_format(fmt: DataFormat) -> DataFormat:
         return DataFormat.Float16
     if fmt == DataFormat.Tf32:
         return DataFormat.Float32
-    return _quasar_sfpu_hardware_format(fmt)
+    return quasar_sfpu_hardware_format(fmt)
 
 
 def _quasar_fpu_source_format(fmt: DataFormat) -> DataFormat:
@@ -370,7 +370,7 @@ def _quasar_fpu_source_format(fmt: DataFormat) -> DataFormat:
         return DataFormat.Float16_b
     if fmt == DataFormat.Fp8_e4m3:
         return DataFormat.Float16
-    return _quasar_sfpu_hardware_format(fmt)
+    return quasar_sfpu_hardware_format(fmt)
 
 
 def _quasar_dest_format_matches_mode(
@@ -393,7 +393,7 @@ def is_valid_quasar_unpack_to_dest(
     That layout is accepted only for SFPU typecast, which reads the
     narrow representation and overwrites it with the converted result.
     """
-    l1_input_format = _quasar_sfpu_hardware_format(input_format)
+    l1_input_format = quasar_sfpu_hardware_format(input_format)
     unpack_out_format = _quasar_dest_hardware_format(unpack_output_format)
 
     # Check whether the unpacker supports the requested conversion.
@@ -424,11 +424,11 @@ def is_valid_quasar_fpu_path(
         return False
 
     # L1 input format.
-    hardware_input = _quasar_sfpu_hardware_format(input_format)
+    hardware_input = quasar_sfpu_hardware_format(input_format)
     # SrcA/B format, also used as the math format.
-    hardware_unpack_output = _quasar_sfpu_hardware_format(unpack_output_format)
+    hardware_unpack_output = quasar_sfpu_hardware_format(unpack_output_format)
     # Dest format, also used as the SFPU and packer input format.
-    hardware_dest = _quasar_sfpu_hardware_format(dest_format)
+    hardware_dest = quasar_sfpu_hardware_format(dest_format)
 
     return (
         hardware_unpack_output
@@ -443,8 +443,8 @@ def is_valid_quasar_packer_conversion(
     pack_input_format: DataFormat, output_format: DataFormat
 ) -> bool:
     """Validate a Dest -> L1 conversion against the Tensix packer table."""
-    hardware_input = _quasar_sfpu_hardware_format(pack_input_format)
-    hardware_output = _quasar_sfpu_hardware_format(output_format)
+    hardware_input = quasar_sfpu_hardware_format(pack_input_format)
+    hardware_output = quasar_sfpu_hardware_format(output_format)
     return hardware_output in _QUASAR_PACK_OUTPUTS.get(hardware_input, set())
 
 

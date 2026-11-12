@@ -54,7 +54,7 @@ def transpose_tile(tile, config, operation, node):
     if node.transpose_faces == Transpose.Yes:
         tile = transpose.transpose_faces_multi_tile(
             tile,
-            config.sentinel.golden_math_format,
+            node.src_format,
             1,
             tilize=True,
             untilize=True,
@@ -63,7 +63,7 @@ def transpose_tile(tile, config, operation, node):
     if node.transpose_within_face == Transpose.Yes:
         tile = transpose.transpose_within_faces_multi_tile(
             tile,
-            config.sentinel.golden_math_format,
+            node.src_format,
             1,
             tilize=True,
             untilize=True,

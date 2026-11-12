@@ -470,8 +470,15 @@ def infer_math_format(a: DataFormat, b: DataFormat = None) -> DataFormat:
     # - Therefore, choosing `a` as the math format is always correct when the compatibility checks
     #   pass, and keeps the behavior deterministic and simple compared to the previous heuristic.
 
+    a = infer_downstream_unpack_out(a)
+    # FP8 is a compressed L1 format; hardware unpacks it to Float16 (float16_a) in
+    # source registers. The ALU and packer must see Float16, not Lf8/Fp8_e4m3.
+    if a == DataFormat.Fp8_e4m3:
+        a = DataFormat.Float16
+
     if b is None:
         return a
+    b = infer_downstream_unpack_out(b)
 
     if (a.is_exponent_B() and not b.is_exponent_B()) or (
         not a.is_exponent_B() and b.is_exponent_B()
@@ -574,17 +581,10 @@ def infer_data_formats(
         unpacking_to_srcs,
     )
 
-    downstream_unpack_out_A = infer_downstream_unpack_out(unpack_out_A)
-    downstream_unpack_out_B = infer_downstream_unpack_out(unpack_out_B)
     downstream_unpack_out_S = infer_downstream_unpack_out(unpack_out_S)
 
     # The format family the dest register, SFPU and packer work in (typically matches unpack_out if both regs have same format)
-    dest_family = infer_math_format(downstream_unpack_out_A, downstream_unpack_out_B)
-
-    # FP8 is a compressed L1 format; hardware unpacks it to Float16 (float16_a) in
-    # source registers. The ALU and packer must see Float16, not Lf8/Fp8_e4m3.
-    if dest_family == DataFormat.Fp8_e4m3:
-        dest_family = DataFormat.Float16
+    dest_family = infer_math_format(unpack_out_A, unpack_out_B)
 
     # The ALU SrcA/SrcB format: a 2x register format stays 2x, everything else uses the dest family
     math = unpack_out_A if unpack_out_A.is_2x_format() else dest_family

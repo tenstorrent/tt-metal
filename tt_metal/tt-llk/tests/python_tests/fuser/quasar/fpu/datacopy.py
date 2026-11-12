@@ -34,7 +34,9 @@ class DatacopyFpu(Fpu):
         block: BlockData,
     ) -> str:
         # Metal's datacopy init programs the ALU before the unpack-to-dest guard.
-        alu_cfg = configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT")
+        alu_cfg = configure_alu_cfg(
+            config, compute_unit, cfg_type="AluCfgType::DEFAULT"
+        )
         if compute_unit.unpack_to_dest.value:
             return alu_cfg
 
@@ -63,12 +65,3 @@ class DatacopyFpu(Fpu):
             return ""
 
         return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_dest});\n"
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

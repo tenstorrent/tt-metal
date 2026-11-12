@@ -13,6 +13,13 @@ class TernarySfpu(Sfpu):
     granularity = InvocationGranularity.TILE
     input_count = 3
     golden_fn = staticmethod(ternary_golden)
+    # _calculate_where_ static_asserts on these Dst formats.
+    _WHERE_FORMATS = {
+        DataFormat.Float32,
+        DataFormat.Float16_b,
+        DataFormat.Int32,
+        DataFormat.UInt32,
+    }
 
     def __init__(
         self,
@@ -28,6 +35,12 @@ class TernarySfpu(Sfpu):
         self.approx_mode = approx_mode
         self.iterations = iterations
 
+    def supports_dest_format(self, dest_format) -> bool:
+        return (
+            self.operation != MathOperation.SfpuWhere
+            or dest_format in self._WHERE_FORMATS
+        )
+
     def get_headers(self):
         return ["llk_math_common.h", "sfpu_operations.h"]
 
@@ -42,14 +55,7 @@ class TernarySfpu(Sfpu):
     def calculate(self, operation, config, compute_unit, block):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         vector_mode = self._vector_mode(operation)
-        data_format = config.sentinel._sfpu_format
-        if self.operation == MathOperation.SfpuWhere and data_format not in (
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.UInt32,
-        ):
-            data_format = DataFormat.Float16_b
-        data_format = data_format.cpp_enum_value
+        data_format = compute_unit.dest_format.cpp_enum_value
         return (
             "test_utils::call_ternary_sfpu_operation<"
             f"{operation.dest_sync.cpp_enum_value}, {config.dest_acc.cpp_enum_value}, "

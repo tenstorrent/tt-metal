@@ -18,7 +18,7 @@ def datacopy_golden(call, state, node, operation, config):
             source = torch.zeros(dimensions)
         result = get_golden_generator(DataCopyGolden)(
             source,
-            config.sentinel.golden_math_format,
+            node.src_a.data_format if node.unpack_to_dest.value else node.src_format,
             num_faces=operation.tile_shape.total_num_faces(),
             input_dimensions=dimensions,
             face_r_dim=operation.tile_shape.face_r_dim,

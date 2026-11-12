@@ -10,7 +10,7 @@ def matmul_golden(call, state, node, operation, config):
     result = get_golden_generator(MatmulGolden)(
         tensor_a,
         tensor_b,
-        config.sentinel.golden_math_format,
+        node.src_format,
         node.math_fidelity,
         input_A_dimensions=tensor_a.shape,
         input_B_dimensions=tensor_b.shape,

@@ -36,7 +36,7 @@ class Packer(BasePacker):
         num_faces = pack_node.output.tile_shape.total_num_faces()
         return (
             f"    _llk_pack_init_<{bh_pack_mode}, false /* zero_output */, false /* skip_addrmod_config */>(\n"
-            f"        {config.sentinel.pack_src_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */\n"
+            f"        {pack_node.pack_src_format.cpp_underlying_value}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */\n"
             f"    );\n"
         )
 

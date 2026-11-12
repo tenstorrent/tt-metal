@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from itertools import chain
 from typing import TYPE_CHECKING, List, Tuple, Union
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.llk_params import (
     DestSync,
     EltwiseBinaryReuseDestType,
@@ -47,6 +48,8 @@ def dest_tile_capacity(tile_shape, dest_sync: DestSync, dest_acc: bool) -> int:
     faces = 32 if dest_sync == DestSync.Half else 64
     if dest_acc:
         faces //= 2
+    if get_chip_architecture() != ChipArchitecture.QUASAR:
+        return faces // 4
     return faces // tile_shape.total_num_faces()
 
 
@@ -170,12 +173,6 @@ class PlannedBlock:
     def block_for(self, node: Node) -> BlockData:
         cols, rows = self.region.node_shape(node.block_tiles_x, node.block_tiles_y)
         return BlockData(
-            block_origin_x=(
-                self.region.x.var if self.region.x.looped else self.region.x.origin
-            ),
-            block_origin_y=(
-                self.region.y.var if self.region.y.looped else self.region.y.origin
-            ),
             block_cols=cols,
             block_rows=rows,
         )

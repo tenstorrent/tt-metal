@@ -94,7 +94,7 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        sfpu_format = config.sentinel._sfpu_format.cpp_enum_value
+        dest_format = compute_unit.dest_format.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         dst_tile_shape = operation.tile_shape.dst_tile_shape
         vector_mode = self._vector_mode(operation)
@@ -110,7 +110,7 @@ class UnarySfpu(Sfpu):
             f"test_utils::call_unary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}"
             f", DataFormat::Float32, DataFormat::Float16_b, {dst_tile_shape}, {vector_mode}"
-            f">({block.tile_id_dest}, {sfpu_format}, true, {self.fill_const_value});\n"
+            f">({block.tile_id_dest}, {dest_format}, true, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:
