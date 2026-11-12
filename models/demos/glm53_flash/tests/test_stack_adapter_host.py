@@ -1900,13 +1900,15 @@ def test_spec_widths_rules(monkeypatch):
     assert spec_multi_k_by_rows(3, 16) == ((4, 3), (8, 1), (16, 1))
     assert spec_multi_k_by_rows(1, 16) == ((8, 1), (16, 1)) and spec_multi_k_by_rows(3, 4) == ((4, 3),)
     # batch 2's fixed-G step (spec_widths groups=G, GLM53_SPEC_MULTI_USERS): G (K + 1) rows on a build width, every MTP
-    # catch-up row with it (cu = wv), the chained rows at the smallest width >= G; the knobs of the single-user rules
+    # catch-up row with it (cu = wv), the chained rows at the smallest width >= G (K 1: none -- ch = w); the knobs of the
+    # single-user rules
     # are not read; the sparse_dsa layers' extra fabric row counts only <= 4 (wider runs on the full width's phases)
     monkeypatch.setenv("GLM53_SPEC_VERIFY_W", "3")
     assert spec_widths(3, 16, ws, groups=4) == dict(w=16, lone=16, wv=16, cu=16, ch=4, mode="multi", ts=(4,))
     assert spec_widths(3, 16, ws, groups=2) == dict(w=8, lone=8, wv=8, cu=8, ch=2, mode="multi", ts=(2,))
-    assert spec_widths(1, 16, ws, groups=2) == dict(w=4, lone=4, wv=4, cu=4, ch=2, mode="multi", ts=(2, 4))
-    assert spec_widths(1, 16, ws, groups=8)["ch"] == 8 and spec_widths(1, 4, (), groups=2)["wv"] == 4
+    assert spec_widths(1, 16, ws, groups=2) == dict(w=4, lone=4, wv=4, cu=4, ch=4, mode="multi", ts=(4,))
+    assert spec_widths(1, 16, ws, groups=8) == dict(w=16, lone=16, wv=16, cu=16, ch=16, mode="multi", ts=())
+    assert spec_widths(1, 8, (), groups=4)["ch"] == 8 and spec_widths(1, 4, (), groups=2)["wv"] == 4
     with expect_error(AssertionError, "must be a decode width of the build"):
         spec_widths(3, 16, ws, groups=3)
     with expect_error(AssertionError, "K \\+ 1 even"):

@@ -135,3 +135,42 @@ Batch 2 as implemented (host-tested only; device rows above pending on the froze
 - items 7 / 8: the step speculates while exactly the G requests are live; the first user to finish ends it for all
   (spec_leave, then plain decode); the adapter admits new requests on free group bases first, and a group base
   released mid-speculation LEAVES (the others' committed rows move to their bases) instead of aborting.
+
+## 7. K 1 at 4-8 users, the open-pool trap, the validation geometry (2026-11-12)
+
+Zoe Carver's regen measurements (notes glm-glx-mtp2, TP8 trays): K 1 pays at >= 4 users (B 4 49 -> 70, B 8 39 -> 53
+t/s/u), 8 users x 2 rows on a 16-row verify; agentic long-context acceptance 0.80-0.84. The fixed-G step covers it as
+GLM53_SPEC_K=1 with GLM53_SPEC_MULTI_USERS = 8 (B 16 build, w = 16) or 4 (w = 8: a build whose decode widths hold 8,
+e.g. B 8 -- a B 16 build has no 8-row width: native widths need the 32-row fabric phase).
+
+Per grouped define at g = 2: REC_CHAIN_GROUPS (kda_rec: ug = G, rows / ug = 2 <= 8 per core group), KDA_VERIFY_GROUPS
+(kda_pre: G <= 16, one row pair per group, the selector page's 16 words), SPEC_GROUPS (G (K + 1) <= 32), MLA_DSA_GROUP_ROWS
+/ MLA_ATT_GROUP_ROWS (2 rows per group, t <= 16) hold for G 8; EH_SEL_ROWS is not used (K 1 has no chained launch: the
+catch-up head drafts d'1 and GATHER reads mout row u (K + 1) + n_u). Two changes:
+- SpecCtl ACCEPT's DSA rings (SPEC_REV 4): the kernel took R x G slot bases (<= 64) -- G 8 x the 11 sparse_dsa layers =
+  88 failed the host assert. Now R tensor bases (slot 0) and user u's ring = slot u (K + 1) of each (pages slot x 8 + i:
+  the generator slot is the DSA state slot, StackBackend._dsa_st), for any G. The single-user kernel is unchanged.
+- spec_widths(groups) at K 1: ch = w (no chained launch, so no extra MTP width / eh buffers for it).
+
+The trap (glm-glx-mtp2 "MLA, index pool": their batch MLA saved the open-pool record only when the user's last row left a
+pool open; with rows [p = 2, p + 1 = 3 mod 4] the record lost row p, and a rejected p + 1's repeat pooled the key from a
+stale row). Ours is not affected: ix_dm1 writes every row's ring row back to DRAM (MLA_DSA_IX_ROWS: rows 0..3 of its
+pool's group, 4 (q - q0) + p % 4 in a one-slot verify) on every chip, the owner chip writes the pooled key of p / 4 from
+the pool's 4 ring rows, rows score only pools < (p + 1) / 4 after every row's writes, a pool a rejected row closed is
+rewritten when that pool closes again, and ACCEPT moves the next base's pool rows to 0..3 per group (q0 = c_u / 4 in
+both kernels). tt/shard_plan.py spec_ring_emulate models exactly that against sequential decode of the committed tokens
+(K 1-3, G 1-8, random accepts, plain steps between verifies): 0 mismatches; Zoe's save-only-if-open variant fails at the
+trap's case (prompt 6, K 1, the closing draft at 7 rejected: row 6 lost, pool 1 scored stale) and so does ACCEPT without
+the move (tests/test_shard_plan_8x4.py test_spec_ring_rollback).
+
+The L1 floor of the B 16 build (cores 0-1..0-7 = column 0's mhc_pre K members, i.e. sparse_dsa owners): every failing
+row ended a program's static CBs there at the same 1,253,888 B (inferred: the t = 16 sparse_dsa program, the owners'
+largest DSA CBs); what moved is the lowest L1 buffer -- 1,250,240 (narrow 4), 1,224,768 (narrow 1, 2, 4 + MTP G 4),
+1,217,856 (narrow 4 + GLM53_MLA_S1_DRAM). The owners' DSA CBs scale with the slot's local pooled-key tiles (tp = SEQ / 4
+/ 32 pools per chip; shard_plan.owner_l1, R8, t 16 on 8 lanes, KPH 4): CB_AKEY + CB_ASEL + mailbox 40,448 B at 1 M,
+30,208 at 256 K, 25,088 at 128 K (+ the ASCR page-table row: 2,048 / 512 / 256 B) -- 256 K lowers that program's CB end
+by ~11.8 KB, 128 K by ~17.2 KB; the narrow widths' and the MTP's L1 tensors do not scale with SEQ. The multi-user MTP
+build WITHOUT narrow widths (and without S1_DRAM) has not run at 1 M yet. Validation order
+(_logs/mesh/chain_mmtp_k1.sh): the 8x4 layer tests U 8 K 1 / U 4 K 1, then the e2e G 8 K 1 on B 16 without narrow widths
+at 1 M, else 256 K, else 128 K (GLM53_SPEC_L1_DEBUG / GLM53_L1_REPORT attribute the L1), G 4 K 1 on a B 8 build, G 4 K 3
+on B 16 at the fitting SEQ, and the single-user K 3 knob-off regression.

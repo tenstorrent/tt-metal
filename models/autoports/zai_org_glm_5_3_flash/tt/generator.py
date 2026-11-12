@@ -678,8 +678,9 @@ def spec_widths(K: int, chunk: int, widths=(), groups: int = 0) -> dict:
     groups = G > 0 (GLM53_SPEC_MULTI, spec_multi_groups; mode "multi", GLM53_SPEC_VERIFY_W / _MTP_W not read):
     w = G (K + 1) rows must be a decode width of the build (the KDA / MLA verify groups split the launch evenly; a
     group is whole row pairs: K + 1 even) -- wv = cu = w (the catch-up: every group's K + 1 rows), ch = the smallest
-    width >= G (chained row u = user u); ts = those of cu / ch <= 4 (t > 4 runs on the full width's phases, as the
-    native widths)."""
+    width >= G (chained row u = user u; K 1: no chained launch -- the catch-up head drafts d'1 directly, spec_ctl GATHER
+    reads mout row u (K + 1) + n_u -- so ch = w and no extra width is built); ts = those of cu / ch <= 4 (t > 4 runs on
+    the full width's phases, as the native widths)."""
     if groups:
         G, g = int(groups), int(K) + 1
         ws = sorted({int(x) for x in widths} | {int(chunk)})
@@ -687,7 +688,7 @@ def spec_widths(K: int, chunk: int, widths=(), groups: int = 0) -> dict:
         assert G >= 1 and (G == 1 or g % 2 == 0) and w <= 16, (
             "GLM53_SPEC_MULTI: G (K + 1) <= 16 rows, K + 1 even (kda_pre's verify groups: row pairs)", G, K)  # fmt: skip
         assert w in ws, ("GLM53_SPEC_MULTI: G (K + 1) rows must be a decode width of the build", w, ws)
-        ch = min(x for x in ws if x >= G)
+        ch = w if K == 1 else min(x for x in ws if x >= G)
         return dict(w=w, lone=w, wv=w, cu=w, ch=ch, mode="multi", ts=tuple(sorted(t for t in {w, ch} if t <= 4)))
     w = int(K) + 1
     shard = os.environ.get("GLM53_SPEC_ON_SHARD", "0") == "1"

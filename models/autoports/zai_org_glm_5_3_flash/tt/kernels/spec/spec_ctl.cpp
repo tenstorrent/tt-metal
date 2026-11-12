@@ -36,7 +36,10 @@
 //   ro = u (K + 1) .. ro + K; per group the rules above with row offset ro: c_u = pos row ro, a / d rows ro + j, the
 //   bonus -> tin row ro, record page u, selector word u = ro + n_u (absolute candidate row), pos_v / mpos_cu rows
 //   ro + j, chain row u of every mpos_ch page; GATHER: d'1 = mout row ro + n_u, d'_{i+1} = cout_i row u -> tin rows
-//   ro + 1 .. ro + K. ACCEPT's rings: runtime arg 10 = R rings per group, then R x G bases (group-major, R x G <= 64).
+//   ro + 1 .. ro + K. ACCEPT's rings (SPEC_REV 4): runtime arg 10 = R (<= 16, one per main sparse_dsa layer), then the
+//   R ring tensors' base addresses (slot 0 = page 0); user u's ring = slot ro = u (K + 1), its group base (the
+//   generator slot = the DSA state slot): pages ro RING_TILES + i of each tensor. SPEC_REV 3 took R x G slot bases
+//   (<= 64): G 8 x the 11 sparse_dsa layers = 88 did not fit (K 1 at 8 users).
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -155,10 +158,10 @@ void kernel_main() {
         if (grp > 0 && n_ring > 0) {
             const uint32_t r0 = 4 * grp;
             const uint32_t off = (r0 >> 4) * 1024 + (r0 & 15) * 32;  // kernels/mla/mla_common.hpp row_off
-            for (uint32_t l = 0; l < n_ring && u * n_ring + l < 64; ++l) {
-                const uint32_t base = get_arg_val<uint32_t>(11 + u * n_ring + l);
+            for (uint32_t l = 0; l < n_ring && l < 16; ++l) {
+                const uint32_t base = get_arg_val<uint32_t>(11 + l);  // layer l's ring tensor (slot 0 at page 0)
                 for (uint32_t i = 0; i < RING_TILES; ++i) {
-                    const uint64_t ra = dram(base, RING_PAGE, i);
+                    const uint64_t ra = dram(base, RING_PAGE, ro * RING_TILES + i);  // user u's slot = its group base
                     noc_async_read(ra + off, s_tok, 128);
                     noc_async_read(ra + off + 512, s_tok + 128, 128);
                     noc_async_read_barrier();

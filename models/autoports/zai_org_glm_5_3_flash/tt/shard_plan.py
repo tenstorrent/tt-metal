@@ -2134,3 +2134,100 @@ def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, pla
                 want = geo.block(name, t, r, c, **pk)
                 if got != {k: want[k] for k in got}:
                     raise ValueError(f"chip {(r, c)} stream {name}: blocks {got} differ from the plan {want}")
+
+
+def spec_ring_emulate(K: int, G: int, steps: int, *, seed: int = 0, variant: str = "ours", plain_p: float = 0.0,
+                      starts=None, forced=None) -> dict:  # fmt: skip
+    """Host model of the DSA indexer's open-pool record under speculative verify + rollback (Zoe Carver's regen trap,
+    notes glm-glx-mtp2: "a rejected row closing a 4-token pool reused a stale open-pool record"), against sequential
+    decode of the committed tokens. The record here is the slot's index ring (kernels/mla/ix_dm1.cpp): a row at
+    position p writes ring row 4 (p / 4 - q0) + p % 4 (MLA_DSA_ONE_SLOT; q0 = its group's first active row's pool,
+    MLA_DSA_GROUP_ROWS = K + 1 per user, slot = the group base) BACK TO DRAM, then pool p / 4's pooled key from that
+    pool's 4 ring rows (only the owner chip keeps it; every chip writes the ring); the plain decode / prefill use rows
+    0..3; SpecCtl ACCEPT (kernels/spec/spec_ctl.cpp, per group) moves rows 4 g .. 4 g + 3 -> 0..3 when the next base
+    (c + n + 1) / 4 = c / 4 + g, g > 0. Rows of a launch see the earlier rows' writes (row order: one index core / the
+    lane baton) and score only pools < (p + 1) / 4, after every row's writes (the owners' I4 waits for all).
+
+    Values are content identities: row value of position p = (p, hash of the input tokens 0..p) (a row whose prefix
+    holds a rejected draft differs); a pooled key = its 4 row values. Checks: every scored pool of every launch row ==
+    the launch's own causal sequence's; after each ACCEPT, every pool closed by the committed positions and the
+    canonical rows 0..(c' % 4) - 1 == sequential decode's. G users (slots u (K + 1)), `steps` verify launches; plain_p:
+    the probability of a plain decode step of a user between verifies (spec leave / BOOT re-enter); starts: prompt
+    lengths (the first verify base = the length: BOOT c = L - 1, n 0); forced {(step, user): n}. variant "ours" (the
+    kernels), "save_if_open" (Zoe's pre-fix: a launch's ring writes persist only when the user's last row leaves its
+    pool open), "no_move" (ACCEPT without the ring move). -> {checks, mismatches: [(step, user, what, index)]}"""
+    import random
+
+    assert variant in ("ours", "save_if_open", "no_move"), variant
+    rng = random.Random(seed)
+    W = K + 1
+    truth = [[rng.randrange(1, 1 << 30) for _ in range(64)] for _ in range(G)]
+
+    def tok(u, p):  # the committed (greedy) token stream of user u
+        while p >= len(truth[u]):
+            truth[u].append(rng.randrange(1, 1 << 30))
+        return truth[u][p]
+
+    def val(seq, p):
+        return (p, hash(tuple(seq[: p + 1])))
+
+    def expect(seq, q):
+        return tuple(val(seq, 4 * q + i) for i in range(4))
+
+    ring = [[None] * 32 for _ in range(G)]  # per user slot: the DRAM ring tile rows
+    pools = [dict() for _ in range(G)]  # per user slot: pool q -> its pooled key
+    base = []
+    out = dict(checks=0, mismatches=[])
+
+    def check(step, u, what, idx, got, want):
+        out["checks"] += 1
+        if got != want:
+            out["mismatches"].append((step, u, what, idx))
+
+    def plain(u, p):  # the plain decode / prefill row at p: canonical rows 0..3
+        seq = [tok(u, i) for i in range(p + 1)]
+        ring[u][p % 4] = val(seq, p)
+        pools[u][p // 4] = tuple(ring[u][0:4])
+
+    for u in range(G):
+        L = int(starts[u]) if starts is not None else rng.randrange(1, 64)
+        for p in range(L):
+            plain(u, p)
+        base.append(L)
+    for step in range(steps):
+        for u in range(G):  # one launch: every group's rows in row order (groups never share a slot)
+            c = base[u]
+            n = (forced or {}).get((step, u))
+            n = rng.randrange(0, K + 1) if n is None else int(n)
+            seq = [tok(u, i) for i in range(c + 1)]  # the bonus at c is the model's output: always the committed token
+            for j in range(1, K + 1):  # drafts: the first n right, the next wrong, the rest random
+                right = tok(u, c + j)
+                seq.append(right if j <= n else right ^ 0x5A5A5 if j == n + 1 else rng.randrange(1, 1 << 30))
+            q0 = c // 4
+            l1 = list(ring[u])  # the launch's view (ix_dm1 writes each row back to DRAM: "ours" persists l1)
+            for j in range(W):
+                p = c + j
+                g = p // 4 - q0
+                assert 0 <= g and 4 * g + 3 < 32, (c, j)
+                l1[4 * g + p % 4] = val(seq, p)
+                pools[u][p // 4] = tuple(l1[4 * g : 4 * g + 4])
+            for j in range(W):  # scoring after every row's writes: pools < (p + 1) / 4 of the launch's own sequence
+                p = c + j
+                for q in range(max(0, q0 - 1), (p + 1) // 4):
+                    check(step, u, "scored_pool", q, pools[u].get(q), expect(seq, q))
+            if variant != "save_if_open" or (c + K) % 4 != 3:
+                ring[u] = l1
+            grp = (c + n + 1) // 4 - q0
+            if grp > 0 and variant != "no_move":  # SpecCtl ACCEPT: the next base's pool rows -> 0..3
+                ring[u][0:4] = ring[u][4 * grp : 4 * grp + 4]
+            c2 = c + n + 1
+            com = [tok(u, i) for i in range(c2)]
+            for q in range(max(0, q0 - 1), c2 // 4):  # every pool the committed positions closed
+                check(step, u, "closed_pool", q, pools[u].get(q), expect(com, q))
+            for i in range(c2 % 4):  # the open pool's committed rows, where the next launch / plain step reads them
+                check(step, u, "open_row", 4 * (c2 // 4) + i, ring[u][i], val(com, 4 * (c2 // 4) + i))
+            base[u] = c2
+            while plain_p and rng.random() < plain_p:  # spec leave: plain steps (canonical rows), then BOOT re-enters
+                plain(u, base[u])
+                base[u] += 1
+    return out

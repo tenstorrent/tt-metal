@@ -44,7 +44,7 @@ BF16, FP32 = ttnn.bfloat16, ttnn.float32
 TILE = 32
 HIDDEN = 4096
 KDIR = os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels")
-SPEC_REV = 3  # 3: ACCEPT moves the DSA rings (mk_mla rev 56); a define on every Stage 17 kernel (a long-lived process caches FILE_PATH binaries by path + args + defines)
+SPEC_REV = 4  # 4: SPEC_GROUPS ACCEPT addresses user u's ring at slot u (K + 1) of each layer's tensor (R bases, not R x G); 3: ACCEPT moves the DSA rings (mk_mla rev 56); a define on every Stage 17 kernel (a long-lived process caches FILE_PATH binaries by path + args + defines)
 SEM_HEAD, SEM_HN = 0, 4  # kernels/head/head_common.hpp roles (owners: partial-sum all-gather; readers: hcat landed)
 
 
@@ -391,15 +391,15 @@ class SpecCtl:
         assert self.groups == 0 or 1 <= self.groups * (K + 1) <= 32, (self.groups, K)
         self.core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
 
-    NARGS = 27  # 10 + the DSA ring count + 16 ring bases (ACCEPT; kernels/spec/spec_ctl.cpp)
-    NARGS_MULTI = 75  # 10 + the per-group ring count + 64 ring bases (R x G <= 64, group-major)
+    NARGS = 27  # 10 + the DSA ring count + 16 ring bases (ACCEPT; kernels/spec/spec_ctl.cpp; SPEC_GROUPS alike)
 
     def __call__(self, mode: str, args: list, io: list, rings: list = ()):
-        """rings: the single-user kernel's slot-0 bases; with groups, R bases per group, group-major (len = R G)"""
-        nmax = 64 if self.groups else 16
+        """rings: the slot-0 base of every main sparse_dsa layer's ring tensor (<= 16); with groups (SPEC_REV 4) the
+        kernel addresses user u's ring at slot u (K + 1) of each tensor -- R args for any G (was R x G <= 64: G 8 x 11
+        layers did not fit)"""
+        nmax = 16
         assert len(args) <= 10 and len(rings) <= nmax, (len(args), len(rings))
-        per = len(rings) // self.groups if self.groups and rings else len(rings)
-        assert not self.groups or per * self.groups == len(rings), (len(rings), self.groups)
+        per = len(rings)
         rt = ttnn.RuntimeArgs()
         rt[0][0] = ([int(a) for a in args] + [0] * (10 - len(args)) + [per] + [int(a) for a in rings]
                     + [0] * (nmax - len(rings)))  # fmt: skip
@@ -950,12 +950,10 @@ class SpecMTP:
 
     def _dsa_rings(self) -> list:
         """slot 0's ring base address of every main sparse_dsa layer's DSA state (empty without DSA); GLM53_SPEC_MULTI:
-        every user's (its group base slot), group-major (spec_ctl.cpp SPEC_GROUPS: R rings x G users)"""
+        the same R bases -- spec_ctl.cpp SPEC_GROUPS (SPEC_REV 4) pages user u's ring at slot u (K + 1) = its group base
+        (StackBackend._dsa_st: DSA slot = generator slot)"""
         from models.autoports.zai_org_glm_5_3_flash.tt.mk_mla import dsa_slot_addrs
 
-        if self.groups:
-            return [dsa_slot_addrs(self.be._dsa_st(self.kv, i, s), 1)[1] for s in self.slots
-                    for i in sorted(self.kv.extra.get("dsa", {}))]  # fmt: skip
         return [dsa_slot_addrs(self.be._dsa_st(self.kv, i, 0), 1)[1] for i in sorted(self.kv.extra.get("dsa", {}))]
 
     def _draft(self):
