@@ -360,6 +360,7 @@ def fast_device_to_host_yuv(
     logical_w: int | None = None,
     use_persistent_buffer: bool = True,
     defer: bool = False,
+    input_patch_size: int = 0,
 ) -> np.ndarray | Callable[[], np.ndarray] | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
@@ -421,6 +422,12 @@ def fast_device_to_host_yuv(
             returns; what is left is host work the caller can overlap with the
             next frame's device work.  Calling it yields the frame.
 
+        input_patch_size: ``0`` (default) for BCTHW input.  An even ``p >= 2``
+            takes the patchified ``(1, T, H/p, W/p, 3*p*p)`` tensor instead, with
+            channels ordered ``(c, w_in_patch, h_in_patch)`` (the LTX VAE
+            ``conv_out`` layout), and ``rgb_to_yuv`` unpatchifies it while
+            reading, which skips the reshape + permute to CHWT.  Single-host only.
+
     Returns:
         ``np.ndarray`` of shape ``(T, H'*W' + 2*(H'/2 * W'/2))``, dtype uint8,
         where ``H'``/``W'`` are ``logical_h``/``logical_w`` when set and
@@ -437,7 +444,16 @@ def fast_device_to_host_yuv(
 
     # NOTE: ttnn ``.shape`` on a multi-device sharded tensor returns the per-shard (local) shape
     mesh_shape = tuple(mesh_device.shape)
-    B, C, T, h_per, w_per = tt_video_BCTHW.shape
+    if input_patch_size:
+        if ttnn.using_distributed_env():
+            msg = "fast_device_to_host_yuv: input_patch_size is single-host only"
+            raise ValueError(msg)
+        p = input_patch_size
+        B, T, hp_per, wp_per, Cp = tt_video_BCTHW.shape
+        assert Cp == 3 * p * p, f"patchified input needs 3*p*p={3 * p * p} channels, got {Cp}"
+        C, h_per, w_per = 3, hp_per * p, wp_per * p
+    else:
+        B, C, T, h_per, w_per = tt_video_BCTHW.shape
     assert B == 1, f"fast_device_to_host_yuv requires B=1, got {B}"
     assert C == 3, f"fast_device_to_host_yuv requires C=3 (RGB), got {C}"
 
@@ -523,24 +539,32 @@ def fast_device_to_host_yuv(
         h_per % 2 == 0 and w_per % 2 == 0
     ), f"per-shard H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
 
-    # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
-    tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
-    if debug:
-        print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
-
-    tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
-    if debug:
-        print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
-
-    # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
     # Match the float export, which clamps RGB to [0, 255] before ffmpeg converts it: the kernel converts first
     # and clips [0, 255] after, so the VAE's out-of-range extremes would otherwise land outside the limited
-    # range (Y 0-255 instead of 16-235; measured ~3 Y levels RMS on 10 % of the pixels).
-    tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
-    # wide_rows takes one T tile per unit (T <= 32): H3 decodes in chunks that fit, but LTX reads back a whole
-    # clip (T=145 for 6 s), which TT_FATALs at pipeline build. Above 32 frames use the plain kernel, as ltx-rt
-    # did before the H3 merge; both give the same planes (test_rgb_to_yuv_wide_minimax_h3).
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=T <= 32)
+    # range (Y 0-255 instead of 16-235; measured ~3 Y levels RMS on 10 % of the pixels). The clip is
+    # elementwise, so it applies to the patchified input as well.
+    if input_patch_size:
+        # 1+2. The kernel reads the patchified shard directly.
+        tt_video_BCTHW = ttnn.clip(tt_video_BCTHW, -1.0, 1.0)
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(
+            tt_video_BCTHW, coefficients=coefficients, wide_rows=T <= 32, input_patch_size=input_patch_size
+        )
+    else:
+        # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
+        tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
+        if debug:
+            print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
+
+        tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
+        if debug:
+            print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
+
+        # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
+        tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
+        # wide_rows takes one T tile per unit (T <= 32): H3 decodes in chunks that fit, but LTX reads back a whole
+        # clip (T=145 for 6 s), which TT_FATALs at pipeline build. Above 32 frames use the plain kernel, as ltx-rt
+        # did before the H3 merge; both give the same planes (test_rgb_to_yuv_wide_minimax_h3).
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=T <= 32)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
