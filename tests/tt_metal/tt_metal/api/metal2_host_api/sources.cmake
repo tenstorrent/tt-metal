@@ -26,6 +26,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/basic_kernel_info.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/compiler_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/dfb_binding.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/global_semaphore_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/hardware_config.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/kernel_arguments.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/scratchpad_binding.cpp
@@ -83,6 +84,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/tensor_spec_relaxations/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utils/table.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/get_token_if_present.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/global_semaphore_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/llk_operand.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/per_node_tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/scratchpad_bindings.cpp
@@ -93,6 +95,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/global_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/llk_operand_mul.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/mesh_workload_factories.cpp

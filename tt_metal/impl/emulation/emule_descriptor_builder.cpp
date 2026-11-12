@@ -396,6 +396,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 k.get_array_args().empty(),
                 "Kernel '{}' declares array arguments, which emulation does not support yet",
                 k.kernel_source().name());
+            TT_FATAL(
+                k.global_semaphore_binding_handles().empty(),
+                "Kernel '{}' binds a GlobalSemaphore, which emulation does not support yet",
+                k.kernel_source().name());
             // Metal 2.0 binding handles (mirror build_metal2_snapshot).
             kd.bindings.is_metal2 = k.is_metal2_kernel();
             kd.bindings.rta_names = k.get_runtime_arg_names();

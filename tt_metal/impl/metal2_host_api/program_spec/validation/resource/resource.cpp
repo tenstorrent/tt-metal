@@ -11,6 +11,7 @@ void ValidateResourceBindings(const KernelSpec& kernel, const ValidationContext&
     ValidateSemaphoreBindings(kernel, arch);
     ValidateScratchpadBindings(kernel);
     ValidateTensorBindings(kernel);
+    ValidateGlobalSemaphoreBindings(kernel);
     ValidatePrefetcherPipeBindings(kernel);
 }
 
@@ -49,6 +50,7 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidateScratchpadsUsed(ctx);
     ValidateTensorParametersUsed(ctx);
     ValidatePerNodeTensorPlacement(ctx);
+    ValidateGlobalSemaphoreParametersUsed(ctx);
     ValidatePrefetcherPipesUsed(ctx);
     experimental::ValidateSRAMArenaParametersUsed(ctx);
 }

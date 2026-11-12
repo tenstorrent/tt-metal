@@ -701,6 +701,12 @@ public:
     // name is unknown; the caller validates known-ness separately).
     TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
+    // Metal 2.0: GlobalSemaphoreParameters, with the mesh the program was built for (a bound
+    // GlobalSemaphore must live on it).
+    void register_global_semaphore_parameter(const std::string& name, const distributed::MeshDevice& device);
+    // Returns nullptr if name is not registered (caller validates).
+    const distributed::MeshDevice* get_global_semaphore_parameter_device(const std::string& name) const;
+    std::vector<std::string> get_registered_global_semaphore_parameter_names() const;
     // Footprint of the tensor most recently bound to a registered parameter. The setter ignores unregistered names;
     // the getter returns nullptr if no tensor has been bound.
     void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
@@ -852,6 +858,7 @@ private:
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
         std::unordered_map<std::string, RegisteredSRAMArenaParameter> sram_arena_parameters;
+        std::unordered_map<std::string, const distributed::MeshDevice*> global_semaphore_parameters;
 
         std::vector<DFBStorageBinding> dfb_storage_bindings;
     };

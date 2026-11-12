@@ -934,6 +934,33 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
     return names;
 }
 
+void ProgramImpl::register_global_semaphore_parameter(const std::string& name, const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->global_semaphore_parameters.try_emplace(name, &device);
+    TT_FATAL(inserted, "Duplicate GlobalSemaphore parameter name: {}", name);
+}
+
+const distributed::MeshDevice* ProgramImpl::get_global_semaphore_parameter_device(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->global_semaphore_parameters.find(name);
+    return it == metal2_registry_->global_semaphore_parameters.end() ? nullptr : it->second;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_global_semaphore_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->global_semaphore_parameters.size());
+        for (const auto& [name, device] : metal2_registry_->global_semaphore_parameters) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
 detail::BoundTensorFootprint detail::make_bound_tensor_footprint(const MeshTensor& tensor) {
     const auto& mesh_buffer = tensor.mesh_buffer();
     return BoundTensorFootprint{

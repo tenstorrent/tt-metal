@@ -383,13 +383,26 @@ LoweredKernel LowerKernel(
     // Resolve scratchpad bindings for this kernel. The scratchpad section follows the TensorBinding
     // section and precedes varargs, so it begins at the tensor-binding resolution's (pre-scratchpad)
     // vararg offset; we then push the vararg section out by the scratchpad section's width so the
-    // crta_layout that flows into the kernel ctor reflects all four sections.
+    // crta_layout that flows into the kernel ctor reflects every section.
     ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
         kernel_spec,
         collected.scratchpad_by_name,
         /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
     ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
+
+    // GlobalSemaphore bindings: one address word each, after the scratchpad section.
+    std::vector<GlobalSemaphoreBindingHandle> global_semaphore_handles;
+    global_semaphore_handles.reserve(kernel_spec.global_semaphore_bindings.size());
+    for (const auto& binding : kernel_spec.global_semaphore_bindings) {
+        global_semaphore_handles.push_back(GlobalSemaphoreBindingHandle{
+            .accessor_name = binding.accessor_name,
+            .global_semaphore_parameter_name = binding.global_semaphore_parameter_name.get(),
+            .addr_crta_word = ta_bindings.crta_layout.vararg_section_offset});
+        ++ta_bindings.crta_layout.vararg_section_offset;
+    }
+    ta_bindings.crta_layout.global_semaphore_section_words =
+        static_cast<uint32_t>(kernel_spec.global_semaphore_bindings.size());
 
     // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
     std::vector<uint32_t> compile_args = cta_varargs;
@@ -487,6 +500,8 @@ LoweredKernel LowerKernel(
     // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
     // or SRAMArena argument binding will later fill each handle's allocated_address.
     kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+    kernel->set_global_semaphore_binding_handles(std::move(global_semaphore_handles));
 
     // PrefetcherPipe accessors -> program slot ids (also part of the kernel cache key).
     if (!resource_bindings.prefetcher_pipes.empty()) {

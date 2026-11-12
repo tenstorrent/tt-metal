@@ -374,6 +374,42 @@ void BindSRAMArenaArgs(
     }
 }
 
+// Validates a GlobalSemaphoreArgument list against the Program's GlobalSemaphoreParameters.
+void ValidateGlobalSemaphoreArgs(
+    const Program& program,
+    const Table<GlobalSemaphoreParamName, ProgramRunArgs::GlobalSemaphoreArgument>& global_semaphore_args,
+    bool require_all) {
+    const detail::ProgramImpl& program_impl = program.impl();
+    for (const auto& [param_name, arg] : global_semaphore_args) {
+        const distributed::MeshDevice* device = program_impl.get_global_semaphore_parameter_device(param_name.get());
+        TT_FATAL(
+            device != nullptr, "GlobalSemaphoreArgument references unknown GlobalSemaphoreParameter '{}'.", param_name);
+        TT_FATAL(
+            arg.get().device() == static_cast<const IDevice*>(device),
+            "GlobalSemaphoreArgument for '{}' supplies a GlobalSemaphore created on a different MeshDevice than the "
+            "one this Program was built for.",
+            param_name);
+    }
+    if (require_all) {
+        for (const std::string& declared : program_impl.get_registered_global_semaphore_parameter_names()) {
+            TT_FATAL(
+                global_semaphore_args.contains(GlobalSemaphoreParamName{declared}),
+                "GlobalSemaphoreParameter '{}' is declared in the Program but has no GlobalSemaphoreArgument entry.",
+                declared);
+        }
+    }
+}
+
+uint32_t GlobalSemaphoreAddressWord(const GlobalSemaphoreParamName& param_name, const GlobalSemaphore& semaphore) {
+    const DeviceAddr address = semaphore.address();
+    TT_FATAL(
+        address <= std::numeric_limits<uint32_t>::max(),
+        "GlobalSemaphore argument for '{}' has address {}, which exceeds uint32_t max",
+        param_name,
+        address);
+    return static_cast<uint32_t>(address);
+}
+
 // A PrefetcherPipe relay DFB is exactly the pipe ring (entry_size * num_entries == ring_size, entry
 // size == the pipe's dense entry size), so its size cannot be overridden per run.
 void RejectPrefetcherPipeRelayResize(
@@ -755,6 +791,8 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     // Validate tensor runtime parameters (delegated to shared helper).
     ValidateTensorArgs(program, params.tensor_args);
 
+    ValidateGlobalSemaphoreArgs(program, params.global_semaphore_args, /*require_all=*/true);
+
     ValidateSRAMArenaArgs(program, params.advanced_options.sram_arena_args, /*require_all=*/true);
 
     // Validate PrefetcherPipe arguments (delegated to shared helper; full path requires all).
@@ -981,6 +1019,19 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         }
     };
 
+    auto append_global_semaphore_crtas = [&params](const auto& global_semaphore_handles, std::vector<uint32_t>& out) {
+        for (const auto& handle : global_semaphore_handles) {
+            const GlobalSemaphoreParamName param_name{handle.global_semaphore_parameter_name};
+            const auto arg = params.global_semaphore_args.get(param_name);
+            TT_FATAL(
+                arg.has_value(),
+                "Internal error: GlobalSemaphore binding '{}' has no GlobalSemaphoreArgument (validation should have "
+                "caught this).",
+                param_name);
+            out.push_back(GlobalSemaphoreAddressWord(param_name, arg->get()));
+        }
+    };
+
     // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals
     // if called twice, so it can only be used the first time; on subsequent SetProgramRunArgs calls
     // (e.g. re-enqueue with new args) the already-allocated buffer is patched in place. Shared by the
@@ -1180,7 +1231,8 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         //      the address slot position chosen here.
         //   3. Scratchpad section, in binding order, one word each (the allocated L1 base address,
         //      0 here until allocate_scratchpads patches it at program-compile time).
-        //   4. Common runtime varargs, in caller-supplied order.
+        //   4. GlobalSemaphore section, in binding order, one word each (the bound GlobalSemaphore's address).
+        //   5. Common runtime varargs, in caller-supplied order.
         const auto& binding_handles = kernel->tensor_binding_handles();
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
@@ -1203,6 +1255,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         }
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
+        append_global_semaphore_crtas(kernel->global_semaphore_binding_handles(), combined_crtas);
         combined_crtas.insert(
             combined_crtas.end(),
             kernel_common_runtime_varargs(kernel_params).begin(),
@@ -1211,8 +1264,8 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         install_crtas(kernel, combined_crtas, kernel_name.get());
     }
 
-    // Second pass: kernels that bind tensors and/or a scratchpad but were omitted from kernel_run_args.
-    // A kernel whose only per-enqueue state is TensorBinding addresses and/or a scratchpad (no named
+    // Second pass: kernels that bind tensors, a scratchpad and/or a GlobalSemaphore but were omitted from
+    // kernel_run_args. A kernel whose only per-enqueue state is binding addresses (no named
     // RTAs/CRTAs and no varargs — a scratchpad's address is framework-supplied, not user-supplied) is
     // allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop above only visits
     // kernels present in kernel_run_args, so such a kernel's binding + scratchpad CRTA sections would
@@ -1229,10 +1282,11 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
         const auto& binding_handles = kernel->tensor_binding_handles();
         const auto& scratchpad_handles = kernel->scratchpad_binding_handles();
-        if (binding_handles.empty() && scratchpad_handles.empty()) {
+        const auto& global_semaphore_handles = kernel->global_semaphore_binding_handles();
+        if (binding_handles.empty() && scratchpad_handles.empty() && global_semaphore_handles.empty()) {
             continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
         }
-        // Binding-only kernel: its CRTA buffer is exactly the TensorBinding + scratchpad sections (it has
+        // Binding-only kernel: its CRTA buffer is exactly the binding sections (it has
         // no named CRTAs or varargs, else validation would have required a kernel_run_args entry).
         // install_crtas allocates the buffer on the first SetProgramRunArgs call and patches it in place
         // on later ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
@@ -1249,6 +1303,7 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
         std::vector<uint32_t> combined_crtas;
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(scratchpad_handles, combined_crtas);
+        append_global_semaphore_crtas(global_semaphore_handles, combined_crtas);
         install_crtas(kernel, combined_crtas, kernel_name);
     }
 
@@ -1570,6 +1625,9 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // ones are validated against their declared spec.
     ValidateTensorArgs(program, params.tensor_args, /*require_all=*/false);
 
+    // GlobalSemaphore args: any may be omitted (its prior address is retained).
+    ValidateGlobalSemaphoreArgs(program, params.global_semaphore_args, /*require_all=*/false);
+
     ValidateSRAMArenaArgs(program, params.advanced_options.sram_arena_args, /*require_all=*/false);
 
     // PrefetcherPipe args: any may be omitted (the binding is sticky); a supplied one must name a
@@ -1776,6 +1834,27 @@ void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& 
         }
     }
 
+    // ---- GlobalSemaphore bindings: patch CRTA address slots for SUPPLIED GlobalSemaphores only ----
+    if (!params.global_semaphore_args.empty()) {
+        for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
+            std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+            for (const auto& handle : kernel->global_semaphore_binding_handles()) {
+                const GlobalSemaphoreParamName param_name{handle.global_semaphore_parameter_name};
+                const auto arg = params.global_semaphore_args.get(param_name);
+                if (!arg.has_value()) {
+                    continue;
+                }
+                TT_FATAL(
+                    !kernel->common_runtime_args().empty(),
+                    "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated; cannot patch GlobalSemaphore "
+                    "bindings. Call SetProgramRunArgs at least once before a partial update.",
+                    kernel_name);
+                kernel->common_runtime_args_data()[handle.addr_crta_word] =
+                    GlobalSemaphoreAddressWord(param_name, arg->get());
+            }
+        }
+    }
+
     // ---- PrefetcherPipe args: omitted parameters keep their bound pipe; a supplied one is bound
     //      (no-op when it is the already-bound object) ----
     BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
@@ -1809,6 +1888,18 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
             // the disjoint check the key is absent, so insert takes effect (under skip_validation a
             // collision keeps base's existing entry).
             base.tensor_args.insert({name, arg});
+        }
+
+        // GlobalSemaphore args: union by parameter name (disjoint). Same insert-not-[] reasoning as
+        // tensor_args: reference_wrapper is not default-constructible.
+        for (const auto& [name, arg] : other.global_semaphore_args) {
+            if (!skip_validation) {
+                TT_FATAL(
+                    !base.global_semaphore_args.contains(name),
+                    "MergeProgramRunArgs: GlobalSemaphoreParameter '{}' is specified in more than one ProgramRunArgs.",
+                    name);
+            }
+            base.global_semaphore_args.insert({name, arg});
         }
 
         // PrefetcherPipe args: union by parameter name (disjoint). Same insert-not-[] reasoning as
