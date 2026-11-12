@@ -2,19 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// GGUF weight pages for the Blackhole SFPU decoders (sfpu/experimental/ckernel_sfpu_gguf_decode.h): the format ids and
-// the layout of a page in L1.
-//
-// A page is the decoder's view of one K tile (two for the pair formats, eight for TQ1_0) of a 32-column N tile. It is a
-// 32-bit tile of 16, 32 or 64 rows of 16 words, unpacked to DEST as is:
-//   bytes [code_offset, code_offset + code_bytes): the code words, regrouped from the GGUF blocks so that SFPU lane
-//                     (r, c) finds its outputs' codes in one place; codebook formats keep their native index bytes here
-//                     and hold the level codes of their grid entries in front of them (from byte 0);
-//   from scale_offset: the scale fields of the K tile's group, regrouped the same way: scale_rows native rows, the last
-//                     fp16_rows of them fp16 fields, then fp32 copies of those fields.
-// The bits are the GGUF file's, moved: a page's code and scale bytes are its weights' GGUF bytes. The level codes and the
-// fp32 copies are filled in by whoever writes the page to L1 before it is unpacked. Each format's rows are described in
-// the ckernel_sfpu_gguf_decode*.h headers.
+// GGUF weight pages for the Blackhole SFPU decoders: the format ids and the layout of a page in L1.
 
 #pragma once
 
@@ -52,6 +40,15 @@ enum Format : std::uint32_t
     TQ1_0   = 25,
 };
 
+// A page is one K tile (two for the pair formats, eight for TQ1_0) of a 32-column N tile: a 32-bit tile of 16, 32 or 64
+// rows of 16 words, unpacked to DEST as is.
+//   [code_offset, code_offset + code_bytes): the code words, regrouped from the GGUF blocks so that SFPU lane (r, c)
+//     finds its outputs' codes in one place; codebook formats keep their native index bytes here, with the level codes
+//     of their grid entries in front (from byte 0).
+//   From scale_offset: the group's scale fields, regrouped the same way: scale_rows native rows (the last fp16_rows of
+//     them fp16 fields), then fp32 copies of those fields.
+// Code and scale bytes are the weights' GGUF bytes, moved; the writer of the page fills in the level codes and fp32
+// copies before it is unpacked.
 struct PageLayout
 {
     std::uint32_t group_tiles;  // K tiles sharing one set of scale fields (the decoder's tile index runs over them)

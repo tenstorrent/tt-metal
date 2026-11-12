@@ -1,15 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""MATH_ISOLATE perf of the GGUF decoders, the DEST-fed matmul and the page copy (Blackhole).
-
-sources/gguf_decode_mm_perf.cpp; mean(MATH_ISOLATE) of the TILE_LOOP row in the .post.csv is cycles per tile:
-  - decode / params / body: sfpu_gguf_decode_tile with both phases, phase 1 (the scales) or phase 2 (the codes),
-    per format, averaged over the tile indices of a group (decode and params: with the group step, once per
-    group);
-  - matmul: _llk_math_dest_srca_mm_ per in0 rows and fidelity, SrcA and SrcB set valid without data;
-  - copy: the unpack-to-DEST copy of a 1, 2 or 4 KB page, as the math thread waits for it.
-"""
+"""MATH_ISOLATE perf of the GGUF decoders, the DEST-fed matmul and the page copy (Blackhole)."""
 
 import pytest
 from conftest import blackhole_only
@@ -49,6 +41,9 @@ TILE_CNT = 8  # every tile index of a group of up to 8 K tiles
 def test_perf_gguf_decode(
     perf_report, step, fmt, in0_rows, fidelity, page_faces, loop_factor
 ):
+    """Cycles per tile: mean(MATH_ISOLATE) of the TILE_LOOP row in the .post.csv; steps as GGUF_STEP in
+    sources/gguf_decode_mm_perf.cpp (decode / params / body per format, matmul per in0 rows and fidelity, copy of a 1,
+    2 or 4 KB page)."""
     configuration = PerfConfig(
         "sources/gguf_decode_mm_perf.cpp",
         InputOutputFormat(DataFormat.UInt32, DataFormat.Float32),

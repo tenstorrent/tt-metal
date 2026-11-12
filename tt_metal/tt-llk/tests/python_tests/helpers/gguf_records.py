@@ -1,20 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""GGUF weights as the Blackhole SFPU decoders read them.
-
-tt_llk_blackhole/common/inc/experimental/ckernel_gguf_page.h describes the pages (FORMATS reads its format ids and
-layouts) and sfpu/experimental/ckernel_sfpu_gguf_decode.h each format's rows. This module builds, for an [N, K] weight:
-  - random ggml blocks (random code bits, finite scale fields);
-  - its records: the GGUF bytes regrouped per 32-column N tile and group of K tiles, the size of the GGUF tensor;
-  - the L1 pages a reader assembles from the records (code bytes at code_offset, the group's scale fields at
-    scale_offset), completed with the fp32 copies of their fp16 scale fields and the codebook formats' level codes;
-  - the codebook formats' level tables, and ggml's dequantization (gguf-py) as the golden.
-
-SFPU output o of lane (r, c) is element k = 16 (o / 16) + 4 ((o / 2) % 4) + r, n = 16 ((o / 8) % 2) + 2c + o % 2 of a
-32x32 [K][N] tile; word-vector v of a page is rows 4 (v / 2) .. + 3, columns of parity v % 2; scale word w = 2c + p
-covers columns 16p + 2c + b.
-"""
+"""GGUF weights as the Blackhole SFPU decoders read them: ggml blocks, records, L1 pages, level tables and goldens."""
 
 import re
 from dataclasses import dataclass
@@ -264,6 +251,8 @@ def level_table(fmt: GgufFormat) -> np.ndarray:
 # ------------------------------------------------------------------------------------------------- records
 
 
+# SFPU lane (r, c)'s output o is element (_out_k(o, r), _out_n(o, c)) of a 32x32 [K][N] tile; word-vector v of a page
+# is rows 4 (v / 2) .. + 3, columns of parity v % 2 (_lane_word); scale word w = 2c + p covers columns 16p + 2c + b.
 def _lane_col(w):  # scale word w covers columns _lane_col(w) + b
     return 16 * (w % 2) + 2 * (w // 2)
 

@@ -1,15 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""GGUF records are their weights' GGUF bytes, regrouped and never widened.
-
-The Blackhole GGUF decoders read pages laid out by ``experimental/ckernel_gguf_page.h``; ``helpers/gguf_records.py``
-reads that layout to build the records a reader turns into pages. A group's record is the codes of its pages and the
-group's scale fields, so it holds the bits of 32 columns by ``32 * group_tiles`` rows of K, at the GGUF file's bits per
-weight. The codebook formats add one level table each.
-
-No hardware needed: the tests run the Python packer.
-"""
+"""GGUF records are their weights' GGUF bytes, regrouped and never widened (no hardware: the Python packer only)."""
 
 import math
 
@@ -35,6 +27,8 @@ def test_formats_from_header():
 
 @pytest.mark.parametrize("name", list(FORMATS))
 def test_record_is_gguf_bytes(name):
+    """A group's record (its pages' codes and the group's scale fields) is the GGUF bytes of 32 columns by
+    32 * group_tiles rows of K."""
     f = FORMATS[name]
     group_weights = 32 * 32 * f.group_tiles
     gguf_bytes = group_weights * f.block_bytes // f.block_elems
@@ -51,6 +45,7 @@ def test_record_is_gguf_bytes(name):
 
 
 def test_level_table_bytes():
+    """The codebook formats add one level table each."""
     assert {name for name, f in FORMATS.items() if f.codebook} == set(LEVEL_TABLE_BYTES)
     for name, size in LEVEL_TABLE_BYTES.items():
         assert (

@@ -2,18 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// GGUF weight decode on the SFPU (sfpu/experimental/ckernel_sfpu_gguf_decode.h) and the DEST-fed matmul
-// (experimental/llk_math_dest_srca_mm.h), Blackhole, 32-bit DEST, full sync.
-//
-// buffer_A: the weight pages, page p of N tile nt at p + nt * (GGUF_KT / page_tiles), each page_bytes long and complete
-//           (fp32 scale copies and level codes written by the host, experimental/ckernel_gguf_page.h); with
-//           GGUF_FMT == 0 each page is a Float32 [K][N] weight tile.
-// buffer_B: the in0 tiles (bf16, GGUF_IN0_FACES faces), K tile kt at kt (GGUF_MM).
-// GGUF_MM = false: one decoded Float32 [K][N] tile out per (nt, kt).
-// GGUF_MM = true: one Float32 output tile per N tile, D += in0[kt] * W[kt][nt] over the K tiles. DEST tile 0 is the
-// accumulator; the K tiles alternate between two slot sets (decoded tile, page, decoder scratch) 1..3 and 4..6, so the
-// next page is unpacked while this one decodes, as the matmul kernel these LLKs come from does; a phase 2 whose stores
-// are not arbitrated against the unpacker's DEST writes (sfpu_gguf_decode_body_unarbitrated) waits for the copy.
+// GGUF weight decode on the SFPU and the DEST-fed matmul (Blackhole, 32-bit DEST, full sync).
 
 #include <cstdint>
 
@@ -59,6 +48,9 @@ static_assert(dest_sync == ckernel::DstSync::SyncFull && is_fp32_dest_acc_en, "g
 static_assert(GGUF_PAGE_ROWS % 64 == 0 && (GGUF_PAGE_ROWS == 0 || GGUF_MM), "gguf_decode_mm_test: page rows offset with matmul only");
 static_assert(!BFP || GGUF_PAGE_ROWS == 0, "gguf_decode_mm_test: no page rows offset with block-float codes");
 
+// buffer_A: the weight pages, page p of N tile nt at p + nt * PAGES_PER_N_TILE, each complete (fp32 scale copies and
+// level codes written by the host); GGUF_FMT == 0: each page is a Float32 [K][N] weight tile.
+// buffer_B (GGUF_MM): the in0 tiles (bf16, GGUF_IN0_FACES faces), K tile kt at kt.
 inline std::uint32_t page_address(const std::uint32_t pages_base, const std::uint32_t nt, const std::uint32_t kt)
 {
     return pages_base + (nt * PAGES_PER_N_TILE + kt / LAYOUT.page_tiles) * PAGE_BYTES;
@@ -192,6 +184,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         if constexpr (GGUF_MM)
         {
+            // One Float32 output tile per N tile, D += in0[kt] * W[kt][nt] over the K tiles. The K tiles alternate
+            // between two slot sets (decoded tile, page, decoder scratch), so the next page is unpacked while this one
+            // decodes; a phase 2 whose stores are not arbitrated against the unpacker's DEST writes waits for the copy.
             _llk_math_wait_for_dest_available_<dest_sync>();
             sfpu::sfpu_gguf_zero_tile(0); // the accumulator
             // The decoded tile per set (its page is the next tile, scratch past it).
@@ -225,6 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
+            // One decoded Float32 [K][N] tile out per (nt, kt).
             for (std::uint32_t kt = 0; kt < GGUF_KT; kt++)
             {
                 _llk_math_wait_for_dest_available_<dest_sync>();

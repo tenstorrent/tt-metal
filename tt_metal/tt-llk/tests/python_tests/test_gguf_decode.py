@@ -1,17 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""GGUF weight decoders on the SFPU and the DEST-fed matmul (Blackhole).
-
-Covers sfpu/experimental/ckernel_sfpu_gguf_decode.h (all 25 formats, on pages laid out by
-experimental/ckernel_gguf_page.h) and experimental/llk_{math,unpack}_dest_srca_mm.h, through
-sources/gguf_decode_mm_test.cpp:
-  - test_gguf_decode: random ggml blocks -> records -> pages -> decoded Float32 [K][N] tiles, equal to ggml's
-    dequantization (gguf-py) value for value;
-  - test_gguf_decode_mm: the same weights decoded in DEST and multiplied with bf16 in0 rows;
-  - test_dest_srca_mm: the matmul alone, on Float32 in1 tiles unpacked to DEST.
-The matmul golden is the FPU's arithmetic (tt-isa-documentation MatrixUnitArithmetic.md), so the results are bit-exact.
-"""
+"""GGUF weight decoders on the SFPU and the DEST-fed matmul (Blackhole), through sources/gguf_decode_mm_test.cpp."""
 
 import math
 
@@ -223,6 +213,8 @@ def _assert_matmul(
 
 @parametrize(fmt=list(FORMATS), shape=lambda fmt: _decode_shapes(FORMATS[fmt]))
 def test_gguf_decode(fmt, shape):
+    """Random ggml blocks -> records -> pages -> decoded Float32 [K][N] tiles, equal to ggml's dequantization
+    (gguf-py) value for value."""
     f = FORMATS[fmt]
     n, k = shape
     nt, kt = n // TILE, k // TILE
@@ -250,6 +242,7 @@ def test_gguf_decode(fmt, shape):
 
 @parametrize(fmt=list(FORMATS), rows=[1, 13, 32])
 def test_gguf_decode_mm(fmt, rows):
+    """The same weights decoded in DEST and multiplied with bf16 in0 rows; bit-exact against the FPU's arithmetic."""
     f = FORMATS[fmt]
     n, k = 2 * TILE, max(_k_unit(f), 8 * TILE)
     nt, kt = n // TILE, k // TILE
@@ -307,6 +300,7 @@ def test_gguf_decode_mm_page_rows(fmt):
     kt=[1, 3, 8],
 )
 def test_dest_srca_mm(fidelity, rows, kt):
+    """The matmul alone, on Float32 in1 tiles unpacked to DEST; bit-exact against the FPU's arithmetic."""
     nt = 2
     rng = np.random.default_rng(3000 + 31 * kt + rows)
     # Full fp32 mantissas, so that the TF32 truncation of in1 matters.
