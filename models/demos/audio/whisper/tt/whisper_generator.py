@@ -1161,7 +1161,11 @@ class WhisperGenerator:
             ttft = time.time() - start_encode
 
             with torch.no_grad():
-                probs = torch.softmax(next_token_logits, dim=-1)
+                # <|nospeech|> probability is read at the <|startoftranscript|> position (as in
+                # openai/whisper and HF generate), before language/task tokens are forced; at the
+                # last forced position the model has been told speech is present and it is ~0.
+                sot_index = prefix_sequence.index(STARTOFTRANSCRIPT_TOKEN_ID)
+                probs = torch.softmax(logits_to_torch[:, sot_index, :], dim=-1)
                 no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]
 
                 log_probs.append(
