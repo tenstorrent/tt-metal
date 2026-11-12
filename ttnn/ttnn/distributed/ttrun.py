@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -43,15 +44,48 @@ INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRTE_TIMEOUT_EXIT_CODE = 241
 
 
-class LaunchedJob:
-    """Owns one MPI launcher for the life of a job (teardown plan P6, P7, P19).
+def remove_stale_mpi_shm_segments() -> int:
+    """Remove this user's Open MPI shared-memory segments that no live process maps (teardown plan P11): what a
+    killed job leaves in /dev/shm, 16 MB each, until reboot. Segments of running jobs are mapped and kept. A
+    ``LaunchedJob`` runs this before it launches (clear a prior job's leak) and again in its teardown (its own)."""
+    host = socket.gethostname()
+    mine = glob.glob(f"/dev/shm/sm_segment.{host}.{os.getuid()}.*")
+    if not mine:
+        return 0
+    mapped = set()
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/maps") as fh:
+                for line in fh:
+                    if "sm_segment." in line:
+                        mapped.add(line.rsplit(" ", 1)[1].strip())
+        except OSError:
+            continue
+    removed = 0
+    for seg in mine:
+        if seg in mapped:
+            continue
+        try:
+            os.unlink(seg)
+            removed += 1
+        except OSError:
+            pass
+    if removed:
+        logger.info(f"{TT_RUN_PREFIX} removed {removed} stale shared-memory segment(s) of this user from /dev/shm")
+    return removed
 
-    A context manager: on entry it starts the launcher in its own session and forwards SIGINT and SIGTERM to it
-    (PRRTE's own handler then ends every rank on every host); on exit it restores the previous handlers, always.
-    The launcher is never SIGKILLed — that would orphan the ranks, which sit in their own process groups. The
-    exit-code contract (one rank fails, the whole job fails) lives in ``run_launcher``, which ends any ranks the
-    launcher leaves behind via ``leftovers`` and ``_end_processes``. The /proc and /dev/shm helpers are the job's
-    own static methods.
+
+class LaunchedJob:
+    """Owns one MPI launcher for the life of a job and cleans up after it (teardown plan P6, P7, P19, P11).
+
+    A context manager. ``__enter__`` clears a prior killed job's /dev/shm leak, starts the launcher in its own
+    session, forwards SIGINT/SIGTERM to it (PRRTE then ends every rank on every host), and REGISTERS the teardown
+    as it goes. ``__exit__`` runs that teardown, always — on the normal path and when the body raises — in reverse
+    of registration: restore the signal handlers, end any rank the launcher left on this host (SIGTERM then
+    SIGKILL), then clear this job's /dev/shm leak. The launcher itself is never SIGKILLed; PRRTE tears the ranks
+    down, and the process-end step is only the last resort for ranks it failed to reap.
     """
 
     def __init__(self, cmd: List[str], cwd: Path):
@@ -61,23 +95,29 @@ class LaunchedJob:
         self.sid = -1
         self.pgid = -1
         self.forwarded: List[int] = []
-        self._previous: dict = {}
+        self.ended: List[int] = []  # ranks the teardown had to end itself (the launcher should have)
+        self._previous_handlers: dict = {}
+        self._teardown = contextlib.ExitStack()
 
     def __enter__(self) -> "LaunchedJob":
-        self.remove_stale_mpi_shm_segments()  # clear a previous killed job's /dev/shm leak before this one starts (P11)
+        remove_stale_mpi_shm_segments()  # before launch: clear a prior killed job's /dev/shm leak
         self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, start_new_session=True)
         # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks even if
-        # the launcher re-sessioned or was reaped before we look.
+        # it re-sessioned or was reaped before we look.
         try:
             self.sid, self.pgid = os.getsid(self.proc.pid), os.getpgid(self.proc.pid)
         except (ProcessLookupError, OSError):
             self.sid = self.pgid = self.proc.pid
-        self._previous = {s: signal.signal(s, self._relay) for s in (signal.SIGINT, signal.SIGTERM)}
+        self._previous_handlers = {s: signal.signal(s, self._relay) for s in (signal.SIGINT, signal.SIGTERM)}
+        # Register the teardown. ExitStack runs these LIFO in __exit__, so the order below reads as the teardown:
+        # restore handlers, then end survivors, then sweep this job's shm.
+        self._teardown.callback(remove_stale_mpi_shm_segments)
+        self._teardown.callback(self._end_survivors)
+        self._teardown.callback(self._restore_handlers)
         return self
 
     def __exit__(self, *exc) -> None:
-        for s, h in self._previous.items():
-            signal.signal(s, h)
+        self._teardown.close()
 
     def _relay(self, signum, frame) -> None:
         self.forwarded.append(signum)
@@ -89,108 +129,75 @@ class LaunchedJob:
         except ProcessLookupError:
             pass
 
+    def _restore_handlers(self) -> None:
+        for s, h in self._previous_handlers.items():
+            signal.signal(s, h)
+
     def wait(self) -> int:
         """Wait for the launcher; return its exit code, a death by signal normalized to the shell's 128 + signum."""
         rc = self.proc.wait()
         return 128 - rc if rc < 0 else rc
 
-    def leftovers(self) -> List[int]:
-        """Processes of this job still alive on this host after the launcher returned — ranks it failed to reap."""
-        return [pid for pid in self._procs_in(self.sid, self.pgid) if pid != os.getpid() and pid != self.proc.pid]
-
-    @staticmethod
-    def _procs_in(sid: int, pgid: int) -> List[int]:
-        """Live pids on this host that belong to session ``sid`` or process group ``pgid`` (the launcher's). PRRTE
-        gives each rank its own process group but keeps the session, so the session id catches the ranks; the process
-        group catches a launcher that re-sessioned. Best effort: /proc is racy and this is a last-resort sweep."""
+    def _survivors(self) -> List[int]:
+        """Live pids of this job on this host — session id catches the ranks, process group catches a re-sessioned
+        launcher — excluding this harness and the launcher itself. Best effort: /proc is racy."""
         out = []
         for d in os.listdir("/proc"):
             if not d.isdigit():
                 continue
             try:
-                with open(f"/proc/{d}/stat") as f:
-                    fields = f.read().rsplit(")", 1)[1].split()
+                with open(f"/proc/{d}/stat") as fh:
+                    fields = fh.read().rsplit(")", 1)[1].split()
                 pgrp, session = int(fields[2]), int(fields[3])  # after comm: state ppid pgrp session ...
-                if session == sid or pgrp == pgid:
-                    out.append(int(d))
+                pid = int(d)
+                if (session == self.sid or pgrp == self.pgid) and pid != os.getpid() and pid != self.proc.pid:
+                    out.append(pid)
             except (OSError, IndexError, ValueError):
                 continue
         return out
 
-    @staticmethod
-    def _end_processes(pids: List[int], grace_s: float = 2.0) -> None:
-        """SIGTERM a set of pids, wait up to ``grace_s`` for them to go, then SIGKILL whatever is left."""
+    def _end_survivors(self, grace_s: float = 2.0) -> None:
+        """Teardown step: end any rank the launcher left alive on this host (SIGTERM, then SIGKILL what remains).
+        Records what it had to end on ``self.ended`` so the caller can classify the exit code."""
+        survivors = self._survivors()
+        if not survivors:
+            return
+        logger.error(
+            f"{TT_RUN_PREFIX} the launcher left {len(survivors)} process(es) of its job alive on this host: "
+            f"{survivors}; ending them (last resort; the launcher should have torn the job down itself)"
+        )
+        self.ended = list(survivors)
         for sig in (signal.SIGTERM, signal.SIGKILL):
-            for pid in pids:
+            for pid in survivors:
                 try:
                     os.kill(pid, sig)
                 except ProcessLookupError:
                     pass
             end = time.time() + grace_s
-            while time.time() < end and any(os.path.exists(f"/proc/{pid}") for pid in pids):
+            while time.time() < end and any(os.path.exists(f"/proc/{pid}") for pid in survivors):
                 time.sleep(0.1)
-            pids = [pid for pid in pids if os.path.exists(f"/proc/{pid}")]
-            if not pids:
+            survivors = [pid for pid in survivors if os.path.exists(f"/proc/{pid}")]
+            if not survivors:
                 return
-
-    @staticmethod
-    def remove_stale_mpi_shm_segments() -> int:
-        """Remove this user's Open MPI shared-memory segments that no live process maps (teardown plan P11): what a
-        killed job leaves in /dev/shm, 16 MB each, until reboot. Segments of running jobs are mapped and kept. Run as
-        the first step of launching a job (``__enter__``), so a previous job's leak never piles up."""
-        host = socket.gethostname()
-        mine = glob.glob(f"/dev/shm/sm_segment.{host}.{os.getuid()}.*")
-        if not mine:
-            return 0
-        mapped = set()
-        for d in os.listdir("/proc"):
-            if not d.isdigit():
-                continue
-            try:
-                with open(f"/proc/{d}/maps") as f:
-                    for line in f:
-                        if "sm_segment." in line:
-                            mapped.add(line.rsplit(" ", 1)[1].strip())
-            except OSError:
-                continue
-        removed = 0
-        for seg in mine:
-            if seg in mapped:
-                continue
-            try:
-                os.unlink(seg)
-                removed += 1
-            except OSError:
-                pass
-        if removed:
-            logger.info(f"{TT_RUN_PREFIX} removed {removed} stale shared-memory segment(s) of this user from /dev/shm")
-        return removed
 
 
 def run_launcher(cmd: List[str], cwd: Path) -> int:
-    """Start the MPI launcher and own it until the job is gone (teardown plan P6, P7, P19): it runs in its own
-    session, SIGINT/SIGTERM at tt-run are forwarded to it and tt-run waits (PRRTE then ends every rank on every
-    host). Then the contract is applied: one rank fails, the whole job fails, with a truthful code.
+    """Start the MPI launcher and own it until the job is gone (teardown plan P6, P7, P19). The LaunchedJob context
+    manager starts it in its own session, forwards SIGINT/SIGTERM, and on exit tears the job down (ends leftover
+    ranks, clears shm). This applies the exit-code contract: one rank fails, the whole job fails, with a truthful
+    code. The launcher's own code is kept — a rank's code, a signal, or PRRTE's --timeout code (241, a clean
+    timeout: PRRTE already ended every rank) — but tt-run never returns 0 while a rank it started was left alive
+    (P19), and a signal tt-run forwarded that the launcher swallowed is reported.
     """
     with LaunchedJob(cmd, cwd) as job:
         rc = job.wait()
-    # Handlers are restored (the context has exited). Apply the exit-code contract. The launcher's own code is kept
-    # — a rank's code, a signal, or PRRTE's --timeout code (241), which means PRRTE already ended every rank (a clean
-    # timeout, not a tt-run failure). But any rank it left on this host is ended, tt-run never returns 0 while a rank
-    # it started is alive (P19), and a signal tt-run forwarded but the launcher swallowed is reported.
+    # __exit__ has torn the job down (handlers restored, leftover ranks ended, shm swept). Classify the result.
     if rc == PRTE_TIMEOUT_EXIT_CODE:
         logger.warning(
             f"{TT_RUN_PREFIX} the job hit its PRRTE --timeout wall clock (exit {rc}); the launcher ended every rank"
         )
-    left = job.leftovers()
-    if left:
-        logger.error(
-            f"{TT_RUN_PREFIX} the launcher returned {rc} but left {len(left)} process(es) of its job running on this "
-            f"host: {left}; ending them (last resort; the launcher should have torn the job down itself)"
-        )
-        LaunchedJob._end_processes(left)
-        if rc == 0:  # reported success yet left a rank alive -> a failure
-            rc = 1
+    if job.ended and rc == 0:  # the launcher reported success but left ranks alive -> a failure
+        rc = 1
     if job.forwarded and rc == 0:  # signalled and forwarded, but the launcher still reported success
         rc = 128 + job.forwarded[0]
     return rc
