@@ -37,13 +37,9 @@ class ChipArchitecture(Enum):
 
     @classmethod
     def from_umd_arch(cls, umd_arch):
-        """Map a tt_umd.ARCH (or its member name, e.g. a soc descriptor's arch_name)."""
+        """Map a tt_umd.ARCH from a PCIe device. Descriptor arch_name strings use from_string."""
         import tt_umd
 
-        if isinstance(umd_arch, str):
-            umd_arch = tt_umd.ARCH.__members__.get(
-                umd_arch.upper(), tt_umd.ARCH.Invalid
-            )
         enum_value = {
             tt_umd.ARCH.WORMHOLE_B0: cls.WORMHOLE,
             tt_umd.ARCH.BLACKHOLE: cls.BLACKHOLE,
@@ -99,9 +95,9 @@ def simulator_architecture():
 
     The RTL simulator path is a directory holding the descriptor; for ttsim it sits next to the .so.
     """
-    sim_path = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
-        "TT_UMD_SIMULATOR_PATH"
-    )
+    from .target_config import simulator_path
+
+    sim_path = simulator_path()
     if not sim_path:
         return None
     sim_path = Path(sim_path).expanduser()
@@ -114,22 +110,42 @@ def simulator_architecture():
     import yaml
 
     with open(soc_descriptor) as f:
-        return ChipArchitecture.from_umd_arch(yaml.safe_load(f)["arch_name"])
+        loaded = yaml.safe_load(f)
+    arch_name = loaded.get("arch_name") if isinstance(loaded, dict) else None
+    if not isinstance(arch_name, str):
+        raise RuntimeError(
+            f"{soc_descriptor} has no arch_name string (got {arch_name!r})"
+        )
+    try:
+        return ChipArchitecture.from_string(arch_name)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{soc_descriptor} has unknown arch_name {arch_name!r}"
+        ) from exc
 
 
 def _pcie_architecture():
-    """Arch of the first local PCIe device, read from PCI config space without opening the device."""
+    """Arch of UMD logical device 0, the card the harness runs on.
+
+    ``enumerate_devices()`` is BDF order and honors ``TT_VISIBLE_DEVICES``, so index 0 is
+    exalens device 0. That is not the lowest ``/dev/tenstorrent/N``. Reading the arch opens
+    that device and issues GET_DEVICE_INFO; it does not initialize the chip or start tt-exalens.
+    """
     import tt_umd
 
-    devices = tt_umd.PCIDevice.enumerate_devices_info()
-    if not devices:
+    device_ids = tt_umd.PCIDevice.enumerate_devices()
+    if not device_ids:
         return None
-    return ChipArchitecture.from_umd_arch(devices[min(devices)].get_arch())
+    info = tt_umd.PCIDevice.read_device_info(f"/dev/tenstorrent/{device_ids[0]}")
+    return ChipArchitecture.from_umd_arch(info.get_arch())
 
 
 def _detect_chip_architecture():
-    # Same gate the pytest plugin uses to pick the simulator over silicon. xdist workers never get
-    # here: they inherit the CHIP_ARCH the controller writes back.
+    # ``--run-simulator`` on the command line or in PYTEST_ADDOPTS, including next to
+    # ``--compile-producer``, so a producer on a card host compiles for the simulator.
+    # The plugin's simulator gate is a different check: it drops ``--compile-producer``
+    # (that step never talks to a device) and treats xdist workers as simulator runs.
+    # Workers never get here; they inherit the CHIP_ARCH the controller writes back.
     if cli_flag_given("--run-simulator") and (arch := simulator_architecture()):
         return arch
     # Silicon first, so a stray simulator env var does not override the card in the machine.

@@ -564,7 +564,7 @@ An external pytest suite should:
    sys.path.insert(0, str(llk_python_tests))
    pytest_plugins = ["tt_llk_harness.plugin"]
    ```
-   Invoke pytest with that suite as the rootdir (so `pytest_plugins` is legal). Set `LLK_HOME` if it cannot be inferred. `CHIP_ARCH` is optional on a live card (`check_context()`); export it for compile-only / no-device.
+   Invoke pytest with that suite as the rootdir (so `pytest_plugins` is legal). Set `LLK_HOME` if it cannot be inferred. `CHIP_ARCH` is optional when a card or a simulator `soc_descriptor.yaml` can be detected; export it for hardware-free runs, and for a simulator on a host with a card unless you also pass `--run-simulator`.
    Test files should not touch `sys.path`. The plugin prepends `<rootdir>/python_tests` so suite-local packages (e.g. `goldens/`) import without per-test boilerplate. Keep suite-local Python packages there, not under a `helpers/` overlay (that name is reserved for the harness).
 
 2. Register proprietary search dirs on `TestConfig` (before or after `setup_build`):
