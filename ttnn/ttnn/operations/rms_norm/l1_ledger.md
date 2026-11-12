@@ -5,7 +5,17 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (
 `Wc = core_w_tiles`, stored at stride `Wp = row_stride_tiles = K·c`), **w_chunk** (streaming
 extent `c = w_chunk_tiles`, `K = num_w_chunks`).
 
-`fp32_dest_acc_en = True` in Phase 0 → every compute intermediate page is `Float32` (audit 2,
+**Refinement 2 — page formats follow the DEST width** (`_Geometry.interm_fmt`, single source):
+`fp32_dest_acc_en=True` → `cb_rstd` / `cb_normed` are `Float32`; `fp32_dest_acc_en=False` → they are
+`Float16_b` (16-bit DEST already rounded the value, a wider page stores nothing; halves `cb_normed`, so
+the block selector can pick a larger `r`/`c`). **`cb_sumsq` stays `Float32` in both modes**
+(`_Geometry.sumsq_fmt`) — mechanism reason: it is a *packer L1 accumulator*, the Σx² adds happen in L1
+at the page format, not in DEST, so Float32 pages carry real bits even with 16-bit DEST (measured: bf16
+pages bias rstd, relative RMS 0.017 → 0.006 at W=7168). Cost ≤ 2 tiles/row. `cb_reduce_mask` follows
+`cb_sumsq`'s format (srcB constraint below). bfloat8_b input / gamma / output: `cb_x`, `cb_gamma`,
+`cb_out` carry the tensor's own format (Bfp8_b pages, `ttnn.tile_size`).
+
+(Phase 0 text:) `fp32_dest_acc_en = True` in Phase 0 → every compute intermediate page is `Float32` (audit 2,
 "under" direction: a 16-bit intermediate would truncate fp32 DEST at the phase boundary).
 Buffers holding *raw input data* (`cb_x`, `cb_x_rm`), constants (`cb_reduce_mask`) and *final
 output* (`cb_out`, `cb_out_rm`) carry the tensor's own format — they never carry a value wider

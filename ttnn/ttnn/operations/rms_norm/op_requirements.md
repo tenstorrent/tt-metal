@@ -100,7 +100,7 @@ Bullet 2 FAIL: acceptance/refinement tests failing:
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
 **Outcome**: root cause was an L1 leak + a wrong CB budget bound, not the kernel. (1) The refinement test's `oom_guard` skips (infeasible fp32 (128,8192) TILE shards) left the sharded input alive in the pytest traceback, so later cases in the module saw a low leaked L1 buffer; `_run` now deallocates in `finally`. (2) `_cb_budget` now bounds CBs by the lowest allocated L1 address (CB region grows up from the allocator base) instead of `largest_contiguous_bytes_free_per_bank`, which turned a leaked/low buffer into a TT_THROW CB clash. Unit dir 229 passed / 0 failed; full golden 1297 passed, 1 failed (the excepted `(1,1,32,32768)` loose case, R3/Refinement 4), 0 hangs.
 
-### [ ] Refinement 2 — Numerical configurability: `fp32_dest_acc_en=False`, bfloat8_b input and gamma
+### [x] Refinement 2 — Numerical configurability: `fp32_dest_acc_en=False`, bfloat8_b input and gamma
 
 **Goal**: add `False` to `SUPPORTED["fp32_dest_acc_en"]` (bf16 / bf8b input; `{float32, False}` stays the
 permanent EXCLUSION), `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` (TILE only — bf8b+RM and bf8b+non-aligned
@@ -118,6 +118,7 @@ in `EXCLUSIONS`, not in their own refinement.
 - Perf loose cases carry a soft `pcc_threshold = 0.9995` at HiFi2 + bf16 DEST — check it explicitly on the 8192-row cases.
 
 **Done when**: every golden cell with `fp32_dest_acc_en=False` (bf16 / bf8b input), `dtype=bfloat8_b` or `gamma_dtype=bfloat8_b` whose other axes are in SUPPORTED passes or is in a justified EXCLUSION; the interleaved `_PERF_BASE` loose cases pass at their soft PCC gate; loud categories at 0.
+**Outcome**: landed with no kernel change. Packer L1 accumulation measured legal and accurate with 16-bit DEST, so the Σx² mechanism swap was not needed. `cb_rstd`/`cb_normed` follow the DEST width; `cb_sumsq` + mask stay Float32 (they are the L1 accumulator). Golden slices: 196/196 fp32-DEST-off loose cells (all 12 interleaved perf cases at PCC ≥ 0.9999), 179 cartesian bf8b / DEST-off cells pass, 0 fail.
 
 ### [ ] Refinement 3 — Speed up the interleaved prefill perf profile
 

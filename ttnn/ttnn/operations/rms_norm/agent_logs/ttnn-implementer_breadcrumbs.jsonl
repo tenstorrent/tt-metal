@@ -12,3 +12,4 @@
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-12T12:14:50+00:00"}
 {"event":"test_run","status":"pass","tests":"tests/ttnn/unit_tests/operations/rms_norm/ (all files)","detail":"62 new numeric-config + 224 prior pass after _Geometry default fix","ts":"2026-11-12T12:23:10+00:00"}
 {"event":"test_run","status":"pass","tests":"golden test_op_loose -k False and (INTERLEAVED or HEIGHT_SHARDED)","detail":"196 passed","ts":"2026-11-12T12:29:30+00:00"}
+{"event":"test_run","status":"pass","tests":"golden test_op slice bf8b/DEST-off x 4 shapes x INTERLEAVED/HEIGHT_SHARDED","detail":"179 passed, 84 xfailed (fp32+False exclusion), 0 failed","ts":"2026-11-12T12:35:04+00:00"}
