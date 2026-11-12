@@ -15,10 +15,12 @@
 //     release_block             pop cb_x / cb_rstd
 //
 // R3 W-split (w_split): rstd_block becomes
-//     partial_block             cb_sumsq -> cb_partial       reduce<SUM, ROW, AccumulateViaAdd>, no post-op
-//                                                            (Σx² over this core's W slice; writer gathers it)
-//     [owner] combine_block     cb_gather -> cb_rstd_root    reduce<..., AccumulateViaAdd, Skip> over
-//                                                            (n_own, G) + post-op (·1/W, +eps, rsqrt)
+//     partial_block             cb_sumsq -> cb_partial       reduce<SUM, ROW, ReduceTile> (one Σx² tile per row;
+//                                                            AccumulateViaAdd + mask when the slice ends in a
+//                                                            partial tile), no post-op; interleaved into
+//                                                            sumsq_block per owner run so the gather overlaps it
+//     [owner] combine_block     cb_gather -> cb_rstd_root    reduce<SUM, COL, AccumulateViaAdd, Skip> over the
+//                                                            slot-major (G, q) grid + post-op (·1/W, +eps, rsqrt)
 // where the block's rows are split over the group (reduce-scatter): slot o owns rows [o*q, (o+1)*q),
 // q = combine_rows. cb_rstd is filled by the writer (owners relay to the root, the root multicasts), then
 // normalize runs as in R1.
@@ -37,7 +39,6 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/debug/kernel_profiler.hpp"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -79,6 +80,13 @@ constexpr uint32_t cb_rstd_root = get_compile_time_arg_val(22);
 constexpr bool gamma_shadow = get_compile_time_arg_val(23) != 0;
 // R3 row-wise reduce-scatter combine: this core (slot o) combines rows [o*q, (o+1)*q) of each block.
 constexpr uint32_t combine_rows = get_compile_time_arg_val(24);
+// R3 partial_block on the FPU reduce datapath (ReduceTile + SUM scaler tile): one tile per output row, where the
+// matmul reduce beats accumulate + SFPU collapse. Only for slices without a partial tail (n_sq == 1).
+constexpr bool partial_reduce_tile = get_compile_time_arg_val(25) != 0;
+constexpr uint32_t cb_reduce_scaler = get_compile_time_arg_val(26);
+// ... and interleaved into sumsq_block per combine owner's run of rows (requires partial_reduce_tile): owner o's
+// partials are packed as soon as its q rows are squared, so the writer's gather overlaps the rest of sumsq.
+constexpr bool partial_interleave = get_compile_time_arg_val(27) != 0;
 
 constexpr uint32_t row_stride_tiles = num_w_chunks * w_chunk_tiles;
 constexpr bool has_partial = w_partial_elems != 0;
@@ -188,6 +196,24 @@ ALWI void rstd_post_op(uint32_t dst_idx) {
     rsqrt_tile(dst_idx, rstd_sfpu_scope);
 }
 
+// R3 partial_block on the FPU reduce datapath for `rows` rows: Σx² tile (one per row) -> column-0 partial.
+template <class SumsqDFB, class ScalerDFB, class PartialDFB>
+ALWI void partial_rows_reduce_tile(SumsqDFB& sumsq, ScalerDFB& scaler, PartialDFB& partial_sums, uint32_t rows) {
+    if constexpr (partial_reduce_tile) {
+        static_assert(!has_partial && n_sq == 1, "ReduceTile partial: one whole Σx² tile per row");
+        compute_kernel_lib::reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_sumsq,
+            cb_reduce_scaler,
+            cb_partial,
+            ReduceInputPolicy::BulkWaitBulkPop,
+            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            ReduceFp32Mode::Fast,
+            ReduceAlgorithm::ReduceTile>(sumsq, scaler, partial_sums, ReduceInputBlockShape::of(rows, 1));
+    }
+}
+
 // Stall shadow: x·γ(row) for the whole block into cb_normed (chunk-major, the order normalize consumes it), then
 // release cb_x — only the ·rstd multiply is left for after rstd arrives. No-op unless gamma_shadow.
 template <class XDFB, class GammaDFB, class NormedDFB>
@@ -224,6 +250,7 @@ void kernel_main() {
     DataflowBuffer partial_sums(cb_partial);
     DataflowBuffer gather(cb_gather);
     DataflowBuffer rstd_root(cb_rstd_root);
+    DataflowBuffer reduce_scaler(cb_reduce_scaler);
 
     const uint32_t num_blocks = (num_tile_rows + block_rows - 1) / block_rows;
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -251,7 +278,6 @@ void kernel_main() {
         // ---- sumsq_block: per row, Σ_t x_t² over the n_full whole tiles into ONE L1-accumulated tile,
         //      chunk by chunk as the reader lands them; then the squared partial tail tile (if any). ----
         {
-            DeviceZoneScopedN("Z_SUMSQ");
             for (uint32_t i = 0; i < rows_this_block; ++i) {
                 const uint32_t row_base = i * row_stride_tiles;
                 if constexpr (n_full > 0) {
@@ -276,6 +302,13 @@ void kernel_main() {
                         }
                     }
                     sumsq.push_back(1);
+                    if constexpr (w_split && partial_interleave) {
+                        // partial_block for owner run [i+1-n, i+1) (see partial_interleave).
+                        const uint32_t run = (i + 1) % combine_rows == 0 ? combine_rows : (i + 1) % combine_rows;
+                        if (run == combine_rows || i + 1 == rows_this_block) {
+                            partial_rows_reduce_tile(sumsq, reduce_scaler, partial_sums, run);
+                        }
+                    }
                 }
                 if constexpr (has_partial) {
                     const uint32_t tail = row_base + core_w_tiles - 1;
@@ -290,26 +323,31 @@ void kernel_main() {
         if constexpr (w_split) {
             // partial_block: Σx² over this core's slice, no post-op (the combine owns ·1/W, +eps, rsqrt).
             {
-                DeviceZoneScopedN("Z_PARTIAL");
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_ROW,
-                    cb_sumsq,
-                    cb_reduce_mask,
-                    cb_partial,
-                    ReduceInputPolicy::BulkWaitBulkPop,
-                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ReduceFp32Mode::Fast,
-                    ReduceAlgorithm::AccumulateViaAdd,
-                    ReduceWithinTile::Collapse>(
-                    sumsq,
-                    mask,
-                    partial_sums,
-                    ReduceInputBlockShape::of(rows_this_block, n_sq),
-                    ReduceInputMemoryLayout::contiguous(),
-                    NoAccumulation{},
-                    NoOp{},
-                    partial);
+                if constexpr (partial_interleave) {
+                    // already produced inside sumsq_block
+                } else if constexpr (partial_reduce_tile) {
+                    partial_rows_reduce_tile(sumsq, reduce_scaler, partial_sums, rows_this_block);
+                } else {
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        cb_sumsq,
+                        cb_reduce_mask,
+                        cb_partial,
+                        ReduceInputPolicy::BulkWaitBulkPop,
+                        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ReduceFp32Mode::Fast,
+                        ReduceAlgorithm::AccumulateViaAdd,
+                        ReduceWithinTile::Collapse>(
+                        sumsq,
+                        mask,
+                        partial_sums,
+                        ReduceInputBlockShape::of(rows_this_block, n_sq),
+                        ReduceInputMemoryLayout::contiguous(),
+                        NoAccumulation{},
+                        NoOp{},
+                        partial);
+                }
             }
             const uint32_t own_lo = slot * combine_rows;
             const uint32_t n_own =
@@ -317,11 +355,6 @@ void kernel_main() {
                     ? 0
                     : ((rows_this_block - own_lo < combine_rows) ? (rows_this_block - own_lo) : combine_rows);
             if (n_own > 0) {
-                {
-                    DeviceZoneScopedN("Z_GWAIT");
-                    gather.wait_front(group_size * combine_rows);
-                }
-                DeviceZoneScopedN("Z_COMBINE");
                 // combine_block: cb_gather holds a (G x q) slot-major tile grid (contributor j's rows at
                 // [j*q, j*q + q)); the partials are column-0-valid -> sum each tile column over the G slots
                 // (REDUCE_COL, within-tile collapse skipped), then the rstd post-op. The whole q-column grid is
@@ -385,11 +418,7 @@ void kernel_main() {
             continue;
         }
         x.wait_front(rows_this_block * row_stride_tiles);
-        {
-            DeviceZoneScopedN("Z_RSTDWAIT");
-            rstd.wait_front(rows_this_block);
-        }
-        DeviceZoneScopedN("Z_NORM");
+        rstd.wait_front(rows_this_block);
         for (uint32_t k = 0; k < num_w_chunks; ++k) {
             eltwise_chain(
                 IterationShape::grid(rows_this_block, w_chunk_tiles),
@@ -416,5 +445,12 @@ void kernel_main() {
     if constexpr (has_partial) {
         mask.wait_front(1);
         mask.pop_front(1);
+    }
+    if constexpr (partial_reduce_tile) {
+        if (num_blocks == 0) {
+            return;  // the reader produces the scaler with block 0's reads
+        }
+        reduce_scaler.wait_front(1);
+        reduce_scaler.pop_front(1);
     }
 }

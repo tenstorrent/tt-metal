@@ -181,3 +181,26 @@ waits for `(G − 1)·(block + 1)`), plus the `ttnn.Mcast` channel's data-ready 
   right after the shadow; the block's x is never read again.
 - Data movement is unchanged (x, out, gamma crossings as R3). The cross-core gather moves `(G−1)·rows`
   half-tiles instead of full tiles.
+
+## R3 row-wise reduce-scatter combine (Refinement 6) — deltas
+
+`q = combine_rows = ceil(r / G)` (`_combine_rows`; `R3_SCATTER_COMBINE = False` restores `q = r`, the
+single-root combine). Row `i` of a block is combined by slot `o = i / q` (the *owner*); the root still
+multicasts the whole block's rstd.
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_gather` (R3) | `G·q` (was `G·r`) | `G·q` on an owner (always the full quantum, so each owned block returns the ring to base; `G·(q − n_own)` pages are unused on a ragged owner) | `{rows: spans → q (owned run), w: spans → G partials, slot-major: contributor j's rows at [j·q, j·q + q)}` | DEST width | writer (owner, after the G − 1 remote arrivals) | compute (owner: `reduce<SUM, REDUCE_COL, AccumulateViaAdd, Skip>` over `(G, q)`) | gather → combine, per owned block | same uniform-address requirement as R4 (contributors write by their own write pointer) → every core. Slot-major so a contributor's run for one owner is contiguous. Shrinks the R4 term by `G`: 7168×1024 BLOCK (G = 8, r = 23) 368 KiB → 48 KiB |
+| `cb_rstd_root` (R3) | `q` (was `r`) | `q` (n_own real rows + `q − n_own` unused columns of the reduce) | `{rows: spans → q}` | DEST width | compute (owner) | writer (owner) | combine → relay / multicast, per owned block | as R4 |
+| `cb_rstd_gather` (R3, `q < r` only) | `r` | `r` (raw scratch on the root; never pushed/popped) | `{rows: spans → r}` | DEST width | writers of the owners (NoC writes of `n_own` tiles at tile `o·q`) | root writer (multicast source) | relay → multicast, per block | must have a uniform address (owners write into the root's copy) → every core. Cannot reuse `cb_rstd` (the multicast's loopback destination on the root) or `cb_rstd_root` (single compute producer) |
+| `cb_reduce_scaler` (R3, no partial-tail slice) | `1` | `1` | constant | bfloat16 | reader (`calculate_and_prepare_reduce_scaler<SUM, REDUCE_ROW>`, with block 0's reads) | compute (`reduce<…, ReduceTile>` partial) | whole kernel | constant tile; `cb_reduce_mask` holds the 0/1 mask of the AccumulateViaAdd path, which keeps serving slices with a partial tail |
+
+`F_R3(r, K) = F(r, K) + r·s_f (partial) + G·q·s_f (gather) + q·s_f (rstd_root) + [q < r]·r·s_f (rstd_gather)`
+(+ one bf16 scaler tile, below the safety margin).
+
+Data movement (R3, per block per row-group): the `(G − 1)·rows` half-tile partials now go to `num_owners`
+destinations instead of one root (a row all-to-all; each contributor sends owner `o`'s run as soon as the
+owner's rows are reduced — pipelined with sumsq — and bumps `o`'s `SEM_GATHER`); then `num_owners − 1`
+relays of `n_own` rstd tiles to the root (`SEM_RSTD_GATHER`, cumulative), then the same one multicast of
+`rows` rstd tiles. With one owner (e.g. decode: `rows = 1`) the relay is skipped and the root
+multicasts straight from `cb_rstd_root`, as R5. DRAM crossings unchanged.

@@ -47,6 +47,7 @@ CB_IDS = [CB_X_RM, CB_X, CB_REDUCE_MASK, CB_SUMSQ, CB_RSTD, CB_GAMMA, CB_NORMED,
 CB_PARTIAL = 9  # this core's per-row Σx² over its W slice (col-0 valid), handed to the writer
 CB_GATHER = 10  # root: the G partials of each row, gathered by the writers (tile (row, slot) at row*G + slot)
 CB_RSTD_ROOT = 11  # combine owner: its rows' combined rstd, handed to the writer (relay to the root / multicast)
+CB_REDUCE_SCALER = 13  # R3 partial on the FPU reduce datapath: the SUM scaler tile (1.0)
 CB_RSTD_GATHER = 12  # root: every owner's rstd rows (row i at tile i), the multicast source (multi-owner blocks)
 
 # Semaphores (R3): the partial-gather counter on every combine owner, the rstd-relay counter on the root; the
@@ -105,6 +106,13 @@ R3_SHADOW_RESIDENT_MIN_ROWS = 4
 # [o*q, (o+1)*q) (G partials each + the rstd post-op) and relays its rstd rows to the root, which multicasts the
 # whole block. False = the root combines every row (q = block_rows; one combine owner).
 R3_SCATTER_COMBINE = True
+# R3 partial_block datapath: the per-core Σx² tile of each row is ONE tile, where the FPU matmul reduce
+# (ReduceTile, scaler 1.0) beats accumulate + SFPU collapse (catalog `reduce_block` / `row_reduce_accumulate`:
+# AccumulateViaAdd only wins from ~4 tiles per output). Slices with a partial tail keep AccumulateViaAdd (masked).
+R3_PARTIAL_REDUCE_TILE = True
+# ... interleaved into the sumsq loop, one reduce per combine owner's run of rows, so the partial gather overlaps
+# the rest of sumsq instead of trailing it.
+R3_PARTIAL_INTERLEAVE = True
 # FORCE_W_SPLIT is a test hook (regime-pinned tests flip it to exercise R3 on shapes R1 can hold).
 FORCE_W_SPLIT = False
 
@@ -541,6 +549,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
         g.gamma_shadow = False
     row_stride_tiles = num_w_chunks * w_chunk_tiles
     combine_rows = _combine_rows(g, block_rows)  # q: rows per combine owner (R3)
+    partial_reduce_tile = R3_PARTIAL_REDUCE_TILE and g.w_split and not g.sq_partial
 
     # ---------------- circular buffers ----------------
     interm = g.interm_fmt  # compute-intermediate format (DEST width)
@@ -573,6 +582,8 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
         cbs.append(_cb(CB_OUT, STREAM_DEPTH * w_chunk_tiles, g.s_o, out.dtype, all_cores))
     if g.sq_partial:
         cbs.append(_cb(CB_REDUCE_MASK, 1, g.s_sq, g.sumsq_fmt, all_cores))
+    if partial_reduce_tile:
+        cbs.append(_cb(CB_REDUCE_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, all_cores))
     if g.has_gamma:
         cbs.append(_cb(CB_GAMMA, STREAM_DEPTH * w_chunk_tiles, g.s_g, gamma.dtype, all_cores))
     if g.has_gamma or g.is_rm:
@@ -652,6 +663,8 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
                 g.stick_page_bytes,
                 g.g_row0_bytes,
                 g.g_face1_offset,
+                int(partial_reduce_tile),
+                CB_REDUCE_SCALER,
             ]
         )
         reader_ct.extend(ttnn.TensorAccessorArgs(x).get_compile_time_args())
@@ -673,7 +686,8 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
             + blocking_ct
             + [group_partial, int(g.has_gamma), int(g.is_rm), _f32_bits(1.0 / g.W), _f32_bits(epsilon)]
             + [int(g.w_split), g.group_size, CB_PARTIAL, CB_GATHER, CB_RSTD_ROOT, int(g.gamma_shadow)]
-            + [combine_rows]
+            + [combine_rows, int(partial_reduce_tile), CB_REDUCE_SCALER]
+            + [int(partial_reduce_tile and R3_PARTIAL_INTERLEAVE)]
         )
 
         readers.append(

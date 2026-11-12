@@ -200,3 +200,67 @@
   - Exact-config decode / few-row cases (for `--profile`).
   - The `test_regime_guard` R1-vs-R3 pinned pairs that set the predicate.
   - The `test_r3_occupancy_predicate` regime pins.
+
+## Refinement 6 — Speed up the block-sharded prefill profile
+- Date: 2026-11-12
+- What was done:
+  - **Diagnosis** (new `test_rms_norm_block_prefill_perf.py`, exact `_PERF_BASE` BLOCK configs; per-stage device
+    zones on 7168×1024 `[736,128]×(8,10)`, 23 tile-rows × 4 tiles per core, G = 8):
+    - Compute-bound, not DM: NCRISC (gamma) ~1.9 µs of a 36 µs kernel.
+    - The root's combine (23 rows × 8 partials + rsqrt post-op) took **17 µs** while the other 70 cores
+      sat **18.7 µs** in the rstd wait. Per-core work before it: sumsq 5.7 µs, partial collapse 3.6 µs.
+  - **Lever 1 — row-wise reduce-scatter combine (scheme change, writer + compute + host).**
+    - Slot `o` combines rows `[o·q, (o+1)·q)`, `q = ceil(block_rows / G)`, then relays its rstd rows to the
+      root's `cb_rstd_gather`. The root keeps the single helper multicast.
+    - `cb_gather` is slot-major `G·q` pages (was `G·block_rows`) and reduced by
+      `reduce<SUM, REDUCE_COL, AccumulateViaAdd, Skip>` over `(G, q)`. Owners always push / consume the full
+      quantum, so remotely addressed CBs stay at their base.
+    - One owner (decode: `rows = 1`) is exactly the R5 path. Knob: `R3_SCATTER_COMBINE`.
+    - 7168×1024: 36.0 → 24.8 µs.
+  - **Lever 2 — stall shadow for tall resident blocks (host gate).** R5 disabled x·γ-during-the-wait for
+    every resident multi-row shard because 640×7168 `[64,1024]` has an 8 µs gamma read. Gated now by
+    `R3_SHADOW_RESIDENT_MIN_ROWS = 4` rows per block: the prefill shards (23–32 rows) take it; the 640-row
+    shards (2 rows) don't. 24.8 → 23.0 µs.
+  - **Lever 3 — pipelined half-tile gather (writer).** The gather was NoC-bandwidth-bound: a row all-to-all
+    on one NoC ring costs bytes × hops.
+    - Measured and rejected: one coalesced full-tile write per owner (fewer issues, 2× bytes) made the
+      gather wait worse (3.4 → 4.6 µs). Staggering the owner order did nothing.
+    - Kept: faces 0/2 only, and each owner's run is sent as soon as those partials are packed, overlapping
+      the rest of the partial reduce. Gather wait 3.4 → 1.3 µs; 23.0 → 20.8 µs.
+  - **Lever 4 — partial on the FPU reduce datapath (compute + reader).**
+    - The per-core partial is ONE Σx² tile per row. There `reduce<…, ReduceTile>` (scaler 1.0, new
+      `cb_reduce_scaler`, made by the reader with block 0's reads) beats accumulate + SFPU collapse
+      (catalog `reduce_block`). Partial 3.6 → 1.2 µs.
+    - Slices with a partial tail keep the masked AccumulateViaAdd path. Knob: `R3_PARTIAL_REDUCE_TILE`.
+  - **Lever 5 — partial interleaved into sumsq (compute).** One ReduceTile call per owner run inside the sumsq
+    row loop. Owner 0's partials leave after 3 rows, so the all-to-all overlaps sumsq: gather wait 2.3 → 0.6 µs.
+    Knob: `R3_PARTIAL_INTERLEAVE`.
+  - Reused: R4/R5's R3 planner, gather semaphore, mcast channel, shadow element types, and the reduce helper
+    (three datapath configs). Added: `_combine_rows`, `CB_RSTD_GATHER`, `CB_REDUCE_SCALER`,
+    `SEM_RSTD_GATHER`, group NoC coordinates as writer RT args, and four knobs.
+- Device kernel ns (Blackhole p150b @ 1350 MHz = reference clock), before → after (`achievable_ns`):
+  - BLOCK prefill, gamma (`_PERF_BASE` config):
+    - 7168×1024 `[736,128]×(8,10)`: 36 039 → 18 784 (18 871)
+    - 7168×2048 `[736,192]×(11,10)`: 45 507 → 25 318 (25 947)
+    - 8192×1024 `[1024,128]×(8,8)`: 50 403 → 25 112 (25 640)
+  - No gamma, same shards: 31.9 → 16.5, 38.4 → 21.2, 43.7 → 21.9 µs.
+  - Guard set (the R3 code is shared):
+    - BLOCK 640×6144 9 944 → 9 454; 640×7168 12 645 → 12 178.
+    - WS decode 32×{1024, 2304, 5120, 7168}: 3 214 / 3 802 / 4 164 / 4 374 → 3 039 / 3 647 / 4 039 / 4 227.
+    - Interleaved decode 32×{1024, 2304, 5120, 7168}: 4 105 / 4 698 / 6 023 / 6 796 → 3 953 / 4 537 / 5 773 / 6 506.
+    - Interleaved 640×6144 45 218 → 44 119; 640×7168 48 871 → 48 376.
+    - R1 prefill 8192×1024 88.1 → 88.3 µs; 7168×2048 146.8 → 147.4 µs (noise, untouched path).
+- Accuracy achieved: soft PCC gate 0.9995 + `helpers.TOLERANCES[bf16]` RMS hold on all 10 BLOCK prefill
+  cases (gamma / no gamma) and the 12 decode cases (HiFi2, bf16 DEST).
+- Golden test progress (targeted slices):
+  - `test_op_loose` WIDTH/BLOCK_SHARDED: 192 passed, 3 skipped (same as R5).
+  - `test_op` 1×1×32×4096 + 2×512×1024 × {INTERLEAVED, WIDTH, BLOCK} (fp32 / bf16 / bf8b, both DEST
+    widths): 252 passed, 60 xfailed, 0 failed.
+  - Unit: w_split + decode_perf + block_prefill_perf + sharded_tile_gamma: 155 passed, 19 skipped.
+- Issues encountered:
+  - The first version wrote full tiles per owner and was slower (see Lever 3).
+  - The reader first built the scaler before block 0's x reads, which made interleaved decode +4%. Moving
+    it after the reads fixed that.
+  - A core with no blocks skips the scaler pop.
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_block_prefill_perf.py`. The 3 BLOCK
+  prefill + 2 BLOCK 640-row `_PERF_BASE` geometries × {gamma, no gamma}, PCC-gated, for `--profile`.

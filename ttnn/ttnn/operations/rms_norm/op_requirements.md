@@ -206,7 +206,7 @@ Next levers, not tried here:
   block-sharded profile.
 - A tree / reduce-scatter combine for large G. The measured G sweep is flat at G = 18–44.
 
-### [ ] Refinement 6 — Speed up the block-sharded prefill profile
+### [x] Refinement 6 — Speed up the block-sharded prefill profile
 
 **Type**: perf
 
@@ -222,3 +222,5 @@ elision), `compute_fusion`, `sfpu_tile_scope` (rsqrt / post-op on column 0 only)
 config toward the clock-scaled `achievable_ns`, the soft PCC gate holds, the golden suite is green,
 and no regression across the config-spanning guard set (one representative per kernel path × layout ×
 placement).
+
+**Outcome**: device-ns at the exact config (Blackhole p150b, 1350 MHz = reference clock), before → after (`achievable_ns`): 7168×1024 `[736,128]×(8,10)` 36 039 → 18 784 (18 871); 7168×2048 `[736,192]×(11,10)` 45 507 → 25 318 (25 947); 8192×1024 `[1024,128]×(8,8)` 50 403 → 25 112 (25 640). All three now meet their target. The bottleneck was the root combine: 23 rows × G partials + the rsqrt post-op on one core (17 µs) while the group waited. Levers kept: a row-wise reduce-scatter combine (owners relay rstd rows to the root, which keeps the one helper multicast); the stall shadow for blocks ≥ 4 rows; a half-tile gather sent per owner run as soon as it is packed; the per-core partial on ReduceTile instead of accumulate + SFPU collapse; that partial interleaved into sumsq. The guard set moved the right way too: BLOCK 640-row −4%, WS decode −3 to −5%, interleaved decode −3 to −4%; R1 prefill flat. Now compute-bound per core: sumsq ≈ 5.7 µs + partial ≈ 1.2 (interleaved, ≈ 8 µs together) → combine ≈ 1.3 → x·γ ≈ 4.0 → ·rstd ≈ 3.5 µs, with the gather / relay / multicast mostly hidden. Next: fuse the per-row sumsq L1-accumulate calls (23 chain calls per block) into fewer, wider calls, and the fused column-0 post-op (`c_skip`, raw sfpi) on the owners. Not tried: every target is already met, and both need lower-level work than this refinement's scope.

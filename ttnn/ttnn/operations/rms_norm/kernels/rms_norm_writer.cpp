@@ -35,7 +35,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
@@ -138,7 +137,6 @@ void kernel_main() {
             }
             // ---- gather: owner o's rows of this core's partials -> o's cb_gather tiles [slot*q, slot*q + n_o) ----
             {
-                DeviceZoneScopedN("W_SEND");
                 // Pipelined with the partial reduce (one output tile per push): owner o's rows go out as soon as they
                 // are packed, so the NoC transfer of owners 0..o-1 overlaps the reduce of the later rows.
                 for (uint32_t o = 0; o < num_owners; ++o) {
@@ -166,7 +164,6 @@ void kernel_main() {
             }
             if (n_own > 0) {
                 ++owned_blocks;
-                DeviceZoneScopedN("W_SEMWAIT");
                 noc_semaphore_wait_min(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr), (group_size - 1) * owned_blocks);
                 cb_push_back(cb_gather, group_size * combine_rows);

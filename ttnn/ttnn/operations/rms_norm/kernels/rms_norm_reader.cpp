@@ -55,10 +55,13 @@ void kernel_main() {
     // (0 = read the whole tile page; block-float gamma has no plain row 0).
     constexpr uint32_t g_row0_bytes = get_compile_time_arg_val(24);
     constexpr uint32_t g_face1_offset = get_compile_time_arg_val(25);
+    // R3 partial on the FPU reduce datapath: the SUM scaler tile, produced once.
+    constexpr bool partial_reduce_tile = get_compile_time_arg_val(26) != 0;
+    constexpr uint32_t cb_reduce_scaler = get_compile_time_arg_val(27);
     constexpr bool x_resident = placement == 1;
     constexpr bool x_local_sticks = placement == 2;
 
-    constexpr auto x_args = TensorAccessorArgs<26>();
+    constexpr auto x_args = TensorAccessorArgs<28>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
@@ -163,6 +166,17 @@ void kernel_main() {
                         cb_push_back(cb_x_rm, w_chunk_tiles);
                     }
                 }
+            }
+        }
+
+        // SUM scaler for the R3 partial reduce: after block 0's x reads (they head the critical path), well before
+        // compute's first partial_block.
+        if constexpr (partial_reduce_tile) {
+            if (block == 0) {
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                    cb_reduce_scaler,
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW>();
             }
         }
 

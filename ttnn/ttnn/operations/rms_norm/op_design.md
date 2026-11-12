@@ -272,6 +272,16 @@ core computes `x·γ` (stall shadow). Phase 0's structure keeps this reachable: 
 already takes `core_w_tiles` / `w_tile_start` as parameters, the reader already reads gamma by
 chunk offset, and `rstd_block` is a separate block operation whose post-op only moves to the root.
 
+**Refinement 6 — combine distribution.** Steps (2)–(3) are now a row-wise reduce-scatter
+(`tensix_all_reduce`): with `q = ceil(block_rows / G)`, slot `o` owns rows `[o·q, (o+1)·q)`. Every core
+sends owner `o`'s run of partials (faces 0/2) into `o`'s slot-major `cb_gather` (`G·q` pages) as soon as
+that run is reduced — the per-run partial (`ReduceTile`, one Σx² tile per row) is interleaved into
+`sumsq_block` so the all-to-all overlaps sumsq. Each owner combines its rows
+(`reduce<SUM, REDUCE_COL, AccumulateViaAdd, Skip>` over `(G, q)` + post-op) and relays them to the root's
+`cb_rstd_gather`; the root's single multicast (step 3) is unchanged. With one owner (`rows ≤ q`, e.g.
+decode) this is exactly the R4/R5 root combine. Knobs: `R3_SCATTER_COMBINE`, `R3_PARTIAL_REDUCE_TILE`,
+`R3_PARTIAL_INTERLEAVE`, `R3_SHADOW_RESIDENT_MIN_ROWS`.
+
 ## Work Distribution
 
 | Field | Value |
