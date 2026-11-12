@@ -286,3 +286,16 @@ def test_subclass_cannot_default_a_trace_flag_to_on(flag: str) -> None:
         type("_Widening", (Pipeline,), {"_run": namespace["_run"]})
     exec(f"def _run(self, *, {flag}=None): pass", namespace)  # noqa: S102
     type("_Narrowing", (Pipeline,), {"_run": namespace["_run"]})
+
+
+def test_trace_region_warning_survives_a_failing_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Mesh:
+        pass
+
+    def fail(device: object, buffer_type: object) -> None:
+        raise RuntimeError("no memory view on this mesh")
+
+    monkeypatch.setattr(pipeline_api.ttnn, "MeshDevice", _Mesh)
+    monkeypatch.setattr(pipeline_api.ttnn, "get_memory_view", fail)
+    pipeline = _FakePipeline(offload_weights=False, trace=True)
+    assert _warnings_of(lambda: pipeline.warn_if_no_trace_region(_Mesh(), by_default=True)) == []

@@ -115,8 +115,14 @@ class Pipeline:
         # Device-free tests construct pipelines with no device, or a stand-in for one.
         if not self.trace or not isinstance(mesh_device, ttnn.MeshDevice):
             return
-        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
-        if view.total_bytes_per_bank * view.num_banks > 0:
+        # Advice only: a mesh whose trace region cannot be read must still construct.
+        try:
+            view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
+            reserved = view.total_bytes_per_bank * view.num_banks
+        except Exception as error:  # noqa: BLE001
+            logger.debug(f"{type(self).__name__}: could not read the trace region size: {error!r}")
+            return
+        if reserved > 0:
             return
         name = type(self).__name__
         if by_default:
