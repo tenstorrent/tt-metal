@@ -46,12 +46,18 @@ TEST(PackScalarIntoUint32, ThirtyTwoBitIntegersTruncate) {
     EXPECT_EQ(pack_scalar_into_uint32(DataType::UINT32, 1.75f), 1u);
 }
 
+TEST(PackScalarIntoUint32, Uint8FillsAllBytes) {
+    EXPECT_EQ(pack_scalar_into_uint32(DataType::UINT8, 7.0f), 0x07070707u);
+    EXPECT_EQ(pack_scalar_into_uint32(DataType::UINT8, 1.75f), 0x01010101u);
+    EXPECT_EQ(pack_scalar_into_uint32(DataType::UINT8, -1.0f), 0x00000000u);
+    EXPECT_EQ(pack_scalar_into_uint32(DataType::UINT8, 300.0f), 0xFFFFFFFFu);
+}
+
 TEST(PackScalarIntoUint32, UnsupportedTypesThrow) {
     for (DataType dtype :
          {DataType::BFLOAT8_B,
           DataType::BFLOAT4_B,
           DataType::FP8_E4M3,
-          DataType::UINT8,
           DataType::INT8,
           DataType::INVALID}) {
         EXPECT_ANY_THROW(pack_scalar_into_uint32(dtype, 0.0f));
