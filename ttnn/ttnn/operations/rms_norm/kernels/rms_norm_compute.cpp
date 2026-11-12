@@ -14,6 +14,13 @@
 //       untilize_chunk [RM]     cb_normed -> cb_out_rm
 //     release_block             pop cb_x / cb_rstd
 //
+// R3 W-split (w_split): rstd_block becomes
+//     partial_block             cb_sumsq -> cb_partial       reduce<SUM, ROW, AccumulateViaAdd>, no post-op
+//                                                            (Σx² over this core's W slice; writer gathers it)
+//     [root] combine_block      cb_gather -> cb_rstd_root    reduce<..., AccumulateViaAdd, Skip> over
+//                                                            (rows, G) + post-op (·1/W, +eps, rsqrt)
+// and cb_rstd is filled by the writer (rstd multicast from the root), then normalize runs as in R1.
+//
 // Raw calls, each with its reason:
 //  - post_reduce_op SFPU calls (mul/add_unary_tile, rsqrt_tile): the reduce helper's documented
 //    callback runs inside the helper's own DEST window, where a chain (which owns its own window)
@@ -56,6 +63,11 @@ constexpr bool has_gamma = get_compile_time_arg_val(14) != 0;
 constexpr bool is_rm = get_compile_time_arg_val(15) != 0;
 constexpr uint32_t inv_w_bits = get_compile_time_arg_val(16);
 constexpr uint32_t eps_bits = get_compile_time_arg_val(17);
+constexpr bool w_split = get_compile_time_arg_val(18) != 0;
+constexpr uint32_t group_size = get_compile_time_arg_val(19);
+constexpr uint32_t cb_partial = get_compile_time_arg_val(20);
+constexpr uint32_t cb_gather = get_compile_time_arg_val(21);
+constexpr uint32_t cb_rstd_root = get_compile_time_arg_val(22);
 
 constexpr uint32_t row_stride_tiles = num_w_chunks * w_chunk_tiles;
 constexpr bool has_partial = w_partial_elems != 0;
@@ -132,10 +144,20 @@ ALWI void tilize_row_chunk(InDFB& in, OutDFB& out) {
         in, out, 1);
 }
 
+// rsqrt(Σx²/W + eps) on the reduced tile in DEST — the reduce helper's post_reduce_op callback.
+ALWI void rstd_post_op(uint32_t dst_idx) {
+    binop_with_scalar_tile_init();
+    mul_unary_tile(dst_idx, inv_w_bits);
+    add_unary_tile(dst_idx, eps_bits);
+    rsqrt_tile_init();
+    rsqrt_tile(dst_idx);
+}
+
 }  // namespace
 
 void kernel_main() {
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+    [[maybe_unused]] const bool is_root = get_arg_val<uint32_t>(1) != 0;
 
     compute_kernel_hw_startup(cb_x, cb_x, cb_rstd);
 
@@ -148,6 +170,9 @@ void kernel_main() {
     DataflowBuffer normed(cb_normed);
     DataflowBuffer out(cb_out);
     DataflowBuffer out_rm(cb_out_rm);
+    DataflowBuffer partial_sums(cb_partial);
+    DataflowBuffer gather(cb_gather);
+    DataflowBuffer rstd_root(cb_rstd_root);
 
     const uint32_t num_blocks = (num_tile_rows + block_rows - 1) / block_rows;
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -209,31 +234,70 @@ void kernel_main() {
         // ---- rstd_block: one reduce over (rows_this_block × n_sq); the masked tail is folded in by the
         //      helper's AccumulateViaAdd partial path; post-op turns Σx² into 1/sqrt(Σx²/W + eps). ----
         constexpr auto partial = has_partial ? ReducePartialScaler::only_partial() : ReducePartialScaler::none();
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            cb_sumsq,
-            cb_reduce_mask,
-            cb_rstd,
-            ReduceInputPolicy::BulkWaitBulkPop,
-            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            ReduceFp32Mode::Fast,
-            ReduceAlgorithm::AccumulateViaAdd,
-            ReduceWithinTile::Collapse>(
-            sumsq,
-            mask,
-            rstd,
-            ReduceInputBlockShape::of(rows_this_block, n_sq),
-            ReduceInputMemoryLayout::contiguous(),
-            NoAccumulation{},
-            [](uint32_t dst_idx) {
-                binop_with_scalar_tile_init();
-                mul_unary_tile(dst_idx, inv_w_bits);
-                add_unary_tile(dst_idx, eps_bits);
-                rsqrt_tile_init();
-                rsqrt_tile(dst_idx);
-            },
-            partial);
+        if constexpr (w_split) {
+            // partial_block: Σx² over this core's slice, no post-op (the combine owns ·1/W, +eps, rsqrt).
+            compute_kernel_lib::reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_ROW,
+                cb_sumsq,
+                cb_reduce_mask,
+                cb_partial,
+                ReduceInputPolicy::BulkWaitBulkPop,
+                ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast,
+                ReduceAlgorithm::AccumulateViaAdd,
+                ReduceWithinTile::Collapse>(
+                sumsq,
+                mask,
+                partial_sums,
+                ReduceInputBlockShape::of(rows_this_block, n_sq),
+                ReduceInputMemoryLayout::contiguous(),
+                NoAccumulation{},
+                NoOp{},
+                partial);
+            if (is_root) {
+                // combine_block: the G gathered partials of each row are column-0-valid -> sum the tiles,
+                // skip the within-tile collapse, then the rstd post-op.
+                compute_kernel_lib::reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_ROW,
+                    cb_gather,
+                    cb_reduce_mask,
+                    cb_rstd_root,
+                    ReduceInputPolicy::BulkWaitBulkPop,
+                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Fast,
+                    ReduceAlgorithm::AccumulateViaAdd,
+                    ReduceWithinTile::Skip>(
+                    gather,
+                    mask,
+                    rstd_root,
+                    ReduceInputBlockShape::of(rows_this_block, group_size),
+                    ReduceInputMemoryLayout::contiguous(),
+                    NoAccumulation{},
+                    [](uint32_t dst_idx) { rstd_post_op(dst_idx); });
+            }
+        } else {
+            compute_kernel_lib::reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_ROW,
+                cb_sumsq,
+                cb_reduce_mask,
+                cb_rstd,
+                ReduceInputPolicy::BulkWaitBulkPop,
+                ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast,
+                ReduceAlgorithm::AccumulateViaAdd,
+                ReduceWithinTile::Collapse>(
+                sumsq,
+                mask,
+                rstd,
+                ReduceInputBlockShape::of(rows_this_block, n_sq),
+                ReduceInputMemoryLayout::contiguous(),
+                NoAccumulation{},
+                [](uint32_t dst_idx) { rstd_post_op(dst_idx); },
+                partial);
+        }
 
         // ---- normalize / scale / untilize, chunk by chunk ----
         x.wait_front(rows_this_block * row_stride_tiles);

@@ -14,6 +14,9 @@
 //                  stick count that is not a whole number of tile-rows): the resident sticks are
 //                  restrided into cb_x_rm with self-aimed L1->L1 reads (no DRAM).
 // Once per kernel: the 0/1 reduce mask for a partial last W tile (prepare_reduce_mask).
+// W slice (R3 W-split): the core reads only W elements [w_elem_start, w_elem_end) of each row (R1/R6: the
+// whole row). TILE slices are tile-aligned (w_tile_start); RM shard slices may start at any L1 granule, so
+// the RM gamma segment read is aligned down to the DRAM read alignment and the relayout skips the slack.
 //
 // Raw NoC: the TILE x reads, the gamma chunk and the RM tail chunk of a K>1 row have no dataflow
 // helper (read_sticks_for_tilize derives its L1 stride from row_bytes, which is wrong for a tail
@@ -41,7 +44,7 @@ void kernel_main() {
     constexpr uint32_t w_partial_elems = get_compile_time_arg_val(14);
     constexpr bool has_gamma = get_compile_time_arg_val(15) != 0;
     constexpr bool is_rm = get_compile_time_arg_val(16) != 0;
-    constexpr uint32_t W = get_compile_time_arg_val(17);
+    [[maybe_unused]] constexpr uint32_t W = get_compile_time_arg_val(17);
     [[maybe_unused]] constexpr uint32_t num_valid_sticks = get_compile_time_arg_val(18);
     constexpr uint32_t x_elem = get_compile_time_arg_val(19);
     constexpr uint32_t g_elem = get_compile_time_arg_val(20);
@@ -65,12 +68,23 @@ void kernel_main() {
     const uint32_t w_tile_start = get_arg_val<uint32_t>(4);
     const uint32_t stick_base = get_arg_val<uint32_t>(5);  // RM: first stick of tile-row 0
     const uint32_t stick_end = get_arg_val<uint32_t>(6);   // RM: one past the core's last valid stick
+    const uint32_t w_elem_start = get_arg_val<uint32_t>(7);  // first element of the core's W slice
+    const uint32_t w_elem_end = get_arg_val<uint32_t>(8);    // one past its last valid element
 
     constexpr uint32_t row_stride_tiles = num_w_chunks * w_chunk_tiles;
     constexpr uint32_t chunk_elems = w_chunk_tiles * 32;
     constexpr uint32_t x_tile_bytes = get_tile_size(cb_x);
+    constexpr uint32_t GAMMA_READ_ALIGN = 64;  // DRAM read alignment (Blackhole 64 B; covers Wormhole's 32 B)
 
     const auto x_acc = TensorAccessor(x_args, x_addr);
+    // Valid elements of the W chunk starting at `elem_off` within the core's slice (0 for a chunk that lies
+    // wholly past a narrow slice's end: kernel groups share the widest slice's chunk grid).
+    auto slice_chunk_elems = [&](uint32_t elem_off) -> uint32_t {
+        if (elem_off >= w_elem_end) {
+            return 0;
+        }
+        return (w_elem_end - elem_off < chunk_elems) ? (w_elem_end - elem_off) : chunk_elems;
+    };
 
     // ---- once per kernel: reduce mask for the partial last W tile ----
     if constexpr (w_partial_elems != 0) {
@@ -89,8 +103,8 @@ void kernel_main() {
     // ---- resident shard: every page of the core's block is already in L1 ----
     if constexpr (x_resident) {
         constexpr uint32_t cb_resident = is_rm ? cb_x_rm : cb_x;
-        cb_reserve_back(cb_resident, num_tile_rows * core_w_tiles);
-        cb_push_back(cb_resident, num_tile_rows * core_w_tiles);
+        cb_reserve_back(cb_resident, num_tile_rows * row_stride_tiles);
+        cb_push_back(cb_resident, num_tile_rows * row_stride_tiles);
     }
 
     const uint32_t num_blocks = (num_tile_rows + block_rows - 1) / block_rows;
@@ -120,8 +134,8 @@ void kernel_main() {
                 const uint32_t first_stick = stick_base + (first_row + i) * 32;
                 const uint32_t sticks = (stick_end - first_stick < 32) ? (stick_end - first_stick) : 32;
                 for (uint32_t k = 0; k < num_w_chunks; ++k) {
-                    const uint32_t elem_off = (w_tile_start * 32) + k * chunk_elems;
-                    const uint32_t valid_elems = (W - elem_off < chunk_elems) ? (W - elem_off) : chunk_elems;
+                    const uint32_t elem_off = w_elem_start + k * chunk_elems;
+                    const uint32_t valid_elems = slice_chunk_elems(elem_off);
                     const uint32_t valid_bytes = valid_elems * x_elem;
                     if (!x_local_sticks && (valid_elems + 31) / 32 == w_chunk_tiles) {
                         dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
@@ -135,11 +149,14 @@ void kernel_main() {
                             uint64_t src;
                             if constexpr (x_local_sticks) {
                                 src = get_noc_addr(
-                                    x_addr + (first_stick - stick_base + s) * stick_page_bytes + elem_off * x_elem);
+                                    x_addr + (first_stick - stick_base + s) * stick_page_bytes +
+                                    (elem_off - w_elem_start) * x_elem);
                             } else {
                                 src = x_acc.get_noc_addr(first_stick + s, elem_off * x_elem);
                             }
-                            noc_async_read(src, l1, valid_bytes);
+                            if (valid_bytes != 0) {
+                                noc_async_read(src, l1, valid_bytes);
+                            }
                             l1 += chunk_elems * x_elem;
                         }
                         noc_async_read_barrier();
@@ -156,8 +173,8 @@ void kernel_main() {
             constexpr uint32_t face_words = 16 * g_elem / 4;  // one 16-element face row, in 32-bit words
             constexpr uint32_t face1_offset = 16 * 16 * g_elem;
             for (uint32_t k = 0; k < num_w_chunks; ++k) {
-                const uint32_t elem_off = (w_tile_start * 32) + k * chunk_elems;
-                const uint32_t valid_elems = (W - elem_off < chunk_elems) ? (W - elem_off) : chunk_elems;
+                const uint32_t elem_off = w_elem_start + k * chunk_elems;
+                const uint32_t valid_elems = slice_chunk_elems(elem_off);
                 cb_reserve_back(cb_gamma, w_chunk_tiles);
                 const uint32_t base = get_write_ptr(cb_gamma);
                 if constexpr (gamma_tiled) {
@@ -182,14 +199,22 @@ void kernel_main() {
                     cb_push_back(cb_gamma, w_chunk_tiles);
                     continue;
                 }
-                noc_async_read(g_acc.get_noc_addr(0, elem_off * g_elem), base, valid_elems * g_elem);
-                noc_async_read_barrier();
+                // Segment start aligned down to the DRAM read alignment; `slack` bytes precede the slice's
+                // first element (0 unless an RM shard slice starts mid-alignment-unit; a multiple of 16 B,
+                // the RM shard granule, so the word copies below stay word-aligned).
+                const uint32_t seg_byte = elem_off * g_elem;
+                const uint32_t slack = seg_byte % GAMMA_READ_ALIGN;
+                if (valid_elems != 0) {
+                    noc_async_read(g_acc.get_noc_addr(0, seg_byte - slack), base, slack + valid_elems * g_elem);
+                    noc_async_read_barrier();
+                }
                 // Spread the contiguous segment into row 0 of each tile: elems 0-15 -> face 0 row 0,
-                // elems 16-31 -> face 1 row 0. Backwards (last tile first) is overlap-safe.
+                // elems 16-31 -> face 1 row 0. Backwards (last tile first) is overlap-safe (every tile's
+                // destination lies above every not-yet-consumed source; tile 0 copies downwards, forwards).
                 const uint32_t valid_tiles = (valid_elems + 31) / 32;
                 for (uint32_t t = valid_tiles; t-- > 0;) {
                     volatile tt_l1_ptr uint32_t* src =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + t * 32 * g_elem);
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + slack + t * 32 * g_elem);
                     volatile tt_l1_ptr uint32_t* dst =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + t * g_tile_bytes);
                     volatile tt_l1_ptr uint32_t* dst1 =
@@ -197,7 +222,7 @@ void kernel_main() {
                     for (uint32_t w = 0; w < face_words; ++w) {
                         dst1[w] = src[face_words + w];
                     }
-                    if (t != 0) {
+                    if (t != 0 || slack != 0) {
                         for (uint32_t w = 0; w < face_words; ++w) {
                             dst[w] = src[w];
                         }

@@ -3,8 +3,10 @@
 
 """rms_norm — RMSNorm(x) = x / sqrt(mean(x^2, dim=-1) + eps) * gamma.
 
-One ttnn.generic_op dispatch per call (regime R1 of op_design.md: rows split across the full
-compute grid, whole rows resident per core). TILE and ROW_MAJOR inputs are handled natively —
+One ttnn.generic_op dispatch per call. Regimes of op_design.md: R1 (interleaved, rows split across the
+full compute grid, whole rows resident per core), R6 (HEIGHT_SHARDED / single-slice shards, reduction
+local to the core) and R3 (WIDTH/BLOCK_SHARDED, or interleaved rows too wide for one core: W split
+across a group of cores, partial sums gathered to a root, rstd multicast back). TILE and ROW_MAJOR inputs are handled natively —
 no host-side layout conversion, padding or slicing.
 """
 
@@ -69,7 +71,12 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 
@@ -134,7 +141,7 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
             raise ExcludedCell(f"rms_norm: unsupported combination (refinement candidate): {exc}")
 
     # Output placement follows the input placement: interleaved in -> interleaved out (DRAM or L1);
-    # HEIGHT_SHARDED in -> the same shard spec out (the output CB is backed by the output shard).
+    # sharded in -> the same shard spec out (the output CB is backed by / written into the output shard).
     if memory_config is not None:
         if axes["memory_layout"] == ttnn.TensorMemoryLayout.INTERLEAVED:
             if memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
@@ -170,7 +177,7 @@ def rms_norm(
     device = input_tensor.device()
     if memory_config is not None:
         output_memory_config = memory_config
-    elif input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+    elif input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         output_memory_config = input_tensor.memory_config()
     else:
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
