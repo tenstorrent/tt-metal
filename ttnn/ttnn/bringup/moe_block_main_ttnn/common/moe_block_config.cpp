@@ -73,6 +73,13 @@ uint32_t snap_bits(std::optional<float> q) {
 
 uint32_t MoEBlockConfig::snap_bits() const { return moe_block_main::snap_bits(combine_snap); }
 
+uint32_t MoEBlockConfig::snap_hi_bits() const {
+    if (!combine_snap_split || snap_bits() == 0) {
+        return 0;
+    }
+    return moe_block_main::snap_bits(std::ldexp(*combine_snap, 18));  // q_hi = 2^18 q
+}
+
 void MoEBlockConfig::check() const {
     TT_FATAL(num_links >= 1 && num_links <= 2, "moe_block: num_links {} (1 or 2)", num_links);
     TT_FATAL(
@@ -82,6 +89,8 @@ void MoEBlockConfig::check() const {
         splits(),
         loops());
     (void)snap_bits();
+    TT_FATAL(
+        !combine_snap_split || snap_bits() != 0, "moe_block: combine_snap_split needs combine_snap (a power of two)");
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main

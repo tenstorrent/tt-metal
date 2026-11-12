@@ -452,7 +452,21 @@ TABLE = {
         "fp32 sums, sqrt(softplus) with the fp32 softplus, + bias, top 6, weights / sum x 1.5), the routing exchange, "
         "the combine planner and dispatch prep; its planner has no fixed combine order, so the combine snaps each term to "
         "2^-19 (owner decision 2026-10-27: keep the snap - it supersedes D7 for the fused head; order-independent fp32 "
-        "sums: bit-identical runs; DS41's routed sums peak at 5.4, under 2^24 x 2^-19 = 32)",
+        "sums: bit-identical runs; DS41's routed sums peak at 5.4, under 2^24 x 2^-19 = 32 - wrong on real prompts: "
+        "FIX.23 measured up to 21376 in layers 15-39, see COMBINE_SPLIT)",
+    ),
+    "COMBINE_SPLIT": Setting(
+        "on",
+        ("on", "off"),
+        "MOE_BLOCK_SRC=main (FIX.23, DS41-235; ported by P.50): the combine's order-free sum. The combine adds each "
+        "token's routed terms in fp32 in packet-arrival order; the snap (2^-19) makes those adds exact - so the sum the "
+        "same in any order - only while a sum stays below 2^24 x 2^-19 = 32. The code prompt's routed sums reach 21376 "
+        "(layers 15-39; the novel prompt's first tokens too), so off (the single sum) gives different outputs for "
+        "identical inputs (DS41-233 / DS41-234). on = MoEBlockConfig.combine_snap_split: each term split into hi (a "
+        "multiple of 2^-1) and lo (the rest, a multiple of 2^-19), two exact fp32 sums, hi + lo rounded once: "
+        "order-free up to 2^23 (the routed_experts_combine fork; a second fp32 sum a token in the accumulators' L1). "
+        "Values: the exact sum of the snapped terms, bit-identical to off wherever off was exact. Default off until "
+        "the owner decides from P.50's A/B (owner 2026-11-12)",
     ),
     "SE_PACK_PRECISE": Setting(
         "on",

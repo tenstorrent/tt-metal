@@ -1235,3 +1235,32 @@ DS41-209: see "Golden rows before the cut (DS41-209)" in the next section (P.33 
 - **Not run** (brief): the off side, the profiles, the gate. The orchestrator measures off / on at 51200 and 512000.
 - **Re-run**: `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_collapse.py`;
   `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.34`.
+
+## The combine's snapped fp32 sum is order-free only below 2^24 q = 32; routed sums reach 21376
+
+DS41-235 (FIX.23, 2026-11-12; ported onto the pre-replication base by P.50, where COMBINE_SPLIT ships off until
+the owner decides from P.50's A/B).
+
+- Repro (one process, warm vs warm is enough): the code prompt (tt-metal C++ sources, testing/b2b.py ids), 2-3 chunks
+  of 5120 from position 0, 3 sequences on one loaded model, each on a fresh state:
+  `DET_WL=code DET_CHUNKS=3 DET_RUNS=3 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/bringup/probe_determinism.py` (on exp/fix23_snapshot 4e90f611e86 only, not ported: a bisect probe; DET_READ=layers: per layer; DET_MOE=combine
+  / all: inside each MoE layer). Every chunk's final hidden differed between runs (max 0.089 / 0.154 / 0.258).
+- First divergence (a readback after every layer and op): layer 37 of chunk 0 (layer 38 of chunk 1);
+  routed_experts_combine's output differs while its inputs that carry values (layer 36's output, the fused head's
+  route / regions / plan / shared expert output) are bit-identical. (head.xbuf / table / token_index and the dispatch's
+  output differ in EVERY layer, also where the combine is identical: arrival-order staging and unused slots, not values.)
+  Its 45 differing elements (run 1) / 29 (run 2) all have |y| >= 37.25 (median 197 / 103); no element under 32 ever
+  differs. Combine output peaks (code, chunk 0): L15 5312, L20 16640, L28 21376, L39 17152; chunk 1: L36-39 768-17152.
+- Cause: accumulator_compute.cpp multiplies each landed row by its gate weight, snaps it to a multiple of q = 2^-19
+  ((v + C) - C) and packs it onto the token's fp32 sum with packer L1 accumulation, in landing order. q-multiples add
+  exactly only while the sum stays below 2^24 q = 32 (and terms below 2^22 q = 8: (v + 24) has a coarser or finer ulp
+  past that); beyond, each add rounds and the result depends on the order the packets landed (the fabric's timing).
+  The setting's note "routed sums peak at 5.4" (2026-10-27) was measured on another input.
+- Fix: MoEBlockConfig.combine_snap_split (setting COMBINE_SPLIT; FIX.23's default on, P.50's base off): hi = v snapped to 2^18 q = 0.5, lo = v -
+  hi (exact) snapped to q; two fp32 sums (CB_ACC doubled), out = lo + hi once. Exact to |hi sums| < 2^23 and terms
+  below 2^21. Values: the exact sum of the snapped terms, bit-identical to the single sum wherever that was exact.
+- Before / after (tests/test_determinism.py: novel and code interleaved, 4 chunks, 3 sequences each, the first after
+  load cold): off - code max |diff| per chunk run 1 [0.0156, 0.0156, 0.051, 0.079], run 2 [0.090, 0.154, 0.097, 0.219]
+  (1443-1956 rows of 5120), novel 0 this time (DS41-233's cold chunk 0 difference is the same race, it does not show
+  every run); on - 0 everywhere.

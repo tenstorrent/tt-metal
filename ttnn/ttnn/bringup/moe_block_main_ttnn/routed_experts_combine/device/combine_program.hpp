@@ -80,6 +80,8 @@ struct CombinePlan {
     MeshPlan mesh;  // ports: peers and fabric link ids
     uint32_t L = 0;
     uint32_t snap_bits = 0;
+    uint32_t snap_hi_bits = 0;  // MoEBlockConfig::combine_snap_split: C_hi's fp32 bits (0: one fp32 sum a token)
+    uint32_t acc_sums = 1;      // fp32 sums a token in CB_ACC (2 with the split: lo, then hi)
     uint32_t S = 0, W = 0;
     RowSlot pc;
     StateLayout st;

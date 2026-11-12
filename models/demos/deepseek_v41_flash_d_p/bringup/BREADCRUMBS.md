@@ -3716,3 +3716,32 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
   noted because P.36 attempt 1 was flagged for a python heredoc editing settings.py.
 - Re-run: `gate P.44 --spec <spec> --check --unit 'P.44#test_index_k_copy'` / `'P.44#test_kv_layout'`;
   `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.44`.
+
+## P.50 (perf, attempt 1): COMBINE_SPLIT ported from FIX.23 onto the pre-replication base
+
+- Expected per chunk (written before the change; perf_guide: this is a correctness change that adds work, no saving):
+  device +~1 ms (routed_experts_combine +0.95 ms a chunk on the replica branch: one extra SFPU pass and a second fp32
+  sum a token, ~24 us a layer x 40), host 0 (same launches, same program count; the switch is a compile arg). Wall:
+  within noise (FIX.23: 183.2 -> 183.5 ms clean wall, spreads 15.6 / 6.5).
+- Ported (DS41-235, owner: the fix only, no redesign): `git diff 4c79ce65ece 4e90f611e86` hunks for the combine fork
+  (common/moe_block_config.{hpp,cpp}, common_nanobind.cpp, routed_experts_combine/device/{combine_host,combine_program}
+  .{hpp,cpp}, kernels/compute/accumulator_compute.cpp, tests/routed_experts_combine/test_experts_combine_checks.py:
+  applied cleanly, offsets only), README / CHANGELOG / INDEX lines, setting COMBINE_SPLIT (default off, owner) and
+  its plumbing in tt/moe_block_main_adapter.py, tests/test_determinism.py, testing/b2b.py (ids() only),
+  DS41-233 / 234 / 235 (+ detail). Not ported: replicas, slot maps, expert_slot_copy, tile_gather, probe_determinism.
+- One addition of mine: the adapter's block cache key (`_BLOCKS`) now includes the split flag (DS41-185: settings are
+  frozen at load; a refresh to the other value in one process would have reused the other side's program).
+- The test also records `determinism_max_abs_diff_<COMBINE_SPLIT>` (off / on). The gate's command pins
+  DS41_COMBINE_SPLIT=on, so the orchestrator's A/B cannot run the off side of this test; I ran it by hand.
+- Determinism (40 layers, 4 chunks of 5120 from 0, 3 sequences a prompt, novel / code interleaved, run 0 = cold):
+  off (DS41_COMBINE_SPLIT=off, results /scratch/dnijemcevic/bringup/p50_det_off/P.50.json): FAILS,
+  determinism_max_abs_diff_off = 0.2542; novel cold vs warm chunk 0: 0.2417 (255 rows), chunks 1-3 0;
+  code run 1 [0.0078, 0.154, 0.254, 0.219] (31 / 390 / 1362 / 271 rows), run 2 [0.225, 0.0195, 0.227, 0] rows
+  [392, 132, 1050, 0]. on (gate unit P.50#test_determinism): PASS, determinism_max_abs_diff_on = 0, every chunk.
+- Re-run: `PYTHONPATH=$PWD DS41_COMBINE_SPLIT=off|on scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py` (~5 min); A/B: `python -m
+  models.demos.common.bringup.orchestrator measure --task P.50`.
+- `orchestrator measure --task P.50` (quick A/B, on side only so far; ab/P.50/new/side.json): quick rung rc 0, every
+  one of 102 limits held (largest share err_state_window_kv_L25 0.746), host_transfers_per_layer 0, clean chunk wall
+  184.3 ms (spread 23.0); at 51200: chunk wall 206.2 ms (spread 46.8), device total 185.85 ms, experts 104.35 ms.
+  The off side and the combine op's own time: the orchestrator's A/B (I did not profile, per the brief).

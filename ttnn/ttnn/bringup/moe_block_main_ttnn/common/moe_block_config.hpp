@@ -90,7 +90,14 @@ struct MoEDtypes {
 // MoEBlockResources, never passed in.
 struct MoEBlockConfig {
     std::optional<float> combine_snap;  // power of two q: every routed term rounded to a multiple of q
-    bool head_dram_fallback = true;     // the head planner may take its DRAM fallback
+    // With combine_snap: each term v split into hi = v rounded to a multiple of q_hi = 2^18 q and lo = v - hi rounded
+    // to a multiple of q, summed in two fp32 sums (hi + lo once at the end). One sum of q-multiples is exact - so the
+    // same in any landing order - only while it stays below 2^24 q (32 at q = 2^-19); the split keeps both sums exact
+    // up to 2^24 q_hi (2^23 at q = 2^-19) for terms below 2^22 q_hi and top_k <= 64 (DeepSeek-V4.1 FIX.23: routed sums
+    // of 21376 made the single sum order-dependent). Costs the accumulators a second fp32 sum (L1) and the split's SFPU
+    // work. false: the single sum (the source's program).
+    bool combine_snap_split = false;
+    bool head_dram_fallback = true;  // the head planner may take its DRAM fallback
     // the fused head's router iterations (HeadLayout.NIT): 0 the planner's (by cost, each layout with the fewest that
     // fit), n at least n (tests: the iterated router where the planner would not pick it)
     uint32_t head_router_iterations = 0;
@@ -136,6 +143,8 @@ struct MoEBlockConfig {
     uint32_t handoff_bytes() const { return persist_l1_small ? 4u : 16u; }
     // The combine's snap constant: the fp32 bits of C = 1.5 x 2^23 q, 0 when combine_snap is unset.
     uint32_t snap_bits() const;
+    // With combine_snap_split: the fp32 bits of C_hi = 1.5 x 2^23 q_hi (q_hi = 2^18 q); 0 otherwise.
+    uint32_t snap_hi_bits() const;
     void check() const;  // TT_FATAL on an invalid field
     bool operator==(const MoEBlockConfig&) const = default;
 };

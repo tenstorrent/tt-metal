@@ -71,7 +71,9 @@ struct StateLayout {
 StateLayout state_layout(uint32_t N, uint32_t A, uint32_t G = 0);
 
 // _acc_cbs: an accumulator's CB bytes (CB_TAB, CB_ROW, CB_META, CB_ACC, CB_OUT, CB_W; each 64 B aligned).
-uint32_t acc_cb_bytes(uint32_t S, uint32_t A, uint32_t NT, uint32_t rows = 2, uint32_t tab = kTabCbBytes);
+// acc_sums: fp32 sums a token (2 with MoEBlockConfig::combine_snap_split: hi and lo).
+uint32_t acc_cb_bytes(
+    uint32_t S, uint32_t A, uint32_t NT, uint32_t rows = 2, uint32_t tab = kTabCbBytes, uint32_t acc_sums = 1);
 // an accumulator's CB_TAB bytes: the shared landing's slot owners (1 B) and free list (2 B a slot) last
 // (accumulator_reader.cpp: plan words, grant queues, trailer probes, zeros, then them from 1600 B)
 inline uint32_t acc_tab_bytes(bool shared, uint32_t psl) {
@@ -109,7 +111,8 @@ CombineLayout combine_l1_layout(
     uint32_t depth = 8,
     uint32_t local_keep = 8,
     bool shared = false,
-    uint32_t pool_slots = 0);
+    uint32_t pool_slots = 0,
+    uint32_t acc_sums = 1);
 
 enum class CombineMode : uint8_t { PortsApart = 0, AccOnPorts = 1 };
 
@@ -169,7 +172,8 @@ CombineAuto combine_auto(
     uint32_t a_max = kAccMax,
     std::optional<CombineMode> mode = std::nullopt,
     CombineLanding landing = CombineLanding::Rings,
-    uint32_t pool_slots = 0);
+    uint32_t pool_slots = 0,
+    uint32_t acc_sums = 1);
 
 // The credit policy: a port returns a source's credits once it consumed CRED_THR of its rows; its idle credit
 // snapshots are batched (CRED_IDLE rows, or CRED_AGE cycles old). N chips, D landing slots a source chip (average);

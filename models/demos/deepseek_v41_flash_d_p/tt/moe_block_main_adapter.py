@@ -58,7 +58,7 @@ from .cores import max_grid
 from .settings import settings
 
 LINKS = 2  # links per direction
-COMBINE_SNAP = 2.0**-19  # (as the carried block, owner 2026-10-27: order-independent fp32 sums)
+COMBINE_SNAP = 2.0**-19  # (as the carried block, owner 2026-10-27: order-independent fp32 sums; COMBINE_SPLIT: > 32)
 _BLOCKS: dict = {}  # (id(mesh), chunk) -> (mesh, MoEBlockResources, MoEBlock)
 WDTYPES = {"bfp4": "bf4", "bfp4_mse": "bf4", "bfp8": "bf8"}  # EXPERTS_IMPL -> the flat op's one weight format
 
@@ -179,12 +179,18 @@ class TtMoEBlockMainLayer:
     def block(self):
         from models.demos.moe_block_main.tt.moe_block import MoEBlock
 
-        key = (id(self.mesh), self.chunk)
+        split = settings.get("COMBINE_SPLIT") == "on"
+        key = (id(self.mesh), self.chunk, split)
         hit = _BLOCKS.get(key)
         if hit is None or hit[0] is not self.mesh:
             mb = _mb()
             cfg = mb.MoEBlockConfig(
-                chunk_tokens=self.chunk, num_links=LINKS, combine_snap=COMBINE_SNAP, persist_l1_small=True
+                chunk_tokens=self.chunk,
+                num_links=LINKS,
+                combine_snap=COMBINE_SNAP,
+                # (FIX.23, DS41-235: order-free sums beyond 32 - the routed sums reach ~2^14 here)
+                combine_snap_split=split,
+                persist_l1_small=True,
             )
             t0 = time.time()
             res = mb.MoEBlockResources(self.mesh, self.dims, cfg, self.dtypes)

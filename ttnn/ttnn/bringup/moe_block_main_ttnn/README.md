@@ -66,8 +66,22 @@ each default off (= the source's program):
 - `MoEDtypes.shared_pack_precise = True` (default False): the head's compute packs bfp8 h with `bfp8_pack_precise` -
   one rounding from fp32 DEST at the group's shared exponent (as ttnn.typecast packs), not two (DS41-137); only bfp8
   packs change.
+- `MoEBlockConfig.combine_snap_split = True` (default False; needs `combine_snap` q): the combine's sum order-free past
+  2^24 q. Each weighted term is split into hi (a multiple of 2^18 q) and lo (the rest, a multiple of q), summed in two
+  fp32 sums (exact while |hi sums| < 2^24 x 2^18 q, top_k <= 64) and added once at the end. The single sum is exact only
+  below 2^24 q (32 at q = 2^-19); DeepSeek-V4.1's routed sums reach 21376, so without the split its outputs depended
+  on the packets' arrival order (FIX.23). Costs a second fp32 sum a token in the accumulators' L1 and the split's SFPU
+  work (README Measured). Bit-identical to the single sum wherever that one was exact and its terms below 2^22 q.
 
 ## Measured
+
+combine_snap_split (FIX.23 on the replica branch, Galaxy 8x4, DeepSeek-V4.1, 40 layers, chunk 5120, q = 2^-19, 17
+accumulators, D 6 - the plan unchanged, the accumulators' L1 + 10 tokens x 5 tiles x 4 KB): routed_experts_combine
+55.84 -> 56.79 ms a chunk (+0.95, ~24 us a layer; the first version with six stock SFPU passes +3.18), device 171.05
+-> 172.85 ms, clean chunk wall 183.2 -> 183.5 ms (spreads 15.6 / 6.5: no wall change). Identical prefills: code prompt
+max |diff| up to 0.219 -> 0 (tests/test_determinism.py, 4 chunks x 3 runs, novel and code). Ladder (rung last): every
+metric identical. Fork test `test_experts_combine_split_determinism` (x 256, |y| to 362): 10 calls bit-identical, PCC
+0.98428 = the single sum's on the same inputs. On this base (P.50): the orchestrator's A/B.
 
 bf8 shared-expert activations (P.37, Galaxy 8x4, DeepSeek-V4.1-Flash dims, random weights, LoFi, 1024 tokens):
 the head's output vs torch with x / h on the bf8 grid rel 0.0471 (bf16 activations 0.0585), vs full precision 0.0465
