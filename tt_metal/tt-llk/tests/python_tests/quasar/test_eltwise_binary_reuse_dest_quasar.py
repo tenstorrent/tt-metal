@@ -10,7 +10,8 @@ from helpers.format_config import DataFormat
 from helpers.golden_generator.heavyweight.mismatch import describe_mismatch
 from helpers.golden_generator.heavyweight.operations import (
     QUASAR,
-    get_eltwise_binary_reuse_dest_golden,
+    Op,
+    get_golden,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -233,8 +234,8 @@ def test_eltwise_binary_reuse_dest_quasar(
     if not is_perf and should_compute_direct_golden(
         "the heavyweight reuse_dest golden"
     ):
-        generate_golden = get_eltwise_binary_reuse_dest_golden(
-            QUASAR, mathop, math_fidelity, reuse_dest_type
+        generate_golden = get_golden(
+            Op.EltwiseBinaryReuseDest, QUASAR, mathop, math_fidelity, reuse_dest_type
         )
         golden_tensor = generate_golden.run(
             [src_A_t, src_B_t],
