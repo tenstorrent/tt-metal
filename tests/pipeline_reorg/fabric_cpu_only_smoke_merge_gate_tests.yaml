@@ -19,16 +19,3 @@
 #   team: scaleout
 #   arch: wormhole_b0
 #   owner_id: U08RRAU5E15 # Ridvan Song
-#
-# The teardown sanity gate rows (tests/tt_metal/distributed/multiprocess/teardown_sanity, the rows that pass
-# today) fit the 10-minute merge-gate budget once the fabric CPU tests are re-enabled here:
-#
-# - id: scaleout-cpu-teardown-sanity-smoke
-#   name: scaleout cpu teardown sanity (gates only)
-#   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity --grep "not xfail"
-#   skus:
-#     cpu_medium:
-#       timeout: 10
-#   team: scaleout
-#   arch: wormhole_b0
-#   owner_id: U08RRAU5E15 # Ridvan Song
