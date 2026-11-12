@@ -1045,6 +1045,7 @@ class TestConfig:
         include_dirs: list = None,
         src_include_dirs: list = None,
         helpers_trees: list = None,
+        kernel_flags: list = None,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -1066,6 +1067,8 @@ class TestConfig:
         # compiled. Regression coverage: tests/hardware_free/harness/test_config.py.)
         templates = list(templates or [])
         runtimes = list(runtimes or [])
+        # Extra compiler flags of this variant's kernel parts, e.g. production's LTO for a test that times compute API code.
+        self.kernel_flags = list(kernel_flags or [])
 
         if TestConfig.SPEED_OF_LIGHT:
             templates = templates + runtimes
@@ -1457,7 +1460,14 @@ class TestConfig:
         )
         self.variant_id = sha256(
             str(
-                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + counters)
+                " | ".join(
+                    temp_str
+                    + ["<<search-dirs>>"]
+                    + search_dirs
+                    + counters
+                    + ["<<kernel-flags>>"]
+                    + self.kernel_flags
+                )
             ).encode()
         ).hexdigest()
 
@@ -1985,6 +1995,7 @@ class TestConfig:
                     [f"-I{VARIANT_DIR}"],
                     local_options_compile,
                     optional_kernel_flags,
+                    self.kernel_flags,
                     f"-DLLK_TRISC_{trisc_define}",
                     device_print_flags,
                     TestConfig.OPTIONS_LINK,

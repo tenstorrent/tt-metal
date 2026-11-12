@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// The block pack of a matmul output as llk_pack_block (hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h) runs it with the W offset on, written with the
+// The block pack of a matmul output as llk_pack_block (tt_llk_blackhole/llk_lib/llk_pack_block.h) runs it with the W offset on, written with the
 // same _llk_ calls in the same order, because a test kernel cannot include the metal API. The form of a block (T per tile, B the block that programs the output, W the
 // block with the W offset) is llk_pack_block_form with the matmul_kt overlay, generated into matmul_pack_tables.h from the API (gen_matmul_pack_tables.py, checked by
 // hardware_free/kernels/test_matmul_pack_tables.py); the first block of the run takes the init table, the next ones the next table. MATMUL_PACK_FORM 1 is the plain
