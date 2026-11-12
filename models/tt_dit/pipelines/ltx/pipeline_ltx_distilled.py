@@ -728,19 +728,33 @@ class LTXDistilledPipeline(LTXPipeline):
                 # recorded last, in _capture_warmup_traces after the DiT and Gemma captures, so no
                 # persistent buffer (ref encoders, DiT statics, CCL buffers, trace io) is allocated
                 # after an encode capture and overwritten by its replay (#3354: the stage-1 hang).
-                self.vae_encoder.traced = False
-                self._warmup_encode(height // 2, width // 2)
-                self._warmup_encode(height, width)
-                if "enc" not in {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",")}:
-                    self.vae_encoder.traced = True
-                    self.vae_encoder.capture_open = True
-                    try:
+                encoder = self.vae_encoder
+                existing_keys = set(encoder._encode_tracers)
+                was_traced = encoder.traced
+                encoder.capture_open = False
+                try:
+                    encoder.traced = False
+                    self._warmup_encode(height // 2, width // 2)
+                    self._warmup_encode(height, width)
+                    if "enc" not in {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",")}:
+                        encoder.traced = True
+                        encoder.capture_open = True
                         self._warmup_encode(height // 2, width // 2)
                         self._warmup_encode(height, width)
-                    finally:
-                        # Never leave the gate open: a failed warmup must not let a later gen prepare
-                        # an encode trace after other persistent allocations (#3354).
-                        self.vae_encoder.capture_open = False
+                except BaseException:
+                    # Both resolutions form one preparation attempt. Keep unrelated valid traces,
+                    # but release every new entry if either shape fails, including on interruption.
+                    for key in set(encoder._encode_tracers) - existing_keys:
+                        tracer = encoder._encode_tracers.pop(key)
+                        encoder._encode_logical_hw.pop(key, None)
+                        try:
+                            tracer.release_trace()
+                        except BaseException:
+                            logger.exception("image encoder: failed to release warmup preparation")
+                    encoder.traced = was_traced
+                    raise
+                finally:
+                    encoder.capture_open = False
                 # The IC-LoRA reference encoders are also built once and never reloaded here, so the
                 # same before-capture rule applies; the late warmup below skips them on this path.
                 if ref_num_frames is not None:
@@ -1796,9 +1810,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0, traced, device=self.mesh_device
             )
             if image_cond and i2v.guide_rows is not None:  # annealed end guide: values-only mask update
-                step_mask = ref_fl_end_guide_step_mask(
-                    i2v.denoise_mask, i2v.guide_rows, sigma_next, sigmas[0].item()
-                )
+                step_mask = ref_fl_end_guide_step_mask(i2v.denoise_mask, i2v.guide_rows, sigma_next, sigmas[0].item())
                 mask_host = torch.ones(1, 1, video_N, 1)
                 mask_host[:, :, :video_N_real, :] = step_mask[0, :, 0].unsqueeze(-1)
                 state._tt_i2v_mask.update(

@@ -14,10 +14,10 @@ from typing import TYPE_CHECKING, Iterable, Sequence
 import torch
 from einops import rearrange
 from loguru import logger
+from models.common.utility_functions import is_blackhole
 from safetensors.torch import load_file
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
@@ -1635,16 +1635,20 @@ class LTXVideoEncoder(Module):
                 # itself is recorded later by capture_traces(), after every other persistent allocation.
                 tracer = Tracer(self.encode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
                 # A host round-trip cannot be captured: the downsample gathers on device inside the trace.
-                self._set_device_gather(True)
                 try:
-                    sample_tt = tracer.prepare(sample_tt, logical_h, logical_w)
+                    self._set_device_gather(True)
+                    try:
+                        sample_tt = tracer.prepare(sample_tt, logical_h, logical_w)
+                    finally:
+                        self._set_device_gather(False)
                 except BaseException:
-                    # Free the staged inputs and cache nothing: a cached unprepared tracer would make every
-                    # later encode of this shape eager and make capture_traces() raise for every shape.
-                    tracer.release_trace()
+                    # Staging can retain inputs even when prepare() never completes. Do not cache
+                    # the failed tracer or let a secondary release failure replace the original error.
+                    try:
+                        tracer.release_trace()
+                    except BaseException:
+                        logger.exception("image encoder: failed to release interrupted preparation")
                     raise
-                finally:
-                    self._set_device_gather(False)
                 self._encode_tracers[key] = tracer
                 self._encode_logical_hw[key] = self._last_logical_hw
                 logger.info(f"image encoder: trace input + prep run for {key}, capture deferred")
@@ -1738,6 +1742,7 @@ class LTXVideoEncoder(Module):
 
     def release_trace(self) -> None:
         """Release every encode capture before rebuilding or unloading weights."""
+        self.capture_open = False
         for tracer in self._encode_tracers.values():
             tracer.release_trace()
         self._encode_tracers.clear()

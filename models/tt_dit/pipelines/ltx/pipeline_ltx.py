@@ -513,6 +513,8 @@ class LTXPipeline:
             self._audio_adapter.release_traces()
         if self.vae_decoder is not None:
             self.vae_decoder.release_trace()
+        if self.vae_encoder is not None:
+            self.vae_encoder.release_trace()
         self._trace_state.clear()
         self._warmup_ran = False  # no family is warm now: the next gen captures its own
         self._warmup_capture_pending = []
