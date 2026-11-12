@@ -1835,6 +1835,7 @@ class Model:
         pa = self.__dict__.get("apc_paged")
         if pa is not None:
             pa.build()
+            pa.init_d2d()  # (DSV41_XROW_D2D=1: persistent buffers of the device-to-device cross-row copy, before the first capture)
 
     def reset_prefix_cache(self):
         """vLLM's reset_prefix_cache (the plugin forwards it) / a weight reload: drop every snapshot."""

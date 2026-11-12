@@ -516,14 +516,17 @@ class PagedApc:
         ttnn.synchronize_device(m.md)
         dt = time.perf_counter() - t0
         self.log(f"APC paged: cross-row copy ops warmed on an idle user in {dt:.1f} s")
+        return dt
+
+    def init_d2d(self):
+        """DSV41_XROW_D2D=1: the persistent buffers of the device-to-device copy + its programs (p2p of every row pair, gather / scatter / slot_copy), BEFORE the first trace capture (called at the end of
+        ``DSV41Model.apc_paged_build``); idempotent, no-op when off / without cross-row hits"""
         from models.demos.blackhole.deepseek_v41_flash.tt import xrow_d2d as XD
 
-        if XD.enabled() and self.d2d is None:
-            self.d2d = XD.XrowD2D(m, self.ks if XD.keys_enabled() else None)
-            self.log(
-                f"APC paged: cross-row d2d buffers allocated, p2p / gather / scatter / slot_copy programs warmed in {self.d2d.warm():.1f} s"
-            )
-        return dt
+        if self.d2d is not None or self.ks is None or not self.idx.xrow or not XD.enabled():
+            return
+        self.d2d = XD.XrowD2D(self.model, self.ks if XD.keys_enabled() else None)
+        self.log(f"APC paged: cross-row d2d buffers allocated, programs warmed in {self.d2d.warm():.1f} s")
 
     def _warm_xrow_save(self):
         """the save kernels on the STAGING tensors of the copy (their sharding / layout differ from the persistent slabs ``build`` warmed them with) with all-SKIP tables: no data is touched"""
