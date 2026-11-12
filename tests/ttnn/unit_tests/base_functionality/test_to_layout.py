@@ -554,10 +554,10 @@ def test_to_layout_same_layout_dtype_change_sharded_to_different_shard_grid(devi
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_to_layout_same_layout_row_major_block_float_raises(device, dtype):
+def test_to_layout_same_layout_row_major_block_float_raises(device, dtype, expect_error):
     torch_input = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match="to_layout"):
+    with expect_error(RuntimeError, "to_layout"):
         ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
 
 
