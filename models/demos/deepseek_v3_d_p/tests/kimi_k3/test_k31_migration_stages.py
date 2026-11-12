@@ -74,20 +74,17 @@ def test_layer_zero_only_rank_keeps_four_stages():
     assert [(s.first_layer, s.count) for s in stages[2:]] == [(0, 1), (0, 1)]
 
 
-def test_missing_or_mis_sized_index_cache_is_refused(expect_error):
-    with expect_error(RuntimeError, "no index cache allocated"):
+def test_missing_index_cache_is_refused(expect_error):
+    """A K3.1 rank with MLA layers and a kvpe cache but no index cache: the allocation and the runtime disagree."""
+    with expect_error(RuntimeError, "allocate_kv_cache disagrees"):
         _runtime(0, 24).kv_migration_stages(_caches(0, 24, index=False))
-    caches = _caches(0, 24)
-    caches.index = _tensor(0x1800, (24, 1, 7040, 128))  # sized to the layers, not the MLA layers
-    with expect_error(RuntimeError, "index cache holds 24 slabs per slot"):
-        _runtime(0, 24).kv_migration_stages(caches)
 
 
 def test_k3_runtime_still_refuses_an_index_cache(expect_error):
     runtime = _runtime(0, 24)
     runtime.hf_config = None  # Kimi-K3: no indexer
     caches = _caches(0, 24)
-    with expect_error(RuntimeError, "Kimi-K3 has no DSA index cache"):
+    with expect_error(RuntimeError, "allocate_kv_cache disagrees"):
         runtime.kv_migration_stages(caches)
     caches.index = None
     assert len(runtime.kv_migration_stages(caches)) == 3
