@@ -9,6 +9,7 @@ from transformers.models.gemma4.modeling_gemma4 import Gemma4TextDecoderLayer, G
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.gemma4_31b_qb2.tt import decoder as decoder_module
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.model import WeightReader, checkpoint_path
 
@@ -55,9 +56,10 @@ def check_rows(expected, actual):
         assert passed, message
 
 
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b], ids=["bf4", "bf8"])
 @pytest.mark.parametrize("layer_index", [0, 5], ids=["sliding", "full"])
 @pytest.mark.parametrize("length,batch", [(1, 13), (127, 1), (129, 3), (1025, 2)])
-def test_prefill_and_live_decode_trace(qb2_mesh, layer_index, length, batch):
+def test_prefill_and_live_decode_trace(qb2_mesh, layer_index, length, batch, weight_dtype, monkeypatch):
     """Every logical row is scored; changed inputs, positions and slot maps reach the trace."""
     torch.set_num_threads(8)
     rng = torch.Generator().manual_seed(3600 + layer_index + length)
@@ -72,6 +74,8 @@ def test_prefill_and_live_decode_trace(qb2_mesh, layer_index, length, batch):
     hf.load_state_dict({k[len(prefix) :]: v for k, v in weights.items()}, assign=True, strict=True)
     hf.eval()
     rope = Gemma4TextRotaryEmbedding(config)
+    for name in decoder_module.WEIGHT_DTYPES:
+        monkeypatch.setitem(decoder_module.WEIGHT_DTYPES, name, weight_dtype)
     layer = Decoder.from_state_dict(weights, hf_config=config, layer_idx=layer_index, mesh_device=qb2_mesh)
     layer._prepare_prefill_norm_stats()
     capacity = ((length + 4 + 127) // 128) * 128
