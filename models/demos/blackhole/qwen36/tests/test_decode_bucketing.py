@@ -20,7 +20,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.common.utility_functions import comp_pcc
-from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
+from models.demos.blackhole.qwen36.tests.test_factory import model_path, parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 N_LAYERS = 8
@@ -1218,7 +1218,9 @@ def test_vllm_warmup_leaves_no_late_allocations(
 ):
     """#56474: after the two-phase vLLM warmup (either order, host or device sampling) every trace replays clean.
     The adapter allocates through allocate_kv_cache_per_layer, as vllm-tt-plugin does, with the GDN state of each row
-    in its own KV cache blocks."""
+    in its own KV cache blocks. Between the replays it also runs what prefix caching (mamba_cache_mode "align") adds: a
+    prefill that writes a checkpoint, a prefix hit that restores the checkpoint, and a decode step whose rows cross
+    into new state blocks."""
     if not trace_allocation_tracker.TRACE_ALLOC_TRACKING:
         pytest.skip("needs TT_METAL_TRACE_ALLOC_TRACKING=1")
     from models.common.sampling.sampling_params import SamplingParams
@@ -1226,7 +1228,7 @@ def test_vllm_warmup_leaves_no_late_allocations(
 
     bmax = 8
     model = Qwen36Model.from_pretrained(
-        mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=N_LAYERS, hf_model="Qwen/Qwen3.6-27B"
+        mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=N_LAYERS, hf_model=model_path()
     )
     if sampling and model.sampling is None:
         pytest.skip("on-device sampling unsupported on this mesh")
@@ -1237,12 +1239,15 @@ def test_vllm_warmup_leaves_no_late_allocations(
     bpu = -(-CTX // probe.block_size)
     # Block 0 is the null block; row u owns bpu attention blocks and one state block per GDN group.
     per_row = bpu + probe.num_groups
-    layout = PluginLayout.for_model(model, num_blocks=1 + bmax * per_row)
+    # Then 3 more blocks per GDN group: a prefill checkpoint, the destination of a prefix hit, and a crossing target.
+    extra = 1 + bmax * per_row
+    layout = PluginLayout.for_model(model, num_blocks=extra + 3 * probe.num_groups)
     kv_cache = gen.allocate_kv_cache_per_layer(layout.per_layer_specs)
     page_table = torch.stack(
         [torch.arange(1 + u * per_row, 1 + u * per_row + bpu, dtype=torch.int32) for u in range(bmax)]
     )
     state_blocks = [tuple(1 + u * per_row + bpu + g for g in range(layout.num_groups)) for u in range(bmax)]
+    ckpt, hit, cross = (tuple(extra + k * layout.num_groups + g for g in range(layout.num_groups)) for k in range(3))
     prefill_kw = dict(kv_cache=kv_cache, can_sample_on_device=False)
     decode_kw = dict(kv_cache=kv_cache, max_batch_size=bmax, num_blocks=bpu, can_sample_on_device=sampling)
     gen.warmup_model_prefill(enable_trace=False, **prefill_kw)
@@ -1260,7 +1265,7 @@ def test_vllm_warmup_leaves_no_late_allocations(
     sampled = SamplingParams(temperature=[1.0] * bmax, top_k=[10] * bmax, top_p=[0.9] * bmax)
     params = [greedy, sampled] if sampling else [None]
 
-    def decode(width, sampling_params, rows=None, **kwargs):
+    def decode(width, sampling_params, rows=None, starts=None, dests=None, **kwargs):
         start_pos = torch.full((bmax,), -1, dtype=torch.int32)
         start_pos[:width] = T
         rows = list(range(bmax)) if rows is None else rows
@@ -1279,7 +1284,9 @@ def test_vllm_warmup_leaves_no_late_allocations(
             enable_trace=True,
             read_from_device=True,
             sampling_params=sampling_params,
-            mamba_state=layout.step_state([state_blocks[r] if i < width else None for i, r in enumerate(rows)], bmax),
+            mamba_state=layout.step_state(
+                dests or [state_blocks[r] if i < width else None for i, r in enumerate(rows)], bmax, start_blocks=starts
+            ),
             **flags,
         )
 
@@ -1293,3 +1300,9 @@ def test_vllm_warmup_leaves_no_late_allocations(
         # A batch condense that moves every slot; device sampling state must be reloaded with it.
         remap = torch.tensor([*range(1, bmax), 0], dtype=torch.int32)
         decode(bmax, params[-1], rows=remap.tolist(), slot_remap=remap, reset_sampling_state=sampling)
+        # Prefix caching: a prefill that writes its state after 2048 tokens into the checkpoint blocks, a prefix hit
+        # that resumes there, and a decode step in which row 0 crosses from the hit's blocks into new ones.
+        for start, kw in ((0, dict(checkpoints=[(2048, ckpt)])), (2048, dict(start_blocks=[ckpt]))):
+            state = layout.step_state([hit], bmax, **kw)
+            gen.prefill_forward(prompt, page_table[:1], kv_cache, [T], start_pos=[start], mamba_state=state)
+        decode(1, params[-1], starts=[hit] + [None] * (bmax - 1), dests=[cross] + [None] * (bmax - 1))

@@ -464,14 +464,19 @@ def test_plugin_admission_accepts_class(hf_config):
 
 
 def test_capabilities():
-    """Spec capabilities are declared and the base class capabilities are preserved."""
+    """Spec capabilities are declared and the shared base class capabilities are preserved. Prefix caching and chunked
+    prefill are declared by Qwen36ForCausalLM only: the MTP class keeps its model-owned GDN state and prefills from
+    position 0."""
     caps = CLS.model_capabilities
     assert caps["supports_spec_decode"] is True
     assert "device_propose" in caps["spec_requirements"]
     assert tuple(caps["spec_hidden_handoff"]) == ("on_device",)
     assert caps["supports_async_decode"] is False
     assert caps["output_tokens_per_step"] == 1
-    for key in Qwen36ForCausalLM.model_capabilities:
+    assert caps["supports_prefix_caching"] is False and not caps.get("supports_chunked_prefill", False)
+    ordinary = Qwen36ForCausalLM.model_capabilities
+    assert ordinary["supports_prefix_caching"] is True and ordinary["supports_chunked_prefill"] is True
+    for key in set(ordinary) - {"supports_prefix_caching", "supports_chunked_prefill"}:
         assert key in caps
 
 

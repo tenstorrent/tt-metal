@@ -61,6 +61,7 @@ def _state(block_size=512):
     st._zero = "zero"
     st._zero_table = SimpleNamespace(shape=[1, 2])
     st._zero_refs = []
+    st._write_refs = []
     return st
 
 

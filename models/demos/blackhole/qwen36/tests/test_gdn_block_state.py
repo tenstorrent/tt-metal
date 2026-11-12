@@ -262,8 +262,8 @@ def test_block_state_matches_model_owned(mesh_device, n_requests, monkeypatch, r
 @torch.no_grad()
 @_parametrize
 def test_chunked_prefill_block_reuse_and_zeroing(mesh_device, monkeypatch, reset_seeds, ensure_gc):
-    """(1) A prompt prefilled in two vLLM chunks (the second at start_pos > 0 recomputes from position 0) leaves the
-    same logits and block state as one prefill. (2) A request prefilled into blocks that a finished request left full
+    """(1) A prompt prefilled in two vLLM chunks (mamba_cache_mode "none": the second continues at start_pos > 0 from
+    the state the first left in the same block) leaves the same logits and block state as one prefill. (2) A request prefilled into blocks that a finished request left full
     of state gets the same logits and state as in fresh blocks: start_pos 0 never reads the block. (3)
     zero_kv_cache_blocks zeroes exactly the listed blocks."""
     model = _build(mesh_device)
@@ -280,7 +280,7 @@ def test_chunked_prefill_block_reuse_and_zeroing(mesh_device, monkeypatch, reset
             kv,
             [end],
             start_pos=[start],
-            mamba_state=layout.step_state([blocks.state(r)], BMAX),
+            mamba_state=layout.step_state([blocks.state(r)], BMAX, start_blocks=["same" if start else None]),
         )[0][0, 0, :vocab]
 
     whole = prefill(0, prompt, L)

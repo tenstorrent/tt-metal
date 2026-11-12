@@ -280,6 +280,27 @@ def pack_history_rows(dims):
     return out.reshape(-1)
 
 
+def unpack_history_rows(dims):
+    """int64 [(K - 1) * C / 32]: for each 32-channel row (carry row j, channel chunk ch) of the convolution carry
+    [K - 1, C] viewed as [(K - 1) * C / 32, 32], the row of the packed history viewed as [Nv * 4 * 32, 32] that holds it
+    (pack_history_rows read backwards). A q or k chunk of key head hk is read from value head hk * (Nv / Nk), the
+    first head that holds it."""
+    rf = dims.nv // dims.nk
+    qn, vn = dims.dk // 32, dims.dv // 32
+    kd32 = dims.nk * dims.dk // 32
+    out = torch.zeros(dims.kconv - 1, dims.conv_dim // 32, dtype=torch.int64)
+    for ch in range(dims.conv_dim // 32):
+        if ch < kd32:
+            h, c = (ch // qn) * rf, ch % qn
+        elif ch < 2 * kd32:
+            h, c = ((ch - kd32) // qn) * rf, qn + (ch - kd32) % qn
+        else:
+            h, c = (ch - 2 * kd32) // vn, 2 * qn + (ch - 2 * kd32) % vn
+        for j in range(dims.kconv - 1):
+            out[j, ch] = (h * HIST_SLOTS + j + 1) * 32 + 2 * c
+    return out.reshape(-1)
+
+
 def pack_conv_taps(taps, dims):
     """[Nv, 4, 32, 32] gdn_decode_step taps from 4 per-device tap rows [C] (tap 0 = oldest): tile (h, j) holds tap j
     of the head's [q_hk | k_hk | v_h] channels, chunk c in tile rows 2c and 2c + 1."""
@@ -394,9 +415,10 @@ def qwen36_kv_cache_spec(
 
     One FullAttentionSpec per attention layer, with the smallest block size whose K and V block holds one GDN state
     (choose_block_size), and one MambaSpec per GDN layer, padded to the attention page so that vLLM keeps the
-    attention block size. ``mamba_block_size``: tokens per state block (max_model_len in mamba_cache_mode "none", so a
-    request keeps one state block per group). Raises ValueError for a TP degree or a geometry gdn_decode_step does not
-    serve."""
+    attention block size. ``mamba_block_size``: tokens per state block in mamba_cache_mode "none" (max_model_len, so a
+    request keeps one state block per group). In mode "align" the state blocks have the attention block size, and the
+    MambaSpec asks for prefill checkpoints on block boundaries, where Qwen36ForCausalLM splits a prefill. Raises
+    ValueError for a TP degree or a geometry gdn_decode_step does not serve."""
     from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
     from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
 
@@ -434,15 +456,19 @@ def qwen36_kv_cache_spec(
     )
     assert attn.page_size_bytes == 2 * layout.tiles * layout.kv_tile_bytes
     shapes, dtypes = gdn_state_shapes(dims)
-    gdn = MambaSpec(
+    if mamba_cache_mode == "align":
+        mamba_kw = dict(block_size=block_size, num_prefill_checkpoint_blocks=1, prefill_checkpoint_alignment=block_size)
+    else:
         # A multiple of the attention block keeps vLLM's scheduler block size (the LCM of the group block sizes) at
-        # this value.
-        block_size=-(-int(mamba_block_size) // block_size) * block_size,
+        # the attention block size.
+        mamba_kw = dict(block_size=-(-int(mamba_block_size) // block_size) * block_size)
+    gdn = MambaSpec(
         shapes=shapes,
         dtypes=dtypes,
         page_size_padded=attn.page_size_bytes,
         mamba_type=MambaAttentionBackendEnum.GDN_ATTN,
         mamba_cache_mode=mamba_cache_mode,
+        **mamba_kw,
     )
     attn_names, gdn_names = qwen36_layer_names(text_config)
     specs = {name: attn for name in attn_names}

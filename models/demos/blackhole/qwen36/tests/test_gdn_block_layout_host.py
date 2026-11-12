@@ -23,6 +23,7 @@ from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
     pack_conv_taps,
     pack_history_rows,
     plan_gdn_block_layout,
+    unpack_history_rows,
 )
 
 QWEN_27B = {
@@ -222,6 +223,41 @@ def test_history_and_tap_packing(tp):
     assert torch.equal(pack_conv_taps(taps, dims), _pack_reference(taps, dims))
 
 
+@pytest.mark.parametrize("tc, tp", [(QWEN_27B, 4), (QWEN_27B, 8), (QWEN_35B, 4)], ids=["27b-tp4", "27b-tp8", "35b-tp4"])
+def test_history_unpack_reads_back_the_packed_carry(tc, tp):
+    """A prefill that resumes from a block rebuilds its convolution carry from the packed history: unpacking the
+    packed rows gives the carry back, also when the slot and rows the operator never reads hold other values."""
+    dims = GdnDims.from_text_config(tc, tp)
+    gen = torch.Generator().manual_seed(tp)
+    carry = torch.randn(dims.kconv - 1, dims.conv_dim, generator=gen)
+    packed = carry.reshape(-1, 32)[pack_history_rows(dims)].reshape(dims.nv, HIST_SLOTS, 32, 32)
+    used = 2 * (2 * dims.dk + dims.dv) // 32
+    packed[:, 0] = torch.randn(dims.nv, 32, 32, generator=gen)
+    packed[:, :, used:] = torch.randn(dims.nv, HIST_SLOTS, 32 - used, 32, generator=gen)
+    rows = packed.reshape(-1, 32)[unpack_history_rows(dims)]
+    assert torch.equal(rows.reshape(dims.kconv - 1, dims.conv_dim), carry)
+
+
+@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
+def test_float32_pages_start_at_one_offset_except_bf8_tp8(tc, tp, bf8, block):
+    """The first whole float32 page of a block starts at the block's first byte in every layout except bfloat8_b
+    1024-token blocks at TP=8, where a block holds 8.5 float32 pages per bank: even blocks start on a page, odd blocks
+    half a page later. A copy between two blocks must therefore address each block's own first page."""
+    _, lay = _layout(tc, tp, bf8)
+    leads = [lay.first_fp32_page(b) * FP32_PAGE_BYTES // lay.banks - b * lay.bank_bytes for b in range(8)]
+    assert leads == ([0, 2048] * 4 if (tp, bf8) == (8, True) else [0] * 8)
+
+
+@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
+def test_block_views_start_on_bank_0(tc, tp, bf8, block):
+    """GdnBlockState reads and copies a block through ttnn.narrow, which needs the first page of the narrowed range on
+    bank 0: the first state page of every block and the first page of its packed history."""
+    _, lay = _layout(tc, tp, bf8)
+    for b in range(lay.banks + 3):
+        assert lay.first_fp32_page(b) % lay.banks == 0
+        assert lay.hist_page(b, 0) % lay.banks == 0
+
+
 def _devices(n):
     return ",".join(str(i) for i in range(n))
 
@@ -348,3 +384,20 @@ def test_vllm_groups_share_layer_slots(vllm_kv, tc, tp, bf8, block):
     dims = GdnDims.from_text_config(tc, tp)
     stand_in = PluginLayout([i % 4 == 3 for i in range(64)], 1, 256, dims, bf8, num_blocks=8)
     assert [tuple(g.layer_names) for g in gdn_groups] == stand_in.group_names
+
+
+@pytest.mark.parametrize("tc, tp, bf8, block", SUPPORTED, ids=IDS)
+def test_align_specs(vllm_kv, tc, tp, bf8, block):
+    """Mode "align": the state blocks have the attention block size (the plugin requires it), the MambaSpec asks for
+    one prefill checkpoint block on block boundaries, and vLLM's grouping keeps one page size."""
+    from models.demos.blackhole.qwen36.tt.kv_cache_spec import qwen36_kv_cache_spec
+
+    kv_iface, kv_utils = vllm_kv
+    specs = qwen36_kv_cache_spec(tc, tp, kv_bf8=bf8, mamba_block_size=None, mamba_cache_mode="align")
+    gdn = [s for s in specs.values() if isinstance(s, kv_iface.MambaSpec)]
+    attn = [s for s in specs.values() if isinstance(s, kv_iface.FullAttentionSpec)]
+    assert {s.block_size for s in attn} == {s.block_size for s in gdn} == {block}
+    g = gdn[0]
+    assert (g.mamba_cache_mode, g.num_prefill_checkpoint_blocks, g.prefill_checkpoint_alignment) == ("align", 1, block)
+    groups = kv_utils._get_kv_cache_groups_uniform_page_size(specs)
+    assert len({grp.kv_cache_spec.page_size_bytes for grp in groups}) == 1
