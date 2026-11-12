@@ -23,6 +23,15 @@ default 0.96), and a text user's ids generated before and after the tower call c
 default 1). Gate = the HF greedy reference ids (GLM53_MK_IMAGE_EXPECT, else the file's expect_ids): first token and
 every id, the stack's top-5 per step (teacher-forced on the reference) logged when they differ. GLM53_MK_ISL = the
 prompt's length.
+
+Speculative A/B (Stage 17 M0, GLM53_SPEC_K=K with GLM53_MK_LIVE=1 and greedy): after the plain run the same prompt
+decodes through the backend's MTP speculative step on the same build (Glm53Generator.generate_batch(spec_k=K)); the
+ids must equal the plain ids up to the first near-tie (a mismatch fails only where the plain top-2 logit gap at that
+position is >= GLM53_MK_SPEC_TIE, default 1.0); MK_SPEC logs tau (committed tokens per spec step), the spec step, the
+effective tok/s/u and the plain step. On the 8x4 shard (B 4):
+
+    GLM53_MESH_SHAPE=8,4 GLM53_MK_B=4 GLM53_MK_LIVE=1 GLM53_SPEC_K=3 GLM53_SPEC_ON_SHARD=1 GLM53_MK_ISL=128 \
+        GLM53_MK_OSL=128 pytest .../test_mk_e2e.py -s
 """
 
 from __future__ import annotations
@@ -293,6 +302,64 @@ def image_topk_report(gen, mm_in: dict, k: int = 5) -> list:
     return out
 
 
+def _last_logits(gen, ids: list[int]):
+    """the plain model's logits of the last position of `ids` ([V] fp32): the generator-owned slot 0 through the
+    backend's per-chunk prefill (the TP prefill's head on the last row) -- the top-2 gap at a spec / plain mismatch"""
+    import torch
+
+    from models.autoports.zai_org_glm_5_3_flash.tt.generator import SlotState
+
+    b = gen._own_binding()
+    gen._ensure_identity_rows(b, [0], {0: len(ids)})
+    b.slots[0] = SlotState(active=True)
+    try:
+        return gen._prefill_user(b, 0, torch.as_tensor(list(ids), dtype=torch.int64)).reshape(-1).float()
+    finally:
+        b.slots[0].active = False
+        b.slots[0].finished = True
+
+
+def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_ms, K, stop) -> None:
+    """Stage 17 M0: the same prompt through the speculative step (generate_batch(spec_k=K)) after the plain greedy run
+    on the same build; MK_SPEC line + the gate (ids == plain up to the first near-tie)"""
+    souts = gen.generate_batch([list(prompt)], OSL, stop_on_eos=stop, enable_trace=True, spec_k=K)
+    ttnn.synchronize_device(mesh_device)
+    st = gen.last_batch_timing
+    sids = souts[0]
+    steps, committed = int(st["spec_steps"]), int(st["spec_committed"])
+    tau = committed / max(1, steps)
+    spec_ms = st["decode_s"] / max(1, steps) * 1e3
+    eff = st["decode_steps"] / st["decode_s"] if st["decode_s"] > 0 else 0.0
+    n = min(len(plain), len(sids))
+    first = next((j for j in range(n) if plain[j] != sids[j]), None)
+    if first is None and len(plain) != len(sids):
+        first = n
+    gap = None
+    if first is not None:  # the plain model's top-2 gap at the first mismatch (its context: prompt + plain[:first])
+        lg = _last_logits(gen, list(prompt) + list(plain[:first]))
+        top = lg[: tok.vocab_size].topk(2)
+        gap = float(top.values[0] - top.values[1])
+        logger.info(f"MK_SPEC first mismatch at {first}: plain {plain[first: first + 4]} spec {sids[first: first + 4]} "
+                    f"plain top-2 {top.indices.tolist()} gap {gap:.3f}")  # fmt: skip
+    text = tok.decode([t for t in sids if 0 <= t < tok.vocab_size])
+    logger.info(
+        f"MK_SPEC: K {K} tau {tau:.2f} (committed {committed} / {steps} steps, accepts n=0..K {st['spec_accepts']}), "
+        f"spec step {spec_ms:.1f} ms, effective {eff:.1f} tok/s/u (decode {st['decode_steps']} tokens in "
+        f"{st['decode_s'] * 1e3:.0f} ms), plain {plain_ms:.1f} ms/step = {1e3 / plain_ms:.1f} tok/s/u, speedup "
+        f"{eff * plain_ms / 1e3:.2f}x; TTFT spec {st['prefill_s'] * 1e3:.0f} ms vs plain {plain_timing['prefill_s'] * 1e3:.0f} ms "
+        f"(MTP prefill rows {st.get('spec_mtp_prefill_rows')} of {len(prompt) - 1}); ids equal "
+        f"{first is None} (first mismatch {first}, plain top-2 gap {gap}); spec ids {sids[:24]}"
+    )
+    logger.info(f"MK_SPEC_TEXT: {text!r}")
+    logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
+    tie = float(os.environ.get("GLM53_MK_SPEC_TIE", "1.0"))
+    assert steps > 0, "the speculative path ran no step"
+    assert first is None or gap < tie, (
+        f"spec ids differ from plain at {first} where the plain top-2 gap is {gap:.3f} >= {tie}: {sids[:first + 4]} vs "
+        f"{plain[:first + 4]}"
+    )
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -429,6 +496,12 @@ def test_mk_e2e(mesh_device, monkeypatch):
     floor = float(os.environ.get("GLM53_MK_MIN_TOKS", "0") or 0)
     if floor:
         assert 1e3 / step_ms >= floor, f"decode {1e3 / step_ms:.1f} tok/s/u < the floor {floor}"
+    spec_k = int(os.environ.get("GLM53_SPEC_K", "0") or 0)
+    if spec_k > 0 and getattr(backend, "spec", None) is not None and backend.spec.drafter == "mtp":
+        if live == 1 and sampling is None:
+            _spec_ab(gen, backend, mesh_device, tok, prompts[0], outs[0], timing, step_ms, spec_k, stop)
+        else:
+            logger.info(f"MK_SPEC: skipped (one greedy user: GLM53_MK_LIVE=1, no GLM53_MK_TEMP; live {live})")
     if isinstance(source, TileCache) and not source.ready:
         source.complete()  # the e2e passed on the tiles it dumped: READ mode from the next run
     if isinstance(source, MkTileCacheSource) and source._added:

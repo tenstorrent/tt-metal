@@ -635,6 +635,54 @@ def _mock_dram_point(backend, label: str):
     return mock_dram.point(backend.mesh, label)
 
 
+# ------------------------------------------------------------------------------------------------ Stage 17 (pure)
+# the speculative step's row counts and the MTP-cache prefill's rows: tt/spec_mtp.py SpecMTP and tt/stack_model.py
+# StackBackend use these; here (no ttnn) so the host tests check them
+def spec_widths(K: int, chunk: int, widths=()) -> dict:
+    """the speculative step's row counts on a backend with decode chunk `chunk` and extra decode widths `widths` (its
+    narrow + native widths) -- pure, so StackBackend sizes the sparse_dsa layers' fabric row counts before SpecMTP exists:
+      w      K + 1, the draft block (verify rows 0..K, the MTP catch-up rows 0..K)
+      lone   the lone speculating user's plain decode width: the smallest decode width >= w, else the chunk
+      wv     the verify's program width (GLM53_SPEC_VERIFY_W: "" = w; "plain" = lone; a number must equal lone)
+      cu/ch  the MTP catch-up / chain rows' launch width (GLM53_SPEC_MTP_W: "k1" = w / 1, the TP8 design; "verify" = wv /
+             wv: every MTP launch on the verify width's programs, pool set and fabric phases -- no narrow L1 set, no
+             extra row counts; rows past the block inactive (positions -1); needs wv <= 4, the stacked residual)
+      ts     the row counts the sparse_dsa layers' fabric phases must serve for the spec step ({cu, ch} + wv <= 4)
+    Defaults with GLM53_SPEC_ON_SHARD=1 (the 8x4 shard, M0): "plain" and "verify" -- on a B = 4 build every spec launch
+    then runs at t = 4 (the plain chunk) and takes no L1 beyond the plain step's; elsewhere "" and "k1" (unchanged)."""
+    w = int(K) + 1
+    shard = os.environ.get("GLM53_SPEC_ON_SHARD", "0") == "1"
+    lone = min((int(x) for x in widths if int(x) >= w), default=int(chunk))
+    vw = os.environ.get("GLM53_SPEC_VERIFY_W")
+    vw = ("plain" if shard else "") if vw is None else vw
+    if vw == "plain":
+        wv = lone
+    elif vw in ("", "0"):
+        wv = w
+    else:
+        wv = int(vw)
+        assert wv == lone, ("GLM53_SPEC_VERIFY_W must equal the lone speculative plain width (the smallest decode "
+                            "width >= K+1)", wv, lone)  # fmt: skip
+    mode = os.environ.get("GLM53_SPEC_MTP_W") or ("verify" if shard and wv <= 4 else "k1")
+    assert mode in ("k1", "verify"), ("GLM53_SPEC_MTP_W: k1 | verify", mode)
+    if mode == "verify":
+        assert wv <= 4, ("GLM53_SPEC_MTP_W=verify: the MTP rows on the stacked residual (verify width <= 4)", wv)
+        cu = ch = wv
+    else:
+        cu, ch = w, 1
+    ts = tuple(sorted({cu, ch} | ({wv} if wv <= 4 else set())))
+    return dict(w=w, lone=lone, wv=wv, cu=cu, ch=ch, mode=mode, ts=ts)
+
+
+def mtp_prefill_span(chunk_start: int, n_valid: int, prompt_len: int) -> tuple:
+    """the MTP-cache rows a prefill chunk fills (pure): MTP position p takes (the prompt token at p + 1, the main
+    model's final-norm hidden of position p) -- vLLM MTP semantics, as the catch-up's row j (token a_j, h row j) at
+    position c + j -- so a chunk [s, s + n) of an L-token prompt fills positions [s, min(s + n, L - 1)); position L - 1
+    (the first generated token's) is the bootstrap's catch-up row 0. -> (first position, count), count 0: none"""
+    lo, hi = int(chunk_start), min(int(chunk_start) + int(n_valid), int(prompt_len) - 1)
+    return lo, max(0, hi - lo)
+
+
 GLM53_DECODE_LOOKAHEAD = os.environ.get("GLM53_DECODE_LOOKAHEAD", "1") == "1"  # generate_batch: step i + 1 enqueued
 # before step i's tokens are collected (backends with read_async / collect)
 
@@ -2442,6 +2490,7 @@ class Glm53Generator(_ReadinessGenerator):
         slots: Optional[Sequence[int]] = None,
         page_table: Optional[torch.Tensor] = None,
         mm: Optional[Sequence[Optional[tuple]]] = None,
+        spec_k: Optional[int] = None,
     ) -> List[List[int]]:
         """Mixed-length batch generation over fixed slots of the generator-owned cache. Each prompt is prefilled into
         its slot (any length), then all live slots decode together; a user that hits a stop token or its
@@ -2450,7 +2499,13 @@ class Glm53Generator(_ReadinessGenerator):
         [max_batch, blocks] gives the listed slots these block rows (rewritten in place under the live trace);
         without it each slot gets its own identity blocks back. `mm[i]` = (positions [m], rows [m, hidden] bf16):
         prompt i's image feature rows (positions inside the prompt; _prefill_user); such a prompt is prefilled on the
-        per-user path, never in a batched / packed admission."""
+        per-user path, never in a batched / packed admission.
+        `spec_k` (Stage 17 M0, opt-in; None / 0 = plain): ONE greedy prompt in slot 0 decodes through the backend's
+        speculative step with K = spec_k drafts (= the backend's GLM53_SPEC_K) -- the prefill also fills the MTP layer's
+        cache (backend arm_mtp_prefill), then spec_enter, spec_step until max_new_tokens / a stop token (a step commits
+        n + 1 tokens: the outputs are plain greedy's), spec_leave; where the context leaves no room for a step the rest
+        decodes plainly. last_batch_timing then also holds spec_steps / spec_committed (sum of n + 1) / spec_emitted /
+        spec_accepts (histogram of n) / spec_mtp_prefill_rows (_spec_decode)."""
         n = len(prompts)
         if n == 0:
             return []
@@ -2483,6 +2538,9 @@ class Glm53Generator(_ReadinessGenerator):
                 raise ValueError("max_new_tokens must be >= 1")
             self.check_context(len(p), mnt[i])
         used = {s: len(prompts[i]) + mnt[i] - 1 for i, s in enumerate(slots)}  # positions the request writes
+        if spec_k:  # Stage 17: one greedy user in slot 0; its steps write up to 2 K + 1 rejected positions past the end
+            self._spec_check(b, int(spec_k), slots, params, next_input)
+            used = {s: min(u + 2 * int(spec_k) + 1, b.max_seq_len) for s, u in used.items()}
         if page_table is not None:
             pt = torch.as_tensor(page_table)
             self._write_page_rows(b, {s: pt[s] for s in slots}, used)
@@ -2491,6 +2549,10 @@ class Glm53Generator(_ReadinessGenerator):
         outputs: list[list[int]] = [[] for _ in range(n)]
         user_of = {s: i for i, s in enumerate(slots)}
         feed: dict[int, int] = {}  # slot -> token fed at the next decode step (the prediction or a forced one)
+        spec_rows = None  # Stage 17: the MTP-cache prefill armed for slot 0's prompt (backend arm_mtp_prefill)
+        if spec_k and callable(getattr(self.backend, "arm_mtp_prefill", None)):
+            spec_rows = 0 if self.backend.arm_mtp_prefill(slots[0], torch.as_tensor(list(prompts[0]))) else None
+        spec_stats = None
         try:
             # ---- prefill every user into its slot; first prediction p0 from the last prompt position (Stage 16:
             # groups of fresh users admitted by one batched-prefill replay when the backend captured one)
@@ -2514,6 +2576,11 @@ class Glm53Generator(_ReadinessGenerator):
                     p0 = self._prefill_user(b, s, ids, sample=params[i], mm=mm[i])
                 self._emit(b, s, outputs[i], p0, next_input, user_of, feed)
             t_first = _time.perf_counter()
+            if spec_k:  # Stage 17 M0: the speculative steps first; the plain loop below decodes whatever they leave
+                if spec_rows is not None:
+                    spec_rows = self.backend.disarm_mtp_prefill()
+                spec_stats = self._spec_decode(b, slots[0], outputs[0], int(spec_k), user_of, feed)
+                spec_stats["spec_mtp_prefill_rows"] = spec_rows
             # ---- decode loop: replay decode + sampler; refresh only scheduler changes and forced tokens.
             # Look-ahead (device sampling, no teacher forcing): step i + 1 is enqueued BEFORE step i's tokens are
             # collected, so the device never waits for the host read-back / loop between steps (every row keeps
@@ -2577,11 +2644,68 @@ class Glm53Generator(_ReadinessGenerator):
                 collect(settled=True)  # the last step ahead (its rows stopped meanwhile: nothing emitted)
             self.last_batch_timing = {"prefill_s": t_first - t_start, "decode_s": _time.perf_counter() - t_first,
                                       "decode_steps": max(len(o) for o in outputs) - 1}  # fmt: skip
+            if spec_stats is not None:
+                self.last_batch_timing.update(spec_stats)
         finally:
+            if spec_k:  # (an exception before / inside the speculative steps: the arming and the speculation end here)
+                if callable(getattr(self.backend, "disarm_mtp_prefill", None)):
+                    self.backend.disarm_mtp_prefill()
+                if getattr(b, "spec", None) is not None:
+                    self.spec_abort(b.kv_cache)
             for s in slots:
                 b.slots[s].active = False
                 b.slots[s].finished = True
         return outputs
+
+    def _spec_check(self, b, K: int, slots: Sequence[int], params: Sequence[SamplingParams], next_input) -> None:
+        """generate_batch(spec_k=K)'s preconditions (the backend's speculative step serves ONE greedy user in slot 0)"""
+        why = []
+        if self.spec_k() != K:
+            why.append(f"the backend's speculative step with K = {K} (GLM53_SPEC_K; the backend has {self.spec_k()})")
+        if list(slots) != [0]:
+            why.append(f"one prompt in slot 0 (slots {list(slots)})")
+        if not all(p.is_greedy for p in params):
+            why.append("greedy sampling (the verify accepts on the top-1)")
+        if next_input is not None:
+            why.append("no teacher forcing")
+        if self.host_sampling:
+            why.append("device sampling")
+        if any(b.slots[s].active and not b.slots[s].finished for s in range(b.max_batch) if s not in slots):
+            why.append("no other live slot")
+        if why:
+            raise ValueError("generate_batch(spec_k=...) needs " + "; ".join(why))
+
+    def _spec_decode(self, b, slot: int, out: list, K: int, user_of: dict, feed: dict) -> dict:
+        """Stage 17 M0: the speculative steps of the lone user in `slot` (0) right after its prefill: spec_enter (the
+        bootstrap drafts d1..dK), then spec_step while the request runs and the context has room -- each step emits the
+        committed a_0..a_n (n accepted drafts + the bonus) until max_new_tokens / a stop token -- then spec_leave (plain
+        decode inputs restored: the slot's next input = the last committed token, in device row 0). Returns the stats:
+        spec_steps, spec_committed (sum of n + 1 over the steps: tau = committed / steps), spec_emitted (tokens emitted
+        by the steps), spec_accepts (histogram of n, K + 1 bins), spec_enters."""
+        kv, st = b.kv_cache, b.slots[slot]
+        stats = dict(spec_steps=0, spec_committed=0, spec_emitted=0, spec_accepts=[0] * (K + 1), spec_enters=0)
+        if st.finished or not self.spec_room(kv):
+            return stats
+        self._sync_tokens(b, {slot: feed[slot]})  # the next input (the prefill's sample) in device row 0
+        self.spec_enter(kv, slot)
+        stats["spec_enters"] += 1
+        try:
+            while not st.finished and self.spec_room(kv):
+                rec = self.spec_step(kv)
+                n = int(rec["n"])
+                stats["spec_steps"] += 1
+                stats["spec_committed"] += n + 1
+                stats["spec_accepts"][n] += 1
+                for tok in rec["a"][: n + 1]:  # a_0..a_n = plain greedy's next n + 1 tokens
+                    self._emit(b, slot, out, int(tok), None, user_of, feed)
+                    stats["spec_emitted"] += 1
+                    if st.finished:
+                        break
+        except BaseException:
+            self.spec_abort(kv)  # (the speculation's state is dead; the request ends with the exception)
+            raise
+        self.spec_leave(kv)
+        return stats
 
     def _emit(self, b, slot, out, token, next_input, user_of, feed):
         """Record one prediction of `slot`; decide the token fed next (teacher forcing may override it)."""

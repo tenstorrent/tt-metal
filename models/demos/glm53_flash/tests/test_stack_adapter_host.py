@@ -49,6 +49,8 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     Glm53Generator,
     ModelBackend,
     PendingTokens,
+    mtp_prefill_span,
+    spec_widths,
 )
 from models.autoports.zai_org_glm_5_3_flash.tt.owner_blocks import OwnerBlockMap
 from models.autoports.zai_org_glm_5_3_flash.tt.sampling import SamplingParams
@@ -1721,4 +1723,224 @@ def test_mm_encoder_selection():
         gvs.make_mm_encoder(Path("/nonexistent"), env={"GLM53_STACK_MM_ENCODER": "device"})
     with expect_error(ValueError, "device \\| hf_cpu \\| none"):
         gvs.make_mm_encoder(Path("/nonexistent"), env={"GLM53_STACK_MM_ENCODER": "gpu"}, backend=backend)
+    assert "ttnn" not in sys.modules
+
+
+# ------------------------------------------------------------------------------------------ Stage 17 M0: the spec loop
+# Glm53Generator.generate_batch(spec_k=K) over a CPU stand-in of the backend's speculative step (tt/spec_mtp.py SpecMTP's
+# host contract: set_page_table / enter / step / read / leave + StackBackend.arm_mtp_prefill / disarm_mtp_prefill).
+class _MockSpec:
+    """The speculative step of the lone user in slot 0 on the mock: the bootstrap drafts K tokens after the next input;
+    a step "verifies" [bonus, d1..dK] with the mock model (a_j = (row j + 1) % V, kernels/spec/spec_ctl.cpp ACCEPT: n =
+    the longest prefix with a_(j-1) == d_j), the slot's state ledger takes the committed rows b, d1..dn, the bonus a_n
+    goes to token row 0 and the next K drafts follow -- right for the first good(step) of them, then wrong."""
+
+    def __init__(self, be, K: int, good):
+        self.be, self.K, self.good = be, K, good
+        self.pos_cap, self.mtp, self.mw_cu = None, object(), K + 1
+        self.counters = dict(enters=0, steps=0, leaves=0)
+        self.rows, self._rec, self._drafts = None, None, []
+
+    def _make_drafts(self, bonus: int, step: int) -> list:
+        out, t = [], int(bonus)
+        for i in range(self.K):
+            t = (t + 1) % VOCAB
+            out.append(t if i < self.good(step) else (t + 5) % VOCAB)
+        return out
+
+    def set_page_table(self, row):
+        self.rows = torch.as_tensor(row).clone()
+
+    def enter(self, row):
+        io = self.be.io
+        b, c = int(io.tokens.t[0]), int(io.cur_pos.t[0]) - 1  # BOOT: c = the plain position - 1
+        self._drafts = self._make_drafts(b, 0)
+        self._rec = dict(n=0, c=c, a=[b] * (self.K + 1), committed=[b], drafts=list(self._drafts), steps=0)
+        self.counters["enters"] += 1
+
+    def step(self, blocking: bool = False):
+        io, st = self.be.io, self.be.kv.state[0]
+        c = self._rec["c"] + self._rec["n"] + 1  # pos_v row 0
+        rows = [int(io.tokens.t[0])] + self._drafts
+        assert len(st) == c, f"verify at {c}: the slot's state holds {len(st)} tokens"
+        a = [(r + 1) % VOCAB for r in rows]
+        n = 0
+        for j in range(1, self.K + 1):
+            if a[j - 1] != rows[j]:
+                break
+            n = j
+        st.extend(rows[: n + 1])
+        io.tokens.t[0] = a[n]
+        self.counters["steps"] += 1
+        self._drafts = self._make_drafts(a[n], self.counters["steps"])
+        self._rec = dict(n=n, c=c, a=a, committed=a[: n + 1], drafts=list(self._drafts), steps=self.counters["steps"])
+
+    def read(self) -> dict:
+        return dict(self._rec)
+
+    def leave(self) -> dict:
+        rec = self.read()
+        pos = self.be.io.cur_pos.t.clone()
+        pos[0] = rec["c"] + rec["n"] + 1
+        self.be.io.cur_pos.t = pos
+        self.counters["leaves"] += 1
+        return rec
+
+
+class _MockSpecBackend(_MockStackBackend):
+    """the mock + a speculative step (K drafts, `good(step)` of them right) + the MTP-cache prefill bookkeeping"""
+
+    def __init__(self, max_batch: int, K: int, good=lambda step: 0):
+        super().__init__(max_batch)
+        self.K, self.good = K, good
+        self.spec, self.armed, self.mtp_spans = None, None, []
+
+    def allocate_kv_cache(self, *, max_batch, max_seq_len, num_blocks=None):
+        self.kv = super().allocate_kv_cache(max_batch=max_batch, max_seq_len=max_seq_len, num_blocks=num_blocks)
+        return self.kv
+
+    def allocate_decode_io(self, kv):
+        self.io = super().allocate_decode_io(kv)
+        self.spec = _MockSpec(self, self.K, self.good)  # (StackBackend: SpecMTP built with the decode IO)
+        return self.io
+
+    def set_page_table_host(self, kv, page_table):
+        super().set_page_table_host(kv, page_table)
+        if getattr(self, "io", None) is not None:  # (the generator-owned cache: StackBackend writes the device table)
+            self.io.page_table.t = torch.as_tensor(page_table).clone()
+
+    def arm_mtp_prefill(self, slot, prompt) -> bool:
+        self.armed = dict(slot=int(slot), ids=torch.as_tensor(prompt).reshape(-1).clone(), rows=0)
+        return True
+
+    def disarm_mtp_prefill(self) -> int:
+        a, self.armed = self.armed, None
+        return int(a["rows"]) if a else 0
+
+    def prefill_chunk(self, tokens, *, kv_cache, slot, chunk_start, n_valid, logits_rows, sample=None, io=None, **sio):
+        out = super().prefill_chunk(tokens, kv_cache=kv_cache, slot=slot, chunk_start=chunk_start, n_valid=n_valid,
+                                    logits_rows=logits_rows, sample=sample, io=io, **sio)  # fmt: skip
+        a = self.armed
+        if a is not None and a["slot"] == slot:  # (StackBackend._mtp_prefill_chunk)
+            p0, n = mtp_prefill_span(chunk_start, n_valid, int(a["ids"].numel()))
+            if n:
+                self.mtp_spans.append((p0, n, a["ids"][p0 + 1 : p0 + 1 + n].tolist()))
+                a["rows"] += n
+        return out
+
+
+def _spec_gen(K: int, good=lambda step: 0, seq: int = SEQ):
+    backend = _MockSpecBackend(B, K, good)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=seq)
+    return backend, gen
+
+
+def test_spec_widths_rules(monkeypatch):
+    """generator.spec_widths: the 8x4 shard defaults (GLM53_SPEC_ON_SHARD=1) run every spec launch at the B = 4 chunk
+    (verify width = the lone plain width, MTP rows at it: the sparse_dsa layers need no extra fabric row count);
+    elsewhere the TP8 design (verify at K + 1, catch-up K + 1, chain 1) is unchanged"""
+    for k in ("GLM53_SPEC_ON_SHARD", "GLM53_SPEC_VERIFY_W", "GLM53_SPEC_MTP_W"):
+        monkeypatch.delenv(k, raising=False)
+    assert spec_widths(1, 4) == dict(w=2, lone=4, wv=2, cu=2, ch=1, mode="k1", ts=(1, 2))
+    assert spec_widths(3, 4) == dict(w=4, lone=4, wv=4, cu=4, ch=1, mode="k1", ts=(1, 4))
+    monkeypatch.setenv("GLM53_SPEC_ON_SHARD", "1")
+    for K in (1, 2, 3):
+        assert spec_widths(K, 4) == dict(w=K + 1, lone=4, wv=4, cu=4, ch=4, mode="verify", ts=(4,)), K
+    # a native B = 8 backend's lone width 8 > 4: the MTP rows stay on the TP8 design (stacked residual only <= 4)
+    assert spec_widths(1, 8, (8,)) == dict(w=2, lone=8, wv=8, cu=2, ch=1, mode="k1", ts=(1, 2))
+    monkeypatch.setenv("GLM53_SPEC_VERIFY_W", "")
+    assert spec_widths(1, 4)["wv"] == 2 and spec_widths(1, 4)["ts"] == (2,)
+    monkeypatch.setenv("GLM53_SPEC_MTP_W", "k1")
+    assert spec_widths(1, 4)["ts"] == (1, 2)
+    monkeypatch.setenv("GLM53_SPEC_VERIFY_W", "3")
+    with expect_error(AssertionError, "must equal the lone speculative plain width"):
+        spec_widths(1, 4)
+    monkeypatch.setenv("GLM53_SPEC_VERIFY_W", "plain")
+    monkeypatch.setenv("GLM53_SPEC_MTP_W", "verify")
+    with expect_error(AssertionError, "verify width <= 4"):
+        spec_widths(1, 8, (8,))
+
+
+def test_mtp_prefill_span_covers_the_prompt():
+    """the MTP-cache rows of a chunked prompt: every position 0 .. L - 2 exactly once (L - 1 is the bootstrap's)"""
+    L, got = 300, []
+    for s in range(0, L, 128):
+        p0, n = mtp_prefill_span(s, min(128, L - s), L)
+        got += list(range(p0, p0 + n))
+    assert got == list(range(L - 1))
+    assert mtp_prefill_span(256, 44, 300) == (256, 43) and mtp_prefill_span(0, 1, 1) == (0, 0)
+
+
+@pytest.mark.parametrize("K", [1, 3])
+@pytest.mark.parametrize("pattern", ["none", "all", "alternate"])
+def test_spec_generate_equals_plain_greedy(K, pattern):
+    """generate_batch(spec_k=K): the same ids as plain greedy whatever the drafts' quality (none / all / every other
+    step right), the steps' bookkeeping (each commits n + 1, the slot's state ledger and the device positions agree --
+    the mock asserts both), tau = committed / steps, the MTP-cache prefill rows = L - 1 over both chunks"""
+    good = {"none": lambda s: 0, "all": lambda s: K, "alternate": lambda s: K if s % 2 else 1}[pattern]
+    prompt, osl = _prompt(200, 3), 40
+    _, plain_gen = _spec_gen(K)
+    plain = plain_gen.generate_batch([prompt], osl, enable_trace=True)[0]
+    backend, gen = _spec_gen(K, good)
+    out = gen.generate_batch([prompt], osl, enable_trace=True, spec_k=K)[0]
+    assert out == plain and len(out) == osl
+    t = gen.last_batch_timing
+    acc = t["spec_accepts"]
+    assert t["spec_steps"] == sum(acc) == backend.spec.counters["steps"] > 0
+    assert t["spec_committed"] == sum((n + 1) * c for n, c in enumerate(acc))
+    assert t["spec_emitted"] == osl - 1 and t["decode_steps"] == osl - 1  # (the prefill's token is not a step's)
+    assert t["spec_committed"] >= t["spec_emitted"]  # (the last step may commit past max_new_tokens)
+    if pattern == "none":
+        assert acc == [t["spec_steps"]] + [0] * K
+    if pattern == "all":
+        assert acc[K] >= t["spec_steps"] - 1 and t["spec_committed"] / t["spec_steps"] > K
+    assert backend.spec.counters["enters"] == backend.spec.counters["leaves"] == 1
+    assert t["spec_mtp_prefill_rows"] == len(prompt) - 1
+    assert [s[:2] for s in backend.mtp_spans] == [(0, 128), (128, 71)]
+    assert backend.mtp_spans[0][2] == prompt[1:129] and backend.mtp_spans[1][2] == prompt[129:200]
+    # the speculation left plain decode consistent: a plain request on the same generator decodes from scratch
+    assert gen.generate_batch([prompt], 8, enable_trace=True)[0] == plain[:8]
+
+
+def test_spec_stop_token_inside_a_committed_block():
+    """a stop token among a step's committed tokens ends the request there (the rest of the block is dropped), as in
+    plain decode"""
+    K, prompt = 3, _prompt(70, 10)  # (decode positions past block 0: the mock's null block)
+    stop = (prompt[-1] + 7) % VOCAB  # the 7th generated token
+    _, plain_gen = _spec_gen(K)
+    plain = plain_gen.generate_batch([prompt], 30, stop_token_ids=[stop])[0]
+    backend, gen = _spec_gen(K, lambda s: K)
+    out = gen.generate_batch([prompt], 30, stop_token_ids=[stop], spec_k=K)[0]
+    assert out == plain and out[-1] == stop and len(out) == 7
+    assert gen.last_batch_timing["spec_emitted"] == 6 < gen.last_batch_timing["spec_committed"]
+
+
+def test_spec_falls_back_to_plain_without_room():
+    """near the end of the context a step no longer fits (positions up to L + 2 K): the loop leaves and plain decode
+    finishes the request with the same ids"""
+    K, prompt, seq, osl = 3, _prompt(70, 5), 192, 120  # the request ends at position 189: steps stop past 185
+    _, plain_gen = _spec_gen(K, seq=seq)
+    plain = plain_gen.generate_batch([prompt], osl, enable_trace=True)[0]
+    backend, gen = _spec_gen(K, lambda s: 1, seq=seq)
+    out = gen.generate_batch([prompt], osl, enable_trace=True, spec_k=K)[0]
+    t = gen.last_batch_timing
+    assert out == plain and len(out) == osl
+    assert 0 < t["spec_emitted"] < osl - 1 and backend.decodes > 0  # the tail decoded plainly
+    assert backend.spec.counters["leaves"] == 1
+
+
+def test_spec_refusals():
+    """generate_batch(spec_k=...) serves one greedy prompt in slot 0 on a backend built with the same K"""
+    backend, gen = _spec_gen(3)
+    with expect_error(ValueError, "the backend's speculative step with K = 2"):
+        gen.generate_batch([_prompt(10, 1)], 4, spec_k=2)
+    with expect_error(ValueError, "one prompt in slot 0"):
+        gen.generate_batch([_prompt(10, 1), _prompt(10, 2)], 4, spec_k=3)
+    with expect_error(ValueError, "greedy sampling"):
+        gen.generate_batch([_prompt(10, 1)], 4, spec_k=3, sampling=[SamplingParams(temperature=1.0, seed=1)])
+    plain_gen = Glm53Generator(
+        _MockStackBackend(B), tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ
+    )  # (no GLM53_SPEC_K build: no speculative step)
+    with expect_error(ValueError, "the backend's speculative step with K = 3"):
+        plain_gen.generate_batch([_prompt(10, 1)], 4, spec_k=3)
     assert "ttnn" not in sys.modules

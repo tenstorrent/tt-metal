@@ -31,6 +31,7 @@ import torch
 
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_KDA
+from models.autoports.zai_org_glm_5_3_flash.tt.generator import mtp_prefill_span, spec_widths  # noqa: F401 (ttnn-free)
 from models.autoports.zai_org_glm_5_3_flash.tt.rt_guard import checked
 
 MTP_L = 45  # conventions.mtp_layer (weights/manifest.json)
@@ -209,15 +210,22 @@ class MtpLayer:
 
         self.mesh = mesh
         self.attn = TPD.build_mla_attn(mesh, cfg, source, MTP_L, ocfg)
-        self.mla = TPM.TPMla(mesh, mtp_mhc_args(source, cfg, "attn"), self.attn, kb=TPD.MLA_KB_SHARD,
+        # the K blocks of the main sparse_dsa layers (TPDsaLayer._build_mla): on the 32-chip replica (2 heads per chip)
+        # TP8's blocks give W_uv (K block 16) q_b's 16-tile bfp8 ring at W_uv's 280-KB budget instead of sharing W_uk's
+        # 8-tile one: +136 KB of reader CBs -- the 8x4 MTP rows' clash (mk137: the MTP MLA program's CB end 1291456 on
+        # its reader cores, 999,488 B of CBs vs the main layers' 886,656 there)
+        kb = TPD.MLA_KB_SHARD if int(mesh.get_num_devices()) <= 8 else TPD.MLA_KB_SHARD_WIDE
+        self.mla = TPM.TPMla(mesh, mtp_mhc_args(source, cfg, "attn"), self.attn, kb=kb,
                              rings=TPD.MLA_RINGS_SHARD, fabrics=share.mla.fabrics if share else None, ts=ts)  # fmt: skip
         for name in ("ds_qb", "ds_o"):  # (TPDsaLayer: the per-chip slices live in the head shard)
             ttnn.deallocate(getattr(self.attn, name).weight)
         for name in ("w_uk", "w_uv"):
             ttnn.deallocate(getattr(self.attn, name))
         moe = EPX.build_moe_ep(mesh, cfg, source, MTP_L, ocfg)
+        # (GLM53_MOE_SHARE_M, as TPDsaLayer: the main layers' shared-expert intermediate m, not an L1 buffer of its own)
+        shm = share.moe.mk.persist if share is not None and os.environ.get("GLM53_MOE_SHARE_M", "1") == "1" else None
         self.moe = TPD.TPMoE(mesh, mtp_mhc_args(source, cfg, "ffn"), moe, ts=ts,
-                             fabrics=share.moe.fabrics if share else None)  # fmt: skip
+                             fabrics=share.moe.fabrics if share else None, persist=shm)  # fmt: skip
 
 
 class MkEh:
@@ -261,7 +269,8 @@ class MkEh:
             self.out[t] = self.readers.outputs(t, DRAM)[0]
         return self.hcat[t], self.out[t]
 
-    def _owner_parts(self, *, src, mode: int, w, hcat, t: int, page0: int, table=None, sel=None, readers=None):
+    def _owner_parts(self, *, src, mode: int, w, hcat, t: int, page0: int, table=None, sel=None, readers=None,
+                     row0=None):  # fmt: skip
         from models.autoports.zai_org_glm_5_3_flash.tt.mk_head import f32_bits
 
         acc = lambda tt: list(ttnn.TensorAccessorArgs(tt).get_compile_time_args())  # noqa: E731
@@ -272,10 +281,12 @@ class MkEh:
             rt0[c.x][c.y] = [src.buffer_address(), w.buffer_address(), hcat.buffer_address(), 2 * k, t, page0,
                              table.buffer_address() if table is not None else 0,
                              sel.buffer_address() if sel is not None else 0, len(readers or [])] + flat_r  # fmt: skip
+            if row0 is not None:  # EH_ROW0: the row-offset page, after the readers' NoC pairs
+                rt0[c.x][c.y] = list(rt0[c.x][c.y]) + [row0.buffer_address()]
             rt1[c.x][c.y] = [t, k] + flat_o
         defs = [("HEAD_SEM", str(SEM_HEAD)), ("HEAD_HN_SEM", str(SEM_HN)), ("EH_IN", str(mode)),
                 ("SPEC_REV", str(SPEC_REV)), ("EH_VOCAB", str(int(table.shape[-2]) if table is not None else 1 << 30))
-                ] + ([("EH_SEL", "1")] if sel is not None else [])  # fmt: skip
+                ] + ([("EH_SEL", "1")] if sel is not None else []) + ([("EH_ROW0", "1")] if row0 is not None else [])  # fmt: skip
         dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)  # noqa: E731
         cc = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
                                           fp32_dest_acc_en=True)  # fmt: skip
@@ -300,6 +311,7 @@ class MkEh:
                cb(8, ttnn.uint32, 4096 + 512 + 64, 1)]  # fmt: skip
         sems = [ttnn.SemaphoreDescriptor(id=SEM_HEAD, core_ranges=self.ocores, initial_value=0)]
         io = [src, w, hcat] + ([table] if table is not None else []) + ([sel] if sel is not None else [])
+        io += [row0] if row0 is not None else []
         return kernels, cbs, sems, io
 
     def norm_e(self, tokens, table, *, t: int, sel=None):
@@ -309,13 +321,17 @@ class MkEh:
                                                    table=table, sel=sel)  # fmt: skip
         ttnn.generic_op(io, checked(ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)))
 
-    def norm_h_proj(self, src, *, mode: int, t: int, sel=None):
+    def norm_h_proj(self, src, *, mode: int, t: int, sel=None, row0=None):
         """program B: hcat[:, 4096:] = hnorm(h rows), then out = hcat @ eh_proj (the DS readers wait for the 64 owners)
-        -> out [1, 1, t, 4608] bf16 DRAM"""
+        -> out [1, 1, t, 4608] bf16 DRAM. row0 (mode 2, kernels/spec/eh_dm0.cpp EH_ROW0): a [1, 32] uint32 DRAM page
+        whose word 0 = r0 -> rows r0 .. r0 + t - 1 of a taller bf16 source (the TP prefill's final-norm tap), within one
+        tile row (the caller's rule); device-resident, so a captured launch serves every offset"""
+        assert row0 is None or mode == 2, (mode, row0)
         hcat, out = self.buffers(t)
         rd = self.readers
         kernels, cbs, sems, io = self._owner_parts(src=src, mode=mode, w=self.w_h, hcat=hcat, t=t,
-                                                   page0=HIDDEN // TILE, sel=sel, readers=rd.noc_coords())  # fmt: skip
+                                                   page0=HIDDEN // TILE, sel=sel, readers=rd.noc_coords(),
+                                                   row0=row0)  # fmt: skip
         # the DS readers read GLM53_MK_W_DELAY_US per call: unset here, else this program's key follows whichever layer
         # kind's knobs the previous program left in the env (the bootstrap right after a step's MTP layer would launch
         # a key no warm-up call compiled -> "not yet in program cache" inside the capture)
@@ -432,17 +448,12 @@ class SpecMTP:
         # MkMla runs MLA_DSA_ONE_SLOT on one index core, so equality with the plain decode is a measured property
         # (s3_identity rollback / DSA-state rows), not an identity of programs. GLM53_MKX_XSL_SEED (a per-kind knob:
         # GLM53_STACK_KNOB_SET "s:" / "a:" entries) makes a row's routed-expert sum independent of the co-rows' routing.
-        lone = min((w_ for w_ in tuple(be.narrow_widths) + tuple(be.native_widths) if w_ >= self.w), default=be.chunk)
-        self.plain_w = lone  # the speculative lone user's plain decode width (the lossless twin of its verify)
-        vw = os.environ.get("GLM53_SPEC_VERIFY_W", "")
-        if vw == "plain":
-            self.wv = lone
-        elif vw not in ("", "0"):
-            self.wv = int(vw)
-            assert self.wv == lone, ("GLM53_SPEC_VERIFY_W must equal the lone speculative plain width (the smallest decode "
-                                     "width >= K+1)", self.wv, lone)  # fmt: skip
-        else:
-            self.wv = self.w
+        # (spec_widths: the widths' rules and their GLM53_SPEC_ON_SHARD defaults)
+        sw = spec_widths(K, be.chunk, tuple(be.narrow_widths) + tuple(be.native_widths))
+        self.plain_w = sw["lone"]  # the speculative lone user's plain decode width (the lossless twin of its verify)
+        self.wv = sw["wv"]
+        # the MTP launches' widths: catch-up rows 0..K at cu (rows past K inactive), each chained row at ch (row 0 live)
+        self.mw_cu, self.mw_ch, self.mtp_mode = sw["cu"], sw["ch"], sw["mode"]
         assert self.w <= self.wv <= 8 and be.max_batch >= self.wv, ("verify width", self.wv, self.w, be.max_batch)
         self.flat = self.wv > 4  # t > 4: the flat residual [1, 1, t, 16384] and the native-width programs
         self.mesh = be.mesh
@@ -472,6 +483,10 @@ class SpecMTP:
         # global block ids (pt_m, C x nb_local blocks; v0 scope: the dense MTP cap -- design section 4 at long context)
         self.shard = kv.extra.get("dsa_shard")
         if self.shard is not None:
+            # the one-slot verify on the shard keeps the plain width's token lanes (mk_mla rev 62, the lane baton; only
+            # one-slot builds read it: the plain programs are unchanged) -- MkMla refuses the t <= 4 verify on the
+            # default 4 lanes (GLM53_MLA_DSA_LANES_T4) without it
+            os.environ.setdefault("GLM53_MLA_DSA_BATON", "1")
             self.pt_v = ttnn.from_torch(torch.zeros(self.shard[0] * 32, kv.extra["bps_local"], dtype=torch.int32),
                                         dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=DRAM,
                                         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0))  # fmt: skip
@@ -504,8 +519,12 @@ class SpecMTP:
                 mesh_mapper=_repl(mesh))  # fmt: skip
         else:
             self.R_v = stacked(wv)
-        self.R_m = stacked(w) if drafter == "mtp" else None
-        self.R_c = [stacked(1) for _ in range(K - 1)] if drafter == "mtp" else []
+        cu, ch = self.mw_cu, self.mw_ch
+        self.R_m = stacked(cu) if drafter == "mtp" else None
+        self.R_c = [stacked(ch) for _ in range(K - 1)] if drafter == "mtp" else []
+        # the MTP-cache prefill's token rows (prefill_mtp: row j = the prompt token after the launch's position j)
+        self.pf_tok = dram_rows(mesh, torch.zeros(32, 64)) if drafter == "mtp" else None
+        self.pf_row0 = dram_rows(mesh, torch.zeros(1, 32)) if drafter == "mtp" else None  # (MkEh EH_ROW0: word 0)
         # diagnosis only (GLM53_SPEC_DBG_IDS=1): every MTP row's routed experts copied out of the MoE program (catch-up
         # rows, then each chained row) -> host comparison with the CPU oracle's routing; off in every measured run
         self.dbg_ids = None
@@ -513,17 +532,17 @@ class SpecMTP:
             ids = lambda t: ttnn.from_torch(torch.zeros(1, 1, t, 8, dtype=torch.int32), dtype=ttnn.uint16,  # noqa
                                             layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=DRAM,
                                             mesh_mapper=_repl(mesh))  # fmt: skip
-            self.dbg_ids = [ids(w)] + [ids(1) for _ in range(K - 1)]
+            self.dbg_ids = [ids(cu)] + [ids(ch) for _ in range(K - 1)]
         dsa = [i for i, e in enumerate(be.seq) if e["sparse"] == "dsa"]
         share = be.seq[dsa[0]]["tp"] if dsa else None
         self.mtp = self.mtp_cache = self.eh = self.w_mtp = None
         if drafter == "mtp":
-            self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=tuple(sorted({1, w})), share=share)
+            self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=tuple(sorted({cu, ch})), share=share)
             l1_debug("after MtpLayer", self.mesh)
             self.mtp_cache = self.mtp.attn.allocate_cache(kv.num_blocks if self.shard is None
                                                           else self.shard[0] * self.shard[1])  # fmt: skip
             self.eh = MkEh(mesh, self.source, cfg, self.ocfg)
-            for t in sorted({1, w}):
+            for t in sorted({cu, ch}):
                 self.eh.buffers(t)
             self.w_mtp = norm_tile(mesh, self.source.host(MTP_L, "shared_head.norm.weight"))
         self.ctl = SpecCtl(mesh, K)
@@ -550,7 +569,8 @@ class SpecMTP:
             l1_debug("after dflash2 kind", self.mesh)
         self.heads = None  # clones made in prepare() (the base head's h exists after its first call)
         self.traces = {}
-        self.counters = dict(steps=0, boots=0, captures=0, enters=0, leaves=0, slot_copies=0)
+        self.counters = dict(steps=0, boots=0, captures=0, enters=0, leaves=0, slot_copies=0, prefill_rows=0,
+                             prefill_launches=0)  # fmt: skip
 
     # ------------------------------------------------------------------ construction
     def _build_verify_stacks(self):
@@ -648,7 +668,7 @@ class SpecMTP:
         from models.autoports.zai_org_glm_5_3_flash.tt import mk_head as MKH
         from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import _rows_view
 
-        be, w = self.be, self.w
+        be = self.be
         em = MKH.MkEmbed.__new__(MKH.MkEmbed)
         em.__dict__.update(be.embed.__dict__)
         em.t = self.wv
@@ -657,8 +677,8 @@ class SpecMTP:
         if self.drafter != "mtp":
             return
         self.heads.update(
-            mtp_cu=head_clone(be.head, w, norm_w=self.w_mtp, view=_rows_view),
-            mtp_ch=[head_clone(be.head, 1, norm_w=self.w_mtp, view=_rows_view) for _ in range(self.K - 1)],
+            mtp_cu=head_clone(be.head, self.mw_cu, norm_w=self.w_mtp, view=_rows_view),
+            mtp_ch=[head_clone(be.head, self.mw_ch, norm_w=self.w_mtp, view=_rows_view) for _ in range(self.K - 1)],
         )
 
     def _seed_persist(self):
@@ -699,7 +719,7 @@ class SpecMTP:
                 continue
             for k, v in list(src.items()) if views else []:
                 if isinstance(k, tuple) and len(k) == 2 and k[1] == full:
-                    for t in sorted({1, self.w}):
+                    for t in sorted({self.mw_cu, self.mw_ch}):
                         dst.setdefault((k[0], t), _rows_view(v, t))
             for k, v in list(src.items()):
                 dst.setdefault(k, v)
@@ -736,7 +756,11 @@ class SpecMTP:
 
     # ------------------------------------------------------------------ the device step (eager here; the same calls
     # run inside the captured traces)
-    def _dsa(self, e, res, cache, pt, pos, t: int, verify: bool, dbg: int | None = None, dsa_state=None):
+    def _dsa(self, e, res, cache, pt, pos, t: int, verify: bool, dbg: int | None = None, dsa_state=None,
+             live="verify"):  # fmt: skip
+        """live: the MoE's live-row page (MKX_LIVE); "verify" = pos_v on a verify-mode call (the plain decode's rule), else
+        none; a page tensor = that page (the MTP rows at the verify width: their own positions, rows < 0 route nowhere)
+        """
         from models.autoports.zai_org_glm_5_3_flash.tt.mk_mla import ATT_NKMAX
         from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import set_knobs
 
@@ -765,11 +789,15 @@ class SpecMTP:
                     s1 = e["mla"].mk.s1_buffer(t)
                 with pool:
                     e["mla"](res, cache, pt, pos, t=t, stack=True, dsa_state=dsa_state, s1=s1)
+        if isinstance(live, str):
+            live = self.vlive if verify else None
+        elif self.vlive is None:  # (GLM53_MOE_LIVE=0 / chunked steps: no MKX_LIVE program anywhere)
+            live = None
         if pool is None:
-            r = e["moe"](s1, t=t, out=res, live=self.vlive if verify else None)
+            r = e["moe"](s1, t=t, out=res, live=live)
         else:
             with pool:
-                r = e["moe"](s1, t=t, out=res, live=self.vlive if verify else None)
+                r = e["moe"](s1, t=t, out=res, live=live)
         if dbg is not None and self.dbg_ids is not None:
             ttnn.copy(r["ids"], self.dbg_ids[dbg])
         if pool is None:
@@ -829,13 +857,16 @@ class SpecMTP:
         self._gather()
 
     def _catchup(self):
-        """tokens a_j = the verify head's rows (BOOT: row 0 = b), h = the main head's h rows (views of one buffer)"""
-        be, w, eh, hd = self.be, self.w, self.eh, self.heads
+        """tokens a_j = the verify head's rows (BOOT: row 0 = b), h = the main head's h rows (views of one buffer); rows
+        0..K at mpos_cu (c + j), launched at mw_cu rows (the rows past K: positions -1, inactive)"""
+        be, w, eh, hd = self.be, self.mw_cu, self.eh, self.heads
         eh.norm_e(hd["verify"].topk_out, be.embed.table, t=w)
         x0 = eh.norm_h_proj(be.head.h, mode=2, t=w)
         eh.expand(x0, self.R_m, t=w)
+        # (MoE live rows: pos_v -- rows 0..K live, as the catch-up's; the verify-width mode reads mpos_cu itself)
+        live = self.mpos_cu if self.mtp_mode == "verify" else "verify"
         self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_m, self.mtp_cache, self.pt_m, self.mpos_cu, w, True,
-                  dbg=0)  # fmt: skip
+                  dbg=0, live=live)  # fmt: skip
         l1_debug("catch-up: after the MTP layer", self.mesh)
         hd["mtp_cu"]([self.R_m], None)
 
@@ -846,13 +877,81 @@ class SpecMTP:
             tok, src, sel = hd["mtp_cu"].topk_out, self.R_m, self.sel
         else:
             tok, src, sel = hd["mtp_ch"][i - 1].topk_out, self.R_c[i - 1], None
-        eh.norm_e(tok, self.be.embed.table, t=1, sel=sel)
-        x0 = eh.norm_h_proj(src, mode=3, t=1, sel=sel)
-        eh.expand(x0, self.R_c[i], t=1)
-        self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_m, self.mpos_ch[i], 1,
-                  False, dbg=i + 1)  # fmt: skip
+        t = self.mw_ch  # (> 1: the verify-width mode -- row 0 is the chained row, rows 1.. inactive: positions -1)
+        eh.norm_e(tok, self.be.embed.table, t=t, sel=sel)
+        x0 = eh.norm_h_proj(src, mode=3, t=t, sel=sel)
+        eh.expand(x0, self.R_c[i], t=t)
+        live = self.mpos_ch[i] if self.mtp_mode == "verify" else "verify"
+        self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_m, self.mpos_ch[i], t,
+                  False, dbg=i + 1, live=live)  # fmt: skip
         l1_debug(f"chain {i}: after the MTP layer", self.mesh)
         hd["mtp_ch"][i]([self.R_c[i]], None)
+
+    def _mtp_prefill_body(self, src):
+        """the device part of one MTP-cache prefill launch of mw_cu rows (eager, or captured per tap: capture()'s "pf<c>"): row j
+        = MTP position mpos_cu[j] (< 0: inactive) with the token in pf_tok row j and the final-norm hidden row r0 + j of
+        src (bf16 [1, 1, C, 4096] DRAM; r0 = word 0 of pf_row0: MkEh EH_ROW0)"""
+        be, eh, T = self.be, self.eh, self.mw_cu
+        eh.norm_e(self.pf_tok, be.embed.table, t=T)
+        x0 = eh.norm_h_proj(src, mode=2, t=T, row0=self.pf_row0)
+        eh.expand(x0, self.R_m, t=T)
+        # (verify mode: the launch's rows are consecutive positions of one user, causal inside the launch; the MoE's live
+        # rows = these positions)
+        self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_m, self.mtp_cache, self.pt_m, self.mpos_cu, T, True,
+                  live=self.mpos_cu)  # fmt: skip
+
+    def _mtp_prefill_launch(self, src, row0: int, toks: list, pos0: int, trace=None):
+        """one MTP-cache prefill launch: rows j < len(toks) = MTP position pos0 + j, token toks[j], hidden row row0 + j of
+        src (the rest inactive) -- the host writes three small pages, then the body runs (eager) or `trace` replays"""
+        T = self.mw_cu
+        n = len(toks)
+        assert n <= T and row0 % TILE + T <= TILE, (n, T, row0)
+        tok = torch.zeros(32, 64, dtype=torch.int32)
+        pos = torch.full((1, 32), -1, dtype=torch.int32)
+        if n:
+            tok[:n, 0] = torch.tensor(toks, dtype=torch.int32)
+            pos[0, :n] = int(pos0) + torch.arange(n, dtype=torch.int32)
+        r0 = torch.zeros(1, 32, dtype=torch.int32)
+        r0[0, 0] = int(row0)
+        write_rows(self.mesh, self.pf_tok, tok)
+        write_rows(self.mesh, self.mpos_cu, pos, ttnn.int32)
+        write_rows(self.mesh, self.pf_row0, r0)
+        if trace is None:
+            self._mtp_prefill_body(src)
+        elif isinstance(trace, tuple):  # mock
+            trace[1]()
+        else:
+            ttnn.execute_trace(self.mesh, trace, cq_id=0, blocking=False)
+
+    def _pf_taps(self) -> dict:
+        """{bucket: tap} of the TP prefill's MTP taps (allocated by its compile forwards; none: {})"""
+        tpp = getattr(self.be, "tpp", None)
+        if self.drafter != "mtp" or tpp is None or not getattr(tpp, "mtp_tap_on", False):
+            return {}
+        return dict(getattr(tpp, "_mtp_taps", {}))
+
+    def prefill_mtp(self, tap, tokens_next, pos0: int, n: int, bucket: int | None = None):
+        """the MTP-cache prefill (M0): MTP positions pos0 .. pos0 + n - 1 from rows 0 .. n - 1 of `tap` (the TP prefill's
+        final-norm hidden of the chunk at pos0: TPPrefill.mtp_tap) and tokens_next[i] = the prompt token at position
+        pos0 + i + 1 (mtp_prefill_span) -- vLLM MTP semantics, the catch-up's: the drafts attend the real prompt, not
+        a zero cache. Launches of mw_cu rows after the chunk's replay (each launch's rows inside one tap tile row; the
+        slot's MTP page-table row = pt_m, set with the page table): the bucket's captured launch (capture(): "pf<c>";
+        GLM53_SPEC_PF_TRACE=0 or no trace: eager); nothing allocated, the programs compiled in prepare(). The page table
+        must cover the positions (the generator's rows)."""
+        assert self.drafter == "mtp" and self.mtp is not None, "MTP-cache prefill: the MTP drafter"
+        assert TILE % self.mw_cu == 0, ("MTP-cache prefill: a launch width dividing the tap's 32-row tiles", self.mw_cu)
+        toks = [int(v) for v in torch.as_tensor(tokens_next).reshape(-1)[: int(n)].tolist()]
+        assert len(toks) == int(n), (len(toks), n)
+        trace = None
+        if bucket is not None and os.environ.get("GLM53_SPEC_PF_TRACE", "1") == "1":
+            trace = self.traces.get(f"pf{int(bucket)}")  # (captured at warm-up with the step; never here)
+        r = 0
+        while r < len(toks):  # (launch r covers tap rows r .. r + mw_cu - 1: one tile row, r a multiple of mw_cu)
+            m = min(self.mw_cu, len(toks) - r)
+            self._mtp_prefill_launch(tap, r, toks[r : r + m], int(pos0) + r, trace=trace)
+            self.counters["prefill_launches"] += 1
+            r += m
+        self.counters["prefill_rows"] += len(toks)
 
     def _gather(self):
         hd = self.heads
@@ -897,6 +996,10 @@ class SpecMTP:
             write_rows(self.mesh, t_, far, ttnn.int32)
         self._step()
         l1_debug("prepare: after step", self.mesh)
+        if self.drafter == "mtp":  # the MTP-cache prefill's own program (MkEh EH_ROW0), every row inactive: compiled
+            # here, before any capture (a first compile at the first request would allocate after the captures)
+            self._mtp_prefill_launch(self.eh.buffers(self.mw_cu)[0], 0, [], 0)
+            l1_debug("prepare: after the MTP prefill launch", self.mesh)
         ttnn.synchronize_device(self.mesh)
         write_rows(self.mesh, self.be.pos, keep.reshape(1, 32), ttnn.int32)
         write_rows(self.mesh, self.sel, torch.zeros(1, 32, dtype=torch.int32))
@@ -912,7 +1015,9 @@ class SpecMTP:
 
         if os.environ.get("GLM53_L1_REPORT") == "1":  # Stage 9 / 12 cf3f: the L1 the verify / draft programs meet
             l1_report(self.mesh, "spec capture (before the step / boot compile)", root=self.be)
-        for name, fn in (("step", self._step), ("boot", self._boot)):
+        # (+ the MTP-cache prefill's launch per TP prefill tap: "pf<c>", replayed between the prefill's chunks)
+        pf = [(f"pf{c}", (lambda tap=tap: self._mtp_prefill_body(tap))) for c, tap in sorted(self._pf_taps().items())]
+        for name, fn in [("step", self._step), ("boot", self._boot)] + pf:
             if MOCK:
                 if os.environ.get("GLM53_MOCK_CAPTURE", "0") == "1":
                     # Stage 9 cf3f (coordinator 18:11:19Z acceptance): the step runs once here, so its programs'

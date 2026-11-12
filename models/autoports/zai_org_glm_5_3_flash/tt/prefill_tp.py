@@ -1794,6 +1794,13 @@ class TPPrefill:
         self._shared_cache, self._ep = {}, None
         self.max_seq = int(kv.blocks_per_seq) * BLOCK
         self.dsa = os.environ.get("GLM53_PF_DSA", "0") == "1"  # P3 DSA indexer (off: the P2 dense-only path)
+        # Stage 17 M0 (GLM53_SPEC_K with the MTP drafter; GLM53_SPEC_MTP_PREFILL=0: off): every chunk row's final-norm
+        # hidden (the head's h: RMSNorm(mean of the 4 streams) * norm.weight, bf16) into a per-bucket tap inside the
+        # trace -- the MTP-cache prefill's input (StackBackend._mtp_prefill_chunk). Off: the forward is unchanged
+        self.mtp_tap_on = (int(os.environ.get("GLM53_SPEC_K", "0") or 0) > 0
+                           and (os.environ.get("GLM53_SPEC_KIND") or os.environ.get("GLM53_SPEC_DRAFTER", "mtp")) == "mtp"
+                           and os.environ.get("GLM53_SPEC_MTP_PREFILL", "1") == "1")  # fmt: skip
+        self._mtp_taps, self._mtp_norm = {}, None
         # GLM53_DSA_SHARD (StackBackend.dsa_shard_owners: (C chips, local blocks per chip, blocks per 128-token unit);
         # tt/dsa_shard.py ShardMap): the latent cache and the pooled-key store are PER CHIP (unit u of a slot on chip
         # u % C at local block / page u // C); the prefill writes each unit to its owner only (ChunkInputs.lat_idx /
@@ -2724,6 +2731,8 @@ class TPPrefill:
             self._sparse_now = None
         self._fresh_now = False
         self._pad_now = None
+        if self.mtp_tap_on:  # Stage 17 M0: every row's final-norm hidden -> the bucket's tap (head or not)
+            self._mtp_tap_write(x, c, sp)
         row = self.last_row(x, ci, sp) if head else None  # head=False: a non-final chunk (no last row, no head)
         if id(x) not in self.persistent:
             ttnn.deallocate(x)
@@ -3256,6 +3265,49 @@ class TPPrefill:
         ttnn.execute_trace(self.mesh, self.traces[key], cq_id=0, blocking=blocking)
         self.counters["replays"] += 1
         return offs
+
+    def mtp_tap(self, c: int):
+        """bucket c's MTP tap [1, 1, c, 4096] bf16 DRAM, replicated: row i = the final-norm hidden of the last replay's
+        chunk row i (allocated by the bucket's first, eager forward: before its capture)"""
+        t = self._mtp_taps.get(int(c))
+        if t is None:
+            t = ttnn.from_torch(torch.zeros(1, 1, int(c), HIDDEN), dtype=BF16, layout=ttnn.TILE_LAYOUT, device=self.mesh,
+                                memory_config=DRAM, mesh_mapper=self.repl)  # fmt: skip
+            self._mtp_taps[int(c)] = t
+        return t
+
+    def _mtp_tap_write(self, x, c: int, sp: bool) -> None:
+        """x (the final residual: comp [1, 1, r, 16384], sm [1, 4, r, 4096]; sp: this chip's r = c / N rows) -> h =
+        RMSNorm(mean of the 4 streams) * norm.weight (MkHead's h, fp32 math) bf16 -> gathered (sp) -> the tap"""
+        if self._mtp_norm is None:
+            from models.autoports.zai_org_glm_5_3_flash.tt.mk_head import norm_host
+
+            self._mtp_norm = ttnn.from_torch(norm_host(self.source).reshape(1, 1, 1, HIDDEN), dtype=BF16,
+                                             layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=DRAM,
+                                             mesh_mapper=self.repl)  # fmt: skip
+        r = int(x.shape[-2])
+        if int(x.shape[-1]) == NSTREAM * HIDDEN:  # comp: stream s = columns [s H, (s + 1) H)
+            parts = [ttnn.slice(x, (0, 0, 0, s * HIDDEN), (1, 1, r, (s + 1) * HIDDEN)) for s in range(NSTREAM)]
+        else:  # sm: stream s = dim 1 index s
+            parts = [ttnn.slice(x, (0, s, 0, 0), (1, s + 1, r, HIDDEN)) for s in range(NSTREAM)]
+        m = parts[0]
+        for p_ in parts[1:]:
+            m2 = ttnn.add(m, p_)
+            ttnn.deallocate(m)
+            ttnn.deallocate(p_)
+            m = m2
+        mean = ttnn.multiply(m, 0.25)
+        ttnn.deallocate(m)
+        h = ttnn.rms_norm(mean, weight=self._mtp_norm, epsilon=self.cfg.rms_norm_eps,
+                          compute_kernel_config=_ckc_fp32(self.mesh))  # fmt: skip
+        ttnn.deallocate(mean)
+        hb = ttnn.typecast(h, BF16)
+        ttnn.deallocate(h)
+        g = self.gather(hb, sp)  # sp: [1, 1, c, 4096] on every chip (rank order = row order); rep: hb itself
+        ttnn.copy(g, self.mtp_tap(c))
+        if g is not hb:
+            ttnn.deallocate(hb)
+        ttnn.deallocate(g)
 
     def row_buf(self):
         if getattr(self, "_row_buf", None) is None:

@@ -657,10 +657,16 @@ class StackBackend(ModelBackend):
                     # 4 stream syncs (4 x 1536 B) for the life of the stack)
                     k_spec = int(os.environ.get("GLM53_SPEC_K", "0"))
                     # (independent of the weight cache: the narrow widths are empty without one, the spec step's
-                    # row counts are needed whenever GLM53_SPEC_K is set -- the MTP layer asserts them in its fabrics)
-                    ts = tuple(
-                        sorted({self.chunk} | set(self.narrow_widths) | ({1, k_spec + 1} if k_spec > 0 else set()))
-                    )
+                    # row counts are needed whenever GLM53_SPEC_K is set -- the MTP layer asserts them in its fabrics;
+                    # generator.spec_widths: (1, K + 1) for the TP8 design, the verify width alone when every MTP
+                    # launch runs at it -- GLM53_SPEC_MTP_W=verify, the 8x4 shard's default)
+                    spec_ts = set()
+                    if k_spec > 0:
+                        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_widths
+
+                        spec_ts = set(spec_widths(k_spec, self.chunk,
+                                                  tuple(self.narrow_widths) + tuple(self.native_widths))["ts"])  # fmt: skip
+                    ts = tuple(sorted({self.chunk} | set(self.narrow_widths) | spec_ts))
                     d = TPD.TPDsaLayer(self.mesh, self.cfg, L, source, OptimizedDecoderConfig(), moe=moe, ts=ts,
                                        share=dsa_share, dsa=self.dsa_decode, defer=self.dsa_defer,
                                        shard=self.dsa_shard)  # fmt: skip
@@ -2459,7 +2465,9 @@ class StackBackend(ModelBackend):
         if logits_rows == "none" and sample is None and nohead_ok:
             # a non-final chunk (the generator asks nothing of it): the head-less trace leaves the decode rows alone ->
             # no reads, waits or restores; the replay is only enqueued (the host runs ahead to the next chunk's inputs)
-            run(False)
+            c_ = run(False)
+            if group is None:
+                self._mtp_prefill_chunk(slot, chunk_start, n_tot, c_)
             self.counters["prefill_tokens"] += n_tot
             self.counters["prefill_chunks_tp"] = self.counters.get("prefill_chunks_tp", 0) + 1
             self.counters["prefill_chunks_nohead"] = self.counters.get("prefill_chunks_nohead", 0) + 1
@@ -2479,7 +2487,9 @@ class StackBackend(ModelBackend):
         pos[slot] = chunk_start + n_tot - 1
         self.write(io.cur_pos, pos)
         tm is not None and tm.append(("cur_pos", _time.perf_counter()))
-        run(True)
+        c_ = run(True)
+        if group is None:
+            self._mtp_prefill_chunk(slot, chunk_start, n_tot, c_)
         tm is not None and tm.append(("prefill_host", _time.perf_counter()))
         self.counters["prefill_tokens"] += n_tot
         self.counters["prefill_chunks_tp"] = self.counters.get("prefill_chunks_tp", 0) + 1
@@ -2512,6 +2522,45 @@ class StackBackend(ModelBackend):
         if sample is not None:
             return int(first)
         return out
+
+    # ------------------------------------------------------------------ Stage 17 M0: the MTP-cache prefill
+    def arm_mtp_prefill(self, slot: int, prompt) -> bool:
+        """the speculating request's prompt (all of it: a chunk's last MTP row takes the next chunk's first token): every
+        TP prefill chunk of `slot` until disarm_mtp_prefill also fills the MTP layer's latent cache from the prefill's
+        final-norm tap (SpecMTP.prefill_mtp: positions 0 .. L - 2; L - 1 is the bootstrap's). False: no MTP drafter /
+        no tap (GLM53_SPEC_MTP_PREFILL=0) -- the drafts then attend a cache without the prompt."""
+        sp = getattr(self, "spec", None)
+        tpp = getattr(self, "tpp", None)
+        if (
+            sp is None
+            or getattr(sp, "mtp", None) is None
+            or tpp is None
+            or not getattr(tpp, "mtp_tap_on", False)
+            or 32 % int(getattr(sp, "mw_cu", 1))
+        ):  # (SpecMTP.prefill_mtp: launches inside the tap's tile rows)
+            self._mtp_pf = None
+            return False
+        self._mtp_pf = dict(slot=int(slot), ids=torch.as_tensor(prompt, dtype=torch.int64).reshape(-1).clone(), rows=0)
+        return True
+
+    def disarm_mtp_prefill(self) -> int:
+        """-> the MTP rows the armed prefill filled (0: none / not armed)"""
+        a, self._mtp_pf = getattr(self, "_mtp_pf", None), None
+        return int(a["rows"]) if a else 0
+
+    def _mtp_prefill_chunk(self, slot: int, chunk_start: int, n_valid: int, bucket) -> None:
+        """after a TP prefill chunk's replay (bucket = TPPrefill.prefill's): its MTP rows (generator.mtp_prefill_span)
+        from the bucket's tap, eager, on the same queue"""
+        a = getattr(self, "_mtp_pf", None)
+        if a is None or a["slot"] != int(slot) or bucket is None:
+            return
+        from models.autoports.zai_org_glm_5_3_flash.tt.generator import mtp_prefill_span
+
+        p0, n = mtp_prefill_span(chunk_start, n_valid, int(a["ids"].numel()))
+        if n <= 0:
+            return
+        self.spec.prefill_mtp(self.tpp.mtp_tap(int(bucket)), a["ids"][p0 + 1 : p0 + 1 + n], p0, n, bucket=int(bucket))
+        a["rows"] += n
 
     def _group_prewarm_keys(self) -> list:
         """GLM53_PF_GROUP_PREWARM = "n@start,..." (W1 serving; with GLM53_PF_GROUP_MAX): the group keys to compile at
