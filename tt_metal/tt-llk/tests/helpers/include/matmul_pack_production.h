@@ -275,8 +275,8 @@ __attribute__((always_inline)) inline void block(
     }
 }
 
-// Every block of the output takes the per-tile form (the first, after a reconfigure, the next ones): the kernel packs per tile, as llk_matmul_block_pack decides
-// (llk_matmul_pack_always_per_tile). Needs the block keys.
+// Every block of the output takes the per-tile form (the first, after a reconfigure, the next ones): the kernel packs per tile, as llk_pack_block<n>
+// folds such a block into main's loop. Needs the block keys.
 template <DstSync sync, bool fp32, DataFormat out_format>
 constexpr bool always_per_tile()
 {
@@ -294,7 +294,7 @@ constexpr bool always_per_tile()
         constexpr bool src32 = fp32 && key_src32;
         constexpr bool t32   = src32 && unpack_to_dest;
         constexpr bool full  = sync == DstSync::SyncFull;
-        // per tile in both matmul contexts (1 pure matmul, 2 with a pack-thread SFPU), as llk_matmul_pack_always_per_tile
+        // per tile in both matmul contexts (1 pure matmul, 2 with a pack-thread SFPU)
         return llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_init_form : llk_pack_init_form_dc, 0, full, src32, int8, 1u) == 'T' &&
                llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_reconf_form : llk_pack_reconf_form_dc, 1, full, src32, int8, 1u) == 'T' &&
                llk_pack_block_form_k<fp32, key_kt>(row, key_nt, t32 ? llk_pack_next_form : llk_pack_next_form_dc, 2, full, src32, int8, 1u) == 'T' &&

@@ -82,8 +82,10 @@ API_END = "// END GENERATED\n"
 
 
 def api_text():
-    """llk_pack_tile_api.h with its generated region (the constexpr form of llk_pack_block_form for llk_matmul_block_pack) brought up to date."""
+    """llk_pack_tile_api.h with its generated region brought up to date; unchanged when it has none (no API code reads the plain-value forms)."""
     s = API.read_text()
+    if API_BEGIN not in s:
+        return s
     _, form, cls = _parts()
     a = s.index(API_BEGIN) + len(API_BEGIN)
     return s[:a] + "template <bool is_fp32_dest_acc_en, std::uint32_t matmul_kt>\n" + form + "\n\n" + cls + "\n" + s[s.index(API_END, a):]

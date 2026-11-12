@@ -154,10 +154,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             KT_DIM,
             in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B,    // in1
-            num_faces_A,    // in0
-            PARTIAL_FACE_B, // in1
-            PARTIAL_FACE_A);
+            num_faces_B,     // in1
+            num_faces_A,     // in0
+            PARTIAL_FACE_B,  // in1
+            PARTIAL_FACE_A); // in0
         PROFILER_SYNC();
     }
     {
@@ -425,7 +425,7 @@ constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
 // main's ttnn kernels: pack_block on every output block, without the K; 3 is the closed block of llk_pack_block (not prepared)
 constexpr int matmul_pack_form_v = matmul_pack_production::prod_form<matmul_pack_out_format>();
 #elif defined(ARCH_BLACKHOLE)
-// a block whose every form is per tile packs per tile (llk_matmul_block_pack)
+// a block whose every form is per tile packs per tile (llk_pack_block<n> runs main's loop for it)
 constexpr int matmul_pack_form_v =
     matmul_pack_production::always_per_tile<dest_sync, is_fp32_dest_acc_en, matmul_pack_out_format>() ? 0 : matmul_pack_form_key;
 #else

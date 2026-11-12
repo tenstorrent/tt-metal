@@ -46,7 +46,7 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
 {
     constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr std::uint32_t MOP_OUTER_LOOP   = 1;
-    // The last PACR takes the one to four rows left; no branch, the init runs cold. Interface mask 0 (all four), 1, 3, 7 for rows modulo 4 of 0, 1, 2, 3.
+    // No branch, the init runs cold: the last PACR's interface mask is 0 (all four), 1, 3 or 7 for rows mod 4 of 0-3.
     const std::uint32_t pack_groups          = (num_rows + 3) >> 2;
     const std::uint32_t last_intf_sel        = (1u << (num_rows & 0x3)) - 1;
 

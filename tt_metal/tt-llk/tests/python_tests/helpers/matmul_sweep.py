@@ -670,8 +670,8 @@ def _matmul_pack_form_value(
     throttle: int = 0,
     l1_acc: bool = False,
 ) -> int:
-    """Output pack form of the Blackhole matmul kernels, the rule ttnn's matmul kernels apply at compile time
-    (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (padded pages, block-float outputs and small tiles).
+    """Output pack form of the Blackhole matmul kernels, the python mirror of matmul_pack_form_k (llk_matmul_forms.h): 0 per tile, 1 one block run,
+    2 the closed block (padded pages, block-float outputs and small tiles).
     """
     small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32
     # the packer's L1 accumulate of a Float32 output reads and writes 64 byte rows: at half sync the block run reads slower than the per-tile pack

@@ -97,11 +97,8 @@ constexpr char llk_pack_next_form_dc[12][4][17] = {
     {"WWWWBBBBBBBBBBBB", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWWW"},  // Float32
 };
 
-// Behind matmul math (the last FPU op init was a matmul init, or the K is given) a block can read slower than per tile in cells the sweeps measured, or a W offset block faster than the form of the table: bit (column * 16 + n - 1) of a mask forbids the W offset (no_w: the block instead), then the block (no_block) at n tiles,
-// or, with the K given, takes the W offset (take_w) or the block (take_b). Rows: LoFi K not given, K 1, K above 1, HiFi2 to HiFi4 together, then LoFi and HiFi after another FPU
-// op init (the other unpack and math contexts). LoFi without the K and HiFi count those contexts too, except the drop masks below.
-// no_block and no_w per state (init, reconfigure, next): a form slower behind one state stays in the others. take_w and take_b only with the K and in the next state
-// (without the first group or the last two); one entry per row of the form tables.
+// Behind matmul math bit column * 16 + n - 1 forbids W (no_w), then the block (no_block); with the K, take_w and take_b
+// pick them in the next state. Rows: LoFi without K, K 1, K above 1, HiFi; then LoFi and HiFi after another FPU init.
 constexpr std::uint64_t llk_pack_mm_no_block[2][6][3][12] = {
     {  // datacopy family
         {  // LoFi, K not given
@@ -259,8 +256,7 @@ constexpr std::uint64_t llk_pack_mm_take_b[2][3][12] = {
     },
 };
 
-// Bits of the matmul masks cleared behind matmul math (contexts 1 and 2), per state: cells only the other contexts read slower, which pure matmul
-// and math-thread SFPU tails read no slower.
+// Mask bits cleared behind matmul math (contexts 1 and 2): cells only the other contexts read slower.
 constexpr std::uint64_t llk_pack_mm_drop_no_block[2][2][3][12] = {
     {  // datacopy family
         {  // LoFi, K not given
@@ -314,8 +310,8 @@ constexpr std::uint64_t llk_pack_mm_drop_no_w[2][2][3][12] = {
     },
 };
 
-// Cells a block reads slower than per tile behind matmul math with a pack-thread SFPU tail (context 2) at most of their points, per
-// state (init, reconfigure, next): ORed into the masks of its group, and the take masks yield to them.
+// Context 2 (a pack-thread SFPU tail behind matmul math): cells a block reads slower than per tile at most points, ORed
+// into the masks of their group; the take masks yield to them.
 constexpr std::uint64_t llk_pack_mm_tail_no_block[2][4][3][12] = {
     {  // datacopy family
         {  // LoFi, K not given
@@ -409,10 +405,8 @@ constexpr std::uint64_t llk_pack_mm_tail_no_w[2][4][3][12] = {
     },
 };
 
-// Cells decided finer than the mask groups: per fidelity, per matmul K, and, for a 32 bit input CB with a 32 bit DEST, per whether a CB unpacks to
-// DEST. One word per cell, the last matching word wins: bits 0-2 the family (datacopy, 32 bit input to SrcA, 32 bit input to DEST), 3-6 the fidelity
-// (LoFi, HiFi2, HiFi3, HiFi4), 7-12 the K (not given, 1, 2, 4, 8, other), 13-15 the context, as masks; 16-17 the state, 18-21 the row, 22-23 the column,
-// 24-27 the tile count - 1, 28-29 the form (0 per tile, 1 block, 2 W offset). Sorted by state and row; read at compile time only, like the masks.
+// Cells finer than the mask groups, last match wins. Masks: bits 0-2 family, 3-6 fidelity, 7-12 K, 13-15 context;
+// fields: 16-17 state, 18-21 row, 22-23 column, 24-27 n - 1, 28-29 form (T, B, W). Sorted by state and row.
 constexpr std::uint32_t llk_pack_form_cells[] = {
     0x070020F9, 0x01C420FA, 0x070420F9, 0x07082089, 0x070C20F9, 0x071020F9, 0x035C2089, 0x13DC20FC, 0x15DC20FC, 0x032820F1, 0x032C2089, 0x010120F9,
     0x014120F9, 0x010520F9, 0x014520FF, 0x010920F9, 0x014920FB, 0x010D20F9, 0x014D20FF, 0x11CD208A, 0x011120F9, 0x015120FF, 0x11D120C2, 0x00E120FC,

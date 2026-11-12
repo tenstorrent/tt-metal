@@ -2106,7 +2106,7 @@ constexpr bool matmul_pack_llkx_per_tile(const MathFidelity fidelity, const Data
 }
 
 // Output pack form of a matmul block: 0 per tile, 1 one block run, 2 the closed block (padded pages and small tiles). in_a and in_b are the A and B operand formats, r0 and c1 the in0 tile height and in1 tile width. The one decision of the
-// harness (matmul_pack_form of matmul_sweep.py mirrors it) and of the keyed llk_matmul_block_pack.
+// harness (matmul_pack_form of matmul_sweep.py mirrors it).
 constexpr int matmul_pack_form_base_k(const MathFidelity fidelity, const bool half_sync, const std::uint32_t throttle, const std::uint32_t kt, const std::uint32_t rt, const std::uint32_t ct,
                                  const DataFormat in_a, const DataFormat in_b, const DataFormat out, const std::uint32_t r0 = 32, const std::uint32_t c1 = 32, [[maybe_unused]] const bool dense_pages = false,
                                  const bool l1_acc = false)

@@ -678,9 +678,8 @@ enum ExecBool : bool
     Exec
 };
 
-// The pack thread's replay buffer holds the program _llk_pack_block_fast_init_ recorded until load_replay_buf records over it and clears this flag.
-// Like every LLK that records once and replays later, it assumes no record the compiler makes itself (#58433) runs on this thread in between.
-// Only the pack thread tracks it; with internal linkage its stores vanish unless the fast block init, the only reader, is compiled in.
+// Set while the replay buffer holds _llk_pack_block_fast_init_'s tile; it assumes no compiler-made record (#58433) runs
+// on this thread in between. Internal linkage: its stores vanish unless the fast block init is compiled in.
 [[maybe_unused]] static bool pack_fast_replay_valid = false;
 #if defined(TRISC_PACK) || defined(LLK_TRISC_PACK)
 #define LLK_PACK_REPLAY_WRITTEN() (pack_fast_replay_valid = false)

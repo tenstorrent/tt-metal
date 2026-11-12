@@ -566,7 +566,7 @@ constexpr DataFormat matmul_pack_out_format = DataFormat::Invalid;
 // main's ttnn kernels: pack_block on every output block, without the K; 3 is the closed block of llk_pack_block (not prepared)
 constexpr int matmul_pack_form_v = matmul_pack_production::prod_form<matmul_pack_out_format>();
 #elif defined(ARCH_BLACKHOLE)
-// a block whose every form is per tile packs per tile (llk_matmul_block_pack); the full sync closed block runs prepared (pack_block_prepare) and takes no form
+// a block whose every form is per tile packs per tile (llk_pack_block<n> runs main's loop for it); the full sync closed block runs prepared (pack_block_prepare) and takes no form
 constexpr int matmul_pack_form_v = (matmul_pack_form_key == 2 && dest_sync == DstSync::SyncFull) ||
                                            !matmul_pack_production::always_per_tile<dest_sync, is_fp32_dest_acc_en, matmul_pack_out_format>()
                                        ? matmul_pack_form_key

@@ -891,10 +891,6 @@ def passed_test(
             selected=ulp_selected,
         )
         is_valid = is_valid | ~ulp_selected
-        # No lattice arm here, unlike the Bfp8_b tolerance branch below: ORing the
-        # block-aware compare in would mean max_ulp was not the enforced maximum. So a
-        # Bfp8_b budget charges for block quantization too, and is usable only where that
-        # quantization is exact -- see _ULP_PROXY_DTYPES in helpers.ulp.
     elif output_data_format in (DataFormat.Bfp8, DataFormat.Bfp8_b):
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
