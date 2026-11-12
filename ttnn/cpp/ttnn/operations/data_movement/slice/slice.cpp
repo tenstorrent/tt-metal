@@ -291,8 +291,11 @@ ttnn::Tensor slice(
                     shard_spec_val.num_cores(),
                     grid_h,
                     grid_w);
-                uint32_t new_shard_h = tt::div_up(output_height, grid_h);
-                uint32_t new_shard_w = tt::div_up(output_width, grid_w);
+                // A ROW_MAJOR grid splits height over its rows and width over its columns; a COL_MAJOR
+                // grid the other way round, as TensorSpec::block_sharded lays it out.
+                const bool col_major = shard_spec_val.orientation == tt::tt_metal::ShardOrientation::COL_MAJOR;
+                uint32_t new_shard_h = tt::div_up(output_height, col_major ? grid_w : grid_h);
+                uint32_t new_shard_w = tt::div_up(output_width, col_major ? grid_h : grid_w);
                 if (!rm_only) {
                     new_shard_h = std::max(tt::round_up(new_shard_h, tile_shape[0]), tile_shape[0]);
                     new_shard_w = std::max(tt::round_up(new_shard_w, tile_shape[1]), tile_shape[1]);
