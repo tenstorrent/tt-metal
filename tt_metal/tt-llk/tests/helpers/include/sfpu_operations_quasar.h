@@ -1656,7 +1656,12 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         calculate_gcd_init();
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
+    else if constexpr (OP == BinaryOp::LOGSIGMOID)
+    {
+        // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
+        logsigmoid_init<APPROXIMATION_MODE>();
+    }
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS are stateless — no init.
 }
 
 /**
