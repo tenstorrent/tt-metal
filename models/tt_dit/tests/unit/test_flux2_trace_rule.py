@@ -38,5 +38,3 @@ def test_call_raises_on_an_offloading_traced_pipeline() -> None:
 
 def test_calls_go_through_the_base() -> None:
     assert Flux2Pipeline.__call__ is Pipeline.__call__
-    with pytest.raises(TypeError, match="takes no `traced` argument"):
-        object.__new__(Flux2Pipeline)(prompts=["a"], num_inference_steps=1, traced=True)

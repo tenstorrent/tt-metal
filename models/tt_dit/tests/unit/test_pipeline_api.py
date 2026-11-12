@@ -11,6 +11,7 @@ import gc
 import pytest
 from loguru import logger
 
+from ...pipelines import pipeline_api
 from ...pipelines.pipeline_api import Pipeline
 
 _RULE = "^TDM-130: trace=True is unsupported with offload_weights=True"
@@ -112,10 +113,108 @@ def test_evictable_modules_are_held_weakly() -> None:
     assert pipeline.offload_weights is False
 
 
-def test_call_takes_no_traced_argument() -> None:
+def _warnings_of(action) -> list[str]:  # noqa: ANN001
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    try:
+        action()
+    finally:
+        logger.remove(sink)
+    return messages
+
+
+@pytest.mark.parametrize(
+    ("offload_weights", "trace", "traced", "expected"),
+    [
+        (False, True, True, "per-call `traced` argument is deprecated and ignored"),
+        (False, False, False, "per-call `traced` argument is deprecated and ignored"),
+        (True, False, None, "per-call `traced` argument is deprecated and ignored"),
+        (False, True, False, "traced=False IGNORED: the pipeline was constructed with trace=True"),
+        (False, False, True, "traced=True IGNORED: the pipeline was constructed with trace=False and runs eager."),
+        (True, False, True, "runs eager because it offloads weights (TDM-130)"),
+    ],
+)
+def test_a_per_call_traced_never_changes_what_runs(
+    offload_weights: bool, trace: bool, traced: bool | None, expected: str
+) -> None:
+    pipeline = _FakePipeline(offload_weights=offload_weights, trace=trace)
+    messages = _warnings_of(lambda: pipeline(prompts=["a"], traced=traced))
+    assert pipeline.calls == [{"prompts": ["a"], "traced": trace}]
+    assert len(messages) == 1
+    assert expected in messages[0]
+
+
+def test_a_disagreeing_traced_names_construction_before_run_untraced() -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
-    with pytest.raises(TypeError, match="takes no `traced` argument. For one eager run, use run_untraced"):
-        pipeline(prompts=["a"], traced=False)
+    (message,) = _warnings_of(lambda: pipeline(prompts=["a"], traced=False))
+    assert "trace buffers stay in use (in DRAM when the mesh has no trace region)" in message
+    assert message.index("construct the pipeline with trace=False") < message.index("run_untraced()")
+    assert "only before the first traced call" in message
+
+
+def test_a_per_call_traced_is_reported_once_per_kind() -> None:
+    pipeline = _FakePipeline(offload_weights=False, trace=True)
+
+    def calls() -> None:
+        for traced in (True, True, False, False, True):
+            pipeline(prompts=["a"], traced=traced)
+
+    messages = _warnings_of(calls)
+    assert ["IGNORED" in m for m in messages] == [False, True]
+    assert [call["traced"] for call in pipeline.calls] == [True] * 5
+    other = _FakePipeline(offload_weights=False, trace=True)
+    assert len(_warnings_of(lambda: other(prompts=["a"], traced=True))) == 1
+
+
+def test_offloading_in_the_warning_follows_registration() -> None:
+    pipeline = _FakePipeline(offload_weights=False, trace=False)
+    module = _FakeModule()
+    pipeline.register_evictable(module)
+    (message,) = _warnings_of(lambda: pipeline(prompts=["a"], traced=True))
+    assert "because it offloads weights (TDM-130)" in message
+
+
+def test_a_call_without_traced_logs_no_warning() -> None:
+    pipeline = _FakePipeline(offload_weights=False, trace=True)
+    assert _warnings_of(lambda: pipeline(prompts=["a"])) == []
+
+
+class _View:
+    def __init__(self, total_bytes_per_bank: int) -> None:
+        self.total_bytes_per_bank = total_bytes_per_bank
+        self.num_banks = 8
+
+
+@pytest.mark.parametrize(
+    ("trace", "region", "by_default", "expected"),
+    [
+        (True, 0, True, "tracing is on by default on this mesh and no trace region is reserved"),
+        (True, 0, False, "trace=True with no trace region reserved; trace buffers are taken from DRAM."),
+        (True, 1 << 20, True, None),
+        (False, 0, True, None),
+    ],
+)
+def test_trace_region_warning(
+    monkeypatch: pytest.MonkeyPatch, trace: bool, region: int, by_default: bool, expected: str | None
+) -> None:
+    class _Mesh:
+        pass
+
+    monkeypatch.setattr(pipeline_api.ttnn, "MeshDevice", _Mesh)
+    monkeypatch.setattr(pipeline_api.ttnn, "get_memory_view", lambda device, buffer_type: _View(region))
+    pipeline = _FakePipeline(offload_weights=False, trace=trace)
+    messages = _warnings_of(lambda: pipeline.warn_if_no_trace_region(_Mesh(), by_default=by_default))
+    assert len(messages) == (0 if expected is None else 1)
+    if expected is not None:
+        assert expected in messages[0]
+    if by_default and expected is not None:
+        assert "Pass trace=False to run eager" in messages[0]
+
+
+@pytest.mark.parametrize("device", [None, object()])
+def test_trace_region_warning_skips_what_is_not_a_mesh_device(device: object) -> None:
+    pipeline = _FakePipeline(offload_weights=False, trace=True)
+    assert _warnings_of(lambda: pipeline.warn_if_no_trace_region(device, by_default=True)) == []
 
 
 def test_run_untraced_is_eager_on_a_traced_pipeline() -> None:
