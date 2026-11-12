@@ -39,11 +39,10 @@ give `cb_normed` two consumers, compute and writer).
 | `K` | `num_w_chunks` | `1 ≤ K ≤ K_floor = ceil(Wc / min(Wc, 8))` | same |
 | `Wc` | `core_w_tiles = ceil(W/32)` (R1: whole row) | `F(1, K_floor) ≤ B` (R1 legality) | R1 predicate; otherwise `NotImplementedError` (R3 deferred) |
 | `Wp` | `K·c` | `Wc ≤ Wp < Wc + K` | definition |
-| `n_sq` | sumsq tiles per row | `1 ≤ n_sq ≤ 2` | `(Wc − p > 0) + p`, `p = (W % 32 ≠ 0)` |
+| `n_sq` | sumsq tiles per row | `1 ≤ n_sq ≤ 2` | `(Wc − p > 0) + p`, `p = (W % 32 ≠ 0)` — host `_n_sq(g, core_w_tiles)` and the compute kernel both derive it from the `core_w_tiles` knob |
 | `rows_cap` | max tile-rows per core | `ceil(Rt / num_cores)` | `split_work_to_cores` |
 | `s_x`, `s_g`, `s_o` | input / gamma / output tile bytes | 2048 (bf16) or 4096 (fp32) | dtype |
 | `s_f` | fp32 tile bytes | 4096 | — |
-| `s_m` | mask tile bytes | 2048 | bf16 |
 | `B` | per-core L1 bytes available to CBs | `get_memory_view(device, L1).largest_contiguous_bytes_free_per_bank − 32 KiB` (net of any L1-resident tensor, incl. the output) | `rms_norm_program_descriptor.py` |
 | `[g]`, `[rm]`, `[tile]`, `[p]` | 1 if has_gamma / ROW_MAJOR / TILE / partial W, else 0 | — | — |
 
@@ -60,10 +59,22 @@ F(r, K) =   r·Wp·s_x                                   # cb_x            — s
           + 2c·s_o                                     # cb_out | cb_out_rm — scales with c
 ```
 
-Worst Phase 0 cell (fp32 input, fp32 gamma, ROW_MAJOR, W = 8192 → Wc = 256, r = 1, K = 32,
-c = 8): `1 MiB (cb_x) + 64 KiB + 4 KiB + 32 KiB + 64 KiB + 64 KiB ≈ 1.22 MiB` — fits; larger `c`
-is taken whenever B permits. Typical prefill cell (bf16, TILE, gamma bf16, 8192 × 4096 → 256
-tile-rows on ~110 cores → r = 3, Wc = 128): K = 8, c = 16 → `768 KiB (cb_x) + 12 KiB (cb_rstd) + 192 KiB (cb_sumsq/cb_normed) + 64 KiB (cb_gamma) + 64 KiB (cb_out) ≈ 1.07 MiB`.
+Measured knobs (Blackhole p150, 12×10 grid, `B = 1 427 520 B` = largest free L1 bank region − 32 KiB;
+verifier probe 2026-11-12, `_select_blocks` output):
+
+| Cell | `Rt` | `rows_cap` | `r, c, K` | `F(r, K)` |
+|------|------|------------|-----------|-----------|
+| bf16 TILE + bf16 gamma, 8192 × 1024 | 256 | 3 | 3, 32, 1 | 876 544 B |
+| bf16 TILE + bf16 gamma, 8192 × 4096 | 256 | 3 | 3, 26, 5 | 1 355 776 B |
+| bf16 TILE + bf16 gamma, 8192 × 7168 | 256 | 3 | 2, 28, 8 (2 blocks/core) | 1 392 640 B |
+| fp32 RM + fp32 gamma, 32 × 8192 (worst Phase 0 cell) | 1 | 1 | 1, 11, 24 | 1 404 928 B |
+| bf16 TILE + bf16 gamma, 64 × 12288 (loose) | 2 | 1 | 1, 48, 8 | 1 384 448 B |
+| bf16 TILE + bf16 gamma, 32 × 16384 (loose) | 1 | 1 | 1, 27, 19 | 1 390 592 B |
+
+On the wide prefill cells the `r`-first selection pushes `K` to 5–8 and `cb_normed` (`r·c` **Float32**
+pages) is the largest term after `cb_x`; once `fp32_dest_acc_en=False` lands (bf16 intermediates,
+see the page-format audit) that term halves. 32 × 32768 bf16 (`Wc = 1024`, 2 MiB of x) does not fit
+R1 at any block size → `NotImplementedError` naming R3.
 
 ## Data-movement budget (R1, chosen split = rows across the full grid)
 

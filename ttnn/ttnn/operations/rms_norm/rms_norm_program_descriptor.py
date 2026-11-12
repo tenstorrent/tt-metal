@@ -69,9 +69,6 @@ class _Geometry:
         self.W = shape[-1]
         self.tensor_w_tiles = math.ceil(self.W / TILE)
         self.w_partial_elems = self.W % TILE
-        p = 1 if self.w_partial_elems else 0
-        self.n_full = self.tensor_w_tiles - p
-        self.n_sq = (1 if self.n_full > 0 else 0) + p
         if self.is_rm:
             self.num_valid_sticks = _prod(shape[:-1])
             self.tensor_rows_tiles = math.ceil(self.num_valid_sticks / TILE)
@@ -87,6 +84,16 @@ class _Geometry:
         self.g_elem = gamma.element_size() if self.has_gamma else 0
 
 
+def _n_sq(g: _Geometry, core_w_tiles: int) -> int:
+    """Sumsq tiles per row: one L1-accumulated tile over the whole tiles + the squared partial tail.
+
+    Derived from the `core_w_tiles` knob (not the tensor width) — the compute kernel derives the same
+    quantity from the same CT args, so the CB size and the kernel's push count cannot drift apart.
+    """
+    p = 1 if g.w_partial_elems else 0
+    return (1 if core_w_tiles - p > 0 else 0) + p
+
+
 def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int) -> int:
     """F(r, K) of l1_ledger.md (sum over the CBs this layout/gamma variant allocates)."""
     c = math.ceil(core_w_tiles / K)
@@ -97,7 +104,7 @@ def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int) -> int:
         f += STREAM_DEPTH * c * g.s_x  # cb_x_rm
     f += p * g.s_f  # cb_reduce_mask (fp32, matches cb_sumsq's srcB format)
     f += r * g.s_f  # cb_rstd
-    f += r * g.n_sq * g.s_f  # cb_sumsq
+    f += r * _n_sq(g, core_w_tiles) * g.s_f  # cb_sumsq
     if g.has_gamma or g.is_rm:
         f += r * c * g.s_f  # cb_normed
     if g.has_gamma:
@@ -160,7 +167,7 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     fp32 = ttnn.float32
     cbs = [
         _cb(CB_X, block_rows * row_stride_tiles, g.s_x, x.dtype, all_cores),
-        _cb(CB_SUMSQ, block_rows * g.n_sq, g.s_f, fp32, all_cores),
+        _cb(CB_SUMSQ, block_rows * _n_sq(g, core_w_tiles), g.s_f, fp32, all_cores),
         _cb(CB_RSTD, block_rows, g.s_f, fp32, all_cores),
     ]
     if g.is_rm:
