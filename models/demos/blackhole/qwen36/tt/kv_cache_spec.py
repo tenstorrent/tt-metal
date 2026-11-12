@@ -406,9 +406,9 @@ def qwen36_kv_cache_spec(
 
     One FullAttentionSpec per attention layer, with the smallest block size whose K and V block holds one GDN state
     (choose_block_size), and one MambaSpec per GDN layer, padded to the attention page so that vLLM keeps the
-    attention block size. ``mamba_block_size``: tokens per state block (max_model_len in mamba_cache_mode "none", so a
-    request keeps one state block per group). Raises ValueError for a TP degree or a geometry gdn_decode_step does not
-    serve."""
+    attention block size. ``mamba_block_size``: tokens per state block in mamba_cache_mode "none" (max_model_len, so a
+    request keeps one state block per group). In mode "align" the state blocks have the attention block size. Raises
+    ValueError for a TP degree or a geometry gdn_decode_step does not serve."""
     from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
     from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
 
@@ -446,15 +446,19 @@ def qwen36_kv_cache_spec(
     )
     assert attn.page_size_bytes == 2 * layout.tiles * layout.kv_tile_bytes
     shapes, dtypes = gdn_state_shapes(dims)
-    gdn = MambaSpec(
+    if mamba_cache_mode == "align":
+        mamba_kw = dict(block_size=block_size)
+    else:
         # A multiple of the attention block keeps vLLM's scheduler block size (the LCM of the group block sizes) at
-        # this value.
-        block_size=-(-int(mamba_block_size) // block_size) * block_size,
+        # the attention block size.
+        mamba_kw = dict(block_size=-(-int(mamba_block_size) // block_size) * block_size)
+    gdn = MambaSpec(
         shapes=shapes,
         dtypes=dtypes,
         page_size_padded=attn.page_size_bytes,
         mamba_type=MambaAttentionBackendEnum.GDN_ATTN,
         mamba_cache_mode=mamba_cache_mode,
+        **mamba_kw,
     )
     attn_names, gdn_names = qwen36_layer_names(text_config)
     specs = {name: attn for name in attn_names}

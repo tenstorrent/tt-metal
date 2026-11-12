@@ -16,6 +16,8 @@ class GroupState:
 
     layer_names: tuple
     windows: torch.Tensor
+    start_blocks: torch.Tensor
+    checkpoint_blocks: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,7 @@ class StepState:
     """Same fields as vllm_tt_plugin.mamba_state.MambaStepState."""
 
     groups: tuple
+    checkpoint_positions: torch.Tensor | None = None
 
 
 class PluginLayout:
@@ -63,14 +66,33 @@ class PluginLayout:
     def num_groups(self):
         return len(self.gdn_groups)
 
-    def step_state(self, state_blocks, rows):
-        """mamba_state for ``rows`` submitted rows; ``state_blocks[r]`` is row r's block per GDN group, or None for a
-        padding row (block 0)."""
+    def step_state(self, state_blocks, rows, start_blocks=None, checkpoints=None):
+        """mamba_state for ``rows`` submitted rows; ``state_blocks[r]`` is row r's destination block per GDN group, or
+        None for a padding row (block 0). ``start_blocks[r]``: row r's start block per group, None (block 0) for a row
+        at start_pos 0, or the string "same" for its destination blocks (mamba_cache_mode "none" after position 0);
+        all None when omitted. ``checkpoints[r]``: (token count, block per group) of row r's prefill checkpoint, or
+        None."""
+        start_blocks = start_blocks or [None] * len(state_blocks)
+        checkpoints = checkpoints or [None] * len(state_blocks)
+        has_checkpoint = any(c is not None for c in checkpoints)
         groups = []
         for g, names in enumerate(self.group_names):
             windows = torch.zeros(rows, 1, dtype=torch.int32)
+            starts = torch.zeros(rows, dtype=torch.int32)
+            ckpt = torch.zeros(rows, 1, dtype=torch.int32) if has_checkpoint else None
             for r, blocks in enumerate(state_blocks):
                 if blocks is not None:
                     windows[r, 0] = blocks[g]
-            groups.append(GroupState(layer_names=names, windows=windows))
-        return StepState(groups=tuple(groups))
+                start = blocks if start_blocks[r] == "same" else start_blocks[r]
+                if start is not None:
+                    starts[r] = start[g]
+                if checkpoints[r] is not None:
+                    ckpt[r, 0] = checkpoints[r][1][g]
+            groups.append(GroupState(layer_names=names, windows=windows, start_blocks=starts, checkpoint_blocks=ckpt))
+        positions = None
+        if has_checkpoint:
+            positions = torch.zeros(rows, 1, dtype=torch.int32)
+            for r, c in enumerate(checkpoints):
+                if c is not None:
+                    positions[r, 0] = c[0]
+        return StepState(groups=tuple(groups), checkpoint_positions=positions)

@@ -33,6 +33,7 @@ Persistent tensors are allocated in the constructor, before any trace capture: a
 alive at a replay can be overwritten by the replay.
 """
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import torch
@@ -61,6 +62,38 @@ def is_mamba_entry(entry):
     shapes. An attention entry is (shape, dtype, tensor_idx)."""
     shapes = entry[0]
     return len(shapes) > 0 and isinstance(shapes[0], (tuple, list))
+
+
+@dataclass(frozen=True)
+class RowBlocks:
+    """The state blocks of one row of ``mamba_state``, one entry per MambaSpec group."""
+
+    start: tuple  # block holding the full state after start_pos tokens; 0 at start_pos 0
+    dest: tuple  # block that takes the end state
+
+
+def row_blocks(mamba_state, row):
+    """RowBlocks of row ``row`` of ``mamba_state`` (vllm_tt_plugin.mamba_state.MambaStepState)."""
+    groups = mamba_state.groups
+    if any(getattr(g, "start_blocks", None) is None for g in groups):
+        raise ValueError(
+            "mamba_state has no start_blocks; Qwen36ForCausalLM needs a vllm-tt-plugin whose MambaGroupState names "
+            "the block of each row's start state"
+        )
+    return RowBlocks(
+        start=tuple(int(g.start_blocks[row]) for g in groups),
+        dest=tuple(int(g.windows[row, 0]) for g in groups),
+    )
+
+
+def prefill_segments(start, end, block_size):
+    """[(a, b), ...]: the token ranges, in order, that a prefill of tokens [start, end) runs one after the other on the
+    GDN workspace. Each range starts on a KV block boundary, where Qwen36Model.prefill_traced_chunked can continue."""
+    if not 0 <= start < end:
+        raise ValueError(f"prefill of tokens [{start}, {end}) is empty")
+    if start % block_size:
+        raise ValueError(f"prefill resumes at {start}, inside a {block_size}-token KV block")
+    return [(start, end)]
 
 
 def _free_copy(view, source):

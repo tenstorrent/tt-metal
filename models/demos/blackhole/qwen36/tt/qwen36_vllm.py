@@ -213,10 +213,20 @@ class Qwen36ForCausalLM(_Qwen36Generator):
     """vLLM-compatible wrapper for Qwen3.5/3.6/3.8 on a Blackhole TP mesh (P150x4, P150x8).
 
     vLLM owns the GDN state of every request: get_kv_cache_spec declares one MambaSpec per GDN layer, and each GDN
-    layer keeps a request's recurrent state and convolution history in the KV cache block that its MambaSpec group
-    gives the request (tt/gdn_block_state.py). Prefill starts every request from zero state and copies the end state
-    into the block; decode reads and writes the blocks with gdn_decode_step.
+    layer keeps a request's recurrent state and convolution history in the KV cache blocks that its MambaSpec group
+    gives the request (tt/gdn_block_state.py). A prefill starts from zero state or from the state of its start block
+    (a later prompt chunk, or a prefix-cache hit in mamba_cache_mode "align") and copies its end state into the
+    destination block; decode reads and writes the blocks with gdn_decode_step.
     """
+
+    # supports_chunked_prefill: a prefill continues from its start block (prefill_forward). supports_prefix_caching:
+    # mamba_cache_mode "align" restores prefixes from the state blocks vLLM keeps; the plugin requires chunked prefill
+    # with it.
+    model_capabilities = {
+        **_Qwen36Generator.model_capabilities,
+        "supports_prefix_caching": True,
+        "supports_chunked_prefill": True,
+    }
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
@@ -268,9 +278,16 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         self.model[0].gdn_blocks.zero_blocks(block_ids)
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
-        """Prefill each row on the GDN layers' batch-1 workspace from zero state, then copy the row's end state into
-        its state blocks (mamba_state). A row whose start_pos is above 0 is computed again from position 0: ``tokens``
-        holds the row's tokens from position 0 to prompt_lens. Returns host logits [N, 1, vocab]."""
+        """Prefill tokens [start_pos[u], prompt_lens[u]) of each row u on the GDN layers' batch-1 workspace, then copy
+        the row's end state into its destination blocks (mamba_state.windows). ``tokens`` holds each row's tokens from
+        position 0.
+
+        At start_pos 0 the row starts from zero state. Otherwise it continues from the full state of its start blocks
+        (mamba_state.start_blocks: a later chunk of the prompt, or a prefix-cache hit in mamba_cache_mode "align"),
+        attending over the KV cache that its page table holds for the earlier tokens; the start blocks are only read.
+        Returns host logits [N, 1, vocab] at each row's last token."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import row_blocks
+
         model = self.model[0]
         mamba_state = kwargs.get("mamba_state")
         if mamba_state is None:
@@ -284,21 +301,44 @@ class Qwen36ForCausalLM(_Qwen36Generator):
             )
         vision_tokens = self._compute_vision_tokens(model, kwargs) if visual else None
         N = tokens.shape[0]
+        start_pos = kwargs.get("start_pos")
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         comp = ttnn.ConcatMeshToTensor(model.mesh_device, dim=0)
+        blocks = model.gdn_blocks
         rows = []
         for u in range(N):
             T = int(prompt_lens[u]) if prompt_lens is not None else tokens.shape[1]
-            logger.info(f"Prefilling row {u} up to {T} tokens")
+            rb = row_blocks(mamba_state, u)
+            segments = self._prefill_segments(int(start_pos[u]) if start_pos is not None else 0, T, rb, visual)
+            logger.info(f"Prefilling row {u}: tokens [{segments[0][0]}, {T})")
+            if segments[0][0] > 0:
+                blocks.restore(mamba_state, rb.start)
+            [(a, b)] = segments
             # Short prompts run one masked-bucket forward; longer ones replay the chunk trace, then the masked tail.
             logits = model.prefill_traced_chunked(
-                tokens[u : u + 1, :T], pt[u : u + 1], actual_len=T, vision_tokens=vision_tokens
+                tokens[u : u + 1, :b], pt[u : u + 1], actual_len=b, vision_tokens=vision_tokens, start_pos=a
             )
             rows.append(ttnn.to_torch(logits, mesh_composer=comp).reshape(-1, model.args.vocab_size)[:1].float())
             ttnn.deallocate(logits)
-            model.gdn_blocks.write_prefill_state(mamba_state, u)
+            blocks.write_state(mamba_state, rb.dest)
         # Zero rope deltas: the multimodal M-RoPE delta is applied model-side (rope.rope_delta).
         return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
+
+    def _prefill_segments(self, start, end, rb, visual):
+        """gdn_block_state.prefill_segments for a row that vLLM schedules from ``start`` to ``end`` with the state
+        blocks ``rb``. A multimodal row restarts at position 0 instead and leaves its start blocks unread: its vision
+        splice and M-RoPE run on the whole prompt, and vllm-tt-plugin does not move the chunk ends of a multimodal
+        prompt onto KV block boundaries. Every other row must start on a KV block boundary, and prefill_segments raises
+        otherwise: vllm-tt-plugin ends the non-final prefill chunks of a MambaSpec model there and rejects a
+        prefix_match_unit below the block size, so vLLM's prefix hits end there too."""
+        from models.demos.blackhole.qwen36.tt.gdn_block_state import prefill_segments
+
+        block_size = self.model[0].gdn_blocks.layout.block_size
+        if start > 0 and visual:
+            start = 0
+        elif (start == 0 and any(rb.start)) or (start > 0 and min(rb.start) <= 0):
+            raise ValueError(f"a prefill row at start_pos {start} has the start blocks {rb.start}")
+        return prefill_segments(start, end, block_size)
 
     def decode_forward(self, *args, **kwargs):
         args = list(args)
