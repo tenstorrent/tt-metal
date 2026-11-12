@@ -13,6 +13,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -44,14 +45,14 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
         return input_tensor;
     }
 
-    auto input_address = ghost_input_tensor.buffer()->address();
+    auto input_address = ghost_input_tensor.mesh_buffer().address();
     tt::tt_metal::TensorSpec output_tensor_spec = ghost_input_tensor.tensor_spec();
     const auto& input_mem_config = ghost_input_tensor.memory_config();
 
     if (mem_config) {
         output_tensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_spec.logical_shape(),
-            TensorLayout(
+            tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                 output_tensor_spec.tensor_layout().get_data_type(),
                 output_tensor_spec.tensor_layout().get_page_config(),
                 *mem_config,
@@ -66,7 +67,7 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
 
     // A tensor moved within L1 it is meant to reallocate at higher addresses and a tensor moved within DRAM is meant to
     // reallocate at lower addresses If the tensor is not allocated in a new address, there is no need to move the data
-    if (move_within_same_mem_space and input_address == output_tensor.buffer()->address()) {
+    if (move_within_same_mem_space and input_address == output_tensor.mesh_buffer().address()) {
         log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",
@@ -77,28 +78,31 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
     const auto num_banks =
-        ghost_input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
+        ghost_input_tensor.device()->allocator()->get_num_banks(output_tensor.memory_config().buffer_type());
     uint32_t size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output_tensor.buffer()->size(),
-        output_tensor.buffer()->page_size(),
+        output_tensor.mesh_buffer().device_local_size(),
+        output_tensor.mesh_buffer().page_size(),
         num_banks,
-        output_tensor.buffer()->alignment());
+        output_tensor.mesh_buffer().alignment());
 
     // If input and output buffers overlap, input has to be copied into circular buffer before writing to output
     // Only compute with storage cores allow CBs to be created
     auto compute_with_storage_grid_size = ghost_input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
+        output_tensor.mesh_buffer().device_local_size(),
+        output_tensor.mesh_buffer().page_size(),
+        num_l1_banks,
+        hal::get_l1_alignment());
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type()) {
             // If DRAM, inverse logic because memory is allocated bottom up
             case tt::tt_metal::BufferType::DRAM: {
-                non_overlap = output_tensor.buffer()->address() + size_per_bank <= input_address;
+                non_overlap = output_tensor.mesh_buffer().address() + size_per_bank <= input_address;
             } break;
             case tt::tt_metal::BufferType::L1: {
-                non_overlap = input_address + size_per_bank <= output_tensor.buffer()->address();
+                non_overlap = input_address + size_per_bank <= output_tensor.mesh_buffer().address();
             } break;
             default: break;
         }
@@ -106,7 +110,7 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
 
     bool fits_in_cb =
         (output_tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
-        (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
+        (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 ? output_tensor.mesh_buffer().address()
                                                                          : output_tensor.device()->l1_size_per_core());
 
     ttnn::prim::MoveOpParallelizationStrategy move_op_parallelization_strategy =
@@ -136,7 +140,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
         return {input_tensor};
     }
 
-    [[maybe_unused]] auto input_address = ghost_input_tensor.buffer()->address();
+    [[maybe_unused]] auto input_address = ghost_input_tensor.mesh_buffer().address();
     auto shard_spec = ghost_input_tensor.shard_spec().value();
 
     auto output_tensor_spec = ghost_input_tensor.tensor_spec();
@@ -145,7 +149,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
         auto output_mem_config = MemoryConfig(mem_config->memory_layout(), mem_config->buffer_type(), shard_spec);
         output_tensor_spec = tt::tt_metal::TensorSpec(
             output_tensor_spec.logical_shape(),
-            TensorLayout(
+            tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
                 output_tensor_spec.tensor_layout().get_data_type(),
                 output_tensor_spec.tensor_layout().get_page_config(),
                 output_mem_config,
@@ -153,7 +157,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());
-    if (ghost_input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
+    if (ghost_input_tensor.mesh_buffer().address() == output_tensor.mesh_buffer().address()) {
         log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",

@@ -574,8 +574,7 @@ struct perf_counter_scoped
             [zid]
             {
 #if defined(PERF_COUNTERS_COMPILED)
-                // Span run types read at their exit rendezvous, so this read would be dead for them, and not
-                // harmless: an L1 read here hung every Wormhole L1_CONGESTION kernel in the math thread.
+                // Span run types read at their exit rendezvous, so this read would be dead for them.
                 if constexpr (is_single_thread_runtype(RUN_TYPE))
                 {
                     // An earlier zone's readout: only a launch that counts one (INIT's own launch) takes it.

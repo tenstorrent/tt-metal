@@ -10,6 +10,9 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -137,9 +140,9 @@ std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircu
     uint32_t num_receivers,
     uint32_t num_layers,
     uint32_t cb_padding,
-    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& in0_buffer,
-    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& in1_buffer,
-    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& output_buffer,
+    const tt_metal::MeshTensor& in0_buffer,
+    const tt_metal::MeshTensor& in1_buffer,
+    const tt_metal::MeshTensor& output_buffer,
     bool use_sub_devices) {
     log_info(tt::LogTest, "created program");
 
@@ -202,7 +205,7 @@ std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircu
     tt_metal::CircularBufferConfig in0_reader_cb_config =
         tt_metal::CircularBufferConfig(in0_reader_cb_size, {{in0_reader_cb_index, tile_format}})
             .set_page_size(in0_reader_cb_index, single_tile_size)
-            .set_globally_allocated_address(*in0_buffer->get_backing_buffer());
+            .set_globally_allocated_address(in0_buffer);
     tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
 
     // in1 receiver CB
@@ -222,7 +225,7 @@ std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircu
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, tile_format}})
             .set_page_size(output_cb_index, single_tile_size)
-            .set_globally_allocated_address(*output_buffer->get_backing_buffer());
+            .set_globally_allocated_address(output_buffer);
     tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
 
     // sync CB
@@ -238,7 +241,7 @@ std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircu
 
     // in1 reader
     std::vector<uint32_t> in1_reader_compile_time_args = {
-        (std::uint32_t)in1_buffer->address(),
+        (std::uint32_t)in1_buffer.address(),
         (std::uint32_t)start_tile_id,
         (std::uint32_t)tt_metal::NOC::RISCV_0_default,
         (std::uint32_t)num_layers};
@@ -452,6 +455,16 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     return numerator / denominator;
 }
 
+// Reads the tensor back and returns the contents of its shard on device (0, 0).
+template <typename T>
+std::vector<T> read_shard_as(tt_metal::distributed::MeshDevice& device, const tt_metal::MeshTensor& tensor) {
+    const auto host_tensor = device.mesh_command_queue().enqueue_read_tensor(tensor);
+    const auto shard = host_tensor.buffer().get_shard(tt_metal::distributed::MeshCoordinate(0, 0));
+    TT_FATAL(shard.has_value(), "Tensor has no shard on device (0, 0)");
+    const auto values = shard->view_as<T>();
+    return std::vector<T>(values.begin(), values.end());
+}
+
 bool validation_bfp8_b(
     const tt::deprecated::Tensor<float>& in0_tensor,
     const tt::deprecated::Tensor<float>& in1_tensor,
@@ -461,7 +474,7 @@ bool validation_bfp8_b(
     uint32_t mt,
     uint32_t kt,
     uint32_t nt,
-    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& out_buffer,
+    const tt_metal::MeshTensor& out_buffer,
     uint32_t num_receivers,
     tt_metal::distributed::MeshDevice* device) {
     bool pass = true;
@@ -469,9 +482,7 @@ bool validation_bfp8_b(
     std::vector<float> result_vec(mt * nt * 32 * 32, 0);
 
     std::vector<float> result_untilized;
-    std::vector<uint32_t> result;
-    tt_metal::distributed::ReadShard(
-        device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
+    const auto result = read_shard_as<uint32_t>(*device, out_buffer);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
     result_untilized = untilize_swizzled(result_bfp8, mt * 32, nt * 32);
 
@@ -513,17 +524,14 @@ bool validation_fp16(
     uint32_t mt,
     uint32_t kt,
     uint32_t nt,
-    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& out_buffer,
+    const tt_metal::MeshTensor& out_buffer,
     uint32_t num_receivers,
     tt_metal::distributed::MeshDevice* device) {
     bool pass = true;
     std::vector<float> golden_vec(mt * nt * 32 * 32, 0);  // Initialize with zeros
     std::vector<float> result_vec(mt * nt * 32 * 32, 0);
 
-    std::vector<uint32_t> result;
-    tt_metal::distributed::ReadShard(
-        device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
-    auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
+    const auto result_bfp16 = read_shard_as<bfloat16>(*device, out_buffer);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, mt * 32, nt * 32);
 
@@ -556,56 +564,40 @@ bool validation_fp16(
     return pass;
 }
 
-std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_sharded_cb(
-    tt_metal::distributed::MeshDevice* device,
+// Allocates a width-sharded tile tensor of ht x wt tiles on `cores` and writes the packed tiles into it.
+tt_metal::MeshTensor create_and_transfer_data_sharded_cb(
+    tt_metal::distributed::MeshDevice& device,
     const vector<uint32_t>& input_vec,
     uint32_t ht,
     uint32_t wt,
     BufferType buffer_type,
     tt::DataFormat data_format,
-    CoreRangeSet cores,
-    uint32_t num_receivers,
-    std::optional<DeviceAddr> address = std::nullopt) {
-    uint32_t size_bytes;
-    uint32_t page_size_bytes;
-    if (data_format == tt::DataFormat::Bfp8_b) {
-        size_bytes = ht * wt * 1088;
-        page_size_bytes = 1088;
-    } else {
-        size_bytes = ht * tt::constants::TILE_HEIGHT * wt * tt::constants::TILE_WIDTH * 2;
-        page_size_bytes = tt::constants::TILE_HW * 2;
-    }
-
-    ShardSpecBuffer shard_spec = ShardSpecBuffer(
-        cores,
-        {ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH / num_receivers},
-        ShardOrientation::ROW_MAJOR,
-        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-        {ht, wt});
-
-    BufferShardingArgs sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED);
+    const CoreRangeSet& cores,
+    uint32_t num_receivers) {
+    const auto dtype =
+        data_format == tt::DataFormat::Bfp8_b ? tt_metal::DataType::BFLOAT8_B : tt_metal::DataType::BFLOAT16;
+    const tt_metal::MemoryConfig memory_config(
+        TensorMemoryLayout::WIDTH_SHARDED,
+        buffer_type,
+        tt_metal::ShardSpec(
+            cores,
+            {ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH / num_receivers},
+            ShardOrientation::ROW_MAJOR));
+    const tt_metal::TensorSpec spec(
+        tt_metal::Shape({ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH}),
+        tt_metal::TensorLayout(dtype, tt_metal::PageConfig(tt_metal::Layout::TILE), memory_config));
     log_info(tt::LogTest, "cores: {}", cores);
-    log_info(tt::LogTest, "size_bytes: {}", size_bytes);
-    log_info(tt::LogTest, "page_size_bytes: {}", page_size_bytes);
+    log_info(tt::LogTest, "size_bytes: {}", spec.compute_packed_buffer_size_bytes());
+    log_info(tt::LogTest, "page_size_bytes: {}", spec.compute_page_size_bytes());
     log_info(tt::LogTest, "num_receivers: {}", num_receivers);
 
-    auto device_local_config = tt_metal::distributed::DeviceLocalBufferConfig{
-        .page_size = page_size_bytes, .buffer_type = buffer_type, .sharding_args = sharding_args};
-
-    tt_metal::distributed::ReplicatedBufferConfig global_buf{.size = size_bytes};
-
-    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer;
-    if (address.has_value()) {
-        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address);
-    } else {
-        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
-    }
-    tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
-    tt_metal::distributed::Finish(device->mesh_command_queue());
+    auto tensor = tt_metal::MeshTensor::allocate_on_device(device, spec);
+    const auto host_tensor = tt_metal::HostTensor::from_buffer(tt_metal::HostBuffer(input_vec), spec);
+    device.mesh_command_queue().enqueue_write_tensor(host_tensor, tensor);
+    tt_metal::distributed::Finish(device.mesh_command_queue());
 
     log_info(tt::LogTest, "created sharded tensor");
-
-    return input_buffer;
+    return tensor;
 }
 
 int main(int argc, char** argv) {
@@ -721,10 +713,10 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::shared_ptr<tt_metal::distributed::MeshBuffer> in0_buffer;
-        std::vector<std::shared_ptr<tt_metal::distributed::MeshBuffer>> in1_buffers(num_layers);
-        std::shared_ptr<tt_metal::distributed::MeshBuffer> in1_l1_buffer;
-        std::shared_ptr<tt_metal::distributed::MeshBuffer> output_buffer;
+        std::optional<tt_metal::MeshTensor> in0_buffer;
+        std::vector<tt_metal::MeshTensor> in1_buffers;
+        in1_buffers.reserve(num_layers);
+        std::optional<tt_metal::MeshTensor> output_buffer;
         SHAPE in0_shape = SHAPE{1, 1, m, k * num_receivers};
         tt::deprecated::Tensor<bfloat16> in0_tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(
             in0_shape,
@@ -757,15 +749,15 @@ int main(int argc, char** argv) {
                 auto input_vec_tilized = tilize_swizzled(in1_tensor_fp8.get_values(), k, n);
                 std::vector<uint32_t> packed_input_vec_tile_layout =
                     pack_as_bfp8_tiles(ttsl::make_const_span(input_vec_tilized), true, false);
-                in1_buffers[i] = create_and_transfer_data_sharded_cb(
-                    device.get(),
+                in1_buffers.push_back(create_and_transfer_data_sharded_cb(
+                    *device,
                     packed_input_vec_tile_layout,
                     kt,
                     nt,
                     tt_metal::BufferType::DRAM,
                     tt::DataFormat::Bfp8_b,
                     dram_reader_core,
-                    num_banks);
+                    num_banks));
             }
 
             // in0
@@ -773,7 +765,7 @@ int main(int argc, char** argv) {
             std::vector<uint32_t> activations =
                 pack_as_bfp8_tiles(ttsl::make_const_span(activations_tilized), true, false);
             in0_buffer = create_and_transfer_data_sharded_cb(
-                device.get(),
+                *device,
                 activations,
                 mt,
                 kt * num_receivers,
@@ -785,7 +777,7 @@ int main(int argc, char** argv) {
             // output
             vector<uint32_t> outputs = test_utils::create_constant_vector_of_bfp8(mt * nt * single_tile_size, 0, false);
             output_buffer = create_and_transfer_data_sharded_cb(
-                device.get(),
+                *device,
                 outputs,
                 mt,
                 nt,
@@ -802,15 +794,15 @@ int main(int argc, char** argv) {
                     convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(input_vec_tilized));
                 vector<uint32_t> packed_input_vec_tile_layout =
                     pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
-                in1_buffers[i] = create_and_transfer_data_sharded_cb(
-                    device.get(),
+                in1_buffers.push_back(create_and_transfer_data_sharded_cb(
+                    *device,
                     packed_input_vec_tile_layout,
                     kt,
                     nt,
                     tt_metal::BufferType::DRAM,
                     tt::DataFormat::Float16_b,
                     dram_reader_core,
-                    num_banks);
+                    num_banks));
             }
 
             // in0
@@ -819,7 +811,7 @@ int main(int argc, char** argv) {
                 convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
             vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             in0_buffer = create_and_transfer_data_sharded_cb(
-                device.get(),
+                *device,
                 activations,
                 mt,
                 kt * num_receivers,
@@ -831,7 +823,7 @@ int main(int argc, char** argv) {
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfloat16(mt * nt * single_tile_size, 0);
             output_buffer = create_and_transfer_data_sharded_cb(
-                device.get(),
+                *device,
                 outputs,
                 mt,
                 nt,
@@ -842,7 +834,7 @@ int main(int argc, char** argv) {
         }
 
         for (uint32_t i = 0; i < num_layers; ++i) {
-            log_info(tt::LogTest, "in1_buffers addr: {}", in1_buffers[i]->address());
+            log_info(tt::LogTest, "in1_buffers addr: {}", in1_buffers[i].address());
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -863,9 +855,9 @@ int main(int argc, char** argv) {
             num_receivers,
             num_layers,
             cb_padding,
-            in0_buffer,
+            *in0_buffer,
             in1_buffers[0],
-            output_buffer,
+            *output_buffer,
             use_sub_devices);
 
         ////////////////////////////////////////////////////////////////////////////
@@ -913,7 +905,7 @@ int main(int argc, char** argv) {
                 mt,
                 kt,
                 nt,
-                output_buffer,
+                *output_buffer,
                 num_receivers,
                 device.get());
         } else {
@@ -926,7 +918,7 @@ int main(int argc, char** argv) {
                 mt,
                 kt,
                 nt,
-                output_buffer,
+                *output_buffer,
                 num_receivers,
                 device.get());
         }

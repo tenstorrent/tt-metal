@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only checks of the KDA state migration contract: segment counts, bytes and numbering."""
 
+from dataclasses import replace
+
 import pytest
 import torch
 
@@ -26,7 +28,8 @@ def test_k3_contract_counts_and_bytes(sp: int, tp: int) -> None:
 
     assert geometry.local_heads == 96 // tp
     assert geometry.recurrent_shape == (1, 96 // tp, 128, 128)
-    assert geometry.convolution_shape == (1, 3, 3 * (96 // tp) * 128)
+    # One 64-channel segment per page: 3 * local_heads * 128 / 64 pages of 3 * 64 elements.
+    assert geometry.convolution_shape == (1, 3 * (96 // tp) * 128 // 64, 3 * 64)
     assert geometry.recurrent_segments_per_layer == 384
     assert geometry.convolution_segments_per_layer == 576
     assert geometry.recurrent_segment_bytes == 16_384
@@ -133,3 +136,23 @@ def test_geometry_rejects_heads_not_divisible_by_tp(sp: int, tp: int, expect_err
 def test_geometry_rejects_same_sp_and_tp_axis(expect_error) -> None:
     with expect_error(ValueError, "distinct 2D SP/TP axes"):
         KdaContractGeometry.from_kda_config(kimi_k3_kda_config(), mesh_shape=(2, 4), sp_axis=1, tp_axis=1)
+
+
+def _geometry_with_head_dim(head_dim: int) -> KdaContractGeometry:
+    config = replace(kimi_k3_kda_config(), head_k_dim=head_dim, head_v_dim=head_dim)
+    return KdaContractGeometry.from_kda_config(config, mesh_shape=(8, 4), sp_axis=0, tp_axis=1)
+
+
+@pytest.mark.parametrize("head_dim,pages,bands", [(64, 1, 2), (128, 2, 4), (256, 4, 8)])
+def test_geometry_accepts_head_dim_of_whole_convolution_pages(head_dim: int, pages: int, bands: int) -> None:
+    geometry = _geometry_with_head_dim(head_dim)
+
+    assert geometry.halves == pages
+    assert geometry.bands == bands
+    assert geometry.convolution_shape == (1, 3 * 24 * pages, 3 * 64)
+
+
+@pytest.mark.parametrize("head_dim", [32, 96])
+def test_geometry_rejects_head_dim_of_partial_convolution_pages(head_dim: int, expect_error) -> None:
+    with expect_error(ValueError, f"head_dim {head_dim} must be a multiple of 64"):
+        _geometry_with_head_dim(head_dim)

@@ -125,7 +125,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 3
-  owner_id: U09LK84G4TF # Nikola Milicevic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: unit
   category: experimental
@@ -135,6 +135,7 @@
   # without changing this infra-owned command. Keep the search roots aligned with the non-IOMMU suites above.
   cmd: |
     pytest \
+      tests/ttnn/nightly/unit_tests/operations/data_movement \
       tests/ttnn/nightly/unit_tests/operations/experimental \
       --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft \
       tests/ttnn/nightly/unit_tests/operations/sdpa \
@@ -157,6 +158,18 @@
   owner_id: U07M7QZ0BQA # Camilo Vega
   team: ttnn
   budget_type: unit
+  category: experimental
+
+- name: Gemma4 sliding ring SDPA op tests (QB2)
+  # Gemma4's fork of ring joint SDPA's sliding path (ttnn.experimental.gemma4.sliding_ring_sdpa).
+  # The cases are multi-chip rings, so it needs a QB2; the perf check is Galaxy-only and deselected here.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/gemma4/test_sliding_ring_sdpa.py -k "not perf_check" -xv --timeout=600'
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: UT1JL93D5 # Kyle Mabee
+  team: models
+  budget_type: e2e
   category: experimental
 
 - name: ttnn nightly pool tests
@@ -335,7 +348,7 @@
   category: sdpa
 
 - name: ttnn nightly data_movement tests
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode and not requires_host_iommu" --timeout=600'
   ai_summary:
     authoritative_job_status: true
   skus:

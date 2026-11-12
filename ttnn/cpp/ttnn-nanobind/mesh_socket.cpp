@@ -13,6 +13,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 

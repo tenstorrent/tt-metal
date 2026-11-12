@@ -296,6 +296,7 @@ class TtPrefillTransformer(LightweightModule):
                 layer_num=self.num_kvpe_cache_layers,
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
+                next_kv_only=kv_only_last_layer and local_idx == num_layers - 2,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 tp_shard_kv=tp_shard_kv,
                 sparse_kv_cache_format=sparse_kv_cache_format,

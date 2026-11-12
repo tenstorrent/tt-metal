@@ -156,6 +156,26 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const DFBSpecName X{"x"};
     const DFBSpecName MASK_PADDED{"mask_padded"};
 
+    constexpr std::uint32_t rows_per_pass_budget_bytes = 300 * 1024;
+    const std::uint32_t rows_per_pass = [&]() -> std::uint32_t {
+        if (arch != tt::ARCH::WORMHOLE_B0 || has_mask || !mask_padded_data || !attributes.numeric_stable) {
+            return 1u;
+        }
+        const std::uint64_t shard_tiles = std::uint64_t{program_config.block_w} * program_config.block_h;
+        const std::uint64_t fixed_bytes =
+            (shard_tiles * in0_tile_size) + (attributes.inplace ? 0 : shard_tiles * out0_tile_size) +
+            max_scaler_tile_size + sum_scaler_tile_size + tt::tile_size(tt::DataFormat::Float16_b);
+        const std::uint64_t l1_bytes = device->allocator()->get_bank_size(BufferType::L1);
+        for (std::uint32_t d = program_config.block_h; d >= 2; --d) {
+            const std::uint64_t pass_bytes = std::uint64_t{program_config.block_w + 3} * d * im_tile_size;
+            if (program_config.block_h % d == 0 && pass_bytes <= rows_per_pass_budget_bytes &&
+                fixed_bytes + pass_bytes <= l1_bytes) {
+                return d;
+            }
+        }
+        return 1u;
+    }();
+
     // ---- DataflowBuffers (mirrors legacy CB allocation; borrowed-memory DFBs for the sharded I/O) ----
     Group<DataflowBufferSpec> dfbs;
     dfbs.push_back(DataflowBufferSpec{
@@ -204,12 +224,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = EXPS,
         .entry_size = im_tile_size,
-        .num_entries = program_config.block_w,
+        .num_entries = program_config.block_w * rows_per_pass,
         .data_format_metadata = im_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = RECIP_SUM_EXPS,
         .entry_size = im_tile_size,
-        .num_entries = 1,
+        .num_entries = rows_per_pass,
         .data_format_metadata = im_cb_data_format});
     if (mask_padded_data) {
         // The reader fills the padding tile with bfloat16 -inf whatever the input and mask dtypes.
@@ -221,11 +241,14 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     }
     if (attributes.numeric_stable) {
         dfbs.push_back(DataflowBufferSpec{
-            .unique_id = MAX, .entry_size = im_tile_size, .num_entries = 1, .data_format_metadata = im_cb_data_format});
+            .unique_id = MAX,
+            .entry_size = im_tile_size,
+            .num_entries = rows_per_pass,
+            .data_format_metadata = im_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = X,
             .entry_size = im_tile_size,
-            .num_entries = program_config.block_w,
+            .num_entries = rows_per_pass > 1 ? rows_per_pass : program_config.block_w,
             .data_format_metadata = im_cb_data_format});
     }
 
@@ -251,6 +274,9 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         compute_defines["NUMERIC_STABLE"] = "1";
     }
     compute_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+    if (rows_per_pass > 1) {
+        compute_defines["ROWS_PER_PASS"] = std::to_string(rows_per_pass);
+    }
     compute_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
 
     // ---- Reader kernel ----

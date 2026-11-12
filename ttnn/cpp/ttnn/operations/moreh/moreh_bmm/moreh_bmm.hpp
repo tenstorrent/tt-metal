@@ -9,6 +9,7 @@
 
 namespace ttnn {
 
+[[deprecated("moreh_bmm is deprecated and will be removed after 2026-11-26. Use ttnn::matmul instead.")]]
 Tensor moreh_bmm(
     const Tensor& input,
     const Tensor& mat2,

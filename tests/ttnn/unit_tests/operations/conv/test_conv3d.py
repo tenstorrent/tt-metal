@@ -986,3 +986,58 @@ def test_conv3d_fp32_operand_split_raw_weights(device):
     raw_out = reshape_output(raw, N, T, 1, 1, C_out, device)
     prepared_out = reshape_output(prepared, N, T, 1, 1, C_out, device)
     assert torch.equal(raw_out, prepared_out), "raw rank-5 weights and pre-prepared weights disagree"
+
+
+def test_conv3d_rejects_c_in_block_not_tile_aligned_with_kernel(device, expect_error):
+    """kernel_volume * C_in_block must be tile aligned when C_in is split into several blocks."""
+    config = create_conv3d_config(C_in_block=16)
+    with expect_error(RuntimeError, "must be a multiple of 32 when C_in is split into multiple blocks"):
+        run_conv3d_test(
+            device,
+            (1, 32, 3, 6, 6),
+            32,
+            (3, 3, 3),
+            (1, 1, 1),
+            1,
+            (0, 0, 0),
+            "zeros",
+            config=config,
+        )
+
+
+@pytest.mark.parametrize("block", ["T_out_block", "H_out_block", "W_out_block"])
+def test_conv3d_rejects_zero_out_block(device, block, expect_error):
+    C, out_channels, kernel_size = 32, 32, (3, 3, 3)
+    torch.manual_seed(0)
+    input_tensor = torch.randn(1, C, 4, 8, 8, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(C, out_channels, kernel_size=kernel_size, padding=(0, 1, 1), bias=False)
+    tt_input = prepare_input_tensor(input_tensor, C, device)
+    config = create_conv3d_config(C_in_block=32, **{block: 0})
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.bfloat16, pad_value=0),
+        groups=1,
+        C_in_block=config.C_in_block,
+        alignment=ALIGNMENT,
+        device=device,
+    )
+    with expect_error(RuntimeError, f"{block} .* must be greater than 0"):
+        ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            dtype=ttnn.bfloat16,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=(1, 1, 1),
+            padding=(0, 1, 1),
+            padding_mode="zeros",
+            config=config,
+        )
+
+
+def test_prepare_conv3d_weights_rejects_zero_alignment(device, expect_error):
+    weight = ttnn.from_torch(torch.randn(32, 32, 3, 3, 3), dtype=ttnn.bfloat16, pad_value=0)
+    with expect_error(RuntimeError, "alignment must be greater than 0"):
+        ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=weight, groups=1, C_in_block=32, alignment=0, device=device
+        )

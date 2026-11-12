@@ -6,11 +6,13 @@
 
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <optional>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "mla_kv_assemble_fw_device_operation.hpp"
 #include "mla_kv_assemble_fw_device_operation_types.hpp"
 
 namespace {
@@ -23,13 +25,16 @@ constexpr auto kWriterKernelPath =
     "tt-train/sources/ttml/metal/ops/mla_kv_assemble_fw/device/kernels/dataflow/"
     "writer_mla_kv_assemble_fw.cpp";
 
-// reader runtime arg indices (for override_runtime_arguments)
-constexpr uint32_t kReaderArgKvUpAddr = 0;
-constexpr uint32_t kReaderArgKpeAddr = 1;
+// Kernel push order: reader, then writer (there is no compute kernel)
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
 
-// writer runtime arg indices
-constexpr uint32_t kWriterArgKAddr = 0;
-constexpr uint32_t kWriterArgVAddr = 1;
+// reader runtime args
+constexpr uint32_t kKvUpAddrIdx = 0U;
+constexpr uint32_t kKpeAddrIdx = 1U;
+// writer runtime args
+constexpr uint32_t kKAddrIdx = 0U;
+constexpr uint32_t kVAddrIdx = 1U;
 
 // CB indices. k_nope and v are demuxed into separate CBs so each output stream can be chunked and
 // double-buffered independently; the writer reinserts the broadcast k_pe between them.
@@ -57,12 +62,19 @@ namespace ttml::metal::ops::mla_kv_assemble_fw::device {
 
 using namespace tt::constants;
 
-struct MLAKVAssembleFwKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-};
+namespace {
 
-MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::create(
+// kv_up's (batch, sequence tile row) blocks over the device's compute grid. create_descriptor() pins it against
+// split_work_to_cores, and override_runtime_arguments() walks the same cores from it.
+WorkSplit make_work_split(const ttnn::Tensor& kv_up) {
+    const auto& shape = kv_up.padded_shape();
+    return compute_work_split(
+        kv_up.device()->compute_with_storage_grid_size(), shape[0] * (shape[2] / tt::constants::TILE_HEIGHT));
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor MLAKVAssembleFwProgramFactory::create_descriptor(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& kv_up = tensor_args.kv_up;
     const auto& k_pe = tensor_args.k_pe;
@@ -70,7 +82,7 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
     auto& v = output[1];
 
     auto* device = kv_up.device();
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     // ── Tile geometry ──
     const auto kv_up_shape = kv_up.padded_shape();
@@ -94,10 +106,12 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
 
     // ── Work split ──
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+    const WorkSplit split = make_work_split(kv_up);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2);
 
     // ── CBs ──
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(kv_up.dtype());
@@ -109,14 +123,9 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
     const uint32_t io_cb_num_tiles = kCbDoubleBuffer * block_size;
     const uint32_t kpe_cb_num_tiles = kCbDoubleBuffer * Tr;
 
-    [[maybe_unused]] auto cb_knope =
-        create_circular_buffer(program, all_cores, kKnopeCbIndex, data_format, single_tile_size, io_cb_num_tiles);
-
-    [[maybe_unused]] auto cb_v =
-        create_circular_buffer(program, all_cores, kVCbIndex, data_format, single_tile_size, io_cb_num_tiles);
-
-    [[maybe_unused]] auto cb_kpe =
-        create_circular_buffer(program, all_cores, kKpeCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kKnopeCbIndex, data_format, single_tile_size, io_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kVCbIndex, data_format, single_tile_size, io_cb_num_tiles));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, kKpeCbIndex, data_format, single_tile_size, kpe_cb_num_tiles));
 
     // ── Kernels ──
     auto* kv_up_buffer = kv_up.buffer();
@@ -134,76 +143,62 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
 
     const std::map<std::string, std::string> defines;
 
-    MLAKVAssembleFwKernels kernels;
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    desc.kernels.push_back(
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
+    desc.kernels.push_back(
+        make_writer_kernel_descriptor(all_cores, writer_compile_time_args, defines, kWriterKernelPath));
 
     // ── Runtime args ──
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_blocks_per_core_group_1,
-        num_blocks_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
-            // Block index = b * Ts + sb. Inputs kv_up, k_pe are flat across blocks.
-            const uint32_t kv_up_tile_id_start = start_block * kv_up_tiles_per_block;
-            const uint32_t k_pe_tile_id_start = start_block * kpe_tiles_per_block;
-            // Outputs are head-major: tile_id(b, h, sb, w) = b*H*HtWt + h*HtWt + sb*Wt + w.
-            const uint32_t b_start = start_block / Ts;
-            const uint32_t sb_start = start_block % Ts;
-            const uint32_t k_tile_id_start = b_start * H * k_HtWt + sb_start * Th;
-            const uint32_t v_tile_id_start = b_start * H * v_HtWt + sb_start * Tv;
-            SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {kv_up_buffer->address(), k_pe_buffer->address(), num_blocks, kv_up_tile_id_start, k_pe_tile_id_start});
-            SetRuntimeArgs(
-                program,
-                kernels.writer,
-                core,
-                {k_buffer->address(), v_buffer->address(), num_blocks, sb_start, k_tile_id_start, v_tile_id_start});
-        });
+    // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.
+    // num_blocks and the tile offsets follow from the hashed shapes and head dims.
+    auto& reader = desc.kernels[kReaderKernelIdx];
+    auto& writer = desc.kernels[kWriterKernelIdx];
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
+        // Block index = b * Ts + sb. Inputs kv_up, k_pe are flat across blocks.
+        const uint32_t kv_up_tile_id_start = start_block * kv_up_tiles_per_block;
+        const uint32_t k_pe_tile_id_start = start_block * kpe_tiles_per_block;
+        // Outputs are head-major: tile_id(b, h, sb, w) = b*H*HtWt + h*HtWt + sb*Wt + w.
+        const uint32_t b_start = start_block / Ts;
+        const uint32_t sb_start = start_block % Ts;
+        const uint32_t k_tile_id_start = b_start * H * k_HtWt + sb_start * Th;
+        const uint32_t v_tile_id_start = b_start * H * v_HtWt + sb_start * Tv;
+        reader.emplace_runtime_args(
+            core, {kv_up_buffer, k_pe_buffer, num_blocks, kv_up_tile_id_start, k_pe_tile_id_start});
+        writer.emplace_runtime_args(core, {k_buffer, v_buffer, num_blocks, sb_start, k_tile_id_start, v_tile_id_start});
+    });
 
-    return cached_program_t{
-        std::move(program),
-        {/* reader_kernel_id = */ kernels.reader,
-         /* writer_kernel_id = */ kernels.writer,
-         /* num_cores        = */ num_cores,
-         /* num_cores_y      = */ num_cores_y}};
+    return desc;
 }
 
 void MLAKVAssembleFwProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*args*/,
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& shared = cached_program.shared_variables;
-    auto& program = cached_program.program;
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const WorkSplit split = make_work_split(tensor_args.kv_up);
 
-    auto* kv_up_buffer = tensor_args.kv_up.buffer();
-    auto* k_pe_buffer = tensor_args.k_pe.buffer();
-    auto* k_buffer = output[0].buffer();
-    auto* v_buffer = output[1].buffer();
+    const uint32_t kv_up_addr = tensor_args.kv_up.buffer()->address();
+    const uint32_t k_pe_addr = tensor_args.k_pe.buffer()->address();
+    const uint32_t k_addr = output[0].buffer()->address();
+    const uint32_t v_addr = output[1].buffer()->address();
 
-    auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
 
-    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        {
-            auto& ra = reader_runtime_args[core.x][core.y];
-            ra[kReaderArgKvUpAddr] = kv_up_buffer->address();
-            ra[kReaderArgKpeAddr] = k_pe_buffer->address();
-        }
-        {
-            auto& ra = writer_runtime_args[core.x][core.y];
-            ra[kWriterArgKAddr] = k_buffer->address();
-            ra[kWriterArgVAddr] = v_buffer->address();
-        }
+        auto& reader_args = reader_runtime_args[core.x][core.y];
+        reader_args[kKvUpAddrIdx] = kv_up_addr;
+        reader_args[kKpeAddrIdx] = k_pe_addr;
+
+        auto& writer_args = writer_runtime_args[core.x][core.y];
+        writer_args[kKAddrIdx] = k_addr;
+        writer_args[kVAddrIdx] = v_addr;
     });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(MLAKVAssembleFwDeviceOperation, MLAKVAssembleFwProgramFactory);
 
 }  // namespace ttml::metal::ops::mla_kv_assemble_fw::device

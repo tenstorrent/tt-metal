@@ -11,7 +11,6 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/distributed_context.hpp>
 
 #include <algorithm>
 #include <functional>

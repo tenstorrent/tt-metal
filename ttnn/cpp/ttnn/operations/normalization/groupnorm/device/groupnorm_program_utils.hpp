@@ -132,6 +132,7 @@ int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
 
 bool is_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords);
 
+// Each output rectangle follows group order, from its low to its high corner.
 void split_and_form_rectangle_grids(
     std::vector<tt::tt_metal::CoreCoord>& group,
     std::vector<tt::tt_metal::CoreCoord>& mcast_group_first,

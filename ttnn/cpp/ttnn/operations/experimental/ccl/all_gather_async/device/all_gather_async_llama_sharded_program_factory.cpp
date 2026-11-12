@@ -315,14 +315,14 @@ tt::tt_metal::ProgramDescriptor build_llama_sharded_program_descriptor(
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
         }
         writer_rt_args.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
+                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_arg_list;

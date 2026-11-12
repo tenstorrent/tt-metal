@@ -326,6 +326,7 @@ class PaliGemmaBackboneTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_values: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         use_cache: bool = False,
+        rope: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through VLM backbone using TTNN.
@@ -346,8 +347,8 @@ class PaliGemmaBackboneTTNN:
             past_kv = past_key_values[i] if past_key_values else None
             hidden_states, new_kv = block.forward(
                 hidden_states,
-                None,  # cos - unused, native TTNN RoPE uses cos_meta stored in block
-                None,  # sin - unused, native TTNN RoPE uses sin_meta stored in block
+                rope[0] if rope else None,
+                rope[1] if rope else None,
                 attention_mask,
                 position_ids,
                 past_kv,
@@ -375,6 +376,7 @@ class PaliGemmaBackboneTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_values: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         use_cache: bool = False,
+        rope: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through action expert using TTNN.
@@ -395,8 +397,8 @@ class PaliGemmaBackboneTTNN:
             past_kv = past_key_values[i] if past_key_values else None
             hidden_states, new_kv = block.forward(
                 hidden_states,
-                None,  # cos - unused, native TTNN RoPE uses cos_meta stored in block
-                None,  # sin - unused, native TTNN RoPE uses sin_meta stored in block
+                rope[0] if rope else None,
+                rope[1] if rope else None,
                 attention_mask,
                 position_ids,
                 past_kv,

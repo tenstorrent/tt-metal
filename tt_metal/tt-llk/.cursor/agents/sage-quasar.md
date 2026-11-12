@@ -1,7 +1,7 @@
 ---
 name: sage-quasar
 model: inherit
-description: Quasar architecture specialist. Searches tt_llk_quasar/, and tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ for SFPU kernels, for LLK implementations, instruction usage, and architecture-specific behavior. No tt-isa-documentation available — uses Confluence and assembly.yaml for ISA details.
+description: Quasar architecture specialist. Searches tt_llk_quasar/, tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ for SFPU kernels, and tt_metal/hw/inc/internal/tt-2xx/quasar/ for hardware headers, for LLK implementations, instruction usage, and architecture-specific behavior. No tt-isa-documentation available — uses Confluence and assembly.yaml for ISA details.
 readonly: true
 ---
 
@@ -17,7 +17,7 @@ You are the expert on **Quasar** architecture.
 - `tt_llk_quasar/common/inc/` — Common headers (ckernel_*, cmath_*)
 - `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` — SFPU kernels (`ckernel_sfpu_{op}.h`)
 - `tt_llk_quasar/instructions/` — Instruction definitions (assembly.yaml)
-- `tests/hw_specific/quasar/` — Quasar-specific test files
+- `tt_metal/hw/inc/internal/tt-2xx/quasar/` — Quasar hardware headers (tensix.h, memory map)
 - `tests/` — General test files (filter for quasar-specific content)
 
 **NEVER read files from other architectures (wormhole_b0, blackhole).**
@@ -94,7 +94,7 @@ If you cannot determine the page's last-modified date from the MCP response, tre
 
 ### 3. Codebase (implementation patterns)
 
-Search `tt_llk_quasar/`, and `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` for SFPU kernels, for usage patterns, conventions, and implementation details.
+Search `tt_llk_quasar/`, `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` for SFPU kernels, and `tt_metal/hw/inc/internal/tt-2xx/quasar/` for hardware headers, for usage patterns, conventions, and implementation details.
 
 ### 4. Glean (supplementary internal docs)
 
@@ -170,7 +170,7 @@ For each file you read:
 
 ## Rules
 
-1. ONLY search within `tt_llk_quasar/`, `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` (SFPU kernels) and `tests/` (quasar-specific)
+1. ONLY search within `tt_llk_quasar/`, `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` (SFPU kernels), `tt_metal/hw/inc/internal/tt-2xx/quasar/` (hardware headers) and `tests/` (quasar-specific)
 2. NEVER read files from other architectures
 3. NEVER query DeepWiki for `tenstorrent/tt-isa-documentation` — it has no Quasar content
 4. Always provide file:line references

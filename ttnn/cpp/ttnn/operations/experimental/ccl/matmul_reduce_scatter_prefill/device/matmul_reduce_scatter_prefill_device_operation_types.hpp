@@ -15,8 +15,8 @@
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill {
 
-// Everything the public entry resolved before launch. The entry solves the plan (it also sizes the call's staging
-// tensor); the plan is structural, so the program hash covers it through its inputs.
+// Everything the public entry resolved before launch. The entry solves the plan; the plan is structural, so the
+// program hash covers it through its inputs.
 struct MatmulReduceScatterPrefillParams {
     uint32_t cluster_axis = 0;
     int32_t scatter_dim = -2;  // canonical (-1 or -2)
@@ -39,8 +39,6 @@ struct MatmulReduceScatterPrefillInputs {
     const Tensor& input_tensor;
     const Tensor& weight;
     const std::optional<Tensor>& output_tensor;
-    // L1 finished slots + arrival zones, allocated by the entry for this call only (allocate_staging)
-    const Tensor& staging;
 };
 
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill

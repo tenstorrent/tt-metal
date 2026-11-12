@@ -243,17 +243,15 @@ GATE_LOG="${MR_DIR}/gates.log"
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
-TIMING_DIR="${MR_DIR}/timing"
 PRODUCER_LOG="${MR_DIR}/producer.log"
-mkdir -p "${TIMING_DIR}"
 
 SUMMARY_DONE=0
 emit_summary() {
   [ "${SUMMARY_DONE}" = 1 ] && return 0
   SUMMARY_DONE=1
   python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
-    --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-    --chunk-size "${CHUNK_SIZE}" \
+    --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
+    --chunk-size "${CHUNK_SIZE}" --pipeline-ranks "${EXPECTED_RANKS:-1}" \
     --probe-chunks "${PROBE_CHUNKS}" \
     --summary-name "${RUN_NAME}_${CONFIG}" \
     || echo "summary generation failed (non-fatal)"
@@ -290,7 +288,7 @@ cleanup() {
       tail -n 40 "$f" 2>/dev/null || true
     done
     emit_summary
-    if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
+    if [ "${EXPECTED_RANKS:-1}" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
       GANTT_PY=python3
@@ -306,7 +304,7 @@ cleanup() {
         fi
       fi
       "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
-        --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+        --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
         -o "${GANTT_DIR}/${RUN_NAME}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
       if [ -n "${GANTT_TMP}" ]; then
@@ -371,8 +369,6 @@ setsid python3 "${TTRUN_PY}" \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
-    export PREFILL_SYNC_PER_CHUNK=1; \
-    export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     ${RUNNER_OVERRIDES} \
@@ -449,6 +445,7 @@ set +e
     export PYTHONPATH=${CHILD_PYTHONPATH}; \
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
+    export OMP_NUM_THREADS=\$(nproc); \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
@@ -497,7 +494,13 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
       *) echo "perf baseline WARN: power probe on ${RESOLVED_HOSTS%%,*} returned '${PERF_POWER}'" >&2; PERF_POWER="" ;;
     esac
   fi
-  python3 "${PERF_GATE}" \
+  # A crashed producer or runner still leaves a partial perf JSON, and its verdict must not mark the job
+  # non-retryable (CI_FAILURE_RECORDS, see models/common/ci_failure.py): only a complete run's verdict repeats.
+  GATE_ENV=()
+  if [ "${PROD_RC}" -ne 0 ] || [ "${RUNNER_RC}" -ne 0 ]; then
+    GATE_ENV=(-u CI_FAILURE_RECORDS)
+  fi
+  env ${GATE_ENV[@]+"${GATE_ENV[@]}"} python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${RUN_NAME}_${CONFIG}.json" \
     --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \

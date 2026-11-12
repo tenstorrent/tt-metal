@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <cstdint>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -89,7 +90,8 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
     const std::uint32_t num_compute_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     const std::uint32_t common_page_elements = std::gcd(elements_per_input_page, elements_per_output_page);
     const std::uint32_t common_page_bytes = common_page_elements * bytes_per_element;
-    const std::uint32_t required_alignment = std::max(input.buffer()->alignment(), output.buffer()->alignment());
+    const std::uint32_t required_alignment =
+        std::max(input.mesh_buffer().alignment(), output.mesh_buffer().alignment());
     const bool can_parallelize_pages =
         total_logical_rows < num_compute_cores && common_page_elements < elements_per_tensor_row &&
         common_page_bytes <= MAX_SUBBLOCK_SIZE_BYTES && common_page_bytes % required_alignment == 0;
@@ -230,10 +232,10 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
-    std::uint32_t input_page_size = input.buffer()->page_size();
-    std::uint32_t aligned_output_page_size =
-        output.buffer()->aligned_page_size();  // Since we are double buffering, the output page_size must be aligned so
+    std::uint32_t input_page_size = input.mesh_buffer().page_size();
+    // Since we are double buffering, the output page_size must be aligned so
     // the noc_write reads from an aligned address in the DFB
+    std::uint32_t aligned_output_page_size = output.mesh_buffer().aligned_page_size();
     std::uint32_t input_subblock_size_bytes = elements_per_input_page * bytes_per_element;
     std::uint32_t output_subblock_size_bytes =
         elements_per_output_page *

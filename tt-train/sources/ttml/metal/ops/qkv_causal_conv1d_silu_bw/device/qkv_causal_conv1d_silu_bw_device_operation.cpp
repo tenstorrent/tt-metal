@@ -97,7 +97,7 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
         // With row_splits > 1, split s reads the bottom faces of input tile row end(s) on its halo step while split
         // s + 1 has already written grad_input over them.
         TT_FATAL(
-            in.preallocated_grad_input->buffer()->address() != in.input.buffer()->address(),
+            in.preallocated_grad_input->mesh_buffer().address() != in.input.mesh_buffer().address(),
             "{}: preallocated_grad_input must not share a buffer with input",
             op_name);
     }

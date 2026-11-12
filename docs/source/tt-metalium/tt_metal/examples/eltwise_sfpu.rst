@@ -78,7 +78,7 @@ Next, create the kernels. Nothing different from the previous examples besides b
 .. code-block:: cpp
 
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
@@ -86,7 +86,7 @@ Next, create the kernels. Nothing different from the previous examples besides b
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "eltwise_sfpu/kernels/dataflow/write_tile.cpp",

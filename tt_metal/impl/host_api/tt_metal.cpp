@@ -5,7 +5,6 @@
 #include <allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
-#include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
@@ -21,17 +20,13 @@
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
-#include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <type_traits>
 #include <variant>
@@ -76,7 +71,6 @@
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
@@ -382,13 +376,8 @@ void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
             dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            tt::llrt::write_launch_msg_to_core(
-                MetalEnvAccessor(metal_ctx.get_env()).impl(),
-                device_id,
-                physical_core,
-                local_launch_msg.view(),
-                kg->go_msg.view(),
-                /*send_go=*/false);
+            slow_dispatch::WriteLaunchMsgToCore(
+                *device, physical_core, local_launch_msg.view(), kg->go_msg.view(), /*send_go=*/false);
         }
     }
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] launch msgs written, done", device_id);
@@ -454,9 +443,8 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            tt::llrt::write_launch_msg_to_core(
-                MetalEnvAccessor(metal_ctx.get_env()).impl(),
-                device_id,
+            slow_dispatch::WriteLaunchMsgToCore(
+                *device,
                 physical_core,
                 local_launch_msg.view(),
                 kg->go_msg.view(),
@@ -998,7 +986,8 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type, /*cq_id=*/0));
+    return GlobalSemaphore(
+        GlobalSemaphoreImpl(device.mesh_command_queue(0), std::move(cores), initial_value, buffer_type));
 }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {

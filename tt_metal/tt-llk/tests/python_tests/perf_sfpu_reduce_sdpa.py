@@ -2,25 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import skip_for_blackhole
+import test_sfpu_reduce_sdpa as _func
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, MathOperation, PerfRunType, ReducePool
 from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.perf.core import PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import (
-    LOOP_FACTOR,
-    MATH_OP,
-    REDUCE_POOL_TYPE,
-    TILE_COUNT,
-    generate_input_dim,
-)
 
 
-@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
@@ -49,46 +39,22 @@ def test_perf_sfpu_reduce_sdpa(
     used in SDPA (Scaled Dot-Product Attention) implementations. It focuses on
     measuring cycles spent in the SFPU calculations, not including memory operations.
 
-    The test uses a 128x32 input dimension (4 tiles) and performs column-wise
+    The test uses a 128x64 input dimension (8 tiles) and performs column-wise
     max reduction, which is the typical operation in SDPA softmax computation.
     """
 
     input_dimensions = [128, 64]
-    tile_count = input_dimensions[1] // 32 * input_dimensions[0] // 32
 
-    # Run performance benchmarks focusing on MATH_ISOLATE to measure SFPU cycles
-    # MATH_ISOLATE measures only the math operation cycles, excluding unpack/pack
-    # This specifically measures the _calculate_reduce_sdpa_ function cycles
-    configuration = PerfConfig(
-        "sources/sfpu_reduce_sdpa_perf.cpp",
+    # The custom SDPA reduction executes on the pack thread, so PACK_ISOLATE
+    # measures the same SFPU sequence as the functional L1_TO_L1 path.
+    _func._run_sfpu_reduce_sdpa(
         formats,
-        run_types=[
-            # PerfRunType.L1_TO_L1,         # Full operation timing
-            PerfRunType.MATH_ISOLATE,  # Only SFPU computation cycles (_calculate_reduce_sdpa_)
-            # PerfRunType.UNPACK_ISOLATE,   # Unpack timing for reference
-            # PerfRunType.PACK_ISOLATE,     # Pack timing for reference
-        ],
-        templates=[
-            MATH_OP(mathop=mathop),
-            REDUCE_POOL_TYPE(reduce_pool),
-            generate_input_dim(input_dimensions, input_dimensions),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),  # Used to minimize profiler overhead
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
-        unpack_to_dest=False,  # Must be False since math kernel does A2D copy
-        dest_acc=dest_acc,
+        dest_acc,
+        mathop,
+        reduce_pool,
+        input_dimensions,
+        loop_factor=loop_factor,
+        is_perf=True,
+        perf_report=perf_report,
+        run_types=[PerfRunType.PACK_ISOLATE],
     )
-
-    configuration.run(perf_report)

@@ -162,9 +162,7 @@ TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_
 assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
 ), f"PREFILL_TP_SHARD_KV=1: model {ADAPTER.name!r} does not support a TP-deduped KV cache"
-SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 CHUNK_TIMEOUT_SECONDS = float(os.environ.get("TT_PREFILL_CHUNK_TIMEOUT_SECONDS", 0))
-TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
@@ -439,7 +437,8 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
             sender_worker_cores=SYNC_WORKER_CORES,
             receiver_worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+            # The sender forwards the activation's record, MTP word included.
+            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
         )
@@ -477,7 +476,7 @@ def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
     idx_in.release_fabric_links()
     t0 = time.perf_counter()
     indices, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        idx_in, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES
+        idx_in, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
     ttnn.deallocate(metadata_msg)
     logger.info(f"[pp] RECV-d2d-idx [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
@@ -720,23 +719,6 @@ def _capture_socket_ops(
     )
 
 
-def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
-    if not TIMING_DIR:
-        return
-    try:
-        # O_CREAT makes the file, not the parent. Without this the open raises ENOENT, the except
-        # below swallows it, and the run silently records nothing -- which is how a 5-point sweep
-        # finished with five empty timing dirs and no Gantt input.
-        os.makedirs(TIMING_DIR, exist_ok=True)
-        fd = os.open(os.path.join(TIMING_DIR, f"rank{rank}.csv"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-        try:
-            os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
-        finally:
-            os.close(fd)
-    except OSError:
-        pass
-
-
 @contextlib.contextmanager
 def _with_hang_timeout(mesh_device):
     if not CHUNK_TIMEOUT_SECONDS:
@@ -842,10 +824,7 @@ def _compute_and_send(
     indices=None,
 ) -> float:
     d2d_out, idx_out = outbound.activation, outbound.indices
-    if SYNC_PER_CHUNK:
-        ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
-    t_perf = time.perf_counter()
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
@@ -884,11 +863,6 @@ def _compute_and_send(
                 **mtp_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
             )
-    if SYNC_PER_CHUNK:
-        ttnn.synchronize_device(runtime.mesh_device)
-        compute_ms = (time.perf_counter() - t_perf) * 1000.0
-        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
-        _record_chunk_timing(rank, c, t_start, compute_ms)
     forward_md = None
     if not runtime.config.is_last_rank:
         if sockets.send_trace is None:
@@ -1167,10 +1141,11 @@ def main() -> None:
     first_layer_idx, num_my_layers = layer_split[rank]
     is_first_rank = rank == 0
     is_last_rank = rank == num_ranks - 1
-    logger.info(
+    print(
         f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} layers=[{first_layer_idx}, "
         f"{first_layer_idx + num_my_layers}) is_first={is_first_rank} is_last={is_last_rank} "
-        f"chunk_size={CHUNK_SIZE} forward_chunks={FORWARD_CHUNKS} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}"
+        f"chunk_size={CHUNK_SIZE} forward_chunks={FORWARD_CHUNKS} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}",
+        flush=True,
     )
 
     mesh_device = open_mesh_device(

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
-from models.demos.gemma4.tt.experts.weights import ExpertWeights
+from models.demos.gemma4.tt.experts.prefill import create_prefill_sparsity
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4_26b_a4b_qb2.tt.fused_decoder import BroadcastRouter, FusedAttention, PackedExperts
@@ -37,6 +37,10 @@ from models.demos.gpt_oss.tt.ccl import CCLManager
 
 class _MeshCCLManager(CCLManager):
     """Cover every worker that native CCL may choose on this mesh."""
+
+    def get_barrier_semaphore(self, axis=None):
+        # The shared Gemma4 collectives pass the cluster axis; this manager keeps one semaphore.
+        return super().get_barrier_semaphore()
 
     def _init_subdevice(self):
         grid = self.mesh_device.compute_with_storage_grid_size()
@@ -550,7 +554,7 @@ class _ExpertParallelExperts(OptimizedExperts):
             )
 
         fused = state_dict["experts.gate_up_proj"]
-        weights = ExpertWeights(
+        weights = SimpleNamespace(
             gate_proj=weight(fused[:, :width, :].transpose(-2, -1).unsqueeze(0)),
             up_proj=weight(fused[:, width:, :].transpose(-2, -1).unsqueeze(0)),
             down_proj=weight(state_dict["experts.down_proj"].transpose(-2, -1).unsqueeze(0)),
@@ -691,6 +695,46 @@ class _ExpertParallelExperts(OptimizedExperts):
             program_config=self.mix_program,
             compute_kernel_config=self.mix_compute,
         )
+
+
+def _tensor_parallel_experts(source, state_dict, mesh_config):
+    """BF16 expert weights with every expert on every chip and the intermediate dim split over TP.
+
+    PackedExperts and the decode configs below expect this layout. The shared Gemma4 layer loads
+    whole experts per chip instead, so the decode experts are rebuilt from the checkpoint here.
+    """
+    import torch
+
+    mesh_device, config, tp = source.mesh_device, source.config, mesh_config.tp
+    width = -(-config.moe_intermediate_size // tp // 32) * 32
+    pad = width * tp - config.moe_intermediate_size
+    gate, up = state_dict["experts.gate_up_proj"].chunk(2, dim=-2)
+    gate, up = (torch.nn.functional.pad(t.transpose(-2, -1), (0, pad)).unsqueeze(0) for t in (gate, up))
+    down = torch.nn.functional.pad(state_dict["experts.down_proj"].transpose(-2, -1), (0, 0, 0, pad)).unsqueeze(0)
+
+    def weight(value, mapper):
+        return ttnn.from_torch(
+            value,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    column, row = mesh_config.column_parallel(mesh_device), mesh_config.row_parallel(mesh_device)
+    weights = SimpleNamespace(
+        gate_proj=weight(gate, column),
+        up_proj=weight(up, column),
+        down_proj=weight(down, row),
+        intermediate_size_per_device=width,
+    )
+    return SimpleNamespace(
+        config=config,
+        mesh_device=mesh_device,
+        weights=weights,
+        prefill_sparsity=create_prefill_sparsity(mesh_device, config.num_experts),
+    )
 
 
 class _HybridExperts:
@@ -989,7 +1033,11 @@ class MultichipDecoder(OptimizedDecoder):
         for name in ("bias", "indices", "output", "output_indices"):
             setattr(router, name, ttnn.to_memory_config(getattr(router, name), router.memory))
         packed = PackedExperts(
-            self.layer.moe.experts, fused_gelu=True, prefill_batch_tokens=32, matmul_mix=True, mix_fp32=sliding
+            _tensor_parallel_experts(self.layer.moe.experts, state_dict, self.mesh_config),
+            fused_gelu=True,
+            prefill_batch_tokens=32,
+            matmul_mix=True,
+            mix_fp32=sliding,
         )
         experts = OptimizedExperts(
             packed,

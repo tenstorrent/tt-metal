@@ -175,14 +175,14 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
         slice_C /= ring_size;
     }
 
-    const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
+    const uint32_t single_tile_bytes = input_tensor.mesh_buffer().page_size();
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t num_pages_per_packet = packet_size_bytes / single_tile_bytes;
     const uint32_t num_tiles_to_write_per_packet = std::min(4u, num_pages_per_packet);
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
     const uint32_t tile_granularity = std::min(4u * num_tiles_to_write_per_packet, max_dst_size);
 
-    const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_num_pages = input_tensor.mesh_buffer().num_pages();
     const uint32_t output_num_pages = input_num_pages / ring_size;
     const uint32_t output_batch_num_pages = output_num_pages / slice_B;
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;

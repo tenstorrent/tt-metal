@@ -149,7 +149,3 @@ the build CI runs.
   test or harness issue. File against
   [tenstorrent/ttsim](https://github.com/tenstorrent/ttsim/issues) with
   a minimal repro.
-- `Polling brisc command timed out` on WH — you're running an old
-  tt-umd. The fix that advances the sim clock on host writes
-  (TTSimTTDevice::write_to_device) is required; upgrade to a release
-  that contains it.

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <functional>
-#include <optional>
 
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 

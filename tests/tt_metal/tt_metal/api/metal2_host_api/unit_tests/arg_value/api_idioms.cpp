@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
@@ -62,6 +63,33 @@ TEST(ApiIdiomsTest, CPU_RunArgsIdiomsCompile) {
         r.runtime_arg_values[name][NodeCoord{1, 1}] = value;
     }
     EXPECT_EQ((r.runtime_arg_values["lead"][NodeCoord{1, 1}].to_uint32()), 4u);
+}
+
+TEST(ApiIdiomsTest, CPU_ArrayArgIdiomsCompile) {
+    std::size_t n = 12;
+    const std::vector<uint32_t> page_sizes = {64, 128, 256};
+
+    KernelSpec k{
+        .compile_time_array_args = {{"page_sizes", page_sizes}},
+        .runtime_arg_schema =
+            {
+                .runtime_array_args = {{.name = "x", .size = 4}},
+                .common_runtime_array_args = {{.name = "dims", .size = 2}},
+            },
+    };
+    k.compile_time_array_args["mixed"] = {1u, n, -1, true};
+    k.runtime_arg_schema.runtime_array_args.push_back(ArrayArgDecl{.name = "more", .size = 2});
+
+    KernelRunArgs r{.kernel = KernelSpecName{"k"}};
+    r.runtime_array_arg_values["x"][NodeCoord{0, 0}] = {1, 2, 3, n};
+    r.runtime_array_arg_values["x"][NodeCoord{0, 1}] = std::vector<uint32_t>{5, 6, 7, 8};
+    r.common_runtime_array_arg_values = {{"dims", {32, 32}}};
+
+    EXPECT_EQ(k.compile_time_array_args.get("page_sizes")->size(), 3u);
+    EXPECT_EQ((*k.compile_time_array_args.get("mixed"))[2].to_uint32(), 0xFFFFFFFFu);
+    EXPECT_EQ((r.runtime_array_arg_values["x"][NodeCoord{0, 0}][3].to_uint32()), 12u);
+    EXPECT_EQ((r.runtime_array_arg_values["x"][NodeCoord{0, 1}][0].to_uint32()), 5u);
+    EXPECT_EQ(r.common_runtime_array_arg_values.get("dims")->size(), 2u);
 }
 
 TEST(ApiIdiomsTest, CPU_CommandListPatchIdiomsCompile) {

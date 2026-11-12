@@ -47,7 +47,6 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dispatch/dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
@@ -568,18 +567,14 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
             REMOTE_DFB_REGION_HEADER_WORDS + participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
         // A slot is reserved from geometry and bound to a live pipe later
         TT_FATAL(
-            participant.pipe != nullptr,
+            participant.is_bound(),
             "PrefetcherPipe slot {} is not bound to a PrefetcherPipe object; supply a PrefetcherPipeArgument for "
             "every PrefetcherPipeParameter via SetProgramRunArgs before enqueueing the program",
             participant.prefetcher_pipe_id);
-        // P is a pipe-lifetime property read at build time, not a participant field: a relay or
-        // later Attach (possibly in another program) may arm lanes after this record was added.
-        // Packing it here (rather than poking the persistent page) keeps it ordered with this
-        // program in the command queue.
-        const uint32_t num_credit_lanes = participant.pipe->num_credit_lanes();
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;
-        payload[base + 2] = pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, num_credit_lanes);
+        payload[base + 2] =
+            pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, participant.num_credit_lanes);
     }
     return payload;
 }
@@ -638,6 +633,10 @@ uint32_t finalize_kernel_bins(
     uint32_t max_offset = 0;
     HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
     uint32_t num_processors = hal.get_num_risc_processors(programmable_core_type);
+    const uint64_t build_key = MetalContext::instance(extract_context_id(device))
+                                   .build_env_manager()
+                                   .get_device_build_env(device->build_id())
+                                   .build_key();
     for (auto& kg : kernel_groups) {
         auto kernel_config = kg->launch_msg.view().kernel_config();
         uint32_t offset = base_offset;
@@ -646,9 +645,7 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
-                                                        .get_device_build_env(device->build_id())
-                                                        .build_key());
+            const auto& binaries = kernel->binaries(build_key);
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             for (uint32_t i = 0; i < num_binaries; i++) {
@@ -2457,8 +2454,7 @@ void assemble_device_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
 
     PrefetcherPipeCommandGenerator prefetcher_pipe_command_generator;
-    prefetcher_pipe_command_generator.construct_commands(
-        metal_ctx, mesh_device, constants, program, batched_transfers);
+    prefetcher_pipe_command_generator.construct_commands(metal_ctx, mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(metal_ctx, batched_transfers, program_config_buffer_calculator);
@@ -2771,6 +2767,7 @@ void update_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
+    program.validate_scratchpad_bindings();
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
@@ -3246,6 +3243,7 @@ void write_program_command_sequence(
 
 TraceNode create_trace_node(
     ProgramImpl& program, distributed::MeshDevice* mesh_device, uint32_t num_workers, bool use_prefetcher_cache) {
+    program.validate_scratchpad_bindings();
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(mesh_device)};
     program.generate_trace_dispatch_commands(mesh_device, use_prefetcher_cache);
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
@@ -3407,7 +3405,7 @@ void reset_worker_dispatch_state_on_device(
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
     auto num_sub_devices = mesh_device->num_sub_devices();
 
-    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    MetalContext& metal_ctx = manager.metal_context();
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (reset_launch_msg_state) {
         for (int i = 0; i < num_sub_devices; ++i) {
@@ -3503,7 +3501,7 @@ static HostMemDeviceCommand build_set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager, uint32_t num_worker_sems, ttsl::Span<const uint32_t> workers_per_sub_device) {
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
-    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    MetalContext& metal_ctx = manager.metal_context();
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         calculator.add_dispatch_set_num_worker_sems();

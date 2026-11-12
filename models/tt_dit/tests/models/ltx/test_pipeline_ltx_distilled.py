@@ -27,9 +27,12 @@ from models.tt_dit.tests.models.ltx.tools.ltx_eval import write_sidecar
 from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.ltx import (
+    DEFAULT_LTX_I2V_IMAGE,
+    DEFAULT_LTX_I2V_PROMPT,
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
+    missing_checkpoints_fail,
     print_ltx_timing_table,
     traced_default,
 )
@@ -101,7 +104,7 @@ FAST_T2V_TIMING_LIMITS = {
 }
 
 
-# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
+# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one (outside CI).
 @pytest.mark.skipif(
     not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
@@ -704,7 +707,8 @@ def test_pipeline_distilled_i2v(
     width = int(os.environ.get("WIDTH", "1920"))
     traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
     seed = int(os.environ.get("SEED", "10"))
-    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    cond_override = os.environ.get("LTX_I2V_IMAGE", DEFAULT_LTX_I2V_IMAGE)
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_I2V_PROMPT if cond_override else DEFAULT_LTX_PROMPT)
 
     pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,

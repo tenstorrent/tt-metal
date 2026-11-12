@@ -40,7 +40,8 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
     const DitFusedNormType norm_type,
     const std::optional<const ttnn::Tensor>& reciprocals,
     const bool preserve_rope_rounding,
-    const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt) {
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map,
+    const std::optional<uint32_t> row_capacity) {
     return ttnn::prim::dit_fused_distributed_rmsnorm(
         input_tensor,
         cluster_axis,
@@ -64,7 +65,8 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
         norm_type,
         reciprocals,
         preserve_rope_rounding,
-        affine_tile_row_map);
+        affine_tile_row_map,
+        row_capacity);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
@@ -80,7 +82,8 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
     [[maybe_unused]] const std::optional<const ttnn::Tensor>& transformation_mat,
     [[maybe_unused]] const std::optional<const ttnn::Tensor>& rope_cos,
     [[maybe_unused]] const std::optional<const ttnn::Tensor>& rope_sin,
-    const DitFusedNormType norm_type) {
+    const DitFusedNormType norm_type,
+    const std::optional<uint32_t> row_capacity) {
     const uint32_t ring_size = ttnn::experimental::prim::dit_fused_norm_ring_size(mesh_device, cluster_axis);
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -102,10 +105,9 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
         /*multi_device_global_semaphore=*/{},
         /*sub_device_id=*/std::nullopt,
         kernel_config_val,
-        norm_type);
+        norm_type,
+        row_capacity);
 
-    // The stats-buffer geometry depends only on input shape / ring size / links / norm_type
-    // (all in params + input_tensor), so no tensor_args are needed here.
     const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor);
     if (!sizing.use_mux) {
         return std::nullopt;
@@ -138,7 +140,8 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const bool preserve_rope_rounding,
-    const std::optional<const ttnn::Tensor>& affine_tile_row_map) {
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map,
+    const std::optional<uint32_t> row_capacity) {
     return dit_fused_distributed_norm_impl(
         input_tensor,
         cluster_axis,
@@ -162,7 +165,8 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
         DitFusedNormType::RMS,
         /*reciprocals=*/std::nullopt,
         preserve_rope_rounding,
-        affine_tile_row_map);
+        affine_tile_row_map,
+        row_capacity);
 }
 
 ttnn::Tensor dit_fused_distributed_layernorm(
@@ -184,7 +188,8 @@ ttnn::Tensor dit_fused_distributed_layernorm(
     const std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<const ttnn::Tensor>& reciprocals) {
+    const std::optional<const ttnn::Tensor>& reciprocals,
+    const std::optional<uint32_t> row_capacity) {
     return dit_fused_distributed_norm_impl(
         input_tensor,
         cluster_axis,
@@ -207,7 +212,9 @@ ttnn::Tensor dit_fused_distributed_layernorm(
         compute_kernel_config,
         DitFusedNormType::LAYERNORM,
         reciprocals,
-        /*preserve_rope_rounding=*/false);
+        /*preserve_rope_rounding=*/false,
+        /*affine_tile_row_map=*/std::nullopt,
+        row_capacity);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
@@ -220,7 +227,8 @@ std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& transformation_mat,
     const std::optional<const ttnn::Tensor>& rope_cos,
-    const std::optional<const ttnn::Tensor>& rope_sin) {
+    const std::optional<const ttnn::Tensor>& rope_sin,
+    const std::optional<uint32_t> row_capacity) {
     return dit_fused_distributed_norm_create_stats_buffer_impl(
         input_tensor,
         cluster_axis,
@@ -232,7 +240,8 @@ std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
         transformation_mat,
         rope_cos,
         rope_sin,
-        DitFusedNormType::RMS);
+        DitFusedNormType::RMS,
+        row_capacity);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
@@ -244,7 +253,8 @@ std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& transformation_mat,
     const std::optional<const ttnn::Tensor>& rope_cos,
-    const std::optional<const ttnn::Tensor>& rope_sin) {
+    const std::optional<const ttnn::Tensor>& rope_sin,
+    const std::optional<uint32_t> row_capacity) {
     return dit_fused_distributed_norm_create_stats_buffer_impl(
         input_tensor,
         cluster_axis,
@@ -256,7 +266,8 @@ std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
         transformation_mat,
         rope_cos,
         rope_sin,
-        DitFusedNormType::LAYERNORM);
+        DitFusedNormType::LAYERNORM,
+        row_capacity);
 }
 
 }  // namespace ttnn::experimental

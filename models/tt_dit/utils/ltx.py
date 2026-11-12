@@ -57,6 +57,35 @@ STEADY_STATE_REPLAY_LTX_PROMPT = (
     "shallow depth of field, warm color grade emphasizing skin tones."
 )
 
+# https://www.pexels.com/photo/woman-playing-guitar-3914563/ (by Olly), downscaled to 1920x1280.
+DEFAULT_LTX_I2V_IMAGE = "models/sample_data/ltx_i2v_guitar_room.jpg"
+DEFAULT_LTX_I2V_PROMPT = (
+    "A young woman with dark curly hair tied up in a bun, wearing a white tank top, sits playing a "
+    "black acoustic guitar in a bright, sunlit room in front of a large window, with shelves, a "
+    "tripod and a softbox light beside her. She strums gently, looking directly at camera with "
+    'genuine warmth. Her mouth opens clearly as she sings "Doo-be-doo, doo-be-day, oh what a sunny '
+    'day" with precise lip sync and natural facial expressions. Her head moves subtly with the '
+    "rhythm. Simple chord progression underlies her melodic voice."
+)
+
+# Second prompt for the traced steady-state pass, so its encode is a real one rather than a hit on
+# the prompt-embedding cache that the first pass just populated.
+STEADY_STATE_LTX_PROMPT = (
+    "A grey tabby cat sits on a windowsill in afternoon light, tail curled around its paws. "
+    "The camera holds a steady medium shot as the cat blinks slowly and turns its head toward "
+    "the window. Dust drifts through the sunbeam behind it. Shot with a 50mm lens at f/2.0, "
+    "shallow depth of field, natural warm color grade. "
+    "Audio: faint birdsong through glass, a quiet purr, soft room tone."
+)
+
+# Third prompt, for the pass after the encode trace is captured: a second unseen prompt is what makes
+# that pass replay every trace rather than capture one.
+STEADY_STATE_REPLAY_LTX_PROMPT = (
+    "A red paper boat drifts across a still pond at dusk, ripples spreading behind it. "
+    "The camera holds a low steady shot near the waterline as the light fades. "
+    "Audio: gentle water laps, distant crickets, soft evening air."
+)
+
 
 def ceil_to(x: int, multiple: int) -> int:
     """Smallest multiple of ``multiple`` that is >= ``x``."""
@@ -325,6 +354,19 @@ def decode_category_rows(root, *, min_frac: float = 0.01):
         if ms / total_ms >= min_frac:
             rows.append((cat, ms / 1000.0, 100.0 * ms / total_ms))
     return rows
+def missing_checkpoints_fail() -> bool:
+    """True in CI, where a test must fail rather than skip when its checkpoint is missing: a skip
+    leaves the job green with nothing tested (e.g. a runner host without the weights)."""
+    return os.environ.get("CI") == "true"
+
+
+def skip_without_checkpoint(reason: str):
+    """Skip a test whose checkpoint is missing, or fail it in CI (see `missing_checkpoints_fail`)."""
+    import pytest
+
+    if missing_checkpoints_fail():
+        pytest.fail(f"{reason}; CI fails instead of skipping, so a missing checkpoint is not a silent pass")
+    pytest.skip(reason)
 
 
 def print_ltx_timing_table(

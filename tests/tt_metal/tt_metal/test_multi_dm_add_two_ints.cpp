@@ -10,7 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "hw/inc/internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -52,7 +51,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
 
     const uint32_t result_base = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    const uint32_t dm_result_base = result_base + MEM_L1_UNCACHED_BASE;
 
     auto make_dm_kernel_spec = [](const experimental::KernelSpecName& id, uint32_t num_threads, uint32_t l1_addr) {
         return experimental::KernelSpec{
@@ -70,10 +68,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         };
     };
 
-    auto k0 = make_dm_kernel_spec(KERNEL_0, 2, dm_result_base);
-    auto k1 = make_dm_kernel_spec(KERNEL_1, 2, dm_result_base + sizeof(int));
-    auto k2 = make_dm_kernel_spec(KERNEL_2, 2, dm_result_base + (2 * sizeof(int)));
-    auto k3 = make_dm_kernel_spec(KERNEL_3, 2, dm_result_base + (2 * sizeof(int)));
+    auto k0 = make_dm_kernel_spec(KERNEL_0, 2, result_base);
+    auto k1 = make_dm_kernel_spec(KERNEL_1, 2, result_base + sizeof(int));
+    auto k2 = make_dm_kernel_spec(KERNEL_2, 2, result_base + (2 * sizeof(int)));
+    auto k3 = make_dm_kernel_spec(KERNEL_3, 2, result_base + (2 * sizeof(int)));
 
     experimental::WorkUnitSpec wu_core0{
         .name = "wu_core0",

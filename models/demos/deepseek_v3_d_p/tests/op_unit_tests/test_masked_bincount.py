@@ -43,6 +43,9 @@ def torch_masked_bincount(
     "sp_dim, topk, n_routed_experts",
     [
         (4096, 8, 256),
+        # Not tile-aligned: 40 logical rows in 64 padded ones. The split must cover only the logical rows,
+        # or the zero padding is counted as 24 extra picks of expert 0.
+        (40, 8, 256),
     ],
 )
 @pytest.mark.parametrize(
@@ -112,8 +115,8 @@ def test_masked_bincount(
             torch_histograms[(group, chip)] = hist
 
     # masked_bincount consumes the gate's output directly: UINT16, TILE, L1-interleaved. The op
-    # untiles in-kernel and splits the token rows across a fixed 8x8 (64-core) grid internally.
-    num_cores = 64
+    # untiles in-kernel and splits the token rows across a fixed 8-core row internally.
+    num_cores = 8
     assert sp_dim % num_cores == 0, f"sp_dim={sp_dim} must be divisible by {num_cores}"
 
     # Shard dim 0 across the dispatch axis, replicate across TP axis
@@ -197,23 +200,22 @@ def test_masked_bincount(
 )
 def test_masked_bincount_tree_reduction_race(mesh_device):
     """
-    Stress test for tree-reduction race condition in masked_bincount.
+    Stress test for the gather race in masked_bincount.
 
-    Crafts workload skew to maximize out-of-order child completion in the
-    binary-tree gather phase: one core's shard targets present experts (slow,
-    many atomic increments) while all other cores target absent experts (fast,
-    zero increments). This creates a timing gap where deeper subtrees signal
-    the root's gather_sem before the slow leaf finishes, exposing data races
-    where a parent reads a child's incomplete histogram.
+    Crafts workload skew to maximize out-of-order completion in the gather
+    phase: one core's shard targets present experts (slow, many increments)
+    while all other cores target absent experts (fast, zero increments). The
+    fast cores signal the collector's gather_sem well before the slow one
+    finishes, exposing a race where the collector reads an incomplete histogram.
     """
     # sp_dim stays at 4096 rather than moving to the 640-token prefill ISL: this test exists to
-    # expose a gather_sem race, and the window it opens scales with per-core work (rows_per_core=64
-    # here, 10 at 640). Shrinking it would narrow the race window this test is built to catch.
+    # expose a gather_sem race, and the window it opens scales with per-core work (rows_per_core=512
+    # here, 80 at 640). Shrinking it would narrow the race window this test is built to catch.
     sp_dim = 4096
     topk = 8
     n_routed_experts = 256
-    num_cores = 64
-    rows_per_core = sp_dim // num_cores  # 64
+    num_cores = 8  # the op's fixed 8-core row
+    rows_per_core = sp_dim // num_cores  # 512
     num_iterations = 50
 
     # Custom dispatch table: only experts 0-7 are "present" (chip_id=0),
@@ -242,7 +244,7 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
 
     for iteration in range(num_iterations):
         # Craft skewed indices:
-        # - Core 1 (rows 64-127): present experts 0..7 → many atomic increments (slow)
+        # - Core 1 (rows 512-1023): present experts 0..7 → many increments (slow)
         # - All other cores: absent experts 128..255 → zero increments (fast)
         indices = torch.randint(128, n_routed_experts, (sp_dim, topk), dtype=torch.int32)
         core1_start = 1 * rows_per_core
@@ -285,6 +287,6 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
             )
 
     assert num_mismatches == 0, (
-        f"Tree-reduction race detected: {num_mismatches}/{num_iterations} iterations " f"produced incorrect histograms"
+        f"Gather race detected: {num_mismatches}/{num_iterations} iterations " f"produced incorrect histograms"
     )
     logger.info(f"All {num_iterations} iterations match torch reference (race test passed)")

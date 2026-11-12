@@ -129,9 +129,8 @@ ChainSenderPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSource
         link_.noc.async_write_barrier();
     } else if constexpr (SOURCE_GUARD == SourceL1Guard::Guard) {
         if (forward) {
-            // The departure flush orders payload before readiness but does not protect the source:
-            // NIU_MST_WRITE_REQS_OUTGOING_ID drops only after the NIU reads it; untagged writes use transaction ID 0.
-            link_.noc.template async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
+            // The departure flush orders payload before readiness but does not protect the source.
+            wait_write_sources_read(link_.noc);
         }
     }
 }
@@ -154,7 +153,7 @@ ChainSenderPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSource
         link_.wait_for_successor();
         link_.publish(link_.sender_signal_value(value));
         if constexpr (SOURCE_GUARD == SourceL1Guard::Guard) {
-            link_.noc.template async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
+            wait_write_sources_read(link_.noc);
         }
     }
 }
@@ -230,7 +229,7 @@ ChainReceiverPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSour
         link_.noc.async_writes_flushed();
         link_.publish(value);
         if constexpr (SOURCE_GUARD == SourceL1Guard::Guard) {
-            link_.noc.template async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
+            wait_write_sources_read(link_.noc);
         }
     }
 }
@@ -248,7 +247,7 @@ ChainReceiverPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSour
     if (link_.has_successor()) {
         link_.wait_for_successor();
         link_.publish(value);
-        link_.noc.template async_writes_flushed<NocOptions::TXN_ID>({.trid = 0});
+        wait_write_sources_read(link_.noc);
     }
     return value;
 }

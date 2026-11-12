@@ -74,14 +74,6 @@ CoreRangeSet get_worker_grid(
         return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
     }
 
-    // An output config inferred from ND-sharded inputs has no 2D shard spec, so the native path below declines it.
-    if (memory_config_actual.is_sharded() && !memory_config_actual.shard_spec().has_value()) {
-        if (auto workers = get_sub_device_workers(memory_config_actual)) {
-            log_debug(tt::LogOp, "Using ND shard grid of the output memory config for worker grid {}", workers->str());
-            return *workers;
-        }
-    }
-
     if (is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
             input_tensor_b ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
@@ -95,6 +87,16 @@ CoreRangeSet get_worker_grid(
                     return *workers;
                 }
             }
+        }
+    }
+
+    // An output config inferred from a sharded input (ND, or 2D with inputs the native path declines) is written
+    // through the TensorAccessor path, so it runs on the sub-device holding the output shards, as an explicit
+    // sharded memory_config does.
+    if (memory_config_actual.is_sharded()) {
+        if (auto workers = get_sub_device_workers(memory_config_actual)) {
+            log_debug(tt::LogOp, "Using shard grid of the output memory config for worker grid {}", workers->str());
+            return *workers;
         }
     }
     log_debug(tt::LogOp, "Using all worker cores of the device for worker grid");
@@ -130,7 +132,7 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
                 b_dim);
         }
 
-        uint32_t out_dim = std::max<uint32_t>(a_dim, b_dim);
+        uint32_t out_dim = (a_dim == 1) ? b_dim : a_dim;
         output_shape[i + largest_rank] = out_dim;
     }
     return ttnn::Shape(output_shape);
@@ -163,8 +165,7 @@ static ShardSpec generate_shard_spec_specless(
     const Shape& padded_out_shape,
     const TensorMemoryLayout& memory_layout,
     Layout output_layout) {
-    // Ternary TTT rejects zero dims (ternary_op_utils.cpp:840); TTS/TST use compute_broadcasted_output_binary
-    // (ternary_device_operation.cpp:109) which allows a_dim==b_dim==0, so the synthesizer's zero-vol guard fires.
+    // Output shapes with a zero dim reach here, so the synthesizer's zero-vol guard fires.
     return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
         input_tensor_a.device()->compute_with_storage_grid_size(),
         padded_out_shape,
@@ -583,7 +584,8 @@ std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& t
         return std::nullopt;
     }
     if (tensor.is_allocated() && tensor.storage_type() == StorageType::DEVICE) {
-        const auto& distribution_spec = tensor.buffer()->buffer_distribution_spec();
+        const auto& distribution_spec =
+            tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
         if (distribution_spec.has_value()) {
             return distribution_spec->tensor_shape_in_pages();
         }

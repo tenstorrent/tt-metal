@@ -11,6 +11,13 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 from tt_py_test_utils_common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
@@ -1343,3 +1350,65 @@ def test_width_sharded_height_concat_page_over_noc_burst(device, dtype):
 
     result = ttnn.concat(tt_inputs, dim=2, memory_config=mem(2 * height))
     assert_equal(expected, ttnn.to_torch(result))
+
+
+# UINT8 regression: sharded last-dim concat (ConcatS2STiledProgramFactory) ran transpose_tile in 16-bit Dest and zeroed UINT8.
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
+def test_concat_dtype_uint8_interleaved(device, input_layout):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, (1, 1, 64, 64), dtype=torch.uint8)
+    y = torch.randint(0, 256, (1, 1, 64, 64), dtype=torch.uint8)
+    tx = ttnn.from_torch(x, dtype=ttnn.uint8, layout=input_layout, device=device)
+    ty = ttnn.from_torch(y, dtype=ttnn.uint8, layout=input_layout, device=device)
+    got = ttnn.to_torch(ttnn.concat([tx, ty], -1).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, torch.cat([x, y], -1))
+
+
+def test_concat_dtype_uint8_sharded_s2s_tiled(device):
+    """Last-dim concat, both inputs TILE + HEIGHT_SHARDED → ConcatS2STiledProgramFactory."""
+    torch.manual_seed(0)
+    shapes = [(1, 1, 128, 128), (1, 1, 128, 128)]
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+    in_cfg = ttnn.create_sharded_memory_config(
+        (32, 128),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    out_cfg = ttnn.create_sharded_memory_config(
+        (32, 256),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    torch_inputs = [torch.randint(0, 256, s, dtype=torch.uint8) for s in shapes]
+    ttnn_inputs = [
+        ttnn.to_memory_config(ttnn.from_torch(t, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device), in_cfg)
+        for t in torch_inputs
+    ]
+    got = ttnn.to_torch(ttnn.concat(ttnn_inputs, dim=3, memory_config=out_cfg).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, torch.cat(torch_inputs, dim=3))
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.concat))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.concat))
+def test_concat_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.concat docstring lists."""
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    inputs = [
+        ttnn.from_torch(
+            full_range_input((1, 1, 32, 64), dtype, seed=seed),
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+        )
+        for seed in (0, 1)
+    ]
+    output = ttnn.concat(inputs, dim=2, memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(torch.concat([ttnn.to_torch(t) for t in inputs], dim=2), ttnn.to_torch(output))
