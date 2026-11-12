@@ -522,7 +522,14 @@ run_cmd_with_emu_monitor() {
     refresh_emu_logs_baseline
     snapshot_simulator_pids
 
-    if command -v setsid &>/dev/null; then
+    if [[ -n "${emu_capture_file:-}" ]]; then
+        # ttsim runs: keep a copy of the output so a ttsim stop can be attributed to the test that was running.
+        if command -v setsid &>/dev/null; then
+            setsid "${gtest_cmd_env[@]}" "${emu_run_cmd[@]}" > >(tee "$emu_capture_file") 2>&1 &
+        else
+            "${gtest_cmd_env[@]}" "${emu_run_cmd[@]}" > >(tee "$emu_capture_file") 2>&1 &
+        fi
+    elif command -v setsid &>/dev/null; then
         setsid "${gtest_cmd_env[@]}" "${emu_run_cmd[@]}" &
     else
         "${gtest_cmd_env[@]}" "${emu_run_cmd[@]}" &
@@ -568,6 +575,8 @@ run_cmd_with_emu_monitor() {
     active_gtest_pid=""
     active_tracked_sim_pids=()
     tracked_sim_pids=()
+    # Let tee finish copying the output before it is read.
+    [[ -n "${emu_capture_file:-}" ]] && sleep 1
     return $rc
 }
 
@@ -622,7 +631,9 @@ record_gtest_result() {
             count=$((count + 1))
         done < <(yq -r '.testsuites[].testsuite[]? | [.classname, .name, .result, (.time // ""), ((.failures // []) | length > 0 | tostring)] | @tsv' "$json_file")
 
-        if [[ $count -eq 0 ]]; then
+        if [[ $count -eq 0 && ${ttsim_rounds:-0} -gt 0 ]]; then
+            : # the tests before the ttsim stop were already recorded; nothing was left to run
+        elif [[ $count -eq 0 ]]; then
             local no_match_status=SKIP
             [[ $rc -ne 0 ]] && no_match_status=FAIL
             if [[ ${#named_filters[@]} -gt 0 ]]; then
@@ -740,7 +751,9 @@ record_pytest_result() {
             | @tsv
         ' "$junit_file" 2>/dev/null || true)
 
-        if [[ $count -eq 0 ]]; then
+        if [[ $count -eq 0 && ${ttsim_rounds:-0} -gt 0 ]]; then
+            : # the tests before the ttsim stop were already recorded; nothing was left to run
+        elif [[ $count -eq 0 ]]; then
             local no_match_status=SKIP
             [[ $rc -ne 0 ]] && no_match_status=FAIL
             record_pytest_targets "$no_match_status" "$(fmt_duration "$elapsed"), no tests ran"
@@ -899,6 +912,90 @@ format_test_label() {
 
 # Args after label are group/filter pairs. Gtest pairs share one group; pytest
 # pairs may name different files that run in one pytest process.
+# ttsim ends the whole test process (_Exit) on an unsupported or unimplemented operation, which hides every test
+# after it in a batch. For TTSIM_LIB runs the output is captured; when the process dies with a ttsim ERROR line and
+# no result file, the tests that finished are recorded from the captured output, the one that was running is
+# recorded as a failure, and the tests that did not run are started again without them.
+ttsim_exclude=()
+ttsim_rounds=0
+
+ttsim_record() {
+    local status="$1" test_label="$2" test_time="$3"
+    case "$status" in
+        PASS) passed=$((passed + 1)); results+=("PASS  $test_label  ($test_time)") ;;
+        FAIL) failed=$((failed + 1)); results+=("FAIL  $test_label  ($test_time)") ;;
+        SKIP) skipped=$((skipped + 1)); results+=("SKIP  $test_label  ($test_time)") ;;
+    esac
+}
+
+# Prints "STATUS<TAB>name<TAB>time" per finished test, then "CRASH<TAB>name" for a test that started and never finished.
+ttsim_parse_gtest_output() {
+    awk '
+    function fin(st,   n, t) {
+        n = $0; sub(/^\[ +[A-Z]+ +\] /, "", n); t = n
+        if (!sub(/ \([0-9]+ ms\).*$/, "", n)) return
+        sub(/^.* \(/, "", t); sub(/ ms\).*$/, "", t)
+        print st "\t" n "\t" t "ms"; cur = ""
+    }
+    /^\[ RUN +\] / { cur = $0; sub(/^\[ RUN +\] /, "", cur); next }
+    /^\[ +OK +\] / { fin("PASS") }
+    /^\[ +FAILED +\] / { fin("FAIL") }
+    /^\[ +SKIPPED +\] / { fin("SKIP") }
+    END { if (cur != "") print "CRASH\t" cur }
+    ' "$1"
+}
+
+ttsim_parse_pytest_output() {
+    awk '
+    /^[^ ]+::[^ ]+( |$)/ {
+        node = $1; rest = $0; sub(/^[^ ]+ */, "", rest)
+        if (rest ~ /^(PASSED|XPASS)( |$)/) { print "PASS\t" node "\t"; cur = "" }
+        else if (rest ~ /^(FAILED|ERROR)( |$)/) { print "FAIL\t" node "\t"; cur = "" }
+        else if (rest ~ /^(SKIPPED|XFAIL)( |$)/) { print "SKIP\t" node "\t"; cur = "" }
+        else cur = node
+    }
+    END { if (cur != "") print "CRASH\t" cur }
+    ' "$1"
+}
+
+# Returns 0 when the last run was stopped by ttsim and the stopped test was found; the tests to leave out of the
+# next run are then in ttsim_exclude.
+ttsim_handle_stop() {
+    local runner="$1" config="$2" group="$3"
+    [[ -n "$ttsim_capture" && -s "$ttsim_capture" ]] || return 1
+    [[ -z "$result_file" || ! -f "$result_file" ]] || return 1
+    local err
+    err="$(grep -m1 -E '\[[0-9]+\] ERROR: [A-Za-z]+: ' "$ttsim_capture" | sed -E 's/^.*\] ERROR: //' || true)"
+    [[ -n "$err" ]] || return 1
+
+    local status name tm crashed="" shown parser
+    if [[ "$runner" == "pytest" ]]; then parser=ttsim_parse_pytest_output; else parser=ttsim_parse_gtest_output; fi
+    while IFS=$'\t' read -r status name tm; do
+        [[ -z "$name" ]] && continue
+        if [[ "$runner" == "pytest" ]]; then
+            if [[ ${n_groups:-1} -gt 1 ]]; then
+                shown="[$config] pytest $name"
+            else
+                shown="[$config] ${groups[0]:-} ${name##*::}"
+            fi
+        else
+            shown="[$config] $group $name"
+        fi
+        if [[ "$status" == CRASH ]]; then
+            crashed="$name"
+            ttsim_record FAIL "$shown" "ttsim stopped: $err"
+        else
+            ttsim_record "$status" "$shown" "${tm:-from output}"
+        fi
+        ttsim_exclude+=("$name")
+    done < <($parser "$ttsim_capture")
+    [[ -n "$crashed" ]] || return 1
+    ttsim_rounds=$((ttsim_rounds + 1))
+    echo "  TTSIM STOPPED in $crashed: $err"
+    echo "  recorded as FAIL; running the remaining tests without the ones already run (round $ttsim_rounds)"
+    return 0
+}
+
 run_test_invocation() {
     local runner="$1" config="$2" envvars="$3" gtest_repeat="$4" label="$5" pytest_mark="${6:-}"
     shift 6
@@ -1046,6 +1143,12 @@ run_test_invocation() {
     local attempt=1
     local rc=0
     local test_start=$SECONDS
+    ttsim_exclude=()
+    ttsim_rounds=0
+    local ttsim_capture=""
+    if [[ -n "${TTSIM_LIB:-}" ]]; then
+        ttsim_capture="$(mktemp "${TMPDIR:-/tmp}/ttsim_out.XXXXXX")"
+    fi
 
     while [[ $attempt -le $max_attempts ]]; do
         if [[ $attempt -gt 1 ]]; then
@@ -1076,6 +1179,10 @@ run_test_invocation() {
         if [[ "$runner" == "pytest" ]]; then
             emu_run_cmd=(pytest -vv)
             emu_run_cmd+=("${node_ids[@]}")
+            local ex
+            for ex in "${ttsim_exclude[@]}"; do
+                emu_run_cmd+=(--deselect "$ex")
+            done
             if [[ -n "$pytest_mark" ]]; then
                 emu_run_cmd+=(-m "$pytest_mark")
             fi
@@ -1084,8 +1191,20 @@ run_test_invocation() {
             fi
         else
             emu_run_cmd=("$BUILD_DIR/test/tt_metal/$group")
-            if [[ -n "$combined_filter" ]]; then
-                emu_run_cmd+=(--gtest_filter="$combined_filter")
+            local run_filter="$combined_filter"
+            if [[ ${#ttsim_exclude[@]} -gt 0 ]]; then
+                local negative
+                negative="$(IFS=:; echo "${ttsim_exclude[*]}")"
+                if [[ -z "$run_filter" ]]; then
+                    run_filter="*-${negative}"
+                elif [[ "$run_filter" == *-* ]]; then
+                    run_filter="${run_filter}:${negative}"
+                else
+                    run_filter="${run_filter}-${negative}"
+                fi
+            fi
+            if [[ -n "$run_filter" ]]; then
+                emu_run_cmd+=(--gtest_filter="$run_filter")
             fi
             emu_run_cmd+=("${gtest_repeat_args[@]}")
             if [[ -n "$result_file" ]]; then
@@ -1095,7 +1214,22 @@ run_test_invocation() {
 
         rc=0
         gtest_emu_hostname_conflict=0
+        emu_capture_file="$ttsim_capture"
+        if [[ -n "$ttsim_capture" ]]; then
+            : > "$ttsim_capture"
+            [[ -n "$result_file" ]] && rm -f "$result_file"
+        fi
         run_cmd_with_emu_monitor || rc=$?
+        emu_capture_file=""
+
+        if [[ -n "$ttsim_capture" && $rc -ne 0 && $gtest_emu_hostname_conflict -eq 0 ]] &&
+            ttsim_handle_stop "$runner" "$config" "$group"; then
+            continue
+        fi
+        # pytest exits with 5 when every test was deselected: nothing was left to run after a ttsim stop.
+        if [[ $ttsim_rounds -gt 0 && "$runner" == "pytest" && $rc -eq 5 ]]; then
+            rc=0
+        fi
 
         if [[ $gtest_emu_hostname_conflict -eq 1 ]]; then
             if [[ $attempt -lt $max_attempts ]]; then
@@ -1118,8 +1252,13 @@ run_test_invocation() {
         break
     done
 
+    [[ -n "$ttsim_capture" ]] && rm -f "$ttsim_capture"
     local elapsed=$((SECONDS - test_start))
-    if [[ "$runner" == "pytest" ]]; then
+    if [[ "$runner" == "pytest" && $ttsim_rounds -gt 0 && -n "$result_file" && -f "$result_file" ]] &&
+        grep -q 'tests="0"' "$result_file"; then
+        # Every test had run before the last ttsim stop; the final run had nothing left to do.
+        echo "  RESULT: no tests were left to run after the last ttsim stop"
+    elif [[ "$runner" == "pytest" ]]; then
         local -a pairs=()
         local i
         for i in "${!groups[@]}"; do
