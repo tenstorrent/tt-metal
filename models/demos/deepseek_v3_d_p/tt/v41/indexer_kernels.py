@@ -478,14 +478,22 @@ def range_scores(
         ttnn.DRAM_MEMORY_CONFIG,
     )
     reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    # every core's runtime arguments padded to RANGE_MAX_UNITS units: the program-cache key holds
+    # the cores and the compile-time arguments but not each core's argument count, and a cache hit
+    # re-applies a core's arguments only up to the length the entry's first call gave it, so 4 live
+    # rows then 16 on the same cores hung the device; with one fixed length a hit carries every unit
+    pad = [0] * (3 * RANGE_MAX_UNITS)
     for i, (cx, cy) in enumerate(coords):
         mine = units[i :: len(coords)]
         addresses = [q.buffer_address(), w.buffer_address(), k.buffer_address(), pin.buffer_address()]
-        reader_args[cx][cy] = addresses + [len(mine)] + [v for user_u, r, row_u, _ in mine for v in (user_u, r, row_u)]
-        writer_args[cx][cy] = [out.buffer_address(), pin.buffer_address(), len(mine)] + [
-            v for _, r, row_u, out_row in mine for v in (r, row_u, out_row)
+        reader_units = [v for user_u, r, row_u, _ in mine for v in (user_u, r, row_u)]
+        writer_units = [v for _, r, row_u, out_row in mine for v in (r, row_u, out_row)]
+        compute_units = [r for _, r, _, _ in mine]
+        reader_args[cx][cy] = addresses + [len(mine)] + (reader_units + pad)[: 3 * RANGE_MAX_UNITS]
+        writer_args[cx][cy] = [out.buffer_address(), pin.buffer_address(), len(mine)] + (writer_units + pad)[
+            : 3 * RANGE_MAX_UNITS
         ]
-        compute_args[cx][cy] = [len(mine)] + [r for _, r, _, _ in mine]
+        compute_args[cx][cy] = [len(mine)] + (compute_units + pad)[:RANGE_MAX_UNITS]
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/rangescore_reader.cpp",
