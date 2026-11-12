@@ -20,9 +20,11 @@ void bind_untilize(nb::module_& mod) {
         R"doc(
             Changes data layout of input tensor to ROW_MAJOR.
 
-            Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+            Input tensor must be on TT accelerator device, in TILE layout, and may have BFLOAT16,
+            FLOAT32, BFLOAT8_B, INT32, UINT16, or UINT8 data type.
 
-            Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+            Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and will have the same
+            data type as the input (BFLOAT8_B inputs are converted to BFLOAT16 on output).
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
