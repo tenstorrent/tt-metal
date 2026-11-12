@@ -14,7 +14,6 @@
 
 namespace abi = cce_addrgen_abi;
 using cce_test::own_tl1_words;
-using cce_test::read_cycle_counter;
 using overlay::ADDRGEN_0;
 using overlay::CMDBUF_0;
 
@@ -84,9 +83,9 @@ void kernel_main() {
     } else {
         const abi::PatternSpec& pattern = abi::kPatterns[pattern_index];
         setup_pattern(pattern, src_strided, dest_strided);
-        const uint64_t pop_start = read_cycle_counter();
+        const uint64_t pop_start = get_timestamp();
         pop_pattern(pattern, src_strided, num_addresses, own_tl1_words<uint64_t>(result_offset));
-        pop_cycles = static_cast<uint32_t>(read_cycle_counter() - pop_start);
+        pop_cycles = static_cast<uint32_t>(get_timestamp() - pop_start);
     }
 
     volatile uint32_t* status = own_tl1_words(status_offset);

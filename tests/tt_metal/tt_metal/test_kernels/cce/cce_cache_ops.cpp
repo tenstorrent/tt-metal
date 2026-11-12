@@ -15,7 +15,6 @@ namespace abi = cce_cache_ops_abi;
 using cce_test::arg_u64;
 using cce_test::kTestAreaBegin;
 using cce_test::kTestAreaEnd;
-using cce_test::read_cycle_counter;
 
 template <typename T>
 static volatile T* cached(uint32_t offset) {
@@ -466,7 +465,7 @@ static void run_ordering_producer(const Args& args, Report& report) {
             break;
         }
         store_words(cached_words, args.num_words, args.value + (pass << 16));
-        const uint64_t start = read_cycle_counter();
+        const uint64_t start = get_timestamp();
         switch (args.steps) {
             case abi::kOrderingLegFlushNoFence:
                 for_each_line(
@@ -487,7 +486,7 @@ static void run_ordering_producer(const Args& args, Report& report) {
                 break;
             default: break;
         }
-        leg_cycles += read_cycle_counter() - start;
+        leg_cycles += get_timestamp() - start;
         if (args.steps != abi::kOrderingLegFlushNoFence) {
             asm volatile("fence w, w" ::: "memory");
         }
@@ -909,7 +908,7 @@ static void run_thrash(const Args& args, Report& report) {
     uint32_t pass_cycles[abi::kMaxPasses] = {};
     bool mismatch_seen = false;
     for (uint32_t pass = 0; pass < args.passes; ++pass) {
-        const uint64_t start = read_cycle_counter();
+        const uint64_t start = get_timestamp();
         for_each_pattern_line(args, [&](uint32_t line) {
             for (uint32_t word = line * kWordsPerLine; word < (line + 1) * kWordsPerLine; ++word) {
                 if (pass != 0) {
@@ -926,7 +925,7 @@ static void run_thrash(const Args& args, Report& report) {
                 cached_words[word] = abi::thrash_word(args.value, args.seed, pass, word);
             }
         });
-        pass_cycles[pass] = static_cast<uint32_t>(read_cycle_counter() - start);
+        pass_cycles[pass] = static_cast<uint32_t>(get_timestamp() - start);
         report.passes = pass + 1;
     }
     flush_l2_cache_range(args.data_offset, args.num_bytes());
@@ -952,9 +951,9 @@ static void run_churn_consumer(const Args& args, Report& report) {
     report.cached_before = carried_over_words(args.data_offset, args.num_words, args.old_value);
     drop_cached_lines(args.data_offset, args.num_bytes());
     report.warm_old = check_words(cached_words, args.num_words, args.old_value).matches;
-    const uint64_t hit_start = read_cycle_counter();
+    const uint64_t hit_start = get_timestamp();
     (void)check_words(cached_words, args.num_words, args.old_value);
-    report.register_c = static_cast<uint32_t>(read_cycle_counter() - hit_start);
+    report.register_c = static_cast<uint32_t>(get_timestamp() - hit_start);
     bool incomplete_seen = false;
     for (uint32_t round = 0; round < args.passes; ++round) {
         const uint32_t round_value = abi::churn_word(args.value, round, 0);
@@ -973,13 +972,13 @@ static void run_churn_consumer(const Args& args, Report& report) {
         if ((args.steps & abi::kStepL2Invalidate) != 0) {
             for_each_line(args.data_offset, args.num_bytes(), [](uint32_t line) { invalidate_l2_cache_line(line); });
         }
-        const uint64_t refill_start = read_cycle_counter();
+        const uint64_t refill_start = get_timestamp();
         const Check refill = check_words(cached_words, args.num_words, round_value);
-        report.register_a += static_cast<uint32_t>(read_cycle_counter() - refill_start);
+        report.register_a += static_cast<uint32_t>(get_timestamp() - refill_start);
         report.stale_before += args.num_words - refill.matches;
-        const uint64_t reread_start = read_cycle_counter();
+        const uint64_t reread_start = get_timestamp();
         const Check reread = check_words(cached_words, args.num_words, round_value);
-        report.register_b += static_cast<uint32_t>(read_cycle_counter() - reread_start);
+        report.register_b += static_cast<uint32_t>(get_timestamp() - reread_start);
         if (reread.matches == args.num_words) {
             report.check.matches++;
         } else if (!incomplete_seen) {
@@ -1115,9 +1114,9 @@ static __attribute__((noinline)) void run_mm41_kernel() {
     if (!mm41_args_valid(args)) {
         report.code = abi::kCodeBadArgs;
     } else {
-        const uint64_t start = read_cycle_counter();
+        const uint64_t start = get_timestamp();
         run_mm41_mode(args, report);
-        report.cycles = static_cast<uint32_t>(read_cycle_counter() - start);
+        report.cycles = static_cast<uint32_t>(get_timestamp() - start);
     }
 
     volatile uint32_t* status = uncached<uint32_t>(args.status_offset);
@@ -1188,7 +1187,7 @@ void kernel_main() {
     if (!args_valid(mode, data_offset, num_words, flag_offset, budget_cycles)) {
         code = abi::kCodeBadArgs;
     } else {
-        const uint64_t start = read_cycle_counter();
+        const uint64_t start = get_timestamp();
         if (mode == abi::kModeProducer) {
             flag_ready = wait_for_flag(flag_offset, abi::kFlagWarmed, budget_cycles) ? 1 : 0;
         }
@@ -1242,7 +1241,7 @@ void kernel_main() {
             run_write_path(mode, data_offset, num_words, value);
             check = check_words(uncached<uint32_t>(data_offset), num_words, value);
         }
-        cycles = static_cast<uint32_t>(read_cycle_counter() - start);
+        cycles = static_cast<uint32_t>(get_timestamp() - start);
     }
 
     volatile uint32_t* status = uncached<uint32_t>(status_offset);
