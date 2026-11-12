@@ -146,7 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_dst,
             formats.unpack_B_dst,
             tensor_shape,
-            tensor_shape_b, ([LLK] Pass TensorShape to unpack hardware setup and reconfig (WH/BH))
+            tensor_shape_b,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
 
