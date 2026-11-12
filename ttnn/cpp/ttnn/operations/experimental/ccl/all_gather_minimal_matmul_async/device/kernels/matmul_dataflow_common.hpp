@@ -71,6 +71,9 @@ auto make_tensor_accessor_tuple_uniform_page_size_common(
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#ifdef FABRIC_2D
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+#endif
 
 using namespace tt::tt_fabric::linear::experimental;
 #endif
@@ -186,9 +189,9 @@ void compute_actual_k_block(
 
 #ifdef USE_MUX
 struct PacketHeaders {
-    volatile tt::tt_fabric::LowLatencyPacketHeader* scatter_hdr;
-    volatile tt::tt_fabric::LowLatencyPacketHeader* unicast_hdr;
-    volatile tt::tt_fabric::LowLatencyPacketHeader* sem_inc_hdr;
+    volatile PACKET_HEADER_TYPE* scatter_hdr;
+    volatile PACKET_HEADER_TYPE* unicast_hdr;
+    volatile PACKET_HEADER_TYPE* sem_inc_hdr;
 };
 
 template <typename TensorAccessorType, typename ConnectionHandleType>
@@ -1012,6 +1015,28 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
 
+#ifdef FABRIC_2D
+        // Fabric2D / TorusXY: route to the neighbour by fabric node (chip, mesh), not by hop count.
+        const auto dst_chip = static_cast<uint8_t>(unicast_route_info.dst_chip_id);
+        const auto dst_mesh = static_cast<uint16_t>(unicast_route_info.dst_mesh_id);
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            hdrs.scatter_hdr,
+            dst_chip,
+            dst_mesh,
+            NocUnicastScatterCommandHeader(dummy_addrs, chunk_sizes, num_tiles_to_write_per_packet),
+            page_size * num_tiles_to_write_per_packet);
+
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_write_set_state<
+            UnicastWriteUpdateMask::PayloadSize>(hdrs.unicast_hdr, dst_chip, dst_mesh, nullptr, in3_tile_size);
+
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            hdrs.sem_inc_hdr,
+            dst_chip,
+            dst_mesh,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+#else
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             hdrs.scatter_hdr,
@@ -1027,6 +1052,7 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
             hdrs.sem_inc_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
+#endif
 
         ccl_routing_utils::fabric_set_line_unicast_route(hdrs.scatter_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(hdrs.unicast_hdr, unicast_route_info);

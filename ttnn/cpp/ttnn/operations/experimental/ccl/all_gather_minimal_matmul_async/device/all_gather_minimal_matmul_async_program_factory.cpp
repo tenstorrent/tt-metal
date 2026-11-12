@@ -19,6 +19,8 @@
 #include <tuple>
 #include <utility>
 #include <variant>
+#include <array>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -189,19 +191,42 @@ void fabric_mux_connection_rt_args(
     tt::tt_metal::CoreCoord termination_master_virtual_core,
     uint32_t num_mux_clients,
     uint32_t termination_sync_id,
-    std::vector<uint32_t>& worker_rt_args) {
-    ttnn::ccl::fabric_mux_connection_rt_args(
-        mux_connection_valid,
-        is_termination_master,
-        channel_type,
-        mux_virtual_core,
-        worker_id,
-        worker_logical_core,
-        mux_kernel_config,
-        desc,
-        termination_master_virtual_core,
-        worker_rt_args,
-        termination_sync_id);
+    std::vector<uint32_t>& worker_rt_args,
+    const std::optional<std::array<uint32_t, 4>>& client_semaphore_ids = std::nullopt) {
+    if (client_semaphore_ids.has_value()) {
+        // The client words of ttnn::ccl::fabric_mux_connection_rt_args (ccl_common.cpp, same order), with the client's
+        // four local semaphores at ids every client shares: the launch writes them in one multicast instead of one
+        // write per client core (10 us of launch time per call on the KDA Galaxy).
+        worker_rt_args.insert(
+            worker_rt_args.end(),
+            {static_cast<uint32_t>(mux_connection_valid),
+             static_cast<uint32_t>(is_termination_master),
+             static_cast<uint32_t>(mux_virtual_core.x),
+             static_cast<uint32_t>(mux_virtual_core.y),
+             static_cast<uint32_t>(mux_kernel_config.get_channel_base_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_connection_info_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_flow_control_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_buffer_index_address(channel_type, worker_id)),
+             static_cast<uint32_t>(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id)),
+             termination_sync_id});
+        worker_rt_args.insert(worker_rt_args.end(), client_semaphore_ids->begin(), client_semaphore_ids->end());
+        worker_rt_args.push_back(termination_master_virtual_core.x);
+        worker_rt_args.push_back(termination_master_virtual_core.y);
+    } else {
+        ttnn::ccl::fabric_mux_connection_rt_args(
+            mux_connection_valid,
+            is_termination_master,
+            channel_type,
+            mux_virtual_core,
+            worker_id,
+            worker_logical_core,
+            mux_kernel_config,
+            desc,
+            termination_master_virtual_core,
+            worker_rt_args,
+            termination_sync_id);
+    }
     worker_rt_args.push_back(num_mux_clients);  // num_mux_clients (this mux)
 }
 
@@ -505,6 +530,13 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Separate ids for in0 vs in1 so an overlap core's two muxes don't share a termination slot.
     auto in0_term_sync_id = add_grid_semaphore(0);
     auto in1_term_sync_id = add_grid_semaphore(0);
+    // Fabric2D: the in0 fabric cores' mux-client semaphores (status, flow control, teardown, buffer index) on the
+    // whole grid, so the launch writes them in one multicast rather than one write per fabric core.
+    std::optional<std::array<uint32_t, 4>> in0_mux_client_semaphore_ids;
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        in0_mux_client_semaphore_ids = std::array<uint32_t, 4>{
+            add_grid_semaphore(0), add_grid_semaphore(0), add_grid_semaphore(0), add_grid_semaphore(0)};
+    }
 
     auto add_cb = [&](uint32_t cb_id, uint32_t tile_size, uint32_t num_tiles, tt::DataFormat data_format) {
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -624,6 +656,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // A mux must sit at the far end of the in0 forwarding chains it serves
     const bool in0_mux_in_column = !single_row_muxes && !transpose_core_grid && (grid_size.x < full_grid_size.x);
     const bool mux_index_on_x = !in0_mux_in_column;
+    // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
+    // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
     TT_FATAL(
         (mux_index_on_x ? full_grid_size.x : full_grid_size.y) >= num_mux_cores,
         "There are not enough cores along the mux axis ({}) for the number of mux cores requested ({})",
@@ -786,11 +821,19 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
     }
 
+    if (fabric_2d) {
+        defines["FABRIC_2D"] = "1";
+    }
+
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
+    if (fabric_2d) {
+        // Blocks the in0 buffer holds: a Fabric2D fabric core holds its forwards in it until its neighbour entered.
+        in0_fabric_defines["AGMM_IN0_CB_BLOCKS"] = std::to_string(double_buffer_factor);
+    }
     auto in1_defines = defines;
     if (persistent_weight_buffer.has_value()) {
         in1_defines["FSDP_FUSED"] = "1";
@@ -1481,7 +1524,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                     termination_master_virtual_core_backward,
                     in0_mux_clients,
                     in0_term_sync_id,
-                    in0_args);
+                    in0_args,
+                    in0_mux_client_semaphore_ids);
             } else {
                 // Forward fabric sender (in0_core_order_index == in0_fwd_idx).
                 auto termination_master_logical_core_forward =
@@ -1505,7 +1549,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                     termination_master_virtual_core_forward,
                     in0_mux_clients,
                     in0_term_sync_id,
-                    in0_args);
+                    in0_args,
+                    in0_mux_client_semaphore_ids);
             }
         }
         if (in0_core_order_index == 0) {
