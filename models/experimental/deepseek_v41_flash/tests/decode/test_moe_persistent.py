@@ -40,7 +40,8 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     moe_weights,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts, DeepSeekV41SparseMoeBlock
-from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY, width_sharded_l1_config
+from models.experimental.deepseek_v41_flash.tt.decode.persistent_moe import PersistentMoE, default_socket_core
+from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
@@ -68,10 +69,6 @@ EXPERT_POOL = 4
 ROUTING_TIE = 0.02
 # The real-weights test: rows per layer, every layer of the checkpoint visited this often in a shuffled order.
 REAL_ROWS_PER_LAYER = 2
-STOP_LAYER = 0xFFFFFFFF
-HEADER_BYTES = 64
-# The worker grid and router row the op multicasts each row over: 12 x (8 + 1).
-REPLICA_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 8))])
 
 
 def _snapshot():
@@ -150,188 +147,6 @@ def _pcc(a, b):
     return torch.corrcoef(torch.stack([a.flatten(), b.flatten()]))[0, 1].item()
 
 
-def _as_int32(values):
-    return torch.tensor([v - (1 << 32) if v >= 1 << 31 else v for v in values], dtype=torch.int32)
-
-
-class PersistentMoE:
-    """The persistent op over ``moes`` (one ``DeepSeekV41SparseMoeBlock`` per layer, all at TP12 on ``moe_mesh``),
-    serving one requester per mesh of ``request_meshes``.
-
-    The layer table holds each layer's buffer addresses in the row layout the op reads; the op itself is launched
-    on layer 0's tensors, whose layouts every layer shares. Each requester's request socket runs from
-    ``request_core`` on each of its chips to ``socket_core`` on the MoE chips of the same column, with a one-page
-    FIFO; its response socket from ``socket_core`` on MoE (0, 0) to ``request_core`` on every one of its chips, two
-    rows deep. The op takes the requesters' requests in strict turn (requester 0, 1, ..., then 0 again), so each
-    has to send its next request only after the others have sent theirs. Use :meth:`upload` and :meth:`request`
-    (or call it with ``(requester, layer, row)`` for one blocking request), and :meth:`stop` once to end the kernels.
-    """
-
-    def __init__(self, moe_mesh, request_meshes, moes, socket_core, request_core):
-        self.moe_mesh = moe_mesh
-        self.request_meshes = request_meshes
-        self.hidden = moes[0].hidden
-        self.row_bytes = self.hidden * 2
-        first = moes[0]
-        experts = first.experts
-        for moe in moes:
-            assert moe.fused_router and moe.fused_shared is not None, "the persistent op runs the whole block"
-        assert experts.fused_all_reduce_axes is not None, "the persistent op reduces over the whole mesh"
-
-        rows = []
-        for layer, moe in enumerate(moes):
-            header = [
-                layer,
-                moe.fused_shared.gate_up.buffer_address(),
-                moe.fused_shared.down.buffer_address(),
-                moe.gate.fused_gate_weight.buffer_address(),
-                moe.gate.ranking_bias().buffer_address(),
-            ]
-            header += [0] * (HEADER_BYTES // 4 - len(header))
-            rows.append(
-                _as_int32(
-                    header
-                    + [w.buffer_address() for w in moe.experts.gate_up_weights]
-                    + [w.buffer_address() for w in moe.experts.down_weights]
-                )
-            )
-        self.layer_table = ttnn.from_torch(
-            torch.stack(rows),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=moe_mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(moe_mesh),
-        )
-        # The row lands here on every core of the grid, replacing the all_gather_for_matmul replica.
-        self.replica = ttnn.from_torch(
-            torch.zeros(1, 1, REPLICA_GRID.num_cores(), self.hidden),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=moe_mesh,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(REPLICA_GRID, [1, self.hidden], ttnn.ShardOrientation.ROW_MAJOR),
-            ),
-            mesh_mapper=ttnn.ReplicateTensorToMesh(moe_mesh),
-        )
-
-        moe_rows, moe_cols = tuple(moe_mesh.shape)
-        self.request_tx, self.request_rx, self.response_tx, self.response_rx = [], [], [], []
-        for request_mesh in request_meshes:
-            request_connections = [
-                ttnn.SocketConnection(
-                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, c), request_core),
-                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, c), socket_core),
-                )
-                for c in range(moe_cols)
-                for r in range(moe_rows)
-            ]
-            tx, rx = ttnn.create_socket_pair(
-                request_mesh,
-                moe_mesh,
-                ttnn.SocketConfig(
-                    request_connections, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, HEADER_BYTES + self.row_bytes)
-                ),
-            )
-            self.request_tx.append(tx)
-            self.request_rx.append(rx)
-            response_connections = [
-                ttnn.SocketConnection(
-                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), socket_core),
-                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, c), request_core),
-                )
-                for c in range(tuple(request_mesh.shape)[1])
-            ]
-            tx, rx = ttnn.create_socket_pair(
-                moe_mesh,
-                request_mesh,
-                ttnn.SocketConfig(
-                    response_connections, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 2 * self.row_bytes)
-                ),
-            )
-            self.response_tx.append(tx)
-            self.response_rx.append(rx)
-        self.inputs = [self.request_input(j) for j in range(len(request_meshes))]
-
-        shared = first.fused_shared
-        self.scratch = ttnn.experimental.deepseek.moe.fused_experts(
-            self.replica,
-            router_weight=first.gate.fused_gate_weight,
-            router_bias=first.gate.ranking_bias(),
-            gate_up_weights=experts.gate_up_weights,
-            down_weights=experts.down_weights,
-            num_experts=experts.top_k,
-            intermediate_size=experts.intermediate,
-            swiglu_limit=experts.limit,
-            top_k=experts.top_k,
-            routed_scaling_factor=experts.routed_scaling_factor,
-            routing_eps=experts.routing_eps,
-            experts_block_size=experts.experts_block_size,
-            shared_gate_up_weights=shared.gate_up,
-            shared_down_weights=shared.down,
-            shared_swiglu_limit=shared.swiglu_limit,
-            memory_config=experts.output_memory_config,
-            all_reduce_cluster_axes=experts.fused_all_reduce_axes,
-            all_reduce_num_links=2,
-            all_reduce_topology=CCL_TOPOLOGY,
-            persistent_layer_table=self.layer_table,
-            persistent_socket_core=socket_core,
-            persistent_input_sockets=self.request_rx,
-            persistent_output_sockets=self.response_tx,
-        )
-
-    def request_input(self, requester: int):
-        """A ``[1, 1, 1, D]`` request row on every chip of ``requester``, zeroed."""
-        mesh = self.request_meshes[requester]
-        return ttnn.from_torch(
-            torch.zeros(1, 1, 1, self.hidden),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-        )
-
-    def upload(self, requester: int, row: torch.Tensor, tensor=None):
-        host = ttnn.from_torch(
-            row.reshape(1, 1, 1, -1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.request_meshes[requester]),
-        )
-        ttnn.copy_host_to_device_tensor(host, self.inputs[requester] if tensor is None else tensor)
-
-    def request(self, requester: int, layer: int, tensor=None):
-        """Dispatches ``requester``'s request without waiting for it; returns its output tensor."""
-        return ttnn.experimental.deepseek.moe.persistent_moe_request(
-            self.inputs[requester] if tensor is None else tensor,
-            layer=layer,
-            request_socket=self.request_tx[requester],
-            response_socket=self.response_rx[requester],
-        )
-
-    @staticmethod
-    def rows_of(out) -> list:
-        """Each request chip's copy of the reduced row, as ``[D]`` bf16."""
-        return [ttnn.to_torch(t).reshape(-1) for t in ttnn.get_device_tensors(out)]
-
-    @classmethod
-    def row_of(cls, out) -> torch.Tensor:
-        """The reduced row of ``out``, which every request chip must hold alike."""
-        copies = cls.rows_of(out)
-        mismatched = [c for c, copy in enumerate(copies) if not torch.equal(copy, copies[0])]
-        assert not mismatched, f"request chips {mismatched} got a different response than chip 0"
-        return copies[0]
-
-    def stop(self):
-        for j in range(len(self.request_meshes)):
-            ttnn.deallocate(self.request(j, STOP_LAYER))
-        for mesh in self.request_meshes + [self.moe_mesh]:
-            ttnn.synchronize_device(mesh)
-
-
 def _setup(mesh_device):
     """``(moe_mesh, request_meshes, config, socket_core, request_core)``: the TP12 MoE submesh, the TP4 requester
     submeshes, the V4.1 config, and the cores the sockets connect."""
@@ -342,10 +157,7 @@ def _setup(mesh_device):
         mesh_device.create_submesh(ttnn.MeshShape(*REQUEST_SUBMESH), ttnn.MeshCoordinate(row, 0))
         for row in REQUEST_ROWS
     ]
-    grid = moe_mesh.compute_with_storage_grid_size()
-    # Bottom-right: outside the 12x9 grid the op multicasts over, and away from the reduce senders, which the
-    # op picks from the bottom row's left end. Nothing else runs on the request chips, so any core does there.
-    core = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
+    core = default_socket_core(moe_mesh)
     return moe_mesh, request_meshes, load_config(_snapshot()), core, core
 
 

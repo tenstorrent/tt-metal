@@ -47,7 +47,8 @@
 //
 // Runtime args:
 //   0: layer_table address   1: input replica address   2+: the senders' NoC xs, then their NoC ys,
-//   then each requester's input socket config address
+//   then each requester's input socket config address, then the senders' source ring address (kFeSourceRing
+//   words on each sender: each iteration's requester, which the senders send its partials to)
 
 constexpr uint32_t kFeStopLayer = 0xFFFFFFFFu;
 
@@ -101,6 +102,7 @@ void kernel_main() {
         set_receiver_socket_page_size(in[k], page_bytes);
     }
     auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_l1 + kHdrBytes);
+    const uint32_t sender_ring_addr = get_arg_val<uint32_t>(2 + 2 * num_senders + num_requesters);
 
     auto* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_READY));
     auto* route_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_route_ready_id));
@@ -167,6 +169,13 @@ void kernel_main() {
             break;
         }
         source[iter % kFeSourceRing] = k;
+        // The senders' copy, which the barrier after the router row's multicasts lands before their go.
+        for (uint32_t s = 0; s < num_senders; ++s) {
+            noc_async_write(
+                reinterpret_cast<uint32_t>(&source[iter % kFeSourceRing]),
+                get_noc_addr(sender_x[s], sender_y[s], sender_ring_addr + (iter % kFeSourceRing) * 4u),
+                4u);
+        }
         {
             DeviceZoneScopedN("FE_CTRL_ROUTE_MCAST");
             noc_async_write_multicast(headers_l1 + layer * kHdrBytes, route_hdr_mcast, kHdrBytes, route_cores);

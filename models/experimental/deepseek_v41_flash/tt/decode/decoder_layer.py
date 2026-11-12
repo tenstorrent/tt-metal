@@ -88,6 +88,49 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         verify_rows: int = 1,
     ):
         cache = _as_cache(cache)
+        self._build_non_moe(
+            config,
+            layer_idx,
+            weights,
+            device,
+            cache,
+            weight_dtype=weight_dtype,
+            tp_size=tp_size,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            engram_sockets=engram_sockets,
+            verify_rows=verify_rows,
+            build_mlp=lambda: DeepSeekV41SparseMoeBlock(
+                config,
+                _strip_prefix(weights, "mlp"),
+                device,
+                experts,
+                cache=cache.sub("ffn"),
+                tp_size=tp_size,
+                use_prefetcher=use_prefetcher,
+                prefetch_buffers=prefetch_buffers,
+                verify_rows=verify_rows,
+            ),
+        )
+
+    def _build_non_moe(
+        self,
+        config,
+        layer_idx: int,
+        weights: dict,
+        device,
+        cache,
+        *,
+        weight_dtype,
+        tp_size: int,
+        use_prefetcher: bool,
+        prefetch_buffers,
+        engram_sockets,
+        verify_rows: int,
+        build_mlp=None,
+    ):
+        """The Engram, attention, both hyper-connections and both norms; ``self.mlp`` is ``build_mlp()`` (built
+        after attention, where the layer always built it, so the allocations keep their order), or ``None``."""
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
@@ -120,17 +163,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
         )
-        self.mlp = DeepSeekV41SparseMoeBlock(
-            config,
-            _strip_prefix(weights, "mlp"),
-            device,
-            experts,
-            cache=cache.sub("ffn"),
-            tp_size=tp_size,
-            use_prefetcher=use_prefetcher,
-            prefetch_buffers=prefetch_buffers,
-            verify_rows=verify_rows,
-        )
+        self.mlp = build_mlp() if build_mlp is not None else None
         self.input_layernorm = DeepSeekV4RMSNorm(
             weights["input_layernorm.weight"], eps, device, cache.file("attn_norm"), sharded=True
         )
@@ -260,4 +293,127 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             streams_out = self._mix(post, comb, mlp_out, hidden_streams)
         ttnn.deallocate(hidden_streams)
         _l1("exit")
+        return streams_out, ffn_pre
+
+
+class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
+    """V4.1 decode decoder layer ``layer_idx`` whose MoE runs on a persistent TP12 MoE server.
+
+    Everything but the MoE -- Engram, attention, both hyper-connections and both norms -- is built as in
+    :class:`DeepSeekV41DecoderLayer` on ``device``, a 1x4 TP4 mesh; one such mesh can hold all 40 layers. The MoE
+    (router, routed experts and shared expert) is ``moe_server``'s (a :class:`~.persistent_moe.PersistentMoE`
+    over the layer's TP12 MoE block on its 3x4 mesh), and ``device`` is its requester ``requester``. So this
+    layer holds no MoE weights: ``weights`` needs no ``mlp.*`` entries and :attr:`mlp` is ``None``.
+
+    The FFN step sends the normed row to the server (``persistent_moe_request``) and mixes in the reduced row it
+    gets back, replicated over the TP4 chips, in place of the MoE block's all-reduced output.
+
+    Decode only, one row: ``B == 1`` and ``S == 1``. The server takes one ``[1, D]`` row per request, and its
+    layer table holds the router's text bias only, so image tokens (``image_mask``) are not supported.
+    """
+
+    def __init__(
+        self,
+        config,
+        layer_idx: int,
+        weights: dict,
+        device,
+        moe_server,
+        requester: int = 0,
+        cache=None,
+        weight_dtype=ttnn.bfloat16,
+        tp_size: int = 4,
+        use_prefetcher: bool = False,
+        prefetch_buffers=None,
+        engram_sockets=None,
+    ):
+        if layer_idx not in moe_server.table_rows:
+            raise ValueError(f"layer {layer_idx} is not on the persistent MoE (it serves {moe_server.layer_ids})")
+        if moe_server.request_meshes[requester] is not device:
+            raise ValueError(f"requester {requester} of the persistent MoE is not this layer's device")
+        self._build_non_moe(
+            config,
+            layer_idx,
+            weights,
+            device,
+            _as_cache(cache),
+            weight_dtype=weight_dtype,
+            tp_size=tp_size,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            engram_sockets=engram_sockets,
+            verify_rows=1,
+        )
+        self.moe_server = moe_server
+        self.requester = requester
+
+    def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True):
+        """Queue this layer's ring requests: Engram's wkv, then attention's -- the order :meth:`decode` pops them.
+        The MoE's weights live on the server."""
+        if self.engram is not None:
+            self.engram.wkv.fetch_weights()
+        self.self_attn.prefetch_weights(one_row=one_row)
+
+    def moe(self, normed: ttnn.Tensor) -> ttnn.Tensor:
+        """The server's MoE of ``normed`` ``[1, 1, 1, D]``: the reduced row as ``[1, 1, 1, D]`` bf16 ROW_MAJOR in
+        DRAM, replicated over the mesh. ``normed`` is not consumed."""
+        d = self.config.hidden_size
+        row = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
+        if row.layout != ttnn.ROW_MAJOR_LAYOUT:
+            tiled = row
+            row = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(tiled)
+        if row.dtype != ttnn.bfloat16:
+            cast = row
+            row = ttnn.typecast(cast, ttnn.bfloat16)
+            ttnn.deallocate(cast)
+        row = ttnn.reshape(row, [1, 1, 1, d])
+        out = self.moe_server.request(self.requester, self.layer_idx, row)
+        ttnn.deallocate(row)
+        return out
+
+    def decode(
+        self,
+        hidden_streams: ttnn.Tensor,
+        pre_mix: ttnn.Tensor,
+        scache: _StaticLayerCache,
+        image_mask: Optional[ttnn.Tensor] = None,
+        **attn_inputs,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """One decode step: ``(streams [1, 1, hc, D], pre_mix [1, 1, 1, hc])`` -> the same pair for the next layer.
+
+        As :meth:`DeepSeekV41DecoderLayer.decode` for one row, the MoE on the server. On an Engram layer the
+        step's rows go to ``self.engram.write_rows`` before this call."""
+        b, s = hidden_streams.shape[0], hidden_streams.shape[1]
+        assert b == 1 and s == 1, f"the persistent MoE decodes one row per step, got [{b}, {s}]"
+        assert image_mask is None, "the persistent MoE's layer table holds the text router bias only"
+
+        if self.engram is not None:
+            with _region("ENGRAM"):
+                streams_in = hidden_streams
+                hidden_streams = self.engram(streams_in)
+                ttnn.deallocate(streams_in)
+        with _region("ATTN_HC"):
+            post, comb, collapsed, attn_pre = self.attn_hc(hidden_streams, pre_mix=pre_mix)
+        with _region("INPUT_NORM"):
+            normed = self.input_layernorm(collapsed)
+        with _region("ATTENTION"):
+            attn_out = self.self_attn.decode(normed, scache=scache, **attn_inputs)
+        with _region("ATTN_MIX"):
+            streams_in = hidden_streams
+            hidden_streams = self._mix(post, comb, attn_out, streams_in)
+        ttnn.deallocate(streams_in)
+        ttnn.deallocate(normed)
+        ttnn.deallocate(attn_out)
+        with _region("FFN_HC"):
+            post, comb, collapsed, ffn_pre = self.ffn_hc(hidden_streams, pre_mix=attn_pre)
+        with _region("POST_NORM"):
+            normed = self.post_attention_layernorm(collapsed)
+        with _region("MOE"):
+            mlp_out = self.moe(normed)
+        ttnn.deallocate(normed)
+        with _region("FFN_MIX"):
+            streams_out = self._mix(post, comb, mlp_out, hidden_streams)
+        ttnn.deallocate(hidden_streams)
+        ttnn.deallocate(mlp_out)
         return streams_out, ffn_pre

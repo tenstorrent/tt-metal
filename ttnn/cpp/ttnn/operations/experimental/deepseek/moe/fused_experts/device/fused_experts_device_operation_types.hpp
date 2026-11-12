@@ -29,32 +29,44 @@ struct FusedAllReduceParams {
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
 };
 
-// The persistent op: launched once, it serves requesters, each a pair of D2D sockets. Every chip
-// receives on each input socket; a page is one token row -- a 64-byte header whose first word is the
-// layer id, then the [1, H] bf16 row -- and the pages of all the inputs, taken round robin as they
-// arrive, go through the op's pipeline one after another. The all-reduce becomes a reduce to mesh
-// coordinate (0, 0), which sends each summed [1, H] row on the output socket paired with the row's
-// input. A page whose layer id is not below num_layers (0xFFFFFFFF by convention) closes its input;
-// once every input is closed, every kernel stops.
+// The persistent op: launched once, it serves requesters, each a request D2D socket and a partials buffer.
+// Every chip receives on each request socket; a page is one token row -- a 64-byte header whose first word is
+// the layer id, then the [1, H] bf16 row -- and the pages of all the requests, taken round robin as they
+// arrive, go through the op's pipeline one after another. There is no cross-chip reduce: every chip sends its
+// partial [1, H] row, in num_links parts, straight to every chip of the row's requester, into that chip's slot
+// of the requester's partials buffer, and the requester sums the chips' partials (persistent_moe_request). A
+// page whose layer id is not below num_layers (0xFFFFFFFF by convention) closes its requester; once every
+// requester is closed, every kernel stops.
 //
-// The socket objects are the caller's; the op only takes their config buffer addresses (sockets are
-// allocated in lockstep, so one address serves every chip) and the outputs' routes.
-// Kernel array bounds: requesters, and sends per requester's output.
+// The socket and buffer objects are the caller's; the op only takes their addresses (they are allocated in
+// lockstep, so one address serves every chip) and the routes to them.
+// Kernel array bounds: requesters, and sends per requester.
 constexpr uint32_t kMaxPersistentRequesters = 8;
 constexpr uint32_t kMaxPersistentRoutes = 16;
+// A sender's fabric connections: one per direction its partials leave in.
+constexpr uint32_t kMaxPersistentConnections = 4;
 
 struct FusedPersistentParams {
     uint32_t num_layers{};
-    // The control core (logical), outside the worker grid, where every socket's endpoint on this mesh lives.
+    // The control core (logical), outside the worker grid, where every request socket's endpoint lives.
     tt::tt_metal::CoreCoord socket_core;
+    // One row's bytes, and the op's chips: the slots of a partials buffer.
+    uint32_t row_bytes{};
+    uint32_t num_chips{};
     // Per requester.
     std::vector<uint32_t> input_socket_config_addresses;
-    std::vector<uint32_t> output_socket_config_addresses;
-    // Per requester, its output's sends out of (0, 0) (see d2d_routes), as the kernel reads them.
-    std::vector<std::vector<uint32_t>> output_route_args;
-    // Where the root's one fabric connection, which every output route leaves by, is opened toward.
-    uint32_t output_connection_mesh_id{};
-    uint32_t output_connection_chip_id{};
+    std::vector<uint32_t> partials_addresses;
+    // Per requester, per link: the NoC coordinates of the sum core that link's part of a row goes to.
+    std::vector<std::vector<uint32_t>> sum_core_noc_xs;
+    std::vector<std::vector<uint32_t>> sum_core_noc_ys;
+    // Per chip of the op (its linear index, its slot), per requester: the sends to that requester's chips (see
+    // d2d_routes), as the kernel reads them.
+    std::vector<std::vector<std::vector<uint32_t>>> partials_route_args;
+    // Per chip of the op: its senders' fabric connections, one per direction its sends leave in (a requester's
+    // all leave in one), by the neighbour each is opened toward; and per requester, the one its sends take.
+    std::vector<std::vector<uint32_t>> partials_connection_mesh_ids;
+    std::vector<std::vector<uint32_t>> partials_connection_chip_ids;
+    std::vector<std::vector<uint32_t>> partials_connection_index;
 };
 
 // Non-tensor parameters of the fused routed-expert FFN.

@@ -21,12 +21,10 @@ using tt::tt_metal::distributed::SocketEndpoint;
 constexpr uint32_t kRequestHeaderBytes = 64;
 constexpr uint32_t kRequestStopLayer = 0xFFFFFFFFu;
 
-// This chip's side of the two sockets: the core that sends the request and receives the response,
-// the request's receivers and the response's sender.
+// This chip's side of the request socket: the core that sends the request, and the request's receivers.
 struct RequestEndpoints {
     tt::tt_metal::CoreCoord core;
     std::vector<tt::tt_fabric::FabricNodeId> receivers;
-    tt::tt_fabric::FabricNodeId responder;
 };
 
 std::optional<RequestEndpoints> request_endpoints(
@@ -52,20 +50,42 @@ std::optional<RequestEndpoints> request_endpoints(
     if (!core.has_value()) {
         return std::nullopt;
     }
-    std::optional<tt::tt_fabric::FabricNodeId> responder;
-    for (const auto& c : attributes.response_socket.get_config().socket_connection_config) {
-        if (c.receiver_core.device_coord != coord) {
-            continue;
-        }
-        TT_FATAL(
-            !responder.has_value() && c.receiver_core.core_coord == *core,
-            "persistent_moe_request: {} must receive the response once, on its request core {}",
-            coord,
-            core->str());
-        responder = attributes.response_socket.get_fabric_node_id(SocketEndpoint::SENDER, c.sender_core.device_coord);
-    }
-    TT_FATAL(responder.has_value(), "persistent_moe_request: {} sends a request but receives no response", coord);
-    return RequestEndpoints{.core = *core, .receivers = std::move(receivers), .responder = *responder};
+    return RequestEndpoints{.core = *core, .receivers = std::move(receivers)};
+}
+
+// The partials buffer's layout (see PersistentMoeRequestParams): its sum cores, one per part of the row, the
+// part's bytes, and the slots (the persistent op's chips) per shard.
+struct PartialsLayout {
+    std::vector<tt::tt_metal::CoreCoord> sum_cores;
+    uint32_t part_bytes;
+    uint32_t num_slots;
+};
+
+// The sum views a part as tiles of this shape; the sum is elementwise, so any whole-tile view does.
+constexpr uint32_t kSumTileH = 16;
+constexpr uint32_t kSumTileW = 32;
+constexpr uint32_t kSumTileBytes = kSumTileH * kSumTileW * 2;
+
+PartialsLayout partials_layout(const PersistentMoeRequestParams& attributes, uint32_t row_bytes) {
+    const auto& partials = attributes.partials;
+    const auto& shard = partials.shard_spec().value();
+    PartialsLayout layout{
+        .sum_cores = corerange_to_cores(shard.grid, std::nullopt, /*row_wise=*/true), .part_bytes = 0, .num_slots = 0};
+    const auto parts = static_cast<uint32_t>(layout.sum_cores.size());
+    TT_FATAL(
+        parts > 0 && row_bytes % parts == 0 && (row_bytes / parts) % kSumTileBytes == 0,
+        "persistent_moe_request: a {} B row does not split into {} parts of whole {} B tiles",
+        row_bytes,
+        parts,
+        kSumTileBytes);
+    layout.part_bytes = row_bytes / parts;
+    // num_slots slots of a part, then a flag word per slot.
+    layout.num_slots = static_cast<uint32_t>(partials.buffer()->aligned_size_per_bank()) / (layout.part_bytes + 4u);
+    TT_FATAL(
+        layout.num_slots > 0,
+        "persistent_moe_request: the partials shards hold no slot of a {} B part",
+        layout.part_bytes);
+    return layout;
 }
 
 }  // namespace
@@ -86,10 +106,15 @@ void PersistentMoeRequestDeviceOperation::validate_on_program_cache_miss(
     auto* mesh = input.device();
     TT_FATAL(
         attributes.request_socket.get_socket_endpoint_type() == SocketEndpoint::SENDER &&
-            attributes.response_socket.get_socket_endpoint_type() == SocketEndpoint::RECEIVER &&
-            attributes.request_socket.get_mesh_device() == mesh && attributes.response_socket.get_mesh_device() == mesh,
-        "persistent_moe_request: it sends on request_socket and receives on response_socket, both endpoints on the "
-        "input's mesh");
+            attributes.request_socket.get_mesh_device() == mesh,
+        "persistent_moe_request: it sends on request_socket, whose sending end must be on the input's mesh");
+    const auto& partials = attributes.partials;
+    TT_FATAL(
+        partials.storage_type() == StorageType::DEVICE && partials.device() == mesh &&
+            partials.memory_config().buffer_type() == BufferType::L1 &&
+            partials.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+        "persistent_moe_request: partials must be an L1 HEIGHT_SHARDED tensor on the input's mesh");
+    partials_layout(attributes, input.buffer()->page_size());
 }
 
 PersistentMoeRequestDeviceOperation::spec_return_value_t PersistentMoeRequestDeviceOperation::compute_output_specs(
@@ -106,9 +131,9 @@ ttsl::hash::hash_t PersistentMoeRequestDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& input) {
     return tt::tt_metal::operation::hash_operation<PersistentMoeRequestDeviceOperation>(
         attributes.request_socket,
-        attributes.response_socket,
         attributes.request_socket.get_config_buffer_address(),
-        attributes.response_socket.get_config_buffer_address(),
+        attributes.partials.buffer()->address(),
+        attributes.partials.memory_config(),
         input);
 }
 
@@ -130,6 +155,7 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
     const auto& core = endpoints->core;
     const uint32_t row_bytes = input.buffer()->page_size();
     const uint32_t page_bytes = kRequestHeaderBytes + row_bytes;
+    const bool stop = attributes.layer == kRequestStopLayer;
 
     ProgramDescriptor desc;
     constexpr uint32_t cb_page = tt::CBIndex::c_0;
@@ -145,14 +171,11 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
 
     std::vector<uint32_t> ct_args = {
         static_cast<uint32_t>(attributes.request_socket.get_config_buffer_address()),
-        static_cast<uint32_t>(attributes.response_socket.get_config_buffer_address()),
         row_bytes,
         static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()),
         cb_page,
-        kRequestStopLayer,
     };
     TensorAccessorArgs(*input.buffer()).append_to(ct_args);
-    TensorAccessorArgs(*output.buffer()).append_to(ct_args);
     KernelDescriptor kernel;
     kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/device/kernels/dataflow/moe_request.cpp";
@@ -163,10 +186,7 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
     tt::tt_metal::KernelHandle kernel_id = desc.kernels.size();
     desc.kernels.push_back(std::move(kernel));
 
-    std::vector<uint32_t> args = {
-        attributes.layer,
-        static_cast<uint32_t>(input.buffer()->address()),
-        static_cast<uint32_t>(output.buffer()->address())};
+    std::vector<uint32_t> args = {attributes.layer, static_cast<uint32_t>(input.buffer()->address())};
     TT_FATAL(
         routes.size() <= 16,
         "persistent_moe_request: {} sends to {} chips, more than the kernel's 16",
@@ -176,14 +196,67 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
     for (const auto& route : routes) {
         append_d2d_route_args(route, args);
     }
-    // Two connections, each its own manager: the ack to the responder may leave in the request's direction,
-    // which one manager cannot hold twice.
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
         *mesh, src, {routes.front().next}, {0u}, desc, kernel_id, core, args, tt::tt_fabric::FabricApiType::Mesh);
-    tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-        *mesh, src, {endpoints->responder}, {1u}, desc, kernel_id, core, args, tt::tt_fabric::FabricApiType::Mesh);
     desc.kernels[kernel_id].runtime_args.emplace_back(
         core, KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end()));
+
+    // The sum of each part of the row, on its sum core: the slots are a CB over the partials shard, which the
+    // persistent op's chips fill.
+    const auto layout = partials_layout(attributes, row_bytes);
+    const uint32_t tiles_per_part = layout.part_bytes / kSumTileBytes;
+    CoreRangeSet sum_set;
+    for (const auto& c : layout.sum_cores) {
+        sum_set = sum_set.merge(CoreRangeSet(CoreRange(c, c)));
+    }
+    const TileDescriptor sum_tile(tt::tt_metal::Tile({kSumTileH, kSumTileW}));
+    constexpr uint32_t cb_in = tt::CBIndex::c_1;
+    constexpr uint32_t cb_out = tt::CBIndex::c_2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = layout.num_slots * layout.part_bytes,
+        .core_ranges = sum_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cb_in,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = kSumTileBytes,
+            .tile = sum_tile,
+        }}},
+        .buffer = attributes.partials.buffer(),
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = layout.part_bytes,
+        .core_ranges = sum_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cb_out,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = kSumTileBytes,
+            .tile = sum_tile,
+        }}},
+    });
+    std::vector<uint32_t> sum_ct_args = {layout.num_slots, layout.part_bytes, cb_in, cb_out, tiles_per_part};
+    TensorAccessorArgs(*output.buffer()).append_to(sum_ct_args);
+    KernelDescriptor sum_reader;
+    sum_reader.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/device/kernels/dataflow/moe_partials_sum.cpp";
+    sum_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    sum_reader.core_ranges = sum_set;
+    sum_reader.compile_time_args = std::move(sum_ct_args);
+    // RISCV_1: the request core may be a sum core, and the request kernel is RISCV_0.
+    sum_reader.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    KernelDescriptor sum_compute;
+    sum_compute.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/device/kernels/compute/moe_partials_sum.cpp";
+    sum_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    sum_compute.core_ranges = sum_set;
+    sum_compute.compile_time_args = {layout.num_slots, tiles_per_part, cb_in, cb_out};
+    sum_compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false};
+    for (uint32_t part = 0; part < layout.sum_cores.size(); ++part) {
+        const auto& c = layout.sum_cores[part];
+        sum_reader.emplace_runtime_args(c, {stop ? 1u : 0u, attributes.partials.buffer(), output.buffer(), part});
+        sum_compute.emplace_runtime_args(c, {stop ? 1u : 0u});
+    }
+    desc.kernels.push_back(std::move(sum_reader));
+    desc.kernels.push_back(std::move(sum_compute));
     return desc;
 }
 
@@ -198,10 +271,18 @@ void PersistentMoeRequestDeviceOperation::MultiCore::override_runtime_arguments(
     if (!endpoints.has_value()) {
         return;
     }
+    const uint32_t skip = attributes.layer == kRequestStopLayer ? 1u : 0u;
     auto& args = tt::tt_metal::GetRuntimeArgs(program, 0, endpoints->core);
     args[0] = attributes.layer;
     args[1] = input.buffer()->address();
-    args[2] = output.buffer()->address();
+    // Kernels 1 and 2: the sums' data movement and compute, on every sum core.
+    const auto layout = partials_layout(attributes, input.buffer()->page_size());
+    for (const auto& c : layout.sum_cores) {
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, 1, c);
+        reader_args[0] = skip;
+        reader_args[2] = output.buffer()->address();
+        tt::tt_metal::GetRuntimeArgs(program, 2, c)[0] = skip;
+    }
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts
@@ -212,11 +293,11 @@ Tensor persistent_moe_request(
     const Tensor& input_tensor,
     uint32_t layer,
     const tt::tt_metal::distributed::MeshSocket& request_socket,
-    const tt::tt_metal::distributed::MeshSocket& response_socket) {
+    const Tensor& partials) {
     using OperationType =
         ttnn::operations::experimental::deepseek::moe::fused_experts::PersistentMoeRequestDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t(layer, request_socket, response_socket), input_tensor);
+        OperationType::operation_attributes_t(layer, request_socket, partials), input_tensor);
 }
 
 }  // namespace ttnn::prim

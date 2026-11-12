@@ -12,8 +12,8 @@ Tensor persistent_moe_request(
     const Tensor& input_tensor,
     uint32_t layer,
     const tt::tt_metal::distributed::MeshSocket& request_socket,
-    const tt::tt_metal::distributed::MeshSocket& response_socket) {
-    return ttnn::prim::persistent_moe_request(input_tensor, layer, request_socket, response_socket);
+    const Tensor& partials) {
+    return ttnn::prim::persistent_moe_request(input_tensor, layer, request_socket, partials);
 }
 
 }  // namespace ttnn::experimental::deepseek::moe

@@ -6,94 +6,73 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/mesh/api.h"
+#include "../d2d_send.h"
+#include "../persistent.h"
 #include <cstdint>
 
-namespace fabric_api = tt::tt_fabric::mesh::experimental;
-
-// The persistent op's reduce to the root chip, on one fabric sender core per link (see persistent.h for
-// the iteration protocol). Its link's output cores bump sem_ar_ready once per iteration each. The senders
-// are their own stage, a row behind the worker grid: they report ready on FE_SEM_READY (the control core's
-// reduce-stage count), which the grid's go for iteration i waits on for iteration i - 2.
+// The persistent op's partials out to the requester, on one fabric sender core per link (see persistent.h for
+// the iteration protocol). The op does no cross-chip reduce: every chip sends its partial row straight to the
+// requesting chips, which sum the partials of every chip themselves (persistent_moe_request). Link L's
+// sender carries the row's L-th part -- its output cores own those columns, and stage their partials here,
+// in column order, in the iteration's half of the staging -- to sum core L of every chip of the iteration's
+// requester (the control core writes the requester into this core's source ring before the go): into this
+// chip's slot of that core's partials buffer, then a ready flag in this chip's flag word after the slots. The
+// flag goes on the same route as the slot, after it, so it lands after it. The requester clears its flags
+// once it has summed them, before it sends its next request, so a slot is free whenever a row of that
+// requester is sent.
 //
-// Off the root, they have staged their partials here first (at the scratch's address, in their run
-// order, in the iteration's half of the staging), and the sender unicasts each one to the root's matching
-// output core, into the slot for this
-// chip in the iteration's half of the root's scratch -- (iter & 1) * ring_size + my_chip -- with the
-// same packet bumping that core's out_ready[iter & 1]. A half is reused two iterations later, once the
-// root has summed it: the root's sender multicasts one credit per iteration back to every chip, so
-// iteration i waits for i - 1 credits (from iteration 2 on), which in steady state are long there.
-//
-// On the root, the bumps mean the link's output cores have summed the iteration, and the sender
-// multicasts the credit, down the whole-mesh branches, to this core's credit semaphore on every chip.
+// The senders are their own stage, a row behind the worker grid: they report ready on FE_SEM_READY (the
+// control core's reduce-stage count), which the grid's go for iteration i waits on for iteration i - 2, so
+// the staging half a row is sent from is refilled only after it has left.
 //
 // Compile-time args:
-//   0: my_chip   1: is_root   2: num_connections (1 off the root: the route to it; the branches on it)
-//   3: core_bytes (one output core's partial)   4: sem_ar_ready   5: ring_size   6: sem_go
-//   7: cb_scratch (this core's staging, at the scratch address)   8: staging_slots (output cores per link,
-//      the stride of the staging's two halves)
+//   0: my_chip (this chip's slot in the requesters' partials buffers)   1: part_bytes (this link's part of a
+//   row, its output cores' partials together)   2: sem_ar_ready   3: sem_go   4: cb_scratch (the staging, at
+//   the scratch address)   5: num_requesters   6: max_payload (fabric packet bytes)   7: num_slots (chips,
+//   the slots of a partials buffer)   8: num_connections (one per direction the partials leave in)
 //
-// Common runtime args:
-//   0: scratch address   1: out_ready[0]   2: out_ready[1]   3: credit (GlobalSemaphore, on the senders)
-//
-// Runtime args: num_cores, their NoC xs, their NoC ys, then on the root the hops (E, W, N, S) of each
-// branch, then the fabric connections.
+// Runtime args: num_cores (this link's output cores), the source ring's address, then per requester: the
+// connection its sends leave by, its partials buffer address, this link's sum core's NoC x and y, its number
+// of routes and the routes (d2d_send.h); then the fabric connections.
 
 constexpr uint32_t my_chip = get_compile_time_arg_val(0);
-constexpr bool is_root = get_compile_time_arg_val(1) != 0;
-constexpr uint32_t num_connections = get_compile_time_arg_val(2);
-constexpr uint32_t core_bytes = get_compile_time_arg_val(3);
-constexpr uint32_t sem_ar_ready_id = get_compile_time_arg_val(4);
-constexpr uint32_t ring_size = get_compile_time_arg_val(5);
-constexpr uint32_t sem_go_id = get_compile_time_arg_val(6);
-constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(7);
-constexpr uint32_t staging_slots = get_compile_time_arg_val(8);
+constexpr uint32_t part_bytes = get_compile_time_arg_val(1);
+constexpr uint32_t sem_ar_ready_id = get_compile_time_arg_val(2);
+constexpr uint32_t sem_go_id = get_compile_time_arg_val(3);
+constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(4);
+constexpr uint32_t num_requesters = get_compile_time_arg_val(5);
+constexpr uint32_t max_payload = get_compile_time_arg_val(6);
+constexpr uint32_t num_slots = get_compile_time_arg_val(7);
+constexpr uint32_t num_connections = get_compile_time_arg_val(8);
 constexpr uint32_t kStopBit = 0x80000000u;
 
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
-    tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
-    arg_idx += num_cores;
-    tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
-    arg_idx += num_cores;
-    fabric_api::MeshMcastRange ranges[num_connections];
-    if constexpr (is_root) {
-        for (uint32_t c = 0; c < num_connections; ++c) {
-            const uint8_t e = get_arg_val<uint32_t>(arg_idx++);
-            const uint8_t w = get_arg_val<uint32_t>(arg_idx++);
-            const uint8_t n = get_arg_val<uint32_t>(arg_idx++);
-            const uint8_t s = get_arg_val<uint32_t>(arg_idx++);
-            ranges[c] = fabric_api::MeshMcastRange{e, w, n, s};
-        }
+    auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t connection[num_requesters];
+    uint32_t partials_addr[num_requesters];
+    uint32_t sum_x[num_requesters];
+    uint32_t sum_y[num_requesters];
+    uint32_t route_args[num_requesters];
+    uint32_t num_routes[num_requesters];
+    for (uint32_t k = 0; k < num_requesters; ++k) {
+        connection[k] = get_arg_val<uint32_t>(arg_idx++);
+        partials_addr[k] = get_arg_val<uint32_t>(arg_idx++);
+        sum_x[k] = get_arg_val<uint32_t>(arg_idx++);
+        sum_y[k] = get_arg_val<uint32_t>(arg_idx++);
+        num_routes[k] = get_arg_val<uint32_t>(arg_idx++);
+        route_args[k] = arg_idx;
+        arg_idx += num_routes[k] * kD2DRouteArgs;
     }
-    const uint32_t scratch_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t out_ready_addr[2] = {get_common_arg_val<uint32_t>(1), get_common_arg_val<uint32_t>(2)};
-    const uint32_t credit_addr = get_common_arg_val<uint32_t>(3);
-    auto* credit = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_addr);
-
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_idx);
-    const uint8_t route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    if constexpr (!is_root) {
-        fabric_api::fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<
-            UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush |
-            UnicastFusedAtomicIncUpdateMask::PayloadSize>(
-            fabric_connection,
-            route_id,
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{0, 0, 1, false},
-            core_bytes);
-    }
+    auto* header = PacketHeaderPool::allocate_header();
     const uint32_t staging_addr = get_write_ptr(cb_scratch_id);
 
-    Noc noc;
     Semaphore<> ar_ready(sem_ar_ready_id);
     auto* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_go_id));
-    uint32_t iter = 0;
-    for (;; ++iter) {
+    for (uint32_t iter = 0;; ++iter) {
         if (iter > 0) {
             noc_semaphore_inc(get_noc_addr(FE_CTRL_X, FE_CTRL_Y, get_semaphore(FE_SEM_READY)), 1);
             noc_async_atomic_barrier();
@@ -112,44 +91,21 @@ void kernel_main() {
             ar_ready.wait_min(num_cores * (iter + 1u));
         }
         DeviceZoneScopedN("FE_RED_SEND");
-        if constexpr (is_root) {
-            noc.async_writes_flushed();
-            fabric_api::fabric_multicast_noc_unicast_atomic_inc(
-                fabric_connection,
-                route_id,
-                ranges,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                    safe_get_noc_addr(my_x[noc_index], my_y[noc_index], credit_addr, 0), 1, true});
-        } else {
-            if (iter >= 2u) {
-                noc_semaphore_wait_min(credit, iter - 1u);
-            }
-            const uint32_t parity = iter & 1u;
-            const uint32_t slot_addr = scratch_addr + (parity * ring_size + my_chip) * core_bytes;
-            const uint32_t staged_addr = staging_addr + parity * staging_slots * core_bytes;
-            for (uint32_t core = 0; core < num_cores; ++core) {
-                // The headers are rewritten in place, so the previous packet's must have left.
-                noc.async_writes_flushed();
-                fabric_api::fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
-                    UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
-                    fabric_connection,
-                    route_id,
-                    staged_addr + core * core_bytes,
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                        safe_get_noc_addr(core_noc_x[core], core_noc_y[core], slot_addr, 0),
-                        safe_get_noc_addr(core_noc_x[core], core_noc_y[core], out_ready_addr[parity], 0),
-                        1,
-                        false});
-            }
+        invalidate_l1_cache();
+        const uint32_t k = source[iter % kFeSourceRing];
+        const uint32_t src = staging_addr + (iter & 1u) * part_bytes;
+        const uint32_t slot = partials_addr[k] + my_chip * part_bytes;
+        const uint32_t flag = partials_addr[k] + num_slots * part_bytes + my_chip * 4u;
+        auto* sender = &fabric_connection.get(connection[k]).sender;
+        size_t idx = route_args[k];
+        for (uint32_t r = 0; r < num_routes[k]; ++r) {
+            const D2DRoute route = read_d2d_route(idx);
+            d2d_send<max_payload>(sender, header, route, src, part_bytes, sum_x[k], sum_y[k], slot);
+            d2d_send_word(sender, header, route, sum_x[k], sum_y[k], flag, 1u);
         }
-        // The staging is refilled next iteration, so every packet has to have left it.
-        noc.async_writes_flushed();
+        // The staging half is refilled two iterations on, so every packet has to have left it.
+        noc_async_writes_flushed();
     }
-    noc.async_write_barrier();
+    noc_async_write_barrier();
     close_connections(fabric_connection);
-    if constexpr (!is_root) {
-        // The root sent one credit per iteration; the last ones may still be in flight.
-        noc_semaphore_wait_min(credit, iter);
-        *credit = 0;
-    }
 }
