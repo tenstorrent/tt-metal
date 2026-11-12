@@ -11,6 +11,7 @@
 #include "metal/ops/minimal_matmul_reduce_scatter_async/device/slice_layout.hpp"
 
 namespace {
+using ttml::metal::ops::minimal_matmul_reduce_scatter_async::assign_producers;
 using ttml::metal::ops::minimal_matmul_reduce_scatter_async::make_slice_layout;
 using ttml::metal::ops::minimal_matmul_reduce_scatter_async::SliceLayout;
 
@@ -149,6 +150,25 @@ TEST(MinimalMatmulReduceScatterSliceLayoutTest, NarrowFirstShareTakesAColumnPerB
         EXPECT_EQ(narrow.n_share(0).size, c.n_first);
         for (uint32_t nb = 0; nb < narrow.N_blocks; ++nb) {
             EXPECT_EQ(narrow.n_block(0, nb).size + 1, mmrs::balanced_span(nb, narrow.n_piece, narrow.N_blocks).size);
+        }
+    }
+}
+
+TEST(MinimalMatmulReduceScatterSliceLayoutTest, ProducersSplitOverSenders) {
+    for (const uint32_t cores : {1U, 8U, 110U}) {
+        for (const uint32_t senders : {1U, 2U, 4U}) {
+            const auto producers = assign_producers(cores, senders);
+            ASSERT_EQ(producers.size(), senders);
+            std::vector<uint32_t> hits(cores, 0);
+            for (const auto& list : producers) {
+                EXPECT_LE(list.size(), producers.front().size());
+                for (const uint32_t core : list) {
+                    hits.at(core)++;
+                }
+            }
+            for (uint32_t core = 0; core < cores; ++core) {
+                EXPECT_EQ(hits[core], 1U);
+            }
         }
     }
 }

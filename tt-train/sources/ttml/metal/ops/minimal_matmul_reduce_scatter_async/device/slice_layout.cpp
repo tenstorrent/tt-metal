@@ -92,4 +92,13 @@ uint64_t padded_work_per_core(
     uint32_t M_tiles, uint32_t N_tiles, uint32_t ring_size, uint32_t m_cores, uint32_t n_cores) {
     return static_cast<uint64_t>(ring_size) * tt::div_up(M_tiles / ring_size, m_cores) * tt::div_up(N_tiles, n_cores);
 }
+
+std::vector<std::vector<uint32_t>> assign_producers(uint32_t num_cores, uint32_t num_senders) {
+    TT_FATAL(num_senders >= 1, "num_senders must be >= 1, got {}", num_senders);
+    std::vector<std::vector<uint32_t>> producers(num_senders);
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        producers[core % num_senders].push_back(core);
+    }
+    return producers;
+}
 }  // namespace ttml::metal::ops::minimal_matmul_reduce_scatter_async

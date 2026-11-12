@@ -25,6 +25,7 @@ struct MinimalMatmulReduceScatterAsyncParams {
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     uint32_t ring_size = 1;
     std::optional<uint32_t> cluster_axis;
+    uint32_t num_links = 1;
     uint32_t num_directions = 2;
     std::vector<ttnn::GlobalSemaphore> semaphores;
     bool transpose_a = false;

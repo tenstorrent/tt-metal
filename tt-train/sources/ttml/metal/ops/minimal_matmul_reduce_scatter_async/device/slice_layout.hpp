@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "kernels/minimal_matmul_reduce_scatter_async_utils.hpp"
 
@@ -43,4 +44,5 @@ SliceLayout make_slice_layout(
 uint64_t padded_work_per_core(
     uint32_t M_tiles, uint32_t N_tiles, uint32_t ring_size, uint32_t m_cores, uint32_t n_cores);
 
+std::vector<std::vector<uint32_t>> assign_producers(uint32_t num_cores, uint32_t num_senders);
 }  // namespace ttml::metal::ops::minimal_matmul_reduce_scatter_async

@@ -4,10 +4,12 @@
 
 #include "minimal_matmul_reduce_scatter_async_device_operation.hpp"
 
+#include <algorithm>
 #include <tt-metalium/constants.hpp>
 
 #include "metal/common/tensor_validation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::constants;
@@ -170,18 +172,27 @@ void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_m
             "multi_device_global_semaphore must be created on the whole compute grid {}",
             all_cores.str());
     }
+    TT_FATAL(attrs.num_links >= 1, "num_links must be >= 1, got {}.", attrs.num_links);
     const ttnn::CoreCoord matmul_grid =
         attrs.config.has_value() ? attrs.config->compute_with_storage_grid_size : device_grid;
     TT_FATAL(
-        attrs.num_directions <= matmul_grid.x - 1,
-        "{} fabric senders (one per ring direction) need that many cores past column 0 in the matmul grid's bottom "
-        "row, which has {}",
-        attrs.num_directions,
+        attrs.num_directions * attrs.num_links <= matmul_grid.x - 1,
+        "num_links={} needs {} fabric senders (one per link and direction) in the matmul grid's bottom row, which has "
+        "{} cores past column 0",
+        attrs.num_links,
+        attrs.num_directions * attrs.num_links,
         matmul_grid.x - 1);
     TT_FATAL(attrs.cluster_axis.has_value(), "cluster_axis must be set: it names the ring the rows are scattered over");
     TT_FATAL(
         ttnn::ccl::is_axis_wrap_wired(*x.device(), attrs.cluster_axis.value()),
         "The reduce-scatter runs on a ring, but mesh axis {} has no wrap-around link on this mesh",
+        attrs.cluster_axis.value());
+    const size_t available_links = ttnn::operations::ccl::common::get_num_links(*x.device(), attrs.cluster_axis);
+    TT_FATAL(
+        attrs.num_links <= available_links,
+        "num_links={} exceeds the {} fabric links available on mesh axis {}",
+        attrs.num_links,
+        available_links,
         attrs.cluster_axis.value());
 
     if (attrs.config.has_value()) {
@@ -215,6 +226,7 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
     const ttnn::Tensor& persistent_buffer,
     const std::vector<ttnn::GlobalSemaphore>& multi_device_global_semaphore,
     std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> num_links,
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
@@ -234,6 +246,14 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
     const uint32_t ring_size =
         cluster_axis.has_value() ? mesh_shape[cluster_axis.value()] : static_cast<uint32_t>(device->num_devices());
     const uint32_t num_directions = bidirectional ? 2 : 1;
+    uint32_t links = num_links.value_or(0);
+    if (!num_links.has_value()) {
+        const ttnn::CoreCoord grid =
+            config.has_value() ? config->compute_with_storage_grid_size : device->compute_with_storage_grid_size();
+        const auto available =
+            static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*device, cluster_axis));
+        links = std::max<uint32_t>(1, std::min<uint32_t>(available, (grid.x - 1) / num_directions));
+    }
     const auto arch = device->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, false, true, true);
@@ -246,6 +266,7 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
             .compute_kernel_config = kernel_config_val,
             .ring_size = ring_size,
             .cluster_axis = cluster_axis,
+            .num_links = links,
             .num_directions = num_directions,
             .semaphores = multi_device_global_semaphore,
             .transpose_a = transpose_a,
