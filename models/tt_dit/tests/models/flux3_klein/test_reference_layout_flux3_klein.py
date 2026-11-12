@@ -60,12 +60,12 @@ def test_prepare_reference(size):
         assert torch.equal(inner, torch.from_numpy(pixels))
 
 
-def test_reference_bucket():
+def test_reference_bucket(expect_error):
     assert reference_bucket(1) == REFERENCE_TOKEN_BUCKETS[0]
     assert reference_bucket(4096) == 4096
     assert reference_bucket(4097) == REFERENCE_TOKEN_BUCKETS[1]
     assert reference_bucket(16384) == 16384
-    with pytest.raises(StopIteration):
+    with expect_error(StopIteration, ""):
         reference_bucket(16385)
 
 
