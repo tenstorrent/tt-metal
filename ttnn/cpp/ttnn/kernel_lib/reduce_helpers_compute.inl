@@ -589,6 +589,14 @@ ALWI void reduce_accumulate_via_add(
             // DST now holds the reduced value (raw SUM, or the mean for direct AVG). A caller post_reduce_op
             // (e.g. reduce_mean's caller 1/N, or recip for softmax) then sees the finalized value.
             post_reduce_op(0);
+            // A caller SFPU post-op runs its own <op>_tile_init, which replaces the SFPU reduce macro armed
+            // once above; re-arm it so the NEXT output's sfpu_reduce collapses with the reduce macro, not the
+            // post-op's (multi-output blocks otherwise get a wrong collapse from the 2nd output on).
+            if constexpr (within_tile == ReduceWithinTile::Collapse && !std::is_same_v<PostReduceOp, NoOp>) {
+                if (o + 1 < n_out) {
+                    sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+                }
+            }
         }
 
         tile_regs_commit();

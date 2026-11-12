@@ -132,3 +132,10 @@ def test_height_sharded_default_output_inherits_spec(device):
         expected_layout=ttnn.TILE_LAYOUT,
         tolerance=TOLERANCES[ttnn.bfloat16],
     )
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
+def test_multi_tile_row_blocks_interleaved(device, layout):
+    # 240 tile-rows on <=120 cores -> block_rows >= 2. Pins the reduce-helper fix: the rstd post-op's SFPU
+    # inits used to clobber the AccumulateViaAdd collapse for the 2nd+ output of a block.
+    _run(device, (1, 1, 32 * 240, 512), ttnn.float32, layout, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)

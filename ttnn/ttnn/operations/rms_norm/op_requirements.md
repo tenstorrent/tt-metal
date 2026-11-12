@@ -55,7 +55,7 @@ interleaved path; the sharded perf cases are landed by Refinement 4.
 - **Compute config**: caller's `ComputeConfigDescriptor` passed as-is (`fp32_dest_acc_en=True` gated; any fidelity / approx)
 - **Golden baseline**: 436 supported_pass / 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode; 6481 xfail_expected (per `verifier_report.json`)
 
-### [ ] Refinement 1 — TILE-layout gamma + HEIGHT_SHARDED placement (dataflow-boundary refinement)
+### [x] Refinement 1 — TILE-layout gamma + HEIGHT_SHARDED placement (dataflow-boundary refinement)
 
 **Goal**: add `ttnn.TILE_LAYOUT` to `SUPPORTED["gamma_layout"]` and `ttnn.TensorMemoryLayout.HEIGHT_SHARDED`
 to `SUPPORTED["memory_layout"]`, both natively in the reader/writer:

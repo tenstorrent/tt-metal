@@ -1,4 +1,4 @@
-# L1 Ledger: rms_norm (Phase 0, regime R1 row-resident)
+# L1 Ledger: rms_norm (regime R1 row-resident + R6 HEIGHT_SHARDED in place)
 
 Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (from
 `op_design.md` Blocking Model): **rows** (extent `r = block_rows`), **w** (whole row per core,
@@ -22,6 +22,33 @@ than the tensor that produced/consumes them.
 | `cb_normed` (gamma or RM) | `r·c` | `rows_this_block·c` | `{rows: spans → r, w: streams → chunk, w_chunk: spans → c}` | Float32 | compute | compute | normalize → scale/untilize, per chunk | not aliased (see `cb_sumsq`). Full chunk-block, not a window: normalize and scale/untilize are sequential helpers on one thread; each full chunk returns the ring to base |
 | `cb_out` (TILE only) | `2·c` | `c` (one row-chunk) | `{rows: streams → 1 tile-row, w: streams → chunk, w_chunk: spans → c}` | output dtype | compute | writer | per row-chunk | 2× live = double buffering compute vs writer. Pack-into-destination: with no gamma, normalize packs straight here (no `cb_normed` at all) |
 | `cb_out_rm` (RM only) | `2·c` | `c` | `{rows: streams → 1 tile-row, w: streams → chunk, w_chunk: spans → c}` | output dtype | compute | writer | per row-chunk | 2× live = double buffering. Cannot share with `cb_x_rm` (concurrent, different producers/consumers) |
+
+### R6 HEIGHT_SHARDED (Refinement 1) — CB placement deltas
+
+Placement `RESIDENT` (TILE x; RM x when `W % 32 == 0` and `shard_h % 32 == 0` and a whole-row chunk
+fits): the input / output **shards are the CBs** (`ttnn.cb_descriptor_from_sharded_tensor`, page
+size overridden to the tile size so CB credit counts tiles) — zero-copy, no DRAM, no NoC.
+
+| CB | R6 RESIDENT | R6 LOCAL_STICKS (RM, shard not tilize-consumable in place) |
+|----|-------------|----------------------------|
+| `cb_x` (TILE) | **= input shard** (`shard_h/32 · Wc` pages, not allocated) | n/a |
+| `cb_x` (RM) | `r·Wp`, as R1 (tilize output) | `r·Wp`, as R1 |
+| `cb_x_rm` (RM) | **= input shard** (whole tile-rows of `Wc` pages at stick stride `Wc·32`) | `2·c` streaming window, filled by self-aimed L1→L1 restride reads of the resident sticks |
+| `cb_out` (TILE) | **= output shard** (compute packs in place; writer only drains credit) | n/a |
+| `cb_out_rm` (RM) | **= output shard** (untilize writes whole tile-rows in place) | `2·c` window; writer copies the valid sticks into the output shard (local L1 write) |
+| others | as R1 | as R1 |
+
+Why LOCAL_STICKS exists: tilize/untilize consume / produce whole 32-stick tile-rows at stride
+`c·32` elements. An RM height shard has stride `align16(W·elem)` (≠ `Wc·32·elem` when `W % 32 ≠ 0`)
+and an arbitrary stick count (`auto_shard_config` gives e.g. 18 sticks/core for 2048 rows on 120
+cores) — untilizing in place would overrun the shard. Those shards are restrided locally (L1 only).
+
+R6 block selection (`_select_resident_blocks`): `K = 1` with the largest `r` that fits (the whole
+shard when it fits). A resident row cannot be re-chunked at a stride other than `Wc`, and with
+`K > 1` the chunk-major pack order equals the shard's row-major order only for `r = 1`, so the wide
+fallback is `r = 1` with `c | Wc`. RM resident needs `K = 1` (falls back to LOCAL_STICKS otherwise).
+`F` drops the `cb_x` (TILE) / `cb_x_rm` + `cb_out[_rm]` terms that are the shards; `B` is already
+net of both resident shards (allocator view).
 
 Reuse patterns applied (Rule 3): **pack into destination** — TILE no-gamma normalize → `cb_out`;
 **transform in place** — RM+gamma scale runs in place on `cb_normed` with real per-tile credit;
@@ -84,6 +111,8 @@ R1 at any block size → `NotImplementedError` naming R3.
 | output | 1 | each tile/stick written once from a streaming window | none |
 | gamma | `Σ_cores num_blocks_this_core` (= active cores when each core has one block) | streamed per chunk, re-read once per block per core (reuse-shared operand, not held) | none |
 | reduce mask | 0 | generated in L1 by the reader | none |
+| x / output, HEIGHT_SHARDED (R6) | 0 | resident shards consumed / produced in place (RM LOCAL_STICKS: one L1→L1 restride per stick, no DRAM) | none |
+| gamma, TILE layout | same as RM gamma | `c` tile pages per chunk, one barrier per chunk | none |
 
 Totals per tier: DRAM = `|x| + |out| + Σ_blocks·|gamma|` (with `|gamma| ≤ |x_block| / (32·r)`);
 cross-core = 0; core-local L1 = x read twice from L1 (sumsq, normalize), intermediates once each.
