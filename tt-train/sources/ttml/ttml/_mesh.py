@@ -242,9 +242,10 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     silently skipped — if none are present (or ``axis_names`` is empty, or
     no mesh is open), the function is a no-op. The default ``("dp",)``
     matches the common DDP case. TP is intentionally excluded: sharded
-    parameters already hold per-shard-correct grads, and replicated
-    parameters see identical inputs on every TP rank so their grads match
-    without a reduce.
+    parameters already hold per-shard-correct grads, and a layer whose
+    replicated parameter gets a TP-partial grad must sum it across TP itself
+    (e.g. ``lora_A`` in ``LoraColumnParallelLinear``). Nothing enforces this;
+    see #63970 for a known violation.
 
     FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
     mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
