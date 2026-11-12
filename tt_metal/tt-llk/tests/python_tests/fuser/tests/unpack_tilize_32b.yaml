@@ -1,0 +1,26 @@
+# Datacopy test that reads through the tilize unpack path with a 32bit dest.
+
+dest_acc: Yes
+
+operands:
+  - name: "input_A"
+    tile_dims: all
+    dims: [128, 256]
+    format: "Float32"
+  - name: "datacopy_tilize_out"
+    tile_dims: all
+    dims: [128, 256]
+    format: "Float32"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_tiles: [1, 4]
+        in0: "input_A"
+        operation: "Datacopy"
+        unpacker: "UnpackerTilizeA"
+        math_fidelity: "HiFi2"
+    pack:
+      - output: "datacopy_tilize_out"
+        block_tiles: [1, 4]
+        packer: "Packer"

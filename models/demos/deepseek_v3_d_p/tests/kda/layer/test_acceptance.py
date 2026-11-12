@@ -221,7 +221,9 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             ttnn.deallocate(tensor)
 
 
-_REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.026, recurrent=0.021, convolution=0.0095)
+# Galaxy SP8xTP4, worst over the four lengths: output 2.041e-2, recurrent 1.579e-2 at HiFi3 (Kimi-K3's scan, affine
+# prefix and output projection); HiFi2 measures 2.271e-2 and 1.800e-2. The bars sit ~8% above HiFi3 and below HiFi2.
+_REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.022, recurrent=0.017, convolution=0.0095)
 
 
 @pytest.mark.parametrize(

@@ -473,8 +473,8 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const uint32_t rW = (resident && scatter_dim == -2) ? 1 : 0;
     const uint32_t a_pages = rA != 0 ? core_m * Kt : plan.depths[0] * win_m * kb;
     const uint32_t w_pages = rW != 0 ? Kt * core_n : plan.depths[1] * kb * win_n;
-    const auto tA = static_cast<uint32_t>(a.buffer()->aligned_page_size());
-    const auto tW = static_cast<uint32_t>(w.buffer()->aligned_page_size());
+    const auto tA = static_cast<uint32_t>(a.mesh_buffer().aligned_page_size());
+    const auto tW = static_cast<uint32_t>(w.mesh_buffer().aligned_page_size());
     const uint32_t a_row_per_block = scatter_dim == -2 ? block_m : 0;
     const uint32_t w_col_per_block = scatter_dim == -1 ? block_n : 0;
 
@@ -955,9 +955,9 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
     // - the global semaphores and the mailbox: never. They are created once per mesh (ensure_mesh_resources) and live
     //   as long as the mesh and its program cache, so create_descriptor's values stay right.
     //   port_sender_rt::ARRIVAL_ADDR (per core) is the same kind of address.
-    const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
-    const auto w_addr = static_cast<uint32_t>(tensor_args.weight.buffer()->address());
-    const auto out_addr = static_cast<uint32_t>(output.buffer()->address());
+    const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.mesh_buffer().address());
+    const auto w_addr = static_cast<uint32_t>(tensor_args.weight.mesh_buffer().address());
+    const auto out_addr = static_cast<uint32_t>(output.mesh_buffer().address());
     for (const auto& [range, sv] : cached.shared_variables) {  // a walk, no lookup per program
         sv.reader.get()[args::reader_common::A_ADDR] = a_addr;
         sv.reader.get()[args::reader_common::W_ADDR] = w_addr;

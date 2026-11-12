@@ -60,7 +60,7 @@ int main() {
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         // A MeshWorkload is a collection of programs that will be executed on the mesh. Each workload is
         // local to a single device. Here we create a workload for our single-device mesh.

@@ -207,7 +207,7 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
     writer_desc.config = WriterConfigDescriptor{};
 
     // split work over metadata pages (batch*seq)
-    const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
+    const auto num_metadata_pages = metadata_tensor.mesh_buffer().num_pages();
 
     const auto [core_page_increments, all_cores] =
         split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);

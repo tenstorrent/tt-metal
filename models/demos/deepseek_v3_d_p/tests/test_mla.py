@@ -18,6 +18,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -1502,7 +1503,10 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
             "within_band": lower <= total_ns <= upper,
         },
     )
-    assert lower <= total_ns <= upper, (
-        f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
-        f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+    assert_perf_gate(
+        lower <= total_ns <= upper,
+        (
+            f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+            f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+        ),
     )
