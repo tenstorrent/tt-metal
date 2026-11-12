@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <type_traits>
 
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
@@ -22,6 +21,13 @@ enum class DestClient : std::uint8_t
     FPU    = 1,
     SFPU   = 2,
     PACK   = 3,
+};
+
+// Name each allocation with a constexpr object; aliases must use the same object.
+struct DestTensor
+{
+    std::uint32_t address; // Absolute Dest row, like LLK2 Tensor::address.
+    std::uint32_t rows;
 };
 
 namespace dst_sync
@@ -45,90 +51,61 @@ constexpr std::uint32_t ME = PACK;
 constexpr std::uint32_t ME = NONE;
 #endif
 
-constexpr std::uint32_t BANK      = 1;
-constexpr std::uint32_t FIRST     = 4;
-constexpr std::uint32_t FULL      = 1u << (FIRST + PACK);
-constexpr std::uint32_t PRODUCERS = 0x7u << FIRST;
+// IDs 16..27: one poster and one getter per directed client pair, shared in program order.
+constexpr std::uint32_t FIRST_SEMAPHORE = 16;
+constexpr std::uint32_t MAX_CREDITS     = 15;
 
-constexpr std::uint32_t sem(const std::uint32_t client)
+constexpr std::uint32_t semaphore_id(const std::uint32_t from, const std::uint32_t to)
 {
-    return client == PACK ? FULL : 1u << (FIRST + client);
+    return FIRST_SEMAPHORE + 3 * from + to - (to > from);
 }
 
 constexpr std::uint32_t STALL[] = {
-    p_stall::STALL_UNPACK | p_stall::STALL_SYNC,
+    p_stall::STALL_UNPACK | p_stall::STALL_MATH | p_stall::STALL_SYNC,
     p_stall::STALL_MATH | p_stall::STALL_SYNC,
     p_stall::STALL_SFPU | p_stall::STALL_MATH | p_stall::STALL_SYNC,
-    p_stall::STALL_PACK | p_stall::STALL_SYNC,
+    p_stall::STALL_PACK | p_stall::STALL_MATH | p_stall::STALL_SYNC,
     p_stall::STALL_SYNC};
 
 constexpr std::uint32_t DONE[] = {p_stall::UNPACK0, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::PACK, p_stall::NOTHING};
 
-constexpr std::uint32_t DRAIN_STALL = ME == PACK ? p_stall::STALL_MATH | p_stall::STALL_SYNC : p_stall::STALL_SYNC;
-
-struct Slot
-{
-    friend constexpr auto region_mode(Slot);
-};
-
-// Dest is split into two regions (one in SyncFull). Two are enough for two clients, but with a third client, for example
-// FPU, SFPU and PACK, one client always has to wait for a free region. In the future dest should hold more tensors.
-template <DstSync DST, bool EN_32BIT_DEST>
-struct DestRegion
-{
-    friend constexpr auto region_mode(Slot)
-    {
-        return DestRegion {};
-    }
-
-    static_assert(DST == DstSync::SyncHalf || DST == DstSync::SyncFull, "Unknown destination synchronization mode");
-
-    static constexpr std::uint32_t REGIONS = DST == DstSync::SyncHalf ? 2 : 1;
-    static constexpr std::uint32_t ROWS    = (trisc::DEST_REGISTER_FULL_SIZE / REGIONS) >> EN_32BIT_DEST;
-
-    static constexpr std::uint32_t base(const std::uint32_t index)
-    {
-        return index * ROWS;
-    }
-
-    static constexpr std::uint32_t next(const std::uint32_t index)
-    {
-        return index ^ (REGIONS - 1);
-    }
-
-    static constexpr std::uint32_t clear_word(const std::uint32_t index)
-    {
-        return TT_OP_ZEROACC(REGIONS == 2 ? p_zeroacc::CLR_HALF : p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_7, index);
-    }
-};
-
-template <std::uint32_t TAKER>
-using Region = decltype(region_mode(std::conditional_t<(TAKER < NONE), Slot, Slot> {}));
-
 struct State
 {
-    std::uint8_t holder;
-    std::uint8_t last;
-    std::uint8_t region;
-    std::uint8_t base;
+    std::uint32_t epoch       = 0;
+    std::uint32_t owner       = NONE;
+    std::uint32_t released_to = NONE;
 };
 
+template <const DestTensor& TENSOR>
 inline State state;
+
+inline std::uint32_t epoch = 0;
+inline bool fp32           = false;
 
 inline void drain()
 {
-    TTI_STALLWAIT(DRAIN_STALL, p_stall::NOTHING, p_stall::NOTHING, DONE[ME]);
+    TTI_STALLWAIT(p_stall::STALL_SYNC | p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, DONE[ME]);
 }
 
-template <std::uint32_t SEM>
-inline void take()
+template <std::uint32_t FROM, std::uint32_t TO>
+inline void post()
 {
-    TTI_SEMWAIT(STALL[ME], p_stall::STALL_ON_ZERO, BANK, SEM);
-    TTI_SEMGET(BANK, SEM);
+    static_assert(FROM < NONE && TO < NONE && FROM != TO);
+    constexpr auto id = semaphore_id(FROM, TO);
+    TTI_SEMWAIT(STALL[ME], p_stall::STALL_ON_MAX, id / 8, 1u << (id % 8));
+    TTI_SEMPOST(id / 8, 1u << (id % 8));
+}
+
+inline void take(const std::uint32_t from, const std::uint32_t to)
+{
+    const auto id = semaphore_id(from, to);
+    TT_SEMWAIT(STALL[ME], p_stall::STALL_ON_ZERO, id / 8, 1u << (id % 8));
+    TT_SEMGET(id / 8, 1u << (id % 8));
 }
 
 inline void program_base(const std::uint32_t row)
 {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::NOTHING, p_stall::NOTHING, DONE[ME]);
     trisc::dest_register_offset = row;
     if constexpr (ME == PACK)
     {
@@ -144,124 +121,147 @@ inline void program_base(const std::uint32_t row)
     }
 }
 
-template <std::uint32_t TAKER>
-inline void retarget(State& s)
-{
-    if (s.base == s.region)
-    {
-        return;
-    }
-    s.base = s.region;
-    program_base(Region<TAKER>::base(s.region));
-}
+} // namespace dst_sync
 
-template <std::uint32_t TAKER>
-inline void hand_over(State& s)
-{
-    if (s.holder == ME)
-    {
-        drain();
-        TTI_SEMPOST(BANK, sem(TAKER));
-    }
-    if constexpr (ME == TAKER && TAKER == PACK)
-    {
-        retarget<TAKER>(s);
-        TTI_SEMWAIT(STALL[ME], p_stall::STALL_ON_ZERO, BANK, FULL);
-    }
-    if constexpr (ME == TAKER && TAKER != PACK)
-    {
-        retarget<TAKER>(s);
-        take<sem(ME)>();
-    }
-}
-
-template <std::uint32_t TAKER>
-inline void open(State& s)
-{
-    if (ME == PACK && s.holder == PACK)
-    {
-        drain();
-        TT_INSN(Region<TAKER>::clear_word(s.region));
-        TTI_SEMGET(BANK, FULL);
-    }
-    s.region           = Region<TAKER>::next(s.region);
-    const bool chained = s.last != NONE && s.last != TAKER;
-    if (chained && s.last == ME)
-    {
-        TTI_SEMPOST(BANK, sem(TAKER));
-    }
-    if constexpr (ME == TAKER)
-    {
-        retarget<TAKER>(s);
-        if (chained)
-        {
-            take<sem(ME)>();
-        }
-        TTI_SEMWAIT(STALL[ME], p_stall::STALL_ON_MAX, BANK, FULL);
-    }
-}
-}
-
+/**
+ * @brief Initialize the twelve Dest channels and clear Dest once per kernel on all four TRISCs.
+ * @note Start with empty channels and Dest dvalid disabled; use one compatible Dest width/encoding with SFPU on TRISC3.
+ */
 template <DstSync DST, bool EN_32BIT_DEST>
-inline decltype(void(sizeof(dst_sync::DestRegion<DST, EN_32BIT_DEST>))) _llk_dest_sync_configure_()
+inline void _llk_dest_sync_configure_()
 {
     using namespace dst_sync;
-    using Mode = DestRegion<DST, EN_32BIT_DEST>;
-
+    static_assert(DST == DstSync::SyncHalf || DST == DstSync::SyncFull);
     if constexpr (ME == PACK)
     {
         drain();
         TTI_ZEROACC(p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_7, 0);
-        TTI_SEMINIT(Mode::REGIONS, 0, BANK, FULL);
-        TTI_SEMPOST(BANK, PRODUCERS);
+        TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH);
+        for (std::uint32_t id = FIRST_SEMAPHORE; id < FIRST_SEMAPHORE + 12; ++id)
+        {
+            TT_SEMINIT(MAX_CREDITS, 0, id / 8, 1u << (id % 8));
+        }
+        post<PACK, UNPACK>();
+        post<PACK, FPU>();
+        post<PACK, SFPU>();
+        for (std::uint32_t client = UNPACK; client < PACK; ++client)
+        {
+            take(client, PACK);
+        }
     }
-    else
+    else if constexpr (ME < PACK)
     {
-        take<sem(ME)>();
+        // Do not arm a Tensix wait while PACK may still SEMINIT its channel.
+        while (semaphore_read(semaphore_id(PACK, ME)) == 0)
+        {
+        }
+        take(PACK, ME);
+        post<ME, PACK>();
     }
+    fp32 = EN_32BIT_DEST;
+    ++epoch;
     program_base(0);
-    state = {NONE, NONE, Mode::REGIONS - 1, 0};
 }
 
-template <DestClient CLIENT>
-NOINLINE void _llk_dest_sync_take_()
+/**
+ * @brief Acquire TENSOR and select its Dest address without releasing other tensors owned by CLIENT.
+ * @note All TRISCs must make the same calls in the same order; use disjoint allocations and submit work before its next handoff.
+ */
+template <DestClient CLIENT, const DestTensor& TENSOR>
+inline __attribute__((always_inline)) void _llk_dest_sync_take_()
 {
     using namespace dst_sync;
-    constexpr std::uint32_t TAKER = to_underlying(CLIENT);
+    constexpr auto taker = to_underlying(CLIENT);
+    static_assert(taker < NONE);
+    static_assert(TENSOR.rows > 0 && TENSOR.address + TENSOR.rows <= trisc::DEST_REGISTER_FULL_SIZE, "Tensor exceeds Dest capacity");
+    static_assert(CLIENT != DestClient::UNPACK || TENSOR.address % 64 == 0, "Legacy unpack-to-Dest requires full-tile bases");
+    LLK_ASSERT(TENSOR.address + TENSOR.rows <= (trisc::DEST_REGISTER_FULL_SIZE >> fp32), "Tensor exceeds configured Dest capacity");
+    auto& s = state<TENSOR>;
+    if (s.epoch != epoch)
+    {
+        s = {epoch, NONE};
+    }
+    LLK_ASSERT(taker != PACK || s.owner != NONE, "PACK cannot produce a Dest tensor");
+    LLK_ASSERT(s.released_to == NONE || s.released_to == taker, "Take must match the tensor's scheduled next writer");
+    if (s.owner != NONE && s.owner != taker)
+    {
+        if constexpr (ME < NONE && ME != taker)
+        {
+            if (ME == s.owner && s.released_to == NONE)
+            {
+                drain();
+                post<ME, taker>();
+            }
+        }
+        if constexpr (ME == taker)
+        {
+            take(s.owner, taker);
+        }
+    }
+    if constexpr (ME == taker)
+    {
+        // Ownership may already be ours while another owned tensor is currently selected.
+        if (trisc::dest_register_offset != TENSOR.address)
+        {
+            program_base(TENSOR.address);
+        }
+    }
+    s.owner       = taker;
+    s.released_to = NONE;
+}
 
-    if (state.holder == TAKER)
+/** @brief Clear only TENSOR after its current owner's outstanding work completes, retaining ownership. */
+template <const DestTensor& TENSOR>
+inline void _llk_dest_sync_clear_()
+{
+    using namespace dst_sync;
+    static_assert(TENSOR.address % 16 == 0 && TENSOR.rows % 16 == 0, "Clear requires complete Dest faces");
+    LLK_ASSERT(state<TENSOR>.epoch == epoch && state<TENSOR>.owner != NONE, "Take the tensor before clearing it");
+    LLK_ASSERT(state<TENSOR>.released_to == NONE, "A released tensor must be taken before clearing it");
+    if (ME != state<TENSOR>.owner)
     {
         return;
     }
-    State s = state;
-    LLK_ASSERT(TAKER != PACK || s.holder != NONE, "PACK only reads dest, so it cannot open a use");
-    const bool opens    = TAKER != PACK && (s.holder == NONE || s.holder == PACK);
-    const bool clears   = ME == PACK && s.holder == PACK;
-    const bool involved = ME == TAKER || (opens ? clears || s.last == ME : s.holder == ME);
-    if (!involved)
+    drain();
+    const auto capacity = trisc::DEST_REGISTER_FULL_SIZE >> fp32;
+    if (TENSOR.address == 0 && TENSOR.rows == capacity)
     {
-        state.holder = TAKER;
-        if (TAKER != PACK)
-        {
-            state.last = TAKER;
-        }
-        if (opens)
-        {
-            state.region = Region<TAKER>::next(s.region);
-        }
-        return;
+        TT_ZEROACC(p_zeroacc::CLR_ALL, fp32, 0, ADDR_MOD_7, 0);
     }
-    if (opens)
+    else if (TENSOR.rows == capacity / 2 && TENSOR.address % TENSOR.rows == 0)
     {
-        open<TAKER>(s);
+        TT_ZEROACC(p_zeroacc::CLR_HALF, fp32, 0, ADDR_MOD_7, TENSOR.address / TENSOR.rows);
     }
     else
     {
-        hand_over<TAKER>(s);
+        for (std::uint32_t face = TENSOR.address / 16; face < (TENSOR.address + TENSOR.rows) / 16; ++face)
+        {
+            TT_ZEROACC(p_zeroacc::CLR_16, fp32, 0, ADDR_MOD_7, face);
+        }
     }
-    s.holder = TAKER;
-    s.last   = TAKER == PACK ? s.last : TAKER;
-    state    = s;
+    TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH);
+}
+
+/**
+ * @brief Clear TENSOR and publish its free credit now; NEXT consumes it at its later take.
+ * @note Match deferred takes to releases in FIFO order on each directed channel, including handoffs of other tensors.
+ */
+template <DestClient NEXT, const DestTensor& TENSOR>
+inline void _llk_dest_sync_release_()
+{
+    using namespace dst_sync;
+    constexpr auto next = to_underlying(NEXT);
+    static_assert(next < PACK, "A fresh tensor needs a writer");
+    LLK_ASSERT(state<TENSOR>.owner != next, "Release transfers the tensor to another client");
+    _llk_dest_sync_clear_<TENSOR>();
+    if constexpr (ME < NONE && ME != next)
+    {
+        if (ME == state<TENSOR>.owner)
+        {
+            post<ME, next>();
+        }
+    }
+    state<TENSOR>.released_to = next;
 }
 
 } // namespace ckernel

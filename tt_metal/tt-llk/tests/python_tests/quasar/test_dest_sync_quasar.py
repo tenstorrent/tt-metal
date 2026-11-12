@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import truncate_to_bfloat16
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -11,6 +12,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     DEST_SYNC_SCHEDULE,
+    DEST_SYNC_TEST_CONFIG,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -197,6 +199,7 @@ SCHEDULES.update(all_transition_schedules(SHAPES, "walk"))
 SCHEDULES.update(all_transition_schedules(REVISIT_SHAPES, "revisit"))
 
 TILE_ELEMENTS = 1024
+SPLIT_PRODUCERS = ["unpack", "srcs_copy", "srcs_square", "fpu"]
 
 
 def pack_orders(schedule):
@@ -259,8 +262,137 @@ def packed_tiles(tensor, packed):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_dest_sync_quasar(schedule, dest_sync, dest_acc):
-    sections = SCHEDULES[schedule]
-    check_schedule(sections)
+    run_dest_sync(schedule, dest_sync, dest_acc)
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize("dest_acc", [DestAccumulation.No, DestAccumulation.Yes])
+def test_dest_sync_persistent_tensors_quasar(dest_acc):
+    run_dest_sync("fpu_pack", DestSync.Full, dest_acc, persistent_tensors=True)
+
+
+@pytest.mark.quasar
+@parametrize(
+    srcs_mode=SPLIT_PRODUCERS,
+    swap_halves=[False, True],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    chunks=[1, 49],
+)
+def test_dest_sync_split_pipeline_quasar(srcs_mode, swap_halves, dest_acc, chunks):
+    """Exercise SDPA's lifetime/dependency pattern using exact, elementary arithmetic.
+
+    Scores and history occupy one half; the two-tile output survives all chunks
+    in the other half. SrcS has its own unpack/SFPU/PACK1 stream, plus transfers
+    into scores and out of either Dest half. This is a sync test, not SDPA math.
+    """
+    fp32 = dest_acc == DestAccumulation.Yes
+    input_format = DataFormat.Float32 if fp32 else DataFormat.Float16_b
+    dtype = format_dict[input_format]
+    output_format = DataFormat.Float16_b
+    out_dtype = format_dict[output_format]
+    torch.manual_seed(91)
+    a = (torch.randint(-8, 9, (chunks, TILE_ELEMENTS)).float() / 32).to(dtype)
+    b = (torch.randint(-4, 5, (chunks, TILE_ELEMENTS)).float() / 64).to(dtype)
+    s = (torch.randint(-4, 13, (chunks, TILE_ELEMENTS)).float() / 32).to(dtype)
+
+    def sfpu_store(values):
+        return (values if fp32 else truncate_to_bfloat16(values)).to(dtype)
+
+    # FPU writes round to nearest-even; plain SFPU BF16 stores truncate.
+    history = torch.zeros(TILE_ELEMENTS, dtype=dtype)
+    output = torch.zeros((2, TILE_ELEMENTS), dtype=dtype)
+    dest_expected, srcs_expected = [], []
+    for chunk in range(chunks):
+        score_input = a[chunk] if srcs_mode in ("unpack", "fpu") else s[chunk]
+        scores = sfpu_store(score_input.float() * score_input.float())
+        if chunk:
+            output = sfpu_store(output.float() + history.float() * 0.5)
+        inputs = [chunk, chunks - 1 - chunk]
+        output = (output.float() + a[inputs].float() + b[inputs].float()).to(dtype)
+        history = sfpu_store(history.float() + scores.float())
+        dest_expected.extend((scores, history))
+        srcs_expected.extend(
+            (
+                sfpu_store(s[chunk].float() * s[chunk].float()),
+                scores,
+                output[0],
+                output[1],
+            )
+        )
+    dest_expected.extend(
+        (sfpu_store(output[0].float() * 0.5), sfpu_store(output[1].float() * 0.5))
+    )
+    dest_expected.append(torch.full((TILE_ELEMENTS,), -0.75, dtype=dtype))
+    golden_dest = torch.stack(dest_expected).to(out_dtype)
+    golden_srcs = torch.stack(srcs_expected).to(out_dtype)
+
+    stimuli = StimuliConfig(
+        a.flatten(),
+        input_format,
+        b.flatten(),
+        input_format,
+        output_format,
+        tile_count_A=chunks,
+        tile_count_B=chunks,
+        tile_count_res=len(golden_dest),
+        buffer_S=s.flatten(),
+        stimuli_S_format=input_format,
+        tile_count_S=chunks,
+        buffer_C=torch.full((4 * chunks * TILE_ELEMENTS,), -99.0, dtype=out_dtype),
+        stimuli_C_format=output_format,
+        tile_count_C=4 * chunks,
+        srcs_layout_operands=frozenset({"S", "C"}),
+        num_faces=MAX_NUM_FACES,
+    )
+    configuration = TestConfig(
+        "sources/quasar/dest_sync_quasar_test.cpp",
+        InputOutputFormat(input_format, output_format),
+        templates=[
+            DEST_SYNC(DestSync.Full),
+            DEST_SYNC_TEST_CONFIG(
+                split_pipeline=True,
+                srcs_mode=SPLIT_PRODUCERS.index(srcs_mode),
+                swap_halves=swap_halves,
+            ),
+        ],
+        runtimes=[
+            TILE_COUNT(chunks),
+            NUM_FACES(MAX_NUM_FACES),
+            TEST_FACE_DIMS(),
+            DEST_SYNC_SCHEDULE(0, 0, 0, 0),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        unpack_to_srcs=True,
+    )
+    outcome = configuration.run()
+    actual_dest = torch.tensor(outcome.result, dtype=out_dtype).reshape(
+        -1, TILE_ELEMENTS
+    )
+    actual_srcs = torch.tensor(
+        stimuli.collect_buffer_c_results(TestConfig.TENSIX_LOCATION), dtype=out_dtype
+    ).reshape(-1, TILE_ELEMENTS)
+    assert actual_dest.shape == golden_dest.shape
+    assert actual_srcs.shape == golden_srcs.shape
+    for name, golden_tiles, actual_tiles in (
+        ("Dest/PACK0", golden_dest, actual_dest),
+        ("SrcS/PACK1", golden_srcs, actual_srcs),
+    ):
+        for tile, (golden_tile, actual_tile) in enumerate(
+            zip(golden_tiles, actual_tiles)
+        ):
+            assert passed_test(
+                golden_tile, actual_tile, output_format
+            ), f"{name} tile {tile}"
+    assert torch.equal(
+        actual_dest[-1], golden_dest[-1]
+    ), "Unrelated persistent guard tensor was corrupted"
+
+
+def run_dest_sync(schedule, dest_sync, dest_acc, persistent_tensors=False):
+    sections = [f + p] * 24 if persistent_tensors else SCHEDULES[schedule]
+    if not persistent_tensors:
+        check_schedule(sections)
     tile_cnt = len(sections)
     # Every client must address dest in the same width, and the unpacker writes the L1 format into dest: with a 32-bit
     # dest a 16-bit unpack to dest would leave dest in a different format than the FPU and SFPU write.
@@ -276,7 +408,16 @@ def test_dest_sync_quasar(schedule, dest_sync, dest_acc):
     src_a = src_a.to(stimuli_dtype)
     src_b = torch.zeros(TILE_ELEMENTS, dtype=stimuli_dtype)
     golden_src = src_a.float() if dest_acc == DestAccumulation.Yes else src_a
-    golden_tensor, packed = golden(golden_src, sections)
+    if persistent_tensors:
+        tiles = golden_src.reshape(tile_cnt, TILE_ELEMENTS)
+        other_squared = tiles.flip(0) * tiles.flip(0)
+        other_fourth = other_squared * other_squared
+        golden_tensor = torch.stack(
+            (tiles, other_fourth, tiles * tiles, other_fourth), dim=1
+        ).flatten()
+        packed = [True] * (tile_cnt * 4)
+    else:
+        golden_tensor, packed = golden(golden_src, sections)
     golden_tensor = golden_tensor.to(format_dict[formats.output_format])
 
     configuration = TestConfig(
@@ -284,12 +425,15 @@ def test_dest_sync_quasar(schedule, dest_sync, dest_acc):
         formats,
         templates=[
             DEST_SYNC(dest_sync),
+            DEST_SYNC_TEST_CONFIG(persistent_tensors),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
             NUM_FACES(MAX_NUM_FACES),
             TEST_FACE_DIMS(),
-            DEST_SYNC_SCHEDULE(*pack_orders(sections)),
+            DEST_SYNC_SCHEDULE(
+                *([0] * 4 if persistent_tensors else pack_orders(sections))
+            ),
         ],
         variant_stimuli=StimuliConfig(
             src_a,
@@ -299,7 +443,7 @@ def test_dest_sync_quasar(schedule, dest_sync, dest_acc):
             formats.output_format,
             tile_count_A=tile_cnt,
             tile_count_B=1,
-            tile_count_res=tile_cnt,
+            tile_count_res=len(packed),
             num_faces=MAX_NUM_FACES,
         ),
         dest_acc=dest_acc,

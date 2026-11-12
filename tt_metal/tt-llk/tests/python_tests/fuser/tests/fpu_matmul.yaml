@@ -2,15 +2,15 @@
 
 operands:
   - name: "input_A"
-    tile_dims: all
+    tile_dims: [32, 32]
     dims: [256, 256]
     format: "Float16_b"
   - name: "input_B"
-    tile_dims: all
+    tile_dims: [32, 32]
     dims: [256, 256]
     format: "Float16_b"
   - name: "matmul_out"
-    tile_dims: all
+    tile_dims: [32, 32]
     dims: [256, 256]
     format: "Float16_b"
 

@@ -13,6 +13,7 @@ from typing import Dict, List
 from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 
+from . import dest_sync
 from .base_sfpu import Sfpu
 from .fuser_config import FuserConfig
 from .pipeline_plan import PlannedBlock
@@ -211,6 +212,7 @@ class FusedKernelGenerator:
             f"{operands}"
             f"\n"
         )
+        common += dest_sync.definitions(self.config)
         test_cpp_dir = Path(os.environ.get("LLK_HOME")) / "tests"
 
         fused_test_cpp_dir = test_cpp_dir / FUSED_TESTS_DIR

@@ -979,6 +979,22 @@ class DEST_SYNC(TemplateParameter):
 
 
 @dataclass
+class DEST_SYNC_TEST_CONFIG(TemplateParameter):
+    persistent_tensors: bool = False
+    split_pipeline: bool = False
+    srcs_mode: int = 0
+    swap_halves: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool dest_tensor_test = {str(self.persistent_tensors).lower()};\n"
+            f"constexpr bool dest_split_pipeline = {str(self.split_pipeline).lower()};\n"
+            f"constexpr unsigned dest_srcs_mode = {self.srcs_mode};\n"
+            f"constexpr bool dest_swap_halves = {str(self.swap_halves).lower()};"
+        )
+
+
+@dataclass
 class TILIZE(TemplateParameter):
     tilize: Tilize = Tilize.No
 

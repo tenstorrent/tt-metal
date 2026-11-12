@@ -203,6 +203,7 @@ class L1Operation:
             if not hoist_reconfig and not config.skip_unpack_init:
                 body += config.sentinel.configure_unpack(config, self, unpack_ops[0])
             body += dest_sync.takes(config, self.pack_nodes)
+            body += dest_sync.finish(config)
             return body + after_commit
 
         code += self._zone_loop(
@@ -278,6 +279,7 @@ class L1Operation:
                 body += config.sentinel.configure_math(config, self, fpu_ops[0])
             body += fpu_common.math_dest_section_done(config, self)
             body += dest_sync.takes(config, self.pack_nodes)
+            body += dest_sync.finish(config)
             return body
 
         code += self._zone_loop(
@@ -321,6 +323,7 @@ class L1Operation:
                     body += cu.sfpu_uninit(self, config, block)
                     body += config.sentinel.sfpu_math_reconfig(config, restore=True)
             body += dest_sync.takes(config, self.pack_nodes)
+            body += dest_sync.finish(config)
             return body
 
         code += self._zone_loop(
@@ -393,6 +396,7 @@ class L1Operation:
                         body += pack_node.uninit(self, config)
                     prev_was_pack = True
             body += pack_common.packer_dest_section_done(config, self)
+            body += dest_sync.finish(config)
             return body
 
         code += self._zone_loop(
