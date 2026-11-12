@@ -3,10 +3,9 @@
 
 """The FPU: it computes, and it writes Dest.
 
-The unpacker and the packer only move and convert. This unit also does
-arithmetic, so it owns the arithmetic: the multiplier's width, the phase
-decomposition, the pre-carry flush, the rounding on every Dest write, and what
-the trip back to a src register costs.
+The unpacker and the packer only move and convert. This unit also computes, so
+it owns the multiplier's width, the phase decomposition, the pre-carry flush,
+and the rounding on every Dest write.
 
 See `README.md`, "The FPU computes".
 """
@@ -80,9 +79,8 @@ class Fpu:
     ) -> torch.Tensor:
         """One element-wise FPU operation on two src registers.
 
-        Computed in a type exact for the operands it was given, so an integer input
-        really does integer arithmetic. ``int64`` rather than the operand's own
-        width because torch integers wrap.
+        Computed in a type exact for the operands, so an integer input really
+        does integer arithmetic. ``int64``, because torch integers wrap.
         """
         try:
             compute = _ELEMENTWISE[operation]
@@ -99,10 +97,9 @@ class Fpu:
     ) -> torch.Tensor:
         """One matrix multiply, accumulated wider than its operands.
 
-        The hardware's network takes products at the combined width of both
-        significands and sums them with guard bits, so there is no per-product
-        rounding to model inside one instruction. Rounding between instructions
-        belongs to the Dest write.
+        The network sums at the combined width of both significands, so there
+        is no per-product rounding inside one instruction. Rounding between
+        them belongs to the Dest write.
         """
         wide = torch.float64 if srcB_rows.dtype.is_floating_point else torch.int64
         return srcB_rows.to(wide) @ srcA_cols.to(wide)
@@ -114,10 +111,9 @@ class Fpu:
     def models_fidelity(self, in_format: DataFormat) -> bool:
         """Whether a multiply on `in_format` decomposes into phases here.
 
-        Needs the architecture's split to be modelled *and* the operands to be
-        floats, since the decomposition slices a mantissa, which an integer has none
-        of. Takes the format rather than a tensor because an operation asks while
-        it is still building its pipeline.
+        Needs the architecture's split modelled and the operands float, since
+        the decomposition slices a mantissa. Takes the format rather than a
+        tensor, because an operation asks while building its pipeline.
         """
         return self.mantissa_split is not None and not in_format.is_integer()
 
@@ -128,12 +124,9 @@ class Fpu:
     def warn_split_unmodelled(self, op_name: str) -> None:
         """Say so when a multiply here falls back to the exact product.
 
-        Silent unless this architecture's multiplier is genuinely unmodelled. An
-        integer multiply also skips the phase loop, but it is exact on the device
-        too, so warning there would be wrong.
-
-        The warning blames whoever asked for the multiply. See
-        :func:`.warn.caller_stacklevel`.
+        Silent unless the multiplier is genuinely unmodelled. An integer
+        multiply also skips the phase loop but is exact on the device too, so
+        warning there would be wrong. See :func:`.warn.caller_stacklevel`.
         """
         if self.mantissa_split is not None:
             return
@@ -162,9 +155,8 @@ class Fpu:
     ) -> torch.Tensor:
         """Zero a lane product whose exponent lands below Dest's lowest normal.
 
-        For a product that *is* a lane result written to Dest. A matmul is exempt
-        and passes ``None``: its products enter the sum-of-products network at
-        full width and never become lane results.
+        For a product that *is* a lane result. A matmul passes ``None``: its
+        products stay inside the network and never become lane results.
         """
         if dest_format is None:
             return product
@@ -181,9 +173,8 @@ class Fpu:
     ) -> torch.Tensor:
         """One fidelity phase of a multiply: window, multiply, flush.
 
-        The whole phase, so the multiply stays in the unit that defines how this
-        device multiplies. A matmul does not use this, because it needs the halves
-        unmultiplied, to arrange into matrices and slice a K face first.
+        The whole phase, so the multiply stays in this unit. A matmul needs the
+        halves unmultiplied and does not use it.
         """
         a, b = self.operand_halves(srcA, srcB, phase)
         return self.flush_pre_carry(
@@ -202,12 +193,8 @@ class Fpu:
     ) -> torch.Tensor:
         """Write a math result into Dest.
 
-        A Dest slot holds only what `dest_format` can represent, and the value is
-        rounded on the way *in*, not on the way out to L1.
-
-        `current` is Dest's existing contents, which a multi-pass op passes to
-        accumulate rather than replace. Because the rounding happens on this
-        write, it happens on every pass.
+        The value is rounded on the way *in*, not on the way out to L1, so a
+        multi-pass op that passes `current` to accumulate rounds every pass.
         """
         self.l1.check_dest_format(dest_format)
         if current is not None:
@@ -221,9 +208,8 @@ class Fpu:
     ) -> None:
         """Say so when a Dest write lands on a tie and the mode is unknown.
 
-        Quiet until it matters: ties-to-even and ties-away agree everywhere
-        else, so an architecture with no pinned mode is still exactly right
-        until a datum lands half an ULP from both neighbours.
+        Quiet until it matters: the two modes agree everywhere except a datum
+        landing half an ULP from both neighbours.
         """
         keep = DEST_MANTISSA_BITS.get(dest_format)
         if keep is None or not values.is_floating_point():
@@ -245,8 +231,7 @@ class Fpu:
     def _accumulate(values: torch.Tensor, current: torch.Tensor) -> torch.Tensor:
         """Add a new result to what Dest holds, in a type exact for both.
 
-        ``int64`` for integers because the narrow types wrap, and ``float32`` for
-        floats. The width follows the values, not `dest_format`. Narrowing and
+        The width follows the values, not `dest_format`. Narrowing and
         saturation happen afterwards in :func:`..storage.to_dest_storage`.
         """
         wide = torch.float32 if values.dtype.is_floating_point else torch.int64
@@ -261,7 +246,6 @@ class Fpu:
         """Move Dest back into a src register, for an op that reuses its result.
 
         Dest is wider than a src register, so the round trip is lossy. SrcA and
-        SrcB share the datum layout, so one method serves both. See
-        :func:`..storage.dest_to_src_storage` for what each Dest format costs.
+        SrcB share the layout, so one method serves both.
         """
         return dest_to_src_storage(dest_values, dest_format, src_format)

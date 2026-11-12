@@ -3,17 +3,11 @@
 
 """Per-operation goldens.
 
-An operation declares its own pipeline in :meth:`Golden.build_chain` — the
-sequence of data-transfer blocks and maths the hardware runs.
-:meth:`Golden.run` executes it.
+An operation declares its pipeline in :meth:`Golden.build_chain` and
+:meth:`Golden.run` executes it. The block methods return a
+:class:`~.chain.Step` rather than doing the work, so the chain runs it later.
 
-The block methods here return a :class:`~.chain.Step` rather than doing the
-work, so an op composes them into a chain and the chain runs it later. They live
-here rather than in :mod:`.chain` because they need the architecture's blocks,
-and a chain deliberately knows nothing about hardware.
-
-Writing a test never involves the data-transfer blocks: name the operation and
-the architecture, then call it with tensors.
+Writing a test never involves the data-transfer blocks::
 
     golden = get_golden(Op.DataCopy, QUASAR)
     result = golden.run(stimuli, in_format, out_format)
@@ -42,7 +36,7 @@ from .chain import Chain, Registers, StageRecord, Step
 class OpConfig:
     """How one invocation of an operation is configured.
 
-    Not a register file — this is the set of knobs the chain is *built* from,
+    Not a register file. This is the set of knobs the chain is *built* from,
     fixed before it runs. Data flows through :class:`~.chain.Registers`.
     """
 
@@ -62,17 +56,10 @@ def check_source_layout(
 ) -> None:
     """Refuse a stimuli layout this model cannot infer.
 
-    ``pack_to_l1`` lays tiles out back to back, ``datums_per_tile`` apart. The
-    harness has two writers and only one of them matches that:
-
-    * ``write_matrix_w_tile_dimensions`` (``use_dense_tile_dimensions=True``)
-      strides the source by the tile's own datum count, same as here.
-    * ``write_matrix``, the default, always strides the source by
-      ``MAX_TILE_ELEMENTS`` regardless of tile size, writing only
-      ``num_faces * face_r_dim * 16`` of each stride.
-
-    They coincide only when a tile *is* ``MAX_TILE_ELEMENTS`` datums, or when
-    there is a single tile and the stride never applies.
+    ``pack_to_l1`` lays tiles ``datums_per_tile`` apart, which matches the
+    harness's ``write_matrix_w_tile_dimensions`` but not its default
+    ``write_matrix``. The two agree only at ``MAX_TILE_ELEMENTS`` datums per
+    tile, or on a single tile. See `README.md`, "run".
     """
     per_tile = datums_per_tile(**geometry)
     if not dense_layout and tile_count > 1 and per_tile != MAX_TILE_ELEMENTS:
@@ -96,9 +83,8 @@ PACK_EFFECT_KEYWORDS = frozenset(
 def check_pack_effects(pack_effects: Dict) -> Dict:
     """Reject a keyword that would otherwise fail later, inside OpConfig.
 
-    ``run`` funnels its surplus keywords into :class:`OpConfig`, so a misspelled
-    argument surfaces as an OpConfig error naming a class the caller never
-    mentioned. Checking here names the caller's own options instead.
+    A misspelled argument would otherwise surface as an OpConfig error naming
+    a class the caller never mentioned.
     """
     unknown = sorted(set(pack_effects) - PACK_EFFECT_KEYWORDS)
     if unknown:
@@ -118,10 +104,9 @@ class Golden:
     def __init__(self, arch=None, blocks: Optional[DataTransferBlocks] = None):
         """Bind the architecture this golden runs on.
 
-        `arch` is an :class:`.arch.ArchProfile`, which says which blocks to use. Use one
-        of the factories in :mod:`.arch` rather than passing it by hand.
-        `blocks` overrides the profile's blocks, which a test uses to drive one
-        architecture's op through another's blocks.
+        Use ``get_golden`` rather than passing `arch` by hand. `blocks`
+        overrides the profile's blocks, to drive one architecture's op through
+        another's.
         """
         if arch is None and blocks is None:
             raise TypeError(
@@ -321,17 +306,10 @@ class Golden:
     ) -> Step:
         """The maths between the src registers and Dest.
 
-        `fn` supplies the arithmetic, which is the operation's business, and the
-        block decides how the result lands in a Dest slot.
-
-        `name` labels the step in a trace. It defaults to the operation's name,
-        which is right for the step that *is* the operation. Pass it when a
-        chain has a second src-to-Dest step that is something else, such as the
-        datacopy that seeds Dest in a reuse-dest chain.
-
-        With `accumulate`, the result is added to what Dest already holds rather
-        than replacing it, and each pass rounds to Dest precision which is what
-        lets a multi-pass op be written as a loop.
+        `fn` supplies the arithmetic and the block decides how the result lands
+        in a Dest slot. `name` defaults to the operation's name; pass it for a
+        second src-to-Dest step that is something else. With `accumulate` the
+        result is added to Dest, rounding to Dest precision each pass.
         """
 
         # Accumulating reads Dest as well as the src registers, so declare it:
@@ -390,12 +368,9 @@ class Golden:
     ) -> Tuple[List[DataFormat], OpConfig]:
         """Normalise one run's arguments into an :class:`OpConfig`.
 
-        Returns the expanded `in_formats` alongside the config, since a single
-        format given for several operands has to be broadcast before use.
-
-        Also applies the architecture's `dest_acc` promotion, so a caller may
-        pass the `dest_acc` its test asked for rather than the one
-        ``TestConfig`` quietly substituted. See :meth:`_promote_dest_acc`.
+        Returns the expanded `in_formats` too, since one format given for
+        several operands has to be broadcast. Applies the architecture's
+        `dest_acc` promotion. See :meth:`_promote_dest_acc`.
         """
         if isinstance(in_formats, DataFormat):
             in_formats = [in_formats] * operands

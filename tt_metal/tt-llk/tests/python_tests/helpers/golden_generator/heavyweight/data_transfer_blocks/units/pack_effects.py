@@ -4,16 +4,12 @@
 """Packer side-effects applied between Dest and the L1 write.
 
 The packer does more than convert format. Three knobs change the values that
-reach L1, and the hardware applies them in this order:
+reach L1, in this order:
 
     Dest -> early convert -> ReLU -> round -> edge mask -> late convert -> L1
 
-The format conversion is in two stages and the effects sit between them, so
-ReLU and the mask meet an already narrowed datum rather than Dest's. See
-:attr:`.Pack.early_conversion`.
-
-Rounding sits between ReLU and the mask in hardware, but the mask *replaces* a
-datum outright, so masking before the late conversion gives the same bytes.
+The conversion is in two stages and the effects sit between them, so ReLU and
+the mask meet an already narrowed datum rather than Dest's.
 
 See `README.md`, "units/pack_effects.py".
 """
@@ -38,8 +34,7 @@ EDGE_MASK_COUNT = 4
 class EdgeMaskMode(IntEnum):
     """What a masked datum becomes.
 
-    An ``IntEnum`` so a caller holding a raw 0 or 1 still compares and packs
-    correctly, while the names carry the meaning.
+    An ``IntEnum``, so a raw 0 or 1 still compares and packs correctly.
     """
 
     # Masked datums are zeroed.
@@ -55,12 +50,11 @@ class PackEdgeMask:
     Args:
         masks: up to ``EDGE_MASK_COUNT`` masks of ``EDGE_MASK_WIDTH`` bits, the
             raw register values. Bit *j* covers datum *j* of a 16-datum row.
-            Whether a set bit keeps or masks that datum is per-architecture, so
-            the caller says which. There is no safe default, since 0xFFFF
-            passes a row through on Wormhole/Blackhole and masks it on Quasar.
-        select: which mask each 16-datum row uses. An int uses one mask for
-            every row, and a sequence gives one index per row. The hardware selector
-            is 2 bits **per row**, never per datum, so a row cannot mix masks.
+            Whether a set bit keeps or masks is per-architecture, so the caller
+            says which. No safe default: 0xFFFF passes a row through on
+            Wormhole/Blackhole and masks it on Quasar.
+        select: which mask each 16-datum row uses. The hardware selector is
+            2 bits **per row**, never per datum, so a row cannot mix masks.
         mode: :class:`EdgeMaskMode`, zero or negative-saturate.
     """
 
@@ -99,8 +93,8 @@ class PackEdgeMask:
     ) -> "PackEdgeMask":
         """Build from Quasar's ``EDGE_MASK_SELECT_FACE0..3`` register words.
 
-        Each 32-bit word holds a 2-bit selector for each of a face's 16 rows, row 0
-        in the low bits, which is the row-major order this class indexes.
+        Each word holds a 2-bit selector per row, row 0 in the low bits, which
+        is the row-major order this class indexes.
         """
         select = [
             (word >> (2 * row)) & 0x3
@@ -180,9 +174,9 @@ FP16_THRESHOLD_FORMATS = (DataFormat.Float16, DataFormat.Bfp8)
 def _encode_threshold_bits(threshold: float, dest_format: DataFormat) -> int:
     """The 16-bit threshold field as the packer's config register stores it.
 
-    The field is 16 bits whatever the pack format, and the two branches narrow
-    *differently*: the Float16 family reads it as fp16 and so **rounds**,
-    everything else reads it as bf16 and so **truncates**.
+    16 bits whatever the pack format, and the branches narrow differently: the
+    Float16 family reads it as fp16 and rounds, everything else as bf16 and
+    truncates.
     """
     if dest_format in FP16_THRESHOLD_FORMATS:
         return torch.tensor(threshold, dtype=torch.float16).view(torch.uint16).item()
@@ -201,9 +195,9 @@ def _encode_threshold(threshold: float, dest_format: DataFormat) -> float:
     """The threshold as the configuration register actually holds it.
 
     A ReLU compares against the register, not the float the test asked for, so
-    narrowing with a plain bf16 cast rounds where the register truncates and
-    shifts the threshold a full bf16 step. This duplicates ``PackGolden`` on
-    purpose. See `README.md`, "Why the threshold is encoded twice".
+    a plain bf16 cast shifts the threshold a full step. Duplicates
+    ``PackGolden`` on purpose. See `README.md`, "Why the threshold is encoded
+    twice".
     """
     return _decode_threshold_bits(
         _encode_threshold_bits(threshold, dest_format), dest_format
@@ -219,8 +213,7 @@ def apply_relu(
     """Apply the packer's ReLU to `values`.
 
     Takes the type and threshold directly rather than the packed 32-bit
-    ``relu_config`` word, and narrows the threshold to what the register holds
-    before comparing.
+    ``relu_config`` word, narrowing to what the register holds first.
     """
     if relu_type is PackerReluType.NoRelu:
         return values
@@ -257,9 +250,8 @@ STOCH_RND_EFFECTS = {
 def is_deterministic(stoch_rnd: StochasticRounding) -> bool:
     """Whether this golden can reproduce `stoch_rnd` bit-exactly.
 
-    Only ``No``. The others round up or down at random from a device-seeded
-    sequence, so this model can only give the round-to-nearest answer.
-    ``Fpu`` counts too: the randomness just moves to the FPU's Dest write.
+    Only ``No``. The rest draw from a device-seeded sequence, so this model can
+    only give the round-to-nearest answer. ``Fpu`` counts too.
     """
     return stoch_rnd is StochasticRounding.No
 

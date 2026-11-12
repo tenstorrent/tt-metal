@@ -224,11 +224,9 @@ def unpack_from_l1(
             l1_format, num_faces, face_r_dim, use_srcs, dest_acc
         )
     if tile_count is None:
-        # A partial trailing tile means the stride and the buffer disagree, and
-        # rounding it away decodes plausible values from a wrong layout, a
-        # 1280-byte SrcS MX tile read at the 1152-byte stride would come back
-        # as one tile with no complaint. pack_to_l1 refuses a partial tile on
-        # the way in, refuse it on the way out too.
+        # A partial trailing tile means the stride and the buffer disagree,
+        # and rounding it away decodes plausible values from a wrong layout.
+        # pack_to_l1 refuses one on the way in, so refuse it here too.
         tile_count, remainder = divmod(len(packed), tile_stride_bytes)
         if remainder or not tile_count:
             raise ValueError(

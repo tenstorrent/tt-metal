@@ -3,18 +3,11 @@
 
 """Operations, each declaring a chain of data-transfer blocks.
 
-The operations live in :mod:`.pipelines`. Everything here is the machinery
-that builds and runs them.
-
-Ask the factory for the golden you want, naming the operation and the
-architecture::
+The operations live in :mod:`.pipelines`. Everything here builds and runs them::
 
     get_golden(Op.Matmul, QUASAR, MathFidelity.HiFi4)
 
-One function, not one per operation and not one per operation and architecture
-pair, so a test that resolves either at run time hands it straight over. The
-pipeline classes are exported too, for a caller that wants to subclass one or
-to pass ``blocks=`` directly.
+See `README.md`.
 """
 
 from .arch import BLACKHOLE, QUASAR, WORMHOLE, ArchProfile, Op, get_golden

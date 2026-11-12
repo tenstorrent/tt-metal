@@ -5,10 +5,9 @@
 
 The multiplier is narrower than a src datum, so a multiply runs several times
 over different slices of the operands' mantissas and the partial products are
-added up. ``MathFidelity`` chooses how many of those phases run.
+added up. ``MathFidelity`` chooses how many phases run.
 
-Everything here describes the FPU rather than any operation, which is why it
-sits beside :mod:`.fpu`. See `README.md`, "units/fidelity.py in full".
+See `README.md`, "units/fidelity.py in full".
 """
 
 import warnings
@@ -45,8 +44,8 @@ def fidelity_phases(math_fidelity: MathFidelity) -> range:
     """The phase numbers to loop over for a multiply at `math_fidelity`.
 
     **Every phase multiplies the original srcA and srcB**, not what the phase
-    before it produced. Chaining them zeroes every phase after the first, and
-    the answer still looks plausible.
+    before produced. Chaining them zeroes every phase after the first, and the
+    answer still looks plausible.
     """
     return range(FIDELITY_PHASES[math_fidelity])
 
@@ -73,9 +72,8 @@ def split_mantissa(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Split into (high, low) at `keep_bits` explicit mantissa bits.
 
-    The low half is ``value - high`` rather than masked bits read back as a
-    float: the implicit leading 1 belongs to the high half, so a masked
-    mantissa is not the remainder.
+    The low half is ``value - high``, not masked bits: the implicit leading 1
+    belongs to the high half, so a masked mantissa is not the remainder.
     """
     high = truncate_mantissa(values, keep_bits)
     return high, values.to(torch.float32) - high
@@ -151,9 +149,8 @@ def min_normal_exponent(dest_format: DataFormat) -> Optional[int]:
 def non_finite_lanes(srcA: torch.Tensor, srcB: torch.Tensor) -> torch.Tensor:
     """Lanes where either operand is an infinity or a NaN.
 
-    The split and flush rules both assume a finite operand, and ``frexp``
-    reports exponent 0 for a non-finite value, which reads as a magnitude
-    near 2^-1.
+    The split and flush rules assume a finite operand, and ``frexp`` reports
+    exponent 0 for a non-finite value, reading as a magnitude near 2^-1.
     """
     return ~(torch.isfinite(srcA.float()) & torch.isfinite(srcB.float()))
 
@@ -166,10 +163,9 @@ def flush_pre_carry_denormals(
 ) -> torch.Tensor:
     """Zero a product whose exponent lands below Dest's lowest normal.
 
-    The lane adds the two stored src exponents and flushes the whole term
-    before the mantissa product's carry, so the rule is one binade coarser than
-    testing the finished magnitude. Use the **datum's** exponent, not a split
-    half's. See `README.md`, "flush_pre_carry_denormals, the pre-carry rule".
+    The lane flushes before the mantissa product's carry, so the rule is one
+    binade coarser than testing the finished magnitude. Use the **datum's**
+    exponent, not a split half's. See `README.md`, "the pre-carry rule".
     """
     if min_exponent is None:
         return product

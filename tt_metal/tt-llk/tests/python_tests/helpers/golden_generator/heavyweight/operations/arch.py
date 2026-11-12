@@ -1,25 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""The architectures an operation can run on, and the per-operation factories.
+"""The architectures an operation can run on, and the factory.
 
-An operation does not have a subclass per architecture. What differs between
-architectures is **data**, namely which blocks to use, so each architecture states
-that once here and every operation takes one as an argument. Everything an
-operation needs to know about the hardware itself it asks the blocks: the FPU
-carries its own multiplier width, the packer its own edge-mask polarity.
+An operation has no subclass per architecture. What differs is data, namely
+which blocks to use, so each architecture states that once here and every
+operation takes one as an argument. Anything else about the hardware an
+operation asks the blocks.
 
-The factories at the bottom are the package's public surface, so a test writes
-``get_golden(Op.Matmul, QUASAR, MathFidelity.HiFi4)`` and never touches the blocks.
-They are named as functions because that is what they are, which leaves the
-class-shaped name free for a pipeline class that wants it.
-
-There is one per operation rather than one per operation and architecture pair.
-The architecture travels as an argument, so a test that reads its own
-architecture at run time passes it straight through, and a fourth architecture
-adds no names here. What an architecture needs that is specific to it goes in
-the body of the factory, which is why these are functions rather than bound
-partials. See `README.md`, "When an architecture differs".
+See `README.md`, "Architecture bindings".
 """
 
 from dataclasses import dataclass

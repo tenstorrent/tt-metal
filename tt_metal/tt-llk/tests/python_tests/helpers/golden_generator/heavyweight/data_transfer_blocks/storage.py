@@ -61,8 +61,7 @@ def truncate_mantissa(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
     """Keep the top `keep_bits` mantissa bits and zero the rest.
 
     Truncation, not rounding. Every narrowing on the register paths drops the
-    low bits rather than folding them in, so this one primitive is behind all
-    of them.
+    low bits, so this one primitive is behind all of them.
     """
     raw = values.to(torch.float32).contiguous().view(torch.int32)
     return (raw & ~((1 << (FP32_MANTISSA_BITS - keep_bits)) - 1)).view(torch.float32)
@@ -71,15 +70,9 @@ def truncate_mantissa(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
 def round_mantissa_away(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
     """Round to `keep_bits` mantissa bits, ties away from zero.
 
-    IEEE and torch both round ties to *even*. Some FPUs round ties away from
-    zero instead, which only shows up when the dropped bits are exactly half an
-    ULP. Random data almost never lands there, but an add or subtract of two
-    datums already on the target grid lands there often.
-
-    Adding half an ULP to the bit pattern and truncating gives ties-away,
-    because a float is sign-magnitude: the add grows the magnitude whatever the
-    sign. Carries into the exponent are correct, so a round up at the top of a
-    binade moves to the next one.
+    IEEE and torch round ties to even, some FPUs away from zero. Random data
+    almost never lands on a tie, but an add of two datums already on the target
+    grid does. See `README.md`, "storage.py".
     """
     dropped = FP32_MANTISSA_BITS - keep_bits
     wide = values.to(torch.float32)
@@ -93,9 +86,7 @@ def round_mantissa_even(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
     """Round to `keep_bits` mantissa bits, ties to even.
 
     What IEEE and torch do, written out at an arbitrary width so a conversion
-    the hardware makes at a width torch has no dtype for still rounds the same
-    way. Adding half an ULP less one, plus the low kept bit, carries exactly
-    when the remainder is over half or the kept bit is already odd.
+    at a width torch has no dtype for still rounds the same way.
     """
     dropped = FP32_MANTISSA_BITS - keep_bits
     wide = values.to(torch.float32)
@@ -124,9 +115,9 @@ def saturate_to_integer(
 ) -> torch.Tensor:
     """Clamp into `dtype`'s range, then narrow. The hardware saturates.
 
-    A plain cast would wrap instead: 200 narrowed to Int8 lands as -56. Signed
-    formats clamp to ``[min + 1, max]`` because the register is sign-magnitude
-    and the most negative two's-complement value has no encoding.
+    A plain cast would wrap instead, landing 200 at -56 in Int8. Signed formats
+    clamp to ``[min + 1, max]``, since the register is sign-magnitude and the
+    most negative value has no encoding.
     """
     info = torch.iinfo(dtype)
     low = info.min if dest_format.name.startswith("U") else info.min + 1
@@ -145,11 +136,9 @@ def flush_subnormals(
 ) -> torch.Tensor:
     """Zero anything below the smallest normal of `dtype`, or of `values` itself.
 
-    Neither the FPU nor the unpacker writes a denormal. By default the
-    threshold comes from the tensor's own dtype, which suits a flush applied
-    after the narrowing cast. Pass `dtype` to flush against a narrower format
-    while still holding the wide value, needed wherever the cast rounds,
-    since rounding can lift the top of the subnormal range past a later flush.
+    Neither the FPU nor the unpacker writes a denormal. Pass `dtype` to flush
+    against a narrower format while still holding the wide value, needed
+    wherever the cast rounds. See `README.md`, "storage.py".
     """
     threshold = torch.finfo(dtype or values.dtype).smallest_normal
     return torch.where(
@@ -162,9 +151,8 @@ def flush_subnormals(
 def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
     """Normalise an accumulation setting to a plain bool.
 
-    Takes the enum as well as a bool, and you want it: ``DestAccumulation``
-    defines no ``__bool__``, so ``DestAccumulation.No`` is **truthy** and reads
-    as "accumulation on" wherever a plain ``if`` tests it.
+    Use it: ``DestAccumulation`` defines no ``__bool__``, so
+    ``DestAccumulation.No`` is **truthy** under a plain ``if``.
     """
     if isinstance(dest_acc, DestAccumulation):
         return dest_acc is DestAccumulation.Yes
@@ -222,12 +210,10 @@ def to_src_storage(
     """Apply the precision a src-register datum can hold.
 
     Two losses, both the unpacker's: the mantissa truncates, and the Float16
-    family's 5-bit exponent saturates or flushes what falls outside it.
-    Integers pass through unchanged.
+    family's 5-bit exponent saturates or flushes. Integers pass through.
 
-    `mantissa_bits` is how many explicit bits this architecture keeps for
-    `src_format`, defaulting to :data:`SRC_MANTISSA_BITS`. It is per
-    architecture because Quasar aliases Float16_b onto Tf32.
+    `mantissa_bits` is per architecture, because Quasar aliases Float16_b onto
+    Tf32. See `README.md`, "Two src storage families".
     """
     if mantissa_bits is None:
         mantissa_bits = SRC_MANTISSA_BITS.get(src_format, SRC_MANT_BITS)
@@ -251,11 +237,9 @@ def truncate_to_block_lattice(
 ) -> torch.Tensor:
     """Quantize toward zero onto a block-float lattice.
 
-    Each block takes the largest biased exponent among its datums, and every
-    datum then stores a magnitude weighted
-    ``2 ** (shared - FP32_EXPONENT_BIAS - (magnitude_bits - 1))``. Flooring that
-    magnitude is the whole conversion, since the leading bit is stored rather
-    than implied and there is nothing left to normalise.
+    Each block takes the largest biased exponent among its datums, and
+    flooring the weighted magnitude is the whole conversion: the leading bit is
+    stored rather than implied, so nothing is left to normalise.
     """
     wide = values.to(torch.float32)
     if wide.numel() % BFP_BLOCK_SIZE:
@@ -289,9 +273,8 @@ def truncate_to_l1_lattice(
 ) -> Optional[torch.Tensor]:
     """Quantize toward zero onto `l1_format`'s lattice, or None if unmodelled.
 
-    For a packer that truncates where the codec rounds. Dropping whatever the
-    format cannot hold lands the value on that format's lattice, so the codec's
-    own conversion afterwards has nothing left to round.
+    For a packer that truncates where the codec rounds. The codec's own
+    conversion afterwards then has nothing left to round.
     """
     block_bits = L1_BLOCK_MAGNITUDE_BITS.get(l1_format)
     if block_bits is not None:
@@ -317,10 +300,8 @@ def to_dest_storage(
     """Round `values` to what a Dest slot can hold.
 
     The FPU writes no denormal, so anything below the format's smallest normal
-    lands as zero. In practice only a Float16 Dest reaches that threshold.
-
-    `ties_away` picks the rounding mode, and is per architecture. The default
-    is the IEEE one torch gives, ties to even.
+    lands as zero. `ties_away` is per architecture, defaulting to the IEEE
+    ties-to-even torch gives.
     """
     if not isinstance(values, torch.Tensor):
         values = torch.tensor(values)
@@ -340,10 +321,8 @@ def dest_to_src_storage(
     """Re-quantize a Dest datum into a 19-bit src datum.
 
     Driven by the **Dest** format. `src_format` only decides whether a wide
-    Dest needs its exponent rebiased into the 5-bit range. Every case is
-    bit-slicing, so nothing rounds.
-
-    See `README.md`, "The feedback path", for what each Dest format costs.
+    Dest needs its exponent rebiased. Every case is bit-slicing, so nothing
+    rounds. See `README.md`, "The feedback path".
     """
     if dest_format is DataFormat.Int16:
         # Carried unchanged. The hardware borrows the bf16 label to move the

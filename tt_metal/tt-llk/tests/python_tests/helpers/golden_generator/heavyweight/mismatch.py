@@ -3,28 +3,20 @@
 
 """The two things a golden failure needs that a value dump cannot give.
 
-``passed_test`` already prints the failing tiles with the bad datums
-highlighted, which answers *where* in the tile. What it cannot answer is:
+``passed_test`` already prints the failing tiles, which answers *where* in the
+tile. What it cannot answer is:
 
-* **how badly**: for an MX output the tolerance is a number of lattice steps,
-  and the step is relative to each element's own magnitude. Ranked by absolute
-  error, the top of a table is large-magnitude datums that comfortably pass
-  while the one that actually failed sits further down.
-* **where to look next**: a datum can disagree because the device's math
-  left a different value in Dest, or because its packer treated the same value
-  differently. Telling those apart needs the *device's* pre-pack Dest, which
-  this report does not have. What it shows is the golden's, which narrows the
-  question: a device zero against a golden Dest above the Dest format's
-  smallest normal is not explained by flush-to-zero alone. To settle it, re-run
-  with an output **in the Dest format**, where the device's packed result *is*
-  its Dest. Not "with a Float16 output": that only coincides when Dest is
-  Float16 too, and for a Float16_b input Dest is Float16_b, so a Float16 output
-  narrows the exponent range and can zero values between 2**-126 and 2**-14 by
-  itself, which is the very symptom this was meant to settle.
-  ``describe_mismatch`` already knows which is which, through ``dest_format``.
+* **how badly**: for an MX output the tolerance is a number of lattice steps
+  relative to each element's own magnitude. Ranked by absolute error, the top
+  of the table is large datums that comfortably pass.
+* **where to look next**: a datum can disagree because the device's math left a
+  different value in Dest, or because its packer treated the same value
+  differently. Settling that needs the *device's* Dest, so re-run with an
+  output **in the Dest format**, where the device's packed result is its Dest.
+  Not a Float16 output, which coincides only when Dest is Float16 too.
 
-So this adds a step-ranked table, the golden's pre-pack Dest beside it, and the
-chain that produced it. Use it alongside ``passed_test``, not instead of it.
+So this adds a step-ranked table, the golden's pre-pack Dest, and the chain
+that produced it. Use it alongside ``passed_test``, not instead of it.
 """
 
 from typing import Optional, Sequence, Tuple
@@ -49,11 +41,9 @@ def lattice_step(
     """``(step, max_steps)`` for an MX-float output, or ``None`` if unmodelled.
 
     Delegates to :func:`helpers.utils.mxfp_local_step`, the same calculation
-    ``_mxfp_block_aware_compare`` uses to decide pass/fail, so a datum this
-    report calls a failure is one the comparator rejects. Computing the step
-    here independently went wrong in exactly the way that invites: the
-    normal-value formula alone reports the smallest E4M3 subnormal as eight
-    steps from zero, where the comparator has them adjacent.
+    the comparator uses, so a datum this report calls a failure is one the
+    comparator rejects. Computing it here independently got the smallest E4M3
+    subnormal eight steps from zero, where the comparator has them adjacent.
     """
     params = _MXFP_COMPARE_PARAMS.get(output_format)
     if params is None:
@@ -85,13 +75,10 @@ def describe_mismatch(
 ) -> str:
     """Rank a golden-vs-device disagreement by lattice steps.
 
-    `output_format` selects the lattice the result landed on. A format with no
-    MX-float model falls back to ranking by absolute error, omits the steps
-    column and does not claim a tolerance. `dest` is the golden's pre-pack
-    Dest, when the caller collected it, and `dest_format` is the format it was
-    held in, needed to say anything about flush-to-zero, since the floor is
-    the Dest format's smallest normal and differs by ~2^112 between fp16 and
-    bf16. Without it the FTZ line is omitted rather than guessed.
+    `output_format` selects the lattice. A format with no MX-float model falls
+    back to absolute error and claims no tolerance. `dest` is the golden's
+    pre-pack Dest and `dest_format` the format it was held in, needed for the
+    flush-to-zero line since the floor differs by ~2^112 between fp16 and bf16.
     """
     g = golden.flatten().float()
     a = actual.flatten().float()

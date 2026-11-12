@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Matmul — the MVMUL family."""
+"""Matmul, the MVMUL family."""
 
 from functools import lru_cache, partial
 from typing import Dict, Tuple
@@ -38,11 +38,9 @@ K_FACES = DEFAULT_TILE_R_DIM // K_FACE_DIM
 def _face_order_permutation() -> Tuple[torch.Tensor, torch.Tensor]:
     """The index permutations between face order and logical row-major order.
 
-    The tilize helpers are pure rearrangements, but they finish by casting to
-    the dtype of the ``stimuli_format`` they were given, and there is no
-    ``DataFormat`` wide enough for an integer matmul's accumulator. Running an
-    ``arange`` through them instead captures the rearrangement on its own, and
-    the data is then reordered by indexing, which cannot change its type.
+    Runs an ``arange`` through the tilize helpers rather than the data, because
+    they cast to the ``stimuli_format`` they were given and no ``DataFormat``
+    is wide enough for an integer matmul's accumulator.
 
     Returns ``(to_logical, to_face_order)``, the inverse of each other.
     """
@@ -59,10 +57,8 @@ def _face_order_permutation() -> Tuple[torch.Tensor, torch.Tensor]:
 def tilize_kwargs() -> dict:
     """Shape arguments for the tilize/untilize helpers, for one full tile.
 
-    Takes no geometry: a matmul here is always one 32x32 tile, and the helpers
-    recompute ``num_faces``/``face_r_dim`` from ``tile_dimensions`` anyway, so
-    forwarding a caller's geometry only looked as though it did something.
-    :meth:`MatmulGolden._as_tile` rejects any other shape before this is used.
+    Takes no geometry: a matmul here is always one 32x32 tile, and
+    :meth:`MatmulGolden._as_tile` rejects any other shape first.
     """
     return dict(
         dimensions=[TILE_DIM, TILE_DIM],
@@ -73,29 +69,9 @@ def tilize_kwargs() -> dict:
 class MatmulGolden(Golden):
     """L1 -> SrcA, L1 -> SrcB -> product -> Dest -> L1.
 
-    A matmul decomposes into fidelity phases the same way an element-wise
-    multiply does: the multiplier is narrower than a src datum, so each pass
-    multiplies a different slice of the operands' mantissas and the partial
-    products accumulate in Dest. The only difference from the element-wise case
-    is that the partial product is a matrix product.
-
-    **Accumulation is exact within one MVMUL, rounded at every Dest write.**
-    Products enter the FPU's sum-of-products network at the combined width of
-    both significands and are summed in wide fixed point with guard bits, so
-    there is no per-MAC rounding to model and no per-product denormal flush:
-    an individual product never becomes a lane result, so the flush rule does
-    not reach it. ``blocks.fpu_sum_of_products`` is where that width lives.
-
-    But one MVMUL is only ``D[8,16] += B[8,16] * A[16,16]``, so a 32-wide inner
-    dimension takes **two** of them, and the second accumulates onto a Dest the
-    first already rounded. ``ADDR_MOD_3`` advances K and rewinds Dest to the
-    start of the tile for exactly that, and the MOP nests the K-face replay
-    inside the fidelity-phase loop
-    (``ckernel_template(1, FIDELITY_PHASES, TT_OP_REPLAY(...))``), so the real
-    order is phase-outer, K-face-inner. This chain emits one ``src_to_dest``
-    per (phase, K face) pair for that reason: summing all 32 K terms before a
-    single Dest write would drop one rounding per phase, worth about an ULP at
-    a 16-bit Dest.
+    Accumulation is exact within one MVMUL and rounded at every Dest write. One
+    MVMUL covers 16 of the 32 K datums, so the chain emits one ``src_to_dest``
+    per (phase, K face). See `README.md`, "MatmulGolden".
     """
 
     op_name = "matmul"
@@ -180,14 +156,11 @@ class MatmulGolden(Golden):
     def _as_tile(values: torch.Tensor, geometry: Dict) -> torch.Tensor:
         """A src register's contents as the logical matrix the FPU multiplies.
 
-        A src register holds its tile **face-ordered**, the way the unpacker
-        wrote it, so a plain ``reshape(32, 32)`` is not the logical matrix: its
-        row 0 is logical row 0 columns 0-15 followed by logical row 1 columns
-        0-15. The leading entries of each row line up, which is exactly why the
-        wrong answer reads as a plausible one.
+        A src register holds its tile face-ordered, so a plain
+        ``reshape(32, 32)`` is not the logical matrix. The leading entries of
+        each row line up, which is why the wrong answer looks plausible.
 
-        Rearranges without converting, so an integer register stays an integer
-        one all the way into ``blocks.fpu_sum_of_products``.
+        Rearranges without converting, so an integer register stays integer.
         """
         # Against the full tile, not datums_per_tile(**geometry): the product
         # below is a 32x32 one whatever geometry says, so a partial-face tile
@@ -208,11 +181,9 @@ class MatmulGolden(Golden):
     def _from_tile(matrix: torch.Tensor, geometry: Dict) -> torch.Tensor:
         """The logical result back in face order, which is how Dest holds it.
 
-        Keeps the product's own type. An integer matmul accumulates in int64
-        and reaches 2**35, which the ``Int32`` the tilize helpers would cast to
-        cannot hold, since it would wrap to a negative number here, *before*
-        :func:`..storage.to_dest_storage` had a chance to saturate it, turning
-        a clean clamp into a sign flip.
+        Keeps the product's own type. An integer matmul reaches 2**35, which
+        would wrap negative in ``Int32`` before
+        :func:`..storage.to_dest_storage` could saturate it.
         """
         _, to_face_order = _face_order_permutation()
         return matrix.reshape(-1)[to_face_order]
@@ -222,23 +193,12 @@ class MatmulGolden(Golden):
     ) -> torch.Tensor:
         """The matrix product, in this architecture's operand order.
 
-        ``Dest = SrcB @ SrcA``, which is not a transpose of the caller's
-        arguments: :attr:`OPERAND_REGISTERS` puts the first operand in SrcB, so
-        the two together give ``arg0 @ arg1``. Both halves are load-bearing and
-        have to agree: the routing without this order, or this order without
-        the routing, transposes the result into something wrong everywhere but
-        still plausible-looking, which is how it was last caught.
+        ``Dest = SrcB @ SrcA``, which with :attr:`OPERAND_REGISTERS` gives
+        ``arg0 @ arg1``. Both halves are load-bearing: either without the other
+        transposes the result into something wrong but plausible.
 
-        The one place operand order lives, so a subclass that diverges does not
-        have to override both the exact and the per-phase paths. The multiply
-        itself is the FPU's, including the accumulator being wider than the
-        operands, so this arranges the two registers into the matrices one
-        instruction covers and hands them over. The rounding the hardware takes
-        *between* K faces is the caller's, which writes Dest once per face
-        rather than once per phase.
-
-        `k_face` selects the 16-wide slice of the inner dimension this MVMUL
-        covers: columns of SrcB, rows of SrcA.
+        `k_face` picks the 16-wide slice of the inner dimension this MVMUL
+        covers. See `README.md`, "Operand order".
         """
         lo = k_face * K_FACE_DIM
         hi = lo + K_FACE_DIM
@@ -257,9 +217,8 @@ class MatmulGolden(Golden):
     ) -> torch.Tensor:
         """One fidelity phase: the matrix product of the chosen operand halves.
 
-        The FPU picks the windows, non-finite operands included, and it carries
-        those on the first phase and zeroes them on the rest, so an infinity
-        reaches every output position that sums over it exactly once.
+        The FPU picks the windows and carries non-finite operands on the first
+        phase only, so an infinity reaches each output position exactly once.
         """
         a, b = self.blocks.fpu_operand_halves(regs["srcA"], regs["srcB"], phase)
         return self._product(a, b, geometry, k_face)

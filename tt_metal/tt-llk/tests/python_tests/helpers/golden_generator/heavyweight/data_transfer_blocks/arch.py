@@ -8,8 +8,8 @@ one unit per hardware stage, injected into :class:`.DataTransferBlocks`.
 
 The architectures differ in three things today: which L1 formats they hold, the
 unpacker's legality tables, and how wide the FPU's multiplier is per fidelity
-phase. They are listed side by side here on purpose, so "how does Blackhole
-differ from Wormhole" is a diff rather than a walk through two files.
+phase. They sit side by side so comparing two is a diff, not a walk through
+two files.
 """
 
 from abc import ABC, abstractmethod
@@ -71,8 +71,7 @@ class ArchGolden(ABC):
 
 
 # ----------------------------------------------------------------------
-# Quasar: MX formats, no block float. Asking for a Bfp here raises rather
-# than quietly quantizing to something the hardware cannot store.
+# Quasar: MX formats, no block float. Asking for a Bfp raises.
 # ----------------------------------------------------------------------
 
 _QUASAR_L1 = L1Support(
@@ -99,10 +98,8 @@ class QuasarArch(ArchGolden):
 
     l1 = _QUASAR_L1
 
-    # Integers stay in their own width. Int32 is deliberately absent: it
-    # unpacks to Dest or SrcS only, never SrcA/SrcB.
-    #
-    # MxFp4's 2x register formats are omitted.
+    # Integers stay in their own width. Int32 is absent: it unpacks to Dest or
+    # SrcS only. MxFp4's 2x register formats are omitted.
     unpack = Unpack(
         _QUASAR_L1,
         to_src_formats={
@@ -135,10 +132,8 @@ class QuasarArch(ArchGolden):
     )
     fpu = Fpu(_QUASAR_L1, mantissa_split=(7, 7), dest_ties_away=False)
 
-    #: Quasar inverts the edge-mask register, so a set bit masks the datum,
-    #: the opposite of Wormhole and Blackhole. And ``TestConfig`` skips the
-    #: outlier promotion here, so a Float16_b Dest packed to Float16 is a
-    #: state this device really runs.
+    #: Quasar inverts the edge-mask register, so a set bit masks the datum.
+    #: ``TestConfig`` also skips the outlier promotion here.
     pack = Pack(
         _QUASAR_L1,
         to_l1_formats={

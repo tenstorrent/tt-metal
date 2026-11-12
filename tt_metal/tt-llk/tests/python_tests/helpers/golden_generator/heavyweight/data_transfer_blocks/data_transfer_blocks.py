@@ -3,19 +3,15 @@
 
 """Value-level model of the L1 <-> register-file data-transfer blocks.
 
-Each block answers one question: given a buffer sitting in L1, what does the
-consumer see after the hardware has moved it? Blocks take and return what the
-hardware does, and **L1 takes bytes**, so a golden op can chain them:
+Each block answers one question: given a buffer in L1, what does the consumer
+see after the hardware has moved it? **L1 takes bytes**, so a golden op can
+chain them:
 
     l1_bytes -> l1_to_srcA -> [math] -> dest_to_l1 -> l1_bytes
 
 There is no quantization step. Storing a tensor as MxFp8R *is* the
-quantization, and reading it back just reports the loss.
-
-**This class is the facade, not the implementation.** The transfers live in
-units, one per hardware stage. An architecture is a set of those units
-(`.arch`), injected here. Nothing subclasses this and nothing overrides a
-method.
+quantization. This class is the facade: the transfers live in units, and an
+architecture is a set of those units injected here.
 
 See `README.md` for what each block models and why.
 """
@@ -173,7 +169,7 @@ class DataTransferBlocks:
         stoch_rnd: StochasticRounding = StochasticRounding.No,
         **geometry,
     ) -> list:
-        """Pack Dest into L1 — the T2 half, mirroring :meth:`l1_to_srcA`."""
+        """Pack Dest into L1, the T2 half mirroring :meth:`l1_to_srcA`."""
         return self.arch.pack.dest_to_l1(
             dest_values,
             l1_format,
@@ -250,11 +246,8 @@ class DataTransferBlocks:
         )
 
     # ------------------------------------------------------------------
-    # The FPU: what it computes, and how its multiplier behaves.
-    #
-    # Forwarded one method at a time, so an operation never holds an Fpu and
-    # the units stay private. The fpu_ prefix says which unit decides the
-    # answer, which a bare phases() or operand_halves() would not.
+    # The FPU: what it computes, and how its multiplier behaves. Forwarded one
+    # method at a time, so an operation never holds an Fpu.
     # ------------------------------------------------------------------
 
     def fpu_elementwise(
@@ -303,15 +296,11 @@ class DataTransferBlocks:
 
 
 # ----------------------------------------------------------------------
-# Architecture factories, under the names the architecture classes used to
-# have, so callers construct blocks the same way they always did.
+# Architecture factories. Not subclasses: a subclass would reintroduce
+# somewhere to override a transfer.
 #
-# Not subclasses: a subclass would reintroduce somewhere to override a
-# transfer, which is what this structure exists to remove.
-#
-# ``partial`` rather than a plain function, so one assigned as a *class
-# attribute* does not bind as a method and pass ``self`` as the architecture.
-# A plain function is a descriptor, and ``partial`` is not.
+# ``partial`` rather than a plain function, which as a class attribute would
+# bind as a method and pass ``self`` as the architecture.
 # ----------------------------------------------------------------------
 
 QuasarDataTransferBlocks = partial(DataTransferBlocks, QuasarArch())
