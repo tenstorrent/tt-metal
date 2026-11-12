@@ -28,12 +28,20 @@ import pytest
 HERE = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("TT_METAL_HOME", HERE.parents[4]))
 PROBE = HERE / "sanity_probe.py"
-BINDING = ROOT / "tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+# A mock Blackhole dual galaxy: two ranks, no device (CPU only). The suite targets Blackhole, so it uses a
+# blackhole mock everywhere; the same descriptor + mapping pairing is already validated by the BH dual-galaxy rows
+# of the fabric CPU-only lane. This is a mock topology for the control plane to parse — the teardown behaviour it
+# exercises (MPI collectives, errhandler, timeout) is independent of the chip.
+BINDING = ROOT / "tests/tt_metal/distributed/config/dual_bh_galaxy_rank_binding.yaml"
 MAPPING = (
-    ROOT / "tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc_mapping.yaml"
+    ROOT
+    / "tt_metal/third_party/tt-cluster-descriptors/blackhole/dual_glx_2.5d_torus/dual_glx_2.5d_torus_cluster_desc_mapping.yaml"
 )
-T3K_DESC = "tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml"
-MGD = ROOT / "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
+# a different Blackhole machine, dropped into one rank's slot to make the two ranks disagree (test_bad_descriptor)
+CONFLICT_DESC = (
+    "tt_metal/third_party/tt-cluster-descriptors/blackhole/single_bh_galaxy_clus_desc/single_bh_galaxy_clus_desc.yaml"
+)
+MGD = ROOT / "tt_metal/fabric/mesh_graph_descriptors/dual_bh_galaxy_torus_xy_graph_descriptor.textproto"
 PYTHON = os.environ.get("TT_SANITY_PYTHON", "python3")
 TTRUN = shutil.which("tt-run") or "tt-run"
 
@@ -151,7 +159,7 @@ def legacy_cmd(mpi_extra: str = "", mapping: Path = MAPPING) -> list:
     ]
 
 
-MGD_QUAD = ROOT / "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_galaxy_torus_xy_graph_descriptor.textproto"
+MGD_QUAD = ROOT / "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 
 
 def solve_cmd(mpi_extra: str = "", mgd: Path = MGD) -> list:
@@ -234,9 +242,9 @@ def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3) -> list:
 
 
 def conflict_mapping(tmp: Path) -> Path:
-    """The dual-galaxy mapping with rank 1's descriptor replaced by a T3K: two ranks that disagree about the machine."""
+    """The dual-galaxy mapping with rank 1's descriptor replaced by a different Blackhole machine: two ranks that disagree."""
     text = MAPPING.read_text()
-    lines = [(f'  1: "{T3K_DESC}"' if line.strip().startswith('1: "') else line) for line in text.splitlines()]
+    lines = [(f'  1: "{CONFLICT_DESC}"' if line.strip().startswith('1: "') else line) for line in text.splitlines()]
     p = tmp / "conflict_mapping.yaml"
     p.write_text("\n".join(lines) + "\n")
     return p
