@@ -1,5 +1,5 @@
 # tt-model.yaml — google/gemma-4-31B-it on a QuietBox 2 (P300x2: 2x P300 boards = 4 Blackhole chips, (1, 4) mesh, TP4)
-# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/{tt-model.yaml,card.md} by render_manifest.py.
+# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update1/{tt-model.yaml,card.md} by render_manifest_u1.py.
 #
 #   single-user          DEFAULT: one user on the resident persistent-kernel decode engine (resident_m3_2) with
 #                        DFlash2 speculative decoding (RedHatAI/gemma-4-31B-it-speculator.dflash2, block 8, R=8 verify),
@@ -126,6 +126,11 @@ serve_profiles:
       GEMMA4_QB2_HOIST_DECODE_ROPE: "1"
       GEMMA4_QB2_SLIDING_SDPA_GRID: 11x10
       GEMMA4_QB2_SMALL_PREFILL_1D_ROWS: "128"
+      # Update 1 (2026-11-12): host threads for CPU-sampled steps. With OMP_NUM_THREADS set, vLLM leaves the thread
+      # count alone (v1/executor/multiproc_executor.py:1107) and the plugin skips its reduction to 1 torch thread
+      # (vllm_tt_plugin/worker.py:535-536). c32 with one repetition_penalty request: step 605 -> 274 ms; greedy and
+      # device-sampled steps unchanged at 29.1 ms (bench/resident/m5b/session_B32omp8 vs session_B32mix).
+      OMP_NUM_THREADS: "8"
     args:
       - [--hf-overrides, '{"architectures":["TTGemma4QB2ForCausalLM"]}']
       - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
@@ -193,6 +198,23 @@ card:
       "chat_template_kwargs": {"enable_thinking": false}
     }'
     ```
+
+    ### Known limitations
+    - **Code-generation quality (BF4 weights).** On the same evaluation harness (the ttnn decode path that `batch` uses), a
+      build of this model with BF8 weights scores higher on code generation:
+      - MBPP: 0.566 (this build) vs 0.658, a significant gap (paired McNemar test, Holm-adjusted p ≈ 1e-6).
+      - HumanEval: 0.835 vs 0.884, not significant.
+      - About half of the MBPP gap is answers that never close their code block, mostly because they run long or repeat
+        until the 512-token limit.
+      - Long thinking traces repeat more often: 12.8% vs 8.8% are degenerate.
+      - GSM8K, IFEval, MMLU-Pro, MATH-500 and RULER (8K) are within noise.
+    - **Host-sampled requests in `batch`.** A request that needs CPU sampling (repetition, presence or frequency penalties,
+      logprobs, or top_k above the device limit of 32) moves sampling for every concurrent request to the CPU while it is
+      active.
+      - At 32 users a decode step goes from about 29 ms to about 274 ms with `OMP_NUM_THREADS=8`, which this package sets
+        (about 605 ms without it).
+      - Greedy requests and the default device sampling are unaffected.
+      - The full fix belongs in the vLLM TT plugin.
 
     ### Results (tt-inference-server `--workflow benchmarks`)
 
