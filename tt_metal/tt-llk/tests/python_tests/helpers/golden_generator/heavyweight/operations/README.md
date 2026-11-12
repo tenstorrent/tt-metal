@@ -12,9 +12,9 @@ Writing a test never touches the data-transfer blocks. Pick the golden for your
 architecture and hand it tensors:
 
 ```python
-from helpers.golden_generator.heavyweight.operations import get_quasar_data_copy_golden
+from helpers.golden_generator.heavyweight.operations import get_data_copy_golden
 
-result = get_quasar_data_copy_golden().run(stimuli, in_format, out_format)
+result = get_data_copy_golden(QUASAR).run(stimuli, in_format, out_format)
 ```
 
 ## Contents
@@ -42,7 +42,7 @@ golden.py     Golden · OpConfig            blocks → steps   ──self.blocks
                      ↓                                                               ↓
 pipelines/    DataCopyGolden · MatmulGolden · …             QuasarArch · WormholeArch · BlackholeArch
                      ↓
-arch.py       get_quasar_eltwise_binary_golden · …  the op bound to an ArchProfile
+arch.py       QUASAR · WORMHOLE · BLACKHOLE  profiles, and one factory per op
 ```
 
 ---
@@ -547,7 +547,7 @@ every operation takes one as an argument:
 ```python
 QUASAR = ArchProfile(name="Quasar", blocks=QuasarDataTransferBlocks)
 
-get_quasar_eltwise_binary_golden = _factory(EltwiseBinaryGolden, QUASAR)
+golden = get_eltwise_binary_golden(QUASAR, MathOperation.Elwmul, MathFidelity.HiFi4)
 ```
 
 Before this each fact was restated per operation — `blocks` in five files, the
@@ -559,27 +559,27 @@ for information that is `ops + architectures`.
 | Quasar | MX — `MxFp8R`, `MxFp8P`, `MxFp4`, `MxInt8`, `MxInt4`, `MxInt2` | **No block float.** No `MxFp4_2x_A/B` — those are src-register formats, never L1 formats. |
 | Wormhole · Blackhole | Block float — `Bfp8`, `Bfp8_b`, `Bfp4_b`, `Bfp2_b` | **No MX.** |
 
-Available today: `get_quasar_data_copy_golden`, `get_quasar_matmul_golden`,
-`get_quasar_eltwise_binary_golden`, `get_quasar_eltwise_binary_reuse_dest_golden`, plus
-datacopy / eltwise / matmul for Wormhole and Blackhole.
+Available today: `get_data_copy_golden`, `get_eltwise_binary_golden` and
+`get_matmul_golden` on all three, and `get_eltwise_binary_reuse_dest_golden` on
+Quasar only.
 
 ## What the names mean
 
-`get_quasar_data_copy_golden` is the caller's handle for "the datacopy golden on
-Quasar". It says nothing about *why* it is Quasar's, and that is deliberate. The
-caller does not care whether the pipeline is the shared one or Quasar's own, and
-the name should not have to change the day that answer changes.
+`get_data_copy_golden(arch)` is the caller's handle for "the datacopy golden on
+this architecture". The name carries the operation and nothing else, because the
+architecture is a value: a test that reads its own architecture at run time
+passes the profile through, and a fourth architecture adds no names.
 
-The factory table answers the implementation question one line over, in the
-first argument:
+Whether that architecture runs the shared pipeline or one of its own is decided
+inside the factory, which is the point of it being a function:
 
 ```python
-get_quasar_data_copy_golden = _factory(DataCopyGolden, QUASAR)        # the shared pipeline
-get_quasar_data_copy_golden = _factory(QuasarDataCopyGolden, QUASAR)  # Quasar's own chain
+def get_data_copy_golden(arch, *args, **kwargs):
+    pipeline = QuasarDataCopyGolden if arch is QUASAR else DataCopyGolden
+    return pipeline(*args, arch=arch, **kwargs)
 ```
 
-So "does this architecture run a different chain" is read off the table rather
-than guessed from the name.
+One place to read, and one place to change.
 
 **The factories are named as functions and the pipelines as classes,** which is
 what keeps those two lines apart. A pipeline specialised for one architecture
@@ -626,7 +626,7 @@ hides the difference from anyone reading the factory table.
    with `chain.dry_run([...pre-loaded slots...])`.
 2. If the maths is not one of the existing `apply` implementations, pass your own
    `fn` to `src_to_dest`, and make `reads` match what it touches.
-3. Add a factory per architecture in `arch.py`: `QuasarMyOpGolden = _factory(MyOpGolden, QUASAR)`. If the op multiplies, ask the blocks' `fpu_*` methods for the phases and the operand windows rather than carrying them.
+3. Add one factory in `arch.py`: `def get_my_op_golden(arch, *args, **kwargs)`, forwarding to the pipeline. Refuse there any architecture the op has not been checked on. If the op multiplies, ask the blocks' `fpu_*` methods for the phases and the operand windows rather than carrying them.
 4. Validate against silicon at **full Dest width first** — run with a `Float16`
    output so the packed result *is* Dest, and compare in ULPs. Only then move to
    an MX output, where a lattice step is hundreds of ULPs wide and will hide a
