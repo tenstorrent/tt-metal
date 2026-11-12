@@ -379,19 +379,19 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
             sfpu::_topk_xl_split_sort_head_<K, true /*macros*/>(tile_offset, ascending);
             break;
         case 1:
-            sfpu::_topk_xl_split_stride2_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_column_pairs_<K, 4 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 2:
             sfpu::_topk_xl_split_columns_<K, 0x5050 /*lane_mask*/>(tile_offset, ascending);
             break;
         case 3:
-            sfpu::_topk_xl_split_stride2_<K, 8 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_column_pairs_<K, 8 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 4:
             sfpu::_topk_xl_split_columns_<K, 0x5500 /*lane_mask*/>(tile_offset, ascending);
             break;
         case 5:
-            sfpu::_topk_xl_split_stride2_<K, 16 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
+            sfpu::_topk_xl_split_column_pairs_<K, 16 /*sort_len*/, true /*macros*/>(tile_offset, ascending);
             break;
         case 6:
             sfpu::_topk_xl_split_columns_<K, 0 /*lane_mask*/>(tile_offset, ascending);
