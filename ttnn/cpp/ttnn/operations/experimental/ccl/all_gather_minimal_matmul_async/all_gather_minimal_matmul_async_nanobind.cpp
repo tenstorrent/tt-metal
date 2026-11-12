@@ -253,7 +253,10 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fsdp_topology") = nb::none(),
             nb::arg("fuse_swiglu") = false,
             nb::arg("chunk_sizes") = std::vector<uint32_t>{},
-            nb::arg("transpose_core_grid") = nb::none()});
+            nb::arg("transpose_core_grid") = nb::none(),
+
+            nb::arg("head_split_chunks_mask") = 0,
+            nb::arg("head_dim") = 0});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

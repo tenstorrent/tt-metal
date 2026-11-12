@@ -41,7 +41,9 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<ttnn::ccl::Topology> fsdp_topology,
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
-    std::optional<bool> transpose_core_grid) {
+    std::optional<bool> transpose_core_grid,
+    uint32_t head_split_chunks_mask,
+    uint32_t head_dim) {
     return ttnn::prim::all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -71,7 +73,9 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fsdp_topology,
         fuse_swiglu,
         chunk_sizes,
-        transpose_core_grid);
+        transpose_core_grid,
+        head_split_chunks_mask,
+        head_dim);
 }
 
 }  // namespace ttnn

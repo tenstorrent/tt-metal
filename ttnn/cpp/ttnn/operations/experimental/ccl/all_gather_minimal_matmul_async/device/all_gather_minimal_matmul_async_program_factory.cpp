@@ -784,6 +784,32 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
         defines["CHUNK_TILE_WIDTHS"] = widths_csv;
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
+
+        // Head-split output chunks: a head-split chunk tensor ([1, H > 1, M, head_dim], from the op's output spec)
+        // gets its tiles written per head (chunk_out_tile_id in matmul_dataflow_common.hpp). No head-split chunk:
+        // no define.
+        uint32_t head_split_mask = 0;
+        uint32_t head_dt = 0;
+        for (size_t c = 0; c < mm_output_tensors.size() && c < 32; ++c) {
+            const auto& shape = mm_output_tensors[c].padded_shape();
+            if (shape.rank() >= 3 && shape[-3] > 1) {
+                const uint32_t dt = shape[-1] / tt::constants::TILE_WIDTH;
+                TT_FATAL(head_dt == 0 || head_dt == dt, "head-split chunks must share one head_dim");
+                TT_FATAL(
+                    shape[-2] / tt::constants::TILE_HEIGHT == M_tiles,
+                    "head-split chunk {} has {} tile rows, the matmul {}",
+                    c,
+                    shape[-2] / tt::constants::TILE_HEIGHT,
+                    M_tiles);
+                TT_FATAL(dt * shape[-3] == chunk_tile_widths[c], "head-split chunk {} width mismatch", c);
+                head_dt = dt;
+                head_split_mask |= 1u << c;
+            }
+        }
+        if (head_split_mask != 0) {
+            defines["CHUNK_HEAD_SPLIT_MASK"] = std::to_string(head_split_mask) + "u";
+            defines["CHUNK_HEAD_DT"] = std::to_string(head_dt);
+        }
     }
 
     in0_defines = defines;

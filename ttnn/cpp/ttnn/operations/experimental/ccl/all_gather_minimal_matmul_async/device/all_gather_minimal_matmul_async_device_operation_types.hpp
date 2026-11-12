@@ -58,6 +58,11 @@ struct AllGatherMinimalMatmulAsyncParams {
     // attribute_values(): the program hash keys on the resolved orientation (resolve_transpose_core_grid),
     // so a pinned and an unpinned call that resolve alike share one program.
     std::optional<bool> transpose_core_grid;
+    // Head-split output chunks (MINIMAX_H3_MK_E2A_HEAD_SPLIT): bit c set = output chunk c is head-split
+    // [1, width / head_dim, M, head_dim] (the layout nlp_create_qkv_heads makes) instead of [1, 1, M, width].
+    // 0 = off. Set after construction; part of the hash.
+    uint32_t head_split_chunks_mask = 0;
+    uint32_t head_dim = 0;
 
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
@@ -132,6 +137,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fuse_swiglu",
         "fused_activation",
         "output_dtype",
+        "head_split_chunks_mask",
+        "head_dim",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -154,6 +161,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fuse_swiglu,
             this->fused_activation,
             this->output_dtype,
+            this->head_split_chunks_mask,
+            this->head_dim,
             this->compute_kernel_config);
     }
 };

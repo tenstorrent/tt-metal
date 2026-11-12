@@ -50,6 +50,13 @@ def _log_s1_once(dtype) -> None:
 _S1_TOKEN_MAJOR_O = os.environ.get("MINIMAX_H3_MK_S1_TOKEN_MAJOR_O", "0")
 if _S1_TOKEN_MAJOR_O not in ("0", "1", "bf8", "layout"):
     raise ValueError(f"MINIMAX_H3_MK_S1_TOKEN_MAJOR_O must be 0, 1, bf8 or layout, got {_S1_TOKEN_MAJOR_O!r}")
+# MINIMAX_H3_MK_E2A_HEAD_SPLIT (head-split output chunks, default off): the qkv all-gather-matmul writes V (chunk 2)
+# already head-split [1, H, N, D] -- the nlp_create_qkv_heads layout -- so V's create_heads goes on every path (sparse,
+# dense, refiner). Bit-identical (the same tiles at the addresses create_heads would move them to).
+_E2A_HEAD_SPLIT = os.environ.get("MINIMAX_H3_MK_E2A_HEAD_SPLIT", "0")
+if _E2A_HEAD_SPLIT not in ("0", "1"):
+    raise ValueError(f"MINIMAX_H3_MK_E2A_HEAD_SPLIT must be 0 or 1, got {_E2A_HEAD_SPLIT!r}")
+_E2A_LOGGED: list = []
 if _TO_OUT_BFP8_WEIGHT and not _TO_OUT_ROW_PARALLEL:
     raise ValueError("MINIMAX_H3_TO_OUT_BFP8_WEIGHT=1 needs MINIMAX_H3_TO_OUT_ROW_PARALLEL=1")
 
@@ -1249,6 +1256,16 @@ class MiniMaxH3Attention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False
             )
 
+        # Head-split output chunks: V (chunk 2) head-split by the matmul writer itself, only where the fused AGMM
+        # runs on a [1, 1, N, K] input (the op's own condition); everywhere else V is split below as before.
+        e2a = (
+            _E2A_HEAD_SPLIT == "1"
+            and self.use_fused_agmm
+            and len(spatial_1BND.shape) == 4
+            and spatial_1BND.shape[0] == 1
+            and spatial_1BND.shape[1] == 1
+        )
+        e2a_kwargs = {"head_split_chunks_mask": 0b100, "head_dim": self.head_dim} if e2a else {}
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
             spatial_1BND,
             compute_kernel_config=lofi.compute_config("qkv", self.mm_compute_kernel_config),
@@ -1256,6 +1273,7 @@ class MiniMaxH3Attention(Module):
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
             **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
+            **e2a_kwargs,
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -1281,7 +1299,14 @@ class MiniMaxH3Attention(Module):
         qk_dtype = {"dtype": ttnn.bfloat8_b} if bf8_native else {}
         q_BHNE = self.norm_q(q_1BNF, **norm_kwargs, **qk_dtype)
         k_BHNE = self.norm_k(k_1BNF, **norm_kwargs, **qk_dtype)
-        if bf8_native and self._BF8_V_BEFORE_SPLIT:
+        if e2a:
+            # Head-split output chunks: V is already [1, H, N, D]; only the BFP8 cast remains (per tile, so
+            # cast-after-split == cast-then-split).
+            v_BHNE = ttnn.typecast(v_1BNF, ttnn.bfloat8_b) if bf8_native else v_1BNF
+            if not _E2A_LOGGED:
+                _E2A_LOGGED.append(True)
+                print("[MINIMAX_H3_MK_E2A] qkv matmul writes V head-split (no V create_heads)", flush=True)
+        elif bf8_native and self._BF8_V_BEFORE_SPLIT:
             v8 = ttnn.typecast(v_1BNF, ttnn.bfloat8_b)
             v_BHNE = create_heads(v8)
             ttnn.deallocate(v8)

@@ -742,6 +742,27 @@ void write_block_sync_granular(
 }
 
 /**
+ * Head-split output chunks (MINIMAX_H3_MK_E2A_HEAD_SPLIT): output tile id of (row m_tile, column col) of chunk
+ * chunk_idx. With CHUNK_HEAD_SPLIT_MASK bit chunk_idx set, that chunk is head-split
+ * [1, width / CHUNK_HEAD_DT, M_tiles, CHUNK_HEAD_DT] in tiles (what nlp_create_qkv_heads makes of the token-major
+ * [1, 1, M, width]); otherwise row-major [M_tiles, width] as before.
+ */
+FORCE_INLINE uint32_t chunk_out_tile_id(
+    [[maybe_unused]] uint32_t chunk_idx,
+    uint32_t m_tile,
+    uint32_t col,
+    uint32_t width,
+    [[maybe_unused]] uint32_t m_tiles) {
+#ifdef CHUNK_HEAD_SPLIT_MASK
+    if ((static_cast<uint32_t>(CHUNK_HEAD_SPLIT_MASK) >> chunk_idx) & 1u) {
+        constexpr uint32_t DT = CHUNK_HEAD_DT;
+        return (col / DT) * (m_tiles * DT) + m_tile * DT + col % DT;
+    }
+#endif
+    return m_tile * width + col;
+}
+
+/**
  * Helper: dispatch to correct tuple element using fold expression.
  * Each branch calls noc.async_write with the concrete TensorAccessor type.
  */
@@ -815,7 +836,9 @@ void write_block_sync_split(
             }
 
             // Row stride is this chunk's own width (a shared width would scatter later chunks).
-            uint32_t tile_id_in_chunk = i * chunk_tile_widths[chunk_idx] + tile_idx_in_chunk;
+            uint32_t tile_id_in_chunk =
+                chunk_out_tile_id(
+                    chunk_idx, i, tile_idx_in_chunk, chunk_tile_widths[chunk_idx], chunk_shape.logical_d0);
 
             // Compile-time dispatch preserving concrete types
             write_tile_to_chunk(
@@ -878,7 +901,8 @@ void write_block_sync_granular_split(
                     break;
                 }
 
-                uint32_t tile_id = m_tile * chunk_tile_widths[chunk_idx] + tile_idx_in_chunk;
+                uint32_t tile_id = chunk_out_tile_id(
+                    chunk_idx, m_tile, tile_idx_in_chunk, chunk_tile_widths[chunk_idx], chunk_shape.logical_d0);
                 // Compile-time dispatch preserving concrete types
                 write_tile_to_chunk(
                     noc,

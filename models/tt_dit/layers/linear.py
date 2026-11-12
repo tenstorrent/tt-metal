@@ -368,6 +368,8 @@ class ColParallelLinear(Module):
         matmul_config=None,
         num_workers_per_link=None,
         transpose_core_grid: bool | None = None,
+        head_split_chunks_mask: int = 0,
+        head_dim: int = 0,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -381,6 +383,9 @@ class ColParallelLinear(Module):
         `matmul_config` is a frozen `MinimalMatmulConfig` (its grid is the worker grid) that bypasses every
         shape-keyed table and rule; on the all-gather-matmul path it comes with `num_workers_per_link` and
         `transpose_core_grid` (None keeps the op's `force_transpose or M > N` orientation).
+        `head_split_chunks_mask` / `head_dim` (MINIMAX_H3_MK_E2A_HEAD_SPLIT): bit c set = output chunk c comes
+        head-split [1, width / head_dim, M, head_dim] (the nlp_create_qkv_heads layout) straight from the
+        all-gather-matmul writer. Only on that path (chunked, ring, TP > 1); 0 = off.
         """
         if matmul_config is not None and parallel_config is not None and num_workers_per_link is None:
             msg = "a frozen matmul_config on the all-gather-matmul path needs num_workers_per_link"
@@ -427,7 +432,13 @@ class ColParallelLinear(Module):
                 None if matmul_config is not None else get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
             )
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
-            if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
+            if (
+                fabric_cfg is not None
+                and self.chunks in (None, 1)
+                and has_unit_batch
+                and addcmul_a is None
+                and not head_split_chunks_mask
+            ):
                 return self._forward_fabric_agmm(
                     x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype, use_persistent_buffer
                 )
@@ -492,6 +503,11 @@ class ColParallelLinear(Module):
                 scalar=addcmul_scalar if addcmul_a is not None else None,
                 addcmul_input_tensor1=addcmul_a,
                 addcmul_input_tensor2=addcmul_b,
+                **(
+                    {"head_split_chunks_mask": int(head_split_chunks_mask), "head_dim": int(head_dim)}
+                    if head_split_chunks_mask
+                    else {}
+                ),
             )
 
             if self.chunks is not None and (self.chunks > 1):
@@ -499,6 +515,9 @@ class ColParallelLinear(Module):
             else:
                 output = outputs[0]
         else:
+            if head_split_chunks_mask:
+                msg = "head_split_chunks_mask needs the fused all-gather-matmul path (ring, TP > 1, chunked)"
+                raise ValueError(msg)
             M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
             core_grid = get_matmul_core_grid(self.mesh_device)
 

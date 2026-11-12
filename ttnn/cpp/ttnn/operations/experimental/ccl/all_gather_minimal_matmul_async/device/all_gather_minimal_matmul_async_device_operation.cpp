@@ -338,6 +338,32 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             N_per_chunk,
             tt::constants::TILE_WIDTH);
     }
+    if (attributes.head_split_chunks_mask != 0) {
+        // Head-split output chunks (MINIMAX_H3_MK_E2A_HEAD_SPLIT).
+        const uint32_t hd = attributes.head_dim;
+        TT_FATAL(chunks >= 2, "head_split_chunks_mask needs chunks >= 2, got {}", chunks);
+        TT_FATAL(
+            attributes.head_split_chunks_mask < (1u << chunks),
+            "head_split_chunks_mask {} names a chunk past chunks={}",
+            attributes.head_split_chunks_mask,
+            chunks);
+        TT_FATAL(hd > 0 && hd % tt::constants::TILE_WIDTH == 0, "head_dim {} must be a positive multiple of 32", hd);
+        TT_FATAL(
+            !attributes.fuse_swiglu && !attributes.fused_ternary_scalar.has_value() &&
+                !attributes.fsdp_cluster_axis.has_value(),
+            "head-split output chunks: not with SwiGLU, the fused addcmul or FSDP");
+        const auto& in_shape = act_tensor.logical_shape();
+        TT_FATAL(
+            in_shape.rank() == 4 && in_shape[0] == 1 && in_shape[1] == 1,
+            "head-split output chunks need a [1, 1, M, K] input, got {}",
+            in_shape);
+        const auto widths = resolve_chunk_sizes(attributes, N);
+        for (size_t c = 0; c < widths.size(); ++c) {
+            if ((attributes.head_split_chunks_mask >> c) & 1u) {
+                TT_FATAL(widths[c] % hd == 0, "chunk {} width {} is not a multiple of head_dim {}", c, widths[c], hd);
+            }
+        }
+    }
 
     if (has_bias) {
         const auto& b_logical = bias_ptr->logical_shape();
@@ -502,9 +528,15 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
 
     // Per-chunk widths: explicit when given, else the uniform N/chunks split.
     const auto chunk_sizes = resolve_chunk_sizes(attributes, N);
-    for (const uint32_t chunk_width : chunk_sizes) {
+    for (size_t c = 0; c < chunk_sizes.size(); ++c) {
+        const uint32_t chunk_width = chunk_sizes[c];
         ttnn::Shape output_shape(in0_input_tensor_shape);
         output_shape[-1] = chunk_width;
+        if ((attributes.head_split_chunks_mask >> c) & 1u) {
+            // Head-split output chunk: [1, 1, M, w] -> [1, w / head_dim, M, head_dim].
+            output_shape[-3] = chunk_width / attributes.head_dim;
+            output_shape[-1] = attributes.head_dim;
+        }
         output_specs.push_back(
             tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
@@ -627,7 +659,10 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<ttnn::ccl::Topology> fsdp_topology,
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
-    std::optional<bool> transpose_core_grid) {
+    std::optional<bool> transpose_core_grid,
+
+    uint32_t head_split_chunks_mask,
+    uint32_t head_dim) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -677,6 +712,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fuse_swiglu,
         chunk_sizes,
         transpose_core_grid};
+    operation_attributes.head_split_chunks_mask = head_split_chunks_mask;
+    operation_attributes.head_dim = head_dim;
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,
