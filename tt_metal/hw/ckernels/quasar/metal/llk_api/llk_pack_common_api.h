@@ -133,7 +133,8 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
 
 /**
  * @brief Signals that the packer has finished consuming the current Destination Register section.
- * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
+ * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer, on both the regular and
+ * the unpack-to-dest path;
  *
  * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode. On the unpack-to-dest
  * path it must equal DST_ACCUM_MODE (enforced by a static_assert), see the body.
@@ -151,6 +152,8 @@ inline void llk_pack_dest_section_done() {
         static_assert(
             EN_32BIT_DEST == DST_ACCUM_MODE,
             "unpack-to-dest: EN_32BIT_DEST must equal DST_ACCUM_MODE, the stride the unpack side flips banks with");
+        // Zero the bank just packed, as the regular path does: the FPU accumulates into DEST.
+        _llk_pack_zero_dest_section_<DST_SYNC_MODE, EN_32BIT_DEST>();
         // Both gets behind the PACK0 drain. UNPACK_PACK first: it frees the bank for the unpacker, which is the count
         // llk_unpack_wait_for_dest_available stalls on; MATH_PACK then lets math forward the next section.
         _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);
