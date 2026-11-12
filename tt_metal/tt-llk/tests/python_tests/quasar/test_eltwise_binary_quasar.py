@@ -6,7 +6,8 @@ import torch
 from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generator.heavyweight.operations import (
-    get_quasar_eltwise_binary_golden,
+    QUASAR,
+    get_eltwise_binary_golden,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -309,7 +310,7 @@ def test_eltwise_binary(
     # should_compute_direct_golden for why this is decided here rather than by
     # the get_golden_generator swap the registry-based tests get.
     if not is_perf and should_compute_direct_golden("the heavyweight eltwise golden"):
-        generate_golden = get_quasar_eltwise_binary_golden(mathop, math_fidelity)
+        generate_golden = get_eltwise_binary_golden(QUASAR, mathop, math_fidelity)
         golden_tensor = generate_golden.run(
             [src_A, src_B],
             formats.input_format,

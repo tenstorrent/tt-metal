@@ -14,7 +14,8 @@ from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generator.heavyweight.operations import (
-    get_quasar_matmul_golden,
+    QUASAR,
+    get_matmul_golden,
 )
 from helpers.golden_generators import (
     TILE_DIM,
@@ -497,7 +498,7 @@ def test_matmul(
             # should_compute_direct_golden. Only the heavyweight variants are
             # affected, so the decision sits inside this branch.
             if should_compute_direct_golden("the heavyweight matmul golden"):
-                generate_golden = get_quasar_matmul_golden(math_fidelity)
+                generate_golden = get_matmul_golden(QUASAR, math_fidelity)
                 golden_tensor = generate_golden.run(
                     [tilized_A.flatten(), tilized_B.flatten()],
                     format.input_format,
