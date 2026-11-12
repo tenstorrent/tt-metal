@@ -129,3 +129,74 @@
   - Regime-pinned predicate test (32768 → R3, 16384 → R1).
   - 32×32768 interleaved.
   - `FORCE_W_SPLIT` interleaved cases (TILE/RM, partial W, RM gamma, 3 row-groups).
+
+## Refinement 5 — Speed up the decode / few-row profile on the W-split scheme
+- Date: 2026-11-12
+- What was done:
+  - **Diagnosis** (new `test_rms_norm_decode_perf.py`: exact-config `_PERF_BASE` decode / few-row cases).
+    - Interleaved decode ran R1 on 1 core (32×7168: 39.1 µs vs 14.9 µs target), and 640-row cases on 20 cores.
+    - Device zones on the R3 combine (32×7168) showed the root's rstd post-op taking **1.16 µs** (·1/W, +eps,
+      rsqrt over a full tile), against 0.23 µs for the 28 tile adds.
+    - The gather was **incast-serialized**: 27 × 2 KiB partials landed ~45 ns apart on the root.
+  - **Lever 1 — interleaved predicate + group shape (host).**
+    - `_take_r3_interleaved`: R3 when R1 cannot hold a row, **or** when R3 occupies ≥ `R3_OCCUPANCY_RATIO`
+      (1.2) × R1's cores. Pinned from regime-forced measurements: R3 wins at 1.2× (3200×2048 73.5 → 70.7 µs;
+      3200×7168 252 → 226 µs) and above, and loses at 0.64× (1504×544 11.6 vs 19.3 µs). Prefill never flips.
+    - `_r3_group_rect`: a row-group is a `gx × gy` core rectangle (several grid rows when there are few
+      row-groups). G ≤ Wt / `R3_MIN_SLICE_TILES`, and the W split is even.
+    - `R3_MIN_SLICE_TILES = 5` was measured best over {2, 4, 5, 6, 8, 12}. `R3_MAX_GROUP_CORES = 0` (no cap):
+      32×32768 drops 33.6 → 19.7 µs at G = 120; caps of 64 and 32 were slower.
+  - **Lever 2 — column-scoped rstd post-op (compute).** `mul_unary_tile` / `add_unary_tile` / `rsqrt_tile`
+    take `VectorMode::C` (faces 0 and 2; column 0 is all that is read). Root post-op 1.16 → 0.66 µs. This is
+    shared by R1/R6, one source.
+  - **Lever 3 — half-tile gather (writer).** Contributors send only faces 0 and 2 of each partial, which
+    halves the root incast. WS 32×7168 5253 → 4915 ns; WS 32×5120 5159 → 4496 ns.
+  - **Lever 4 — stall shadow (compute + host).** x·γ is computed for the whole block into `cb_normed`
+    during the gather / combine / multicast (on the root, after its combine), and `cb_x` is then released.
+    Only ·rstd remains after rstd arrives. `R3_GAMMA_SHADOW` gates it to R3 + TILE + gamma, with a
+    fallback when the block-wide `cb_normed` does not fit.
+    - It is disabled for resident multi-row shards (BLOCK grids). There the gamma read takes 8 µs: 64
+      row-0 reads per core, re-read by every row of the grid column. The shadow put that read on the
+      critical path (640×7168 BLOCK 12.7 → 13.8 µs). Scaling after rstd hides it.
+  - **Parked live knob**: `R3_STREAM_CHUNK_TILES` (0 = whole slice per chunk). Finer chunks measured slower
+    (32×7168: c = 8 8.17 µs, c = 4 8.34, c = 2 8.87).
+  - **Measured and dropped**: rstd multicast handshake off, and a 3/4-tile multicast payload. Both measured
+    the same ~0.5 µs latency, so the latency is not protocol or payload.
+  - Reused: R4's interleaved R3 planner, combine, multicast and kernel groups; MulGammaRow / MulRstdCol
+    chain shapes. Added: the occupancy predicate, `_r3_group_rect`, the shadow element types,
+    `shadow_block`, and one compute CT arg (`gamma_shadow`).
+- Device kernel ns (Blackhole p150b @ 1350 MHz), before → after (`achievable_ns`):
+  - Interleaved:
+    - 32×1024: 8 903 → 4 105 (9 149)
+    - 32×2304: 16 885 → 4 698 (17 003)
+    - 32×5120: 30 004 → 6 023 (75 825)
+    - 32×7168: 39 093 → 6 796 (14 894)
+    - 640×6144: 55 201 → 45 218 (101 968)
+    - 640×7168: 60 796 → 48 871 (119 307)
+  - WIDTH_SHARDED:
+    - 32×1024 `[32,128]×(8,1)`: 3 864 → 3 214 (4 110)
+    - 32×2304: 4 596 → 3 802 (4 617)
+    - 32×5120 `[32,160]×(8,4)`: 5 386 → 4 164 (5 267)
+    - 32×7168 `[32,256]×(7,4)`: 5 543 → 4 374 (5 481)
+  - BLOCK_SHARDED:
+    - 640×6144: 11 057 → 9 944 (19 039)
+    - 640×7168: 13 786 → 12 645 (21 669)
+  - Guard set:
+    - Prefill R1 8192×1024 90.2 → 88.1 µs; 8192×7168 569.7 → 562.3; 7168×2048 146.0 → 146.8 (noise).
+    - 32×4096 RM: 8.9 µs, now on R3.
+- Accuracy achieved: the soft PCC gate 0.9995 holds on all 12 decode / few-row cases (HiFi2, bf16 DEST).
+  `helpers.TOLERANCES` holds on the unit dir and golden slices.
+- Golden test progress (targeted slices):
+  - `test_op` INTERLEAVED for 1×1×32×4096 + 2×512×1024 (both flipped to R3, every dtype / layout / gamma
+    axis): 96 passed, 24 xfailed, 0 failed.
+  - `test_op_loose` INTERLEAVED: 107/107.
+  - `test_op_loose` WIDTH/BLOCK_SHARDED: 192 passed, 3 skipped (infeasible shard).
+  - Unit dir: 354 passed, 19 skipped, 0 failed.
+- Issues encountered:
+  - The mcast `noc` must match the writer kernel's NoC, so an NOC_0 multicast is not expressible from the
+    NOC_1 writer.
+  - Remaining headroom is recorded on the refinement's Outcome line.
+- Tests added: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_decode_perf.py`:
+  - Exact-config decode / few-row cases (for `--profile`).
+  - The `test_regime_guard` R1-vs-R3 pinned pairs that set the predicate.
+  - The `test_r3_occupancy_predicate` regime pins.

@@ -20,3 +20,5 @@
 {"event":"test_run","status":"pass","tests":"prefill_perf + sharded_tile_gamma after clang-format","result":"100 passed, 19 skipped","ts":"2026-11-12T13:18:49+00:00"}
 {"event":"test_run","refinement":4,"status":"pass","detail":"golden WIDTH/BLOCK loose 192/196 (+13x777x1023 fixed by DEST-width gather pages), cartesian fp32 slice 210/210, bf8b+bf16-DEST-off slice 290/290, unit dir 322 passed","ts":"2026-11-12T14:29:34+00:00"}
 {"event":"fix_applied","refinement":4,"detail":"cb_partial/cb_gather pages follow DEST width (halves gather); fixes 13x777x1023 WIDTH L1 fit","ts":"2026-11-12T14:42:31+00:00"}
+{"event":"test_run","refinement":5,"status":"pass","detail":"unit dir 354 passed/19 skipped; golden interleaved flip slice 96p/24xf; loose INTERLEAVED 107/107; loose W/B 192p/3s","ts":"2026-11-12T17:02:31+00:00"}
+{"event":"fix_applied","refinement":5,"levers":["interleaved R3 occupancy predicate 1.2x + gx*gy group rect, min slice 5","rstd post-op VectorMode::C","gather faces 0/2 only","stall shadow (off for resident multi-row)"],"perf":"32x7168 interleaved 39.1->6.8us; WS 32x7168 5.54->4.37us","ts":"2026-11-12T17:02:31+00:00"}

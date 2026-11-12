@@ -85,3 +85,31 @@ def test_regime_guard(device, monkeypatch, rows, W, regime):
     else:
         monkeypatch.setattr(pd, "FORCE_W_SPLIT", True)
     test_decode_perf(device, (rows, W, ML.INTERLEAVED, None, None))
+
+
+@pytest.mark.parametrize(
+    "rows,W,want_r3",
+    [
+        (32, 7168, True),  # decode: R1 would run 1 core
+        (640, 7168, True),  # 20 tile-rows: R1 runs 20 cores, R3 fills the grid
+        (8192, 1024, False),  # prefill: R1 already fills the grid -> must not flip
+        (1504, 544, False),  # Rt=47, Wt=17: R3 would run fewer cores than R1
+    ],
+)
+def test_r3_occupancy_predicate(device, rows, W, want_r3):
+    """Refinement 5's pinned interleaved predicate: R3 iff R3 occupies >= R3_OCCUPANCY_RATIO x R1's cores."""
+    from ttnn.operations.rms_norm import rms_norm_program_descriptor as pd
+
+    x = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, rows, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    gm = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 1, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    try:
+        g = pd._Geometry(x, gm, x, False)
+        grid = device.compute_with_storage_grid_size()
+        assert pd._take_r3_interleaved(g, grid, pd._cb_budget(device)) == want_r3
+    finally:
+        ttnn.deallocate(x)
+        ttnn.deallocate(gm)

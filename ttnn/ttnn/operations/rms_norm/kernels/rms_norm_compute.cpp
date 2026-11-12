@@ -20,6 +20,9 @@
 //     [root] combine_block      cb_gather -> cb_rstd_root    reduce<..., AccumulateViaAdd, Skip> over
 //                                                            (rows, G) + post-op (·1/W, +eps, rsqrt)
 // and cb_rstd is filled by the writer (rstd multicast from the root), then normalize runs as in R1.
+// Stall shadow (gamma_shadow: R3, TILE + gamma): between partial_block and the rstd wait (on the root: after
+// combine_block), shadow_block computes x·γ for the whole block into cb_normed and releases cb_x. After rstd
+// arrives, only cb_normed·rstd -> cb_out remains on the critical path.
 //
 // Raw calls, each with its reason:
 //  - post_reduce_op SFPU calls (mul/add_unary_tile, rsqrt_tile): the reduce helper's documented

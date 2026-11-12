@@ -159,7 +159,7 @@ each core reducing its slice, partials combined across the group.
 
 **Done when**: every golden cell with `memory_layout ∈ {WIDTH_SHARDED, BLOCK_SHARDED}` whose other axes are in SUPPORTED passes (resilience, pad-poison, translated and sharded `_PERF_BASE` loose cases included; `infeasible_skipped` shard geometries excepted), `(1,1,32,32768)` interleaved passes, regime-pinned tests exist for the interleaved W-split predicate, loud categories at 0.
 
-### [ ] Refinement 5 — Speed up the decode / few-row profile on the W-split scheme
+### [x] Refinement 5 — Speed up the decode / few-row profile on the W-split scheme
 
 **Type**: perf
 
@@ -177,6 +177,34 @@ config, each targeted case moves toward (ideally meets) its clock-scaled `achiev
 gate holds, the golden suite is green, and no regression across the config-spanning guard set (one
 representative per kernel path × layout × placement, incl. R1 prefill shapes that must not flip to the
 W-split).
+
+**Outcome**: device-ns at the exact config (Blackhole p150b, 1350 MHz), before → after (`achievable_ns`):
+- Interleaved: 32×1024 8 903 → 4 105 (9 149); 32×2304 16 885 → 4 698 (17 003); 32×5120 30 004 → 6 023
+  (75 825); 32×7168 39 093 → 6 796 (14 894); 640×6144 55 201 → 45 218 (101 968); 640×7168 60 796 → 48 871
+  (119 307).
+- WIDTH_SHARDED: 32×1024 3 864 → 3 214 (4 110); 32×2304 4 596 → 3 802 (4 617); 32×5120 5 386 → 4 164
+  (5 267); 32×7168 5 543 → 4 374 (5 481).
+- BLOCK_SHARDED: 640×6144 11 057 → 9 944 (19 039); 640×7168 13 786 → 12 645 (21 669).
+
+Every targeted case now meets its `achievable_ns`. Prefill is unchanged; it stays on R1 because R3 cannot
+exceed R1's core count once Rt ≥ grid.
+
+Remaining bottlenecks:
+- **Interleaved decode** is bound by the two DRAM phases around the combine. All G cores read their slice
+  at once (~1.5 µs), and all write their 8 tiles at once after rstd. On 32×7168 the far cores' write
+  takes ~2 µs, against ~0.75 µs near the root.
+- **Sharded decode** is bound by the combine chain. On WS 32×7168: gather incast ~0.75 µs, root combine
+  ~1.0 µs (of which the column-scoped rsqrt post-op is 0.66 µs), rstd multicast ~0.5 µs (latency;
+  independent of payload size and of the handshake), then the ·rstd pass ~0.45 µs.
+- **BLOCK_SHARDED** hides an 8 µs gamma read: 64 row-0 reads per core, re-read by all 10 cores of each
+  grid column.
+
+Next levers, not tried here:
+- A fused column-0 post-op (`c_skip`: ·1/W, +eps, rsqrt in one 8-vector SFPU walk, ~−0.45 µs on the root).
+  It needs raw sfpi internals, while this refinement kept to public `VectorMode` APIs.
+- A read-once gamma column multicast for BLOCK grids (`mcast_topology`). This is Refinement 6's
+  block-sharded profile.
+- A tree / reduce-scatter combine for large G. The measured G sweep is flat at G = 18–44.
 
 ### [ ] Refinement 6 — Speed up the block-sharded prefill profile
 

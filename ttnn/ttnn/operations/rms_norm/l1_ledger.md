@@ -161,3 +161,23 @@ only its slice → 1 per row-group per block. Cross-core per block per row-group
 partial tiles unicast to the root (+ 1 semaphore increment per contributor) and one multicast of `rows`
 rstd tiles to the `G` group cores. Semaphores: `SEM_GATHER` (cumulative count, never reset — the root
 waits for `(G − 1)·(block + 1)`), plus the `ttnn.Mcast` channel's data-ready / consumer-ready pair.
+
+## R3 decode / few-row tuning (Refinement 5) — deltas
+
+- **Interleaved R3 placement**: a row-group is a `gx × gy` core rectangle (`_r3_group_rect`) at grid rows
+  `[i·gy, (i+1)·gy)`; `G = gx·gy ≤ Wc / R3_MIN_SLICE_TILES (5)`, even W split (the first `Wc mod G` slices
+  get one extra tile). Taken when `F(1, K_floor) > B` **or** R3 occupies `≥ 1.2×` R1's cores
+  (`_take_r3_interleaved`). `cb_gather` is still `G·r` pages on every core: at G = 120 (`32×32768` fp32
+  DEST) that is 120 × 4 KiB = 480 KiB per core at r = 1. It fits, because the slice CBs are tiny. Only
+  the root reads it.
+- **Gather payload**: contributors write faces 0 and 2 of each partial (the column-0 data), not the whole
+  tile. That is half the root's incast. Faces 1/3 of `cb_gather` keep stale bytes. They are summed into
+  faces 1/3 of `cb_rstd_root` / `cb_rstd`, which are never read: the post-op is scoped to faces 0/2, and the
+  normalize multiply broadcasts column 0.
+- **`cb_normed` under the stall shadow** (R3 + TILE + gamma, not resident multi-row shards): `r·Wp`
+  pages, not `r·c`. It holds the whole block's x·γ from the shadow until the ·rstd pass. With `K = 1`
+  (every sharded R3 geometry and most decode slices) `r·Wp = r·c`, so there is no extra L1. The selector
+  solves with the block-wide term and falls back to no shadow if that does not fit. `cb_x` is released
+  right after the shadow; the block's x is never read again.
+- Data movement is unchanged (x, out, gamma crossings as R3). The cross-core gather moves `(G−1)·rows`
+  half-tiles instead of full tiles.

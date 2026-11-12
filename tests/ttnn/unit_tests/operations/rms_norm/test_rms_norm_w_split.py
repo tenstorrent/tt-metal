@@ -119,8 +119,9 @@ def test_w_split_poisoned_padding(device, memory_layout):
 
 
 def test_r3_predicate_pinned(device):
-    """R3 is taken iff R1 cannot hold one whole row: (1,1,32,32768) bf16 TILE + TILE gamma must W-split,
-    (1,1,32,16384) must not (its row fits one core)."""
+    """R1 residency (_r1_fits): one whole (1,1,32,32768) bf16 TILE + TILE gamma row does not fit a core,
+    (1,1,32,16384) does. (Refinement 5 additionally takes R3 for few-row shapes on occupancy — see
+    test_rms_norm_decode_perf.py::test_r3_occupancy_predicate.)"""
 
     def geom(W):
         x = ttnn.allocate_tensor_on_device(
