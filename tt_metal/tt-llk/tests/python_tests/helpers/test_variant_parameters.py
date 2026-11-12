@@ -2257,6 +2257,73 @@ class PACK_API_GEOMETRY(TemplateParameter):
         return "\n".join(lines)
 
 
+class PACK_API_SWEEP(TemplateParameter):
+    """A pack sweep arm through pack_api_shim.h and pack_api_sweep.h: PACK_API's arm, tiles, K, traits and compile-time DEST start, the
+    block loop's state (0 steady, 1 a pack init before every block, 2 outputs A and B alternating with a reconfigure), B's form (arm_b),
+    output 17 of format_b, A's CB depth in blocks (cbd, 0 every block of a run), the output tile (faces, face_r; a tile under 32 rows has
+    partial faces, as the JIT's Tile), and MATH_FIDELITY where the test has no MATH_FIDELITY of its own. Not a dataclass: it adds no
+    CSV column, the sweeps keep their arm in dst_index."""
+
+    def __init__(
+        self,
+        arm,
+        tiles,
+        kt=0,
+        matmul=False,
+        sfpu=False,
+        dst=0,
+        state=0,
+        arm_b="T",
+        cbd=0,
+        format_b=DataFormat.Float16_b,
+        faces=4,
+        face_r=16,
+        fidelity=None,
+    ):
+        tile_r = face_r * (2 if faces > 2 else 1)
+        self.api = PACK_API(arm, tiles, kt, 16, matmul, sfpu, dst, tile_r < 32)
+        (
+            self.state,
+            self.arm_b,
+            self.cbd,
+            self.format_b,
+            self.faces,
+            self.face_r,
+            self.fidelity,
+        ) = (state, arm_b, cbd, format_b, faces, face_r, fidelity)
+        self.pack_src_b = None  # B's packer input, set by pack_sweep.bind_pack_src_b
+
+    def convert_to_cpp(self) -> str:
+        arm_b = "0" if self.arm_b == "0" else f"'{self.arm_b}'"
+        lines = [
+            self.api.convert_to_cpp(),
+            f"constexpr std::uint32_t pack_sweep_state = {self.state};",
+            f"constexpr char pack_sweep_arm_b = {arm_b};",
+            f"constexpr std::uint32_t pack_sweep_cbd = {self.cbd};",
+            f"#define PACK_API_SHIM_NUM_FACES {self.faces}",
+            f"#define PACK_API_SHIM_FACE_R_DIM {self.face_r}",
+        ]
+        if self.state == 2:
+            # output B only where it is packed: the other arms keep production's one-output arrays
+            lines += [
+                "#define PACK_API_SHIM_OUT2 17",
+                f"#define PACK_API_SHIM_OUT2_FORMAT ckernel::to_underlying(DataFormat::{self.format_b.name})",
+            ]
+            if self.pack_src_b is not None:
+                lines.append(
+                    f"#define PACK_API_SHIM_OUT2_SRC ckernel::to_underlying(DataFormat::{self.pack_src_b.name})"
+                )
+        if self.fidelity is not None:
+            lines.append(
+                f"constexpr ckernel::MathFidelity MATH_FIDELITY = ckernel::MathFidelity::{self.fidelity};"
+            )
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        # The variant hash reads the templates' repr: the dataclass repr of TemplateParameter shows no field of this class.
+        return f"PACK_API_SWEEP({self.convert_to_cpp()!r})"
+
+
 class PACK_RMW_DEST(TemplateParameter):
     """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_; on when LLK_PACK_RMW=1."""
 

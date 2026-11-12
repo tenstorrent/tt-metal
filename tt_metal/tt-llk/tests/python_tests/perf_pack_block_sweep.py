@@ -1,4 +1,7 @@
-"""Crossover sweep (ad hoc): the closed block against the per-tile pack for every block float output, tiles 2 to 8, SyncHalf and SyncFull, alternating outputs and a single output."""
+"""Crossover sweep (ad hoc): the closed block against the per-tile pack for every block float output, tiles 2 to 8, SyncHalf and SyncFull, alternating outputs and a single output.
+
+Forms through pack_api_shim.h (helpers/pack_sweep.py): h the block form of A, m its per-tile pack (B per tile in both), M main's per-tile loop for both outputs.
+"""
 
 from dataclasses import dataclass
 
@@ -11,6 +14,7 @@ from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
+from helpers.pack_sweep import SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
@@ -36,6 +40,15 @@ BFP = [
     DataFormat.Bfp2,
 ]
 BLOCKS = 6
+# (mode, form): pack_sweep.py arm ids, alt the reconfigure state, single the init state
+ARM = {
+    ("alt", "h"): (2, 1),
+    ("alt", "m"): (2, 0),
+    ("alt", "M"): (6, 0),
+    ("single", "h"): (1, 1),
+    ("single", "m"): (1, 0),
+    ("single", "M"): (5, 0),
+}
 
 
 @dataclass
@@ -72,7 +85,7 @@ def _cases():
 @skip_for_wormhole
 @parametrize(
     case=_cases(),
-    form=["h", "m"],
+    form=["h", "m", "M"],
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
     is_perf=[True],
@@ -99,6 +112,7 @@ def test_perf_pack_block_sweep(
             DEST_SYNC(dest_sync),
             PACK_BLOCK_SWEEP(f"{mode}/{form}"),
             PACK_SRC_FROM_OUTPUT(),
+            *sweep_templates(ARM[(mode, form)], block_tiles, fidelity="LoFi"),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -121,8 +135,9 @@ def test_perf_pack_block_sweep(
             operand_res_tile_size=4096,
         ),
         "dest_acc": dest_acc,
+        **SHIM_CONFIG,
         "unpack_to_dest": False,
     }
     create_test_or_perf_config(
-        is_perf=True, run_types=run_types, test_config_kwargs=kwargs
+        is_perf=True, run_types=run_types, test_config_kwargs=bind_pack_src_b(kwargs)
     ).run(perf_report)

@@ -9,6 +9,7 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
     unpack_matmul_fits_perf_ring,
 )
+from helpers.pack_sweep import SHIM_CONFIG
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
@@ -21,6 +22,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
+    PACK_API_SWEEP,
     PACK_SRC_FROM_OUTPUT,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -31,6 +33,21 @@ F = DataFormat
 OUTS = [F.Bfp8_b, F.Bfp4_b, F.Float16_b, F.Float32]
 FIDS = [MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
 KTS = (1, 2, 4, 8)
+# form: (arm, CB depth in blocks, context 2) through pack_api_shim.h: 0 per tile, 1 block, 2 W (a CB of the blocks the output ring
+# holds), 3 main per tile, 4 and 5 W in a CB of two and one blocks, 6 the form tables; 11, 12 and 16 the block, W and tables behind a pack-thread
+# SFPU init (context 2)
+FORM_ARM = {
+    0: ("T", 0, False),
+    1: ("B", 0, False),
+    2: ("W", 0, False),
+    3: ("M", 0, False),
+    4: ("W", 2, False),
+    5: ("W", 1, False),
+    6: ("0", 0, False),
+    11: ("B", 0, True),
+    12: ("W", 0, True),
+    16: ("0", 0, True),
+}
 
 
 @dataclass
@@ -69,11 +86,10 @@ def _cases():
 
 
 @pytest.mark.perf
-@parametrize(
-    case=_cases(), math_fidelity=FIDS, form=[0, 1, 2, 3, 4]
-)  # pk-limit5: 3 = main per tile, 4 = W under the continuation rule (CB of two blocks)
+@parametrize(case=_cases(), math_fidelity=FIDS, form=list(FORM_ARM))
 def test_perf_matmul_pack_sweep10(perf_report, case, math_fidelity, form):
     fmt, dest_acc, dest_sync, rt, ct, kt = case
+    arm, cbd, ctx2 = FORM_ARM[form]
     formats = InputOutputFormat(F.Float32, fmt)
     dims = generate_tile_dims(
         ([rt * TILE_DIM, kt * TILE_DIM], [kt * TILE_DIM, ct * TILE_DIM])
@@ -90,6 +106,7 @@ def test_perf_matmul_pack_sweep10(perf_report, case, math_fidelity, form):
             THROTTLE_LEVEL(),
             PACK_SRC_FROM_OUTPUT(),
             MM_CONTIG(not fmt.is_block_float(), fmt == F.Float32),
+            PACK_API_SWEEP(arm, rt * ct, matmul=True, sfpu=ctx2, cbd=cbd),
         ],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
@@ -110,4 +127,5 @@ def test_perf_matmul_pack_sweep10(perf_report, case, math_fidelity, form):
             tile_count_res=min(dims.rt_dim * dims.ct_dim, PERF_RING_TILES),
         ),
         dest_acc=dest_acc,
+        **SHIM_CONFIG,
     ).run(perf_report)

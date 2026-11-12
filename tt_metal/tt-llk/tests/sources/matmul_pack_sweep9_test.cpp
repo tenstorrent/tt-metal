@@ -209,13 +209,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "pack_sweep_helpers.h"
+// after params.h: the shim reads the test's formats and PACK_API_SHIM_* settings
+#include "pack_api_shim.h"
+#include "pack_api_sweep.h"
 
-// llk_pack_block's block-float forms behind HiFi math, steady state (one output, no init between blocks): DST_INDEX is the form, 0 per-tile packs,
-// 1 the closed block that programs the output, 2 the closed block with the W offset (output programmed once). The default destination write of the packs
-// is the byte-wise one under full sync, as in llk_pack_tile_api.h.
-constexpr bool sw_rmw = dest_sync == DstSync::SyncFull;
-
+// llk_pack_block's forms behind matmul math through the compute API's code (pack_api_shim.h, pack_api_sweep.h), steady state:
+// PACK_API's arm into a CB over the perf output ring of pack_sweep_cbd blocks (0: as many as fit), the pack thread marked as
+// matmul_block_init marks it, and with PACK_API_SHIM_SFPU as a pack-thread SFPU init marks it behind the matmul.
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -224,114 +224,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
     const std::uint32_t TILE_SIZE_PACK = params.TILE_SIZE_PACK;
-    const std::uint32_t CT_DIM         = params.CT_DIM;
-    const std::uint32_t RT_DIM         = params.RT_DIM;
 #endif
-    const volatile std::uint32_t form_v = static_cast<std::uint32_t>(params.DST_INDEX);
-    const std::uint32_t form            = form_v;
-    const std::uint32_t n               = CT_DIM * RT_DIM;
-    const std::uint32_t base            = PERF_ADDRESS(PERF_OUTPUT, 0);
-    // pk-limit5 form 4: the W offset under cb0ac's rule. The output is a CB of two blocks (one when two do not fit the 64 KB output ring): a W block
-    // continues only right behind a W block of the output at the next address, otherwise it programs the base (and the W stride) first.
-    const std::uint32_t w_cb_blocks = 2 * n * TILE_SIZE_PACK * 16 <= PERF_RING_TILES * 4096 ? 2 : 1;
-    std::uint32_t w_next = 0, w_tiles = 0;
-    bool w_last = false;
+    constexpr std::uint32_t out     = PACK_API_SHIM_OUT;
+    constexpr std::uint32_t n       = pack_api_tiles;
+    const std::uint32_t ring_blocks = PERF_RING_TILES * 4096 / (n * TILE_SIZE_PACK * 16);
+    const std::uint32_t fit_blocks  = ring_blocks != 0 ? ring_blocks : 1;
+    const std::uint32_t cb_blocks   = pack_sweep_cbd != 0 && pack_sweep_cbd < fit_blocks ? pack_sweep_cbd : fit_blocks;
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
-        _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_src, formats.pack_dst);
+        pack_api_shim::cb_bind(out, PERF_ADDRESS(PERF_OUTPUT, 0) + 1, TILE_SIZE_PACK, cb_blocks * n);
+        pack_api_sweep::init<pack_api_arm>(out);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-        if constexpr (sw_rmw)
-        {
-            _llk_pack_rmw_dest_init_<true>();
-        }
-        if (form == 2)
-        {
-            _llk_pack_block_w_init_(base, TILE_SIZE_PACK << 4);
-        }
+        pack_api_sweep::mark_matmul();
+#if defined(PACK_API_SHIM_SFPU)
+        pack_api_sweep::mark_sfpu();
+#endif
         PROFILER_SYNC();
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
-        {
-            return;
-        }
-        else
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
-                {
-                    _llk_packer_wait_for_math_done_();
-                }
-                if (form == 0)
-                {
-                    _llk_pack_close_fast_untilize_<dest_sync>();
-                    for (std::uint32_t i = 0; i < n; i++)
-                    {
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, sw_rmw && !(!is_fp32_dest_acc_en && sweep_float32_out)>(
-                            i, base + i * TILE_SIZE_PACK);
-                    }
-                }
-                else if (form == 3)
-                {
-                    // pk-limit5: main's per-tile pack (no fast-untilize close, no byte-wise RMW)
-                    for (std::uint32_t i = 0; i < n; i++)
-                    {
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, false>(i, base + i * TILE_SIZE_PACK);
-                    }
-                }
-                else if (form == 1)
-                {
-                    if constexpr (sweep_contig)
-                    {
-                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, sw_rmw>(0, base, n);
-                    }
-                    else
-                    {
-                        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en, sw_rmw>(0, base, n, TILE_SIZE_PACK << 4, 4);
-                    }
-                }
-                else if (form == 4)
-                {
-                    const std::uint32_t addr = base + (w_cb_blocks == 2 ? (loop & 1) : 0) * n * TILE_SIZE_PACK;
-                    if (!(w_last && w_next == addr && w_tiles + n <= 127))
-                    {
-                        pack_sweep_w_reprogram(addr, TILE_SIZE_PACK << 4);
-                        w_tiles = 0;
-                        w_next  = addr;
-                    }
-                    const std::uint32_t out_tile = w_tiles;
-                    w_tiles += n;
-                    w_next += n * TILE_SIZE_PACK;
-                    w_last = true;
-                    if constexpr (sweep_contig)
-                    {
-                        _llk_pack_block_w_<dest_sync, is_fp32_dest_acc_en>(0, out_tile, n);
-                    }
-                    else
-                    {
-                        _llk_pack_block_closed_w_mop_<dest_sync, is_fp32_dest_acc_en>(0, out_tile, n, 4);
-                    }
-                }
-                else
-                {
-                    if constexpr (sweep_contig)
-                    {
-                        _llk_pack_block_w_<dest_sync, is_fp32_dest_acc_en>(0, 0, n);
-                    }
-                    else
-                    {
-                        _llk_pack_block_closed_w_mop_<dest_sync, is_fp32_dest_acc_en>(0, 0, n, 4);
-                    }
-                }
-                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
-                {
-                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-                }
-            }
-        }
+        pack_api_sweep::run<n, is_fp32_dest_acc_en, pack_api_kt, 0, pack_api_arm, pack_api_arm, out, out>(LOOP_FACTOR, 1, 0, [] {}, [] {});
         PROFILER_SYNC();
     }
 }

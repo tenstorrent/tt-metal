@@ -151,6 +151,7 @@ DB_SCHEMA = [
     Column("pack_block_sweep", "string", True, "configuration"),
     Column("block_sweep_closed", "string", True, "configuration"),
     Column("block_sweep_mode", "string", True, "configuration"),
+    Column("mm_sweep_ctx", "string", True, "configuration"),
     Column("mm_contig", "bool", True, "configuration"),
     Column("mm_f32", "bool", True, "configuration"),
     Column("tiny_f32", "bool", True, "configuration"),

@@ -191,53 +191,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
+// after params.h: the shim reads the test's formats and PACK_API_SHIM_* settings
+#include "pack_api_shim.h"
+#include "pack_api_sweep.h"
 
-// pack_block on output A alternating with pack_block on output B, the two outputs of different format and page size (the gathered bmm kernels pack the output
-// and the partials this way). Every block is the first block of its output (another output was packed in between), so llk_pack_block never takes the W offset
-// here: it takes the per-tile pack, the plain block or the closed block. alt_head_form 0: main's form, every tile packed one by one.
-#if defined(ARCH_BLACKHOLE)
-static inline std::uint32_t alt_page_bytes(const std::uint32_t fmt)
-{
-    switch (static_cast<DataFormat>(fmt))
-    {
-        case DataFormat::Float32:
-            return 4096;
-        case DataFormat::Bfp8_b:
-        case DataFormat::Bfp8:
-            return 1088;
-        case DataFormat::Bfp4_b:
-        case DataFormat::Bfp4:
-            return 576;
-        case DataFormat::Bfp2_b:
-        case DataFormat::Bfp2:
-            return 320;
-        default:
-            return 2048;
-    }
-}
-
-template <bool fp32>
-inline void alt_pack_tile(const std::uint32_t fmt, const std::uint32_t tile, const std::uint32_t addr)
-{
-    if (!fp32 && fmt == static_cast<std::uint32_t>(DataFormat::Float32))
-    {
-        _llk_pack_<dest_sync, fp32, ckernel::PackMode::Default, false, false>(tile, addr);
-    }
-    else
-    {
-        _llk_pack_<dest_sync, fp32, ckernel::PackMode::Default>(tile, addr);
-    }
-}
-
-inline std::uint32_t alt_form(const std::uint32_t fmt, [[maybe_unused]] const std::uint32_t ntiles, const std::uint32_t head)
-{
-    // sweep: the closed block forced for the block float output (head) against the per-tile pack (main); never a plain block
-    const bool bfp = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b) || fmt == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
-                     fmt == static_cast<std::uint32_t>(DataFormat::Bfp2_b) || fmt == static_cast<std::uint32_t>(DataFormat::Bfp8) ||
-                     fmt == static_cast<std::uint32_t>(DataFormat::Bfp4) || fmt == static_cast<std::uint32_t>(DataFormat::Bfp2);
-    return (head && bfp) ? 2 : 0;
-}
-#endif
+// The block form against the per-tile pack of a block float output through the compute API's code (pack_api_shim.h,
+// pack_api_sweep.h): alternating with a Float16_b output B and a reconfigure before each block (the gathered bmm kernels
+// pack the output and the partials this way), or a single output with a pack init before each block.
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -245,98 +205,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t num_faces          = params.num_faces;
-    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
-    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
-    const int DST_INDEX                    = params.DST_INDEX;
-    const int RELU_CONFIG                  = params.RELU_CONFIG;
-    const Operand& buffer_Res              = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces   = params.num_faces;
+    const int NUM_BLOCKS            = params.NUM_BLOCKS;
+    const int DST_INDEX             = params.DST_INDEX & 0xff;
+    const int RELU_CONFIG           = params.RELU_CONFIG;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
 #if defined(ARCH_BLACKHOLE)
-    const std::uint32_t fmt_a   = formats.pack_dst;
-    const std::uint32_t fmt_b   = static_cast<std::uint32_t>(alt_pack_dst);
-    const std::uint32_t page_a  = alt_page_bytes(fmt_a);
-    const std::uint32_t page_b  = alt_page_bytes(fmt_b);
-    const std::uint32_t tiles_a = ((static_cast<std::uint32_t>(NUM_BLOCKS) + 1) / 2) * NUM_TILES_IN_BLOCK;
-    const std::uint32_t base_a  = L1_ADDRESS(buffer_Res[0]);
-    // output B starts at the next 1 KB after the tiles of A (the python side reads it from the same offset)
-    const std::uint32_t base_b = base_a + ((tiles_a * page_a + 1023) & ~1023u) / 16;
+    constexpr std::uint32_t out_a = PACK_API_SHIM_OUT;
+    constexpr std::uint32_t out_b = PACK_API_SHIM_OUT2;
+    const std::uint32_t dst       = pack_api_sweep::dest_start(DST_INDEX);
+    constexpr auto pack_mode      = llk_test_pack_mode_v<false, tilize_en>;
+    const std::uint32_t face_r    = FACE_R_DIM;
+    const std::uint32_t tile_c    = TILE_C_DIM;
+    const std::uint32_t page_a    = pack_api_sweep::page_bytes(formats.pack_dst, face_r, num_faces);
+    const std::uint32_t page_b    = pack_api_sweep::page_bytes(PACK_API_SHIM_OUT2_FORMAT, face_r, num_faces);
     {
         START_PERF_MEASURE("INIT")
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
-            formats.pack_src, fmt_a, page_a, FACE_R_DIM, TILE_C_DIM, num_faces, false, false, RELU_CONFIG);
-        _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false>(fmt_a, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, pack_mode>(
+            formats.pack_src, formats.pack_dst, page_a, face_r, tile_c, num_faces, false, false, RELU_CONFIG);
+        pack_api_sweep::bind<pack_api_tiles, pack_sweep_state, pack_sweep_cbd, out_a, out_b>(L1_ADDRESS(buffer_Res[0]), NUM_BLOCKS, page_a, page_b);
+        pack_api_sweep::init<pack_api_arm, pack_mode>(out_a);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
-    // the form of each output is decided once, as a kernel with constant tile counts has it folded
-    // read through a volatile so the main arm compiles to the same loop as the head arm and the two differ in data only
-    const volatile std::uint32_t head_v = alt_head_form ? 1 : 0;
-    const std::uint32_t form_a          = alt_form(fmt_a, NUM_TILES_IN_BLOCK, 1) & (0u - head_v);
-    const std::uint32_t form_b          = 0;
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
-        {
-        }
-        else
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
-            {
-                std::uint32_t cur = 0;
-                for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(NUM_BLOCKS); ++block)
-                {
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
-                    {
-                        _llk_packer_wait_for_math_done_();
-                    }
-                    const std::uint32_t out  = sweep_single ? 0u : (block & 1);
-                    const std::uint32_t fmt  = out ? fmt_b : fmt_a;
-                    const std::uint32_t page = out ? page_b : page_a;
-                    if (out != cur)
-                    {
-                        _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats.pack_src, fmt, page);
-                        cur = out;
-                    }
-                    if constexpr (alt_l1_acc)
-                    {
-                        _llk_pack_reconfig_l1_acc_(out);
-                    }
-                    if (sweep_single)
-                    {
-                        _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false>(fmt_a, FACE_R_DIM, TILE_C_DIM, num_faces);
-                    }
-                    const std::uint32_t first = sweep_single ? block * NUM_TILES_IN_BLOCK : (block >> 1) * NUM_TILES_IN_BLOCK;
-                    const std::uint32_t base  = out ? base_b : base_a;
-                    const std::uint32_t form  = out ? form_b : form_a;
-                    const std::uint32_t addr0 = base + first * (page / 16);
-                    if (form == 0)
-                    {
-                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
-                        {
-                            alt_pack_tile<is_fp32_dest_acc_en>(fmt, DST_INDEX + tile, addr0 + tile * (page / 16));
-                        }
-                    }
-                    else if (form == 1)
-                    {
-                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX, addr0, NUM_TILES_IN_BLOCK);
-                    }
-                    else
-                    {
-                        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX, addr0, NUM_TILES_IN_BLOCK, page);
-                    }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
-                    {
-                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-                    }
-                }
-                if constexpr (alt_l1_acc)
-                {
-                    _llk_pack_reconfig_l1_acc_(0);
-                }
-            }
-        }
+        pack_api_sweep::run<pack_api_tiles, is_fp32_dest_acc_en, pack_api_kt, pack_sweep_state, pack_api_arm, pack_sweep_arm_b, out_a, out_b>(
+            LOOP_FACTOR, NUM_BLOCKS, dst, [] { pack_api_sweep::init<pack_api_arm, pack_mode>(out_a); }, [] {});
         PROFILER_SYNC();
     }
 #endif
