@@ -215,7 +215,8 @@ FindingSeverity get_finding_severity(FindingCode code) {
         case FindingCode::ROUTING_TABLE_SHAPE_INVALID: return FindingSeverity::ERROR;
         // Both differences happen on a correct router (decision 20): a corner chip is live toward a missing sibling.
         case FindingCode::CONNECTED_NOT_LIVE:
-        case FindingCode::LIVE_NOT_CONNECTED: return FindingSeverity::INFO;
+        case FindingCode::LIVE_NOT_CONNECTED:
+        case FindingCode::UNCREDITED_AT_PEER_NEGATIVE: return FindingSeverity::INFO;
     }
     TT_THROW("Fabric decode: unknown finding code {}", static_cast<int>(code));
 }
@@ -233,6 +234,7 @@ FindingOrigin get_finding_origin(FindingCode code) {
         case FindingCode::TYPE_LARGER_THAN_ELEMENT:
         case FindingCode::UNKNOWN_ENUMERATOR:
         case FindingCode::STREAM_COUNT_OUT_OF_RANGE:
+        case FindingCode::UNCREDITED_AT_PEER_NEGATIVE:
         case FindingCode::CONNECTED_NOT_LIVE:
         case FindingCode::LIVE_NOT_CONNECTED:
         case FindingCode::ROUTING_TABLE_COPIES_DIFFER:

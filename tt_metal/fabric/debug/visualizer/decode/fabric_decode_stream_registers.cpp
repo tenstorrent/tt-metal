@@ -5,12 +5,16 @@
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_stream_registers.hpp"
 
 #include <bit>
+#include <type_traits>
 #include <variant>
 #include <vector>
+
+#include <fmt/format.h>
 
 #include <enchantum/enchantum.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_interpret.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_regions.hpp"
 
 namespace tt::tt_fabric::decode {
 
@@ -91,6 +95,40 @@ void add_field_stream_registers(
     }
 }
 
+// The full read of the count register the field `key` names, on the first ERISC of `fields_by_erisc` whose field has
+// one in `reads`. Null when none does.
+const StreamCountRead* find_field_count_read(
+    const manifest::FieldsByErisc& fields_by_erisc, std::string_view key, const StreamCountReads& reads) {
+    for (const std::vector<manifest::Field>& fields : fields_by_erisc) {
+        for (const manifest::Field& field : fields) {
+            if (field.key != key || !field.content.has_value()) {
+                continue;
+            }
+            const auto* stream = std::get_if<manifest::content::StreamReg>(&*field.content);
+            if (const auto read = stream == nullptr ? reads.end() : reads.find(stream); read != reads.end()) {
+                return &read->second;
+            }
+        }
+    }
+    return nullptr;
+}
+
+// The producer's edge on `vc` that lands on sender channel `channel` of the sibling facing `consumer_direction`. Null
+// when it has none, or the edge lands on the tensix mux.
+const manifest::DownstreamEdge* find_edge_into_channel(
+    const manifest::Router& producer, size_t vc, eth_chan_directions consumer_direction, size_t channel) {
+    if (vc >= producer.intra_chip_downstream_edges.size()) {
+        return nullptr;
+    }
+    for (const manifest::DownstreamEdge& edge : producer.intra_chip_downstream_edges[vc]) {
+        if (!edge.through_tensix_mux && edge.downstream_channel.target.direction == consumer_direction &&
+            edge.downstream_channel.landing_channel == channel) {
+            return &edge;
+        }
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 StreamRegisterFactsByRegister collect_stream_register_facts(
@@ -122,6 +160,54 @@ StreamRegisterFactsByRegister collect_stream_register_facts(
     }
     add_field_stream_registers(router.fields_by_erisc, [](size_t) { return StreamRegisterFacts{}; }, out);
     return out;
+}
+
+StreamCountReads collect_stream_count_reads(const RouterValues& values) {
+    StreamCountReads out;
+    manifest::for_each_router_region(
+        *values.get_snapshot().get_router().router, [&](std::string_view path, const auto& region) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(region)>, manifest::content::StreamReg>) {
+                if (!std::holds_alternative<StreamRole>(region.role) ||
+                    region.type != manifest::manifest_type_name<uint32_t>) {
+                    return;
+                }
+                if (const RegionRead<uint32_t>* read = values.find_read<uint32_t>(path, std::nullopt)) {
+                    out.emplace(
+                        &region,
+                        StreamCountRead{.path = std::string(path), .count = read->elements.at(0), .t_ns = read->t_ns});
+                }
+            }
+        });
+    return out;
+}
+
+std::optional<UncreditedAtPeer> find_uncredited_at_peer(
+    const RouterCountReads& consumer, size_t vc, size_t channel, const RouterCountReads& producer) {
+    const manifest::SenderChannel& sender = consumer.router.channels.senders.at(vc).at(channel);
+    const std::optional<uint32_t> depth = find_channel_depth(sender.ring_buffer);
+    const manifest::DownstreamEdge* edge =
+        find_edge_into_channel(producer.router, vc, consumer.router.identity.key.direction, channel);
+    if (!depth.has_value() || edge == nullptr) {
+        return std::nullopt;
+    }
+    const StreamCountRead* edge_read = find_field_count_read(edge->fields_by_erisc, "free_slots", producer.reads);
+    const StreamCountRead* channel_read = find_field_count_read(sender.fields_by_erisc, "free_slots", consumer.reads);
+    if (edge_read == nullptr || channel_read == nullptr) {
+        return std::nullopt;
+    }
+    const std::optional<uint32_t> producer_uncredited = find_slots_not_counted(edge_read->count, depth);
+    const std::optional<uint32_t> unsent = find_slots_not_counted(channel_read->count, depth);
+    if (!producer_uncredited.has_value() || !unsent.has_value()) {
+        return std::nullopt;
+    }
+    return UncreditedAtPeer{
+        .value = static_cast<int32_t>(*producer_uncredited) - static_cast<int32_t>(*unsent),
+        .producer_edge = fmt::format("{}/{}", producer.path, edge_read->path),
+        .producer_uncredited = *producer_uncredited,
+        .unsent = *unsent,
+        .read_apart_ns = edge_read->t_ns > channel_read->t_ns ? edge_read->t_ns - channel_read->t_ns
+                                                              : channel_read->t_ns - edge_read->t_ns,
+    };
 }
 
 int32_t sign_extend_stream_count(uint32_t count) {
@@ -200,6 +286,19 @@ json make_erisc_sync_json(uint32_t value) {
     const std::optional<std::string> step_name =
         state.step.has_value() ? find_enum_name(*state.step) : std::optional<std::string>();
     out["step"] = step_name.has_value() ? json(*step_name) : json(nullptr);
+    return out;
+}
+
+json make_uncredited_at_peer_json(const std::optional<UncreditedAtPeer>& uncredited_at_peer) {
+    if (!uncredited_at_peer.has_value()) {
+        return json(nullptr);
+    }
+    json out;
+    out["value"] = uncredited_at_peer->value;
+    out["producer_edge"] = uncredited_at_peer->producer_edge;
+    out["producer_uncredited"] = uncredited_at_peer->producer_uncredited;
+    out["unsent"] = uncredited_at_peer->unsent;
+    out["read_apart_ns"] = uncredited_at_peer->read_apart_ns;
     return out;
 }
 

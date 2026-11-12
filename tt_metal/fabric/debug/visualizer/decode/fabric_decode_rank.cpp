@@ -103,6 +103,7 @@ DecodedRouter decode_router(
         decoded.activity = judge_router_activity(values, arch);
     }
     decoded.directions = find_router_directions(router);
+    decoded.count_reads = collect_stream_count_reads(values);
     if (std::optional<RoutingTableRead> read = find_routing_table_read(values)) {
         routing_tables.push_back(RouterRoutingTable{
             .ref = captured.ref, .path = captured.path, .router = captured.router, .read = std::move(*read)});
@@ -212,6 +213,18 @@ void place_router(
         l1_areas[area.name] = std::move(area_json);
     }
     node["l1_areas"] = std::move(l1_areas);
+    for (size_t vc = 0; vc < router.uncredited_at_peer.size(); ++vc) {
+        for (size_t channel = 0; channel < router.uncredited_at_peer[vc].size(); ++channel) {
+            const json::json_pointer channel_pointer(fmt::format("/channels/senders/vc{}/ch{}", vc, channel));
+            TT_FATAL(
+                node.contains(channel_pointer),
+                "Fabric decode: {} has no sender channel node at {}",
+                router.path,
+                channel_pointer.to_string());
+            node[channel_pointer]["analysis"]["uncredited_at_peer"] =
+                make_uncredited_at_peer_json(router.uncredited_at_peer[vc][channel]);
+        }
+    }
     json analysis;
     analysis["capture"] = make_capture_json(router.capture);
     analysis["activity"] = router.activity.has_value() ? make_activity_json(*router.activity, protocol) : json(nullptr);
@@ -255,6 +268,65 @@ void analyze_routers_routing_tables(
     }
 }
 
+// The decoded router on `ref`, or null when the rank didn't decode one there.
+const DecodedRouter* find_decoded_router(const DecodedRank& rank, const manifest::RouterRef& ref) {
+    const auto router = std::ranges::find_if(rank.routers, [&](const DecodedRouter& decoded) {
+        return decoded.ref.node == ref.node && decoded.ref.key.direction == ref.key.direction &&
+               decoded.ref.key.routing_plane == ref.key.routing_plane;
+    });
+    return router == rank.routers.end() ? nullptr : &*router;
+}
+
+// Each router's sender channels' uncredited_at_peer, from each channel's free slots and its producer's edge into it,
+// and a finding for each that's negative. A sibling is on the same chip, so the rank has its reads whenever capture
+// read it.
+void analyze_uncredited_at_peer(DecodedRank& rank) {
+    for (DecodedRouter& consumer : rank.routers) {
+        const auto& senders = consumer.router->channels.senders;
+        consumer.uncredited_at_peer.resize(senders.size());
+        for (size_t vc = 0; vc < senders.size(); ++vc) {
+            consumer.uncredited_at_peer[vc].resize(senders[vc].size());
+            for (size_t channel = 0; channel < senders[vc].size(); ++channel) {
+                const std::optional<manifest::SenderChannelProducer>& producer = senders[vc][channel].producer;
+                const auto* sibling =
+                    producer.has_value() ? std::get_if<manifest::SiblingRouterRef>(&*producer) : nullptr;
+                if (sibling == nullptr) {
+                    continue;
+                }
+                const manifest::RouterRef producer_ref{
+                    .node = consumer.ref.node,
+                    .key = {.direction = sibling->direction, .routing_plane = consumer.ref.key.routing_plane}};
+                const DecodedRouter* producer_router = find_decoded_router(rank, producer_ref);
+                if (producer_router == nullptr) {
+                    continue;
+                }
+                std::optional<UncreditedAtPeer> value = find_uncredited_at_peer(
+                    {.router = *consumer.router, .path = consumer.path, .reads = consumer.count_reads},
+                    vc,
+                    channel,
+                    {.router = *producer_router->router,
+                     .path = producer_router->path,
+                     .reads = producer_router->count_reads});
+                if (value.has_value() && value->value < 0) {
+                    rank.findings.push_back(Finding{
+                        .code = FindingCode::UNCREDITED_AT_PEER_NEGATIVE,
+                        .paths =
+                            {fmt::format("{}/channels/senders/vc{}/ch{}", consumer.path, vc, channel),
+                             value->producer_edge},
+                        .message = fmt::format(
+                            "{} uncredited at the producer, less {} unsent, is {}: the two registers were read {} ns "
+                            "apart while the routers moved",
+                            value->producer_uncredited,
+                            value->unsent,
+                            value->value,
+                            value->read_apart_ns)});
+                }
+                consumer.uncredited_at_peer[vc][channel] = std::move(value);
+            }
+        }
+    }
+}
+
 }  // namespace
 
 bool DecodedRank::is_complete() const {
@@ -279,6 +351,7 @@ DecodedRank decode_rank(const DecodeRequest& request, const DecodeInputs& inputs
         rank.routers.push_back(decode_router(snapshot, inputs.manifest.facts, routes, rank.findings, routing_tables));
     }
     analyze_routers_routing_tables(rank, routing_tables, inputs.manifest.facts);
+    analyze_uncredited_at_peer(rank);
     return rank;
 }
 

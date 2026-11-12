@@ -53,6 +53,9 @@ enum class FindingCode : uint8_t {
     // A stream register's count, as the router reads it, is above its channel's slots: taken below zero, or given
     // more than the channel holds.
     STREAM_COUNT_OUT_OF_RANGE,
+    // A sender channel's uncredited_at_peer is negative: its free slots and its producer's edge were read while the
+    // routers moved.
+    UNCREDITED_AT_PEER_NEGATIVE,
     // A VC is connected to a sibling it never forwards to: expected on an E/W router that can't turn.
     CONNECTED_NOT_LIVE,
     // A VC forwards to a direction it has no sibling for: expected on a corner chip, since a correct
