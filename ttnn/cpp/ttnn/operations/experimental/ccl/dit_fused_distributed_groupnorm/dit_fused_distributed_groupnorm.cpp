@@ -42,7 +42,8 @@ ttnn::Tensor dit_fused_distributed_groupnorm(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation) {
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    std::optional<uint32_t> second_cluster_axis) {
     // Always launch the fused device op. Width-1 runs local PRE+POST (no fabric);
     // width>1 runs PRE → fabric AG → POST. Packed RM γ/β + input_mask (same as ttnn.group_norm).
     return ttnn::prim::dit_fused_distributed_groupnorm(
@@ -60,24 +61,32 @@ ttnn::Tensor dit_fused_distributed_groupnorm(
         compute_kernel_config,
         persistent_output_buffer,
         subdevice_id,
-        fused_activation);
+        fused_activation,
+        second_cluster_axis);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_groupnorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
     const uint32_t num_groups,
     const uint32_t cluster_axis,
-    const MeshDevice& mesh_device) {
+    const MeshDevice& mesh_device,
+    std::optional<uint32_t> second_cluster_axis) {
     TT_FATAL(num_groups >= 1, "num_groups must be >= 1, got {}", num_groups);
     TT_FATAL(cluster_axis < 2, "cluster_axis must be 0 or 1, got {}", cluster_axis);
+    TT_FATAL(
+        !second_cluster_axis.has_value() || (*second_cluster_axis < 2 && *second_cluster_axis != cluster_axis),
+        "second_cluster_axis must be the other mesh axis than cluster_axis ({})",
+        cluster_axis);
     const auto& in_shape = input_tensor.logical_shape();
     TT_FATAL(in_shape.rank() == 4, "input rank must be 4 ([N, 1, H*W, C]), got {}", in_shape.rank());
     const uint32_t channels = in_shape[3];
     TT_FATAL(channels % TILE_WIDTH == 0, "C ({}) must be divisible by TILE_WIDTH ({})", channels, TILE_WIDTH);
     TT_FATAL(channels % num_groups == 0, "C ({}) must be divisible by num_groups ({})", channels, num_groups);
     const uint32_t ring_size = cluster_width(mesh_device, cluster_axis);
+    const uint32_t second_ring_size =
+        second_cluster_axis.has_value() ? cluster_width(mesh_device, *second_cluster_axis) : 1u;
     const uint32_t grid_x = mesh_device.compute_with_storage_grid_size().x;
-    auto sizing = ttnn::experimental::prim::gn_make_sizing(num_groups, ring_size, channels, grid_x);
+    auto sizing = ttnn::experimental::prim::gn_make_sizing(num_groups, ring_size, channels, grid_x, second_ring_size);
     if (sizing.is_local) {
         return std::nullopt;
     }
@@ -91,7 +100,13 @@ std::optional<ttnn::Tensor> dit_fused_distributed_groupnorm_create_stats_buffer(
 namespace ttnn::experimental::prim {
 
 DitFusedDistributedGroupnormSizing gn_make_sizing(
-    uint32_t num_groups, uint32_t ring_size, uint32_t channels, uint32_t grid_x) {
+    uint32_t num_groups, uint32_t ring_size, uint32_t channels, uint32_t grid_x, uint32_t second_ring_size) {
+    TT_FATAL(
+        second_ring_size <= 1 || ring_size > 1,
+        "a second cluster axis of width {} needs a first cluster axis wider than 1 (got {})",
+        second_ring_size,
+        ring_size);
+    const bool two_axes = second_ring_size > 1;
     DitFusedDistributedGroupnormSizing s;
     s.num_groups = num_groups;
     s.is_local = (ring_size <= 1);
@@ -106,9 +121,10 @@ DitFusedDistributedGroupnormSizing gn_make_sizing(
     s.stick_bytes = ((s.num_groups_per_core * 4u + 63u) / 64u) * 64u;
     // A single forwarder coalesces all masters' sub-sticks into one packet (whole device stat is
     // num_groups*4 B ≤ one fabric packet), so there is one DRAM chunk per device.
-    s.num_forwarders = s.is_local ? 0u : 1u;
-    s.num_chunks_per_device = s.num_forwarders;  // max_rounds == 1
-    s.total_pages = s.is_local ? 0u : ring_size;
+    // With a second axis, a second forwarder exchanges the merged stats over that axis.
+    s.num_forwarders = s.is_local ? 0u : (two_axes ? 2u : 1u);
+    s.num_chunks_per_device = s.is_local ? 0u : 1u;  // per axis, max_rounds == 1
+    s.total_pages = s.is_local ? 0u : ring_size + (two_axes ? second_ring_size : 0u);
     s.page_size_bytes = s.num_masters * s.stick_bytes;
     return s;
 }
@@ -116,7 +132,7 @@ DitFusedDistributedGroupnormSizing gn_make_sizing(
 DitFusedDistributedGroupnormSizing compute_sizing(const DitFusedDistributedGroupnormParams& args, const Tensor& input) {
     const uint32_t channels = input.logical_shape()[3];
     const uint32_t grid_x = input.device()->compute_with_storage_grid_size().x;
-    return gn_make_sizing(args.num_groups, args.ring_size, channels, grid_x);
+    return gn_make_sizing(args.num_groups, args.ring_size, channels, grid_x, args.second_ring_size);
 }
 
 tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedGroupnormSizing& sizing) {

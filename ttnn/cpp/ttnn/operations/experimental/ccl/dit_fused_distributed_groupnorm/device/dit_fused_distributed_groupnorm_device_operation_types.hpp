@@ -31,6 +31,14 @@ struct DitFusedDistributedGroupnormParams {
     uint32_t cluster_axis = 0;
     uint32_t ring_size = 1;
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
+    // Optional second mesh axis the input is also sharded on (2-D spatial split). After merging
+    // the stats over cluster_axis, the op exchanges the merged stats over this axis and merges
+    // again, so every device ends up with the stats of the whole mesh. second_ring_size == 1
+    // means there is no second axis.
+    uint32_t second_cluster_axis = 0;
+    uint32_t second_ring_size = 1;
+    ttnn::ccl::Topology second_topology = ttnn::ccl::Topology::Linear;
+    // [0] serves the cluster_axis exchange, [1] the second_cluster_axis exchange.
     std::vector<GlobalSemaphore> multi_device_global_semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
@@ -45,6 +53,9 @@ struct DitFusedDistributedGroupnormParams {
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("topology", topology);
+        attrs.emplace_back("second_cluster_axis", second_cluster_axis);
+        attrs.emplace_back("second_ring_size", second_ring_size);
+        attrs.emplace_back("second_topology", second_topology);
         return attrs;
     }
 };
@@ -69,23 +80,25 @@ struct DitFusedDistributedGroupnormInputs {
 // (64 on Blackhole) because each master NoC-reads its own sub-stick at DRAM offset slot*stick_bytes,
 // and non-64-aligned offsets read back as zero on BH. A single forwarder coalesces all masters'
 // sub-sticks into one packet (num_groups*4 B ≤ one fabric packet), so num_chunks_per_device = 1,
-// total_pages = ring_size, and the DRAM page = num_masters * stick_bytes.
+// total_pages = ring_size, and the DRAM page = num_masters * stick_bytes. With a second cluster
+// axis, a second forwarder exchanges the merged stats over that axis into pages
+// [ring_size, ring_size + second_ring_size) of the same buffer.
 struct DitFusedDistributedGroupnormSizing {
     bool is_local = false;
     uint32_t num_groups = 0;
     uint32_t num_masters = 1;            // mcast-group senders per device = num_virtual_cols
     uint32_t num_groups_per_core = 0;    // groups owned by each master
-    uint32_t num_forwarders = 0;         // single coalescing forwarder (optimal for the tiny stick)
-    uint32_t num_chunks_per_device = 0;  // = num_forwarders (max_rounds == 1)
+    uint32_t num_forwarders = 0;         // one coalescing forwarder per exchanged axis
+    uint32_t num_chunks_per_device = 0;  // pages per device per axis (max_rounds == 1)
     uint32_t stick_bytes = 0;            // per-master, 64 B-aligned
-    uint32_t total_pages = 0;            // = ring_size
+    uint32_t total_pages = 0;            // = ring_size + second_ring_size (if > 1)
     uint32_t page_size_bytes = 0;        // = num_masters * stick_bytes
 };
 
 // Single source of truth for the stats-buffer geometry. Used by create_stats_buffer (host
 // allocation), compute_output_specs, validate, and the program factory so they cannot drift.
 DitFusedDistributedGroupnormSizing gn_make_sizing(
-    uint32_t num_groups, uint32_t ring_size, uint32_t channels, uint32_t grid_x);
+    uint32_t num_groups, uint32_t ring_size, uint32_t channels, uint32_t grid_x, uint32_t second_ring_size = 1);
 
 DitFusedDistributedGroupnormSizing compute_sizing(const DitFusedDistributedGroupnormParams& args, const Tensor& input);
 

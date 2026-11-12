@@ -77,6 +77,16 @@ void kernel_main() {
         "GN_DISTRIBUTED_AG requires bf16 stats CBs (stats_is_fp32 == 0)");
     // Appended after src0's positional accessor block.
     constexpr auto stats_dram_args = TensorAccessorArgs<decltype(src0_args)::next_compile_time_args_offset()>();
+#ifdef GN_DISTRIBUTED_AG_2D
+    // Second exchange, over the other mesh axis, of the stats already merged over the first. A
+    // second forwarder lands its sticks in pages [ring_size, ring_size + second_ring_size).
+#ifndef GN_RUNTIME_SIZE_ARGS
+#error "GN_DISTRIBUTED_AG_2D requires GN_RUNTIME_SIZE_ARGS"
+#endif
+    constexpr uint32_t second_ring_size = get_named_compile_time_arg_val("second_ring_size");
+    constexpr uint32_t second_arrival_sem_id = get_named_compile_time_arg_val("second_arrival_sem_id");
+    constexpr uint32_t second_go_sem_id = get_named_compile_time_arg_val("second_go_sem_id");
+#endif
 #endif
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -220,6 +230,12 @@ void kernel_main() {
     // The packet CB is created on the whole grid, so the forwarder's copy is at this same address.
     const uint32_t fwd_packet_buf_addr = dfb_packet.get_write_ptr();
     const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
+#ifdef GN_DISTRIBUTED_AG_2D
+    const uint32_t second_fwd_x = get_arg_val<uint32_t>(fabric_base + 5);
+    const uint32_t second_fwd_y = get_arg_val<uint32_t>(fabric_base + 6);
+    Semaphore<> second_fwd_arrival_sem(second_arrival_sem_id);
+    Semaphore<> second_go_sem(second_go_sem_id);
+#endif
 #endif
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -538,6 +554,12 @@ void kernel_main() {
         dfb_stats_gathered.wait_front(ring_size);
         auto gathered_u16 = reinterpret_cast<volatile uint16_t*>(gbase);
         constexpr uint32_t stick_stride_u16 = stick_bytes / 2;  // uint16 elements per device stick
+#ifdef GN_DISTRIBUTED_AG_2D
+        // The merged stats also go into a new stick for the second exchange.
+        dfb_stats_local.reserve_back(1);
+        volatile tt_l1_ptr uint16_t* second_stick_u16 =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb_stats_local.get_write_ptr());
+#endif
         auto out_ptr = global_base_ptr;
         for (uint32_t m = 0; m < num_groups; ++m) {
 #ifdef GN_RUNTIME_SIZE_ARGS
@@ -551,9 +573,66 @@ void kernel_main() {
             auto p_out_vars = reinterpret_cast<volatile uint16_t*>(out_ptr + single_tile_size_bytes);
             p_out_means[0] = merged.mean;
             p_out_vars[0] = merged.variance;
+#ifdef GN_DISTRIBUTED_AG_2D
+            second_stick_u16[m * 2 + 0] = merged.mean;
+            second_stick_u16[m * 2 + 1] = merged.variance;
+#endif
             out_ptr += 2 * single_tile_size_bytes;
         }
         dfb_stats_gathered.pop_front(ring_size);
+
+#ifdef GN_DISTRIBUTED_AG_2D
+        // 5. The same exchange over the second mesh axis, with the stats merged over the first:
+        //    publish to the second forwarder, wait for its gather, read second_ring_size sticks
+        //    from pages [ring_size, ring_size + second_ring_size) and merge them into dfb_ex_global.
+        //    Each of those sticks covers ring_size devices.
+        dfb_stats_local.push_back(1);
+        dfb_stats_local.wait_front(1);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(dfb_stats_local.get_read_ptr()),
+            fwd_ep,
+            stick_bytes,
+            {},
+            // The second forwarder is another core with its own copy of the same packet CB.
+            {.noc_x = second_fwd_x, .noc_y = second_fwd_y, .addr = fwd_packet_buf_addr + my_slot * stick_bytes});
+        noc.async_write_barrier();
+        second_fwd_arrival_sem.up(noc, second_fwd_x, second_fwd_y, 1);
+        dfb_stats_local.pop_front(1);
+
+        second_go_sem.wait_min(1);
+        second_go_sem.set(0);
+
+        dfb_stats_gathered.reserve_back(second_ring_size);
+        const uint32_t second_gbase = dfb_stats_gathered.get_write_ptr();
+        for (uint32_t d = 0; d < second_ring_size; d++) {
+            const uint32_t page_idx = (ring_size + d) * num_chunks_per_device + my_forwarder_index;
+            noc.async_read(
+                stats_dram,
+                CoreLocalMem<uint32_t>(second_gbase + d * stick_bytes),
+                stick_bytes,
+                {.page_id = page_idx, .offset_bytes = my_slot * stick_bytes},
+                {});
+        }
+        noc.async_read_barrier();
+        dfb_stats_gathered.push_back(second_ring_size);
+
+        dfb_stats_gathered.wait_front(second_ring_size);
+        auto second_gathered_u16 = reinterpret_cast<volatile uint16_t*>(second_gbase);
+        out_ptr = global_base_ptr;
+        for (uint32_t m = 0; m < num_groups; ++m) {
+            auto merged = combine_welford_stats<stick_stride_u16>(
+                second_gathered_u16 + m * 2,
+                second_gathered_u16 + m * 2 + 1,
+                second_ring_size,
+                count_per_device * ring_size);
+            auto p_out_means = reinterpret_cast<volatile uint16_t*>(out_ptr);
+            auto p_out_vars = reinterpret_cast<volatile uint16_t*>(out_ptr + single_tile_size_bytes);
+            p_out_means[0] = merged.mean;
+            p_out_vars[0] = merged.variance;
+            out_ptr += 2 * single_tile_size_bytes;
+        }
+        dfb_stats_gathered.pop_front(second_ring_size);
+#endif
 
         // Batched mcast-back: broadcast the whole dfb_ex_global region (the GLOBAL stat for every
         // group) to the receiver cores in one shot, then release them with one semaphore multicast.

@@ -12,7 +12,13 @@
  *
  * The description below is written in terms of the RMSNorm caller (128 B
  * sticks, one forwarder per link); GroupNorm uses the same protocol with its
- * own stick_bytes and a single forwarder.
+ * own stick_bytes and one forwarder per exchanged mesh axis. Each GroupNorm
+ * forwarder is set up as a lone forwarder (num_forwarders = 1, max_rounds = 1,
+ * num_chunks_per_device = 1) and passes the first DRAM page of its axis as
+ * forwarder_index: 0 for the first axis, ring_size of the first axis for the
+ * second. A check that forwarder_index < num_forwarders, or DIT_NORM_RUNTIME_ROWS
+ * on the GroupNorm side (its present counts scale with forwarder_index), would
+ * break that.
  *
  * One forwarder core per fabric link (num_forwarders = min(num_links,
  * num_workers)). It owns a contiguous GROUP of worker cores on this chip and

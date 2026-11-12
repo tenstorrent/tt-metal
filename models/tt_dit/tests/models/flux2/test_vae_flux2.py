@@ -106,9 +106,10 @@ def prep_data(
         [(1, 1), single_device_params_flux2],
         [(2, 2), line_params_flux2],
         [(1, 8), line_params_flux2],
+        [(2, 4), line_params_flux2],
         [(4, 8), line_params_flux2],
     ],
-    ids=["1x1", "2x2", "1x8", "4x8"],
+    ids=["1x1", "2x2", "1x8", "2x4", "4x8"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -116,18 +117,21 @@ def prep_data(
     [(1, 1024, 1024)],
     ids=["1024"],
 )
+# Rows on mesh axis 1, and channels (tp_h) or columns (h_w) on axis 0.
+@pytest.mark.parametrize("split", ["tp_h", "h_w"])
 def test_vae_flux2_decoder(
     *,
     mesh_device: ttnn.Device,
     batch_size: int,
     height: int,
     width: int,
+    split: str,
 ) -> None:
     torch.manual_seed(0)
 
-    tp_axis = 0
-    h_axis = 1 - tp_axis
-    w_axis = None
+    tp_axis = 0 if split == "tp_h" else None
+    h_axis = 1
+    w_axis = 0 if split == "h_w" else None
 
     torch_model = _load_pruned_torch_model()
 
