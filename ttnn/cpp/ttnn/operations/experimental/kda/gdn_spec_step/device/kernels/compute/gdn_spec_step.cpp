@@ -460,6 +460,10 @@ TT_KERNEL void compute() {
     const uint32_t kc_id = dfb::kc;
     const uint32_t vc_id = dfb::vc;
 
+    // The token loops run to a count the compiler cannot see: with T = 2 known, GCC duplicates the loop bodies despite
+    // the unroll pragma, and the three kernel binaries (5 KB larger) outgrow the kernel config buffer.
+    uint32_t n_tok = T;
+    asm volatile("" : "+r"(n_tok));
     compute_kernel_hw_startup(dfb::src_in, dfb::state_in, dfb::out);
     scaler.wait_front(1);
     eps_l2.wait_front(1);
@@ -476,7 +480,7 @@ TT_KERNEL void compute() {
     ab_in.wait_front(1);
     csel.wait_front(2);
 #pragma GCC unroll 1
-    for (uint32_t t = 0; t < T; ++t) {
+    for (uint32_t t = 0; t < n_tok; ++t) {
         gates_token(rsel, g1, a_s, b_s, beta_t, dec);
     }
     ab_in.pop_front(1);
@@ -632,9 +636,9 @@ TT_KERNEL void compute() {
     // ---- C. T serial delta-rule steps, state in L1
     state_in.wait_front(KV);
 #pragma GCC unroll 1
-    for (uint32_t t = 0; t < T; ++t) {
+    for (uint32_t t = 0; t < n_tok; ++t) {
         const bool first = (t == 0);
-        const bool last = (t + 1 == T);
+        const bool last = (t + 1 == n_tok);
         e_t.wait_front(1);
         dec.wait_front(1);
         beta_t.wait_front(1);
