@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Device checks of the KDA state slabs: per-layer export/import, trace replay, and the address table.
 
+Each chip's slabs hold only its SP row's ``H_store`` heads of its TP column, so the round trip is
+native -> export (the chip's heads, selected on device by its SP coordinate) -> import -> all-gather -> native, and
+must be bit-identical.
+
 Synthetic data with a distinct value in every element, so a wrong head, band, branch, half, slot or
 layer shows up as a mismatch rather than a coincidence. The table check reads every segment of every
 (layer, slot) back through ``read_device_chunk`` and reassembles the global state from the segment
@@ -18,7 +22,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.kda.utils import read_slab_layer
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params, kda_mesh_param, read_slab_layer
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
@@ -45,18 +49,15 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     encode_tail,
 )
 
-pytestmark = [
-    run_for_blackhole(),
-    pytest.mark.parametrize(
-        "device_params",
-        [pytest.param({"trace_region_size": 64 * 1024 * 1024}, id="trace64m")],
-        indirect=True,
-    ),
-]
+pytestmark = run_for_blackhole()
 
 SP_AXIS, TP_AXIS = 0, 1
 LAYER_IDS = (1, 2)
 NUM_SLOTS = 2
+
+
+def _device_params(shape: tuple[int, int]) -> dict:
+    return kda_device_params(shape, trace_region_size=64 * 1024 * 1024)
 
 
 def _geometry(mesh_device) -> KdaContractGeometry:
@@ -123,9 +124,16 @@ def _shards(tensor: ttnn.Tensor, mesh_device) -> dict[tuple[int, int], torch.Ten
     return {(row, col): host[row * cols + col] for row in range(rows) for col in range(cols)}
 
 
-def _expected_chip(geometry, recurrent, convolution, tp_col):
-    local = geometry.local_heads
-    return recurrent[tp_col * local : (tp_col + 1) * local], _per_chip_convolution(geometry, convolution, tp_col)
+def _expected_chip(geometry, recurrent, convolution, tp_col, sp_row):
+    """What chip (sp_row, tp_col) stores: its SP row's heads of its column, the convolution branch-major over them."""
+    local, stored, dim = geometry.local_heads, geometry.stored_heads, geometry.head_dim
+    first = tp_col * local + sp_row * stored
+    column = _per_chip_convolution(geometry, convolution, tp_col)
+    branches = [
+        column[:, (branch * local + sp_row * stored) * dim : (branch * local + (sp_row + 1) * stored) * dim]
+        for branch in range(3)
+    ]
+    return recurrent[first : first + stored], torch.cat(branches, dim=-1)
 
 
 def _single_stage_layout(mesh_device, slab, count):
@@ -146,7 +154,15 @@ def _single_stage_layout(mesh_device, slab, count):
     ]
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
+# The import all-gathers over SP, so the mesh opens the fabric K3 runs on.
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        kda_mesh_param(shape, f"mesh-{shape[0]}x{shape[1]}", f"{shape[0]}x{shape[1]}", _device_params(shape))
+        for shape in ((8, 4), (2, 4))
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "layer_ids,num_slots",
     [(LAYER_IDS, NUM_SLOTS), ((1,), 1)],
@@ -155,7 +171,7 @@ def _single_stage_layout(mesh_device, slab, count):
 def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids, num_slots):
     """The one-layer, one-slot case matters: a slice over a whole slab can hand back the slab itself."""
     geometry = _geometry(mesh_device)
-    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=layer_ids, num_slots=num_slots)
+    slabs = KdaStates.allocate(mesh_device, geometry, sp_axis=SP_AXIS, layer_ids=layer_ids, num_slots=num_slots)
     rows, cols = tuple(mesh_device.shape)
     tp = geometry.tensor_parallel_size
 
@@ -169,17 +185,14 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
         ttnn.deallocate(index)
     ttnn.synchronize_device(mesh_device)
 
-    # 1. Every slab batch holds its layer's per-chip state, on every SP replica, bit for bit.
+    # 1. Every slab batch holds its layer's state for the chip's own heads only, bit for bit.
     rec_shards = _shards(slabs.recurrent, mesh_device)
     conv_shards = _shards(slabs.convolution, mesh_device)
     for (slot, layer), (recurrent, convolution) in patterns.items():
         batch = slabs.batch_index(slot, layer)
         for row in range(rows):
             for col in range(cols):
-                coord = [0, 0]
-                coord[SP_AXIS], coord[TP_AXIS] = row if SP_AXIS == 0 else col, col if TP_AXIS == 1 else row
-                tp_col = coord[TP_AXIS]
-                want_rec, want_conv = _expected_chip(geometry, recurrent, convolution, tp_col)
+                want_rec, want_conv = _expected_chip(geometry, recurrent, convolution, tp_col=col, sp_row=row)
                 assert_bit_identical(
                     want_rec, rec_shards[(row, col)][batch], name=f"S slot{slot} L{layer} ({row},{col})"
                 )
@@ -199,10 +212,30 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
         deallocate_state(back)
         return shards
 
-    # 2. Import lands the same bytes back in a native carry, through the same device-read slot.
-    for (slot, layer), state in natives.items():
-        for index, (want, got) in enumerate(zip(host(state), imported(slot, layer), strict=True)):
-            assert_bit_identical(want, got, name=f"import slot{slot} L{layer} shard{index}")
+    # 2. Import gathers the same bytes back into a native carry on every chip, through the same device-read slot,
+    #    and a repeated import (the staging buffer reused) lands them again.
+    for repeat in range(2):
+        for (slot, layer), state in natives.items():
+            for index, (want, got) in enumerate(zip(host(state), imported(slot, layer), strict=True)):
+                assert_bit_identical(want, got, name=f"import {repeat} slot{slot} L{layer} shard{index}")
+
+    # 2b. A captured import follows the device slot on replay: captured on slot 0, replayed on the last slot.
+    carry = read_slab_layer(mesh_device, slabs, 0, layer_ids[-1])
+    slot_tt = device_scalar(mesh_device, 0)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    slabs.import_layer(carry, slot_tt, layer_ids[-1])
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    staged_slot = device_scalar(mesh_device, num_slots - 1)
+    ttnn.copy(staged_slot, slot_tt)
+    for replay in range(2):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        want_state = natives[(num_slots - 1, layer_ids[-1])]
+        for index, (want, got) in enumerate(zip(host(want_state), host(carry), strict=True)):
+            assert_bit_identical(want, got, name=f"traced import replay {replay} shard{index}")
+    ttnn.release_trace(mesh_device, trace_id)
+    for tensor in (slot_tt, staged_slot):
+        ttnn.deallocate(tensor)
+    deallocate_state(carry)
 
     # 3. A captured export follows the carry's contents and the device slot on replay, and touches
     #    nothing else: captured on slot 0, replayed with the last slot written into the slot tensor.
@@ -228,16 +261,17 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     conv_shards = _shards(slabs.convolution, mesh_device)
     for (slot, layer), (recurrent, convolution) in patterns.items():
         batch = slabs.batch_index(slot, layer)
-        for col in range(cols):
-            coord = [0, 0]
-            coord[TP_AXIS] = col
-            want_rec, want_conv = _expected_chip(geometry, recurrent, convolution, coord[TP_AXIS])
-            assert_bit_identical(want_rec, rec_shards[(0, col)][batch], name=f"replay S slot{slot} L{layer} col{col}")
-            assert_bit_identical(
-                want_conv,
-                decode_tail(conv_shards[(0, col)][batch], KDA_CONVOLUTION_PAGE_CHANNELS),
-                name=f"replay conv slot{slot} L{layer} col{col}",
-            )
+        for row in range(rows):
+            for col in range(cols):
+                want_rec, want_conv = _expected_chip(geometry, recurrent, convolution, tp_col=col, sp_row=row)
+                assert_bit_identical(
+                    want_rec, rec_shards[(row, col)][batch], name=f"replay S slot{slot} L{layer} ({row},{col})"
+                )
+                assert_bit_identical(
+                    want_conv,
+                    decode_tail(conv_shards[(row, col)][batch], KDA_CONVOLUTION_PAGE_CHANNELS),
+                    name=f"replay conv slot{slot} L{layer} ({row},{col})",
+                )
 
     # 4. The address table resolves every (layer, segment, slot) to the right bytes, and the segment
     #    numbering alone reassembles the global state.
@@ -268,7 +302,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
             stage_layout=_single_stage_layout(mesh_device, slab, len(layer_ids)),
             layer_rows=layer_rows,
         )
-    assert table.num_device_groups() == tp
+    assert table.num_device_groups() == rows * tp  # one chip per group
     for (slot, layer), (recurrent, convolution) in patterns.items():
         rec_segments = {
             segment: recurrent_segment_to_torch(

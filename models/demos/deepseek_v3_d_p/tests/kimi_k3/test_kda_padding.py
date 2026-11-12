@@ -70,7 +70,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
     geometry = KdaContractGeometry.from_kda_config(
         config, mesh_shape=tuple(mesh_device.shape), sp_axis=sp_axis, tp_axis=tp_axis
     )
-    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(1,), num_slots=1)
+    slabs = KdaStates.allocate(mesh_device, geometry, sp_axis=sp_axis, layer_ids=(1,), num_slots=1)
     scratch = allocate_native_state(mesh_device, geometry)
     attention = TtK3KdaAttention(layer, 1, tp_axis, 1, ttnn.Topology.Linear, scratch)
     slot_tt = device_scalar(mesh_device, 0)

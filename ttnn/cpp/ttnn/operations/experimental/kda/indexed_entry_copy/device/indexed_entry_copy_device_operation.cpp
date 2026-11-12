@@ -52,7 +52,7 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
         "{}: source and destination must have equal rank, at least 3 for TILE",
         kOperation);
     // The program strides both sides by one entry of the single-entry side's padded shape, so the padding must agree
-    // past dim 0 and leave dim 0 unpadded.
+    // past dim 0 and leave dim 0 unpadded. A partitioned source holds `parts` destination entries along dim 1.
     const auto& source_padded = source.padded_shape();
     const auto& destination_padded = destination.padded_shape();
     TT_FATAL(
@@ -61,15 +61,32 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
         kOperation,
         source_padded,
         destination_padded);
-    for (int dim = 1; dim < static_cast<int>(source_shape.rank()); ++dim) {
+    const bool partitioned = inputs.source_part.has_value();
+    if (partitioned) {
+        // Parts and groups split dim 1 into whole pages: dim 1 must lie outside the tile (TILE) or the row (ROW_MAJOR).
         TT_FATAL(
-            source_shape[dim] == destination_shape[dim],
-            "{}: source {} and destination {} differ past dim 0",
+            source_shape.rank() >= (source.layout() == tt::tt_metal::Layout::TILE ? 4u : 3u),
+            "{}: source_part needs rank at least 4 for TILE and 3 for ROW_MAJOR, so dim 1 spans whole pages",
+            kOperation);
+        TT_FATAL(
+            destination_shape[1] > 0,
+            "{}: source_part needs a non-empty destination dim 1, got {}",
+            kOperation,
+            destination_shape);
+    }
+    // A dim 1 that no whole number of parts fills fails below.
+    const uint32_t parts = partitioned ? source_shape[1] / destination_shape[1] : 1;
+    for (int dim = 1; dim < static_cast<int>(source_shape.rank()); ++dim) {
+        const uint32_t dim_parts = dim == 1 ? parts : 1;
+        TT_FATAL(
+            source_shape[dim] == dim_parts * destination_shape[dim],
+            "{}: source {} and destination {} differ past dim 0{}",
             kOperation,
             source_shape,
-            destination_shape);
+            destination_shape,
+            partitioned ? " (beyond a whole number of parts in dim 1)" : "");
         TT_FATAL(
-            source_padded[dim] == destination_padded[dim],
+            source_padded[dim] == dim_parts * destination_padded[dim],
             "{}: source padded {} and destination padded {} differ past dim 0",
             kOperation,
             source_padded,
@@ -84,6 +101,20 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(params.index_scale >= 1, "{}: index_scale must be at least 1", kOperation);
     if (inputs.zero_fill_at_zero.has_value()) {
         kda_factory_detail::check_device_scalar(source, *inputs.zero_fill_at_zero, kOperation, "zero_fill_at_zero");
+    }
+    TT_FATAL(
+        params.source_part_groups >= 1 && (partitioned || params.source_part_groups == 1),
+        "{}: source_part_groups must be at least 1, and 1 without source_part",
+        kOperation);
+    if (partitioned) {
+        kda_factory_detail::check_device_scalar(source, *inputs.source_part, kOperation, "source_part");
+        TT_FATAL(source_shape[0] == 1, "{}: source_part needs a single-entry source, got {}", kOperation, source_shape);
+        TT_FATAL(
+            destination_shape[1] % params.source_part_groups == 0,
+            "{}: destination dim 1 ({}) must split into source_part_groups ({}) equal groups",
+            kOperation,
+            destination_shape[1],
+            params.source_part_groups);
     }
 }
 
@@ -103,12 +134,19 @@ Tensor indexed_entry_copy(
     const Tensor& index,
     uint32_t index_scale,
     uint32_t index_offset,
-    const std::optional<Tensor>& zero_fill_at_zero) {
+    const std::optional<Tensor>& zero_fill_at_zero,
+    const std::optional<Tensor>& source_part,
+    uint32_t source_part_groups) {
     using OperationType = ttnn::experimental::prim::IndexedEntryCopyDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.index_scale = index_scale, .index_offset = index_offset},
+        OperationType::operation_attributes_t{
+            .index_scale = index_scale, .index_offset = index_offset, .source_part_groups = source_part_groups},
         OperationType::tensor_args_t{
-            .source = source, .destination = destination, .index = index, .zero_fill_at_zero = zero_fill_at_zero});
+            .source = source,
+            .destination = destination,
+            .index = index,
+            .zero_fill_at_zero = zero_fill_at_zero,
+            .source_part = source_part});
 }
 
 }  // namespace ttnn::experimental::prim

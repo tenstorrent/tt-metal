@@ -91,21 +91,52 @@ def _json_ready(obj):
     return obj
 
 
-def read_layer(table, config_id: int, kind: str, layer: int, slot: int, geometry, device_map):
-    """All segments of one layer as a host tensor, or None when the layer lives on another host."""
+def umd_chunk_reader(device_map):
+    """Read a segment from its chip over UMD, as the migration worker does: local-PCIe only, so a chip this host
+    does not reach reads as None. A bare UMD cluster pins host memory for every visible chip (1 GiB each)."""
+
+    def read(key, loc, members):
+        unique_id = resolve_unique_id(members, device_map)
+        if unique_id is None:
+            return None
+        return ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
+
+    return read
+
+
+def table_chunk_reader(table):
+    """Read a segment through the table itself (``read_device_chunk``), in a process that holds the devices."""
+
+    def read(key, loc, members):
+        return bytes(table.read_device_chunk(*key))
+
+    return read
+
+
+def read_layer(table, config_id: int, kind: str, layer: int, slot: int, geometry, read_chunk):
+    """All segments of one layer as a host tensor, or None when the layer lives on another host.
+
+    ``read_chunk(key, loc, members)`` returns the bytes of the segment at ``key = (layer, position, slot,
+    config_id)``, located at ``loc`` on chip ``members[0]``, or None when that chip is out of reach.
+    """
     first = table.lookup(layer, 0, slot, config_id)
     if first.size_bytes == 0:
         return None, "unpublished"
-    unique_id = resolve_unique_id(table.get_device_group(first.device_group_index).fabric_node_ids, device_map)
-    if unique_id is None:
-        return None, "remote"
+    # Each segment names its own device group: the one chip storing it. A larger group is a table published
+    # before the state was sharded over SP, whose primary member holds other heads at other addresses.
     segments = {}
     for segment in range(kda_segments_per_layer(geometry, kind)):
-        loc = table.lookup(layer, kda_position(geometry, kind, segment), slot, config_id)
-        uid = resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
-        if uid is None:
-            return None, f"segment {segment} on a remote device"
-        raw = ttnn.experimental.disaggregation.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)
+        key = (layer, kda_position(geometry, kind, segment), slot, config_id)
+        loc = table.lookup(*key)
+        members = table.get_device_group(loc.device_group_index).fabric_node_ids
+        if len(members) != 1:
+            raise ValueError(
+                f"config {config_id} layer {layer} segment {segment}: device group of {len(members)} chips, but "
+                "every segment is stored on one chip"
+            )
+        raw = read_chunk(key, loc, members)
+        if raw is None:
+            return None, "remote" if segment == 0 else f"segment {segment} on a remote device"
         if kind == "kda_recurrent":
             segments[segment] = recurrent_segment_to_torch(raw, geometry)
         else:
@@ -113,6 +144,33 @@ def read_layer(table, config_id: int, kind: str, layer: int, slot: int, geometry
     if kind == "kda_recurrent":
         return assemble_recurrent(segments, geometry), "ok"
     return assemble_convolution(segments, geometry), "ok"
+
+
+def score_layers(table, adapter, geometry, *, num_layers: int, slot: int, row: int, golden_dir: Path, read_chunk):
+    """Read every published KDA layer state and score it against golden row ``row``.
+
+    Returns ``(results, worst)``: one dict per (config, layer) with its status and PCC, and the minimum PCC per
+    kind. ``read_chunk`` as for ``read_layer``.
+    """
+    results = []
+    worst = {}
+    for config_id in range(table.num_configs()):
+        kind = adapter.cache_kind(config_id)
+        if kind not in GOLDEN_FILES:
+            continue
+        for layer in sorted(adapter.cache_layer_rows(config_id, num_layers)):
+            state, status = read_layer(table, config_id, kind, layer, slot, geometry, read_chunk)
+            if state is None:
+                results.append({"config": config_id, "kind": kind, "layer": layer, "status": status})
+                continue
+            golden = load_golden(golden_dir, kind, layer, row)
+            if kind == "kda_recurrent":
+                golden = golden.transpose(-1, -2)  # golden is [heads, v, k]; the device stores [k, v]
+            score = pcc(state, golden)
+            results.append({"config": config_id, "kind": kind, "layer": layer, "status": "ok", "pcc": score})
+            worst[kind] = _worse(worst.get(kind, 1.0), score)
+            logger.info(f"config {config_id} {kind:16s} layer {layer:3d}: pcc {score:.6f}")
+    return results, worst
 
 
 def main(argv=None) -> int:
@@ -146,24 +204,16 @@ def main(argv=None) -> int:
         f"table {args.table}: {table.num_configs()} configs; device map {len(device_map)} chips; golden row {row}"
     )
 
-    results = []
-    worst = {}
-    for config_id in range(table.num_configs()):
-        kind = adapter.cache_kind(config_id)
-        if kind not in GOLDEN_FILES:
-            continue
-        for layer in sorted(adapter.cache_layer_rows(config_id, args.num_layers)):
-            state, status = read_layer(table, config_id, kind, layer, args.slot, geometry, device_map)
-            if state is None:
-                results.append({"config": config_id, "kind": kind, "layer": layer, "status": status})
-                continue
-            golden = load_golden(golden_dir, kind, layer, row)
-            if kind == "kda_recurrent":
-                golden = golden.transpose(-1, -2)  # golden is [heads, v, k]; the device stores [k, v]
-            score = pcc(state, golden)
-            results.append({"config": config_id, "kind": kind, "layer": layer, "status": "ok", "pcc": score})
-            worst[kind] = _worse(worst.get(kind, 1.0), score)
-            logger.info(f"config {config_id} {kind:16s} layer {layer:3d}: pcc {score:.6f}")
+    results, worst = score_layers(
+        table,
+        adapter,
+        geometry,
+        num_layers=args.num_layers,
+        slot=args.slot,
+        row=row,
+        golden_dir=golden_dir,
+        read_chunk=umd_chunk_reader(device_map),
+    )
 
     checked = [r for r in results if r["status"] == "ok"]
     skipped = [r for r in results if r["status"] != "ok"]

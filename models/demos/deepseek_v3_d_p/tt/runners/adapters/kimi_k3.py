@@ -190,7 +190,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
         kda_layer_ids = schedule.rank_kda_layer_ids()
         if kda_layer_ids:
             geometry = kimi_k3_kda_geometry(params.mesh_shape, params.sp_axis, params.tp_axis)
-            kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=kda_layer_ids, num_slots=params.num_users)
+            kda_states = KdaStates.allocate(
+                mesh_device, geometry, sp_axis=params.sp_axis, layer_ids=kda_layer_ids, num_slots=params.num_users
+            )
         return KimiK3KvCaches(kvpe=kvpe, kda_states=kda_states)
 
     def layer_split_boundaries(self, num_layers: int):

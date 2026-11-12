@@ -78,8 +78,12 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
     sp = mesh_shape[sp_axis]
     local_rows = 256
     capacity = sp * local_rows
-    # head_dim 128, as Kimi-K3's, so the migration slabs' segment geometry applies and every commit exports.
-    config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5)
+    # head_dim 128, as Kimi-K3's, so the migration slabs' segment geometry applies and every commit exports. One head
+    # per chip: the slabs store each head once on the mesh, so the head count must divide over SP x TP.
+    num_heads = mesh_shape[sp_axis] * mesh_shape[tp_axis]
+    config = KDAConfig(
+        hidden_size=256, num_heads=num_heads, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5
+    )
     weights = random_weights(config)
     layer = build_layer(
         mesh_device,
@@ -92,7 +96,7 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
         convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
     )
     geometry = KdaContractGeometry.from_kda_config(config, mesh_shape=mesh_shape, sp_axis=sp_axis, tp_axis=tp_axis)
-    slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(LAYER,), num_slots=NUM_SLOTS)
+    slabs = KdaStates.allocate(mesh_device, geometry, sp_axis=sp_axis, layer_ids=(LAYER,), num_slots=NUM_SLOTS)
     scratch = allocate_native_state(mesh_device, geometry)
     attention = TtK3KdaAttention(layer, LAYER, tp_axis, 1, ttnn.Topology.Linear, scratch)
     dims = [None, None]

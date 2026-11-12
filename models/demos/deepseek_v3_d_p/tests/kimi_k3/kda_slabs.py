@@ -28,7 +28,9 @@ def attach_kda_states(mesh_device, model, *, sp_axis: int, tp_axis: int, num_slo
     if not layer_ids:
         return None
     geometry = kimi_k3_kda_geometry(mesh_device.shape, sp_axis, tp_axis)
-    model.kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=layer_ids, num_slots=num_slots)
+    model.kda_states = KdaStates.allocate(
+        mesh_device, geometry, sp_axis=sp_axis, layer_ids=layer_ids, num_slots=num_slots
+    )
     return model.kda_states
 
 

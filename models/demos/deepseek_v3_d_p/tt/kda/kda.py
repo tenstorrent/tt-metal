@@ -670,8 +670,10 @@ class ttKDA:
         """One model layer per chunk, its carry kept in the model's state slabs: import -> forward -> export.
 
         ``states`` is the model's ``KdaStates`` (``tt/kda/state_adapter.py``, typed loosely because that module
-        imports this one). ``slot`` is its replicated one-element UINT32 device scalar, read on device by both copies,
-        so a captured trace follows the slot of the replay. ``scratch`` is overwritten with the slot's carry; the
+        imports this one), which stores each head once on the mesh: the import copies this chip's heads out of the
+        slab and all-gathers them over SP into ``scratch``; the export keeps each chip's heads of the (SP-replicated)
+        new carry and stores them. ``slot`` is its replicated one-element UINT32 device scalar, read on device by the
+        copies, so a captured trace follows the slot of the replay. ``scratch`` is overwritten with the slot's carry; the
         replacement carry is stored back at ``(slot, layer_idx)`` and freed. ``actual_start`` also marks a request
         head: where it reads 0 the import loads zeros instead of the slot. Returns the layer output.
         """

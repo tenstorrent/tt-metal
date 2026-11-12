@@ -29,13 +29,14 @@ constexpr uint32_t kStagingBatches = 2;
 constexpr uint32_t kWorkerRows = 2;
 
 // Pages of one dim-0 entry: tiles for TILE layout, rows for ROW_MAJOR.
-uint32_t pages_per_entry(const Tensor& single_entry) {
-    const auto& shape = single_entry.padded_shape();
-    if (single_entry.layout() == Layout::TILE) {
-        const auto& tile = single_entry.tensor_spec().tile();
-        return shape.volume() / (tile.get_height() * tile.get_width());
+uint32_t pages_per_entry(const Tensor& tensor) {
+    const auto& shape = tensor.padded_shape();
+    const uint32_t entry_volume = shape.volume() / shape[0];
+    if (tensor.layout() == Layout::TILE) {
+        const auto& tile = tensor.tensor_spec().tile();
+        return entry_volume / (tile.get_height() * tile.get_width());
     }
-    return shape.volume() / shape[-1];
+    return entry_volume / shape[-1];
 }
 
 // Leave the flag unbound when absent; the reader resolves it with get_token_if_present.
@@ -55,6 +56,30 @@ void bind_zero_fill_at_zero(
     reader.scratchpad_bindings.push_back({word, "zero_fill_at_zero_word"});
 }
 
+// Both kernels read the part word, so a part out of range skips the copy on both sides. Left unbound when absent.
+void bind_source_part(
+    ProgramSpec& spec,
+    ProgramRunArgs& run,
+    const std::optional<Tensor>& source_part,
+    KernelSpec& reader,
+    KernelSpec& writer) {
+    if (!source_part) {
+        return;
+    }
+    const TensorParamName name{"source_part"};
+    const auto& tensor = source_part->mesh_tensor();
+    spec.tensor_parameters.push_back({.unique_id = name, .spec = tensor.tensor_spec()});
+    run.tensor_args.emplace(name, tensor);
+    const uint32_t word_size = source_part->buffer()->aligned_page_size();
+    for (auto [kernel, word] :
+         {std::pair{&reader, ScratchpadSpecName{"reader_source_part_word"}},
+          std::pair{&writer, ScratchpadSpecName{"writer_source_part_word"}}}) {
+        spec.scratchpads.push_back({.unique_id = word, .size_per_node = word_size});
+        kernel->tensor_bindings.push_back({name, "source_part"});
+        kernel->scratchpad_bindings.push_back({word, "source_part_word"});
+    }
+}
+
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_program_artifacts(
@@ -67,7 +92,12 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
     const uint32_t source_entries = source.logical_shape()[0];
     const bool indexed_is_source = source_entries > 1;
     const uint32_t num_entries = std::max(source_entries, static_cast<uint32_t>(destination.logical_shape()[0]));
-    const uint32_t entry_pages = pages_per_entry(indexed_is_source ? destination : source);
+    // An entry is the destination's: a partitioned source holds `source_parts` of them along dim 1, so its dim 1 is
+    // groups of parts, each part `group_pages` pages. Unpartitioned, the source is one part in one group.
+    const uint32_t entry_pages = pages_per_entry(destination);
+    const uint32_t source_parts =
+        inputs.source_part.has_value() ? source.logical_shape()[1] / destination.logical_shape()[1] : 1;
+    const uint32_t group_pages = entry_pages / params.source_part_groups;
     // index[0] < index_limit  <=>  index[0] * index_scale + index_offset < num_entries, with no 32-bit wrap.
     const uint32_t index_limit =
         params.index_offset < num_entries ? 1 + (num_entries - params.index_offset - 1) / params.index_scale : 0;
@@ -98,6 +128,9 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
         {"index_scale", params.index_scale},
         {"index_offset", params.index_offset},
         {"indexed_is_source", static_cast<uint32_t>(indexed_is_source)},
+        {"has_source_part", static_cast<uint32_t>(inputs.source_part.has_value())},
+        {"source_parts", source_parts},
+        {"group_pages", group_pages},
     };
     const KernelSpec::RuntimeArgSchema runtime_arg_schema{.runtime_arg_names = {"first_page", "num_pages"}};
 
@@ -179,6 +212,7 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
     };
 
     bind_zero_fill_at_zero(spec, run_args, inputs.zero_fill_at_zero, reader);
+    bind_source_part(spec, run_args, inputs.source_part, reader, writer);
     spec.kernels = {std::move(reader), std::move(writer)};
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

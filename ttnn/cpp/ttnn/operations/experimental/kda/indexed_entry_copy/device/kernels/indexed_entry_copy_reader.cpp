@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reads this core's page range of one entry from the source into the staging DFB, a batch per push; when the
-// `zero_fill_at_zero` word reads 0 it pushes zeroed batches instead and never reads the source.
+// `zero_fill_at_zero` word reads 0 it pushes zeroed batches instead and never reads the source. A partitioned source
+// holds `source_parts` entries along dim 1 as groups of parts; page p of the entry comes from part `source_part` of
+// its group.
 
 #include <stdint.h>
 
@@ -18,6 +20,8 @@ void kernel_main() {
     constexpr uint32_t batch_pages = get_arg(args::batch_pages);
     constexpr bool indexed_is_source = get_arg(args::indexed_is_source);
     constexpr bool has_zero_fill_at_zero = get_arg(args::has_zero_fill_at_zero);
+    constexpr uint32_t source_parts = get_arg(args::source_parts);
+    constexpr uint32_t group_pages = get_arg(args::group_pages);
     const uint32_t first_page = get_arg(args::first_page);
     const uint32_t num_pages = get_arg(args::num_pages);
 
@@ -36,12 +40,18 @@ void kernel_main() {
             {.page_id = 0},
             {.offset_bytes = 0});
     }
+    const volatile uint32_t* part_word = issue_source_part_read(noc);
     uint32_t entry_base;
-    if (!resolve_entry_base(noc, first_page, entry_base)) {
+    if (!resolve_entry_base(noc, first_page, entry_base) || !source_part_in_range(part_word)) {
         return;
     }
     const bool zero = has_zero_fill_at_zero && *fill_word == 0;
-    const uint32_t source_base = indexed_is_source ? entry_base : first_page;
+    // Source page of entry page `page`: the entry's own page when unpartitioned (the multiply by zero folds away).
+    const uint32_t part_page = part_word == nullptr ? 0 : *part_word * group_pages;
+    const uint32_t source_entry = indexed_is_source ? entry_base - first_page : 0;
+    auto source_page = [&](uint32_t page) {
+        return source_entry + (page / group_pages) * (source_parts - 1) * group_pages + part_page + page;
+    };
 
     const auto source = TensorAccessor(tensor::source);
     DataflowBuffer staging(dfb::staging);
@@ -60,7 +70,7 @@ void kernel_main() {
                 source,
                 CoreLocalMem<uint32_t>(batch_addr + i * page_stride),
                 page_size,
-                {.page_id = source_base + done + i},
+                {.page_id = source_page(first_page + done + i)},
                 {});
         }
         noc.async_read_barrier();
