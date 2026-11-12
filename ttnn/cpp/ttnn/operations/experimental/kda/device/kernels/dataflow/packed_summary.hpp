@@ -9,17 +9,19 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tile_constants.h"
 
 namespace kda {
 
 // Packed affine summaries are [S, N, K, K+V]: transform t of slot s is transform s * N + t, stored as Kt
-// consecutive rows of (Kt + Vt) tiles holding [A | B], A at column 0 and B at column Kt.
+// consecutive rows of (Kt + Vt) tiles holding the complement form [E | B] (E = A - I), E at column 0 and B at column
+// Kt.
 template <uint32_t Kt, uint32_t Vt>
 constexpr uint32_t summary_row_page(uint32_t transform, uint32_t row) {
     return (transform * Kt + row) * (Kt + Vt);
 }
 
-// Split one transform's [A | B] rows into its A [Kt, Kt] and B [Kt, Vt] buffers.
+// Split one transform's [E | B] rows into its E [Kt, Kt] and B [Kt, Vt] buffers.
 template <uint32_t Kt, uint32_t Vt, typename Accessor, typename DFB>
 FORCE_INLINE void read_summary_transform(Noc& noc, const Accessor& summaries, DFB& a, DFB& b, uint32_t transform) {
     const uint32_t tile_bytes = a.get_entry_size();
@@ -42,6 +44,27 @@ FORCE_INLINE void read_summary_transform(Noc& noc, const Accessor& summaries, DF
                 {.offset_bytes = (row * Vt + column) * tile_bytes});
         }
     }
+}
+
+// Write FP32 1.0 on the diagonal of a zeroed FP32 32x32 tile. A tile's diagonal lies in its top-left and bottom-right
+// faces.
+template <typename VolatileWords>
+FORCE_INLINE void write_identity_diagonal(VolatileWords tile) {
+    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
+    for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
+        tile[row * tt::constants::FACE_WIDTH + row] = one_fp32;
+        tile[3 * tt::constants::FACE_HW + row * tt::constants::FACE_WIDTH + row] = one_fp32;
+    }
+}
+
+// One FP32 32x32 identity tile, with which compute converts between A and E = A - I on diagonal tiles in FP32 DST.
+template <typename DFB>
+FORCE_INLINE void seed_identity_tile(Noc& noc, DFB& identity) {
+    identity.reserve_back(1);
+    noc.async_write_zeros(identity, identity.get_entry_size());
+    noc.write_zeros_l1_barrier();
+    write_identity_diagonal(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(identity.get_write_ptr()));
+    identity.push_back(1);
 }
 
 }  // namespace kda
