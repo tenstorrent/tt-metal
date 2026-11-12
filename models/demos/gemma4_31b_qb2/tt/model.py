@@ -21,6 +21,8 @@ from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 
 HF_ID = "google/gemma-4-31B-it"
 HF_REVISION = "842da3794eaa0b77d5f08bae87a17459d91ff475"
+# Storage format of the tied LM head (the decoder projections are in decoder.WEIGHT_DTYPES).
+HEAD_DTYPE = ttnn.bfloat8_b
 
 
 def checkpoint_path():
@@ -48,7 +50,7 @@ class WeightReader:
 
 
 class Gemma4Model:
-    def __init__(self, mesh_device, *, checkpoint=None, layer_indices=None, projection_dtype=ttnn.bfloat8_b):
+    def __init__(self, mesh_device, *, checkpoint=None, layer_indices=None):
         if tuple(mesh_device.shape) != (1, 4):
             raise ValueError("Gemma4 31B QB2 requires a [1, 4] mesh")
         self.mesh = mesh_device
@@ -76,7 +78,6 @@ class Gemma4Model:
                     layer_idx=index,
                     mesh_device=mesh_device,
                     shared_setup=self.shared_setup,
-                    projection_dtype=projection_dtype,
                 )
             )
         self.ccl = self.shared_setup["ccl"]
@@ -98,7 +99,7 @@ class Gemma4Model:
         weight = reader.get("model.language_model.embed_tokens.weight")
         # The tied embedding has one physical layout for each consuming operation.
         self.embedding = self.tensor(weight, dim=1, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.head = self.tensor(weight.T.contiguous(), dim=1, dtype=ttnn.bfloat8_b)
+        self.head = self.tensor(weight.T.contiguous(), dim=1, dtype=HEAD_DTYPE)
         self.embedding_scale = torch.tensor(self.config.hidden_size**0.5, dtype=weight.dtype).item()
         norm = reader.get("model.language_model.norm.weight")
         self.norm = self.tensor(norm.reshape(1, 1, 1, -1))

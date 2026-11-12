@@ -43,6 +43,8 @@ DECODE_GEOMETRY = {
 # Output storage cores per decode matmul (sets per_core_N), independent of the input cores above, so the input
 # multicast geometry can change without changing the output shards the following ops consume.
 DECODE_OUTPUT_CORES = {"qkv": 8, "gate_up": 56, "o": 8, "down": 8}
+# Storage format of each projection matrix (the tied LM head is in model.py).
+WEIGHT_DTYPES = {"qkv": ttnn.bfloat8_b, "o": ttnn.bfloat8_b, "gate_up": ttnn.bfloat8_b, "down": ttnn.bfloat8_b}
 
 
 class Decoder:
@@ -53,7 +55,7 @@ class Decoder:
 
     @classmethod
     def from_state_dict(
-        cls, state_dict, *, hf_config, layer_idx, mesh_device, shared_setup=None, projection_dtype=ttnn.bfloat8_b
+        cls, state_dict, *, hf_config, layer_idx, mesh_device, shared_setup=None
     ):
         """Load one layer and share the stack's collective and rotary buffers."""
         import torch
@@ -191,7 +193,9 @@ class Decoder:
 
         def linear(name):
             return tensor(
-                sd[name + ".weight"].T, projection_dtype, dim=0 if name in ("self_attn.o_proj", "mlp.down_proj") else 1
+                sd[name + ".weight"].T,
+                WEIGHT_DTYPES[{"self_attn.o_proj": "o", "mlp.down_proj": "down"}.get(name, "gate_up")],
+                dim=0 if name in ("self_attn.o_proj", "mlp.down_proj") else 1,
             )
 
         q, k = (sd["self_attn.q_proj.weight"], sd["self_attn.k_proj.weight"])
@@ -204,17 +208,17 @@ class Decoder:
 
         self.qkv = tensor(
             packed(q, k, v),
-            projection_dtype,
+            WEIGHT_DTYPES["qkv"],
             dim=1,
             decode_only="qkv" if not self.sliding else None,
         )
         if not self.sliding:
-            self.qk = tensor(packed(q, k), projection_dtype, dim=1)
+            self.qk = tensor(packed(q, k), WEIGHT_DTYPES["qkv"], dim=1)
         self.o = linear("self_attn.o_proj")
         self.gate, self.up, self.down = (linear("mlp." + name + "_proj") for name in ("gate", "up", "down"))
         self.gate_up = tensor(
             packed(sd["mlp.gate_proj.weight"], sd["mlp.up_proj.weight"]),
-            projection_dtype,
+            WEIGHT_DTYPES["gate_up"],
             dim=1,
             decode_only="gate_up",
         )

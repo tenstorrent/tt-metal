@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 """Translate vLLM scheduler updates into the Gemma4 TP4 generator's inputs."""
 
-import os
 
 import torch
 
@@ -72,10 +71,7 @@ class Gemma4ForCausalLM:
         if hf_config.text_config.hidden_size != 5376 or hf_config.text_config.num_hidden_layers != 60:
             raise ValueError("Expected the Gemma4 31B checkpoint")
         torch.set_num_threads(8)
-        projection_dtype = {"bf4": ttnn.bfloat4_b, "bf8": ttnn.bfloat8_b}[
-            os.environ.get("GEMMA4_QB2_PROJECTION_DTYPE", "bf8")
-        ]
-        generator = build_generator(mesh_device, max_seq_len=max_seq_len, projection_dtype=projection_dtype)
+        generator = build_generator(mesh_device, max_seq_len=max_seq_len)
         return cls(generator, max_batch_size, max_seq_len)
 
     @classmethod
