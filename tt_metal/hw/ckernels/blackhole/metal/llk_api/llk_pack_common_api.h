@@ -196,6 +196,55 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 }
 
 /**
+ * llk_pack_reconfig_data_format for an output known at compile time (pack_reconfig_data_format's constant call sites):
+ * where the kernel allows it (llk_pack_reconfig_imm), only the config bits its pack formats change, as immediates.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam new_output          New output circular buffer / operand index to configure for.
+ */
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
+__attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
+    constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
+        ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+            pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
+    // get_output_id is the identity.
+    constexpr std::uint32_t output_id = new_output;
+    // A SKIP_ALL kernel keeps the no-op reconfigure.
+    constexpr bool skip_all = (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+                                   pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
+                               ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
+    if constexpr (
+        !imm.ok || skip_all || output_id >= sizeof(pack_dst_format) ||
+        pack_src_format[output_id] == static_cast<unsigned char>(DataFormat::Invalid) ||
+        pack_dst_format[output_id] == static_cast<unsigned char>(DataFormat::Invalid)) {
+        llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
+    } else {
+        SAN_HOOK(reconfigure(
+            StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+            StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+            StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+            StateVal<Operand<Exu::Pack>::TileWidth>(get_output_tile_c_dim(output_id)),
+            StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+            StateVal<Operand<Exu::Pack>::PartialFace>(false),
+            StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
+        LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
+        ckernel::packer::reconfig_packer_data_format_imm_and_state<
+            is_fp32_dest_acc_en,
+            imm.strides_full,
+            imm.format,
+            imm.section,
+            imm.lf8,
+            imm.threshold,
+            imm.dstacc,
+            imm.ystride,
+            imm.zwstride,
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            pack_tile_num_faces[output_id]>();
+    }
+}
+
+/**
  * Conditionally reconfigure the packer when switching output operands: only reprograms the data
  * format when the new output's destination format differs from the old one and neither is Invalid.
  *

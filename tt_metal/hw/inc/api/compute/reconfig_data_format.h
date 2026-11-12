@@ -9,6 +9,7 @@
 #include "api/compute/src_order.h"
 
 #ifdef TRISC_PACK
+#include <type_traits>
 #include "llk_pack_common_api.h"
 #include "llk_pack_tile_api.h"
 #endif
@@ -525,4 +526,47 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
 #endif
 }
 
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// The output as the front end sees it: its id for a constant, PACK_RECONFIG_CB_NONE for one known only at run time.
+constexpr std::uint32_t PACK_RECONFIG_CB_NONE = 0xFFFFFFFF;
+
+template <typename T>
+constexpr std::uint32_t pack_reconfig_cb_id(const T& cb) {
+    if constexpr (std::is_convertible_v<T, std::uint32_t>) {
+        return static_cast<std::uint32_t>(cb);
+    } else {
+        return PACK_RECONFIG_CB_NONE;
+    }
+}
+
+// pack_reconfig_data_format(cb) with the output's id taken by the front end: a constant output reconfigures with
+// immediates (llk_pack_reconfig_data_format_ct), any other keeps today's call.
+template <std::uint32_t cb_id, typename T>
+ALWI void pack_reconfig_data_format_cb(const T& new_cb) {
+    if constexpr (cb_id != PACK_RECONFIG_CB_NONE) {
+        LLK_SAN_FUNCTION();
+        PACK((llk_pack_reconfig_data_format_ct<DST_ACCUM_MODE, cb_id>()));
+    } else {
+        pack_reconfig_data_format(new_cb);
+    }
+}
+#endif
+
 }  // namespace ckernel
+
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// Lets today's pack_reconfig_data_format(cb) calls with a constant output reach the immediate reconfigure; other
+// arities pass through.
+#define PACK_RECONFIG_NARGS_(a1, a2, a3, a4, n, ...) n
+#define PACK_RECONFIG_NARGS(...) PACK_RECONFIG_NARGS_(__VA_ARGS__, 4, 3, 2, 1, 0)
+#define PACK_RECONFIG_CAT_(a, b) a##b
+#define PACK_RECONFIG_CAT(a, b) PACK_RECONFIG_CAT_(a, b)
+#define PACK_RECONFIG_CALL_1(cb)                                                                                  \
+    pack_reconfig_data_format_cb<(                                                                                \
+        __builtin_constant_p(::ckernel::pack_reconfig_cb_id(cb)) ? ::ckernel::pack_reconfig_cb_id(cb)            \
+                                                                  : ::ckernel::PACK_RECONFIG_CB_NONE)>(cb)
+#define PACK_RECONFIG_CALL_2(...) pack_reconfig_data_format(__VA_ARGS__)
+#define PACK_RECONFIG_CALL_3(...) pack_reconfig_data_format(__VA_ARGS__)
+#define PACK_RECONFIG_CALL_4(...) pack_reconfig_data_format(__VA_ARGS__)
+#define pack_reconfig_data_format(...) PACK_RECONFIG_CAT(PACK_RECONFIG_CALL_, PACK_RECONFIG_NARGS(__VA_ARGS__))(__VA_ARGS__)
+#endif

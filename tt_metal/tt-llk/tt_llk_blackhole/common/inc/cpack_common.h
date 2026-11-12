@@ -946,6 +946,174 @@ inline void reconfig_packer_data_format_and_state(
     __builtin_memcpy(pack_state, &state, sizeof(state));
 }
 
+// The words the reconfigure leaves for one output, as set_packer_config, reconfig_packer_data_format and
+// set_packer_strides<Default> write them.
+constexpr std::uint32_t pack_cfg_format_word(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    const std::uint32_t hw_src = pack_is_fp8_e4m3(pack_dst_format) ? to_underlying(DataFormat::Float16) : masked_data_format(pack_src_format);
+    return (1u << THCON_SEC0_REG1_Disable_zero_compress_SHAMT) | (masked_data_format(pack_dst_format) << THCON_SEC0_REG1_Out_data_format_SHAMT) |
+           (hw_src << THCON_SEC0_REG1_In_data_format_SHAMT);
+}
+
+constexpr bool pack_cfg_no_exp_section(const std::uint32_t pack_dst_format)
+{
+    return masked_data_format(pack_dst_format) == to_underlying(DataFormat::Lf8) || masked_data_format(pack_dst_format) == to_underlying(DataFormat::Int8);
+}
+
+constexpr std::uint32_t pack_cfg_ystride_word(const std::uint32_t pack_src_format)
+{
+    return (FACE_C_DIM * datum_size_in_bytes(pack_src_format)) << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT;
+}
+
+constexpr std::uint32_t pack_cfg_zwstride_word(const std::uint32_t pack_src_format)
+{
+    const std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
+    return ((FACE_R_DIM * FACE_C_DIM * x_stride) << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT) |
+           ((TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride) << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT);
+}
+
+// Per config word, the bits the kernel's CBs set differently. Fast tilize and hw_cleanup leave formats no CB has (no ok),
+// the other stride writers strides no CB has (strides_full: written whole, as the full reconfigure does).
+struct llk_pack_reconfig_imm_t
+{
+    bool ok;
+    bool strides_full;
+    std::uint32_t format, section, lf8, threshold, dstacc, ystride, zwstride;
+};
+
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n>
+constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
+    const unsigned char (&pack_src_format)[n],
+    const unsigned char (&pack_dst_format)[n],
+    const unsigned char (&pack_num_faces)[n],
+    const unsigned char (&pack_partial_face)[n])
+{
+    llk_pack_reconfig_imm_t m {false, false, 0, 0, 0, 0, 0, 0, 0};
+    bool any = false;
+    std::uint32_t f0 = 0, s0 = 0, l0 = 0, t0 = 0, a0 = 0, y0 = 0, z0 = 0;
+    for (std::size_t i = 0; i < n; i++)
+    {
+        const std::uint32_t src = pack_src_format[i];
+        const std::uint32_t dst = pack_dst_format[i];
+        if (src == to_underlying(DataFormat::Invalid) || dst == to_underlying(DataFormat::Invalid))
+        {
+            continue;
+        }
+        const std::uint32_t f = pack_cfg_format_word(src, dst);
+        // Word 0 after hw_configure on this output, and after a reconfigure to it (which writes it for block-float,
+        // Lf8 and Int8 outputs only).
+        const std::uint32_t s_hw = pack_cfg_no_exp_section(dst) ? 0 : (pack_partial_face[i] ? 1u : pack_num_faces[i]) << THCON_SEC0_REG1_Exp_section_size_SHAMT;
+        const std::uint32_t s_rc = IS_BFP_FORMAT(masked_data_format(dst)) ? std::uint32_t(pack_num_faces[i]) << THCON_SEC0_REG1_Exp_section_size_SHAMT : s_hw;
+        const std::uint32_t l = std::uint32_t(pack_is_fp8_e4m3(dst)) << THCON_SEC0_REG1_Pac_LF8_4b_exp_SHAMT;
+        const std::uint32_t t = pack_exp_threshold_bits<is_fp32_dest_acc_en>(masked_data_format(dst));
+        const std::uint32_t a = pack_dstacc_format(src, dst) << ALU_FORMAT_SPEC_REG2_Dstacc_SHAMT;
+        const std::uint32_t y = pack_cfg_ystride_word(src);
+        const std::uint32_t z = pack_cfg_zwstride_word(src);
+        if (!any)
+        {
+            any = true;
+            f0 = f, s0 = s_hw, l0 = l, t0 = t, a0 = a, y0 = y, z0 = z;
+        }
+        m.format |= f ^ f0;
+        m.section |= (s_hw ^ s0) | (s_rc ^ s0);
+        m.lf8 |= l ^ l0;
+        m.threshold |= t ^ t0;
+        m.dstacc |= a ^ a0;
+        m.ystride |= y ^ y0;
+        m.zwstride |= z ^ z0;
+    }
+    m.ok = any;
+    if ((is_fp32_dest_acc_en && sync == DstSync::SyncHalf && pack_reconfig_u2d<sync>) || pack_fast_tilize_linked<sync> || pack_strides_writer<4>)
+    {
+        m.ok = false;
+    }
+    if (pack_fast_untilize_linked<sync> || pack_strides_writer<1> || pack_strides_writer<2> || pack_strides_writer<3> || pack_strides_writer<5> ||
+        pack_strides_writer<6> || pack_strides_writer<7> || pack_strides_writer<8> || pack_strides_writer<9> || pack_strides_writer<10>)
+    {
+        m.strides_full = true;
+    }
+    return m;
+}
+
+// The bits of mask in one config word, set to val's: one RMWCIB per byte the mask touches.
+template <std::uint32_t addr, std::uint32_t mask, std::uint32_t val>
+TT_ALWAYS_INLINE void pack_cfg_rmw_imm()
+{
+    if constexpr ((mask & 0xff) != 0)
+    {
+        TTI_RMWCIB0(mask & 0xff, val & mask & 0xff, addr);
+    }
+    if constexpr (((mask >> 8) & 0xff) != 0)
+    {
+        TTI_RMWCIB1((mask >> 8) & 0xff, ((val & mask) >> 8) & 0xff, addr);
+    }
+    if constexpr (((mask >> 16) & 0xff) != 0)
+    {
+        TTI_RMWCIB2((mask >> 16) & 0xff, ((val & mask) >> 16) & 0xff, addr);
+    }
+    if constexpr ((mask >> 24) != 0)
+    {
+        TTI_RMWCIB3(mask >> 24, (val & mask) >> 24, addr);
+    }
+}
+
+// reconfig_packer_data_format_and_state for a constant output: only the bits the kernel's formats change, as immediates.
+// dest_rd_ctrl is always written (the run-time FP32 DEST switch writes it too); the tile header GPR has no Blackhole reader.
+template <
+    bool is_fp32_dest_acc_en,
+    bool strides_full,
+    std::uint32_t format_mask,
+    std::uint32_t section_mask,
+    std::uint32_t lf8_mask,
+    std::uint32_t threshold_mask,
+    std::uint32_t dstacc_mask,
+    std::uint32_t ystride_mask,
+    std::uint32_t zwstride_mask,
+    std::uint32_t pack_src_format,
+    std::uint32_t pack_dst_format,
+    std::uint32_t num_faces>
+TT_ALWAYS_INLINE void reconfig_packer_data_format_imm_and_state()
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        is_packer_to_L1_conversion_supported(
+            static_cast<DataFormat>(masked_data_format(pack_src_format)), static_cast<DataFormat>(masked_data_format(pack_dst_format))),
+        "Unsupported packer to L1 conversion.");
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
+    pack_cfg_rmw_imm<THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2, format_mask, pack_cfg_format_word(pack_src_format, pack_dst_format)>();
+    LLK_ASSERT(
+        is_pack_reads_per_xy_plane(1),
+        "reconfig_packer_data_format: pack_reads_per_xy_plane counter must be 1 before packer reconfig "
+        "(invariant violated; reduce mask should have been cleared via _llk_pack_reduce_mask_clear_).");
+    pack_cfg_rmw_imm<
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
+        PCK_DEST_RD_CTRL_FIELDS_MASK,
+        pack_dest_rd_ctrl_bits<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format) << PCK_DEST_RD_CTRL_Read_32b_data_SHAMT>();
+    if constexpr (IS_BFP_FORMAT(masked_data_format(pack_dst_format)))
+    {
+        pack_cfg_rmw_imm<THCON_SEC0_REG1_Row_start_section_size_ADDR32, section_mask, num_faces << THCON_SEC0_REG1_Exp_section_size_SHAMT>();
+    }
+    else if constexpr (pack_cfg_no_exp_section(pack_dst_format))
+    {
+        pack_cfg_rmw_imm<THCON_SEC0_REG1_Row_start_section_size_ADDR32, section_mask, 0>();
+    }
+    pack_cfg_rmw_imm<THCON_SEC0_REG1_Pac_LF8_4b_exp_ADDR32, lf8_mask, std::uint32_t(pack_is_fp8_e4m3(pack_dst_format)) << THCON_SEC0_REG1_Pac_LF8_4b_exp_SHAMT>();
+    pack_cfg_rmw_imm<THCON_SEC0_REG1_Exp_threshold_ADDR32, threshold_mask, pack_exp_threshold_bits<is_fp32_dest_acc_en>(masked_data_format(pack_dst_format))>();
+    pack_cfg_rmw_imm<ALU_FORMAT_SPEC_REG2_Dstacc_ADDR32, dstacc_mask, pack_dstacc_format(pack_src_format, pack_dst_format) << ALU_FORMAT_SPEC_REG2_Dstacc_SHAMT>();
+    if constexpr (strides_full)
+    {
+        set_packer_strides<PackMode::Default, true, false, false, is_fp32_dest_acc_en>(pack_src_format, TILE_C_DIM);
+    }
+    else
+    {
+        pack_cfg_rmw_imm<PCK0_ADDR_CTRL_XY_REG_0_Ystride_ADDR32, ystride_mask, pack_cfg_ystride_word(pack_src_format)>();
+        pack_cfg_rmw_imm<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32, zwstride_mask, pack_cfg_zwstride_word(pack_src_format)>();
+    }
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    const std::uint32_t state = 0x100;
+    __builtin_memcpy(pack_state, &state, sizeof(state));
+}
+
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
