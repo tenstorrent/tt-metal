@@ -35,6 +35,10 @@ KNOBS = {
     # one per token: 112 -> 7 and 48 -> 3 per source at t 16; same bytes, page ids, order): 4 K x 16 33.3 -> 32.7 ms,
     # bit-identical over 3 runs; 32 K x 4 ids identical
     "GLM53_DSA_SHARD_RSB": "1",
+    # GLM53_DSA_SHARD_R8: the local select and the merge in 8-bit radix digits (4 rounds + tie instead of 8 + tie; the
+    # same T / T_g, quotas and tie order): 1 M x 16 40.5 -> 38.2 ms (user 0 ids identical), 4 K x 16 bit-identical over
+    # 3 runs (merge -31 us per DSA layer), 32 K x 4 ids identical
+    "GLM53_DSA_SHARD_R8": "1",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",

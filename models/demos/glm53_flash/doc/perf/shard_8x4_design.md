@@ -208,7 +208,7 @@ instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to the compiler's 
 | COMB + RS1_EARLY | 3807.9 us | 4 K x 16 40.0 ms, 32 K x 4 22.1 ms | as COMB | off |
 | AGB (on AGK) | - | 4 K x 16 36.8 -> 35.7 ms; with RS1_EARLY 34.3 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical with RS1_EARLY | on |
 | RSB | 2977.0 -> 2925.4 us (layers 0-3 with UG16; RS1 wait 325 -> 287, RS2 58 -> 45) | 4 K x 16 33.3 -> 32.7 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical | on |
-| R8 (8-bit radix digits) | pending device run | pending device run | expected bit-identical (host: the same T / T_g, k_rem, quotas, tie order) | off |
+| R8 (8-bit radix digits) | 2925.5 -> 2899.6 us (B 16 pos 4095; merge 121 -> 89.5 us) | 4 K x 16 32.7 (both); 1 M x 16 40.5 -> 38.2 ms | bit-identical at B 16 (3 runs); 32 K x 4 and 1 M x 16 user 0 identical | on |
 
 The rows ran on the single-knob trees (wt_mrg e7f7dc8443f, wt_rsc ab4bd43c343 / 4d61833e021, wt_rs1 4e59a2c95c0),
 whose knob-off kernels equal this tree's. RS1_EARLY only moves send timing (the two-field gates are sound for every
@@ -251,7 +251,7 @@ cross-half traffic is 16 t x 20 KB per direction on the column's middle link (5.
 so if RS1 is link-bound its share shrinks to the signals' router stalls only -- the rs1 lane's opened -> sent span
 (probe row 238) tells which. RS2 (512 KB on the row's middle link at t 16) is not byte-bound.
 
-### R8: 8-bit radix digits in the local select and the merge (2026-11-11, MLA_REV 70, opt-in)
+### R8: 8-bit radix digits in the local select and the merge (2026-11-11, MLA_REV 70, default on the 8x4)
 
 Today (dsa_common.hpp 4-bit digits) a sparse token's local select is 8 radix rounds + the tie round on the lane's
 coordinator (ix_dm0), one report / broadcast handshake each: every chunk core histograms its compacted keys into its
