@@ -299,7 +299,7 @@ def video_audio_codes(backend, item):
 def interleave_video_audio(backend, item, frames):
     """A video with its audio track (tt/video_audio.py): the frames' rows ``frames`` [T * n_per_grid, hidden] and the
     audio's (its codes, ``video_audio_codes``, through ``backend.embed_audio_codes``) in the order of the item's
-    embedding rows, as vLLM 0.30's MiMoV2OmniForCausalLM.embed_multimodal lays them out: per group of T / n_segs grids,
+    embedding rows, as vLLM 0.31's MiMoV2OmniForCausalLM.embed_multimodal lays them out: per group of T / n_segs grids,
     the group's frames, then the group's audio segment (``video_audio_seg_lens``), the segments taken from the start of
     the audio in turn. Where the codes come from (the front end, or the engine's tokenizer from the mel) changes
     nothing here.

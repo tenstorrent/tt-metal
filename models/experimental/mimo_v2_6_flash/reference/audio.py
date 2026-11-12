@@ -25,7 +25,7 @@ vLLM's ``_load_audio_tokenizer``, which cast the whole tokenizer module to bf16:
 the RVQ codebooks (``encode`` casts the quantizer back to fp32 afterwards, the rounding stays) and the RoPE
 ``inv_freq``.
 
-vLLM 0.30.0 (``mimo_audio.py`` ``MimoAudioEncoder.get_audio_feature``, processor ``MiMoVLProcessor``) vs HF:
+vLLM 0.31.0 (``mimo_audio.py`` ``MimoAudioEncoder.get_audio_feature``, processor ``MiMoVLProcessor``) vs HF:
 
 * Precision: vLLM runs the tokenizer encoder in bf16 with bf16-rounded buffers (as above) and the patch encoder in
   the model dtype (bf16). We follow fp32 (the HF math; fp64 gives the same codes). bf16 changes at least one of the

@@ -3,7 +3,7 @@
 
 """Audio encoding in vLLM's front end: the upstream MiMo-V2-Omni processor plus the host audio encoders.
 
-``MiMoV2OmniTTMultiModalProcessor`` runs vLLM 0.30.0's ``MiMoV2OmniMultiModalProcessor`` (placeholders, pixels, mels,
+``MiMoV2OmniTTMultiModalProcessor`` runs vLLM 0.31.0's ``MiMoV2OmniMultiModalProcessor`` (placeholders, pixels, mels,
 video timestamps; unchanged) and then replaces each audio item's ``audio_features`` mel [T, 128] by the fp32 mel
 for the engine's device tokenizer encoder (MIMO_AUDIO_TOKENIZER=device, the default; below), or with
 MIMO_AUDIO_TOKENIZER=frontend by its RVQ codes (25 Hz) computed here in fp32 as the HF module computes them
@@ -14,13 +14,13 @@ MIMO_AUDIO_PATCH=frontend by the LLM embeddings the patch encoder makes from the
 of the engine. Only a bit-identical fp32 computation keeps every code (its RVQ decisions sit at fp32 rounding level,
 tests/perf/audio_codes_margin.py); the device encoder's few percent of changed frames cost no accuracy (below).
 
-Where it runs: vLLM 0.30.0's renderer calls ``_process_multimodal`` (and so this processor) through
+Where it runs: vLLM 0.31.0's renderer calls ``_process_multimodal`` (and so this processor) through
 ``make_async(..., executor=self._mm_executor)``, a single-worker ThreadPoolExecutor of the API server process, not on
 its asyncio event loop. Torch kernels release the GIL, so the loop keeps streaming other requests' tokens: while a
 120 s clip took 10.4 s there, a 10 ms text stream's largest gap was 20 ms (12 ms before; 10.9 s with the same work
 on the loop), on bhg4 at load average ~37 (tests/perf/audio_frontend_stall.py). Multimodal items of one API server
 queue behind each other on the one worker: a 5 s clip sent with that 120 s one finished after 10.7 s (9.7 s with the
-aligned windowed attention, load average ~20). vLLM 0.30 offers no setting for more workers: ``BaseRenderer``
+aligned windowed attention, load average ~20). vLLM 0.31 offers no setting for more workers: ``BaseRenderer``
 creates ``ThreadPoolExecutor(max_workers=1)`` and requires it ("must stay single-worker per #38418": the sender-side
 processor cache must see items in the order the engine receives them). The tokenizer encoder is ~98 % of an item's
 time here (30 s on bhg2: 1.63 s, of which resampling 6 ms, the upstream processor 17 ms, ``fp32_mels`` 15 ms), so
@@ -173,8 +173,8 @@ def fp32_mels(mels, waveforms, cfg):
 class MiMoV2OmniTTMultiModalProcessor(MiMoV2OmniMultiModalProcessor):
     """The upstream processor, with each audio item's mel replaced by its RVQ codes (``audio_codes``)."""
 
-    def _apply_hf_processor_main(self, mm_items, hf_processor_mm_kwargs):
-        out = super()._apply_hf_processor_main(mm_items, hf_processor_mm_kwargs)
+    def _apply_hf_processor_main(self, mm_items, hf_kwargs):
+        out = super()._apply_hf_processor_main(mm_items, hf_kwargs)
         if "audio_features" in out:
             if bool(torch.as_tensor(out.get("is_audio_tokenized", False)).any()):
                 raise ValueError("pre-tokenized audio input is not served; send the audio itself")

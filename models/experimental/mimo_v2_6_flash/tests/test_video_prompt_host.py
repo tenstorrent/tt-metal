@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A served video prompt is the checkpoint processor's (tt/video_prompt.py; host, needs vLLM 0.30.0 and the checkpoint).
+"""A served video prompt is the checkpoint processor's (tt/video_prompt.py; host, needs vLLM 0.31.0 and the checkpoint).
 
 The chat template renders a video as ``<|vision_start|><|video_pad|><|vision_end|>`` and the checkpoint's
 ``MiMoOmniProcessor`` replaces all three tokens by ``<|mimo_video_start|> (timestamp <|vision_start|> pads

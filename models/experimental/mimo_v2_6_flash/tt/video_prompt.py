@@ -9,7 +9,7 @@ MiMo's chat template renders a video as ``<|vision_start|><|video_pad|><|vision_
     <|mimo_video_start|> 00:00 <|vision_start|> pad x n <|vision_end|> 00:02 <|vision_start|> ... <|mimo_video_end|>
 
 (``process``: ``_ids = [video_start_token_id] ... + [video_end_token_id]``), as it does for images and audio, whose
-expansions bring their own start / end tokens. vLLM 0.30.0's ``MiMoV2OmniMultiModalProcessor._get_prompt_updates``
+expansions bring their own start / end tokens. vLLM 0.31.0's ``MiMoV2OmniMultiModalProcessor._get_prompt_updates``
 targets only ``<|video_pad|>``, so when vLLM applies the update itself (its processor-cache path, the default) the
 template's outer pair stays around the expansion:
 

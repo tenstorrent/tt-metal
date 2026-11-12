@@ -5,7 +5,7 @@
 
 vLLM's video loader samples the frames (``--media-io-kwargs '{"video": {...}}'`` or a request's ``media_io_kwargs``:
 32 frames spread over the whole clip by default; ``{"num_frames": N, "fps": F}`` samples at F frames per second, at
-most N frames) and returns them with their source indices and fps (``frames_indices``, ``fps``). vLLM 0.30's
+most N frames) and returns them with their source indices and fps (``frames_indices``, ``fps``). vLLM 0.31's
 ``MiMoV2OmniMultiModalProcessor`` drops those and labels the frames 0, 1, 2, ... seconds (``_INPUT_FPS = 1``), so a
 2-minute clip's 32 frames are announced as 00:00 .. 00:30 and every timestamp token the model reads is wrong.
 
@@ -32,7 +32,6 @@ Frame sampling is vLLM's loader's: Xiaomi's is ``--media-io-kwargs '{"video": {"
 """
 
 import os
-import threading
 
 import numpy as np
 import torch
@@ -98,7 +97,7 @@ def _metadata_list(items, n):
 
 
 def upstream_timestamps(num_frames):
-    """vLLM 0.30's labels: the frames 1 s apart (MiMoV2OmniMultiModalProcessor._INPUT_FPS)."""
+    """vLLM 0.31's labels: the frames 1 s apart (MiMoV2OmniMultiModalProcessor._INPUT_FPS)."""
     return torch.arange(num_frames, dtype=torch.float32)
 
 
@@ -194,38 +193,29 @@ def mimo_video(video, metadata=None, resize=None):
     return frames, (upstream_timestamps(frames.shape[0]) if times is None else times)
 
 
-_CONVERTING = threading.local()
-
-
-def converting():
-    """Whether the processor is inside _apply_hf_processor_main (the videos go to the checkpoint's processor)."""
-    return getattr(_CONVERTING, "on", False)
-
-
 class VideoTimestampsMixin:
     """For a MiMoV2OmniMultiModalProcessor subclass: hand the checkpoint's processor the loader's frame times
-    (MIMO_VIDEO_TIMESTAMPS=loader); every video goes as (frames, times), which upstream passes through (it cannot take
-    the (frames, metadata) items of a metadata-keeping parser)."""
+    (MIMO_VIDEO_TIMESTAMPS=loader); every video goes as (frames, times)."""
 
-    def _apply_hf_processor_main(self, mm_items, hf_processor_mm_kwargs):
-        _CONVERTING.on = True
-        try:
-            return super()._apply_hf_processor_main(mm_items, hf_processor_mm_kwargs)
-        finally:
-            _CONVERTING.on = False
+    def _get_hf_mm_inputs(self, mm_items, hf_kwargs):
+        """The items' data for the checkpoint's processor, with every video converted here (``mimo_video``).
 
-    def _get_hf_mm_data(self, mm_items):
-        data, passthrough = super()._get_hf_mm_data(mm_items)
-        videos = data.get("videos")
-        # vLLM also calls this for the passthrough data alone (before its processor-cache lookup): the frames are
-        # converted (resized, as floats) only for the checkpoint's processor, so a cache hit converts nothing.
-        if not videos or not converting():
-            return data, passthrough
-        metadata = _metadata_list(mm_items.get("video"), len(videos))
-        processor = self.info.get_hf_processor().mimo_processor
-        resize = (processor._vid_kw, processor.patch_size * processor.merge_size)
-        out = [None if v is None else mimo_video(v, m, resize) for v, m in zip(videos, metadata)]
-        return {**data, "videos": out}, passthrough
+        vLLM 0.31's MiMoV2OmniMultiModalProcessor converts the videos in its own ``_get_hf_mm_inputs``, on the base
+        class's data, before a subclass sees them: it cannot take the (frames, metadata) items of the metadata-keeping
+        parser, and it turns the frames into floats at full size. So this takes the base class's data instead of
+        upstream's; converting the videos is all upstream's override does. vLLM calls it only for the items its
+        processor cache misses (``_apply_hf_processor_main``), so a cache hit converts nothing."""
+        from vllm.multimodal.processing.processor import BaseMultiModalProcessor
+
+        inputs = BaseMultiModalProcessor._get_hf_mm_inputs(self, mm_items, hf_kwargs)
+        videos = inputs.hf_data.get("videos")
+        if videos:
+            metadata = _metadata_list(mm_items.get("video"), len(videos))
+            processor = self.info.get_hf_processor().mimo_processor
+            resize = (processor._vid_kw, processor.patch_size * processor.merge_size)
+            videos = [None if v is None else mimo_video(v, m, resize) for v, m in zip(videos, metadata)]
+            inputs.hf_data["videos"] = videos
+        return inputs
 
 
 class VideoInfoMixin:

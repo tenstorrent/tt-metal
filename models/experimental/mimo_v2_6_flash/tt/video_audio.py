@@ -6,7 +6,7 @@
 The checkpoint's processor (``MiMoVLProcessor``, ``video_audio`` items) cuts a video's audio into one segment per group
 of frames (``video_audio_interleave_length`` 0: one group per temporal grid, i.e. two frames) at 6.25 tokens a second,
 by the frames' times, and writes ``<|mimo_video_start|> (timestamp <|vision_start|> pads <|vision_end|>
-<|mimo_audio_start|> audio pads <|mimo_audio_end|>)* <|mimo_video_end|>``; vLLM 0.30's ``get_video_replacement`` writes
+<|mimo_audio_start|> audio pads <|mimo_audio_end|>)* <|mimo_video_end|>``; vLLM 0.31's ``get_video_replacement`` writes
 the same from the item's ``video_audio_n_segs`` / ``video_audio_seg_lens``. vLLM's API has no way to ask for it (its
 ``use_audio_in_video`` adds the audio as a separate item and placeholder), so here:
 
@@ -15,8 +15,8 @@ the same from the item's ``video_audio_n_segs`` / ``video_audio_seg_lens``. vLLM
   resampled to 24 kHz mono (vLLM's resampler, as its parser does for audio items) and kept in the video's loader
   metadata (``mimo_audio``), which goes into the item's hash and survives vLLM's processor cache with the frames
   (tt/video_input.py). A video without an audio track (or whose track fails to decode) stays a plain video (logged).
-* ``_get_hf_mm_data``: a call's videos go to the checkpoint's processor as ``video_audio`` items when every one of them
-  has its audio (the processor lists plain videos before video_audio ones, so a mix would reorder the items).
+* ``_get_hf_mm_inputs``: a call's videos go to the checkpoint's processor as ``video_audio`` items when every one of
+  them has its audio (the processor lists plain videos before video_audio ones, so a mix would reorder the items).
 * ``_apply_hf_processor_main``: each item's mel is recomputed in fp32 (vLLM casts the processor's to bf16) and, as
   tt/audio/processor.py does for audio items, follows MIMO_AUDIO_TOKENIZER: with ``device`` (the default) the item
   carries the whole track's fp32 mel as its int32 bits, ``va_audio_mel_bits`` [T, 128] (a video field; 51 KB a
@@ -167,24 +167,23 @@ class VideoAudioMixin:
             attach_audio(inputs.mm_data_items.get("video"))
         return super().apply(inputs, *args, **kwargs)
 
-    def _get_hf_mm_data(self, mm_items):
-        from .video_input import converting
-
-        data, passthrough = super()._get_hf_mm_data(mm_items)
+    def _get_hf_mm_inputs(self, mm_items, hf_kwargs):
+        inputs = super()._get_hf_mm_inputs(mm_items, hf_kwargs)  # VideoTimestampsMixin: the videos as (frames, times)
+        data = inputs.hf_data
         videos = data.get("videos")
-        if not videos or not converting():
-            return data, passthrough
+        if not videos:
+            return inputs
         waves = _waves(mm_items, len(videos))
         if any(w is None for w in waves):
             if any(w is not None for w in waves):
                 logger.warning("MiMo video audio: some videos of the request have no audio track; none takes its audio")
-            return data, passthrough
-        data = {k: v for k, v in data.items() if k != "videos"}
+            return inputs
+        del data["videos"]
         data["video_audio"] = [_video_audio_input(v, w) for v, w in zip(videos, waves)]
-        return data, passthrough
+        return inputs
 
-    def _apply_hf_processor_main(self, mm_items, hf_processor_mm_kwargs):
-        out = super()._apply_hf_processor_main(mm_items, hf_processor_mm_kwargs)
+    def _apply_hf_processor_main(self, mm_items, hf_kwargs):
+        out = super()._apply_hf_processor_main(mm_items, hf_kwargs)
         if "va_audio_features" not in out:
             return out
         from ..reference import audio as ref

@@ -5,7 +5,7 @@
 
 On real speech (reference/make_audio_clips.py: 5 s, 30 s and 65 s, the last over one 6000-frame segment):
 
-* the mel equals vLLM 0.30.0's ``MiMoVLProcessor.preprocess_audio`` bit for bit, after vLLM's own resampling of the
+* the mel equals vLLM 0.31.0's ``MiMoVLProcessor.preprocess_audio`` bit for bit, after vLLM's own resampling of the
   16 kHz file to 24 kHz, and our token count equals its ``audio_token_lens``;
 * in fp32 the 20 RVQ codes are identical to the HF ``MiMoAudioTokenizer`` encoder's, and the [n, 4096]
   embeddings to ``MiMoAudioEncoder.get_audio_feature``'s; n == ``audio_token_lens``;

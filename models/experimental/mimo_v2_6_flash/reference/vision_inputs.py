@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ViT inputs exactly as served: vLLM 0.30.0's ``MiMoV2OmniMultiModalProcessor`` run on the host.
+"""ViT inputs exactly as served: vLLM 0.31.0's ``MiMoV2OmniMultiModalProcessor`` run on the host.
 
 The processor is built the way the server builds it (``ModelConfig`` of the checkpoint with the omni architecture,
 ``dtype=bfloat16``, so ``pixel_values`` arrive in bf16 like in serving) and called on PIL images or decoded video

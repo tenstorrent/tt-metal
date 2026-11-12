@@ -3,7 +3,7 @@
 
 """Audio tokenized in vLLM's front end (tt/audio/processor.py): no device.
 
-Through vLLM 0.30.0's own renderer (the API server's input path, built from the checkpoint with the TT platform and
+Through vLLM 0.31.0's own renderer (the API server's input path, built from the checkpoint with the TT platform and
 MiMoV2OmniForCausalLM, so the registered processor is ours), on LibriSpeech clips (16 kHz files, resampled by vLLM):
 
 * with MIMO_AUDIO_TOKENIZER=frontend (MIMO_AUDIO_PATCH device or engine) each item reaches the engine as ``audio_codes`` int32

@@ -7,7 +7,7 @@ MiMoV2OmniMultiModalProcessor) with no engine and no device. For each case it re
 would answer (exceptions mapped with vLLM's own create_error_response, the way its exception handlers do) and, on
 success, the placeholder count of every multimodal item and the prompt length.
 
-Run with the serving environment's Python (vLLM 0.30), on CPU, without the TT platform plugin:
+Run with the serving environment's Python (vLLM 0.31), on CPU, without the TT platform plugin:
 
   VLLM_TARGET_DEVICE=cpu VLLM_PLUGINS= HF_HUB_OFFLINE=1 python conformance_offline.py \\
       --model /path/to/MiMo-V2.6-Flash-MOPD --out offline.json [--extra-path DIR] [--cases id1,id2]
@@ -58,7 +58,7 @@ def build_front_end(model_path, max_model_len, limits, media_io_kwargs=None):
 
 
 def status_of(exc):
-    """The HTTP status vLLM 0.30's API server answers for an exception raised while rendering a chat request."""
+    """The HTTP status vLLM 0.31's API server answers for an exception raised while rendering a chat request."""
     import pydantic
     from vllm.entrypoints.serve.exception_handling.error_response import create_error_response
 

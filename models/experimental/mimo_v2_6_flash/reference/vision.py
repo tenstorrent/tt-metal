@@ -19,7 +19,7 @@ op (same torch functions in the same order, so fp32 outputs match the HF module 
   units of each frame are transposed (h, w) -> (w, h) on entering the run and restored on leaving it;
 * merger: norm over each patch, 2x2 merge units concatenated to 5120, Linear 5120 -> 5120, GELU, Linear -> 4096.
 
-HF vs vLLM (vLLM 0.30.0 ``mimo_v2_omni.py``, what serves the model on GPU): the merger norm differs. HF builds
+HF vs vLLM (vLLM 0.31.0 ``mimo_v2_omni.py``, what serves the model on GPU): the merger norm differs. HF builds
 ``nn.LayerNorm(1280)`` (mean-centred; its bias, absent from the checkpoint, initialises to 0); vLLM builds
 ``RMSNorm(1280)``. The checkpoint holds only ``visual.merger.ln_q.weight``, as an RMSNorm would. We follow vLLM
 (``merger_norm="rms"``, the default); ``merger_norm="layernorm"`` reproduces HF. The merger linears have no bias in

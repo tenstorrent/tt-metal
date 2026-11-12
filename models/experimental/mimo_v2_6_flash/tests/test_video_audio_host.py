@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""A video with its audio track (tt/video_audio.py, tt/multimodal.py; host, needs vLLM 0.30.0, PyAV, torchaudio and a
+"""A video with its audio track (tt/video_audio.py, tt/multimodal.py; host, needs vLLM 0.31.0, PyAV, torchaudio and a
 checkpoint with ``audio_tokenizer/``).
 
 A synthetic 6 s clip (4 fps, AAC audio) goes through vLLM's media loader and the TT processor with
@@ -109,7 +109,14 @@ def cached_processor(processor):
     from vllm.multimodal.cache import MultiModalProcessorOnlyCache
 
     cache = MultiModalProcessorOnlyCache(processor.info.ctx.model_config)
-    return type(processor)(processor.info, processor.dummy_inputs, cache=cache)
+
+    class Cached(type(processor)):
+        """vLLM 0.31 hands the processor its cache with each call (its renderer does)."""
+
+        def __call__(self, *args, **kwargs):
+            return super().__call__(*args, cache=cache, **kwargs)
+
+    return Cached(processor.info, processor.dummy_inputs)
 
 
 @pytest.fixture(scope="module")

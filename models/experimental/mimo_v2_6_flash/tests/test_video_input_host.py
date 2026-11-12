@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Video input fidelity (tt/video_input.py; host, needs vLLM 0.30.0 and the checkpoint).
+"""Video input fidelity (tt/video_input.py; host, needs vLLM 0.31.0 and the checkpoint).
 
 * Timestamps: a video whose loader metadata says its 32 frames were sampled over 74 s is announced with those times
   (00:00, 00:04, ... 01:11), not upstream's 00:00 .. 00:30, also through vLLM's processor cache (which re-parses the
@@ -59,10 +59,17 @@ def processors():
     upstream = vi.vllm_processor(path)
     info = Info(upstream.info.ctx)
     cache = MultiModalProcessorOnlyCache(upstream.info.ctx.model_config)
+
+    class Cached(Processor):
+        """With vLLM's processor cache, which vLLM 0.31 hands the processor with each call (its renderer does)."""
+
+        def __call__(self, *args, **kwargs):
+            return super().__call__(*args, cache=cache, **kwargs)
+
     return {
         "upstream": upstream,
         "ours": Processor(info, Dummy(info)),
-        "cached": Processor(info, Dummy(info), cache=cache),
+        "cached": Cached(info, Dummy(info)),
     }
 
 
@@ -200,7 +207,7 @@ def test_video_items_bounded_only_by_the_context(processors):
 
 def test_cache_hit_converts_nothing(processors, monkeypatch):
     """vLLM's processor cache: the second request on a video (the next question) neither resizes nor processes its
-    frames; vLLM's passthrough-only call of _get_hf_mm_data converts nothing either."""
+    frames."""
     from models.experimental.mimo_v2_6_flash.tt import video_input
 
     calls = []
