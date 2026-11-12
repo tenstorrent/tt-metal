@@ -473,15 +473,15 @@ std::array<uint32_t, 4> reduce_scatter_semaphore_args(
     };
 }
 
-// Common runtime args of the reduce-scatter reader and writer, in ReduceScatterCommonArgs order: input, intermediate,
-// output, penult (0 when absent), then the semaphore slots.
-// The input's tile rows: the row word of the line kernels' row-free programs.
-uint32_t reduce_scatter_input_Ht(const Tensor& input) {
+// The input's rows in tiles.
+uint32_t input_Ht(const Tensor& input) {
     const auto& shape = input.padded_shape();
     const uint32_t rows = shape.rank() >= 2 ? shape[-2] : 1u;
     return input.layout() == tt::tt_metal::Layout::TILE ? rows / tt::constants::TILE_HEIGHT : rows;
 }
 
+// Common runtime args of the reduce-scatter kernels, in ReduceScatterCommonArgs order: input, intermediate, output,
+// penult (0 when absent), the semaphore slots, then input_Ht and half the intermediate's pages (line kernels only).
 void append_reduce_scatter_common_args(
     tt::tt_metal::KernelDescriptor::RTArgList& common_args,
     bool is_ring,
@@ -508,7 +508,7 @@ void append_reduce_scatter_common_args(
         common_args.push_back(
             semaphore_arg);  // smuggled-rta-ok: GlobalSemaphore address, workload-scoped or re-applied
     }
-    common_args.push_back(reduce_scatter_input_Ht(input));
+    common_args.push_back(input_Ht(input));
     common_args.push_back(static_cast<uint32_t>(intermediate.mesh_buffer().num_pages() / 2));
 }
 
@@ -534,7 +534,7 @@ void apply_reduce_scatter_common_args(
     values[Args::penult] = penult.has_value() ? penult->mesh_buffer().address() : 0u;
     const auto semaphore_args = reduce_scatter_semaphore_args(is_ring, barrier, semaphores);
     std::copy(semaphore_args.begin(), semaphore_args.end(), values.begin() + Args::barrier);
-    values[Args::input_Ht] = reduce_scatter_input_Ht(input);
+    values[Args::input_Ht] = input_Ht(input);
     values[Args::intermediate_half_pages] = static_cast<uint32_t>(intermediate.mesh_buffer().num_pages() / 2);
     for (const size_t kernel_index :
          {artifacts.reader_kernel_index, artifacts.writer_kernel_index, artifacts.reduce_kernel_index}) {
@@ -1799,8 +1799,8 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
                     start_tiles_to_read,                                         // start_tiles_to_read
                 };
                 if (normalized_dim != 0) {
-                    writer_rt_args.push_back(worker_id);    // worker_id
-                    writer_rt_args.push_back(num_workers);  // num_workers
+                    writer_rt_args.push_back(worker_id);
+                    writer_rt_args.push_back(num_workers);
                 }
                 tt::tt_metal::KernelDescriptor::RTArgList writer_args;
                 writer_args.append(writer_rt_args);
