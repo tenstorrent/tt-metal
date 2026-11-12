@@ -1,11 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Software-fp32 GDN gate math for the fast_mode readers. VERBATIM copy of the anonymous-namespace helpers of
-// gdn_decode_step/device/kernels/dataflow/reader_gdn_decode_step_conv_fast.cpp (fill_scalar_tile_fast, f_from_bits,
-// bits_from_f, exp_acc, log1p_acc, read_head_scalar_bits) plus gate_beta_decay_bits, the per-user gate block of that
-// reader as one function. gdn_spec_step(fast_mode=True) is bit-identical to gdn_decode_step(fast_mode=True) only
-// while the two stay identical: keep them in sync (tests/ttnn/unit_tests/operations/experimental/kda/
-// test_gdn_spec_step.py::test_tier1_vs_gdn_decode_step_conv[fast*] guards the identity on device).
+// Software-fp32 GDN gate math of the fast_mode readers of gdn_decode_step and gdn_spec_step: one copy, so a
+// gdn_spec_step token and a gdn_decode_step step compute the same gate bits.
 #pragma once
 #include <cstdint>
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"

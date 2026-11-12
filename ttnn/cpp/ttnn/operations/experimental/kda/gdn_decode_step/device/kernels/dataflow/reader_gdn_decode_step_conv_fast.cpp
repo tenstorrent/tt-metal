@@ -6,94 +6,9 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
 
 using namespace gdn_step_df;
-
-namespace {
-// Broadcast one fp32 value over a whole fp32 tile (slot reserved): plain unrolled stores (the lock flushes on release).
-inline void fill_scalar_tile_fast(DataflowBuffer& dfb, uint32_t value) {
-    auto lock = dfb.scoped_write_lock(1);
-    uint32_t* p = &lock.template get_ptr<uint32_t>()[0];
-#pragma GCC unroll 16
-    for (uint32_t i = 0; i < 1024; ++i) {
-        p[i] = value;
-    }
-}
-
-// FAST2: fp32 scalar gate math on the reader (the compute gets ready-made beta / decay scalar tiles).
-inline float f_from_bits(uint32_t b) {
-    union {
-        uint32_t u;
-        float f;
-    } v{b};
-    return v.f;
-}
-inline uint32_t bits_from_f(float f) {
-    union {
-        float f;
-        uint32_t u;
-    } v{f};
-    return v.u;
-}
-// exp(x): Cody-Waite range reduction + degree-7 Taylor on |r| <= ln2/2 (rel. err ~1e-7)
-inline float exp_acc(float x) {
-    if (x < -87.0f) {
-        return 0.0f;
-    }
-    if (x > 88.0f) {
-        x = 88.0f;
-    }
-    const float fn = x * 1.4426950408889634f;
-    const int32_t n = static_cast<int32_t>(fn < 0.0f ? fn - 0.5f : fn + 0.5f);
-    const float r = (x - static_cast<float>(n) * 0.693359375f) - static_cast<float>(n) * (-2.12194440e-4f);
-    float p = 1.0f / 5040.0f;
-    p = p * r + 1.0f / 720.0f;
-    p = p * r + 1.0f / 120.0f;
-    p = p * r + 1.0f / 24.0f;
-    p = p * r + 1.0f / 6.0f;
-    p = p * r + 0.5f;
-    p = p * r + 1.0f;
-    p = p * r + 1.0f;
-    return f_from_bits(bits_from_f(p) + (static_cast<uint32_t>(n) << 23));
-}
-// log(1 + y), y >= 0
-inline float log1p_acc(float y) {
-    if (y < 1e-4f) {
-        return y * (1.0f - y * (0.5f - y * (1.0f / 3.0f)));
-    }
-    const float z = 1.0f + y;
-    uint32_t zb = bits_from_f(z);
-    int32_t e = static_cast<int32_t>((zb >> 23) & 0xFF) - 127;
-    float m = f_from_bits((zb & 0x007FFFFFu) | 0x3F800000u);  // [1, 2)
-    if (m > 1.41421356f) {
-        m *= 0.5f;
-        e += 1;
-    }
-    const float t = (m - 1.0f) / (m + 1.0f);
-    const float t2 = t * t;
-    float s = 1.0f / 11.0f;
-    s = s * t2 + 1.0f / 9.0f;
-    s = s * t2 + 1.0f / 7.0f;
-    s = s * t2 + 1.0f / 5.0f;
-    s = s * t2 + 1.0f / 3.0f;
-    s = s * t2 + 1.0f;
-    return static_cast<float>(e) * 0.6931471805599453f + 2.0f * t * s;
-}
-
-template <bool src_fp32, typename Accessor>
-inline uint32_t read_head_scalar_bits(const Accessor& acc, DataflowBuffer& staging, Noc& noc, uint32_t col) {
-    staging.reserve_back(1);  // staging only: never pushed (the compute does not consume this DFB in FAST2)
-    return load_tile_scalar<src_fp32>(acc, staging, noc, 0, col);
-}
-
-template <bool src_fp32, typename Accessor>
-inline void load_head_scalar_fast(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t col) {
-    dfb.reserve_back(1);
-    const uint32_t value = load_tile_scalar<src_fp32>(acc, dfb, noc, 0, col);
-    fill_scalar_tile_fast(dfb, value);
-    dfb.push_back(1);
-}
-}  // namespace
 
 template <
     uint32_t Kt,
@@ -203,20 +118,13 @@ TT_KERNEL void reader(uint32_t head, uint32_t u0, uint32_t nu) {
             a_bits = static_cast<uint32_t>(p16[tile_elem_index(b, h)]) << 16;
             b_bits = static_cast<uint32_t>(p16[tile_elem_index(b, Nv + h)]) << 16;
         }
-        // FAST2: a_s <- beta = sigmoid(b), b_s <- decay = exp(-exp(A) * softplus(a + dt_bias)) (softplus threshold 20)
-        {
-            const float bv = f_from_bits(b_bits);
-            const float beta = 1.0f / (1.0f + exp_acc(-bv));
-            const float xv = f_from_bits(a_bits) + f_from_bits(dtb_bits);
-            const float sp = xv > 20.0f ? xv : log1p_acc(exp_acc(xv));
-            const float dec = exp_acc(f_from_bits(nea_bits) * sp);
-            a_bits = bits_from_f(beta);
-            b_bits = bits_from_f(dec);
-        }
-        fill_scalar_tile_fast(a_s, a_bits);
+        // a_s <- beta = sigmoid(b), b_s <- decay = exp(-exp(A) * softplus(a + dt_bias)) (softplus threshold 20)
+        uint32_t beta_bits, dec_bits;
+        gate_beta_decay_bits(a_bits, b_bits, dtb_bits, nea_bits, beta_bits, dec_bits);
+        fill_scalar_tile_fast(a_s, beta_bits);
         a_s.push_back(1);
         b_s.reserve_back(1);
-        fill_scalar_tile_fast(b_s, b_bits);
+        fill_scalar_tile_fast(b_s, dec_bits);
         b_s.push_back(1);
         read_tiles_2<state2>(state_acc, state2_acc, state_pages_a, state_in, noc, state_page, KV);
         if (ui == 0) {

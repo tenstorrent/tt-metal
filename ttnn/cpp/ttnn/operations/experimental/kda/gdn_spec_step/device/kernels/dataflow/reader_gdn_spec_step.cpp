@@ -20,7 +20,7 @@
 #define GDN_FAST 0
 #endif
 #if GDN_FAST
-#include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_spec_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
 #endif
 
 using namespace gdn_step_df;
