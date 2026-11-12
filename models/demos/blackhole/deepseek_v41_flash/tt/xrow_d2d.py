@@ -46,6 +46,11 @@ def halo_pairs(src, cps):
     return out
 
 
+def ag_enabled():
+    """DSV41_XROW_D2D_AG=1: latents travel as 1/cols per column pair (the 8 columns hold identical pools) and are re-assembled by a column all_gather on every row"""
+    return enabled() and os.environ.get("DSV41_XROW_D2D_AG", "0") == "1"
+
+
 def keys_enabled():
     return enabled() and os.environ.get("DSV41_XROW_D2D_KEYS", "1") == "1"
 
@@ -87,6 +92,14 @@ class XrowD2D:
         self.G = z([1, 1, CH, PO.HEAD_DIM])
         self.OUT = z([1, 1, CH, PO.HEAD_DIM])
         self.INT = self._intermediate(self.G)
+        self.ag = ag_enabled()
+        if self.ag:
+            self.S = CH // self.cols
+            assert self.S * self.cols == CH
+            self.G8 = z([1, 1, self.S, PO.HEAD_DIM])
+            self.OUT8 = z([1, 1, self.S, PO.HEAD_DIM])
+            self.INT8 = self._intermediate(self.G8)
+            self.shard2 = ttnn.ShardTensor2dMesh(md, dims=(0, 1), mesh_shape=(self.rows, self.cols))
         self.kst = {}
         if self.ks is not None:
             for lid, st in self.ks.store.items():
@@ -138,7 +151,46 @@ class XrowD2D:
             mesh_mapper=self.shard,
         )
 
+    def _ids8(self, row, vals):
+        """uint32 RM [rows, cols, 1, S] sharded over both mesh axes: column c of ``row`` holds vals[c * S : (c + 1) * S], SKIP elsewhere"""
+        ids = torch.full((self.rows, self.cols, 1, self.S), SKIP, dtype=torch.int64)
+        for c in range(self.cols):
+            v = vals[c * self.S : (c + 1) * self.S]
+            if row is not None:
+                ids[row, c, 0, : v.numel()] = v
+        return ttnn.from_torch(
+            ids.to(torch.int32),
+            device=self.md,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.shard2,
+        )
+
+    def _gather_cols(self, t):
+        return ttnn.all_gather(t, dim=2, cluster_axis=1, num_links=1, topology=ttnn.Topology.Ring)
+
+    def _move_latents_ag(self, sri, dr, phys_src, phys_dst):
+        pool = self.m.pool
+        n = int(phys_src.numel())
+        keep = []
+        for a in range(0, n, CH):
+            m = min(CH, n - a)
+            d_s = self._ids8(sri, phys_src[a : a + m])
+            d_d = self._ids(dr, phys_dst[a : a + m])
+            PO.paged_gather_rows(pool.pool, ttnn.reshape(d_s, [1, self.S]), out=self.G8)
+            self.p2p(self.G8, self.OUT8, sri, dr, self.INT8)
+            full = self._gather_cols(self.OUT8)
+            PO.paged_scatter_rows(pool.pool, full, d_d)
+            ttnn.deallocate(
+                full
+            )  # (enqueued behind the scatter: the allocator reuses it only for later ops of the same queue)
+            keep += [d_s, d_d]
+        return keep
+
     def move_latents(self, sri, dr, phys_src, phys_dst):
+        if self.ag:
+            return self._move_latents_ag(sri, dr, phys_src, phys_dst)
         """pool[dr][phys_dst[i]] = pool[sri][phys_src[i]] for the concatenated sources, in place; enqueued, NOT synchronised (-> tensors to free after the next synchronize)"""
         pool = self.m.pool
         n = int(phys_src.numel())
@@ -194,6 +246,14 @@ class XrowD2D:
         PO.paged_gather_rows(pool.pool, ttnn.reshape(d_s, [1, CH]), out=self.G)
         PO.paged_scatter_rows(pool.pool, self.OUT, d_d)
         keep += [d_s, d_d]
+        if self.ag:
+            d8 = self._ids8(None, torch.zeros(0, dtype=torch.long))
+            PO.paged_gather_rows(pool.pool, ttnn.reshape(d8, [1, self.S]), out=self.G8)
+            keep += [d8, self._gather_cols(self.OUT8)]
+            for sr in range(self.rows):
+                for dr in range(self.rows):
+                    if sr != dr:
+                        self.p2p(self.G8, self.OUT8, sr, dr, self.INT8)
         for sr in range(self.rows):
             for dr in range(self.rows):
                 if sr != dr:
