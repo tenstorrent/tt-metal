@@ -123,6 +123,7 @@ def _load_env_config(check_budget: bool = True) -> None:
     # Must match the runner's. PREFILL_PRODUCER_MEDIA="start:num_tokens,..." places synthetic images at those prompt
     # positions of every request; the runner reads them from the metadata as the engine would send them.
     MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
+    assert MEDIA_MAX_REFS >= 0, f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS} must be >= 0"
     H2D_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
     MEDIA = [tuple(int(x) for x in m.split(":")) for m in os.environ.get("PREFILL_PRODUCER_MEDIA", "").split(",") if m]
     assert not MEDIA or MEDIA_MAX_REFS, "PREFILL_PRODUCER_MEDIA needs PREFILL_MEDIA_MAX_REFS > 0"

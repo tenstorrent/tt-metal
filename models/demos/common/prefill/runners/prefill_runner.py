@@ -154,6 +154,7 @@ CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
 # Most media items the first rank's H2D metadata lists per forward; the engine must use the same value. Only that
 # metadata grows: D2D records, D2H acks and the indices channel keep their sizes.
 MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
+assert MEDIA_MAX_REFS >= 0, f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS} must be >= 0"
 H2D_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
 
 D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
@@ -561,8 +562,9 @@ def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
 
 
 def _ack_metadata(runtime, sockets, meta: dict, d2h_service) -> ttnn.Tensor:
-    """The D2H ack record: the received metadata, except on the first rank with media refs, whose H2D metadata is
-    longer than the ack; there a chunks-only record, refilled each forward."""
+    """Metadata sent back in the D2H ack. Normally this is the metadata the rank received. On the first rank with
+    media refs, the received metadata also carries the refs and is too long for the ack, so send only the chunk
+    records, rebuilt every forward."""
     if not (MEDIA_MAX_REFS and d2h_service is not None and runtime.config.is_first_rank):
         return sockets.metadata
     words = torch.tensor(forward_metadata_words(meta["chunks"], FORWARD_CHUNKS), dtype=torch.int32).reshape(1, 1, 1, -1)
