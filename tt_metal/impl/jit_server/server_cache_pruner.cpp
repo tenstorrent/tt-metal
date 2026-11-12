@@ -125,33 +125,33 @@ std::vector<fs::path> child_dirs(const fs::path& path) {
     return dirs;
 }
 
-struct Usage {
-    std::int64_t last_used_epoch_seconds = 0;
-    std::uint64_t bytes = 0;
-};
-
-// Newest timestamp and allocated size of a directory tree. The directory mtimes count, and so do
-// each file's mtime and atime; directory atimes are skipped because the scan itself updates them.
-Usage measure(const fs::path& path) {
-    Usage usage;
+// When a kernel directory was last used, from one lstat of the directory itself rather than a walk
+// of every file beneath it. Every request stamps the directory's mtime. A directory no request has
+// stamped, such as one an older server wrote, keeps the mtime it got when its files were created,
+// so it counts as last used when it was compiled.
+std::optional<std::int64_t> last_used_epoch_seconds(const fs::path& path) {
     struct stat info{};
     if (::lstat(path.c_str(), &info) != 0) {
-        return usage;
+        return std::nullopt;
     }
-    usage.bytes = static_cast<std::uint64_t>(info.st_blocks) * 512;
-    usage.last_used_epoch_seconds = info.st_mtime;
-    if (!S_ISDIR(info.st_mode)) {
-        usage.last_used_epoch_seconds = std::max<std::int64_t>(info.st_mtime, info.st_atime);
-        return usage;
+    return info.st_mtime;
+}
+
+// Allocated size of a directory tree, not following symlinks.
+std::uint64_t allocated_bytes(const fs::path& path) {
+    struct stat info{};
+    if (::lstat(path.c_str(), &info) != 0) {
+        return 0;
     }
-    std::error_code ec;
-    fs::directory_iterator it(path, ec);
-    for (; !ec && it != fs::directory_iterator(); it.increment(ec)) {
-        const Usage child = measure(it->path());
-        usage.bytes += child.bytes;
-        usage.last_used_epoch_seconds = std::max(usage.last_used_epoch_seconds, child.last_used_epoch_seconds);
+    std::uint64_t bytes = static_cast<std::uint64_t>(info.st_blocks) * 512;
+    if (S_ISDIR(info.st_mode)) {
+        std::error_code ec;
+        fs::directory_iterator it(path, ec);
+        for (; !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            bytes += allocated_bytes(it->path());
+        }
     }
-    return usage;
+    return bytes;
 }
 
 std::string megabytes(std::uint64_t bytes) { return std::to_string(bytes / (1024 * 1024)); }
@@ -351,9 +351,13 @@ ServerCachePruner::ScanResult ServerCachePruner::scan(std::int64_t now_epoch_sec
                     }
                     continue;
                 }
-                const Usage usage = measure(variant);
-                if (usage.bytes > 0 && idle_enough(usage.last_used_epoch_seconds, now_epoch_seconds)) {
-                    result.candidates.push_back({usage.last_used_epoch_seconds, usage.bytes, variant});
+                const auto last_used = last_used_epoch_seconds(variant);
+                if (!last_used || !idle_enough(*last_used, now_epoch_seconds)) {
+                    continue;
+                }
+                const std::uint64_t bytes = allocated_bytes(variant);
+                if (bytes > 0) {
+                    result.candidates.push_back({*last_used, bytes, variant});
                 }
             }
         }
@@ -403,7 +407,7 @@ ServerCachePruner::RemoveOutcome ServerCachePruner::remove(
     freed = candidate.bytes;
     if (ec) {
         // Count only what actually went. The rest stays as trash for the next run to retry.
-        const std::uint64_t remaining = measure(trash).bytes;
+        const std::uint64_t remaining = allocated_bytes(trash);
         freed = candidate.bytes > remaining ? candidate.bytes - remaining : 0;
         error = "delete " + trash.string() + ": " + ec.message();
         outcome = RemoveOutcome::Failed;
@@ -454,7 +458,7 @@ CachePruneResult ServerCachePruner::prune_once() {
     if (!scanned.trash.empty()) {
         std::uint64_t trash_bytes = 0;
         for (const auto& trash : scanned.trash) {
-            trash_bytes += measure(trash).bytes;
+            trash_bytes += allocated_bytes(trash);
             fs::remove_all(trash, ec);
         }
         remeasure(trash_bytes);

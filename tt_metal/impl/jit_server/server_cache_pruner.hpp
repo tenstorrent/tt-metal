@@ -32,9 +32,10 @@
 // leases and renames the directory away under the same mutex, so a request either sees the old
 // directory intact or starts from an empty one.
 //
-// A Lease also stamps the directory's mtime, so last use is exact for every request this server
-// handles. Directories last used under an older server only have file timestamps to go on, so the
-// pruner takes the newest mtime or atime of anything beneath them.
+// A Lease also stamps the directory's mtime, and the pruner ranks directories by that mtime alone:
+// one lstat per directory, not a walk of every file beneath it. A directory no request has stamped,
+// such as one an older server wrote, keeps the mtime it got when it was compiled, so it counts as
+// last used then.
 //
 // Firmware (<build_key>/firmware/) and the shared PCH directory are never deleted: firmware is
 // uploaded once per client process, and a running client whose firmware vanished would fail every

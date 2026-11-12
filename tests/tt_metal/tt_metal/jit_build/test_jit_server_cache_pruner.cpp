@@ -193,17 +193,32 @@ TEST_F(ServerCachePrunerTest, NeverDeletesRecentlyUsedKernelsFirmwareOrPch) {
     EXPECT_NE(logs_[0].find("Could not reach 40.0%"), std::string::npos) << logs_[0];
 }
 
-TEST_F(ServerCachePrunerTest, RecentFileAccessKeepsAnOldDirectory) {
-    // A kernel last used by an older server, which did not stamp the directory: only a file's
-    // atime shows the recent hit.
-    const fs::path kernel = make_kernel("1", "reader", "11", 1000);
+TEST_F(ServerCachePrunerTest, RanksByTheDirectoryStampNotFileTimes) {
+    // Files touched just now do not make a directory recent: only its own mtime counts.
+    const fs::path stale_dir = make_kernel("1", "reader", "11", 1000);
     const std::time_t now = std::time(nullptr);
-    const struct timeval times[2] = {{now, 0}, {now - 1000 * kSecondsPerHour, 0}};
-    ASSERT_EQ(::lutimes((kernel / "brisc" / "brisc.elf").c_str(), times), 0);
+    const struct timeval just_now[2] = {{now, 0}, {now, 0}};
+    ASSERT_EQ(::lutimes((stale_dir / "brisc" / "brisc.elf").c_str(), just_now), 0);
+    // ...and old files do not make a recently stamped directory old.
+    const fs::path fresh_dir = make_kernel("1", "reader", "12", 1000);
+    ASSERT_EQ(::lutimes(fresh_dir.c_str(), just_now), 0);
 
     auto pruner = make_pruner(1.0);
-    EXPECT_EQ(pruner.prune_once().deleted, 0u);
-    EXPECT_TRUE(fs::exists(kernel));
+    EXPECT_EQ(pruner.prune_once().deleted, 1u);
+    EXPECT_FALSE(fs::exists(stale_dir));
+    EXPECT_TRUE(fs::exists(fresh_dir));
+}
+
+TEST_F(ServerCachePrunerTest, UnstampedDirectoryCountsAsUsedWhenCompiled) {
+    // No request has stamped either directory, so each counts as last used when it was written.
+    const fs::path compiled_long_ago = make_kernel("1", "reader", "11", 1000);
+    const fs::path just_compiled = root_ / "1" / "kernels" / "reader" / "12";
+    write_file(just_compiled / "brisc" / "brisc.elf", 64 * 1024);
+
+    auto pruner = make_pruner(1.0);
+    EXPECT_EQ(pruner.prune_once().deleted, 1u);
+    EXPECT_FALSE(fs::exists(compiled_long_ago));
+    EXPECT_TRUE(fs::exists(just_compiled));
 }
 
 TEST_F(ServerCachePrunerTest, LeasedKernelIsSkippedAndStampedAsUsed) {
