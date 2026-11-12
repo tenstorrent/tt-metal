@@ -1349,6 +1349,7 @@ def test_vllm_warmup_leaves_no_late_allocations(
 
     T = 2048 + 100  # one traced chunk plus a masked tail
     prompt = torch.randint(1, 1000, (1, T), dtype=torch.int64)
+    long_prompt = torch.randint(1, 1000, (1, 4096), dtype=torch.int64)
     greedy = SamplingParams(temperature=[0.0] * bmax, top_k=[1] * bmax, top_p=[1.0] * bmax)
     sampled = SamplingParams(temperature=[1.0] * bmax, top_k=[10] * bmax, top_p=[0.9] * bmax)
     params = [greedy, sampled] if sampling else [None]
@@ -1394,3 +1395,10 @@ def test_vllm_warmup_leaves_no_late_allocations(
             state = layout.step_state([hit], bmax, **kw)
             gen.prefill_forward(prompt, page_table[:1], kv_cache, [T], start_pos=[start], mamba_state=state)
         decode(1, params[-1], starts=[hit] + [None] * (bmax - 1), dests=[cross] + [None] * (bmax - 1))
+        # Checkpoints inside the prompt's last chunk, which that chunk's eager forward computes: after a replayed
+        # chunk, and in a whole last chunk that then runs eagerly.
+        for end in (2048 + layout.block_size + 100, 4096):
+            state = layout.step_state(
+                [hit], bmax, checkpoints=[((end - 1) // layout.block_size * layout.block_size, ckpt)]
+            )
+            gen.prefill_forward(long_prompt, page_table[:1], kv_cache, [end], mamba_state=state)

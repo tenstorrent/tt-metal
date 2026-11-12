@@ -303,3 +303,17 @@ def test_drafter_prompt_kv_takes_the_prompts_mrope_table(monkeypatch):
     assert torch.equal(
         cos[0, 0, n:], m._rope_tp_cos_sin_decode_torch(torch.arange(n, S), [m.rope.rope_delta] * (S - n))[0][0, :, 0]
     )
+
+
+def test_a_checkpoint_inside_an_image_needs_no_second_segment(model):
+    """A 2000-token prompt with an image at [900, 1156) and a checkpoint after 1024, inside the image: one eager
+    forward over the whole row splices all 256 vision rows and computes the checkpoint 1024 tokens in."""
+    m, calls = model
+    m.prefill_masked_bucket = lambda ids, page_table, **kw: calls.append(
+        ("bucket", ids.shape[1], kw["chunk_start"], kw["vis_row_offset"], kw["checkpoint_len"])
+    )
+    row = _row(2000, 900, 256)
+    m.prefill_traced_chunked(
+        row, None, 2000, vision_tokens=torch.zeros(256, DIM), start_pos=0, rope_token_ids=row, checkpoint_pos=1024
+    )
+    assert calls == [("rope", 2000, True), ("bucket", 2000, 0, 0, 1024)]

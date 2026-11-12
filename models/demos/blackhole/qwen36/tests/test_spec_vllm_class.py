@@ -650,6 +650,7 @@ def gen_eng(monkeypatch):
         gdn_blocks=blocks,
         prefill_traced_chunked=prefill,
         vision_rows=vision_rows,
+        prefill_chunk_size=2048,
     )
     gen = object.__new__(CLS)
     gen.model = [model]

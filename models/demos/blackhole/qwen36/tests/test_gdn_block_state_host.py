@@ -143,6 +143,27 @@ def test_prefill_writes_each_rows_blocks(monkeypatch, expect_error):
         st.write_prefill_state(state, 2)
 
 
+def test_prefill_checkpoint_writes_each_layers_own_state(monkeypatch, expect_error):
+    """write_checkpoint writes the state every GDN layer computed at the prefill checkpoint (not its workspace) into
+    its group's checkpoint block, and frees it."""
+    st, plugin = _state(), _plugin()
+    writes, target, freed = [], [], []
+    monkeypatch.setattr(st, "_set_write_tables", target.append)
+    monkeypatch.setattr(
+        st, "_write_state", lambda dn, rec=None, carry=None: writes.append((dn.name, rec, carry, target[-1]))
+    )
+    monkeypatch.setattr(ttnn, "deallocate", freed.append)
+    for i, dn in st.layers.items():
+        dn.take_prefill_checkpoint = lambda i=i: (f"rec{i}", f"conv{i}")
+    state = plugin.step_state([(10, 11, 12)], BMAX)
+    st.write_checkpoint(state, (30, 31, 32))
+    want = [(i, f"rec{i}", f"conv{i}", 30 + g) for g, layers in enumerate(plugin.gdn_groups) for i in layers]
+    assert writes == want
+    assert freed == [t for i, rec, conv, _ in want for t in (rec, conv)]
+    with expect_error(ValueError, "has the null block 0"):
+        st.write_checkpoint(state, (30, 0, 32))
+
+
 def test_zero_blocks_in_padded_groups(ttnn_calls):
     st = _state()
     st.zero_blocks([])
