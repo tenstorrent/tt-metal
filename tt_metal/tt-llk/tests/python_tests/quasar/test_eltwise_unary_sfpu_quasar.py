@@ -853,11 +853,8 @@ def _is_uint16_to_fp32(src_format: DataFormat, dst_format: DataFormat) -> bool:
 # so a signed read gives -0.0 and -32767 instead.
 _UINT16_TO_FP32_SEEDS = (0, 1, 32767, 32768, 65535)
 
-# Int8 -> UInt8 clamps, same as float -> UInt8. These four come back as 0, not their magnitude.
-# UInt8 -> Int8 saturates to sign-magnitude Int8: 128, 200 and 255 -> 127, and 127 stays 127.
+# Signed -> unsigned clamps negatives to 0. UInt8 -> Int8 saturates to [-127, 127].
 # Int32/Int16 -> Int8 plants values the narrow convert must saturate.
-# Int16 -> UInt8 and Int32 -> UInt16 plant negatives. The random band for an unsigned
-# endpoint starts at 0, so the clamp would otherwise never see a negative.
 _INT8_TO_UINT8_SEEDS = (-1, -2, -64, -127)
 _UINT8_TO_INT8_SEEDS = (128, 200, 255, 127)
 _SIGNED_TO_INT8_SEEDS = (128, -128, 200, -200, 32767, -32767)
