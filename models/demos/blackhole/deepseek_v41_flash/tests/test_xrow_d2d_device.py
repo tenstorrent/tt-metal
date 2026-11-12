@@ -161,6 +161,15 @@ def test_xrow_d2d(mesh_device):
         pa.idx.release(f"occ1_{tag}")
         return l_x, pa.stats["xrow_s"] - s0, pa.stats["xrow_failed"] - f0, dt_x, plan
 
+    def mem():
+        ttnn.synchronize_device(md)
+        mv = ttnn.get_memory_view(md, ttnn.BufferType.DRAM)
+        return dict(
+            alloc_mib=round(mv.total_bytes_allocated_per_bank / 2**20, 2),
+            free_mib=round(mv.total_bytes_free_per_bank / 2**20, 2),
+            largest_free_mib=round(mv.largest_contiguous_bytes_free_per_bank / 2**20, 2),
+        )
+
     clean()
     t_cold, l_cold, dt_cold = run(0, P, 0, "cold")
     res["cold_prefill_s"] = round(dt_cold, 2)
@@ -200,6 +209,8 @@ def test_xrow_d2d(mesh_device):
         cur = dec_step(d_user, cur, pos0 + k)
     pos0 += 5
     reps = []
+    res["mem_before_reps"] = mem()
+    log("MEM before reps " + json.dumps(res["mem_before_reps"]))
     for rep in range(REPS):
         for x in (0, 1, 2, 3, 6, 7):
             m.release_user(x)
@@ -217,6 +228,7 @@ def test_xrow_d2d(mesh_device):
             failed=failed,
             bits_vs_cold=bool(torch.equal(l_x, l_cold)),
             maxdiff=float((l_x - l_cold).abs().max()),
+            mem=mem(),
         )
         reps.append(r)
         log("REP " + json.dumps(r))
