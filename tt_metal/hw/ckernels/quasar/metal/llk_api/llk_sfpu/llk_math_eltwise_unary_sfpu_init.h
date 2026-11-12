@@ -9,6 +9,7 @@
 namespace ckernel {
 
 namespace sfpu {
+void hardmish_init();
 void softcap_init();
 }  // namespace sfpu
 
@@ -17,7 +18,10 @@ void softcap_init();
 template <SfpuType sfpu_op>
 inline void llk_math_eltwise_unary_sfpu_init() {
     _llk_math_eltwise_sfpu_init_();
-    if constexpr (sfpu_op == SfpuType::softcap) {
+    if constexpr (sfpu_op == SfpuType::hardmish) {
+        // hardmish reads 0.5 from vConstFloatPrgm0 and advances Dest through ADDR_MOD_6, both set here.
+        sfpu::hardmish_init();
+    } else if constexpr (sfpu_op == SfpuType::softcap) {
         sfpu::softcap_init();
     }
 }
