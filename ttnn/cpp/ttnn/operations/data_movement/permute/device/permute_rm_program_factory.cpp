@@ -195,12 +195,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     uint32_t X = input_tensor.logical_shape()[x_dim];
     // stride from one row to the next for each dim in the input tensor
     auto input_strides = detail::get_row_strides(input_tensor.logical_shape());
-    uint32_t X_stride = input_strides[x_dim];
 
     auto output_strides = detail::get_row_strides(output_tensor.logical_shape());
     // after we transpose X and W, we need to stride from one row to the next for each dim in the output tensor
     uint32_t W = input_tensor.logical_shape()[-1];
-    uint32_t W_stride = output_strides[x_dim];
 
     uint32_t N = operation_attributes.dims.size();
     uint32_t num_rows = detail::num_pages(input_tensor);
@@ -257,18 +255,15 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC_CB, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        // The shape-dependent counts are runtime args, so the binary does not depend on the dimension sizes.
         .compile_time_args =
             {{"N", N},
              {"page_size", input_cb_page_size},
-             {"num_rows", num_rows},
              {"x_dim", x_dim},
-             {"num_blocks_total", num_blocks_total},
-             {"x_blocks", x_blocks},
-             {"w_blocks", w_blocks},
              {"x_block_size", x_block_size},
              {"w_block_size", w_block_size},
              {"element_size", input_tensor.element_size()}},
-        .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block", "num_rows", "x_blocks", "w_blocks"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * N},
     };
@@ -284,20 +279,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .compile_time_args =
             {{"N", N},
              {"output_page_size", output_cb_page_size},
-             {"num_rows", num_rows},
-             {"X", X},
-             {"X_stride", X_stride},
              {"x_dim", x_dim},
-             {"W_stride", W_stride},
-             {"input_page_size", input_cb_page_size},
              {"element_size", input_tensor.element_size()},
-             {"num_blocks_total", num_blocks_total},
-             {"x_blocks", x_blocks},
-             {"w_blocks", w_blocks},
              {"x_block_size", x_block_size},
-             {"w_block_size", w_block_size},
-             {"W", W}},
-        .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
+             {"w_block_size", w_block_size}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"start_block", "end_block", "num_rows", "X", "W", "x_blocks", "w_blocks"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
@@ -364,11 +351,25 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         uint32_t end_block = start_block + num_blocks_per_core;
 
         AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"start_block", start_block}, {"end_block", end_block}});
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"start_block", start_block},
+             {"end_block", end_block},
+             {"num_rows", num_rows},
+             {"x_blocks", x_blocks},
+             {"w_blocks", w_blocks}});
         reader_run_args.advanced_options.runtime_varargs.emplace(core, reader_varargs);
 
         AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values, core, {{"start_block", start_block}, {"end_block", end_block}});
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"start_block", start_block},
+             {"end_block", end_block},
+             {"num_rows", num_rows},
+             {"X", X},
+             {"W", W},
+             {"x_blocks", x_blocks},
+             {"w_blocks", w_blocks}});
         writer_run_args.advanced_options.runtime_varargs.emplace(core, writer_varargs);
 
         AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"num_blocks", num_blocks_per_core}});

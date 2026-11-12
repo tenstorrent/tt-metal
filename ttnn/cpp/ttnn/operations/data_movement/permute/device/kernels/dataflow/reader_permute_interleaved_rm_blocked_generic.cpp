@@ -15,11 +15,11 @@
 void kernel_main() {
     constexpr uint32_t N = get_arg(args::N);
     constexpr uint32_t input_cb_page_size = get_arg(args::page_size);
-    constexpr uint32_t num_rows = get_arg(args::num_rows);
     constexpr uint32_t x_dim = get_arg(args::x_dim);
-    constexpr uint32_t num_blocks_total = get_arg(args::num_blocks_total);
-    constexpr uint32_t x_blocks = get_arg(args::x_blocks);
-    constexpr uint32_t w_blocks = get_arg(args::w_blocks);
+    // The shape-dependent counts are runtime args, so the binary does not depend on the dimension sizes.
+    const uint32_t num_rows = get_arg(args::num_rows);
+    const uint32_t x_blocks = get_arg(args::x_blocks);
+    const uint32_t w_blocks = get_arg(args::w_blocks);
     constexpr uint32_t x_block_size = get_arg(args::x_block_size);
     constexpr uint32_t w_block_size = get_arg(args::w_block_size);
     constexpr uint32_t element_size = get_arg(args::element_size);
