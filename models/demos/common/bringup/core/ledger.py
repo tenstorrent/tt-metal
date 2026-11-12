@@ -21,6 +21,8 @@ tasks.yaml:
 
 state.json: {task id: {status, attempts, last_run, duration_s, rc, metrics, log, history, agent, ...},
              "_run": {name, branch, created, forked_from}}
+F265: state.json, state_metrics.json (F253) and history_state.json (F180) are kept as chunk files below the repo's
+500 KB limit (state.chunks/0001.json, ...; core/chunked.py); read and write them only through Ledger.
 
 DEFERRED (F46): a component the implement agent deferred to the op code generator (plan/op_request.py). It stays on
 the CPU reference through the bridge (testing/cpu_bridge.py), so for its dependents it counts like PASS.
@@ -35,12 +37,13 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import json
 import re
 import time
 from pathlib import Path
 
 import yaml
+
+from models.demos.common.bringup.core.chunked import ChunkedJson
 
 STATUSES = (
     "TODO",
@@ -111,8 +114,13 @@ class Ledger:
     def __init__(self, ledger_dir: Path):
         self.dir = Path(ledger_dir)
         self.tasks_path = self.dir / "tasks.yaml"
-        self.state_path = self.dir / "state.json"
+        self.state_path = self.dir / "state.json"  # F265: the old single file; the state lives in state.chunks/
         self.results_dir = self.dir / "results"
+        # F265 (owner, FIX.27): the three records that grow with every task are chunk files below the repo's 500 KB
+        # limit (core/chunked.py); every reader and writer goes through these stores
+        self.state_store = ChunkedJson(self.state_path, indent=1, merge_fields=("history",))
+        self.metrics_store = ChunkedJson(self.dir / "state_metrics.json", indent=1)
+        self.side_store = ChunkedJson(self.dir / "history_state.json", indent=None, merge_fields=("agent_runs",))
 
     # ---- tasks
     def load_spec(self) -> dict:
@@ -156,7 +164,7 @@ class Ledger:
             tasks = self.tasks()
         except LedgerError as e:
             return [str(e)]
-        done = self.state() if self.state_path.exists() else {}
+        done = self.state() if self.state_store.exists() else {}
         for tid, t in tasks.items():
             for k in ("title", "gate"):
                 if k not in t:
@@ -241,13 +249,29 @@ class Ledger:
 
     @property
     def side_path(self) -> Path:
-        return self.dir / "history_state.json"
+        return self.side_store.legacy
 
     @property
     def metrics_path(self) -> Path:
         """F253: the tasks' gate metrics, committed beside state.json (DeepSeek-V4.1 X.3: state.json reached 503 KB
-        again, metrics 384 KB of it: the repo's 500 KB hook refused the commit)."""
-        return self.dir / "state_metrics.json"
+        again, metrics 384 KB of it: the repo's 500 KB hook refused the commit). F265: kept as state_metrics.chunks/
+        (FIX.26: state_metrics.json reached 515,706 bytes); this is the old single file's path."""
+        return self.metrics_store.legacy
+
+    @property
+    def stores(self) -> tuple[ChunkedJson, ...]:
+        return (self.state_store, self.metrics_store, self.side_store)
+
+    def record_paths(self, committed_only: bool = True) -> list[Path]:
+        """F265: what a commit of the ledger's state stages: every store's chunk directory and its old single file
+        (the old file's deletion is committed once). history_state is the clone's own record (F180) unless asked."""
+        stores = (self.state_store, self.metrics_store) if committed_only else self.stores
+        return [p for st in stores for p in st.paths()]
+
+    def migrate(self) -> dict[str, list[Path]]:
+        """F265: turn every old single-file store into chunks once, losslessly (ChunkedJson.migrate checks it)."""
+        with self.locked():
+            return {st.legacy.name: st.migrate() for st in self.stores}
 
     def _exclude_side(self) -> None:
         """F180: keep history_state.json out of git (the clone's own info/exclude: no tracked file changes)."""
@@ -262,16 +286,16 @@ class Ledger:
         if not ex:
             return
         p = Path(ex) if Path(ex).is_absolute() else self.dir / ex
-        line = "**/bringup/history_state.json"
         text = p.read_text() if p.exists() else ""
-        if line not in text.split("\n"):
+        # F265: and its chunks, with the same reach as the old line (a seeded run's ledger keeps tracking its own)
+        lines = ("**/bringup/history_state.json", "**/bringup/history_state.chunks/")
+        add = [ln for ln in lines if ln not in text.split("\n")]
+        if add:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(text + ("" if text.endswith("\n") or not text else "\n") + line + "\n")
+            p.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(add) + "\n")
 
     def state(self) -> dict:
-        state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
-        side = json.loads(self.side_path.read_text()) if self.side_path.exists() else {}
-        mets = json.loads(self.metrics_path.read_text()) if self.metrics_path.exists() else {}
+        state, mets, side = (st.read() for st in self.stores)  # F265: the chunks (or the old single file)
         for tid, m in mets.items():  # F253
             if isinstance(state.get(tid), dict):
                 state[tid].setdefault("metrics", m)
@@ -281,20 +305,22 @@ class Ledger:
                     state[tid].setdefault(k, v)
         return state
 
-    def _save_state(self, state: dict) -> None:
+    def _trim_metrics(self, tid: str, metrics: dict) -> dict:
+        """The metrics a gate run records: the gated ones and their limits (F129), floats to 6 significant digits
+        (F246; results/<task>.json keeps every metric at full precision). F265: applied to the entry being written
+        only; a recorded entry is never trimmed or rounded again (owner, FIX.27: nothing dropped)."""
         from models.demos.common.bringup.core.gate import state_metrics
 
         try:
-            tasks = self.tasks()
-        except (FileNotFoundError, KeyError, TypeError):
-            tasks = {}
-        for tid, e in state.items():  # F129: older entries kept every metric; trim them on the next save
-            if isinstance(e, dict) and e.get("metrics") and tid in tasks:
-                e["metrics"] = state_metrics(tasks[tid].get("gate", {}).get("metrics") or {}, e["metrics"])
-            if isinstance(e, dict) and isinstance(
-                e.get("metrics"), dict
-            ):  # F246: 6 significant digits (results/ keeps all)
-                e["metrics"] = {k: _sig6(v) for k, v in e["metrics"].items()}
+            task = self.tasks().get(tid)
+        except (FileNotFoundError, KeyError, TypeError, LedgerError):
+            task = None
+        if task is not None:
+            metrics = state_metrics(task.get("gate", {}).get("metrics") or {}, metrics)
+        return {k: _sig6(v) for k, v in metrics.items()}
+
+    def _save_state(self, state: dict) -> None:
+        old_side, old_mets = self.side_store.read(), self.metrics_store.read()
         side = {}
         for tid, e in state.items():  # F180
             if isinstance(e, dict):
@@ -305,21 +331,20 @@ class Ledger:
         for tid, e in state.items():  # F253: metrics in their own committed file
             if isinstance(e, dict) and "metrics" in e:
                 mets[tid] = e.pop("metrics")
-        mtmp = self.metrics_path.with_suffix(".tmp")
-        mtmp.write_text(json.dumps(mets, indent=1, sort_keys=True) + "\n")
-        mtmp.replace(self.metrics_path)
+        # F265: a record of a task state() could not attach (no state entry) is carried, never dropped
+        side = {**{t: v for t, v in old_side.items() if not isinstance(state.get(t), dict)}, **side}
+        mets = {**{t: v for t, v in old_mets.items() if not isinstance(state.get(t), dict)}, **mets}
+        self.metrics_store.write(mets)  # F265: chunks below the repo's limit, never compacted
         self._exclude_side()
-        stmp = self.side_path.with_suffix(".tmp")
-        stmp.write_text(json.dumps(side, sort_keys=True) + "\n")
-        stmp.replace(self.side_path)
-        tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, indent=1, sort_keys=True) + "\n")
-        tmp.replace(self.state_path)
+        self.side_store.write(side)
+        self.state_store.write(state)
 
     def update(self, tid: str, history_add: dict | None = None, **fields) -> dict:
         with self.locked():
             state = self.state()
             entry = state.setdefault(tid, {})
+            if isinstance(fields.get("metrics"), dict):
+                fields["metrics"] = self._trim_metrics(tid, fields["metrics"])
             entry.update(fields)
             if history_add:
                 entry.setdefault("history", []).append(history_add)

@@ -1,0 +1,84 @@
+{
+ "used": [
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md already hit the 500 KB hook once (P.26, archived by hand): it is one of the logs now rolled into numbered chunks at every gate commit (core/chunked.roll_log from gate.stage_paths)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-194",
+   "evidence": "its fix (write a pointer, archive by hand) is superseded: F265 rolls BREADCRUMBS.md past 256 KB into BREADCRUMBS.0001.md, ... byte for byte at each gate commit (models/demos/common/bringup/core/gate.py stage_paths, core/chunked.py roll_log; selftest test_ledger_chunks.py::test_the_models_breadcrumbs_roll_losslessly)",
+   "cited": false
+  }
+ ],
+ "missing": [
+  "a running orchestrator keeps the framework code it started with: a framework change made inside a step (ledger format) is met by the old code's writes when that orchestrator runs the step's gate (DS41-239)",
+  "F-numbers: the next free framework id is found by grepping models/demos/common/bringup for F2xx (F254 was already taken by a fork-suite fix)",
+  "a non-device gate cannot call pytest directly either (core/gate.py device_policy_errors); a CPU selftest gate goes through scripts/run_safe_pytest.sh --no-precompile --run-all, as dev/tasks.yaml does: FIX.27's own cmd was refused by gate --check"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.27",
+   "answer": "done",
+   "evidence": "state_metrics.json 515,706 B -> state_metrics.chunks/0001.json 256,402 + 0002.json 259,307; history_state.json 290,493 -> 255,251 + 35,243; state.json 146,416 -> state.chunks/0001.json; each chunk-merge == the old file (parsed JSON), MIGRATED.json per store; test_ledger_chunks.py 14 passed, test_core.py 51 passed; ledger_files_over_limit 0; gate --check refused FIX.27's tasks.yaml cmd before running (direct pytest, core/gate.py:149); the same units via scripts/run_safe_pytest.sh --no-precompile --run-all: 65 passed, ledger_files_over_limit 0: change the cmd"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or op change; framework ledger code only"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no device use at all; CPU selftests only"
+  }
+ ],
+ "cited_only": [
+  "DS41-239"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.27",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-12T20:56:01",
+  "head": "8a5e0f82931",
+  "touched": [
+   "models/demos/common/bringup/__main__.py",
+   "models/demos/common/bringup/core/chunked.py",
+   "models/demos/common/bringup/core/gate.py",
+   "models/demos/common/bringup/core/ledger.py",
+   "models/demos/common/bringup/core/stamps.py",
+   "models/demos/common/bringup/dev/BREADCRUMBS.md",
+   "models/demos/common/bringup/orchestrator.py",
+   "models/demos/common/bringup/plan/ledger_gen.py",
+   "models/demos/common/bringup/selftest/test_core.py",
+   "models/demos/common/bringup/selftest/test_ledger_chunks.py",
+   "models/demos/common/bringup/selftest/test_seeded.py",
+   "models/demos/common/bringup/skill/bringup/SKILL.md",
+   "models/demos/common/bringup/testing/ops_lint.py",
+   "models/demos/common/bringup/timing.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/history_state.chunks/0001.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/history_state.chunks/0002.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/history_state.chunks/MIGRATED.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.27.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state.chunks/0001.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state.chunks/MIGRATED.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state_metrics.chunks/0001.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state_metrics.chunks/0002.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state_metrics.chunks/MIGRATED.json"
+  ]
+ }
+}

@@ -31,6 +31,7 @@ from pathlib import Path
 from models.demos.common.bringup.core import batch, freeze, hangdump
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core import stamps
+from models.demos.common.bringup.core.chunked import log_chunks, roll_log
 from models.demos.common.bringup.core.ledger import Ledger, fixed_accuracy, satisfied, wall_only_device_metrics
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 
@@ -434,8 +435,8 @@ def outputs_in(results: Path, task: dict) -> list[Path]:
 def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     repo = spec.repo
     rel = lambda p: str(Path(p).resolve().relative_to(repo)) if Path(p).is_absolute() else p  # noqa: E731
-    paths = [rel(ledger.state_path), rel(ledger.results_dir / f"{task['id']}.json"), rel(ledger.tasks_path)]
-    paths.append(rel(ledger.metrics_path))  # F253
+    paths = [rel(ledger.results_dir / f"{task['id']}.json"), rel(ledger.tasks_path)]
+    paths += [rel(p) for p in ledger.record_paths()]  # F253 / F265: state and metrics chunks (and the old files)
     paths.append(rel(ledger.dir / ".gitignore"))
     # F183: the run's own files are in its ledger; the model's shared files in bringup_dir (the same dir unless seeded)
     for d, extras in (
@@ -459,6 +460,11 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
         for extra in extras:
             if (d / extra).exists() and rel(d / extra) not in paths:
                 paths.append(rel(d / extra))
+    # F265 (owner, FIX.27): an append-only log past the chunk bound moves its older sections, unchanged, to numbered
+    # chunk files beside it (core/chunked.roll_log) before the commit; every chunk is staged with it
+    for log in (spec.bringup_dir / "BREADCRUMBS.md", ledger.dir / "supervision.md"):
+        roll_log(log)
+        paths += [rel(p) for p in log_chunks(log) if rel(p) not in paths]
     # The files the task's own gate writes (gate_outputs): <task>_profile.json, <task>_ops_profile.json, ... and the
     # record of the model's ttnn.bringup calls the derived-op test task writes.
     paths += [rel(p) for p in gate_outputs(ledger, task) if p.exists() and p.name != f"{task['id']}.json"]

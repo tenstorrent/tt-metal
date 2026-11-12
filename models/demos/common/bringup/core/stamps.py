@@ -55,6 +55,10 @@ NO_MEASURE = tuple(
 RECORDS = (  # F105; F234: a seeded run's ledger (bringup/ledgers/<box>-<mode>/tasks.yaml) is a record too
     "*state.json",
     "*state_metrics.json",  # F253: the gate metrics beside state.json
+    "*state.chunks/*",  # F265: the same records as chunk files (core/chunked.py)
+    "*state_metrics.chunks/*",
+    "*history_state.json",
+    "*history_state.chunks/*",
     "*/results/*",
     "*BREADCRUMBS.md",
     "*supervision.md",

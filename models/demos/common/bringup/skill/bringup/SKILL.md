@@ -541,8 +541,9 @@ and their results, and anything you rejected or reverted. The person approves th
 ### Keep the session's context small
 
 A run takes hours and dozens of gates; the supervising session must not fill its context with logs.
-- Pull numbers, not files: extract the metrics you need from `state.json` / `results/<task>.json` with a short
-  `python -c` or `grep`, and `tail -n` the orchestrator log. Never `cat` a gate log, an agent transcript
+- Pull numbers, not files: extract the metrics you need from the ledger state (`Ledger(<ledger dir>).state()`: state,
+  metrics and histories are chunk files `state.chunks/`, `state_metrics.chunks/`, `history_state.chunks/`, F265) or
+  `results/<task>.json` with a short `python -c` or `grep`, and `tail -n` the orchestrator log. Never `cat` a gate log, an agent transcript
   (`runs/<run>/agents/*.jsonl`), a golden or a dashboard page.
 - Wait with the watch (section 4, "Always be watching"), which already filters to the events you act on; do not
   stream step starts, freezes or agent transcripts.

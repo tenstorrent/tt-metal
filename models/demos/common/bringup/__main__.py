@@ -304,7 +304,7 @@ def cmd_op_ready(a):
     print(f"delivered: {', '.join('ttnn.bringup.' + o for o in out['ops'])}")
     print("reset: " + " ".join(out["reset"]))
     if not a.no_commit:
-        paths = out["paths"] + [str(p.relative_to(spec.repo)) for p in (led.tasks_path, led.state_path)]
+        paths = out["paths"] + [str(p.relative_to(spec.repo)) for p in (led.tasks_path, *led.record_paths())]
         sha = git_commit(
             spec,
             paths,

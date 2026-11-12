@@ -1,0 +1,33 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [
+  "DS41-236",
+  "DS41-238"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.26",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-12T20:06:41",
+  "head": "0d9535946d2",
+  "touched": [
+   "models/demos/common/bringup/reference/drift.py",
+   "models/demos/common/bringup/reference/golden.py",
+   "models/demos/common/bringup/reference/handoff.py",
+   "models/demos/common/bringup/selftest/test_handoff.py",
+   "models/demos/common/bringup/testing/contract.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.26.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.26.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/kv_contract.py"
+  ]
+ }
+}

@@ -401,7 +401,7 @@ def seed_record(spec) -> dict:
     seed = spec.seed_spec()
     led = Ledger(seed.ledger_dir)
     commit = subprocess.run(
-        ["git", "log", "-1", "--format=%H", "--", str(led.state_path)],
+        ["git", "log", "-1", "--format=%H", "--", *map(str, led.state_store.paths())],  # F265: chunks or old file
         cwd=spec.repo,
         capture_output=True,
         text=True,

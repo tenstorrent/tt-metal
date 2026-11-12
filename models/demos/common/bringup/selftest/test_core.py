@@ -35,8 +35,8 @@ def test_pass_commits_only_declared_paths(sandbox):
     assert sandbox.git("log", "-1", "--format=%s") == "[toy][A.1] task A.1"
     committed = set(sandbox.git("show", "--name-only", "--format=", "HEAD").split())
     assert committed == {
-        "bringup/state.json",
-        "bringup/state_metrics.json",
+        "bringup/state.chunks/0001.json",  # F265: state.json and state_metrics.json as chunk files
+        "bringup/state_metrics.chunks/0001.json",
         "bringup/results/A.1.json",
         "bringup/tasks.yaml",
         "bringup/.gitignore",
@@ -457,7 +457,7 @@ def test_attempt_and_ab_histories_live_beside_state_json(sandbox):
     histories now live in history_state.json (uncommitted); state() merges them back for every reader."""
     led = sandbox.tasks(task("A.1", "true"))
     led.update("A.1", agent_runs=[{"attempt": 1, "role": "fix"}], ab={"decision": "accept"}, status="PASS")
-    raw = json.loads(led.state_path.read_text())["A.1"]
+    raw = led.state_store.read()["A.1"]
     assert "agent_runs" not in raw and "ab" not in raw and raw["status"] == "PASS"
     st = led.state()["A.1"]
     assert st["agent_runs"] == [{"attempt": 1, "role": "fix"}] and st["ab"] == {"decision": "accept"}
@@ -470,9 +470,9 @@ def test_a_refused_commit_record_and_long_floats_stay_out_of_state_json(sandbox)
     and metrics kept 17-digit floats. commit_pending lives beside state.json; metrics keep 6 significant digits."""
     led = sandbox.tasks(task("A.1", "true"))
     led.update("A.1", commit_pending={"files": ["x"] * 3}, metrics={"err_x": 0.01756252724938108, "n": 3}, status="X")
-    raw = json.loads(led.state_path.read_text())["A.1"]
+    raw = led.state_store.read()["A.1"]
     assert "commit_pending" not in raw and "metrics" not in raw  # F253: metrics in state_metrics.json
-    assert json.loads(led.metrics_path.read_text())["A.1"] == {"err_x": 0.0175625, "n": 3}
+    assert led.metrics_store.read()["A.1"] == {"err_x": 0.0175625, "n": 3}
     assert led.state()["A.1"]["commit_pending"] == {"files": ["x"] * 3}
     led.update("A.1", commit_pending=None)
     assert led.state()["A.1"].get("commit_pending") is None
@@ -573,8 +573,8 @@ def test_metrics_live_in_their_own_committed_file(sandbox):
     state_metrics.json beside it; state() merges them back."""
     led = sandbox.tasks(task("A.1", "true"))
     led.update("A.1", metrics={"err_x": 0.5}, status="PASS")
-    assert "metrics" not in json.loads(led.state_path.read_text())["A.1"]
-    assert json.loads(led.metrics_path.read_text())["A.1"] == {"err_x": 0.5}
+    assert "metrics" not in led.state_store.read()["A.1"]
+    assert led.metrics_store.read()["A.1"] == {"err_x": 0.5}
     assert led.state()["A.1"]["metrics"] == {"err_x": 0.5}
     led.update("A.1", status="PASS")
     assert led.state()["A.1"]["metrics"] == {"err_x": 0.5}

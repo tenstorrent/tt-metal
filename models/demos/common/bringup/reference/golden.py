@@ -8,6 +8,8 @@ One directory per ladder rung, ``<golden_root>/s{seq}_c{chunk}/`` (the prefill s
     metadata.json                         token_ids, num_layers, state tensor names, seq_len
     kv_cache/layer_{i}.safetensors        final state per layer, key f"{name}_cache_layer_{i}" (key/value for a KV cache)
     kv_cache/layer_{i}_at_{p}.safetensors the fixed-size state tensors (spec state.fixed) as of position p
+    kv_cache/handoff_layer_{i}_at_{p}.safetensors, handoff.json, handoff-drift-<rung>.json   F264: the state at a
+                                          serving handoff point (reference/handoff.py; derived, own sha256 index)
     chunk_{c:02d}/layer_{i:02d}.safetensors   boundary tensors of layer i in chunk c, keyed by boundary name
     chunk_{c:02d}/model.safetensors       embed, final_norm, top32 ids/values per position, logits of the last 32 rows
 
@@ -73,7 +75,8 @@ INDEX = "files.json"
 
 
 def derived(name: str) -> bool:
-    return name in DERIVED or (name.startswith("drift-") and name.endswith(".json"))  # F134: drift-<rung>.json
+    # F134: drift-<rung>.json; F264: the handoff snapshots and their drift (reference/handoff.py, own sha256 index)
+    return name in DERIVED or (name.startswith("drift-") and name.endswith(".json")) or name.startswith("handoff")
 
 
 OFFICIAL_SUFFIX = "-official"  # F128: the same rung at the reference's own shipped precision (the margin's source)
@@ -344,6 +347,12 @@ class Golden:
         if fixed and at is not None and at != self.seq:
             p = self.dir / "kv_cache" / f"layer_{i}_at_{at}.safetensors"
             if not p.exists():
+                from models.demos.common.bringup.reference.handoff import load_snapshot
+
+                snap = load_snapshot(self, i, at)  # F264: a serving handoff point (reference/handoff.py)
+                if snap is not None:
+                    out.update({n: snap[f"{n}_cache_layer_{i}"] for n in fixed})
+                    return out
                 raise FileNotFoundError(
                     f"{p}: no snapshot of the fixed-size state {fixed} at position {at} "
                     f"(snapshots at {self.meta.get('state_snapshots', [])})"

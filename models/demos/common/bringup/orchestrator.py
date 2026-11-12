@@ -141,9 +141,9 @@ ROLE_OF_STEP = {
 }
 IGNORED = (
     r"/dashboard/[^/]+\.(html|yaml)$",  # the dashboards and their links (F71)
-    r"(^|/)bringup/(ledgers/[^/]+/)?(overseer\.yaml|supervision\.md)$",  # the overseer's own files (F69; a seeded run's ledger too, F189)
-    r"(^|/)bringup/(ledgers/[^/]+/)?history_state\.json$",
-    r"(^|/)bringup/(ledgers/[^/]+/)?state_metrics\.json$",  # F253  # F180: the attempt / A/B histories beside state.json (uncommitted)
+    r"(^|/)bringup/(ledgers/[^/]+/)?(overseer\.yaml|supervision(\.\d{4,})?\.md)$",  # the overseer's own files (F69; a seeded run's ledger too, F189)
+    # F180: the attempt / A/B histories beside state.json; F253: the gate metrics; F265: either as chunk files
+    r"(^|/)bringup/(ledgers/[^/]+/)?(history_state|state_metrics)(\.json|\.chunks/[^/]+\.json)$",
     r"(^|/)__pycache__/",
     r"\.pyc$",
     r"^generated/",
@@ -2274,7 +2274,7 @@ class Orchestrator:
         with self.led.locked():
             sha = git_commit(
                 self.spec,
-                [rel(self.spec, self.led.state_path)],
+                [rel(self.spec, p) for p in self.led.record_paths()],  # F265: the state's chunks
                 f"[{self.spec.tag}][{tid}] {task['title']} (rejected by the owner)",
                 why,
             )
