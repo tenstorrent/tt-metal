@@ -151,7 +151,7 @@ std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip
 
 // System address of HSIO tile 0's CCE SRAM: the tile's global window (0x12_0400_0000) plus the SRAM offset
 // (0x280_0000), Keraunos-E100 Table 14 (docs arch/KERAUNOS-HW-FINDINGS.md Q1). Tiles are keraunos.tile_stride apart.
-constexpr uint64_t k_keraunos_system_sram_base = 0x1206800000ULL;
+constexpr uint64_t k_keraunos_system_sram_base = KERAUNOS_HSIO0_SYSTEM_BASE + 0x2800000ULL;
 
 // The NOC routes (CceNocRoutes, hostdev/cce_spa_routes.h) of Keraunos core `logical_eth` on `chip`, from the chip's
 // SoC descriptor. Each keraunos.cores entry gets a route at its virtual coordinate and one at its Ethernet channel's
