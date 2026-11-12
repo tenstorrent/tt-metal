@@ -9,14 +9,11 @@ The production prefill runner is cache-only: it hands the model an empty ``state
 a piece (final norm / LM head, the MTP tree) used to fail at start-up, and the only remedy was to rsync the
 whole cache from another site.
 
-``PREFILL_WEIGHT_CATEGORIES`` names the categories the runner may convert from the checkpoint when their cache is
-missing. For each rank the runner checks every category of its layer slice, and
+For each rank the runner checks every category of its layer slice, and
 
 * nothing missing -> load from cache, exactly as before;
-* everything missing is selected -> read just those tensors from the checkpoint and let the model write the
-  cache while it builds;
-* something missing is NOT selected -> raise, listing what is missing and the variable to set. Building it
-  anyway would convert ``torch.empty`` placeholders into the cache.
+* something missing -> read just those tensors from the checkpoint (``PREFILL_HF_MODEL``) and let the model write
+  the cache while it builds. Nothing is ever built from ``torch.empty`` placeholders.
 
 Categories (rank-local unless noted):
 
@@ -28,9 +25,7 @@ Categories (rank-local unless noted):
     shared_experts   shared expert of every MoE layer
     routed_experts   routed experts of every MoE layer     (by far the largest: 256 fp8 experts per layer)
     lm_head          final norm + LM head                   (last rank running MTP)
-    mtp              the MTP predictor tree (``$TT_GLM53_MTP_TTNN_CACHE``; last rank running MTP)
-
-``all`` selects every category. Unset / empty selects none (today's behaviour: fail early when incomplete).
+    mtp              the MTP predictor tree (its own cache root; last rank running MTP)
 """
 
 from __future__ import annotations
@@ -42,8 +37,6 @@ from pathlib import Path
 
 import torch
 from loguru import logger
-
-WEIGHT_CATEGORIES_ENV = "PREFILL_WEIGHT_CATEGORIES"
 
 EMBEDDING = "embedding"
 NORMS = "norms"
@@ -57,21 +50,6 @@ MTP = "mtp"
 
 CATEGORIES = (EMBEDDING, NORMS, MLA, DENSE_FFN, MOE_GATE, SHARED_EXPERTS, ROUTED_EXPERTS, LM_HEAD, MTP)
 _PROJ = ("gate_proj", "up_proj", "down_proj")
-
-
-def parse_weight_categories(value: str | None) -> frozenset[str]:
-    """``"moe_gate,lm_head"`` -> ``{"moe_gate", "lm_head"}``; ``"all"`` -> every category; ``""`` -> none."""
-    names = {n.strip().lower() for n in (value or "").replace(" ", ",").split(",") if n.strip()}
-    if "all" in names:
-        return frozenset(CATEGORIES)
-    unknown = names - set(CATEGORIES)
-    if unknown:
-        raise ValueError(f"{WEIGHT_CATEGORIES_ENV}: unknown categories {sorted(unknown)}; valid: {CATEGORIES} or 'all'")
-    return frozenset(names)
-
-
-def weight_categories_from_env() -> frozenset[str]:
-    return parse_weight_categories(os.environ.get(WEIGHT_CATEGORIES_ENV))
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -213,20 +191,6 @@ def format_missing(missing: dict[str, list[int]]) -> str:
     return ", ".join(parts)
 
 
-def check_selected(missing: dict[str, list[int]], selected: frozenset[str], where: str) -> dict[str, list[int]]:
-    """Return the part of ``missing`` that ``selected`` covers; raise if any of it is not covered."""
-    uncovered = {c: l for c, l in missing.items() if c not in selected}
-    if uncovered:
-        raise RuntimeError(
-            f"TTNN weight cache at {where} is missing: {format_missing(uncovered)}. These were not selected for "
-            f"conversion from the checkpoint, and converting nothing would load uninitialised placeholders as the "
-            f"weights. Either populate the cache (rsync it, or run the pretrained smoke test), or let the runner "
-            f"build them from the FP8 checkpoint with {WEIGHT_CATEGORIES_ENV}="
-            f"{','.join(sorted(set(missing) | set(selected))) or 'all'} (plus a readable PREFILL_HF_MODEL / GLM53_HF_MODEL)."
-        )
-    return missing
-
-
 # ---------------------------------------------------------------------------------------------------------------
 # Reading the checkpoint
 # ---------------------------------------------------------------------------------------------------------------
@@ -240,8 +204,8 @@ class _Checkpoint:
         index = self.path / "model.safetensors.index.json"
         if not index.is_file():
             raise FileNotFoundError(
-                f"{index} not found: {WEIGHT_CATEGORIES_ENV} needs the FP8 checkpoint "
-                "(set PREFILL_HF_MODEL / GLM53_HF_MODEL to the directory holding model.safetensors.index.json)"
+                f"{index} not found: rebuilding the missing weight cache needs the FP8 checkpoint "
+                "(set PREFILL_HF_MODEL to the directory holding model.safetensors.index.json)"
             )
         self.weight_map: dict[str, str] = json.loads(index.read_text())["weight_map"]
 

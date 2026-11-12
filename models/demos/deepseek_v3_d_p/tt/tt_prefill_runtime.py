@@ -35,7 +35,6 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor, prepare_prefill_mtp_tokens
 from models.demos.deepseek_v3_d_p.tt.runners import weight_categories
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
-from models.demos.deepseek_v3_d_p.tt.runners.weight_categories import WEIGHT_CATEGORIES_ENV
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -66,9 +65,9 @@ class TtPrefillRuntimeConfig:
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
-    # Weight categories (see tt/runners/weight_categories.py) the runtime may convert from the HF checkpoint at
-    # `hf_model_path` when their TTNN cache is missing. Empty = cache-only: an incomplete cache is an error.
-    weight_categories: frozenset = frozenset()
+    # Convert whatever TTNN cache pieces are missing from the HF checkpoint at `hf_model_path` (see
+    # tt/runners/weight_categories.py). False = cache-only: an incomplete cache is an error.
+    build_missing_cache: bool = False
     hf_model_path: str = ""
     # Route the MoE routing all-gather's global semaphores to L1_SMALL (instead of pinning the main-L1
     # floor and clashing with the next layer's MLA static CBs). Requires the mesh opened with
@@ -241,7 +240,7 @@ class TtPrefillRuntime:
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
             experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
-            if self.config.weight_categories and not state_dict:
+            if self.config.build_missing_cache and not state_dict:
                 state_dict = self._partial_state_dict_for_missing_cache(experts_per_chip)
             elif self.MODEL_CLS.check_cache_complete(
                 self.config.weight_cache_path,
@@ -273,8 +272,7 @@ class TtPrefillRuntime:
                     f"routed_expert_weights_dtype={self.config.routed_expert_weights_dtype}, and no "
                     f"source weights were supplied to rebuild it. Continuing would load uninitialized "
                     f"placeholders as the expert weights. Populate the cache at this dtype first "
-                    f"(run the pretrained smoke test once), or set {WEIGHT_CATEGORIES_ENV}=<categories|all> "
-                    f"to build the missing pieces from the FP8 checkpoint (PREFILL_HF_MODEL)."
+                    f"(run the pretrained smoke test once)."
                 )
             else:
                 logger.warning(
@@ -325,7 +323,7 @@ class TtPrefillRuntime:
 
     def _partial_state_dict_for_missing_cache(self, experts_per_chip: int) -> dict:
         """Check this rank's trunk cache category by category and read the missing, selected ones from the
-        checkpoint. Raises when something is missing that ``weight_categories`` does not select. Returns ``{}``
+        checkpoint. Returns ``{}``
         (cache-only) when nothing is missing."""
         cfg = self.config
         missing = weight_categories.missing_trunk_categories(
@@ -345,7 +343,6 @@ class TtPrefillRuntime:
         if not missing:
             logger.info(f"TTNN weight cache complete at {cfg.weight_cache_path}; loading from disk")
             return {}
-        weight_categories.check_selected(missing, cfg.weight_categories, str(cfg.weight_cache_path))
         logger.warning(
             f"TTNN weight cache at {cfg.weight_cache_path} is missing {weight_categories.format_missing(missing)}; "
             f"building it from the checkpoint at {cfg.hf_model_path}"
@@ -396,13 +393,12 @@ class TtPrefillRuntime:
             init_checker(eff)
         mtp_state_dict = {"mtp": {}, "layer": {}}
         if not mtp_cached:
-            if weight_categories.MTP not in self.config.weight_categories:
+            if not self.config.build_missing_cache:
                 raise RuntimeError(
                     f"MTP weight cache incomplete at {mtp_cache_path}. Building it here would dequantise "
                     f"layer {mtp_cfg.mtp_layer_idx}'s 256 fp8 experts inside the serving process; populate it "
                     "once with tests/mtp_prefill/test_mtp_transformer_chunks.py, point "
-                    f"{MTP_CACHE_ENV} at a populated tree, or select it with {WEIGHT_CATEGORIES_ENV}=mtp "
-                    "(reads PREFILL_HF_MODEL)."
+                    f"{MTP_CACHE_ENV} at a populated tree."
                 )
             logger.warning(
                 f"MTP weight cache incomplete at {mtp_cache_path}; building it from {self.config.hf_model_path}"
