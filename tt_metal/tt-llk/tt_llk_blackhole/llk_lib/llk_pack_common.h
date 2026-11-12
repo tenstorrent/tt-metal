@@ -48,9 +48,14 @@ inline void _llk_packer_set_math_semaphore_()
 }
 
 // One SyncHalf release with the half known at compile time: the ZEROACC and WRCFG words are fixed, so the RISC computes none.
-template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_nops>
+template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_first, bool offset_nops>
 inline void _llk_pack_dest_half_done_()
 {
+    constexpr std::uint32_t next_half_gpr = half ? p_gpr_pack::DEST_OFFSET_LO : p_gpr_pack::DEST_OFFSET_HI;
+    if constexpr (offset_first)
+    {
+        TTI_WRCFG(next_half_gpr, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+    }
     if constexpr (clear_dest)
     {
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
@@ -61,11 +66,14 @@ inline void _llk_pack_dest_half_done_()
     {
         _llk_packer_set_math_semaphore_<p_stall::PACK>();
     }
-    TTI_WRCFG(half ? p_gpr_pack::DEST_OFFSET_LO : p_gpr_pack::DEST_OFFSET_HI, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
-    if constexpr (offset_nops)
+    if constexpr (!offset_first)
     {
-        TTI_DMANOP;
-        TTI_DMANOP;
+        TTI_WRCFG(next_half_gpr, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        if constexpr (offset_nops)
+        {
+            TTI_DMANOP;
+            TTI_DMANOP;
+        }
     }
 }
 
@@ -89,35 +97,52 @@ inline void _llk_pack_dest_section_done_()
 {
     constexpr bool offset_nops = (words & 1) == 0;
     constexpr bool by_branch   = (words & 2) != 0;
-    if constexpr (Dst == DstSync::SyncHalf && (by_branch || !offset_nops))
+    // The packer takes the DEST offset when it accepts a PACR, so the next half's offset goes ahead of the drain wait, except with
+    // fp32 DEST and an unpack to DEST, where the earlier pack start contends with the unpacker for L1.
+    constexpr bool offset_first = Dst == DstSync::SyncHalf && !(is_fp32_dest_acc_en && pack_reconfig_u2d<Dst>);
+    if constexpr (Dst == DstSync::SyncHalf && by_branch)
     {
-        if constexpr (by_branch)
+        if (dest_offset_id == 0)
         {
-            if (dest_offset_id == 0)
-            {
-                _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 0, offset_nops>();
-            }
-            else
-            {
-                _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 1, offset_nops>();
-            }
-            flip_packer_dest_offset_id();
+            _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 0, offset_first, offset_nops>();
         }
         else
         {
-            if constexpr (clear_dest)
-            {
-                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
-                TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
-                _llk_packer_set_math_semaphore_<p_stall::NONE>();
-            }
-            else
-            {
-                _llk_packer_set_math_semaphore_<p_stall::PACK>();
-            }
-            flip_packer_dest_offset_id();
-            TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+            _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 1, offset_first, offset_nops>();
         }
+        flip_packer_dest_offset_id();
+    }
+    else if constexpr (offset_first)
+    {
+        const std::uint32_t done_half = dest_offset_id % 2;
+        flip_packer_dest_offset_id();
+        // Arithmetic pick of the next half's GPR: a branch on the parity here lets GCC duplicate the loop body per half
+        TT_WRCFG(p_gpr_pack::DEST_OFFSET_HI - (p_gpr_pack::DEST_OFFSET_HI - p_gpr_pack::DEST_OFFSET_LO) * done_half, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        if constexpr (clear_dest)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
+            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, done_half);
+            _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        }
+        else
+        {
+            _llk_packer_set_math_semaphore_<p_stall::PACK>();
+        }
+    }
+    else if constexpr (Dst == DstSync::SyncHalf && !offset_nops)
+    {
+        if constexpr (clear_dest)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
+            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+            _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        }
+        else
+        {
+            _llk_packer_set_math_semaphore_<p_stall::PACK>();
+        }
+        flip_packer_dest_offset_id();
+        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
     else
     {
