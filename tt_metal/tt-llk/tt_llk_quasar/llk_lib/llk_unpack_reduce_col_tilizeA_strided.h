@@ -42,15 +42,17 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_mop_config_(
         0 /*last*/,
         [buf_desc_id_0, idx_inc, num_faces, num_faces_c_dim]
         {
-            for (std::uint32_t face = 0; face < num_faces; face++)
+            const auto face_start = [idx_inc, num_faces_c_dim](const std::uint32_t f) { return (f / num_faces_c_dim) * 2 * idx_inc + (f % num_faces_c_dim); };
+
+            // Face 0
+            TT_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 0 /*Set Dvalid*/);
+            TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_inc);
+            TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
+
+            for (std::uint32_t face = 1; face < num_faces; face++)
             {
-                if (face > 0)
-                {
-                    const auto face_start = [idx_inc, num_faces_c_dim](const std::uint32_t f)
-                    { return (f / num_faces_c_dim) * 2 * idx_inc + (f % num_faces_c_dim); };
-                    const std::uint32_t move = (face_start(face) - face_start(face - 1) - idx_inc) & kIndex18BitMask;
-                    TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, move);
-                }
+                const std::uint32_t move = (face_start(face) - face_start(face - 1) - idx_inc) & kIndex18BitMask;
+                TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, move);
                 TT_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 0 /*Set Dvalid*/);
                 TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_inc);
                 TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
