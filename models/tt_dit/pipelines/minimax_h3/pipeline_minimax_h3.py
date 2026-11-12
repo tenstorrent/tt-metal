@@ -686,6 +686,14 @@ class MiniMaxH3Pipeline:
         # same matmuls. Its weight cache has its own subfolder (no `_FSDP` suffix), so the first run builds it.
         self.encoder_resident = os.environ.get("MINIMAX_H3_ENCODER_RESIDENT", "0") == "1"
         self.audio_beside_video = os.environ.get("MINIMAX_H3_AUDIO_BESIDE_VIDEO", "0") == "1"
+        # MINIMAX_H3_STEP_SYNC=0: skip the device sync after each denoise step. Every op of the request runs on one
+        # command queue, so the order (and every value) is unchanged; only the host stops waiting between steps. The
+        # end-of-loop sync and the distributed barrier stay. With it off, the per-step times in the "denoise
+        # breakdown" log are enqueue times. Any other value than 0 / 1 raises.
+        _step_sync = os.environ.get("MINIMAX_H3_STEP_SYNC", "1")
+        if _step_sync not in ("0", "1"):
+            raise ValueError("MINIMAX_H3_STEP_SYNC must be '0' or '1'")
+        self.step_sync = _step_sync == "1"
         self._levels_all: dict[tuple[str, int], StateTensor] = {}
         self._levels_warm_steps = int(os.environ.get("MINIMAX_H3_LEVELS_ONCE_WARM_STEPS", "16"))
         self._levels_warmed: set[tuple[str, int]] = set()
@@ -3466,7 +3474,8 @@ class MiniMaxH3Pipeline:
                 ttnn.add_(self._tt_audio.value, audio_velocity)
                 if i + 1 < len(timesteps):
                     upload_levels_for(i + 1)
-                ttnn.synchronize_device(self.mesh_device)
+                if self.step_sync:
+                    ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()
                 if i == 0:
