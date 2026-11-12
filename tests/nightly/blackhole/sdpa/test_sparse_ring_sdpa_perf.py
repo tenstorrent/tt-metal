@@ -26,17 +26,21 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa import (
     open_ring_joint_sdpa_runtime,
 )
 from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import (
+    ALIGNED,
     BLOCK,
     D,
     MASK_STRUCTURES,
     Case,
     Geometry,
     _block_lengths,
+    _check,
     _density,
+    balance_mask,
     frame_block_mask,
     make_mask,
     make_structured_mask,
     pool,
+    sparse_reference,
     window_allow,
 )
 
@@ -434,3 +438,75 @@ def test_dense_tail_perf(bench, results_file, rows, position, variant, tail_toke
         dense_blocks=dense,
         dense_local=variant == "dense_blocks_local",
     )
+
+
+# Load balancing: rows of very different cost that nobody flags. heavy_rows: 2 % of the (head, Q block) rows keep 90 %
+# of the blocks (within a device); causal: block-triangular (across devices). Only the kept route balances; the sparse
+# (pooled) route runs the static split on the same masks.
+BALANCE_STRUCTURES = ["heavy_rows", "causal"]
+
+
+@pytest.mark.parametrize("pooled", [True, False], ids=["sparse", "kept"])
+@pytest.mark.parametrize("structure", BALANCE_STRUCTURES)
+@pytest.mark.parametrize("rows", list(TAIL_POINTS), ids=list(TAIL_POINTS.values()))
+def test_balance_perf(bench, results_file, rows, structure, pooled):
+    """The sparse op at the production k_chunk on masks with very uneven rows, on both routes."""
+
+    def make(case):
+        n_heavy = max(1, (case.S * case.H * case.geo.nb()) // 50)
+        return balance_mask(case.geo, case.S, case.H, kind=structure, density=0.2, seed=rows, heavy_rows=n_heavy)
+
+    time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, structure=f"balance_{structure}")
+
+
+def test_balance_trace_masks(runtime):
+    """Correctness under trace replay: one captured trace of the op, replayed after new mask contents are written into
+    the same device tensor (prefix, causal, random): costs, ranges and swaps are recomputed on device every replay."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo)
+    mesh = runtime.mesh_device
+    q, k, v = case.inputs(60)
+    tq = case._upload(q, case.seq_dims, dtype=case.q_dtype)
+    tk, tv = (case._upload(x, case.seq_dims, dtype=case.dtype) for x in (k, v))
+    masks = [
+        balance_mask(geo, case.S, case.H, kind="prefix", seed=60),
+        balance_mask(geo, case.S, case.H, kind="causal", seed=61),
+        make_mask(geo, case.S, case.H, density=0.2, seed=62),
+    ]
+
+    def host_mask(m):
+        return ttnn.from_torch(
+            m, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=case.mapper(case.dims(0, 1))
+        )
+
+    t_mask = case._upload(masks[0], case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _free(case.call(tq, tk, tv, t_mask))  # compile
+    ttnn.synchronize_device(mesh)
+    trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out = case.call(tq, tk, tv, t_mask)
+    ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+    try:
+        for i, mask in enumerate(masks):
+            ttnn.copy_host_to_device_tensor(host_mask(mask), t_mask)
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+            sparse = ttnn.to_torch(out, mesh_composer=case.composer).float()[:, :, : geo.logical_n]
+            pk, pv = (pool(x, geo, case.S) for x in (k, v))  # unused by the kept-only reference, but required
+            ref = sparse_reference(
+                q,
+                k,
+                v,
+                mask,
+                pk,
+                pv,
+                geo,
+                case.S,
+                case.scale,
+                pooled=False,
+                heads=sorted({0, 1, case.H // 2, case.H - 1}),
+            )[:, :, : geo.logical_n]
+            r = {"sparse": sparse, "dense": None, "ref": ref}
+            _check(f"trace replay {i}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    finally:
+        ttnn.release_trace(mesh, trace_id)
+        _free(out)
+        ttnn.deallocate(t_mask)
