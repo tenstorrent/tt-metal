@@ -19,7 +19,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn::experimental::test {
+namespace ttnn::command_list::test {
 
 class CommandListTest : public TTNNFixtureWithDevice {
 protected:
@@ -96,4 +96,4 @@ TEST_F(CommandListTest, BuilderLifetimeErrors) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CommandListBuilder has been deallocated")));
 }
 
-}  // namespace ttnn::experimental::test
+}  // namespace ttnn::command_list::test

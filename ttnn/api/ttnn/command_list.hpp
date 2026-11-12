@@ -11,9 +11,9 @@
 #include "ttnn/common/guard.hpp"
 #include "ttnn/common/queue_id.hpp"
 
-// Experimental and subject to change. Shares unqualified names with tt::tt_metal::experimental; qualify the Metal ones.
+// Experimental and subject to change.
 
-namespace ttnn::experimental {
+namespace ttnn::command_list {
 
 class CommandList;
 
@@ -86,4 +86,4 @@ private:
     tt::tt_metal::experimental::CommandList metal_list_;
 };
 
-}  // namespace ttnn::experimental
+}  // namespace ttnn::command_list

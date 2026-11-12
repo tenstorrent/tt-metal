@@ -16,8 +16,8 @@
 
 namespace ttnn::operations::command_list {
 
-using ttnn::experimental::CommandList;
-using ttnn::experimental::CommandListBuilder;
+using ttnn::command_list::CommandList;
+using ttnn::command_list::CommandListBuilder;
 
 void py_module_types(nb::module_& mod) {
     nb::class_<CommandListBuilder>(mod, "CommandListBuilder", R"doc(

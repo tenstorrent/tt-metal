@@ -15,7 +15,7 @@
 
 namespace {
 
-thread_local ttnn::experimental::CommandListBuilder* t_recording = nullptr;
+thread_local ttnn::command_list::CommandListBuilder* t_recording = nullptr;
 
 }  // namespace
 
@@ -46,7 +46,7 @@ void record_to_command_list(
 
 }  // namespace ttnn::device_operation::detail
 
-namespace ttnn::experimental {
+namespace ttnn::command_list {
 
 namespace metal = tt::tt_metal::experimental;
 
@@ -116,4 +116,4 @@ tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return meta
 
 QueueId CommandList::cq_id() const { return QueueId(metal_list_.cq_id()); }
 
-}  // namespace ttnn::experimental
+}  // namespace ttnn::command_list
