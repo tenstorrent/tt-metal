@@ -23,28 +23,28 @@ class TtResnet50:
         # Layer 1, at the highest resolution: its circular buffers with float32 accumulation do not fit L1.
         # Each stage's first block strides and projects the shortcut; the remaining blocks repeat, and
         # their count follows the reference model's.
-        stage_options = {
-            1: ({"fp32_dest_acc": False}, {"fp32_dest_acc": False}),
-            2: ({"blk_sharded": True, "activation_dtype": ttnn.bfloat8_b}, {}),
-            3: ({"blk_sharded": True, "activation_dtype": ttnn.bfloat8_b}, {}),
-            4: (
+        stage_options = (
+            (conv_args.layer1, {"fp32_dest_acc": False}, {"fp32_dest_acc": False}),
+            (conv_args.layer2, {"blk_sharded": True, "activation_dtype": ttnn.bfloat8_b}, {}),
+            (conv_args.layer3, {"blk_sharded": True, "activation_dtype": ttnn.bfloat8_b}, {}),
+            (
+                conv_args.layer4,
                 {"blk_sharded": True, "activation_dtype": ttnn.bfloat8_b, "conv3_blk_sharded": True},
                 {"conv3_blk_sharded": True},
             ),
-        }
+        )
         self.stages = []
-        for stage, (first_options, repeat_options) in stage_options.items():
-            blocks_args = getattr(conv_args, f"layer{stage}")
-            num_blocks = sum(1 for name in conv_pth if name.startswith(f"layer{stage}_"))
+        for stage, (blocks_args, first_options, repeat_options) in enumerate(stage_options, start=1):
+            blocks_pth = [conv_pth[name] for name in conv_pth if name.startswith(f"layer{stage}_")]
             self.stages.append(
                 [
                     TtBottleneck(
                         blocks_args[block],
-                        getattr(conv_pth, f"layer{stage}_{block}"),
+                        block_pth,
                         device=self.device,
                         **({"is_downsample": True, **first_options} if block == 0 else repeat_options),
                     )
-                    for block in range(num_blocks)
+                    for block, block_pth in enumerate(blocks_pth)
                 ]
             )
 
