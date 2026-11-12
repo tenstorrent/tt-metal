@@ -11,6 +11,9 @@
 #include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#ifdef AGMM_GATHER_SENDERS
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#endif
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -275,6 +278,17 @@ void kernel_main() {
 #endif
 
     in0_valid_sem.set(VALID);
+#ifdef AGMM_GATHER_SENDERS
+    // Hardware multicast of each in0 block along the row from its injector (x = 0), in place of the
+    // core-to-core relay (with gather senders the gather does not use the in0 chain, so the block only feeds the
+    // matmul).
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in0_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in0_mcast_rt_offset")>
+        in0_mcast_args;
+    auto in0_tx = in0_mcast_args.optional_sender(noc_obj);
+    auto in0_rx = in0_mcast_args.optional_receiver(noc_obj);
+#endif
 
     // all gather
     volatile tt_l1_ptr uint32_t* out_ready_sem_backward_addr_ptr =
@@ -566,16 +580,28 @@ void kernel_main() {
                         k_block_right_tile + k_right_tiles,
                         k_right_tiles);
                 } else {
+#ifdef AGMM_GATHER_SENDERS
+                    in0_rx->receive();
+#else
                     // Get from previous device
                     in0_receiver_sem.set(INVALID);
                     in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
                     in0_receiver_sem.wait(VALID);
+#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_in0.push_back(in0_block_num_tiles);
-                if (!is_sink_core) {
+#ifdef AGMM_GATHER_SENDERS
+                if (is_injector_core) {
+                    in0_tx->send(in0_start_address, in0_start_address, current_block_bytes);
+                }
+                constexpr bool relay_chain = false;  // the multicast replaces the core-to-core relay
+#else
+                constexpr bool relay_chain = true;
+#endif
+                if (relay_chain && !is_sink_core) {
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
 

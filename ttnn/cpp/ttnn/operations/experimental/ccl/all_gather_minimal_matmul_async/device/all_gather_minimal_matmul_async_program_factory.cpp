@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
 #include <algorithm>
 #include <bit>
@@ -808,6 +809,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     }
 
     if (gather_senders) {
+        // in0 blocks multicast along each row, in1 blocks down each column (see the end of the factory).
         defines["AGMM_GATHER_SENDERS"] = "1";
     }
     if (fabric_2d) {
@@ -1862,6 +1864,35 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             N_end_tile,
         };
         desc.kernels[kComputeKernelIdx].emplace_runtime_args(core, as_runtime_args(compute_runtime_args));
+    }
+
+    if (gather_senders) {
+        // in1: hardware multicast down each column of the matmul grid from its row-0 injector.
+        using ttnn::kernel_lib::host::Mcast;
+        Mcast in1_mcast(
+            *device,
+            ttnn::kernel_lib::host::McastConfig{.noc = in1_noc},
+            tt::tt_metal::CoreRangeSet(core_grid),
+            grid_size.y,
+            ttnn::kernel_lib::host::McastFixedSenderConfig{},
+            ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
+        std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 2> in1_targets{
+            desc.kernels[kIn1SenderKernelIdx], desc.kernels[kIn1ReceiverKernelIdx]};
+        in1_mcast.attach(desc, "in1_mcast", in1_targets, next_semaphore_id);
+        next_semaphore_id = in1_mcast.next_semaphore_id();
+        // in0: hardware multicast along each row of the matmul grid from its x = 0 injector.
+        Mcast in0_mcast(
+            *device,
+            ttnn::kernel_lib::host::McastConfig{.noc = in0_noc},
+            tt::tt_metal::CoreRangeSet(core_grid),
+            grid_size.x,
+            ttnn::kernel_lib::host::McastFixedSenderConfig{},
+            ttnn::kernel_lib::host::McastCoreOrder::RowMajor);
+        std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 3> in0_targets{
+            desc.kernels[kIn0SenderKernelIdx],
+            desc.kernels[kIn0ReceiverNoFabricKernelIdx],
+            desc.kernels[kIn0ReceiverFabricKernelIdx]};
+        in0_mcast.attach(desc, "in0_mcast", in0_targets, next_semaphore_id);
     }
 
     return desc;
