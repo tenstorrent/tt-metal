@@ -6,14 +6,18 @@
 // own nodes, so the multicast rectangle must stay within them. Part of the NoC sanitizer, which includes this header.
 #pragma once
 
+#include "internal/debug/node_range.h"
 #include "internal/debug/sanitize.h"
 
 // The nodes a multicast destination's address is reserved on, which its traits report through multicast_node_set:
-// num_nodes packed coordinates (x in bits 8-15, y in bits 0-7). Defined without Watcher too, so the traits needn't
-// depend on it.
+// num_nodes packed coordinates (x in bits 8-15, y in bits 0-7) and num_ranges rectangles. A destination with neither is
+// not checked. Defined without Watcher too, so the
+// traits needn't depend on it.
 struct DebugMulticastNodeSet {
-    const uint16_t* packed_xy_coords;
-    uint32_t num_nodes;
+    const uint16_t* packed_xy_coords = nullptr;
+    uint32_t num_nodes = 0;
+    const DebugNodeRange* ranges = nullptr;
+    uint32_t num_ranges = 0;
 };
 
 #if defined(DEBUG_SANITIZE_NOC_ENABLED)
@@ -32,6 +36,8 @@ struct DebugMulticastRect {
     // corner past the NoC coordinate range is reported too, before the scans over the rectangle could loop on it.
     bool is_malformed;
 
+    // A rectangle whose corners are already ordered.
+    DebugMulticastRect(DebugNodeCoord lower, DebugNodeCoord upper) : min{lower}, max{upper}, is_malformed{false} {}
     // NoC 0 runs from the start corner up to the end corner, NoC 1 down.
     DebugMulticastRect(uint8_t noc_id, DebugNodeCoord start, DebugNodeCoord end) :
         min{noc_id == 0 ? start : end},
@@ -108,6 +114,54 @@ inline void debug_sanitize_multicast_rect_covered(
     }
 }
 
+// The destination's worker nodes inside the rectangle, and whether the sender is one of the destination's nodes.
+struct DebugNodesInside {
+    uint32_t num_inside = 0;
+    bool has_sender = false;
+};
+// Over the destination's packed coordinates.
+inline DebugNodesInside debug_coords_inside(
+    const DebugMulticastRect& rect, DebugMulticastNodeSet nodes, DebugNodeCoord sender) {
+    DebugNodesInside inside;
+    for (uint32_t i = 0; i < nodes.num_nodes; ++i) {
+        const DebugNodeCoord node{
+            static_cast<uint32_t>((nodes.packed_xy_coords[i] >> 8) & 0xFF),
+            static_cast<uint32_t>(nodes.packed_xy_coords[i] & 0xFF),
+        };
+        inside.num_inside += debug_rect_contains(rect, node);
+        inside.has_sender |= node == sender;
+    }
+    return inside;
+}
+// Over the destination's rectangles, counting the workers of each one's overlap with the rectangle.
+inline DebugNodesInside debug_ranges_inside(
+    uint8_t noc_id, const DebugMulticastRect& rect, DebugMulticastNodeSet nodes, DebugNodeCoord sender) {
+    DebugNodesInside inside;
+    for (uint32_t i = 0; i < nodes.num_ranges; ++i) {
+        const DebugNodeRange& node_range = nodes.ranges[i];
+        const DebugMulticastRect range{
+            DebugNodeCoord{node_range.start.x, node_range.start.y},
+            DebugNodeCoord{node_range.end.x, node_range.end.y},
+        };
+        inside.has_sender |= debug_rect_contains(range, sender);
+        // Both rectangles have worker corners, so their overlap does too.
+        const DebugMulticastRect overlap{
+            DebugNodeCoord{
+                rect.min.x > range.min.x ? rect.min.x : range.min.x,
+                rect.min.y > range.min.y ? rect.min.y : range.min.y,
+            },
+            DebugNodeCoord{
+                rect.max.x < range.max.x ? rect.max.x : range.max.x,
+                rect.max.y < range.max.y ? rect.max.y : range.max.y,
+            },
+        };
+        if (overlap.min.x <= overlap.max.x && overlap.min.y <= overlap.max.y) {
+            inside.num_inside += debug_count_workers(noc_id, overlap);
+        }
+    }
+    return inside;
+}
+
 // Every worker node of the rectangle must be one of the destination's nodes.
 //
 // Takes the nodes as a pointer and count, not a template over the destination, so Watcher builds carry one copy.
@@ -120,25 +174,31 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
     DebugNodeCoord end,
     DebugMulticastNodeSet nodes,
     bool includes_sender) {
+    if (nodes.packed_xy_coords == nullptr && nodes.ranges == nullptr) {
+        return;
+    }
     const DebugMulticastRect rect{noc_id, start, end};
     if (!rect.is_malformed && !debug_is_worker(noc_id, rect.min)) {
         return;  // left to the generic multicast check
     }
     const DebugNodeCoord sender = debug_sender_coord(noc_id);
     // Assumes the nodes are distinct, or a duplicate inside the rectangle can hide a missing one. A tensor's
-    // BufferDistributionSpec built from a CoreRangeSet satisfies this; one built from a core list is not checked.
-    uint32_t num_inside = 0;
-    bool is_sender_node = false;
-    for (uint32_t i = 0; i < nodes.num_nodes; ++i) {
-        const DebugNodeCoord node{
-            static_cast<uint32_t>((nodes.packed_xy_coords[i] >> 8) & 0xFF),
-            static_cast<uint32_t>(nodes.packed_xy_coords[i] & 0xFF),
-        };
-        num_inside += debug_rect_contains(rect, node);
-        is_sender_node |= node == sender;
-    }
+    // BufferDistributionSpec built from a CoreRangeSet satisfies this, as do a CoreRangeSet's rectangles; a
+    // BufferDistributionSpec built from a core list is not checked.
+    const DebugNodesInside coords = debug_coords_inside(rect, nodes, sender);
+    // A malformed rectangle is reported without scanning it, as its corners may be out of range.
+    const DebugNodesInside ranges =
+        rect.is_malformed ? DebugNodesInside{} : debug_ranges_inside(noc_id, rect, nodes, sender);
     debug_sanitize_multicast_rect_covered(
-        noc_id, noc_addr, l1_addr, len, rect, num_inside, sender, is_sender_node, includes_sender);
+        noc_id,
+        noc_addr,
+        l1_addr,
+        len,
+        rect,
+        coords.num_inside + ranges.num_inside,
+        sender,
+        coords.has_sender || ranges.has_sender,
+        includes_sender);
 }
 #define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(                                  \
     noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, nodes, includes_sender) \

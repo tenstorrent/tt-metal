@@ -19,7 +19,7 @@ void check_dram_operand(const Tensor& tensor, std::string_view name) {
     const bool nd_sharded_tiles =
         tensor.memory_config().nd_shard_spec().has_value() && tensor.layout() == tt::tt_metal::Layout::TILE;
     TT_FATAL(
-        tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM && (interleaved || nd_sharded_tiles),
+        tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM && (interleaved || nd_sharded_tiles),
         "{}: {} must be interleaved DRAM, or ND-sharded DRAM for TILE",
         kOperation,
         name);
@@ -43,7 +43,7 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
     const auto& destination_shape = destination.logical_shape();
     TT_FATAL(
         source.layout() == destination.layout() && source.tensor_spec().tile() == destination.tensor_spec().tile() &&
-            source.buffer()->page_size() == destination.buffer()->page_size(),
+            source.mesh_buffer().page_size() == destination.mesh_buffer().page_size(),
         "{}: source and destination must share layout, tile and page size",
         kOperation);
     TT_FATAL(
@@ -82,6 +82,9 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
         source_shape,
         destination_shape);
     TT_FATAL(params.index_scale >= 1, "{}: index_scale must be at least 1", kOperation);
+    if (inputs.zero_fill_at_zero.has_value()) {
+        kda_factory_detail::check_device_scalar(source, *inputs.zero_fill_at_zero, kOperation, "zero_fill_at_zero");
+    }
 }
 
 IndexedEntryCopyDeviceOperation::spec_return_value_t IndexedEntryCopyDeviceOperation::compute_output_specs(
@@ -95,11 +98,17 @@ IndexedEntryCopyDeviceOperation::tensor_return_value_t IndexedEntryCopyDeviceOpe
 }
 
 Tensor indexed_entry_copy(
-    const Tensor& source, const Tensor& destination, const Tensor& index, uint32_t index_scale, uint32_t index_offset) {
+    const Tensor& source,
+    const Tensor& destination,
+    const Tensor& index,
+    uint32_t index_scale,
+    uint32_t index_offset,
+    const std::optional<Tensor>& zero_fill_at_zero) {
     using OperationType = ttnn::experimental::prim::IndexedEntryCopyDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.index_scale = index_scale, .index_offset = index_offset},
-        OperationType::tensor_args_t{.source = source, .destination = destination, .index = index});
+        OperationType::tensor_args_t{
+            .source = source, .destination = destination, .index = index, .zero_fill_at_zero = zero_fill_at_zero});
 }
 
 }  // namespace ttnn::experimental::prim
