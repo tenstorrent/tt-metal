@@ -393,7 +393,7 @@ class DecoderLayer:
             and user_seqlen <= 32 * 1024
             and hidden_states.dtype == ttnn.bfloat8_b
         ):
-            # TEMP experiment (GPT_OSS_PREFILL_RESIDUAL_BF16=1): the post-MoE residual in bf16 too, as the
+            # GPT_OSS_PREFILL_RESIDUAL_BF16=1 (gpt-oss-20b release settings): the post-MoE residual in bf16 too, as the
             # post-attention add above (a bf8 residual shares one exponent per 16 channels across gpt-oss's
             # large-magnitude channels)
             moe_out = hidden_states

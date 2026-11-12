@@ -6,7 +6,6 @@ import math
 import ttnn
 
 from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
-from ..fused_decode.config import FULL_FIDELITY
 from .weights import AttentionWeights
 
 
@@ -125,7 +124,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
         Output tensor after projection
     """
     # The prefill attention casts the heads to bf8 before the concat (already bf8 here); the caller owns the input.
-    cast = tensor if FULL_FIDELITY or tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
+    cast = tensor if tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
     if unpadded and weights.o_proj_prefill_op is not None:
         out = weights.o_proj_prefill_op(cast, weights.o_proj_stream, activation_dtype)
     else:
@@ -255,8 +254,7 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     Nt_per_core = N_tiles // mm_core_grid.x
     Mt_per_core = max(1, math.ceil(M_tiles / grid_y))
 
-    if not FULL_FIDELITY:
-        tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
+    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
 
     mm_config = ttnn.MinimalMatmulConfig(
         M_block_size=m_block,

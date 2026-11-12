@@ -12,8 +12,7 @@ Decode expert streams (experts/weights.py _load_split_decode_expert_weights, fus
   * bank b holds logical bank L = (b + rot) % banks, its bytes contiguous (uint8 width-sharded, 64-byte pages);
   * gate|up bank bytes: for expert e, for slot s in 0..2P-1 (slot 2r = gate column L * P + r, slot 2r + 1 = up column
     L * P + r): one segment; down bank bytes: for expert e, for c in 0..Cd-1 (output column L * Cd + c): one segment;
-  * a full segment is [BFP4 exact part][BFP2 part][rounded part], a round-only segment only the rounded part, and a
-    separate stream holds every segment's exact parts first, then every segment's rounded part in segment order;
+  * a full segment is [BFP4 exact part][BFP2 part][rounded part], a round-only segment only the rounded part;
   * the rounded part is (k_tiles + 1) BFP4 tiles: k = 0..k_tiles-1 weight tiles (stored transposed within the tile),
     then the bias tile (row n holds output column n's two residual terms at K positions 0 and 16).
 
@@ -29,7 +28,7 @@ BFP4_BYTES = 576  # bfloat4_b tile: 64 exponent bytes + 512 mantissa bytes (mxfp
 BFP2_BYTES = 320  # BFP2 tile (mxfp4_split.BFP2_BYTES)
 BFP8_BYTES = 1088
 # Stream kinds of a decode expert stream with a rounded part (experts/weights.py _load_split_decode_expert_weights).
-STREAM_FULL, STREAM_ROUND_ONLY, STREAM_SEPARATE = "full", "round_only", "separate"
+STREAM_FULL, STREAM_ROUND_ONLY = "full", "round_only"
 # K positions of the bias tile's residual terms (mxfp4_split.bias_tiles_t)
 BIAS_TERM_COLUMNS = (0, 16)
 
@@ -69,8 +68,6 @@ class SplitStreamLayout:
         """Byte offset in its bank of the rounded part (weight tile k = 0) of segment `seg` of `expert`."""
         assert 0 <= expert < self.num_experts and 0 <= seg < self.segs_per_expert, (expert, seg)
         i = expert * self.segs_per_expert + seg
-        if self.kind == STREAM_SEPARATE:
-            return self.segs_per_bank * (self.seg_bytes - self.part_bytes) + i * self.part_bytes
         return i * self.seg_bytes + self.seg_bytes - self.part_bytes
 
     def physical_bank(self, logical):
@@ -81,7 +78,7 @@ class SplitStreamLayout:
 def split_stream_layout(stream, kind, num_experts, hidden, inter_pad, banks, rot):
     """SplitStreamLayout of a decode gate|up ("gate_up") or down ("down") stream of `kind` (STREAM_*), for one TP shard
     of inter_pad (padded) intermediate columns."""
-    assert kind in (STREAM_FULL, STREAM_ROUND_ONLY, STREAM_SEPARATE), kind
+    assert kind in (STREAM_FULL, STREAM_ROUND_ONLY), kind
     assert hidden % TILE == 0 and inter_pad % TILE == 0, (hidden, inter_pad)
     if stream == "gate_up":
         pairs = inter_pad // TILE

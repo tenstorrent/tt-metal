@@ -124,8 +124,7 @@ ROUTED_TP_CACHE_SUBDIR = "experts_routed_tp"
 # groups run along the input dimension and hold those values exactly; the expert op transposes the tiles back as it
 # unpacks them (weights_tile_transposed). The tile grid, sharding and reads are unchanged. Prefills the routed path does
 # not take on its own (shorter than its minimum, or not a multiple of 64) are padded into it (MLP.__call__), so every
-# batch-1 prefill reads these weights and no separately rounded prefill copy (GPT_OSS_DECODE_BF4_ROUNDED with
-# GPT_OSS_PREFILL_BF4_ROUNDED) is needed. The bfloat8_b layers keep the checkpoint values.
+# batch-1 prefill reads these weights. The bfloat8_b layers keep the checkpoint values.
 PREFILL_KGPTQ_ENV = "GPT_OSS_PREFILL_KGPTQ"
 ROUTED_WEIGHTS_DTYPE = ttnn.bfloat4_b
 # Layers whose routed expert weights are bfloat8_b instead of bfloat4_b ("all", "" or a comma list of layer ids).
@@ -183,19 +182,16 @@ def decode_stream_kinds(layer_idx):
     """(gate|up kind, down kind) of a layer's decode expert streams when both hold a rounded part the routed prefill
     can read (stream_pages.STREAM_*), else None. Mirrors experts/weights.py _load_split_decode_expert_weights: split
     streams (GPT_OSS_DECODE_EXPERTS_SPLIT) with GPT_OSS_DECODE_SPLIT_RANKS set carry the rounded part; round-only for
-    split_r0 with GPT_OSS_DECODE_SPLIT_ROUND_ONLY, separate for 0 < k ranks with GPT_OSS_DECODE_SPLIT_SEPARATE, else
-    full segments. GPT_OSS_DECODE_SPLIT_REST_PKG streams (normal-orientation package tiles) are not read."""
+    split_r0 with GPT_OSS_DECODE_SPLIT_ROUND_ONLY, else full segments."""
     from ..fused_decode.config import (
         DECODE_SPLIT_RANKS,
-        DECODE_SPLIT_REST_PKG,
         DECODE_SPLIT_ROUND_ONLY,
-        DECODE_SPLIT_SEPARATE,
         decode_experts_split,
         decode_split_dtype,
     )
-    from .stream_pages import STREAM_FULL, STREAM_ROUND_ONLY, STREAM_SEPARATE
+    from .stream_pages import STREAM_FULL, STREAM_ROUND_ONLY
 
-    if layer_idx is None or DECODE_SPLIT_RANKS is None or DECODE_SPLIT_REST_PKG:
+    if layer_idx is None or DECODE_SPLIT_RANKS is None:
         return None
     if decode_experts_split(str(int(layer_idx))) != frozenset(("gate_up", "down")):
         return None
@@ -204,8 +200,6 @@ def decode_stream_kinds(layer_idx):
         dtype = decode_split_dtype(int(layer_idx), stream)
         if DECODE_SPLIT_ROUND_ONLY and dtype == "split_r0":
             kinds.append(STREAM_ROUND_ONLY)
-        elif DECODE_SPLIT_SEPARATE and dtype not in ("split", "split_r0"):
-            kinds.append(STREAM_SEPARATE)
         else:
             kinds.append(STREAM_FULL)
     return tuple(kinds)
@@ -858,11 +852,9 @@ class RoutedPrefillExperts:
         E = self.num_experts
         rows, cols = self.mesh_device.shape
         projs = ("gate", "up", "down")
-        # The values depend on the checkpoint biases (the cache directory), the neuron orders and the padding.
-        key = "|".join(
-            [os.getenv(v, "").strip() for v in ("GPT_OSS_DECODE_SPLIT_ORDERS", "GPT_OSS_DECODE_SPLIT_ROUND_ORDERS")]
-            + [str(n_gu), str(n_dn), str(layouts["gate_up"].banks)]
-        )
+        # The values depend on the checkpoint biases (the cache directory) and the padding. (The two empty leading
+        # fields held the neuron-order experiment's settings; kept so the cache names stay the same.)
+        key = "|".join(["", "", str(n_gu), str(n_dn), str(layouts["gate_up"].banks)])
         prefix = f"routed_tp_v{ROUTED_TP_FILES_VERSION}_" + hashlib.sha1(key.encode()).hexdigest()[:10]
         names = None
         if self.cache_dir is not None:

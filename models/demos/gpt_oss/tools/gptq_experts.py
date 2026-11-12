@@ -3,6 +3,11 @@
 
 """GPTQ rounding of gpt-oss-20b's MXFP4 routed-expert weights onto the bfloat4_b grid of the fused decode streams.
 
+Not used by the release: the gpt-oss-20b release settings (models/demos/gpt_oss/__init__.py) use the K-GPTQ rounding
+instead (16-value groups along the input dimension, read from GPT_OSS_DECODE_SPLIT_ROUND_DIR by the decode streams and,
+with GPT_OSS_PREFILL_KGPTQ, by the routed prefill experts). The model no longer has a switch that loads this tool's
+output-grouped rounding; the tool is kept for reference and re-calibration studies.
+
 The decode streams hold the experts in bfloat4_b: blocks of 16 consecutive output columns at one input row share an
 exponent, each value a sign and a 3-bit magnitude (uniform steps of 2^(e - 2), e the block max's exponent). MXFP4's
 values {0, 0.5, 1, 1.5, 2, 3, 4, 6} x scale do not fit that grid: the conversion's round-to-nearest leaves ~10% error on
@@ -19,8 +24,7 @@ QuietBox 2, 180K calibration tokens: expert output error 11.2% / 9.5% -> 6.1% / 
   python models/demos/gpt_oss/tools/gptq_experts.py collect calib.pt texts/*.txt
   # 2. rounding (~2.5 min per layer at 8 threads): one layer_<L>.pt per layer
   python models/demos/gpt_oss/tools/gptq_experts.py round rounded/ calib.pt [calib2.pt ...]
-  # 3. serve / test with them: experts/weights.py loads the decode streams from the directory
-  GPT_OSS_DECODE_BF4_ROUNDED=rounded/ ...
+  # 3. (the model no longer has a switch that loads them, see above)
 
 Calibration size matters: ~500 tokens per expert overfits (worse than round-to-nearest on held-out tokens); 82K tokens
 in total (~10K per expert) generalizes. Use 8 threads: at 16 the per-row ops spend ~50 ms each synchronizing.

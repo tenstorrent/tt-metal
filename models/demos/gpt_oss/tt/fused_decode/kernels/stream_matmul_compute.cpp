@@ -36,10 +36,6 @@ ALWI void fold_rows(uint32_t idst) {
 }
 #endif
 
-#if defined(EXP_TAIL_SUBS) && (defined(W_FP32_FOLD) || defined(W_TRANSPOSED))
-#error "EXP_TAIL_SUBS: the plain (finalizing) BFP4 / BFP8 down stream only"
-#endif
-
 void kernel_main() {
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
@@ -52,45 +48,23 @@ void kernel_main() {
 #else
     constexpr bool transpose = false;
 #endif
-#ifdef W_NO_SPLIT_ACC
-    constexpr bool split_acc = false;
-#else
     constexpr bool split_acc = true;
-#endif
     constexpr bool dense_packing = false;
     custom_mm_block_init<transpose, split_acc, dense_packing>(cb_in0, cb_w, cb_out);
 
     cb_wait_front(cb_in0, kt);
     for (uint32_t c = 0; c < cols; ++c) {
         tile_regs_acquire();
-#ifdef EXP_TAIL_SUBS
-        // TEMP experiment (fused_decode/config.py DECODE_EXPERT_TAIL_SPLIT, the expert down stream): the last column,
-        // pushed by the reader (stream_down_reader.cpp) in EXP_TAIL_SUBS sub-blocks, is multiplied sub-block by
-        // sub-block as they land; every K tile accumulates into the same DST rows whatever the call split, and only
-        // the last call finalizes (the same MVMUL / ELWADD sequence as one call).
-        if (c + 1 == cols) {
-            constexpr uint32_t tt = EXP_TAIL_TILES;
-            for (uint32_t t = 0; t + 1 < EXP_TAIL_SUBS; ++t) {
-                cb_wait_front(cb_w, (t + 1) * tt);
-                custom_mm_block<false>(cb_in0, cb_w, t * tt, t * tt, 0, tt);
-            }
-            cb_wait_front(cb_w, kt);
-            custom_mm_block<true>(cb_in0, cb_w, kt - tt, kt - tt, 0, tt);
-            cb_pop_front(cb_w, kt);
-        } else
-#endif
-        {
-            cb_wait_front(cb_w, kt);
+        cb_wait_front(cb_w, kt);
 #ifdef W_FP32_FOLD
-            custom_mm_block<false>(cb_in0, cb_w, 0, 0, 0, kt);
-            cb_pop_front(cb_w, kt);
-            binop_with_scalar_tile_init();
-            fold_rows(0);
+        custom_mm_block<false>(cb_in0, cb_w, 0, 0, 0, kt);
+        cb_pop_front(cb_w, kt);
+        binop_with_scalar_tile_init();
+        fold_rows(0);
 #else
-            custom_mm_block<true>(cb_in0, cb_w, 0, 0, 0, kt);
-            cb_pop_front(cb_w, kt);
+        custom_mm_block<true>(cb_in0, cb_w, 0, 0, 0, kt);
+        cb_pop_front(cb_w, kt);
 #endif
-        }
         tile_regs_commit();
         cb_reserve_back(cb_out, 1);
         tile_regs_wait();

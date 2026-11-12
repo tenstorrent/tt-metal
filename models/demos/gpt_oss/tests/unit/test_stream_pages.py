@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Host-only checks of the routed prefill page tables (tt/experts/stream_pages.py): reading tile (expert, column, k)
-through the table returns that weight tile's bytes in the decode expert streams, for full, round-only and separate
-segments, the bank rotation, the gate|up slot order and the down columns, and in the batch-32 dense layout.
+through the table returns that weight tile's bytes in the decode expert streams, for full and round-only segments, the
+bank rotation, the gate|up slot order and the down columns, and in the batch-32 dense layout.
 
-The streams are packed with the real mxfp4_split.pack_columns; the bank / slot ordering and the round-only and
-separate cuts replicate experts/weights.py _load_split_decode_expert_weights (that function needs ttnn). Both modules
+The streams are packed with the real mxfp4_split.pack_columns; the bank / slot ordering and the round-only cut
+replicate experts/weights.py _load_split_decode_expert_weights (that function needs ttnn). Both modules
 are loaded from their files, so no ttnn is imported: runs on any host with torch.
 """
 
@@ -43,7 +43,7 @@ def _mxfp4(E, K, N, gen):
 
 def _pack_device(w, b, wr, kind, banks, rot, gate_up):
     """One device's bank byte streams, as experts/weights.py builds them (pack -> slot order -> bank rotation -> cut)."""
-    p4, p2, r4 = ms.pack_columns(w, b, True, wr, None)
+    p4, p2, r4 = ms.pack_columns(w, b, True, wr)
     cols = torch.cat([p4, p2, r4], -1)  # [E, n_tiles, segment bytes]
     if gate_up:
         half = cols.shape[1] // 2
@@ -55,11 +55,6 @@ def _pack_device(w, b, wr, kind, banks, rot, gate_up):
     seg, part4 = cols.shape[-1], r4.shape[-1]
     if kind == sp.STREAM_ROUND_ONLY:
         return [v.reshape(-1, seg)[:, -part4:].reshape(-1) for v in full]
-    if kind == sp.STREAM_SEPARATE:
-        return [
-            torch.cat([v.reshape(-1, seg)[:, :-part4].reshape(-1), v.reshape(-1, seg)[:, -part4:].reshape(-1)])
-            for v in full
-        ]
     return full
 
 
@@ -93,7 +88,7 @@ def weights():
     )
 
 
-@pytest.mark.parametrize("kind", [sp.STREAM_FULL, sp.STREAM_ROUND_ONLY, sp.STREAM_SEPARATE])
+@pytest.mark.parametrize("kind", [sp.STREAM_FULL, sp.STREAM_ROUND_ONLY])
 @pytest.mark.parametrize("kind_dn", [sp.STREAM_FULL, sp.STREAM_ROUND_ONLY])
 def test_stream_page_table_reads_rounded_tiles(weights, kind, kind_dn):
     gu_banks = _pack_device(*weights["gu"], kind, BANKS, ROT, gate_up=True)
@@ -173,7 +168,7 @@ def test_model_layout_numbers():
     table = sp.stream_page_table(full_gu, full_dn, 24, 90)
     assert table.shape == (32, 2 * (48 + 90))
     assert int(table[..., 1::2].max()) < full_gu.bank_bytes and int(table.max()) < (1 << 31)
-    for kind in (sp.STREAM_FULL, sp.STREAM_ROUND_ONLY, sp.STREAM_SEPARATE):  # the op needs 64 B aligned addresses
+    for kind in (sp.STREAM_FULL, sp.STREAM_ROUND_ONLY):  # the op needs 64 B aligned addresses
         gu = sp.split_stream_layout("gate_up", kind, E, H, I_pad, banks, 7)
         dn = sp.split_stream_layout("down", kind, E, H, I_pad, banks, 7)
         assert (sp.stream_page_table(gu, dn, 24, 90)[..., 1::2] % 64 == 0).all()
