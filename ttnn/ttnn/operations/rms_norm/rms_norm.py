@@ -16,8 +16,9 @@ Inputs
                   ROW_MAJOR; bfloat8_b is TILE only).
     epsilon       added to the mean of squares before the reciprocal square root.
     compute_kernel_config
-                  a ttnn.ComputeConfigDescriptor; None means default_compute_kernel_config(). The op honors its
-                  math_fidelity, fp32_dest_acc_en and math_approx_mode.
+                  a ttnn.ComputeConfigDescriptor; None means default_compute_kernel_config(): HiFi4, fp32 DEST
+                  off, approx mode on (ttnn.rms_norm's own default). The op honors its math_fidelity,
+                  fp32_dest_acc_en and math_approx_mode.
     memory_config the output's placement; None means the input's. A sharded input's output keeps its shard spec.
 
 Output
@@ -102,8 +103,8 @@ EXCLUSIONS = []
 def default_compute_kernel_config() -> ttnn.ComputeConfigDescriptor:
     return ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        fp32_dest_acc_en=True,
-        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        math_approx_mode=True,
     )
 
 
