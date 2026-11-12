@@ -215,8 +215,8 @@ class Qwen36ForCausalLM(_Qwen36Generator):
     vLLM owns the GDN state of every request: get_kv_cache_spec declares one MambaSpec per GDN layer, and each GDN
     layer keeps a request's recurrent state and convolution history in the KV cache blocks that its MambaSpec group
     gives the request (tt/gdn_block_state.py). A prefill starts from zero state or from the state of its start block
-    (a later prompt chunk, or a prefix-cache hit in mamba_cache_mode "align") and copies its end state into the
-    destination block; decode reads and writes the blocks with gdn_decode_step.
+    (a later prompt chunk, or a prefix-cache hit in mamba_cache_mode "align"), writes vLLM's prefill checkpoint on the
+    way, and copies its end state into the destination block; decode reads and writes the blocks with gdn_decode_step.
     """
 
     # supports_chunked_prefill: a prefill continues from its start block (prefill_forward). supports_prefix_caching:
@@ -285,7 +285,8 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         At start_pos 0 the row starts from zero state. Otherwise it continues from the full state of its start blocks
         (mamba_state.start_blocks: a later chunk of the prompt, or a prefix-cache hit in mamba_cache_mode "align"),
         attending over the KV cache that its page table holds for the earlier tokens; the start blocks are only read.
-        Returns host logits [N, 1, vocab] at each row's last token."""
+        When the row has a prefill checkpoint after p tokens, the prefill stops after token p, writes the workspace
+        into the checkpoint blocks and continues. Returns host logits [N, 1, vocab] at each row's last token."""
         from models.demos.blackhole.qwen36.tt.gdn_block_state import row_blocks
 
         model = self.model[0]
@@ -313,11 +314,15 @@ class Qwen36ForCausalLM(_Qwen36Generator):
             logger.info(f"Prefilling row {u}: tokens [{segments[0][0]}, {T})")
             if segments[0][0] > 0:
                 blocks.restore(mamba_state, rb.start)
-            [(a, b)] = segments
-            # Short prompts run one masked-bucket forward; longer ones replay the chunk trace, then the masked tail.
-            logits = model.prefill_traced_chunked(
-                tokens[u : u + 1, :b], pt[u : u + 1], actual_len=b, vision_tokens=vision_tokens, start_pos=a
-            )
+            logits = None
+            for a, b in segments:
+                if logits is not None:
+                    ttnn.deallocate(logits)
+                    blocks.write_state(mamba_state, rb.checkpoint)
+                # Short prompts run one masked-bucket forward; longer ones replay the chunk trace, then the masked tail.
+                logits = model.prefill_traced_chunked(
+                    tokens[u : u + 1, :b], pt[u : u + 1], actual_len=b, vision_tokens=vision_tokens, start_pos=a
+                )
             rows.append(ttnn.to_torch(logits, mesh_composer=comp).reshape(-1, model.args.vocab_size)[:1].float())
             ttnn.deallocate(logits)
             blocks.write_state(mamba_state, rb.dest)
@@ -338,7 +343,9 @@ class Qwen36ForCausalLM(_Qwen36Generator):
             start = 0
         elif (start == 0 and any(rb.start)) or (start > 0 and min(rb.start) <= 0):
             raise ValueError(f"a prefill row at start_pos {start} has the start blocks {rb.start}")
-        return prefill_segments(start, end, block_size)
+        if rb.checkpoint_pos and (visual or rb.checkpoint_pos <= start):
+            raise ValueError(f"this prefill row cannot write the prefill checkpoint after {rb.checkpoint_pos} tokens")
+        return prefill_segments(start, end, rb.checkpoint_pos, block_size)
 
     def decode_forward(self, *args, **kwargs):
         args = list(args)

@@ -70,6 +70,8 @@ class RowBlocks:
 
     start: tuple  # block holding the full state after start_pos tokens; 0 at start_pos 0
     dest: tuple  # block that takes the end state
+    checkpoint: tuple | None  # block that takes the state after checkpoint_pos tokens, or None
+    checkpoint_pos: int  # token count of the prefill checkpoint, 0 for none
 
 
 def row_blocks(mamba_state, row):
@@ -80,20 +82,37 @@ def row_blocks(mamba_state, row):
             "mamba_state has no start_blocks; Qwen36ForCausalLM needs a vllm-tt-plugin whose MambaGroupState names "
             "the block of each row's start state"
         )
+    pos = getattr(mamba_state, "checkpoint_positions", None)
+    p = int(pos[row, 0]) if pos is not None else 0
+    checkpoint = None
+    if p > 0:
+        checkpoint = tuple(int(g.checkpoint_blocks[row, 0]) for g in groups)
+        if min(checkpoint) <= 0:
+            raise ValueError(f"row {row} writes a prefill checkpoint after {p} tokens into the null block 0")
     return RowBlocks(
         start=tuple(int(g.start_blocks[row]) for g in groups),
         dest=tuple(int(g.windows[row, 0]) for g in groups),
+        checkpoint=checkpoint,
+        checkpoint_pos=p,
     )
 
 
-def prefill_segments(start, end, block_size):
+def prefill_segments(start, end, checkpoint_pos, block_size):
     """[(a, b), ...]: the token ranges, in order, that a prefill of tokens [start, end) runs one after the other on the
-    GDN workspace. Each range starts on a KV block boundary, where Qwen36Model.prefill_traced_chunked can continue."""
+    GDN workspace, so that the workspace holds the state after ``checkpoint_pos`` tokens (0: none) at the end of the
+    first range. Each range starts on a KV block boundary, where Qwen36Model.prefill_traced_chunked can continue."""
     if not 0 <= start < end:
         raise ValueError(f"prefill of tokens [{start}, {end}) is empty")
     if start % block_size:
         raise ValueError(f"prefill resumes at {start}, inside a {block_size}-token KV block")
-    return [(start, end)]
+    if not checkpoint_pos:
+        return [(start, end)]
+    if not start < checkpoint_pos < end or checkpoint_pos % block_size:
+        raise ValueError(
+            f"prefill checkpoint after {checkpoint_pos} tokens is not on a {block_size}-token block boundary inside "
+            f"[{start}, {end})"
+        )
+    return [(start, checkpoint_pos), (checkpoint_pos, end)]
 
 
 def _free_copy(view, source):

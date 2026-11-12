@@ -407,7 +407,8 @@ def qwen36_kv_cache_spec(
     One FullAttentionSpec per attention layer, with the smallest block size whose K and V block holds one GDN state
     (choose_block_size), and one MambaSpec per GDN layer, padded to the attention page so that vLLM keeps the
     attention block size. ``mamba_block_size``: tokens per state block in mamba_cache_mode "none" (max_model_len, so a
-    request keeps one state block per group). In mode "align" the state blocks have the attention block size. Raises
+    request keeps one state block per group). In mode "align" the state blocks have the attention block size, and the
+    MambaSpec asks for prefill checkpoints on block boundaries, where Qwen36ForCausalLM splits a prefill. Raises
     ValueError for a TP degree or a geometry gdn_decode_step does not serve."""
     from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
     from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
@@ -447,7 +448,7 @@ def qwen36_kv_cache_spec(
     assert attn.page_size_bytes == 2 * layout.tiles * layout.kv_tile_bytes
     shapes, dtypes = gdn_state_shapes(dims)
     if mamba_cache_mode == "align":
-        mamba_kw = dict(block_size=block_size)
+        mamba_kw = dict(block_size=block_size, num_prefill_checkpoint_blocks=1, prefill_checkpoint_alignment=block_size)
     else:
         # A multiple of the attention block keeps vLLM's scheduler block size (the LCM of the group block sizes) at
         # the attention block size.
