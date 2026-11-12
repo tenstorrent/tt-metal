@@ -7,10 +7,13 @@
 #include <type_traits>
 
 #include "ckernel_defs.h"
+#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_math_eltwise_sfpu_common.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -174,10 +177,21 @@ inline void init_zero_comp() {
 /**
  * @brief Element-wise comparison-to-zero over a tile, written as 1/0 booleans.
  *
- * Defaults each result lane and writes the opposite into the lanes matching COMP_MODE (eqz/nez/ltz/gtz
- * default 0 and write 1; gtez/ltez default 1 and write 0 — see @ref _zero_comp_writes_zero_), in FMT's
- * native encoding (see @ref zero_comp_traits). The body's SFPSTORE rides @c ADDR_MOD_6 (dest.incr=2,
- * programmed in @ref init_zero_comp) to advance the dest counter, so the loop needs no dst_reg++.
+ * Raw TTI, because the predicates are integer tests on the bits of the element's LREG image that
+ * sfpi cannot express: its lz() hardwires SFPLZ to CC_NONE, so it cannot set the lane mask. Every
+ * format loads the element as its raw word (sign in bit 31 for sign-magnitude ints and IEEE floats
+ * alike; the sfpmem mode from @ref zero_comp_traits), stores the default result straight to Dest,
+ * enables the lanes of COMP_MODE's predicate and stores the other value over them:
+ *  - the magnitude test |v| != 0 is one SFPLZ NOSGN|CC_NE0 (bit 31 masked, lanes enabled where the
+ *    rest is non-zero), replacing the SFPSETSGN + SFPSETCC pair: ±0 count as zero, every other
+ *    pattern (NaN included) as non-zero, as before;
+ *  - the sign test is SFPSETCC LT0 / GTE0 on the raw word (bit 31, as the sfpi v<0 / v>=0 was).
+ * eqz/nez: one SFPLZ (eqz defaults 1 and writes 0 on |v| != 0, nez the reverse). ltz/gtz: sign test,
+ * then SFPLZ, which only updates the lanes the sign test left enabled, so the two AND together;
+ * default 0, write 1. gtez/ltez: the strict complement's lanes, default 1, write 0 (±0 is in neither
+ * strict set and keeps the 1). The predicated SFPSTORE rides @c ADDR_MOD_6 (dest.incr=2, programmed
+ * in @ref init_zero_comp) to advance the dest counter, so the loop needs no TTINCRWC. The float
+ * formats' 0/1 are LCONST_0 / LCONST_1; the integer formats' 1 is one SFPLOADI per call.
  *
  * @tparam APPROXIMATION_MODE: Unused (no approx path); retained for dispatcher signature symmetry.
  * @tparam FMT: SFPU DataFormat (sfpu_math): Int32/Int16/Int8/UInt16/UInt8, or Float32 for any float
@@ -196,22 +210,56 @@ inline void calculate_zero_comp() {
     static_assert(
         is_int_fmt || is_float_fmt,
         "calculate_zero_comp: unsupported FMT (expected an integer format or an IEEE float width)");
+    static_assert(
+        COMP_MODE == SfpuType::equal_zero || COMP_MODE == SfpuType::not_equal_zero ||
+            COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_zero ||
+            COMP_MODE == SfpuType::less_than_equal_zero || COMP_MODE == SfpuType::greater_than_equal_zero,
+        "calculate_zero_comp: COMP_MODE must be one of the six comparison-to-zero SfpuType modes");
 
     using traits = zero_comp_traits<FMT>;
 
+    // Float widths load/store DEFAULT (width from the dest format config); the integer formats their
+    // explicit sfpmem width, as traits::load / traits::store select it.
+    constexpr std::uint32_t ld_st_mod = traits::is_float ? p_sfpu::sfpmem::DEFAULT : _sfpu_sfpmem_type_<FMT>();
+
+    constexpr std::uint32_t V = p_sfpu::LREG0;    // the element's raw word
+    constexpr std::uint32_t TMP = p_sfpu::LREG1;  // SFPLZ count, unused
+    constexpr std::uint32_t ZERO = p_sfpu::LCONST_0;
+    constexpr std::uint32_t ONE = traits::is_float ? p_sfpu::LCONST_1 : p_sfpu::LREG2;
+
     // gtez/ltez default to 1 and write 0 on their (strict-sign) predicate; the other modes default
-    // to 0 and write 1 (see @ref _zero_comp_writes_zero_).
-    constexpr bool writes_zero = _zero_comp_writes_zero_<COMP_MODE>();
+    // to 0 and write 1 (see @ref _zero_comp_writes_zero_). eqz enables the |v| != 0 lanes, so it is
+    // the inverse of nez: default 1, write 0.
+    constexpr bool writes_zero = _zero_comp_writes_zero_<COMP_MODE>() || COMP_MODE == SfpuType::equal_zero;
+    constexpr std::uint32_t default_result = writes_zero ? ONE : ZERO;
+    constexpr std::uint32_t taken_result = writes_zero ? ZERO : ONE;
+    constexpr bool sign_negative =
+        COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero;
+    constexpr bool sign_test =
+        sign_negative || COMP_MODE == SfpuType::greater_than_zero || COMP_MODE == SfpuType::less_than_equal_zero;
+
+    if constexpr (!traits::is_float) {
+        TTI_SFPLOADI(ONE, sfpi::SFPLOADI_MOD0_USHORT, 1 /*integer 1*/);
+    }
+
+    // One row pair per replay: the body is recorded once and replayed ITERATIONS times, as the sfpi
+    // loop it replaces was (one RISC issue per row).
+    constexpr std::uint32_t replay_len = sign_test ? 6 : 5;
+    lltt::record(0 /*start*/, replay_len);
+    TTI_SFPLOAD(V, ld_st_mod, ADDR_MOD_7, 0 /*done*/, 0 /*dest_reg_addr*/);
+    TTI_SFPSTORE(default_result, ld_st_mod, ADDR_MOD_7, 0 /*done*/, 0 /*dest_reg_addr*/);
+    if constexpr (sign_test) {
+        // Bit 31 of the raw word, read as a two's-complement int (imm12 bit 11 clear).
+        TTI_SFPSETCC(0 /*imm12_math*/, V, sign_negative ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0);
+    }
+    // |v| != 0: leading-zero count with bit 31 masked, lanes enabled where the masked word is non-zero.
+    TTI_SFPLZ(V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
+    TTI_SFPSTORE(taken_result, ld_st_mod, ADDR_MOD_6, 0 /*done*/, 0 /*dest_reg_addr*/);
+    TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, sfpi::SFPENCC_MOD1_EI_RI);  // all lanes back on
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vInt bits = traits::load();
-
-        typename traits::result_t result = writes_zero ? traits::one() : traits::zero();
-        v_if(_zero_comp_pred_<COMP_MODE>(bits)) { result = writes_zero ? traits::zero() : traits::one(); }
-        v_endif;
-
-        traits::store(result);
+        lltt::replay(0 /*start*/, replay_len);
     }
 }
 
