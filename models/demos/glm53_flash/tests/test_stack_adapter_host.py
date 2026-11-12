@@ -1144,6 +1144,25 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     assert not pc.tail  # the slot released: its chain ends
     e = d + _prompt(20, 80)
     assert ad.confirm_prefix_cache_hit(e, [], 512) == 512
+    # ---- GLM53_STACK_PREFIX_EXACT (grid 512 here, min gain 128): F's last chunk [512, 700) ends off the grid and off
+    #      the 128 boundary -> split at 640: [512, 640) head-less with the snapshot at 640 (superseding F's 512 tail),
+    #      then [640, 700) sampled; the next turn (vLLM proposes its full 64-token blocks, 640) attaches at 640
+    backend.prefill_chunk_tokens, pc.exact, pc.exact_min = 512, True, 128
+    f = _prompt(700, 91)
+    row_f = [1 + 3 * BPS + 12 + j for j in range(-(-len(f) // BLOCK_SIZE))]  # unused blocks of request 3's pool
+    n = len(backend.state_io)
+    first_f = _prefill_steps(ad, kv, f, row_f, slot=3, ends=[512, len(f)])
+    g = ad._alias[3]
+    assert [r[0:2] for r in backend.state_io[n:]] == [(g, 0), (g, 512), (g, 640)]
+    assert [r[3] is not None for r in backend.state_io[n:]] == [True, True, False]  # snapshots at 512 and 640
+    assert kv.state[g] == f and first_f == (f[-1] + 1) % VOCAB and pc.stats["exact_splits"] == 1
+    assert pc.store.key(f, 640) in pc.store.entries and pc.store.key(f, 512) not in pc.store.entries
+    ad.release_request(3)
+    assert ad.confirm_prefix_cache_hit(f + _prompt(30, 95), [], 640) == 640
+    # below the minimum gain (a 600-token prompt: 512 -> its boundary 512 already; 640 > 600) nothing splits
+    assert pc.exact_splits([512], [600]) == {} and pc.exact_splits([512], [700]) == {0: 640}
+    pc.exact_min = 256
+    assert pc.exact_splits([512], [700]) == {}  # 640 gains 128 < 256 over the grid snapshot at 512
 
 
 # ------------------------------------------------------------------------------- image input (GLM53_STACK_MM)

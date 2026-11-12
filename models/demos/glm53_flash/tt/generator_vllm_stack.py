@@ -110,6 +110,14 @@ PREFIX_CACHE = os.environ.get("GLM53_STACK_PREFIX", "0") == "1"
 # evicted when the next commits -- so one long prompt holds head + 1 pool entries instead of one per chunk (AgentX
 # 2026-11-12: a 400 K prompt rotated all 32 entries and every next turn re-prefilled from 0, hit rate 0.7 %)
 PREFIX_HEAD = int(os.environ.get("GLM53_STACK_PREFIX_HEAD", "16384"))
+# GLM53_STACK_PREFIX_EXACT=1 (opt-in): a prompt's LAST chunk (it ends off the snapshot grid: vLLM cuts every other
+# chunk on it) is split at its last 128-aligned position P -- [start, P) head-less with the snapshot at P, then
+# [P, end) -- so the conversation's next turn resumes within 128 tokens of the previous prompt's end instead of at
+# its last 8,192 boundary (AgentX re-prefilled ~4 K tokens per turn there). Only when P gains at least
+# GLM53_STACK_PREFIX_EXACT_MIN tokens over the grid snapshot (the tail costs one more, small-bucket replay). A hit
+# then resumes off the chunk grid, so its text can move at a near-tie vs a cold prefill (chunk boundaries differ).
+PREFIX_EXACT = os.environ.get("GLM53_STACK_PREFIX_EXACT", "0") == "1"
+PREFIX_EXACT_MIN = int(os.environ.get("GLM53_STACK_PREFIX_EXACT_MIN", "2048"))
 SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
 SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
 # GLM53_SPEC_MULTI=1 (default off; design doc/perf/mtp_multi_user_design.md): every live user speculates on a B 16
@@ -392,10 +400,11 @@ class StackPrefixCache:
         self._pending: list = []  # the current prefill call's reserved snapshots: (key, n_tokens, pages, entry, slot)
         self.head = PREFIX_HEAD  # snapshots at or below it are kept; above it one (the latest) per request
         self.tail: dict = {}  # generator slot -> the key of its request's latest snapshot above the head
+        self.exact, self.exact_min = PREFIX_EXACT, PREFIX_EXACT_MIN  # GLM53_STACK_PREFIX_EXACT(_MIN)
         self.stats = {
             k: 0
             for k in ("confirmed", "confirmed_tokens", "not_resident", "attaches", "fallbacks", "snapshots",
-                      "snapshots_skipped", "mm_excluded", "tail_superseded")  # fmt: skip
+                      "snapshots_skipped", "mm_excluded", "tail_superseded", "exact_splits")  # fmt: skip
         }
 
     @property
@@ -492,7 +501,7 @@ class StackPrefixCache:
             planned = set()
             for i, (s0, end) in enumerate(zip(starts, ends)):
                 end = int(end)
-                if end % self.grid or end % self.store.boundary or end <= s0:
+                if end % self.store.boundary or end <= s0 or (end % self.grid and not self.exact):
                     continue
                 if i in skip:  # an image request's state depends on pixels its token-id key does not carry
                     self.stats["mm_excluded"] += 1
@@ -514,6 +523,25 @@ class StackPrefixCache:
         if snap:
             extra["snapshot_after"] = snap
         return starts, extra
+
+    def exact_splits(self, starts: list, ends: list, skip=()) -> dict:
+        """GLM53_STACK_PREFIX_EXACT: {row: P} for the rows to split -- a chunk that ends off the snapshot grid (a
+        prompt's last: vLLM cuts every other chunk on the grid) and not on the 128 boundary, whose last boundary P
+        gains >= exact_min tokens over the snapshot the grid policy leaves (its last grid boundary, or the chunk's
+        start). Rows in ``skip`` (image requests) are never split."""
+        if not self.exact:
+            return {}
+        b, g, out = self.store.boundary, self.grid, {}
+        for i, (s0, end) in enumerate(zip(starts, ends)):
+            s0, end = int(s0), int(end)
+            if i in skip or end % g == 0 or end % b == 0:
+                continue  # a grid / boundary end snapshots without a split (plan)
+            pos = end // b * b
+            if pos > s0 and pos - max(end // g * g, s0) >= self.exact_min:
+                out[i] = pos
+        if out:
+            self.stats["exact_splits"] += len(out)
+        return out
 
     def commit(self) -> None:
         """the prefill call returned: its snapshots exist on the device"""
@@ -836,6 +864,19 @@ class GLM53StackForCausalLM:
             raise ValueError(
                 f"prefill chunks [start, end) {list(zip(starts, ends))} outside tokens [{B}, {tokens.shape[1]}]"
             )
+        # GLM53_STACK_PREFIX_EXACT: split a prompt's last chunk at its last 128-aligned position P (head-less
+        # [start, P) with the snapshot at P, an inner call of this method), then continue the rows below at P
+        inner = bool(kwargs.pop("_exact_inner", False))
+        if self.prefix is not None and self.prefix.exact and not mm and not inner:
+            split = self.prefix.exact_splits(starts, ends) if page_table is not None else {}
+            if split:
+                rws = sorted(split)
+                self.prefill_forward(tokens[rws], page_table=torch.as_tensor(page_table)[rws], kv_cache=kv_cache,
+                                     enable_trace=enable_trace, prompt_lens=[split[i] for i in rws],
+                                     start_pos=[starts[i] for i in rws], empty_slots=[slots[i] for i in rws],
+                                     sampling_params=None, _exact_inner=True)  # fmt: skip
+                for i in rws:
+                    starts[i] = split[i]
         # GLM53StackForConditionalGeneration (``_mm_plan``): the rows' image feature rows, an off-grid continuation
         # re-run from position 0, the rows of failed image requests; the text class never gets here with one
         plan = self._mm_plan(tokens, starts, ends, slots, kwargs) if mm else None
@@ -898,6 +939,7 @@ class GLM53StackForCausalLM:
                 empty_slots=gslots,
                 start_pos=gen_starts,
                 sampling_params=params,
+                **({"head_rows": [False] * B} if inner else {}),
                 **extra,
             )
         except Exception:
