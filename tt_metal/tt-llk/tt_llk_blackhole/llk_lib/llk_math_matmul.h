@@ -1232,6 +1232,8 @@ inline void _llk_math_matmul_init_(
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order, false, bias_write>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        // a call built for the row form (matmul_plain_row_form) checks the stride, so a tile init after a row init clears it
+        matmul_rows_dest_stride = 0;
         matmul_configure_mop<math_fidelity, in1_order, false, run_end_fold, reuse_dir>(blk_ct, blk_rt, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else

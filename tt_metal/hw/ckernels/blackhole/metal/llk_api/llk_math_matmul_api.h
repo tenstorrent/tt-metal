@@ -44,11 +44,31 @@ inline void llk_math_matmul_init_impl(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
-// The tile_mop argument for a kernel's k steps per DEST section and output format; 0 and Invalid when unknown.
+// Whether a CB of the kernel holds a 32-bit format: unpack_src_format lists every CB, outputs included.
+constexpr bool llk_math_matmul_kernel_has_32bit_cb() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    for (const std::uint8_t f : unpack_src_format) {
+        if (f == to_underlying(DataFormat::Float32) || f == to_underlying(DataFormat::Tf32)) {
+            return true;
+        }
+    }
+    return false;
+#else
+    return true;
+#endif
+}
+
+// The tile_mop argument for a kernel's k steps per DEST section and output format; 0 and Invalid when unknown, which takes
+// matmul_plain_row_form.
 template <bool row_mop, std::uint32_t kt_per_section, DataFormat out_format>
 constexpr bool llk_math_matmul_tile_mop() {
-    return !row_mop &&
-           !matmul_math_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>();
+    if constexpr (kt_per_section == 0) {
+        return !row_mop &&
+               !matmul_plain_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE>(llk_math_matmul_kernel_has_32bit_cb());
+    } else {
+        return !row_mop &&
+               !matmul_math_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>();
+    }
 }
 
 // The half_end_fold argument for a kernel's math fidelity, k steps per DEST section, operand and output formats (see matmul_half_end_fold);

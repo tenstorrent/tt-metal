@@ -177,6 +177,15 @@ constexpr char matmul_default_form()
     }
 }
 
+// The math form of a call that keys no k steps per DEST section (a plain matmul_block), from constants of the whole kernel so its init
+// and calls agree: the row form above LoFi, whose plain calls may take another reuse direction, but at HiFi2 half sync with a 32-bit DEST
+// where a section may pack to Float32.
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest>
+constexpr bool matmul_plain_row_form(const bool may_pack_32bit)
+{
+    return math_fidelity != MathFidelity::LoFi && !(math_fidelity == MathFidelity::HiFi2 && dst_sync == DstSync::SyncHalf && fp32_dest && may_pack_32bit);
+}
+
 // Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against
 // Float16_b in1 into Float32, both when the operand formats and the k steps of a section are given (main's form, unknown k, takes no fold); HiFi2 with a 16-bit
 // DEST and one k step per section, Float16_b or Bfp8_b output. At LoFi, at HiFi3 with a 32-bit DEST and elsewhere at HiFi2 the earlier release of the held

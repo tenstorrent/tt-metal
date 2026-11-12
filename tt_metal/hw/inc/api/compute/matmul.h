@@ -405,7 +405,7 @@ ALWI void matmul_block_init_llk(
           matmul_elided_fidelity<in0_format, in1_format, out_format>(),
           MM_THROTTLE,
           row_mop_on,
-          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
+          llk_dir != 0 || llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
           in1_order,
           llk_dir,
           row_end_fold,
@@ -486,7 +486,7 @@ ALWI void matmul_block_llk(
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle<
           row_mop_on,
-          llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
+          llk_dir != 0 || llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
           in1_order,
           in0_format,
           in1_format,
