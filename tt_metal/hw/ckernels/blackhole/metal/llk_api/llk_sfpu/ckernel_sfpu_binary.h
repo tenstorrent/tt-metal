@@ -104,6 +104,8 @@ template <
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    constexpr bool round_to_bf16_rne = (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) &&
+                                       !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
     // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
     // loop; as literals inside the loop they would be re-materialised on every row.
     // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
@@ -113,6 +115,14 @@ inline void calculate_sfpu_binary(
     if constexpr (BINOP == BinaryOp::XLOGY) {
         log_c = LogPoly::C;
         log_d = LogPoly::D;
+    }
+    // The bf16 RNE constants are bound outside the loop for the same reason (two SFPLOADI
+    // per row otherwise). Unassigned unless round_to_bf16_rne, which also gates their use.
+    sfpi::vUInt rne_bias;
+    sfpi::vUInt rne_mask;
+    if constexpr (round_to_bf16_rne) {
+        rne_bias = kBf16RneBias;
+        rne_mask = kBf16RneMask;
     }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -206,10 +216,8 @@ inline void calculate_sfpu_binary(
             v_endif;
         }
 
-        if constexpr (
-            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
-            dst_rounding_mode == DstRoundingMode::NearestEven) {
-            result = float32_to_bf16_rne(result);
+        if constexpr (round_to_bf16_rne) {
+            result = float32_to_bf16_rne(result, rne_bias, rne_mask);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -222,15 +230,24 @@ inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    // RNE constants bound once per face, not re-materialised on every row.
+    // Unassigned unless round_to_bf16_rne, which also gates their use.
+    constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en;
+    sfpi::vUInt rne_bias;
+    sfpi::vUInt rne_mask;
+    if constexpr (round_to_bf16_rne) {
+        rne_bias = kBf16RneBias;
+        rne_mask = kBf16RneMask;
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         sfpi::vFloat result = in0 * in1;
 
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (round_to_bf16_rne) {
             // software RNE approach:
-            result = float32_to_bf16_rne(result);
+            result = float32_to_bf16_rne(result, rne_bias, rne_mask);
 
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
