@@ -732,9 +732,13 @@ class LTXDistilledPipeline(LTXPipeline):
                 if "enc" not in {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",")}:
                     self.vae_encoder.traced = True
                     self.vae_encoder.capture_open = True
-                    self._warmup_encode(height // 2, width // 2)
-                    self._warmup_encode(height, width)
-                    self.vae_encoder.capture_open = False
+                    try:
+                        self._warmup_encode(height // 2, width // 2)
+                        self._warmup_encode(height, width)
+                    finally:
+                        # Never leave the gate open: a failed warmup must not let a later gen prepare
+                        # an encode trace after other persistent allocations (#3354).
+                        self.vae_encoder.capture_open = False
                 # The IC-LoRA reference encoders are also built once and never reloaded here, so the
                 # same before-capture rule applies; the late warmup below skips them on this path.
                 if ref_num_frames is not None:
