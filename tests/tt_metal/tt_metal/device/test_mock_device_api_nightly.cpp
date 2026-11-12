@@ -37,10 +37,12 @@ TEST_F(MockDeviceAPINightlyFixture, NIGHTLY_SwitchFromMockToRealHardwareWithDevi
     // and reinitializes base objects (cluster_, hal_) with real hardware
     experimental::disable_mock_mode();
     EXPECT_FALSE(experimental::is_mock_mode_registered());
-    // "Real" hardware is the simulator when TT_METAL_SIMULATOR is set. Read the environment directly rather than
-    // rtoptions, whose target the cluster copies, so a restore that wrongly picks the target still fails here.
-    const tt::TargetDevice real_target =
-        std::getenv("TT_METAL_SIMULATOR") != nullptr ? tt::TargetDevice::Simulator : tt::TargetDevice::Silicon;
+    // "Real" hardware is the simulator when TT_METAL_SIMULATOR is set, else the emulator when TT_METAL_EMULE_MODE is.
+    // Read the environment directly rather than rtoptions, whose target the cluster copies, so a restore that wrongly
+    // picks the target still fails here.
+    const tt::TargetDevice real_target = std::getenv("TT_METAL_SIMULATOR") != nullptr    ? tt::TargetDevice::Simulator
+                                         : std::getenv("TT_METAL_EMULE_MODE") != nullptr ? tt::TargetDevice::Emule
+                                                                                         : tt::TargetDevice::Silicon;
     EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), real_target);
 
     // Create real hardware device - verifies full reinitialization worked correctly
