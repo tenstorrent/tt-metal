@@ -38,21 +38,32 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     return result;
 }
 
+// Float32 -> bfloat16 IEEE 754 Round-to-Nearest-Even (RNE): the "add 0x7fff + LSB" algorithm,
+// applied in software before SFPSTORE because SFPSTORE truncates fp32 -> bf16. kBf16RneBias is
+// the round-half-down bias, kBf16RneMask keeps the 16 bits a bf16 holds, and kBf16LsbBit is the
+// float32 bit that becomes the bf16 mantissa LSB (the tie-breaker).
+constexpr std::uint32_t kBf16RneBias = 0x7fffU;
+constexpr std::uint32_t kBf16RneMask = 0xFFFF0000U;
+constexpr std::uint32_t kBf16LsbBit = 16;
+
 /**
- * @brief Converts float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE).
- * Implements the "add 0x7fff + LSB" algorithm for correct tie-breaking, ported
- * from BH. Applied in software before SFPSTORE because SFPSTORE truncates
- * fp32->bf16 on all architectures.
+ * @brief Converts float32 to bfloat16 (RNE) with the two constants bound by the caller.
+ *
+ * sfpi re-materialises an integer literal (SFPLOADI) at every use, so a caller that binds
+ * kBf16RneBias and kBf16RneMask once before its row loop keeps them in two LREGs for the whole
+ * face instead of reloading them per row.
  *
  * @param in: float32 value to convert
+ * @param bias: kBf16RneBias, bound by the caller
+ * @param mask: kBf16RneMask, bound by the caller
  * @return bf16 value packed in the upper 16 bits of a float32
  */
-sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
+sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in, const sfpi::vUInt bias, const sfpi::vUInt mask) {
     sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
 
-    // Extract the LSB of what will become the bf16 mantissa (bit 16 of float32).
-    // Needed for the tie-breaker: round to even.
-    sfpi::vUInt lsb = (bits >> 16) & 1;
+    // The tie-breaker: the LSB of what will become the bf16 mantissa, isolated by a logical
+    // shift pair, which takes immediates and so needs no constant LREG (a mask would).
+    sfpi::vUInt lsb = (bits << (31 - kBf16LsbBit)) >> 31;
 
     // Add 0x7fff + lsb to implement RNE:
     // - lower 16 bits > 0x8000      -> overflow, rounds up
@@ -60,26 +71,22 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     // - lower 16 bits == 0x8000 (tie)
     //     and lsb=0: 0x7fff+0=0xffff, no overflow -> stays even
     //     and lsb=1: 0x7fff+1=0x8000,    overflow -> rounds up to even
-    bits = bits + 0x7fffU + lsb;
+    bits = bits + bias + lsb;
 
     // Clear the lower 16 bits to get bf16 in upper 16 bits (bf16 format in float32).
-    bits = bits & 0xFFFF0000U;
+    bits = bits & mask;
 
     return sfpi::as<sfpi::vFloat>(bits);
 }
 
-/** @brief Dest store policy that rounds to bf16 (RNE) before SFPSTORE when ROUND_TO_BF16. */
-template <bool ROUND_TO_BF16>
-struct DestBf16RneFormat : SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat> {
-    template <SfpuReg REG>
-    sfpi_inline static void store(int index, sfpi::vFloat value) {
-        static_assert(REG == SfpuReg::Dest, "bf16 RNE store policy is Dest-only");
-        if constexpr (ROUND_TO_BF16) {
-            value = float32_to_bf16_rne(value);
-        }
-        SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>::template store<REG>(index, value);
-    }
-};
+/**
+ * @brief Converts float32 to bfloat16 (RNE) with the constants loaded at the call.
+ * For callers that cannot spare two LREGs across their loop (addcdiv: all 8 are live inside the
+ * reciprocal).
+ */
+sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
+    return float32_to_bf16_rne(in, kBf16RneBias, kBf16RneMask);
+}
 
 }  // namespace sfpu
 }  // namespace ckernel

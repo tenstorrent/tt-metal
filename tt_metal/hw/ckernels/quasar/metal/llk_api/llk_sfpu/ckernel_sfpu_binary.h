@@ -50,22 +50,35 @@ inline void calculate_sfpu_binary(
         dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB,
         "NearestEven rounding parameter is currently supported for ADD and SUB only");
     constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
+    // ADD/SUB narrow to bf16 in software under NearestEven on a 16-bit Dest; DIV always does on a
+    // 16-bit Dest.
+    constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
+    constexpr bool round_div_to_bf16 = BINOP == BinaryOp::DIV && !is_fp32_dest_acc_en;
+    // The bf16 RNE constants are bound once per face, not re-materialised on every row (two
+    // SFPLOADI per row otherwise). Unassigned unless a path below rounds in software, which also
+    // gates their use.
+    sfpi::vUInt rne_bias;
+    sfpi::vUInt rne_mask;
+    if constexpr (round_to_bf16_rne || round_div_to_bf16) {
+        rne_bias = kBf16RneBias;
+        rne_mask = kBf16RneMask;
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        if constexpr (BINOP == BinaryOp::ADD) {
+        if constexpr (BINOP == BinaryOp::ADD && !round_to_bf16_rne) {
             using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
-            constexpr bool round_to_bf16 = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
-            using Output = SfpuOperand<SfpuReg::Dest, DestBf16RneFormat<round_to_bf16>>;
             calculate_binary_operands<AddFloatMath, 1 /*ITERATIONS*/>(
                 Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
                 Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
-                Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
+                Operand{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
         } else {
             sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
             sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
             sfpi::vFloat result = 0.0f;
 
-            if constexpr (BINOP == BinaryOp::MUL) {
+            if constexpr (BINOP == BinaryOp::ADD) {
+                result = in0 + in1;
+            } else if constexpr (BINOP == BinaryOp::MUL) {
                 result = in0 * in1;
             } else if constexpr (BINOP == BinaryOp::SUB) {
                 result = in0 - in1;
@@ -87,16 +100,15 @@ inline void calculate_sfpu_binary(
                 v_elseif(in0 == in1) { result = sfpi::copysgn(sfpi::vFloat(1.0f), result); }
                 v_endif;
 
-                if constexpr (!is_fp32_dest_acc_en) {
+                if constexpr (round_div_to_bf16) {
                     // Software RNE conversion to match FPU bf16 rounding (Quasar SFPSTORE
                     // truncates by default).
-                    result = float32_to_bf16_rne(result);
+                    result = float32_to_bf16_rne(result, rne_bias, rne_mask);
                 }
             }
 
-            if constexpr (
-                BINOP == BinaryOp::SUB && !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven) {
-                result = float32_to_bf16_rne(result);
+            if constexpr ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB) && round_to_bf16_rne) {
+                result = float32_to_bf16_rne(result, rne_bias, rne_mask);
             }
 
             sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
