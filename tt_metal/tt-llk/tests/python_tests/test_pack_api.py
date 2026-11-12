@@ -56,6 +56,11 @@ PACK_API_PRODUCTION = {
         block_tiles=4,
         opts=dict(out=2, matmul=True, sfpu=True, dst=0),
     ),
+    "partial_face_compile": dict(
+        dest_sync=DestSync.Half,
+        block_tiles=4,
+        opts=dict(out=2, matmul=True, sfpu=True, dst=0, partial_face=True),
+    ),
     "bmm_half_f16b_2x2": dict(
         dest_sync=DestSync.Half,
         block_tiles=4,

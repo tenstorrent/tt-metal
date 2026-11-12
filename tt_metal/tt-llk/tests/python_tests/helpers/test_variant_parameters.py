@@ -1040,6 +1040,7 @@ class PACK_API(TemplateParameter):
     matmul: bool = False
     sfpu: bool = False
     dst: int = -1
+    partial_face: bool = False
 
     def convert_to_cpp(self) -> str:
         arm = "0" if self.arm == "0" else f"'{self.arm}'"
@@ -1055,6 +1056,8 @@ class PACK_API(TemplateParameter):
             lines.append("#define PACK_API_SHIM_SFPU")
         if self.dst >= 0:
             lines.append(f"#define PACK_API_DST {self.dst}")
+        if self.partial_face:
+            lines.append("#define PACK_API_SHIM_PARTIAL_FACE 1")
         return "\n".join(lines)
 
 
