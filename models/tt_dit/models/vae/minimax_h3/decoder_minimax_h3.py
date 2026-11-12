@@ -35,6 +35,9 @@ tile; attention sees q/k/v at the logical length, so the pad keys never enter a 
 
 from __future__ import annotations
 
+import math
+import os
+
 import torch
 
 import ttnn
@@ -49,6 +52,47 @@ from .rope_minimax_h3 import head_lane_permutation, rope_tables
 
 TILE = 32
 
+# MINIMAX_H3_VAE_MM_CONFIG=1: explicit minimal_matmul blockings for the decoder's linears. Every decoder shape misses
+# the shared 11x10 table and runs on the generic 8x8x8 / 2x2 fallback ("No known best blocking"). Entries come from a
+# sweep (models/tt_dit/utils/sweep_mm_block_sizes.py), keyed on what the kernel sees: (rows, K, N), rows = batch x
+# sequence (minimal_matmul folds the batch into M): 1824 for one tile per chip, 3648 for two tiles per decoder call;
+# get_matmul_config sees only the 1824 per batch. An entry with K_block_size 8 keeps every
+# output tile's K order, so it is bit-identical to the fallback; another K block regroups the K blocks (GPE).
+# Decoder-local, so no other model's shape can match an entry. Unset, or a shape without an entry: today's call.
+_VAE_MM_CONFIG = os.environ.get("MINIMAX_H3_VAE_MM_CONFIG", "0") == "1"
+_VAE_MM_TABLE: dict[tuple[int, int, int], tuple[int, int, int, tuple[int, int]]] = {
+    # (rows, K, N): (M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w)), from the sweep
+}
+
+
+def _vae_matmul_config(x: ttnn.Tensor, n: int, mesh_device: ttnn.MeshDevice) -> ttnn.MinimalMatmulConfig | None:
+    """The swept blocking for ``x @ W`` (W with ``n`` output columns) under MINIMAX_H3_VAE_MM_CONFIG, else None.
+
+    Switch off: returns None before touching ``x`` (today's call, nothing else runs). The key is computed on a list:
+    ttnn ``Shape.__getitem__`` takes an int only, so a slice of ``padded_shape`` raises.
+    """
+    if not _VAE_MM_CONFIG:
+        return None
+    shape = list(x.padded_shape)
+    entry = _VAE_MM_TABLE.get((math.prod(shape[:-1]), shape[-1], n))
+    if entry is None:
+        return None
+    m_block, k_block, n_block, (sub_h, sub_w) = entry
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=m_block,
+        K_block_size=k_block,
+        N_block_size=n_block,
+        subblock_h=sub_h,
+        subblock_w=sub_w,
+        compute_with_storage_grid_size=get_matmul_core_grid(mesh_device),
+    )
+
+
+def _vae_linear(linear: Linear, x: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """``linear(x)``, with the swept blocking when the table has one for this shape."""
+    config = _vae_matmul_config(x, linear.weight.data.padded_shape[-1], mesh_device)
+    return linear(x) if config is None else linear(x, matmul_config=config)
+
 
 def padded_sequence_length(num_patches: int, num_suffix_tokens: int) -> int:
     """Round ``num_patches + num_suffix_tokens`` up to a whole tile."""
@@ -62,7 +106,9 @@ def _proj_add_residual(
     """``residual + (x @ W + b)`` folded into the projection's matmul epilogue (``gate`` is ones)."""
     weight = linear.weight.data
     m, k, n = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-    matmul_config = get_matmul_config(m, k, n, get_matmul_core_grid(mesh_device))
+    matmul_config = _vae_matmul_config(x, n, mesh_device)
+    if matmul_config is None:
+        matmul_config = get_matmul_config(m, k, n, get_matmul_core_grid(mesh_device))
     return ttnn.experimental.dit_minimal_matmul_addcmul_fused(
         x,
         weight,
@@ -194,7 +240,7 @@ class MiniMaxH3ViTAttention(Module):
         valid_len: int | None = None,
     ) -> ttnn.Tensor:
         batch, seq_len, _ = x.shape
-        qkv = self.to_qkv(x)
+        qkv = _vae_linear(self.to_qkv, x, self.mesh_device)
 
         # One fused op rather than chunk + 3 reshapes + 3 permutes: profiled per layer, that
         # hand-rolled head plumbing costs 25.8 % of device time in ReshapeView (800 us mean)
@@ -309,7 +355,8 @@ class MiniMaxH3TransformerBlock(Module):
         valid_len: int | None = None,
     ) -> ttnn.Tensor:
         x = self.attn(self.norm1(x), rope_cos, rope_sin, residual=x, valid_len=valid_len)
-        return _proj_add_residual(self.ff2, self.ff1(self.norm2(x)), x, self._ones_gate, self.mesh_device)
+        hidden = _vae_linear(self.ff1, self.norm2(x), self.mesh_device)
+        return _proj_add_residual(self.ff2, hidden, x, self._ones_gate, self.mesh_device)
 
 
 class MiniMaxH3ViTDecoder3d(Module):
@@ -420,7 +467,7 @@ class MiniMaxH3ViTDecoder3d(Module):
         assert (
             tokens.shape[1] == self.num_patches
         ), f"expected {self.num_patches} patch tokens for latent {self.latent_shape}, got {tokens.shape[1]}"
-        hidden = self.proj_in(tokens)
+        hidden = _vae_linear(self.proj_in, tokens, self.mesh_device)
         # One concat covers the register tokens, the zero cls token and the tile pad.
         suffix = self.suffix.data
         if suffix.shape[0] != hidden.shape[0]:
@@ -429,7 +476,7 @@ class MiniMaxH3ViTDecoder3d(Module):
         valid_len = self.num_patches + self.num_suffix_tokens
         for block in self.transformer_blocks:
             hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, valid_len=valid_len)
-        return self.proj_out(self.norm_out(hidden))
+        return _vae_linear(self.proj_out, self.norm_out(hidden), self.mesh_device)
 
 
 def unpatchify(
