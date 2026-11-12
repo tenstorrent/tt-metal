@@ -92,6 +92,9 @@ def test_protect_partial_through_the_adapter(mesh_device, tmp_path):
     sw_r.write_text("0")
     os.environ["DSV41_PROTECT_PARTIAL_FILE"] = str(sw_p)
     os.environ["DSV41_RESUME_FROM_RECORD_FILE"] = str(sw_r)
+    sw_sl = tmp_path / "sliver"
+    sw_sl.write_text("0")
+    os.environ["DSV41_SLIVER_EXTEND_FILE"] = str(sw_sl)
     sw_s = tmp_path / "snap"
     sw_s.write_text("0")
     os.environ["DSV41_SNAPSHOT_ON_EVICT_FILE"] = str(sw_s)
@@ -167,7 +170,8 @@ def test_protect_partial_through_the_adapter(mesh_device, tmp_path):
         ad.pf_done.clear()
         events.clear()
 
-    def set_flags(protect, resume, snap=False):
+    def set_flags(protect, resume, snap=False, sliver=False):
+        sw_sl.write_text("1" if sliver else "0")
         sw_p.write_text("1" if protect else "0")
         sw_r.write_text("1" if resume else "0")
         sw_s.write_text("1" if snap else "0")
@@ -192,27 +196,65 @@ def test_protect_partial_through_the_adapter(mesh_device, tmp_path):
         return max(results[f"cold_vs_cold_{name}"]["max"], 1e-3)
 
     # ---- case A: hit piece shorter than a chunk ---------------------------------------------------------------------------------------------------
-    for protect in (False, True):
-        set_flags(protect, False)
+    for arm, protect, sliver in (("off", False, False), ("prot", True, False), ("sliv", False, True)):
+        set_flags(protect, False, sliver=sliver)
         clean()
         out, _ = call(D, 0, LEN, "donor", 2, True, LEN)
         m.flush_key_exports(why="test")
         ad.release_request(2)  # (the donor request ends; its blocks stay cached)
         plan = pa.idx.plan_hit("hitX", X.numpy(), LEN)
-        log(f"[A protect={protect}] plan: hit {plan.hit_tokens} row {plan.row} user {plan.user}")
+        log(f"[A {arm}] plan: hit {plan.hit_tokens} row {plan.row} user {plan.user}")
         assert plan.hit_tokens == HIT, plan
         slot = plan.user  # (logical slot = model user: the slot map is the identity here)
         events.clear()
         call(X, HIT, HIT + SHORT, "hitX", slot, False, LEN)
         out, dt = call(X, HIT + SHORT, LEN, "hitX", slot, True, LEN)
         lg = out[0, 0].float()
-        r = dict(
-            case="A", protect=protect, events=list(events), vs_cold=cmp(lg, refs[("X", 0)]), second_piece_s=round(dt, 2)
-        )
+        r = dict(case="A", arm=arm, events=list(events), vs_cold=cmp(lg, refs[("X", 0)]), second_piece_s=round(dt, 2))
         r["ok"] = bool(r["vs_cold"]["max"] <= 3 * noise("X") and r["vs_cold"]["argmax_equal"])
-        results[f"A_{protect}"] = r
+        results[f"A_{arm}"] = r
         log(json.dumps(r))
         pa.idx.check()
+
+    if (
+        os.environ.get("DSV41_PP_XROW") == "1"
+    ):  # cross-row copy of an extended hit: the donor's row has no free user, the plan is a copy into the other row
+        for arm, protect, sliver in (("off", False, False), ("both", True, True)):
+            set_flags(protect, False, sliver=sliver)
+            clean()
+            out, _ = call(D, 0, LEN, "donor", 2, True, LEN)
+            m.flush_key_exports(why="test")
+            ad.release_request(2)
+            drow = 2 // U
+            ad.slots.live.update(range(drow * U, drow * U + U))  # (the donor's row is full of other requests)
+            plan = pa.idx.plan_hit("xhitX", X.numpy(), LEN)
+            log(f"[X {arm}] plan: hit {plan.hit_tokens} row {plan.row} user {plan.user} xrow_src {plan.xrow_src}")
+            assert plan.hit_tokens == HIT and plan.xrow_src >= 0, plan
+            ad.slots.live.difference_update(range(drow * U, drow * U + U))
+            slot = plan.user
+            events.clear()
+            call(X, HIT, HIT + SHORT, "xhitX", slot, False, LEN)
+            out, dt = call(X, HIT + SHORT, LEN, "xhitX", slot, True, LEN)
+            lg = out[0, 0].float()
+            r = dict(
+                case="X", arm=arm, events=list(events), vs_cold=cmp(lg, refs[("X", 0)]), second_piece_s=round(dt, 2)
+            )
+            r["ok"] = bool(r["vs_cold"]["max"] <= 3 * noise("X") and r["vs_cold"]["argmax_equal"])
+            results[f"X_{arm}"] = r
+            log(json.dumps(r))
+            pa.idx.check()
+    if os.environ.get("DSV41_PP_ONLY") == "A":
+        set_flags(False, False)
+        clean()
+        out_f = os.environ.get("DSV41_PP_OUT")
+        if out_f:
+            json.dump(results, open(out_f, "w"), indent=1)
+        assert any("without carried state" in e for e in results["A_off"]["events"]), "control A"
+        for k in ("A_prot", "A_sliv") + (("X_both",) if "X_both" in results else ()):
+            assert not any("without carried state" in e for e in results[k]["events"]), results[k]
+            assert results[k]["ok"], results[k]
+        log(f"A/X OK: {[(k, results[k]['vs_cold']) for k in results if k[:2] in ('A_', 'X_')]}")
+        return
 
     # ---- case B: lost carried state, resume from a record ------------------------------------------------------------------------------------------
     for resume in (False, True):
@@ -284,12 +326,12 @@ def test_protect_partial_through_the_adapter(mesh_device, tmp_path):
     logger.remove(sink)
     # old behaviour is reproduced with the flags off, the protected / resumed variants have no recompute and match the cold logits
     assert any(
-        "without carried state" in e for e in results["A_False"]["events"]
+        "without carried state" in e for e in results["A_off"]["events"]
     ), "control A: the old behaviour did not recompute"
     assert not any(
-        "without carried state" in e or "recomputing from" in e for e in results["A_True"]["events"]
-    ), results["A_True"]
-    assert results["A_True"]["ok"], results["A_True"]
+        "without carried state" in e or "recomputing from" in e for e in results["A_prot"]["events"]
+    ), results["A_prot"]
+    assert results["A_prot"]["ok"], results["A_prot"]
     assert any(
         "without carried state" in e for e in results["B_False"]["events"]
     ), "control B: the old behaviour did not recompute"
