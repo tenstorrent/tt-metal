@@ -45,6 +45,7 @@ void bind_conv3d(nb::module_& mod) {
             weight_lo_tensor (ttnn.Tensor, optional): Required with ``config.enable_fp32_operand_split``: the residual ``W_lo = W - bf16(W)``. Split ``W`` into ``W_hi = bf16(W)`` and ``W_lo`` **before** preparation and pass both through ``prepare_conv3d_weights`` with identical ``groups``, ``alignment`` and ``C_in_block`` (or pass both raw, rank-5, and let this op prepare them). The kernel splits the fp32 activation into ``bf16(x)`` and its residual and accumulates ``x_hi*W_hi + x_hi*W_lo + x_lo*W_hi`` (dropping ``x_lo*W_lo``) in one fp32 pass; needs ``fp32_dest_acc_en``.
             output_depth_to_space (List[int], optional): ``(p1, p2, p3)``; default ``(1, 1, 1)`` (off). The output channels must be packed ``(p1, p2, p3, C)`` with ``C`` a multiple of 32; the op writes ``(N, T * p1 - output_trim_t_front, H * p2, W * p3, C)`` directly, replacing reshape + permute + reshape. ``C_out_block`` must nest with ``C`` (one divides the other, at most 8 groups per block). Not combinable with ``output_pad_h``/``output_pad_w``.
             output_trim_t_front (int, optional): with ``output_depth_to_space``, drop this many leading output frames (default 0).
+            residual_tensor (ttnn.Tensor, optional): Row-major bfloat16 tensor of the output's shape, added to the output in the conv epilogue.
 
         Returns:
             ttnn.Tensor: Output tensor after applying the Conv3D operation.
@@ -74,7 +75,8 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("output_pad_w") = 0u,
         nb::arg("weight_lo_tensor") = nb::none(),
         nb::arg("output_depth_to_space") = std::array<uint32_t, 3>{1, 1, 1},
-        nb::arg("output_trim_t_front") = 0u);
+        nb::arg("output_trim_t_front") = 0u,
+        nb::arg("residual_tensor") = nb::none());
 
     // Register to ttnn.experimental namespace
     ttnn::bind_function<"prepare_conv3d_weights", "ttnn.experimental.">(

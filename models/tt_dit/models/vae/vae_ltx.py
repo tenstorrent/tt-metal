@@ -54,6 +54,11 @@ def _fold_d2s_enabled() -> bool:
     return os.environ.get("LTX_VAE_FOLD_D2S", "0") == "1"
 
 
+def _fuse_residual_enabled() -> bool:
+    """LTX_VAE_FUSE_RESIDUAL=1 lets the resnet block's conv2 add the skip in its epilogue (default off)."""
+    return os.environ.get("LTX_VAE_FUSE_RESIDUAL", "0") == "1"
+
+
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
     """Cached mask that zeros width-padding columns beyond logical_w (neighbor_pad has no W mask)."""
     sharded_w = x_BTHWC.shape[3]
@@ -269,18 +274,25 @@ class LTXCausalConv3d(Module):
         cf_output_padded: bool = False,
         output_depth_to_space: tuple[int, int, int] | None = None,
         output_trim_t_front: int = 0,
+        residual: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         # x_BTHWC: (B, T, H_per_device, W_per_device, C) ROW_MAJOR, H/W fractured on the mesh.
         # logical_h/logical_w: pre-pad full spatial dims for pad masking (0 = no masking).
         # cf_input_padded: x is already a padded [.,Hp,Wp,.] buffer
         # output_depth_to_space: conv3d writes each (p1, p2, p3) channel group to its depth-to-space
         # slot (per device), dropping the first output_trim_t_front frames.
+        # residual: added to the output in the conv3d epilogue (see can_fuse_residual).
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
         d2s_kwargs = {}
         if output_depth_to_space is not None:
             d2s_kwargs = dict(
                 output_depth_to_space=list(output_depth_to_space), output_trim_t_front=output_trim_t_front
             )
+        residual_kwargs = {}
+        if residual is not None:
+            # conv3d refuses a residual with output padding or depth-to-space.
+            assert not cf_output_padded and output_depth_to_space is None and output_trim_t_front == 0
+            residual_kwargs = dict(residual_tensor=residual)
 
         # Temporal padding (T is not sharded — local op on every device).
         if self.time_pad > 0:
@@ -397,6 +409,7 @@ class LTXCausalConv3d(Module):
                     output_pad_h=(pHe if cf_output_padded else 0),
                     output_pad_w=(pWe if cf_output_padded else 0),
                     **d2s_kwargs,
+                    **residual_kwargs,
                 )
 
             if self._use_halo_conv:
@@ -444,9 +457,23 @@ class LTXCausalConv3d(Module):
             logical_w_mask=conv_logical_w,
             pad_offset_tensor=pad_offset_tensor,
             **d2s_kwargs,
+            **residual_kwargs,
         )
 
         return x_BTHWC
+
+    def can_fuse_residual(self, residual: ttnn.Tensor) -> bool:
+        """conv3d's residual epilogue reads bf16 row-major DRAM rows laid out like its output."""
+        mem = residual.memory_config()
+        return (
+            self.dtype == ttnn.bfloat16
+            and self.out_channels == self.unpadded_out_channels
+            and self.out_channels % 32 == 0
+            and residual.dtype == ttnn.bfloat16
+            and residual.layout == ttnn.ROW_MAJOR_LAYOUT
+            and mem.buffer_type == ttnn.BufferType.DRAM
+            and mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        )
 
     def can_fold_depth_to_space(self, stride: tuple[int, int, int]) -> bool:
         """conv3d's depth-to-space output needs tile-aligned groups that nest with C_out_block."""
@@ -540,6 +567,10 @@ class LTXResnetBlock3D(Module):
             out_channels, out_channels, kernel_size=3, stride=1, conv_dims=conv_dims, **conv_kwargs
         )
 
+        # LTX_VAE_FUSE_RESIDUAL=1 (default off): conv2 adds the skip in its epilogue instead of a
+        # separate add over the whole activation.
+        self.fuse_residual = _fuse_residual_enabled()
+
         self.has_shortcut = in_channels != out_channels
         if self.has_shortcut:
             # 1x1x1 channel-projection conv
@@ -583,7 +614,9 @@ class LTXResnetBlock3D(Module):
 
         h = self.norm2(h, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w, cf_input_padded=True)
+        conv2_kwargs = dict(causal=causal, logical_h=logical_h, logical_w=logical_w, cf_input_padded=True)
+        if not self.fuse_residual:
+            h = self.conv2(h, **conv2_kwargs)
 
         if self.has_shortcut:
             residual = ttnn.layer_norm(residual, weight=self.norm3_weight.data, bias=self.norm3_bias.data)
@@ -591,6 +624,10 @@ class LTXResnetBlock3D(Module):
                 residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
             residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
+        if self.fuse_residual:
+            if self.conv2.can_fuse_residual(residual):
+                return self.conv2(h, **conv2_kwargs, residual=residual)
+            h = self.conv2(h, **conv2_kwargs)
         return ttnn.add(residual, h)
 
 

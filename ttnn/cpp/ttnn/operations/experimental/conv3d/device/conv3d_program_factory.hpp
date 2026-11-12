@@ -23,6 +23,7 @@ struct Conv3dCbGeometry {
     bool use_fp32_partials = false;  // with use_fp32_exact: the running-partial CB
     bool use_bias = false;
     bool operand_split = false;  // the x_hi, x_lo and weight_lo CBs
+    bool use_residual = false;   // the residual_rm and untilized_rm CBs
     uint32_t vol2col_rm_pages = 0;
     uint32_t padded_patch_size_bytes = 0;
     uint32_t C_in_block_bytes = 0;
