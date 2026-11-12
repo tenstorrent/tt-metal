@@ -36,6 +36,11 @@ def enabled():
     return APS.enabled()
 
 
+def xrow_key_groups(n_blocks, U):
+    """DSV41_XROW_BATCH: the blocks 0..n-1 of a cross-row copy written U at a time through the U lanes (users) of the receiving row -> [[(lane in row, block index)]] (every block exactly once)."""
+    return [[(j, g0 + j) for j in range(min(U, n_blocks - g0))] for g0 in range(0, n_blocks, U)]
+
+
 def extra_pool_pages(users_per_row):
     """pages the pool needs on top of the per-user capacity: the idle pages of the users (they are outside the index)"""
     return IDLE_PAGES * int(users_per_row) if enabled() else 0
@@ -658,8 +663,48 @@ class PagedApc:
             shard = ttnn.ShardTensor2dMesh(md, dims=(0, 1), mesh_shape=(rows, cols))
             rep0 = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
             keep = []
+
+            def _tm(name, fn, *a, **k):  # (E-A: split of the store phase when DSV41_XROW_PROFILE=1)
+                if prof is None:
+                    return fn(*a, **k)
+                t_ = time.perf_counter()
+                r_ = fn(*a, **k)
+                prof[name] = prof.get(name, 0.0) + time.perf_counter() - t_
+                return r_
+
+            batch = os.environ.get("DSV41_XROW_BATCH", "0") == "1"
+            if batch:
+                # DSV41_XROW_BATCH=1 (default off): the key blocks go through the U lanes of the receiving row, U blocks per save call (one staging tensor per layer and group, one table upload and
+                # one save launch per group) instead of one block per call: 1/U of the host staging / launches of the store phase (the device wait was 0.001 s of 0.89 s: host-bound).
+                # (Up == U is required by XROW: the lanes of the row are its users.)
+                with_key = [(i, cp) for i, cp in cps if cp.key_slot >= 0]
+                for lanes_ in xrow_key_groups(len(with_key), U):
+                    grp = [with_key[k] for _, k in lanes_]
+                    vals = [None] * (rows * U)
+                    for j, (_, cp) in enumerate(grp):
+                        vals[dst * U + j] = cp.key_slot
+                    _tm("key_table_s", self.ks.set_save, vals)
+                    stage = {}
+                    for lid in self.ks.store:
+                        R = self.ks.geom[lid].nrb * 32
+                        host = torch.zeros(rows * U, cols, R, APS.IDIM, dtype=torch.bfloat16)
+                        for j, (i, _) in enumerate(grp):
+                            for c in range(cols):
+                                host[dst * U + j, c] = keys[(lid, i)][c]
+                        stage[lid] = _tm(
+                            "key_upload_s",
+                            ttnn.from_torch,
+                            host,
+                            device=md,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=shard,
+                        )
+                    _tm("key_launch_s", self.ks.save, stage)
+                    keep += list(stage.values())
             for i, cp in cps:
-                if cp.key_slot >= 0:
+                if cp.key_slot >= 0 and not batch:
                     vals = [None] * (rows * U)
                     vals[b] = cp.key_slot
                     self.ks.set_save(vals)

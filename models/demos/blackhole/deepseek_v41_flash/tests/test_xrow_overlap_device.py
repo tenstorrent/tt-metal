@@ -182,8 +182,18 @@ def test_xrow_copy_phases_and_overlap(mesh_device):
     t_cold, l_cold, dt_cold = run(0, P, 0, "cold")
     res["cold_prefill_s"] = round(dt_cold, 2)
     logs = []
-    for sync_every in (1, 8, 1, 8, 8, 1):  # (the first pass of each program compiles: compare the later ones)
+    for sync_every, batch in (
+        (1, 0),
+        (8, 0),
+        (8, 1),
+        (1, 0),
+        (8, 0),
+        (8, 1),
+        (8, 1),
+        (8, 0),
+    ):  # (the first pass of each program compiles: compare the later ones)
         os.environ["DSV41_XROW_SYNC_EVERY"] = str(sync_every)
+        os.environ["DSV41_XROW_BATCH"] = str(batch)
         clean()
         run(0, D, 0, f"donor{sync_every}")
         m.release_user(0)
