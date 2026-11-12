@@ -1520,7 +1520,7 @@ constexpr bool matmul_pack_full_l1_per_tile(const MathFidelity fidelity, const D
 
 constexpr bool matmul_format_block_float(const DataFormat f)
 {
-    return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b;
+    return f == DataFormat::Bfp8 || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4 || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2 || f == DataFormat::Bfp2_b;
 }
 
 // Two and three tile blocks of one K tile at LoFi and HiFi2 (cells below): the closed block through llk_pack_block (first block closed, then the W form) reads 4 to 10 cycles behind
@@ -1528,7 +1528,9 @@ constexpr bool matmul_format_block_float(const DataFormat f)
 constexpr bool matmul_pack_two_tile_per_tile(const MathFidelity fidelity, const DataFormat out, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
 {
     return kt == 1 &&
-           ((rt * ct == 2 && matmul_format_block_float(out) && (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2)) ||
+           // the block float outputs measured: not Bfp4 or Bfp2 (5 bit exponent)
+           ((rt * ct == 2 && (out == DataFormat::Bfp8 || out == DataFormat::Bfp8_b || out == DataFormat::Bfp4_b || out == DataFormat::Bfp2_b) &&
+             (fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2)) ||
             // LoFi blocks of two tiles to Float16 or Float16_b read 5 cycles behind main with the plain block (48 of 52 rows), to Float32 6 ahead; a three tile Bfp8_b block 12 behind
             (rt * ct == 2 && fidelity == MathFidelity::LoFi && (out == DataFormat::Float16 || out == DataFormat::Float16_b)) ||
             (rt * ct == 3 && fidelity == MathFidelity::LoFi && out == DataFormat::Bfp8_b));
