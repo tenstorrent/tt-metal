@@ -132,13 +132,17 @@ class LaunchedJob:
         return [pid for pid in _procs_in(self.sid, self.pgid) if pid != os.getpid() and pid != self.proc.pid]
 
 
-def _resolve_exit_code(rc: int, job: LaunchedJob) -> int:
-    """The contract: one rank fails, the whole job fails, with a truthful code. The launcher's own code is preserved
-    — a rank's code, a signal, or PRRTE's ``--timeout`` code (241), which means PRRTE already ended every rank, a
-    clean timeout rather than a tt-run failure. But any rank the launcher left on this host is ended, and tt-run
-    never returns 0 while a rank it started is alive (teardown plan P19); if tt-run was signalled and forwarded it
-    yet the launcher still reported success, the signal is reported.
+def run_launcher(cmd: List[str], cwd: Path) -> int:
+    """Start the MPI launcher and own it until the job is gone (teardown plan P6, P7, P19): it runs in its own
+    session, SIGINT/SIGTERM at tt-run are forwarded to it and tt-run waits (PRRTE then ends every rank on every
+    host). Then the contract is applied: one rank fails, the whole job fails, with a truthful code.
     """
+    with LaunchedJob(cmd, cwd) as job:
+        rc = job.wait()
+    # Handlers are restored (the context has exited). Apply the exit-code contract. The launcher's own code is kept
+    # — a rank's code, a signal, or PRRTE's --timeout code (241), which means PRRTE already ended every rank (a clean
+    # timeout, not a tt-run failure). But any rank it left on this host is ended, tt-run never returns 0 while a rank
+    # it started is alive (P19), and a signal tt-run forwarded but the launcher swallowed is reported.
     if rc == PRTE_TIMEOUT_EXIT_CODE:
         logger.warning(
             f"{TT_RUN_PREFIX} the job hit its PRRTE --timeout wall clock (exit {rc}); the launcher ended every rank"
@@ -155,17 +159,6 @@ def _resolve_exit_code(rc: int, job: LaunchedJob) -> int:
     if job.forwarded and rc == 0:  # signalled and forwarded, but the launcher still reported success
         rc = 128 + job.forwarded[0]
     return rc
-
-
-def run_launcher(cmd: List[str], cwd: Path) -> int:
-    """Start the MPI launcher and own it until the job is gone (teardown plan P6, P7, P19): it runs in its own
-    session, SIGINT/SIGTERM at tt-run are forwarded to it and tt-run waits (PRRTE then ends every rank on every
-    host), and afterwards any rank it left on this host is ended and the job is reported failed if the launcher
-    returned 0 with a rank still alive."""
-    with LaunchedJob(cmd, cwd) as job:
-        rc = job.wait()
-    # handlers restored (context exited); now apply the exit-code contract and sweep any leftovers
-    return _resolve_exit_code(rc, job)
 
 
 def remove_stale_mpi_shm_segments() -> int:
