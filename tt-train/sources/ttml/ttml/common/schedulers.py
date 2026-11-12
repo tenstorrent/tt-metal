@@ -29,7 +29,7 @@ class SpeedrunScheduler:
             # Linear warmup to lr_max over exactly w steps.
             return peak * ((s + 1) / w)
         elif s <= w + h or T <= w + h:
-            # hold at lr_max
+            # Hold at lr_max; with no decay window (T <= w + h), stay there for the rest of the run.
             return peak
         else:
             # linear decay from lr_max at (w+h) to min_lr at T

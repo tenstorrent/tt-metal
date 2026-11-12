@@ -1710,13 +1710,13 @@ def test_speedrun_lr_stays_within_min_and_max_lr(total_steps):
 
 def test_speedrun_decays_linearly_to_min_lr_at_total_steps():
     sched = SpeedrunScheduler(
-        SpeedrunSchedulerConfig(max_lr=1.0, min_lr=0.1, warmup_steps=10, hold_steps=0, total_steps=100)
+        SpeedrunSchedulerConfig(max_lr=1.0, min_lr=0.2, warmup_steps=10, hold_steps=0, total_steps=100)
     )
     assert sched.lr_at(0) == pytest.approx(0.1)
     assert sched.lr_at(9) == pytest.approx(1.0)
-    assert sched.lr_at(55) == pytest.approx(0.55)
-    assert sched.lr_at(100) == pytest.approx(0.1)
-    assert sched.lr_at(150) == pytest.approx(0.1)
+    assert sched.lr_at(55) == pytest.approx(0.6)
+    assert sched.lr_at(100) == pytest.approx(0.2)
+    assert sched.lr_at(150) == pytest.approx(0.2)
 
 
 @pytest.mark.parametrize(
