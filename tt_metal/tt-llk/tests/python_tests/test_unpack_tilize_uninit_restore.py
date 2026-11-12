@@ -23,7 +23,8 @@ datacopy reads corrupted data and the result diverges from
 ``TilizeGolden(src_A, num_faces)``.
 
 ``num_faces ∈ {1, 2}`` covers non-4-face operands, which no existing tilize
-test reaches.
+test reaches. One face is a 16x16 tile: it is one face wide, so its 16 rows are the
+first 256 datums of operand A.
 """
 
 import pytest
@@ -36,6 +37,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TEST_FACE_DIMS
+from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.utils import passed_test, result_tensor
 
 
@@ -78,12 +80,21 @@ def test_unpack_tilize_uninit_restore(
     # Golden: the run-1 datacopy is an identity copy of the run-0 tilized tile,
     # so a correct restore yields exactly the tilized operand A.
     tilize_function = get_golden_generator(TilizeGolden)
-    golden_tensor = tilize_function(
-        src_A,
-        input_dimensions,
-        formats.output_format,
-        num_faces,
-    ).to(torch_format)
+    if num_faces == 1:
+        golden_tensor = tilize_function(
+            src_A[: MAX_FACE_R_DIM * FACE_C_DIM],
+            [MAX_FACE_R_DIM, FACE_C_DIM],
+            formats.output_format,
+            num_faces,
+            tile_dimensions=[MAX_FACE_R_DIM, FACE_C_DIM],
+        ).to(torch_format)
+    else:
+        golden_tensor = tilize_function(
+            src_A,
+            input_dimensions,
+            formats.output_format,
+            num_faces,
+        ).to(torch_format)
 
     L1_to_L1_iterations = 2
     configuration = TestConfig(

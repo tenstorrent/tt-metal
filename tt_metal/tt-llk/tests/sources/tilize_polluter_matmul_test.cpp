@@ -64,7 +64,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t pol_ct_dim   = POLLUTER_CT_DIM;
     int run                              = 0;
     const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(pol_ct_dim);
-    const std::uint32_t pol_tilize_nf    = pol_num_faces;
+    // Regular polluter is 32x32 (4 faces), tiny is face_r_dim x 32 (2 faces).
+    const ckernel::TensorShape pol_tensor_shape = ckernel::make_tensor_shape_from_legacy(pol_face_r_dim, pol_num_faces);
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats_array[run].unpack_A_src,
@@ -73,17 +74,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_dst,
         ckernel::make_tensor_shape_from_legacy(pol_face_r_dim, pol_num_faces),
         ckernel::make_tensor_shape_from_legacy(pol_face_r_dim, pol_num_faces));
-    _llk_unpack_tilize_init_wrapper_(
-        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, pol_ct_dim, pol_face_r_dim, false /* narrow_tile */, pol_tilize_nf);
+    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, pol_ct_dim, pol_tensor_shape);
     _llk_unpack_tilize_wrapper_(
         L1_ADDRESS(params.buffer_A[0]),
         0 /* tile_index */,
         formats_array[run].unpack_A_src,
         formats_array[run].unpack_A_dst,
         pol_block_ct_dim,
-        pol_face_r_dim,
-        pol_tilize_nf,
-        false /* narrow_tile */);
+        pol_tensor_shape);
 
     // Wait until the run-0 packer has drained before touching unpacker state.
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
@@ -108,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // idiomatic full reconfigure for a geometry change is `_llk_unpack_hw_configure_`
         // (configure_unpack_AB), which reprograms both descriptors to the regular baseline.
         // (For a geometry-matched polluter, face_r_dim==16, uninit alone already suffices.)
-        _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, pol_num_faces, pol_face_r_dim);
+        _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, pol_tensor_shape);
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats_array[run].unpack_A_src,
             formats_array[run].unpack_B_src,
