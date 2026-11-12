@@ -525,7 +525,9 @@ class PagedApc:
 
         if self.d2d is not None or self.ks is None or not self.idx.xrow or not XD.enabled():
             return
-        self.d2d = XD.XrowD2D(self.model, self.ks if XD.keys_enabled() else None)
+        self.d2d = XD.XrowD2D(
+            self.model, self.ks if XD.keys_enabled() else None, self.hs if XD.halos_enabled() else None
+        )
         self.log(f"APC paged: cross-row d2d buffers allocated, programs warmed in {self.d2d.warm():.1f} s")
 
     def _warm_xrow_save(self):
@@ -609,6 +611,7 @@ class PagedApc:
                 self.d2d
             )  # (DSV41_XROW_D2D: latents and, unless DSV41_XROW_D2D_KEYS=0, keys travel device to device; halos stay host staged)
             d2dk = d2d is not None and d2d.ks is not None
+            d2dh = d2d is not None and d2d.hs is not None
             lat = {}
             for s_ in PO.SOURCES:
                 if s_ in m.layer_ids and d2d is None:
@@ -633,7 +636,7 @@ class PagedApc:
                     )
             tip = src[-1]
             hpend = {}
-            for pn in self.hs.store:
+            for pn in self.hs.store if not d2dh else ():
                 slot = tip[3] if pn == "A" else tip[4]
                 if slot >= 0:
                     NL = len(self.hs.layers[pn])
@@ -699,6 +702,8 @@ class PagedApc:
             batch = os.environ.get("DSV41_XROW_BATCH", "0") == "1"
             if d2dk:
                 dkeep += d2d.move_keys(sri, dst, XD.key_pairs(src, cps))
+            if d2dh:
+                dkeep += d2d.move_halos(sri, dst, XD.halo_pairs(src, cps))
             if batch and not d2dk:
                 # DSV41_XROW_BATCH=1 (default off): the key blocks go through the U lanes of the receiving row, U blocks per save call (one staging tensor per layer and group, one table upload and
                 # one save launch per group) instead of one block per call: 1/U of the host staging / launches of the store phase (the device wait was 0.001 s of 0.89 s: host-bound).
@@ -756,7 +761,7 @@ class PagedApc:
                         )
                     self.ks.save(stage)
                     keep += list(stage.values())
-                for pn, slot in (("A", cp.halo_a), ("B", cp.halo_b)):
+                for pn, slot in (("A", cp.halo_a), ("B", cp.halo_b)) if not d2dh else ():
                     if slot >= 0 and pn in halos:
                         vals = [None] * (rows * U)
                         vals[b] = slot

@@ -23,11 +23,27 @@ from models.demos.blackhole.deepseek_v41_flash.tt import xrow_ops as XO
 
 SKIP = 0xFFFFFFFF
 CH = int(os.environ.get("DSV41_XROW_D2D_CH", "16384"))  # latent rows per chunk (16 MiB)
+KH = 32  # halo blocks per stage (>= the layers of a halo part)
 KG = int(os.environ.get("DSV41_XROW_D2D_KG", "128"))  # key blocks per group
 
 
 def enabled():
     return os.environ.get("DSV41_XROW_D2D", "0") == "1"
+
+
+def halos_enabled():
+    return keys_enabled() and os.environ.get("DSV41_XROW_D2D_HALOS", "1") == "1"
+
+
+def halo_pairs(src, cps):
+    """[(part, donor slot, new slot)] of the tip's halo slots: the donor tip block ``src[-1]`` (halo A slot at [3], B at [4]) -> the receiving chunk plans' ``halo_a`` / ``halo_b``"""
+    tip = src[-1]
+    out = []
+    for _, cp in cps:
+        for pn, dslot, sslot in (("A", cp.halo_a, tip[3]), ("B", cp.halo_b, tip[4])):
+            if dslot >= 0 and sslot >= 0:
+                out.append((pn, int(sslot), int(dslot)))
+    return out
 
 
 def keys_enabled():
@@ -57,7 +73,7 @@ def latent_rows(pt, hit, layer_ids, phys_src_fn, phys_dst_fn):
 
 
 class XrowD2D:
-    def __init__(self, model, key_store=None):
+    def __init__(self, model, key_store=None, halo_store=None):
         self.m = model
         self.md = model.md
         self.rows, self.cols = model.rows, model.cols
@@ -77,6 +93,12 @@ class XrowD2D:
                 R = int(st.shape[2])
                 a, b = z([KG, 1, R, XO.IDIM], ttnn.TILE_LAYOUT), z([KG, 1, R, XO.IDIM], ttnn.TILE_LAYOUT)
                 self.kst[lid] = (a, b, self._intermediate(a))
+        self.hs = halo_store
+        if self.hs is not None:
+            st = next(iter(self.hs.store.values()))
+            shp = [KH, 1, int(st.shape[2]), int(st.shape[3])]
+            a, b = z(shp, ttnn.TILE_LAYOUT), z(shp, ttnn.TILE_LAYOUT)
+            self.hst = (a, b, self._intermediate(a))
         self.shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols))
         self.stats = {}
 
@@ -147,6 +169,22 @@ class XrowD2D:
                 XO.slot_copy(ts, out, st, KG, KG)
         return keep
 
+    def move_halos(self, sri, dr, parts):
+        """tip halos: [(part, donor slot, new slot)]; the halo store [slots * NL, 1, 128, 512] holds the NL layers of a slot as consecutive blocks; enqueued, NOT synchronised"""
+        keep = []
+        stage, out, inter = self.hst
+        for pn, sslot, dslot in parts:
+            NL = len(self.hs.layers[pn])
+            assert NL <= KH
+            tg = XO._tab(self.md, {sri: [sslot * NL + l for l in range(NL)]}, {sri: list(range(NL))}, KH)
+            ts = XO._tab(self.md, {dr: list(range(NL))}, {dr: [dslot * NL + l for l in range(NL)]}, KH)
+            keep += [tg, ts]
+            st = self.hs.store[pn]
+            XO.slot_copy(tg, st, stage, KH, KH)
+            self.p2p(stage, out, sri, dr, inter)
+            XO.slot_copy(ts, out, st, KH, KH)
+        return keep
+
     def warm(self, latents=True):
         """build every p2p program used (all ordered row pairs, all columns, every spec) and the gather / scatter / slot_copy programs, with all-SKIP ids / tables (no pool or store data is touched)"""
         t0 = time.perf_counter()
@@ -169,6 +207,17 @@ class XrowD2D:
                 stage, out, _ = self.kst[lid]
                 XO.slot_copy(tab, st, stage, KG, KG)
                 XO.slot_copy(tab, out, st, KG, KG)
+        if self.hs is not None:
+            stage, out, inter = self.hst
+            tab = XO._tab(self.md, {}, {}, KH)
+            keep.append(tab)
+            for sr in range(self.rows):
+                for dr in range(self.rows):
+                    if sr != dr:
+                        self.p2p(stage, out, sr, dr, inter)
+            for st in {id(v): v for v in self.hs.store.values()}.values():
+                XO.slot_copy(tab, st, stage, KH, KH)
+                XO.slot_copy(tab, out, st, KH, KH)
         ttnn.synchronize_device(self.md)
         for x in keep:
             ttnn.deallocate(x)
