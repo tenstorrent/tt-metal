@@ -54,6 +54,9 @@ class Callback:
     def on_train_epoch_end(self, trainer: Any) -> None:
         pass
 
+    def on_train_end(self, trainer: Any) -> None:
+        """Only after the loop completes; a failed or stopped run calls ``on_train_error`` instead."""
+
     def on_validation_start(self, trainer: Any) -> None:
         pass
 
@@ -65,9 +68,6 @@ class Callback:
 
     def on_validation_end(self, trainer: Any, val_loss: Any) -> None:
         pass
-
-    def on_train_end(self, trainer: Any) -> None:
-        """Only after the loop completes; a failed or stopped run calls ``on_train_error`` instead."""
 
     def on_setup_error(self, trainer: Any, exception: BaseException) -> None:
         """``setup`` failed and will re-raise ``exception``; ``trainer.logger`` is ``None`` if it failed first."""
