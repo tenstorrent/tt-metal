@@ -41,6 +41,27 @@ COMPUTE_LOFI = ttnn.WormholeComputeKernelConfig(
 FABRIC_PAYLOAD_ENV = "QWEN36_FABRIC_PAYLOAD_BYTES"
 
 
+def prefill_options(args):
+    """args.prefill_options (Qwen36PrefillOptions), or the defaults for args without one."""
+    opts = getattr(args, "prefill_options", None)
+    if opts is None:
+        from models.demos.blackhole.qwen36.tt.model_config import Qwen36PrefillOptions
+
+        opts = Qwen36PrefillOptions()
+    return opts
+
+
+def norm_compute_cfg(args=None, default=None):
+    """RMSNorm compute config: HiFi4 + fp32 accumulation when args.prefill_options.exact_norms, else `default`.
+    HiFi2 truncates x*x and biases sum(x^2): 0.88% relative error vs fp32 on Qwen3.5-9B layer inputs (mean x^2 ~ 1e-4),
+    HiFi4 + fp32 0.29% (= the bf16 output rounding)."""
+    if not prefill_options(args).exact_norms:
+        return default
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+
+
 def fabric_router_config():
     """QWEN36_FABRIC_PAYLOAD_BYTES (default 8192; 0 = the fabric default of 4352): max fabric packet payload for the
     multi-device meshes, the value qwen38_27b_qb2 uses. Larger packets cut per-packet overhead in the decode
@@ -63,15 +84,15 @@ def kv_cache_bf8_enabled():
 
 
 LMHEAD_CFG_ENV = "QWEN36_LMHEAD_CFG"
-_LMHEAD_LOGGED = False
+_LMHEAD_LOGGED = set()
 
 
-def lm_head_compute_config():
-    """Compute kernel config for LM-head matmuls, chosen by QWEN36_LMHEAD_CFG.
+def lm_head_compute_config(mode=None):
+    """Compute kernel config for LM-head matmuls: `mode`, else QWEN36_LMHEAD_CFG.
     "default" (or unset): None (ttnn default: HiFi2, bf16 dest accumulation for bf16 output).
     "hifi2_fp32" / "hifi4_fp32": fp32 dest accumulation, packer_l1_acc."""
-    global _LMHEAD_LOGGED
-    mode = os.environ.get(LMHEAD_CFG_ENV, "default").strip().lower()
+    if mode is None:
+        mode = os.environ.get(LMHEAD_CFG_ENV, "default").strip().lower()
     if mode == "default":
         cfg = None
     elif mode in ("hifi2_fp32", "hifi4_fp32"):
@@ -83,15 +104,16 @@ def lm_head_compute_config():
         )
     else:
         raise ValueError(f"{LMHEAD_CFG_ENV}={mode!r} invalid (default|hifi2_fp32|hifi4_fp32)")
-    if not _LMHEAD_LOGGED:
-        _LMHEAD_LOGGED = True
-        logger.info(f"LM head compute config ({LMHEAD_CFG_ENV}) = {mode}")
+    if mode not in _LMHEAD_LOGGED:
+        _LMHEAD_LOGGED.add(mode)
+        logger.info(f"LM head compute config = {mode}")
     return cfg
 
 
-def lm_head_kwargs():
-    """ttnn.linear kwargs for LM head: empty for "default" so behavior is bit-identical."""
-    cfg = lm_head_compute_config()
+def lm_head_kwargs(args=None):
+    """ttnn.linear kwargs for LM head: empty for "default" so behavior is bit-identical.
+    args.prefill_options.lm_head_cfg overrides the env."""
+    cfg = lm_head_compute_config(None if args is None else prefill_options(args).lm_head_cfg)
     return {} if cfg is None else {"compute_kernel_config": cfg}
 
 
@@ -777,12 +799,13 @@ def fused_norm_resources(tt_ccl, x, weight, num_links, cluster_axis=1):
     return pairs[idx]
 
 
-def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, memory_config, cluster_axis=1):
+def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, memory_config, cluster_axis=1, dtype=None):
     """Prefill distributed RMSNorm as ONE op (stats partial sums + fabric all-gather + normalize) replacing
     rms_norm_pre_all_gather / all_gather_async / rms_norm_post_all_gather.
 
     x: hidden-fractured [1,1,S,dim/tp] bf16 TILE; weight: TILE [1,1,dim] (1+gamma) sharded on dim 2 -> [1,1,dim/tp] per
-    chip. Output dtype/placement match the 3-op path: x's dtype, `memory_config`. compute_cfg needs fp32_dest_acc_en."""
+    chip. Output dtype/placement match the 3-op path: x's dtype (or `dtype`), `memory_config`. compute_cfg needs
+    fp32_dest_acc_en."""
     sems, stats = fused_norm_resources(tt_ccl, x, weight, FUSED_NORM_LINKS, cluster_axis)
     return ttnn.experimental.dit_fused_distributed_rmsnorm(
         x,
@@ -792,7 +815,7 @@ def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, mem
         topology=topology,
         epsilon=eps,
         weight=weight,
-        dtype=x.dtype,
+        dtype=dtype if dtype is not None else x.dtype,
         persistent_output_buffer=stats,
         num_preferred_links=FUSED_NORM_LINKS,
         memory_config=memory_config,
