@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import MappingProxyType
 
 import torch
@@ -483,10 +483,9 @@ class VaeAttention(Module):
 
         linear_args = dict(mesh_axis=ctx.tp_axis, mesh_device=ctx.device, ccl_manager=ctx.ccl_manager)
 
-        # Norm runs on the AG'd full-spatial tensor inside forward(), so the inner norm should NOT
-        # AG/partition again. Bypass the _VaeSpatialGroupNorm wrap by handing _norm a TP-only ctx.
-        norm_ctx = replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
-        self.norm = _norm(norm, num_channels=num_channels, ctx=norm_ctx)
+        # The norm runs on the local spatial shard before the H+W all-gather, so a group norm takes
+        # the fused distributed path like the other VAE norms.
+        self.norm = _norm(norm, num_channels=num_channels, ctx=ctx)
         # Fused QKV: one ColParallelLinear with chunks=3 replaces three RowParallelLinear+RS+AG
         # round-trips. Each output is fractured on out_dim (channels) and gets AG'd before SDPA.
         self.to_qkv = ColParallelLinear(num_channels, 3 * num_channels, chunks=3, **linear_args)
@@ -571,6 +570,8 @@ class VaeAttention(Module):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         identity = x  # [N, H/h, W/w, C/tp] when SP+TP active; identity captured pre-AG
 
+        x = self.norm.forward(x)
+
         # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
         x = _all_gather_hw(self._ctx, x)
 
@@ -578,8 +579,6 @@ class VaeAttention(Module):
 
         # convert to 1d sequence and insert head dimension; there is only one head
         x = x.reshape([n, 1, h * w, -1])
-
-        x = self.norm.forward(x)
 
         # ColParallelLinear expects replicated input on K. AG manually here (rather than
         # passing parallel_config and letting the linear gather) because on Ring topology
