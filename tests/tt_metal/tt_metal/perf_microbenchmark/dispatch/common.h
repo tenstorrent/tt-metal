@@ -1044,7 +1044,7 @@ static_assert(
 
 inline bool is_quasar_sim() {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    return rtoptions.get_simulator_enabled() &&
+    return rtoptions.is_simulator_or_emulated() &&
            tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
 }
 
