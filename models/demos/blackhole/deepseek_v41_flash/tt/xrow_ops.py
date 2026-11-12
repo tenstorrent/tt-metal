@@ -35,9 +35,9 @@ def _tab(md, per_row_src, per_row_dst, nt):
 
 def slot_copy(tab, src, dst, n, nt, ncores=16):
     """dst[tab[nt + i]] = src[tab[i]] for i < n (blocks of NP = R / 32 * 4 tile pages), in place on dst"""
-    R = int(src.shape[2])
-    assert int(dst.shape[2]) == R and int(src.shape[3]) == IDIM and int(dst.shape[3]) == IDIM
-    NP = R // 32 * 4
+    R, Dd = int(src.shape[2]), int(src.shape[3])
+    assert int(dst.shape[2]) == R and int(dst.shape[3]) == Dd and R % 32 == 0 and Dd % 32 == 0
+    NP = R // 32 * (Dd // 32)  # tile pages per block (keys: R/32*4; halos [K*NL,1,128,512]: 64 per (slot, layer) block)
     ncores = min(ncores, n)
     ct = [NP, TILE_BYTES, 0, nt, n, int(src.shape[0]), int(dst.shape[0]), ncores] + _acc(tab) + _acc(src) + _acc(dst)
     cores = [ttnn.CoreCoord(c % 8, c // 8) for c in range(ncores)]
