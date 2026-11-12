@@ -160,8 +160,26 @@ struct llk_pack_sfpu_api<1>
 namespace pack_api_shim
 {
 
+#ifndef PACK_API_SHIM_CB_COUNTS
+#define PACK_API_SHIM_CB_COUNTS
+
+// metal's get_cb_tiles_received_ptr / get_cb_tiles_acked_ptr (stream_io_map.h): CB n's counts in overlay stream n's
+// REMOTE_DEST_BUF_SIZE (10) and REMOTE_DEST_BUF_START (8) registers; the harness keeps noc_overlay_parameters.h out.
+inline volatile std::uint32_t* cb_tiles_received_ptr(const std::uint32_t cb)
+{
+    return reinterpret_cast<volatile std::uint32_t*>(0xFFB40000 + cb * 0x1000 + 10 * 4);
+}
+
+inline volatile std::uint32_t* cb_tiles_acked_ptr(const std::uint32_t cb)
+{
+    return reinterpret_cast<volatile std::uint32_t*>(0xFFB40000 + cb * 0x1000 + 8 * 4);
+}
+#endif
+
 // A CB of num_pages pages of page_words over L1 from wr_ptr, empty, as the firmware sets one up; in 16 byte words, as
-// the metal CB pointers.
+// the metal CB pointers. notify: the CB's counts as metal keeps them (llk_io), in the CB's stream scratch registers,
+// which the producer clears; its consumer waits no earlier than the next zone boundary, a four-thread rendezvous.
+template <bool notify = false>
 inline void cb_bind(const std::uint32_t cb, const std::uint32_t wr_ptr, const std::uint32_t page_words, const std::uint32_t num_pages)
 {
     LocalCBInterface& c = get_local_cb_interface(cb);
@@ -172,9 +190,42 @@ inline void cb_bind(const std::uint32_t cb, const std::uint32_t wr_ptr, const st
     c.fifo_rd_ptr       = wr_ptr;
     c.fifo_limit        = wr_ptr + c.fifo_size;
     c.fifo_wr_tile_ptr  = 0;
+    if constexpr (notify)
+    {
+        c.tiles_acked_received_init = 0;
+        *cb_tiles_received_ptr(cb)  = 0;
+        *cb_tiles_acked_ptr(cb)     = 0;
+    }
 }
 
-// cb_push_back's pointer moves on the pack thread (llk_push_tiles), without the consumer's notification.
+// The isolate run types have no peer thread to wait on, so their waits are dropped and the pointer moves stay.
+#if defined(LLK_PROFILER)
+inline constexpr bool cb_waits = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+#else
+inline constexpr bool cb_waits = true;
+#endif
+
+// cb_reserve_back: llk_wait_for_free_tiles, with notify.
+template <bool notify = false>
+inline void cb_reserve_back(const std::uint32_t cb, const std::uint32_t num_tiles)
+{
+    if constexpr (notify && cb_waits)
+    {
+        volatile std::uint32_t* tiles_acked_ptr = cb_tiles_acked_ptr(cb);
+        const std::uint16_t tiles_received      = get_local_cb_interface(cb).tiles_received;
+        std::int32_t free_tiles;
+        do
+        {
+            const std::uint16_t tiles_acked     = (std::uint16_t)ckernel::reg_read((std::uint32_t)tiles_acked_ptr);
+            const std::uint16_t free_tiles_wrap = get_local_cb_interface(cb).fifo_num_pages - (tiles_received - tiles_acked);
+            free_tiles                          = (std::int32_t)free_tiles_wrap;
+        } while (free_tiles < (std::int32_t)num_tiles);
+    }
+}
+
+// cb_push_back's pointer moves on the pack thread (llk_push_tiles); with notify also its consumer notification
+// (llk_push_to_brisc): the count stored once the packer is done.
+template <bool notify = false>
 inline void cb_push_back(const std::uint32_t cb, const std::uint32_t num_tiles)
 {
     LocalCBInterface& c           = get_local_cb_interface(cb);
@@ -184,6 +235,16 @@ inline void cb_push_back(const std::uint32_t cb, const std::uint32_t num_tiles)
     if (c.fifo_wr_ptr >= c.fifo_limit)
     {
         c.fifo_wr_ptr -= c.fifo_size;
+    }
+    if constexpr (notify)
+    {
+        const std::uint32_t tiles_received_addr_tensix =
+            static_cast<std::uint32_t>((reinterpret_cast<std::uintptr_t>(cb_tiles_received_ptr(cb)) >> 2) & 0x3ffff);
+        c.tiles_received += num_tiles;
+        const std::uint16_t tiles_received_new = c.tiles_received;
+        TT_SETDMAREG(0, tiles_received_new, 0, LO_16(ckernel::p_gpr_pack::NUM_MSGS_RECEIVED));
+        TTI_STALLWAIT(ckernel::p_stall::STALL_THCON, ckernel::p_stall::PACK);
+        TT_STOREREG(ckernel::p_gpr_pack::NUM_MSGS_RECEIVED, tiles_received_addr_tensix);
     }
     // A compute kernel's block loop holds opaque code (CB waits, noinline reconfigures), so the pack state lives in memory.
     asm volatile("" ::: "memory");
@@ -286,6 +347,98 @@ __attribute__((always_inline)) inline void pack_block(const std::uint32_t start_
     llk_pack_block<ntiles, is_fp32_dest_acc_en, false, matmul_kt, arm_form>(start_tile_index, output);
 }
 #endif
+
+} // namespace pack_api_shim
+
+#endif
+
+// The unpack thread's side of a CB the pack thread fills, for a test that defines PACK_API_SHIM_UNPACK_SIDE: its own
+// cb_interface over the same L1, and metal's llk_io waits and pops (llk_wait_tiles, llk_pop_tiles).
+#if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(PACK_API_SHIM_UNPACK_SIDE)
+
+#include <cstdint>
+
+#include "internal/circular_buffer_interface.h"
+
+// The CBs the unpack thread binds: ids below this.
+#ifndef PACK_API_SHIM_UNPACK_CBS
+#define PACK_API_SHIM_UNPACK_CBS 25
+#endif
+extern "C" CBInterface pack_api_shim_cb_interface[PACK_API_SHIM_UNPACK_CBS];
+__attribute__((used)) CBInterface pack_api_shim_cb_interface[PACK_API_SHIM_UNPACK_CBS];
+asm(".globl cb_interface\n.set cb_interface, pack_api_shim_cb_interface");
+
+namespace pack_api_shim
+{
+
+#ifndef PACK_API_SHIM_CB_COUNTS
+#define PACK_API_SHIM_CB_COUNTS
+
+// metal's get_cb_tiles_received_ptr / get_cb_tiles_acked_ptr (stream_io_map.h): CB n's counts in overlay stream n's
+// REMOTE_DEST_BUF_SIZE (10) and REMOTE_DEST_BUF_START (8) registers; the harness keeps noc_overlay_parameters.h out.
+inline volatile std::uint32_t* cb_tiles_received_ptr(const std::uint32_t cb)
+{
+    return reinterpret_cast<volatile std::uint32_t*>(0xFFB40000 + cb * 0x1000 + 10 * 4);
+}
+
+inline volatile std::uint32_t* cb_tiles_acked_ptr(const std::uint32_t cb)
+{
+    return reinterpret_cast<volatile std::uint32_t*>(0xFFB40000 + cb * 0x1000 + 8 * 4);
+}
+#endif
+
+// The consumer's binding: the producer clears the counts (pack thread's cb_bind<true>); this one starts its own at 0.
+inline void cb_bind(const std::uint32_t cb, const std::uint32_t rd_ptr, const std::uint32_t page_words, const std::uint32_t num_pages)
+{
+    LocalCBInterface& c         = get_local_cb_interface(cb);
+    c.fifo_page_size            = page_words;
+    c.fifo_num_pages            = num_pages;
+    c.fifo_size                 = page_words * num_pages;
+    c.fifo_wr_ptr               = rd_ptr;
+    c.fifo_rd_ptr               = rd_ptr;
+    c.fifo_limit                = rd_ptr + c.fifo_size;
+    c.fifo_wr_tile_ptr          = 0;
+    c.tiles_acked_received_init = 0;
+}
+
+#if defined(LLK_PROFILER)
+inline constexpr bool cb_waits = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+#else
+inline constexpr bool cb_waits = true;
+#endif
+
+// cb_wait_front: llk_wait_tiles.
+inline void cb_wait_front(const std::uint32_t cb, const std::uint32_t num_tiles)
+{
+    if constexpr (cb_waits)
+    {
+        volatile std::uint32_t* tiles_received_ptr = cb_tiles_received_ptr(cb);
+        const std::uint16_t num_tiles_u            = (std::uint16_t)num_tiles;
+        std::uint16_t num_tiles_recv;
+        do
+        {
+            const std::uint16_t tiles_received = (std::uint16_t)ckernel::reg_read((std::uint32_t)tiles_received_ptr);
+            num_tiles_recv                     = tiles_received - get_local_cb_interface(cb).tiles_acked;
+        } while (num_tiles_recv < num_tiles_u);
+    }
+}
+
+// cb_pop_front: llk_pop_tiles, the ack stored once the unpacker is done.
+inline void cb_pop_front(const std::uint32_t cb, const std::uint32_t num_tiles)
+{
+    const std::uint32_t tiles_acked_addr_tensix = static_cast<std::uint32_t>((reinterpret_cast<std::uintptr_t>(cb_tiles_acked_ptr(cb)) >> 2) & 0x3ffff);
+    LocalCBInterface& c                         = get_local_cb_interface(cb);
+    const std::uint32_t num_words               = num_tiles * c.fifo_page_size;
+    c.tiles_acked += num_tiles;
+    TT_SETDMAREG(0, c.tiles_acked, 0, LO_16(4));
+    TTI_STALLWAIT(ckernel::p_stall::STALL_THCON, ckernel::p_stall::UNPACK);
+    TT_STOREREG(4, tiles_acked_addr_tensix);
+    c.fifo_rd_ptr += num_words;
+    if (c.fifo_rd_ptr >= c.fifo_limit)
+    {
+        c.fifo_rd_ptr -= c.fifo_size;
+    }
+}
 
 } // namespace pack_api_shim
 
