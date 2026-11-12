@@ -343,7 +343,7 @@ def test_moe_block_accuracy(case, mesh_device, device_params):
 
 @PARAMS
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(1800 + int(os.environ.get("MOE_SOAK_SECS", "0")))
 def test_moe_block_determinism(case, mesh_device, device_params):
     # (with the combine's snap: every routed term rounded to a multiple of q, so its fp32 sums do not depend on the order
     # the rows land in - without it they do, and runs differ in the last bits)
@@ -360,6 +360,30 @@ def test_moe_block_determinism(case, mesh_device, device_params):
     for _ in range(case.calls):
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
         det.add({"y": y_tr})
+    soak = int(os.environ.get("MOE_SOAK_SECS", "0"))
+    if soak:  # (stress: replay the captured call until the deadline, every 64th output checked; a progress line a minute)
+        import time
+
+        def mismatch():
+            shards = ttnn.get_device_tensors(det.marker) if mesh_device.get_num_devices() > 1 else [det.marker]
+            return max(float(ttnn.to_torch(s).float().max()) for s in shards)
+
+        t0 = time.monotonic()
+        last = t0
+        n = 0
+        while time.monotonic() - t0 < soak:
+            for _ in range(64):
+                ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            det.add({"y": y_tr})
+            n += 64
+            if time.monotonic() - last >= 60:
+                ttnn.synchronize_device(mesh_device)
+                last = time.monotonic()
+                mm = mismatch()
+                logger.info(f"MOE_SOAK {last - t0:.0f} s: {n} replays, mismatch {mm}")
+                assert mm == 0.0, f"{case.id}: soak output differs after {n} replays"
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"MOE_SOAK done: {n} replays in {time.monotonic() - t0:.0f} s")
     ttnn.release_trace(mesh_device, tid)
     det.assert_identical(f"{case.id}: {case.calls} eager calls + {case.calls} traced replays")
 
