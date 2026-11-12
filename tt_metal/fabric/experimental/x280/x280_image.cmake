@@ -91,21 +91,28 @@ _x280_compile(
 )
 
 #[[
-x280_add_image(NAME <stem> SOURCES <c-source>... [LIM_IDLE] [DEFINES <macro>...])
+x280_add_image(NAME <stem> SOURCES <c-source>... [LIM_IDLE | STANDALONE] [DEFINES <macro>...])
 
 Builds ${X280_IMAGE_DIR}/<stem>.elf and <stem>.bin from C sources, and adds them to x280_images.
 An image links the active lifecycle harness and ld/x280.ld (.text at 0x08001000), or with
 LIM_IDLE the per-hart entry and ld/x280-lim-idle.ld (.text at 0x08000000). DEFINES apply to
 this image's sources only.
+
+STANDALONE is for an image the host boots directly, with no resident idle: the per-hart entry
+calls main on every hart, and the image links ld/x280.ld (.text at 0x08001000). The host points
+each hart's reset vector at _start. main must not return.
 #]]
 function(x280_add_image)
-    cmake_parse_arguments(PARSE_ARGV 0 ARG "LIM_IDLE" "NAME" "SOURCES;DEFINES")
+    cmake_parse_arguments(PARSE_ARGV 0 ARG "LIM_IDLE;STANDALONE" "NAME" "SOURCES;DEFINES")
     if(NOT ARG_NAME OR NOT ARG_SOURCES OR ARG_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "x280_add_image: needs NAME and SOURCES; unparsed: '${ARG_UNPARSED_ARGUMENTS}'")
     endif()
     if(ARG_LIM_IDLE)
         set(entry "${_x280_obj_dir}/entry_hart.o")
         set(script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ld/x280-lim-idle.ld")
+    elseif(ARG_STANDALONE)
+        set(entry "${_x280_obj_dir}/entry_hart.o")
+        set(script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ld/x280.ld")
     else()
         set(entry
             "${_x280_obj_dir}/entry_active.o"

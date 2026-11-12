@@ -355,3 +355,6 @@ endforeach()
 
 # Experimental telemetry image and its driver.
 add_subdirectory(telemetry)
+
+# Standalone telemetry firmware and its host loader.
+add_subdirectory(telemetry_v2)

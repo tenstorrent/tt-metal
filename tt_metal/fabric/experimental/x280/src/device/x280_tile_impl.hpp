@@ -81,6 +81,16 @@ public:
     // `timeout`. Reset stays released on failure.
     bool confirm_resident_idle_unlocked(std::chrono::milliseconds timeout, BootResult& result);
 
+    // Standalone image: booted straight from reset with no resident idle, so the reset vectors
+    // point at the image itself. Prepare validates it as an active image, loads and reads it back,
+    // points every hart's vector at X280_ACTIVE_FW_LOAD_ADDR, and clears the protocol block and the
+    // heartbeat. Returns the image size. Nothing is released.
+    size_t prepare_standalone_boot_unlocked(const std::string& image_path);
+
+    // Waits for the heartbeat magic, then for its counter to move. Fills `result` and returns
+    // whether the firmware was seen running within `timeout`. Reset stays released on failure.
+    bool confirm_standalone_unlocked(std::chrono::milliseconds timeout, BootResult& result);
+
 private:
     friend class ActiveSessionImpl;
     friend class TileTestAccess;

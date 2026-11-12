@@ -797,7 +797,11 @@ MultiTileBootResult X280Runtime::boot_tiles(const MultiTileBootRequest& request)
             if (std::find(to_release.begin(), to_release.end(), report.id.hw_index) == to_release.end()) {
                 continue;
             }
-            runtime.tile_impl(report.id).prepare_cold_boot_unlocked(request.idle_image_path);
+            if (request.image_kind == BootImageKind::Standalone) {
+                runtime.tile_impl(report.id).prepare_standalone_boot_unlocked(request.idle_image_path);
+            } else {
+                runtime.tile_impl(report.id).prepare_cold_boot_unlocked(request.idle_image_path);
+            }
         }
     } catch (const std::exception& error) {
         result.diagnostic = std::string("preparation failed before any reset was released: ") + error.what();
@@ -823,7 +827,11 @@ MultiTileBootResult X280Runtime::boot_tiles(const MultiTileBootRequest& request)
             continue;
         }
         try {
-            (void)runtime.tile_impl(report.id).confirm_resident_idle_unlocked(request.boot_timeout, report.result);
+            if (request.image_kind == BootImageKind::Standalone) {
+                (void)runtime.tile_impl(report.id).confirm_standalone_unlocked(request.boot_timeout, report.result);
+            } else {
+                (void)runtime.tile_impl(report.id).confirm_resident_idle_unlocked(request.boot_timeout, report.result);
+            }
         } catch (const std::exception& error) {
             report.result.outcome = BootOutcome::ResetRequiredNoResidentIdle;
             report.result.diagnostic =
@@ -839,10 +847,11 @@ MultiTileBootResult X280Runtime::boot_tiles(const MultiTileBootRequest& request)
     for (int hw_index : to_release) {
         diagnostic << ' ' << hw_index;
     }
+    const char* reached = request.image_kind == BootImageKind::Standalone ? "standalone firmware" : "resident idle";
     diagnostic << " on chip " << chip_id << " in one write at the safe clock; "
-               << (result.ready() ? "every selected tile reached resident idle"
-                                  : "at least one selected tile did not reach resident idle, and no further cold "
-                                    "boot is possible in this chip-reset lifetime")
+               << (result.ready() ? std::string("every selected tile reached ") + reached
+                                  : std::string("at least one selected tile did not reach ") + reached +
+                                        ", and no further cold boot is possible in this chip-reset lifetime")
                << ". The owner raises the operating clock with set_pll.";
     result.diagnostic = diagnostic.str();
     return result;

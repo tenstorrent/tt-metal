@@ -100,11 +100,26 @@ struct ChipOpenResult {
 
 struct RuntimeOpenResult;
 
+// What boot_tiles loads, and how it confirms the tile came up.
+enum class BootImageKind {
+    // The resident-idle image, confirmed by every hart reaching IDLE. The default.
+    ResidentIdle,
+    // A standalone image linked at the active-image base. Every hart's reset vector points straight
+    // at it, with no resident idle, and it is confirmed by the heartbeat it publishes (see
+    // X280_STANDALONE_HEARTBEAT_ADDR). The tile belongs to the image until an ASIC reset.
+    Standalone,
+};
+
 struct MultiTileBootRequest {
     // Tiles to boot, all on one chip, each a member of tile_ids(). Duplicates
     // and foreign tiles are refused before anything is touched.
     std::vector<TileId> tiles;
 
+    // Which image the path below names. ResidentIdle unless a standalone boot is wanted.
+    BootImageKind image_kind = BootImageKind::ResidentIdle;
+
+    // Path to the image selected by image_kind. The name predates Standalone: it is the resident-idle
+    // image only when image_kind is ResidentIdle.
     std::string idle_image_path;
 
     // Bounds the wait for each tile's harts to reach IDLE after the release.

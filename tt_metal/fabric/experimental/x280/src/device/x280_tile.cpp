@@ -273,6 +273,68 @@ bool TileImpl::confirm_resident_idle_unlocked(std::chrono::milliseconds timeout,
     return true;
 }
 
+size_t TileImpl::prepare_standalone_boot_unlocked(const std::string& image_path) {
+    const auto image = read_image_file(image_path, "standalone image", "ninja x280_images");
+
+    // Validated as an active image: it links at X280_ACTIVE_FW_LOAD_ADDR and must stay inside the
+    // ECC-primed window. Loaded and read back; nothing has been released yet.
+    load_active_image(image, read_lim_ecc_unlocked().primed_bytes);
+
+    // No resident idle to jump from, so every hart resets straight into the image.
+    set_reset_vectors_unlocked(X280_ACTIVE_FW_LOAD_ADDR);
+    zero_hart_protocol_unlocked();
+
+    // Clear the heartbeat so a stale magic is never mistaken for this boot, and check it took.
+    const std::array<uint8_t, X280_STANDALONE_HEARTBEAT_BYTES> zeros{};
+    transport().write_block(id().chip_id, core(), X280_STANDALONE_HEARTBEAT_ADDR, zeros.data(), zeros.size());
+    const uint64_t magic = transport().read_u64(id().chip_id, core(), X280_STANDALONE_HEARTBEAT_ADDR);
+    if (magic != 0) {
+        fail(
+            "standalone heartbeat did not clear at " + hex(X280_STANDALONE_HEARTBEAT_ADDR) + ": " +
+            format_readback_values(0, magic) + ". Reset was not released.");
+    }
+    return image.size();
+}
+
+bool TileImpl::confirm_standalone_unlocked(std::chrono::milliseconds timeout, BootResult& result) {
+    constexpr std::chrono::milliseconds kCounterAdvanceWait{100};  // The counter ticks about once a millisecond.
+    const auto label = label_chip_l2cpu(id().chip_id, id().hw_index);
+    const uint64_t expected_magic = static_cast<uint64_t>(X280_STANDALONE_HEARTBEAT_MAGIC);
+
+    const Deadline deadline{timeout};
+    const auto up = poll_until(deadline, kPollInterval, [&] {
+        return transport().read_u64(id().chip_id, core(), X280_STANDALONE_HEARTBEAT_ADDR) == expected_magic;
+    });
+    if (!up.satisfied) {
+        result.outcome = BootOutcome::ResetRequiredNoResidentIdle;
+        result.last_state = inspect_state();
+        result.diagnostic = "standalone firmware did not publish its heartbeat within " +
+                            std::to_string(timeout.count()) + " ms on " + label + " (" + std::to_string(up.polls) +
+                            " polls). Reset remains released; an ASIC reset (tt-smi -r) is required.";
+        return false;
+    }
+
+    // The magic only shows it ran once. A counter that moves shows it is still running.
+    const uint64_t first = transport().read_u64(id().chip_id, core(), X280_STANDALONE_HEARTBEAT_COUNTER_ADDR);
+    const Deadline advance_deadline{kCounterAdvanceWait};
+    const auto moving = poll_until(advance_deadline, kPollInterval, [&] {
+        return transport().read_u64(id().chip_id, core(), X280_STANDALONE_HEARTBEAT_COUNTER_ADDR) != first;
+    });
+    result.last_state = inspect_state();
+    if (!moving.satisfied) {
+        result.outcome = BootOutcome::ResetRequiredNoResidentIdle;
+        result.diagnostic = "standalone firmware published its heartbeat on " + label +
+                            " but the counter did not advance within " + std::to_string(kCounterAdvanceWait.count()) +
+                            " ms; it started and then stopped. Reset remains released; an ASIC reset (tt-smi -r) is "
+                            "required.";
+        return false;
+    }
+
+    result.outcome = BootOutcome::Booted;
+    result.diagnostic = label + " cold-booted into standalone firmware at the safe clock";
+    return true;
+}
+
 BootResult TileImpl::boot(const BootRequest& request) {
     BootResult result;
 

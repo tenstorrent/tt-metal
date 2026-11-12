@@ -73,6 +73,17 @@ _Static_assert(
 #define X280_ECC_PRIME_EXTENT_OFFSET (X280_ECC_PRIME_MARKER_OFFSET + 8)
 #define X280_ECC_PRIME_EXTENT_ADDR (X280_LIM_BASE + X280_ECC_PRIME_EXTENT_OFFSET)
 
+/* Heartbeat published by a standalone image (booted straight from reset, no resident idle).
+ * Two u64 words in the LIM past the hart protocol block (which ends 0x08131B00) and below the
+ * telemetry table (0x08132000): the magic at +0 and a counter at +8. Hart 0 writes the counter
+ * first and the magic last, so a host that sees the magic reads a valid counter. The host zeroes
+ * both before releasing reset, so an old magic is never mistaken for a new boot. */
+#define X280_STANDALONE_HEARTBEAT_OFFSET X280_ABI_U64(0x00131C00)
+#define X280_STANDALONE_HEARTBEAT_ADDR (X280_LIM_BASE + X280_STANDALONE_HEARTBEAT_OFFSET)
+#define X280_STANDALONE_HEARTBEAT_MAGIC X280_ABI_U64(0x544C4D5F414C4956) /* "TLM_ALIV" */
+#define X280_STANDALONE_HEARTBEAT_COUNTER_ADDR (X280_STANDALONE_HEARTBEAT_ADDR + 8)
+#define X280_STANDALONE_HEARTBEAT_BYTES X280_ABI_U64(16)
+
 /* Memory Port aperture onto the DRAM tile attached to this X280, and the
  * core-local interrupt controller. Naming the tile is deliberate: the aperture
  * covers that one tile, and it is not the route to any other -- those are NOC
