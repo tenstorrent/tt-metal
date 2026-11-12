@@ -68,8 +68,8 @@ SUPPORTED = {
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
-    "gamma_layout": [ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
+    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
 }
 
 
@@ -133,8 +133,16 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"rms_norm: unsupported combination (refinement candidate): {exc}")
 
-    if memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise UnsupportedAxisValue("rms_norm: output memory_config must be interleaved in Phase 0")
+    # Output placement follows the input placement: interleaved in -> interleaved out (DRAM or L1);
+    # HEIGHT_SHARDED in -> the same shard spec out (the output CB is backed by the output shard).
+    if memory_config is not None:
+        if axes["memory_layout"] == ttnn.TensorMemoryLayout.INTERLEAVED:
+            if memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+                raise UnsupportedAxisValue("rms_norm: interleaved input requires an interleaved output memory_config")
+        elif memory_config.memory_layout != axes["memory_layout"] or memory_config.shard_spec != (
+            input_tensor.memory_config().shard_spec
+        ):
+            raise UnsupportedAxisValue("rms_norm: sharded output memory_config must match the input's shard spec")
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +168,12 @@ def rms_norm(
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
 
     device = input_tensor.device()
-    output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    if memory_config is not None:
+        output_memory_config = memory_config
+    elif input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        output_memory_config = input_tensor.memory_config()
+    else:
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(_shape_list(input_tensor)),
         input_tensor.dtype,

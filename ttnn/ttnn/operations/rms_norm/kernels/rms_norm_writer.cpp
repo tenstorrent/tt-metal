@@ -6,6 +6,11 @@
 //   RM:   write_sticks_after_untilize for full-width chunks (valid sticks / valid bytes only);
 //         the tail chunk of a K>1 row keeps the nominal c*32-element L1 stride (hand-written,
 //         see tilize_helpers_dataflow.inl:208-209).
+// HEIGHT_SHARDED (placement):
+//   RESIDENT     — cb_out / cb_out_rm IS the output shard: compute packs in place; the writer only
+//                  drains the credit (no NoC traffic).
+//   LOCAL_STICKS — RM: the valid sticks of each untilized row-chunk are copied into this core's output
+//                  shard (self-aimed L1 write; the shard's stick count need not be a multiple of 32).
 
 #include <cstdint>
 
@@ -23,17 +28,30 @@ void kernel_main() {
     constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(13);
     constexpr bool is_rm = get_compile_time_arg_val(14) != 0;
     constexpr uint32_t W = get_compile_time_arg_val(15);
-    constexpr uint32_t num_valid_sticks = get_compile_time_arg_val(16);
+    [[maybe_unused]] constexpr uint32_t num_valid_sticks = get_compile_time_arg_val(16);
     constexpr uint32_t out_elem = get_compile_time_arg_val(17);
-    constexpr auto out_args = TensorAccessorArgs<18>();
+    constexpr uint32_t placement = get_compile_time_arg_val(18);
+    constexpr uint32_t stick_page_bytes = get_compile_time_arg_val(19);
+    constexpr bool out_resident = placement == 1;
+    constexpr bool out_local_sticks = placement == 2;
+    constexpr auto out_args = TensorAccessorArgs<20>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile_row = get_arg_val<uint32_t>(1);
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
     const uint32_t w_tile_start = get_arg_val<uint32_t>(3);
+    const uint32_t stick_base = get_arg_val<uint32_t>(4);
+    const uint32_t stick_end = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t chunk_elems = w_chunk_tiles * 32;
     const auto out_acc = TensorAccessor(out_args, out_addr);
+
+    if constexpr (out_resident) {
+        constexpr uint32_t cb_resident = is_rm ? cb_out_rm : cb_out;
+        cb_wait_front(cb_resident, num_tile_rows * core_w_tiles);
+        cb_pop_front(cb_resident, num_tile_rows * core_w_tiles);
+        return;
+    }
 
     const uint32_t num_blocks = (num_tile_rows + block_rows - 1) / block_rows;
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -58,21 +76,26 @@ void kernel_main() {
                     noc_async_write_barrier();
                     cb_pop_front(cb_out, w_chunk_tiles);
                 } else {
-                    const uint32_t first_stick = tile_row * 32;
-                    const uint32_t sticks =
-                        (num_valid_sticks - first_stick < 32) ? (num_valid_sticks - first_stick) : 32;
+                    const uint32_t first_stick = stick_base + (first_row + i) * 32;
+                    const uint32_t sticks = (stick_end - first_stick < 32) ? (stick_end - first_stick) : 32;
                     const uint32_t elem_off = (w_tile_start * 32) + k * chunk_elems;
                     const uint32_t valid_elems = (W - elem_off < chunk_elems) ? (W - elem_off) : chunk_elems;
                     const uint32_t valid_bytes = valid_elems * out_elem;
-                    if ((valid_elems + 31) / 32 == w_chunk_tiles) {
+                    if (!out_local_sticks && (valid_elems + 31) / 32 == w_chunk_tiles) {
                         dataflow_kernel_lib::write_sticks_after_untilize<cb_out_rm>(
                             out_acc, sticks, valid_bytes, first_stick, elem_off * out_elem);
                     } else {
                         cb_wait_front(cb_out_rm, w_chunk_tiles);
                         uint32_t l1 = get_read_ptr(cb_out_rm);
                         for (uint32_t s = 0; s < sticks; ++s) {
-                            noc_async_write(
-                                l1, out_acc.get_noc_addr(first_stick + s, elem_off * out_elem), valid_bytes);
+                            uint64_t dst;
+                            if constexpr (out_local_sticks) {
+                                dst = get_noc_addr(
+                                    out_addr + (first_stick - stick_base + s) * stick_page_bytes + elem_off * out_elem);
+                            } else {
+                                dst = out_acc.get_noc_addr(first_stick + s, elem_off * out_elem);
+                            }
+                            noc_async_write(l1, dst, valid_bytes);
                             l1 += chunk_elems * out_elem;
                         }
                         noc_async_write_barrier();

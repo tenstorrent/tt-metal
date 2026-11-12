@@ -59,3 +59,27 @@ def test_rm_monotonic_columns(device):
     print("ratio row0 sample:", ratio[0, 0, 0, ::256].tolist())
     print("ratio col-spread per row0:", (ratio[0, 0, 0].max() - ratio[0, 0, 0].min()).item())
     assert torch.allclose(out, _ref(x), atol=0.05, rtol=0.05)
+
+
+def test_debug_two_tile_rows_one_block(device):
+    """Refinement 1 debug: block_rows=2 on one core (64-row HEIGHT shard, W=512).
+
+    Tile-row 0 is all 1.0 (sumsq = 512, rstd = 1), tile-row 1 is all 2.0 (sumsq = 2048, rstd = 0.5):
+    output must be all ones. Found: tile-row 1 of a multi-row block got a wrong rstd (Phase 0 never
+    put more than one tile-row on a core in its tests).
+    """
+    from eval.sharding import shard_config
+
+    x = torch.ones(1, 1, 64, 512)
+    x[..., 32:, :] = 2.0
+    mc = shard_config(
+        [64, 512], (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
+    )
+    tx = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = ttnn.MathFidelity.HiFi4
+    cfg.fp32_dest_acc_en = True
+    out = ttnn.to_torch(rms_norm(tx, compute_kernel_config=cfg)).float()
+    assert torch.allclose(
+        out, torch.ones_like(out), atol=1e-2
+    ), f"tile-row maxes {out[0,0].reshape(2,32,512).amax((1,2))}"

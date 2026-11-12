@@ -40,6 +40,11 @@ CB_OUT = 7  # output tiles (TILE only)
 CB_OUT_RM = 8  # untilized output (RM only)
 CB_IDS = [CB_X_RM, CB_X, CB_REDUCE_MASK, CB_SUMSQ, CB_RSTD, CB_GAMMA, CB_NORMED, CB_OUT, CB_OUT_RM]
 
+# x / out placement (dataflow CT arg):
+PLACEMENT_INTERLEAVED = 0  # TensorAccessor reads/writes (DRAM or L1 interleaved)
+PLACEMENT_RESIDENT = 1  # HEIGHT_SHARDED, CBs backed by the shards (zero-copy)
+PLACEMENT_LOCAL_STICKS = 2  # HEIGHT_SHARDED RM whose shard is not tilize-consumable in place
+
 # Depth (in chunks) of every streaming window: cb_x_rm, cb_gamma, cb_out, cb_out_rm.
 STREAM_DEPTH = 2
 # Granularity floor of a W chunk (whole tiles, >= 8 per NoC batch; catalog `double_buffer`).
@@ -82,6 +87,29 @@ class _Geometry:
         self.x_elem = x.element_size()
         self.out_elem = out.element_size()
         self.g_elem = gamma.element_size() if self.has_gamma else 0
+        self.gamma_tiled = self.has_gamma and gamma.layout == ttnn.TILE_LAYOUT
+
+        # ---- placement (regime R1 interleaved | R6 HEIGHT_SHARDED in place) ----
+        self.is_sharded = x.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        self.stick_page_bytes = x.buffer_aligned_page_size() if self.is_rm else 0
+        if self.is_sharded:
+            spec = x.memory_config().shard_spec
+            self.shard_h = int(spec.shape[0])  # rows (TILE: multiple of 32; RM: sticks)
+            shard_w = int(spec.shape[1])
+            # TILE: the shard spans the padded row; RM: the (page-granule padded) row.
+            if (shard_w != self.tensor_w_tiles * TILE) if not self.is_rm else (shard_w < self.W):
+                raise NotImplementedError(f"rms_norm: HEIGHT_SHARDED shard width {shard_w} must span the whole row")
+            self.shard_grid = spec.grid
+            self.shard_row_wise = spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+            # RM shard is tilize-consumable in place only when its stick stride is exactly Wc*32 elements
+            # and every tile-row of the shard allocation is whole (32 sticks); otherwise the reader
+            # restrides the resident sticks into cb_x_rm (local L1 copy, no DRAM).
+            self.rm_in_place = self.is_rm and self.w_partial_elems == 0 and self.shard_h % TILE == 0
+        else:
+            self.shard_h = 0
+            self.rm_in_place = False
+        # cb_x (TILE) / cb_x_rm + cb_out_rm (RM in place) / cb_out (TILE) are the resident shards.
+        self.x_resident = self.is_sharded and (not self.is_rm or self.rm_in_place)
 
 
 def _n_sq(g: _Geometry, core_w_tiles: int) -> int:
@@ -99,9 +127,11 @@ def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int) -> int:
     c = math.ceil(core_w_tiles / K)
     row_stride = K * c
     p = 1 if g.w_partial_elems else 0
-    f = r * row_stride * g.s_x  # cb_x
-    if g.is_rm:
-        f += STREAM_DEPTH * c * g.s_x  # cb_x_rm
+    f = 0
+    if g.is_rm or not g.x_resident:
+        f += r * row_stride * g.s_x  # cb_x (TILE sharded: the resident input shard, not allocated)
+    if g.is_rm and not g.x_resident:
+        f += STREAM_DEPTH * c * g.s_x  # cb_x_rm (RM in place: the resident input shard)
     f += p * g.s_f  # cb_reduce_mask (fp32, matches cb_sumsq's srcB format)
     f += r * g.s_f  # cb_rstd
     f += r * _n_sq(g, core_w_tiles) * g.s_f  # cb_sumsq
@@ -109,12 +139,15 @@ def _footprint(g: _Geometry, core_w_tiles: int, r: int, K: int) -> int:
         f += r * c * g.s_f  # cb_normed
     if g.has_gamma:
         f += STREAM_DEPTH * c * g.s_g  # cb_gamma
-    f += STREAM_DEPTH * c * g.s_o  # cb_out | cb_out_rm
+    if not g.x_resident:
+        f += STREAM_DEPTH * c * g.s_o  # cb_out | cb_out_rm (resident output shard when x_resident)
     return f
 
 
 def _select_blocks(g: _Geometry, core_w_tiles: int, rows_cap: int, budget: int):
     """Block-selection function of op_design.md: maximize block_rows, then minimize num_w_chunks."""
+    if g.x_resident:
+        return _select_resident_blocks(g, core_w_tiles, rows_cap, budget)
     c_floor = min(core_w_tiles, W_CHUNK_FLOOR_TILES)
     k_floor = math.ceil(core_w_tiles / c_floor)
     if _footprint(g, core_w_tiles, 1, k_floor) > budget:
@@ -134,6 +167,24 @@ def _select_blocks(g: _Geometry, core_w_tiles: int, rows_cap: int, budget: int):
     return r, c, K
 
 
+def _select_resident_blocks(g: _Geometry, core_w_tiles: int, rows_cap: int, budget: int):
+    """R6: x / out are the resident shards (row stride Wc, output produced in place in row-major order).
+
+    Preferred: K = 1 (whole row per chunk) and the largest block_rows that fits — the whole shard when
+    it fits. When even one whole-row chunk does not fit (wide rows: cb_normed is r*c fp32 tiles), fall
+    back to block_rows = 1 with W chunks: c must divide Wc so the chunk grid lands exactly on the shard's
+    row stride, and r = 1 keeps the chunk-major pack order equal to the shard's row-major order.
+    """
+    for r in range(rows_cap, 0, -1):
+        if _footprint(g, core_w_tiles, r, 1) <= budget:
+            return r, core_w_tiles, 1
+    if not g.is_rm:  # RM resident tilizes whole rows in place; the caller falls back to LOCAL_STICKS
+        for c in range(core_w_tiles - 1, 0, -1):
+            if core_w_tiles % c == 0 and _footprint(g, core_w_tiles, 1, core_w_tiles // c) <= budget:
+                return 1, c, core_w_tiles // c
+    raise NotImplementedError("rms_norm: row too wide for single-core residency; needs W-split regime R3")
+
+
 def _cb(index, num_pages, page_size, data_format, core_ranges):
     return ttnn.CBDescriptor(
         total_size=num_pages * page_size,
@@ -146,12 +197,41 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     g = _Geometry(x, gamma, out)
     device = x.device()
 
-    # ---------------- work distribution (rows over the full grid) ----------------
-    grid = device.compute_with_storage_grid_size()
-    (num_cores, all_cores, core_group_1, core_group_2, rows_per_core_1, rows_per_core_2) = ttnn.split_work_to_cores(
-        grid, g.tensor_rows_tiles, row_wise=True
-    )
-    rows_cap = max(rows_per_core_1, rows_per_core_2)
+    # ---------------- work distribution ----------------
+    # Per core: (core, start_tile_row, num_tile_rows, stick_base, stick_end).
+    #   interleaved (R1): tile-rows split over the full grid (split_work_to_cores).
+    #   HEIGHT_SHARDED (R6): the shard grid IS the split — core i owns shard i (ragged last shard).
+    # RM tile-rows are core-local: tile-row t covers sticks [stick_base + 32t, min(+32, stick_end)).
+    work = []
+    if g.is_sharded:
+        all_cores = g.shard_grid
+        for i, core in enumerate(ttnn.corerange_to_cores(all_cores, None, g.shard_row_wise)):
+            if g.is_rm:
+                stick_base = min(i * g.shard_h, g.num_valid_sticks)
+                stick_end = min(stick_base + g.shard_h, g.num_valid_sticks)
+                n = math.ceil((stick_end - stick_base) / TILE)
+                start = 0
+            else:
+                tr = g.shard_h // TILE
+                start = min(i * tr, g.tensor_rows_tiles)
+                n = min(tr, g.tensor_rows_tiles - start)
+                stick_base = stick_end = 0
+            work.append((core, start, n, stick_base, stick_end))
+        assert sum(w[2] for w in work) >= 1
+    else:
+        grid = device.compute_with_storage_grid_size()
+        (_, all_cores, core_group_1, core_group_2, rows_per_core_1, rows_per_core_2) = ttnn.split_work_to_cores(
+            grid, g.tensor_rows_tiles, row_wise=True
+        )
+        start = 0
+        for group, per_core in ((core_group_1, rows_per_core_1), (core_group_2, rows_per_core_2)):
+            if per_core == 0:
+                continue
+            for core in ttnn.corerange_to_cores(group, None, True):
+                work.append((core, start, per_core, start * TILE, g.num_valid_sticks))
+                start += per_core
+        assert start == g.tensor_rows_tiles
+    rows_cap = max(1, max(w[2] for w in work))
 
     # ---------------- block selection ----------------
     core_w_tiles = g.tensor_w_tiles  # R1: each core owns the whole row
@@ -160,19 +240,39 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     # every L1-resident tensor, including the freshly allocated output), minus a safety margin.
     l1_view = ttnn.device.get_memory_view(device, ttnn.BufferType.L1)
     budget = l1_view.largest_contiguous_bytes_free_per_bank - L1_SAFETY_MARGIN
+    if g.rm_in_place and _footprint(g, core_w_tiles, 1, 1) > budget:
+        # Whole-row in-place tilize does not fit: restride the resident sticks instead (W chunks allowed).
+        g.rm_in_place = g.x_resident = False
     block_rows, w_chunk_tiles, num_w_chunks = _select_blocks(g, core_w_tiles, rows_cap, budget)
     row_stride_tiles = num_w_chunks * w_chunk_tiles
 
     # ---------------- circular buffers ----------------
     fp32 = ttnn.float32
+
+    def _resident(index, tensor, page_size):
+        # Zero-copy CB over the tensor's local shard; tile-sized pages so CB credit counts tiles.
+        desc = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
+        desc.format_descriptors = [
+            ttnn.CBFormatDescriptor(buffer_index=index, data_format=tensor.dtype, page_size=page_size)
+        ]
+        return desc
+
     cbs = [
-        _cb(CB_X, block_rows * row_stride_tiles, g.s_x, x.dtype, all_cores),
         _cb(CB_SUMSQ, block_rows * _n_sq(g, core_w_tiles), g.s_f, fp32, all_cores),
         _cb(CB_RSTD, block_rows, g.s_f, fp32, all_cores),
     ]
+    if g.is_rm or not g.x_resident:
+        cbs.append(_cb(CB_X, block_rows * row_stride_tiles, g.s_x, x.dtype, all_cores))
     if g.is_rm:
-        cbs.append(_cb(CB_X_RM, STREAM_DEPTH * w_chunk_tiles, g.s_x, x.dtype, all_cores))
-        cbs.append(_cb(CB_OUT_RM, STREAM_DEPTH * w_chunk_tiles, g.s_o, out.dtype, all_cores))
+        if g.x_resident:
+            cbs.append(_resident(CB_X_RM, x, g.s_x))
+            cbs.append(_resident(CB_OUT_RM, out, g.s_o))
+        else:
+            cbs.append(_cb(CB_X_RM, STREAM_DEPTH * w_chunk_tiles, g.s_x, x.dtype, all_cores))
+            cbs.append(_cb(CB_OUT_RM, STREAM_DEPTH * w_chunk_tiles, g.s_o, out.dtype, all_cores))
+    elif g.x_resident:
+        cbs.append(_resident(CB_X, x, g.s_x))
+        cbs.append(_resident(CB_OUT, out, g.s_o))
     else:
         cbs.append(_cb(CB_OUT, STREAM_DEPTH * w_chunk_tiles, g.s_o, out.dtype, all_cores))
     if g.w_partial_elems:
@@ -189,16 +289,18 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
     x_addr = x.buffer_address()
     gamma_addr = gamma.buffer_address() if g.has_gamma else 0
     out_addr = out.buffer_address()
-    start = 0
-    for group, per_core in ((core_group_1, rows_per_core_1), (core_group_2, rows_per_core_2)):
-        if per_core == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            reader_rt[core.x][core.y] = [x_addr, gamma_addr, start, per_core, w_tile_start]
-            writer_rt[core.x][core.y] = [out_addr, start, per_core, w_tile_start]
-            compute_rt[core.x][core.y] = [per_core]
-            start += per_core
-    assert start == g.tensor_rows_tiles
+    for core, start, n, stick_base, stick_end in work:
+        reader_rt[core.x][core.y] = [x_addr, gamma_addr, start, n, w_tile_start, stick_base, stick_end]
+        writer_rt[core.x][core.y] = [out_addr, start, n, w_tile_start, stick_base, stick_end]
+        compute_rt[core.x][core.y] = [n]
+
+    # x / out placement as seen by the dataflow kernels (single source for reader and writer).
+    if not g.is_sharded:
+        placement = PLACEMENT_INTERLEAVED
+    elif g.x_resident:
+        placement = PLACEMENT_RESIDENT
+    else:
+        placement = PLACEMENT_LOCAL_STICKS
 
     # ---------------- kernels ----------------
     blocking_ct = [block_rows, w_chunk_tiles, num_w_chunks, core_w_tiles]
@@ -215,6 +317,9 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
             g.num_valid_sticks,
             g.x_elem,
             g.g_elem,
+            placement,
+            int(g.gamma_tiled),
+            g.stick_page_bytes,
         ]
     )
     reader_ct.extend(ttnn.TensorAccessorArgs(x).get_compile_time_args())
@@ -224,7 +329,11 @@ def create_program_descriptor(x, gamma, out, epsilon, compute_config) -> ttnn.Pr
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
 
-    writer_ct = CB_IDS + blocking_ct + [g.tensor_w_tiles, int(g.is_rm), g.W, g.num_valid_sticks, g.out_elem]
+    writer_ct = (
+        CB_IDS
+        + blocking_ct
+        + [g.tensor_w_tiles, int(g.is_rm), g.W, g.num_valid_sticks, g.out_elem, placement, g.stick_page_bytes]
+    )
     writer_ct.extend(ttnn.TensorAccessorArgs(out).get_compile_time_args())
 
     compute_ct = (
