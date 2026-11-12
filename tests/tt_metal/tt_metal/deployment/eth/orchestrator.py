@@ -1,24 +1,36 @@
+import os
 import shlex
+import asyncio
 import sqlite3
 import threading
 import configparser
 
-from time import time
+import result_parser
+
 from pathlib import Path
+from time import time, sleep
+from threading import Thread
 from argparse import ArgumentParser
 from dataclasses import dataclass, field
-from typing import Union, Optional, Iterator
+from typing import Union, Optional, Iterator, TypeAlias, cast
 
-from pssh.clients import ParallelSSHClient
 from pssh.config import HostConfig
+from pssh.output import HostOutput
 from pssh.utils import enable_host_logger
+from pssh.clients import ParallelSSHClient
 
-from gevent import joinall, spawn
 from gevent.queue import Queue
+from gevent import joinall, spawn
+from gevent.os import make_nonblocking, nb_write
 
 from typed_configparser import ConfigParser
 
+from result_parser import process_logs
 from testenums import TestCase, DistTestCase, prepare_filter
+
+result_parser.print_logs = False
+
+Buffer: TypeAlias = bytes | bytearray | memoryview
 
 
 @dataclass
@@ -108,7 +120,27 @@ def envtostr(e: dict[str, str | int]) -> str:
     return " ".join(f"{k}={shlex.quote(str(e[k]))}" for k in e)
 
 
-def run_single(host: HostSettings, argv: str, env: dict[str, str | int]) -> tuple[int]:
+def write_all(fd: int, data: Buffer):
+    view = memoryview(data)
+    while view:
+        n = nb_write(fd, view)
+        view = view[n:]
+
+
+def handle_output(h: HostSettings, host_output: HostOutput, wfd: Optional[int] = None):
+    host = h.hostname
+    for line in host_output.stdout:
+        assert isinstance(line, str)
+        print(f"[{host:<15}] {line}")
+        if wfd:
+            write_all(wfd, (line + "\n").encode("utf-8"))
+    for line in host_output.stderr:
+        assert isinstance(line, str)
+        print(f"[err {host:<11}] {line}")
+    print(f"{host:<15} exit code: {host_output.exit_code}")
+
+
+def run_single(host: HostSettings, argv: str, env: dict[str, str | int], wfd: Optional[int] = None) -> tuple[int]:
     hostnames = [host.hostname]
     hostconfigs = [host.host_config]
 
@@ -119,15 +151,7 @@ def run_single(host: HostSettings, argv: str, env: dict[str, str | int]) -> tupl
     e = envtostr(env)
     outputs = client.run_command(f"cd %s && {e} {argv}", host_args=args)
 
-    def handle_output(h: HostSettings, host_output):
-        host = h.hostname
-        for line in host_output.stdout:
-            print(f"[{host:<15}] {line}")
-        for line in host_output.stderr:
-            print(f"[err {host:<11}] {line}")
-        print(f"{host:<15} exit code: {host_output.exit_code}")
-
-    readers = [spawn(handle_output, host, host_output) for host, host_output in zip([host], outputs)]
+    readers = [spawn(handle_output, host, host_output, wfd) for host, host_output in zip([host], outputs)]
 
     joinall(readers)
     client.join(outputs)
@@ -135,7 +159,13 @@ def run_single(host: HostSettings, argv: str, env: dict[str, str | int]) -> tupl
     return tuple(host_output.exit_code for host_output in outputs)
 
 
-def run_pair(hosts: tuple[HostSettings, HostSettings], argv: str, env: dict[str, str | int], sync: bool = True) -> tuple[int, int]:
+def run_pair(
+    hosts: tuple[HostSettings, HostSettings],
+    argv: str,
+    env: dict[str, str | int],
+    wfd: Optional[int] = None,
+    sync: bool = True,
+) -> tuple[int, int]:
     hostnames = [h.hostname for h in hosts]
     hostconfigs = [h.host_config for h in hosts]
 
@@ -150,15 +180,7 @@ def run_pair(hosts: tuple[HostSettings, HostSettings], argv: str, env: dict[str,
     outputs = client.run_command(f"cd %s && {e} {argv}", host_args=args)
     # outputs = client.run_command("cd %s && for i in $(seq 10); do echo $i; sleep .4; done # sh run2.sh %d", host_args=args)
 
-    def handle_output(h: HostSettings, host_output):
-        host = h.hostname
-        for line in host_output.stdout:
-            print(f"[{host:<15}] {line}")
-        for line in host_output.stderr:
-            print(f"[err {host:<11}] {line}")
-        print(f"{host:<15} exit code: {host_output.exit_code}")
-
-    readers = [spawn(handle_output, host, host_output) for host, host_output in zip(hosts, outputs)]
+    readers = [spawn(handle_output, host, host_output, wfd) for host, host_output in zip(hosts, outputs)]
 
     joinall(readers)
     client.join(outputs)
@@ -167,7 +189,12 @@ def run_pair(hosts: tuple[HostSettings, HostSettings], argv: str, env: dict[str,
 
 
 def test_one(
-    db: sqlite3.Connection, host: HostSettings, test: TestCase, links: Optional[str], precompile=False
+    db: sqlite3.Connection,
+    host: HostSettings,
+    test: TestCase,
+    links: Optional[str],
+    precompile=False,
+    wfd: Optional[int] = None,
 ) -> bool:
     # endpoint_pairs = getlinks(db, *[h.hostname for h in host])  # TODO
     # if len(endpoint_pairs) == 0:
@@ -191,7 +218,7 @@ def test_one(
             print(f"Kernel precompilation failed with exit code: {', '.join(str(e) for e in exitcodes)}")
             return False
 
-    exitcodes = run_single(host, cmd, env)
+    exitcodes = run_single(host, cmd, env, wfd)
     if sum(exitcodes) > 0:
         print(f"Test run failed with exit code: {', '.join(str(e) for e in exitcodes)}")
         return False
@@ -200,7 +227,12 @@ def test_one(
 
 
 def test_pair(
-    db: sqlite3.Connection, hosts: tuple[HostSettings, HostSettings], test: DistTestCase, links: str, precompile=True
+    db: sqlite3.Connection,
+    hosts: tuple[HostSettings, HostSettings],
+    test: DistTestCase,
+    links: str,
+    precompile=True,
+    wfd: Optional[int] = None,
 ) -> bool:
     endpoint_pairs = getlinks(db, *[h.hostname for h in hosts])  # TODO
     if len(endpoint_pairs) == 0:
@@ -228,7 +260,7 @@ def test_pair(
             print(f"Kernel precompilation failed with exit codes: {', '.join(str(e) for e in exitcodes)}")
             return False
 
-    exitcodes = run_pair(hosts, cmd, env)
+    exitcodes = run_pair(hosts, cmd, env, wfd)
     if sum(exitcodes) > 0:
         print(f"Test run failed with exit codes: {', '.join(str(e) for e in exitcodes)}")
         return False
@@ -242,24 +274,81 @@ def pairs(hosts: list[HostSettings]) -> Iterator[tuple[HostSettings, HostSetting
             yield hosts[i], hosts[j]
 
 
-def test_single(db: sqlite3.Connection, tests: list[TestCase], hosts: list[HostSettings], links: Optional[str]) -> bool:
+def test_single(
+    db: sqlite3.Connection, tests: list[TestCase], hosts: list[HostSettings], links: Optional[str], wfd: Optional[int]
+) -> bool:
     test_pass = True
     for h in hosts:
         for t in tests:
             print(f"Testing {t} on {h.hostname}")
-            test_pass = test_pass and test_one(db, h, t, links)  # TODO: In parallel
+            test_pass = test_pass and test_one(db, h, t, links, wfd=wfd)  # TODO: In parallel
 
     return test_pass
 
 
-def test_dist(db: sqlite3.Connection, tests: list[DistTestCase], hosts: list[HostSettings], links: str) -> bool:
+def test_dist(
+    db: sqlite3.Connection, tests: list[DistTestCase], hosts: list[HostSettings], links: str, wfd: Optional[int]
+) -> bool:
     test_pass = True
     for p in pairs(hosts):
         for t in tests:
             print(f"Testing {t} on {p[0].hostname} <-> {p[1].hostname}")
-            test_pass = test_pass and test_pair(db, p, t, links)  # TODO: In parallel
+            test_pass = test_pass and test_pair(db, p, t, links, wfd=wfd)  # TODO: In parallel
 
     return test_pass
+
+
+def batch_worker(q: Queue):
+    done = False
+    while not done:
+        batch = []
+        while not q.empty():
+            data = q.get_nowait()
+            if data == "DONE":
+                done = True
+                break
+            batch.append(data)
+
+        if batch:
+            print(batch)
+        else:
+            sleep(0.1)
+
+
+def prepare_db_thread(rfd: int) -> tuple[Thread, Thread]:
+    q = Queue()
+
+    async def runner():
+        print("running in asyncio thread")
+        pipe = os.fdopen(rfd, "rb", buffering=0)
+
+        reader = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(reader)
+        transport, _ = await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, pipe)
+
+        try:
+            runs = await process_logs(reader, None, q)
+        finally:
+            pass
+
+        q.put("DONE")
+        transport.close()
+
+    threads = (
+        Thread(target=lambda: asyncio.run(runner())),
+        Thread(target=batch_worker, args=[q]),
+    )
+
+    for t in threads:
+        t.start()
+
+    return threads
+
+
+def wait_for_threads(threads: tuple[Thread, Thread], wfd: int):
+    os.close(wfd)
+    for t in threads:
+        t.join()
 
 
 def main() -> int:
@@ -287,12 +376,19 @@ def main() -> int:
 
     links = opts.l
 
+    rfd, wfd = os.pipe()
+    make_nonblocking(wfd)
+
+    threads = prepare_db_thread(rfd)
+
     test_pass = True
     if opts.t in [t.value for t in TestCase]:
-        test_pass = test_pass and test_single(db, [TestCase(opts.t)], hs, links)
+        test_pass = test_pass and test_single(db, [TestCase(opts.t)], hs, links, wfd)
 
     if opts.t in [t.value for t in DistTestCase]:
-        test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links)
+        test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links, wfd)
+
+    wait_for_threads(threads, wfd)
 
     return 0 if test_pass else 1
 

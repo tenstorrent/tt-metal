@@ -136,7 +136,8 @@ def publish_link(test, link: TestedLink, srcsn, dstsn, q: Queue):
         "errors": link.errors,
     }
     q.put(payload)
-    print(json.dumps(payload, indent=4), link)
+    if print_logs:
+        print(json.dumps(payload, indent=4), link)
 
 
 def parse_teststart(l: str) -> Optional[Event]:
