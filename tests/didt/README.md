@@ -112,10 +112,14 @@ pytest "tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_Hi
 ```
 
 `nd_origin_sweep.sh` runs a set of windows and prints PASS / HANG / ND per window. It resets the galaxy after a hang.
+On one chip of a p150/p300 host, set the mesh, the chip, its grid and the reset. With `MESH=1chips` the script sets
+`TT_MESH_GRAPH_DESC_PATH` to the p150 mesh graph descriptor, which one ASIC of a p300 needs; set it yourself for a
+direct pytest run.
 
 ```bash
 tests/didt/nd_origin_sweep.sh                 # col excl rows: suspect column alone, chip without it, each row alone
 BAD_X=5 tests/didt/nd_origin_sweep.sh rows    # one case only; other settings are listed at the top of the script
+MESH=1chips TT_VISIBLE_DEVICES=3 GX=11 RESET="tt-smi -r" tests/didt/nd_origin_sweep.sh
 ```
 
 With M = N, in0 moves along each row from core (0,y) on NOC_1, and in1 moves down each column from core (x,0) on NOC_0.
