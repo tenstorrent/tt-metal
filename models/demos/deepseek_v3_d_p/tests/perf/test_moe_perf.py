@@ -70,8 +70,8 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # CI LoudBox (bh_loudbox) run 40424867859, 2026-10-27. A 23-run cut of this slot had sd 0.6%.
-        expected_ns_8x1=2_951_400,
+        # Mean of 4 CI LoudBox runs on main, 42248381694 through 42389135888 (2,719,426-2,771,991 ns, sd 0.9%).
+        expected_ns_8x1=2_757_700,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
         # CI LoudBox (bh_loudbox) run 40424867859, 2026-10-27.

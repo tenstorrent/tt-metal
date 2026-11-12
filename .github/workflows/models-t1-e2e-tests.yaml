@@ -36,6 +36,7 @@ on:
           - deepseek-v3-tg
           - deepseek-v3-b1
           - z-image-turbo
+          - ideogram-4
           - resnet50
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"

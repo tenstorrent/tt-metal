@@ -23,10 +23,11 @@ void bind_interleaved_to_sharded_partial(nb::module_& mod) {
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): input tensor. Must be TILE layout with the standard 32x32 tile.
             * :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
+            * :attr:`shard_shape` (List[int]): Shape [height, width] of each shard, in elements. Both must be greater than 0.
             * :attr:`num_slices` (int): Number of slices.
             * :attr:`slice_index` (int): Slice index.
             * :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-            * :attr:`shard_orienttion` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
+            * :attr:`shard_orientation` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
 
         Keyword Args:
             * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
