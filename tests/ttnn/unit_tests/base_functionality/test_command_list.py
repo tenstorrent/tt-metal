@@ -263,6 +263,106 @@ def test_one_builder_per_device(device, builder, expect_error):
         ttnn.experimental.CommandListBuilder(device)
 
 
+SOFTMAX_SHAPE = (1, 1, 64, 64)
+MASK_SHAPE = (1, 1, 32, 64)
+
+
+def to_device(device, torch_tensor, layout=ttnn.TILE_LAYOUT):
+    return ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+
+
+@pytest.fixture
+def mask(device):
+    return to_device(device, torch.randn(MASK_SHAPE, dtype=torch.bfloat16))
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("by_param", [True, False])
+def test_update_args_changes_input_and_scale(device, builder, command_lists, mask, by_param):
+    input_a = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
+    input_b = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
+    expected_b = ttnn.to_torch(ttnn.scale_mask_softmax(input_b, 0.25, mask))
+    num_entries_before = device.num_program_cache_entries()
+
+    x = ttnn.experimental.CmdListParam(input_a, "x")
+    scale = ttnn.experimental.CmdListParam(0.5, "scale")
+    with builder:
+        out = ttnn.scale_mask_softmax(input_tensor=x, scale=scale, mask=mask)
+    # The eager call created the cache entry; recording bound the hit.
+    assert device.num_program_cache_entries() == num_entries_before + 1
+    command_list = builder.build()
+    command_lists.append(command_list)
+
+    command_list.update_args({x: input_b, scale: 0.25} if by_param else {"x": input_b, "scale": 0.25})
+    command_list.enqueue(blocking=True)
+    assert torch.equal(ttnn.to_torch(out), expected_b)
+
+
+@skip_for_slow_dispatch()
+def test_cmd_list_param_runs_with_its_default_outside_recording(device, mask):
+    torch_input = torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16)
+    expected = ttnn.to_torch(ttnn.scale_mask_softmax(to_device(device, torch_input), 0.5, mask))
+    x = ttnn.experimental.CmdListParam(to_device(device, torch_input), "x")
+    out = ttnn.scale_mask_softmax(input_tensor=x, scale=ttnn.experimental.CmdListParam(0.5, "scale"), mask=mask)
+    assert torch.equal(ttnn.to_torch(out), expected)
+
+
+@skip_for_slow_dispatch()
+def test_update_args_rejects_unknown_names_and_kinds(device, builder, command_lists, mask, expect_error):
+    device_input = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
+    with builder:
+        ttnn.scale_mask_softmax(
+            input_tensor=ttnn.experimental.CmdListParam(device_input, "x"),
+            scale=ttnn.experimental.CmdListParam(0.5, "scale"),
+            mask=mask,
+        )
+    command_list = builder.build()
+    command_lists.append(command_list)
+
+    with expect_error(RuntimeError, "Unknown TTNN command-list parameter 'nope'"):
+        command_list.update_args({"nope": 1.0})
+    with expect_error(RuntimeError, "TTNN command-list parameter 'scale' is a scalar"):
+        command_list.update_args({"scale": device_input})
+    with expect_error(RuntimeError, "TTNN command-list parameter 'x' is a tensor"):
+        command_list.update_args({"x": 1.0})
+
+
+@skip_for_slow_dispatch()
+def test_cmd_list_param_must_be_passed_by_keyword(device, builder, mask, expect_error):
+    device_input = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
+    with builder:
+        with expect_error(TypeError, "CmdListParam 'x' must be passed by keyword"):
+            ttnn.scale_mask_softmax(ttnn.experimental.CmdListParam(device_input, "x"), 0.5, mask)
+
+
+@skip_for_slow_dispatch()
+def test_param_the_program_does_not_read_is_reported(device, builder, expect_error):
+    device_input = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
+    with builder:
+        # relu's factory maps no keywords.
+        with expect_error(RuntimeError, r"CmdListParam\(s\) 'x' did not reach any recorded program field"):
+            ttnn.relu(input_tensor=ttnn.experimental.CmdListParam(device_input, "x"))
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize(
+    "shape, layout, message",
+    [
+        # The op tilizes a ROW_MAJOR input into a new tensor.
+        (SOFTMAX_SHAPE, ttnn.ROW_MAJOR_LAYOUT, "is not the tensor the device operation reads"),
+        # The op unsqueezes a 2D input into a 4D view of the same buffer.
+        (SOFTMAX_SHAPE[2:], ttnn.TILE_LAYOUT, "through a view with a different TensorSpec"),
+    ],
+)
+def test_param_the_op_replaces_is_rejected(device, builder, mask, expect_error, shape, layout, message):
+    device_input = to_device(device, torch.randn(shape, dtype=torch.bfloat16), layout=layout)
+    with builder:
+        with expect_error(RuntimeError, message):
+            ttnn.scale_mask_softmax(
+                input_tensor=ttnn.experimental.CmdListParam(device_input, "x"), scale=0.5, mask=mask
+            )
+
+
 @skip_for_slow_dispatch()
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
 def test_trace_capture_fails_while_builder_exists(device, builder, expect_error):
