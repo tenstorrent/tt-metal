@@ -6,9 +6,12 @@
 Subclasses ``MLAPrefillAdapter`` for the shared plumbing and replaces what V4 does differently:
 
 * the config is built from the model-config class (``v4_hf_config``), not read from the checkpoint;
-* there is no ttnn weight cache and no engine-owned KV cache. V4 attention reads its weights off torch
-  modules and keeps its own state, so ``build_runtime`` loads the native checkpoint on host, one layer
-  at a time, and ``allocate_kv_cache`` hands back an empty handle;
+* there is no engine-owned KV cache. V4 attention reads its weights off torch modules and keeps its own
+  state, so ``build_runtime`` loads the native checkpoint on host, one layer at a time, and
+  ``allocate_kv_cache`` hands back an empty handle;
+* the ttnn weight cache is opt-in (set the variant's ``ttnn_cache_env``) and covers only what V4 caches:
+  the norms and the MoE (routed + shared experts, gate). A hit saves the host conversion of those
+  weights; it does not skip reading the checkpoint, since attention still comes off the torch modules;
 * a pipeline rank other than the first may not start inside the hash-routed layers, which need host
   token ids that only the first rank has.
 """
@@ -22,6 +25,8 @@ from typing import Callable, Optional
 
 from loguru import logger
 
+import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
@@ -33,6 +38,8 @@ _TRACE_ROOT = "/mnt/models/deepseek-prefill-cache/golden/structured_traces"
 
 class _DeepSeekV4Adapter(MLAPrefillAdapter):
     default_gate_mode = "DEVICE_FP32"  # applies to the top-k layers; hash layers always take the hash gate
+    # Opt-in: each variant names the env var that points at its cache root. CI sets it to the weka paths
+    # (see tests/pipeline_reorg/blaze_models_prefill_tests.yaml); with it unset nothing is read or written.
     ttnn_cache_default = ""
     config_builder_overrides_checkpoint = True
     prefill_trace_layout = "chunked_group_a_v1"
@@ -53,8 +60,32 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
         """The full-depth config from the model constants; the runner overwrites ``max_seq_len``."""
         return self.config_builder()
 
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
-        return None
+    def weight_cache_path(self, mesh_shape: tuple, checkpoint: Optional[Path] = None) -> Optional[Path]:
+        """The ttnn weight-cache dir, or None when no cache root is configured (or it cannot be created).
+
+        ``<root>/{name}_{arch}_{N}dev/<checkpoint-dir-name>/{sp}x{tp}``: the same ``{name}_{arch}_{N}dev``
+        / ``{sp}x{tp}`` frame as the other adapters, with the checkpoint's directory name between them so
+        that a different checkpoint can never silently load another's tensors (the Kimi-K3 convention).
+        The root is the variant's ``ttnn_cache_env``, else ``PREFILL_TTNN_CACHE``, else ``ttnn_cache_default``.
+
+        ``checkpoint`` defaults to ``checkpoint_path()``; a test that resolves its own checkpoint passes it so
+        the cache is keyed by the weights it actually loads.
+        """
+        env_name = getattr(self, "ttnn_cache_env", None) or ""
+        root = os.environ.get(env_name) or os.environ.get("PREFILL_TTNN_CACHE") or self.ttnn_cache_default
+        if not root:
+            return None
+        checkpoint = Path(checkpoint) if checkpoint is not None else self.checkpoint_path()
+        arch = "bh" if is_blackhole() else "wh"
+        sp, tp = mesh_shape
+        path = Path(root) / f"{self.name}_{arch}_{ttnn.get_num_devices()}dev" / checkpoint.name / f"{sp}x{tp}"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:  # e.g. a user outside the cache-writers group: run uncached rather than fail
+            logger.warning(f"DeepSeek-V4 weight cache disabled: cannot create {path}: {exc}")
+            return None
+        logger.info(f"DeepSeek-V4 ttnn weight cache: {path}")
+        return path
 
     def checkpoint_path(self) -> Path:
         from models.demos.deepseek_v3_d_p.tt.v4.weights import CHECKPOINT_INDEX
@@ -100,7 +131,7 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
             topology=topology,
             capacity_factor=params.capacity_factor,
             gate_fallback_mode=GateComputeMode[params.gate_mode_name],
-            weight_cache_path=None,
+            weight_cache_path=params.weight_cache_path,
             model_cfg=self.model_config,
             first_layer_idx=params.first_layer_idx,
             is_first_rank=params.is_first_rank,
@@ -123,6 +154,7 @@ class DeepSeekV4ProAdapter(_DeepSeekV4Adapter):
     hf_model_default = f"{_CHECKPOINT_ROOT}/DeepSeek-V4-Pro-0813-dequantized"
     prefill_trace_default = f"{_TRACE_ROOT}/v4_pro_55K_partial_trace/trace_v4_pro_full"
     env_var = "V4_PRO_HF_MODEL"
+    ttnn_cache_env = "TT_DSV4_PRO_PREFILL_TTNN_CACHE"
 
 
 class DeepSeekV4FlashAdapter(_DeepSeekV4Adapter):
@@ -131,3 +163,4 @@ class DeepSeekV4FlashAdapter(_DeepSeekV4Adapter):
     hf_model_default = f"{_CHECKPOINT_ROOT}/DeepSeek-V4-Flash-0731-dequantized"
     prefill_trace_default = f"{_TRACE_ROOT}/v4_flash_55K_partial_trace/trace_v4_flash_full"
     env_var = "V4_FLASH_HF_MODEL"
+    ttnn_cache_env = "TT_DSV4_FLASH_PREFILL_TTNN_CACHE"

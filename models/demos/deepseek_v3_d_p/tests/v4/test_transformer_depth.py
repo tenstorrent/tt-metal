@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.v4.helpers import (
     streams_to_host,
     upload_tokens,
 )
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4 import DeepSeekV4FlashAdapter, DeepSeekV4ProAdapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 from models.demos.deepseek_v3_d_p.tt.v4.weights import (
@@ -57,6 +58,8 @@ CHUNK = PREFILL_CHUNK_TOKENS
 SEQ_CACHE = 55 * 1024  # 56320, the length the golden was captured at
 N_CHUNKS = SEQ_CACHE // CHUNK
 _GOLDEN = {DeepSeekV4ProConfig: golden.V4_PRO, DeepSeekV4FlashConfig: golden.V4_FLASH}
+# Each variant's adapter owns its weight-cache env var (TT_DSV4_{FLASH,PRO}_PREFILL_TTNN_CACHE) and layout.
+_ADAPTER = {DeepSeekV4ProConfig: DeepSeekV4ProAdapter, DeepSeekV4FlashConfig: DeepSeekV4FlashAdapter}
 _HEAD = "head.weight"
 _PRO_HEAD = 10  # layers 0..9, the ones the trace keeps before the last
 _PRO_TAIL = ((_PRO_HEAD, 26), (36, 25))  # (first, count) of each process after the head
@@ -145,6 +148,9 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
 
     config = v4_hf_config(model_config, last, max_seq_len=SEQ_CACHE)
     n, hidden = config.hc_mult, config.hidden_size
+    # None unless the variant's cache env var is set. When set, the norms and the MoE (gate, routed and shared
+    # experts) write their ttnn tensors here on a miss and load them on a hit, keyed by this checkpoint.
+    weight_cache_path = _ADAPTER[model_config]().weight_cache_path(tuple(mesh_device.shape), checkpoint)
     t0 = time.monotonic()
     state_dict = v4_model_from_checkpoint(config, checkpoint, load_embed=is_first, load_tail=is_last)
     state_dict["layers"] = V4CheckpointLayers(config, checkpoint, first, count)
@@ -162,6 +168,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         num_links=num_links,
         topology=per_axis_topology(device_params["fabric_config"]),
         slot_num=_SLOTS,
+        weight_cache_path=weight_cache_path,
     )
     del state_dict
     logger.info(f"built layers [{first}, {last}) with {_SLOTS} user slots in {(time.monotonic() - t0) / 60:.1f} min")
