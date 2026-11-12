@@ -42,9 +42,10 @@ VISION_GRIDS = {
     # with one 256-key chunk, 240 of its keys masked
     "h4w4": (1, 4, 4),
 }
-# The grids that the CI entry "MiniMax-M3 vision unit tests (1-card)" runs. h40w54 covers partial row tiles and the RoPE
-# op's reload kernels, which h16w16 does not. M3_VISION_ALL_GRIDS=1 adds the other grids, left out rather than skipped.
-CI_GRIDS = ("h16w16", "h40w54")
+# The grids that the CI entry "MiniMax-M3 vision unit tests (1-card)" runs. On the 11x10, 12x10 and 13x10 core grids,
+# h36w36 covers what h16w16 does not: transposed matmul splits, the MLP's shards, partial row tiles, padded SDPA keys
+# and the RoPE op's reload kernels. M3_VISION_ALL_GRIDS=1 adds the other grids, left out rather than skipped.
+CI_GRIDS = ("h16w16", "h36w36")
 # The attention test also runs h18w18 in CI, where SDPA masks 188 of its 512 padded keys, the largest share in CI.
 ATTENTION_CI_GRIDS = CI_GRIDS + ("h18w18",)
 # The CI grids of the tower test of L1 against DRAM. Both use L1 on 11x10, 12x10 and 13x10, and h36w36 shards the MLP.
