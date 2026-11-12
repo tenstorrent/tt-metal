@@ -2449,6 +2449,7 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
     const uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
 
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     const auto& impl = program.impl();
