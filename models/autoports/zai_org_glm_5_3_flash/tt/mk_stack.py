@@ -88,13 +88,42 @@ class AllocPool:
         self.prefixed = set()  # ... of them, the bases handed as a prefix view (a later key match on one = a collision)
         self.real = {}  # per key: the real tensors this build has taken (a prefix-served request takes none)
         self.prefix_slots, self.prefix_base = {}, {}  # (key, request index, shape) -> its prefix view's key -> base
+        # lend_from (GLM53_DSA_POOL_BORROW): another pool whose tensors this one takes before allocating its own, and
+        # the claims set (tensor ids) it shares with every other borrower of that lender (its child included)
+        self.lender, self.claims = None, None
 
     def child(self) -> "AllocPool":
         """a separate pool (the layers' persistent hand-off buffers: never aliased with a build's intermediates)"""
         if self._child is None:
             self._child = AllocPool()
+            if self.lender is not None:  # the same lender; the shared claims keep the two pools' takes disjoint
+                self._child.lend_from(self.lender, self.claims)
         self._child.alias = self.alias
         return self._child
+
+    def lend_from(self, lender: "AllocPool", claims: set | None = None) -> None:
+        """GLM53_DSA_POOL_BORROW (stack_model._dsa_pools): a request this pool has no tensor of its own for takes an
+        UNCLAIMED tensor of the same key from `lender`'s lists before it allocates. Sound when the two pools' programs
+        never overlap in time and every tensor of both is a pure build intermediate (written before it is read inside
+        each program): the KDA stacks' pool (its persistent hand-offs live in its CHILD, never lent) and the sparse_dsa
+        MLA / MoE programs, which run between the stacks, never inside one. The lender's state (lists, counts, alias
+        bases) is never touched; `claims` (shared with this pool's child) hands each lent tensor to ONE borrower, so the
+        MLA -> MoE hand-off s1 (the child's) never shares a buffer with an MLA / MoE intermediate."""
+        assert lender is not self
+        self.lender = lender
+        self.claims = claims if claims is not None else set()
+        if self._child is not None and self._child.lender is None:
+            self._child.lend_from(lender, self.claims)
+
+    def _borrow(self, k):
+        """an unclaimed tensor of key k from the lender (None: no lender, or every one of that key is claimed)"""
+        if self.lender is None:
+            return None
+        for b in self.lender.lists.get(k, ()):
+            if id(b) not in self.claims:
+                self.claims.add(id(b))
+                return b
+        return None
 
     @staticmethod
     def _padded(shape, a, kw) -> tuple:
@@ -119,7 +148,8 @@ class AllocPool:
         self.counts[k] = i + 1
         lst = self.lists.setdefault(k, [])
         if i == len(lst):
-            lst.append(self.orig(shape, *a, **kw))
+            b = self._borrow(k)
+            lst.append(b if b is not None else self.orig(shape, *a, **kw))
         self._take(lst[i])
         return lst[i]
 
@@ -139,6 +169,9 @@ class AllocPool:
             return self._take_prefix(self.prefix_slots[pk])
         lst = self.lists.setdefault(k, [])
         j = self.real.get(k, 0)  # the request's index among this key's REAL tensors (prefix-served ones skip it)
+        b = self._borrow(k) if j == len(lst) else None  # a lender's tensor of this padded key first (no new L1)
+        if b is not None:
+            lst.append(b)
         if j == len(lst):  # nothing of this padded shape left to alias
             vk = self._prefix_alias(want, pad, k)
             if vk is not None:

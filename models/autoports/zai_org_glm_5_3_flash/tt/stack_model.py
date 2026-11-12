@@ -1005,6 +1005,13 @@ class StackBackend(ModelBackend):
             from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import AllocPool
 
             kv.extra["dsa_pool"] = AllocPool()
+            # GLM53_DSA_POOL_BORROW=1 (L1 diet, 2026-11-12): the DSA pool and its hand-off child take the KDA stacks'
+            # pool tensors of the same key before allocating (mk_stack.AllocPool.lend_from: the two sets of programs
+            # never overlap, both pools hold build intermediates only). The B 16 x 1 M floor binder is the TPMoE program
+            # (static CBs to 1,253,888 on its reader cores, every t); lendable at the first DSA layer (the dense KDA
+            # stack built), estimated: s1 20 KB, the (1,1,t,4096) bf16 trio 12 KB, post / comb / coef 12 KB per bank
+            if os.environ.get("GLM53_DSA_POOL_BORROW", "0") == "1" and kv.extra.get("pool") is not None:
+                kv.extra["dsa_pool"].lend_from(kv.extra["pool"])
         kv.extra["dsa_pool"].alias = kv.extra["pool"].alias
         return kv.extra["dsa_pool"]
 
@@ -1022,12 +1029,31 @@ class StackBackend(ModelBackend):
             del s1
             return
         pool = pools
-        with pool.child():  # s1 from the persistent-hand-off pool: never aliased by a build intermediate
-            s1 = e["mla"].mk.s1_buffer(t)
+        if 1 < t <= 4 and t in self.narrow_widths and os.environ.get("GLM53_DSA_NARROW_S1_DRAM", "0") == "1":
+            # a narrow width's stacked s1 [t, 1, 4, 4096] fp32 in DRAM (20,480 B per L1 bank at t = 4, allocated below
+            # every full-width program: the B 16 x 1 M narrow-4 clash at 1,217,856): the KDA layers' own narrow s1
+            # (mk_layer._narrow_s1_dram, GLM53_MK_S1_DRAM) -- one buffer, the layers never overlap; the writer
+            # (mhc_post writer_p) and the MoE's mhc_pre reader take tensor accessors
+            from models.autoports.zai_org_glm_5_3_flash.tt.mk_layer import _narrow_s1_dram
+
+            s1 = _narrow_s1_dram(self.mesh, t)
+        else:
+            with pool.child():  # s1 from the persistent-hand-off pool: never aliased by a build intermediate
+                s1 = e["mla"].mk.s1_buffer(t)
         with pool:  # the MLA / MoE intermediates alias each other's and the KDA stacks' (one L1 set per step)
             e["mla"](x, latent, pt, pos, t=t, stack=True, dsa_state=dsa_state, s1=s1)
+        rep = os.environ.get("GLM53_L1_REPORT") == "1"
+        seen = self.__dict__.setdefault("_l1_dsa_seen", set())
+        if rep and t not in seen:  # the L1 tensors the first MoE build of width t meets (host-only allocator view)
+            seen.add(t)
+            l1_report(self.mesh, f"sparse_dsa MoE build t={t} (before its first compile)", root=self)
         with pool:
-            e["moe"](s1, t=t, out=out, live=self._moe_live())
+            try:
+                e["moe"](s1, t=t, out=out, live=self._moe_live())
+            except RuntimeError as ex:
+                if rep and "clash with L1 buffers" in str(ex):
+                    l1_report(self.mesh, f"sparse_dsa MoE build t={t}: static-CB clash", root=self)
+                raise
 
     def _step_narrow(self, kv: StackCache, w: int):
         """a narrow width's step: the t = w embed into its stacked residual, the t = w stacks / sparse_dsa programs on
@@ -1037,6 +1063,16 @@ class StackBackend(ModelBackend):
         embed(self.head.topk_out, [rw])
         pool.alias = True
         pools = self._dsa_pools(kv)  # (after the alias flag: the DSA pool mirrors it)
+        # GLM53_STACK_NARROW_PC_DRAM=1 (2 <= w <= 4): the narrow builds' stacked mHC post / comb tiles (w,1,32,32) fp32
+        # in DRAM -- the verify's GLM53_SPEC_PC_DRAM allocator (spec_mtp._pc_dram: written by mhc_pre's root through
+        # accessors, read by no kernel on the packed t <= 4 path): 2 x 4 KB per L1 bank per narrow width, KDA + DSA.
+        # Builds only (the first, eager step); w = 1 is excluded ((1,1,32,32) fp32 is also the fused coef tile's key)
+        pc = None
+        if 2 <= w <= 4 and os.environ.get("GLM53_STACK_NARROW_PC_DRAM", "0") == "1":
+            from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import verify_allocator
+
+            pc = verify_allocator(pool, w, True, pools=() if pools is None else (pools,))
+            pc.__enter__()
         try:
             for r, stk in kv.extra["nstacks"][w]:
                 if stk is None:
@@ -1049,6 +1085,8 @@ class StackBackend(ModelBackend):
                 stk([kv.states[0][i][1] for i in r], masks, [kv.states[0][i][0] for i in r])
         finally:
             pool.alias = False
+            if pc is not None:
+                pc.__exit__(None, None, None)
         head([rw], self.pos, pos_copies=self.pos_c)
 
     def dsa_shard_owners(self, kv: StackCache):

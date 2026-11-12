@@ -116,6 +116,42 @@ Validated at the pool-v3 commit bbe4485aeea (2026-11-09 01:41 / 01:57): 32 K x 4
 (68.7 ms); the later re-validation of the rows is in section 6. Section 6's 4 K row agrees with the 2x4 shard on the
 first 9 ids (the contract rows are the 32 K ones, identical 24/24).
 
+### 7b. The floor with narrow widths / multi-user MTP (2026-11-12, opt-in knobs)
+
+The binder is still the TPMoE program (static CBs to 1,253,888 on its reader cores 0-1 .. 0-7, 961,920 B, every t). The
+check compares that end with the LOWEST L1 buffer of the whole chip (lock-step allocator: every interleaved or sharded
+L1 tensor takes its address range on every bank), so every L1 tensor counts, whichever cores it lives on. L1 tensors
+grow down from 1,540,096: the budget is 286,208 B per bank.
+
+| B 16 x 1 M row (2026-11-12) | where it threw | lowest L1 buffer | short |
+|---|---|---|---|
+| narrow 4, live 4 | the FIRST full-width step (layer-3-class DSA MoE build) | 1,250,240 | 3,648 |
+| narrow 4, live 1 | the first full-width step | 1,240,512 | 13,376 |
+| narrow 4 + GLM53_MLA_S1_DRAM=1 | the NARROW t = 4 step (`_step_narrow`) | 1,217,856 | 36,032 |
+| MTP G 4 + narrow 1,2,4 (mmtp b3) | the first full-width step | 1,224,768 | 29,120 |
+
+S1_DRAM did not make the floor worse: it moved the full-width s1 (flat [1,1,16,16384] fp32, 20,480 B per bank) out of
+L1, the full-width step passed, and the run died one step later, in the narrow t = 4 step, whose own allocations (~52 KB
+per bank: the stacked s1 [4,1,4,4096] fp32 20,480 B -- `s1_memory` keeps t <= 4 in L1 -- the stacked mHC post / comb
+(4,1,32,32) of the KDA and DSA builds 4 KB each, q_ix / q_lat / o_lat at 4 rows, the 4-lane hist) land below everything.
+
+Knobs (`tt/stack_model.py`, `tt/mk_stack.py`; all default 0):
+- `GLM53_DSA_POOL_BORROW=1`: the DSA pool and its hand-off child take the KDA stacks' pool tensors of the same key
+  before allocating (`AllocPool.lend_from`; the two program sets never overlap and both pools hold build intermediates
+  only -- the KDA persistent hand-offs live in its child, never lent; one claims set keeps s1 apart from the MLA / MoE
+  intermediates; the KDA pool's lists, counts and alias bases are untouched). At the first DSA layer the dense KDA stack
+  is built: s1 (20,480 B), the (1,1,16,4096) bf16 trio hn / y2 / y (3 x 4 KB), post / comb / coef (3 x 4 KB) =
+  ~44 KB per bank, the full-width s1 staying in L1 (no S1_DRAM latency). The router-side keys (logits, ids, scores,
+  weights) are first built by the sparse KDA stacks (layer 4, after layer 3) and stay the DSA pool's own.
+- `GLM53_DSA_NARROW_S1_DRAM=1`: a narrow width's (2..4) stacked DSA s1 in DRAM -- the KDA layers' narrow s1 buffer
+  (`mk_layer._narrow_s1_dram`, the same writer / reader kernels the KDA hand-off already runs from DRAM): 20,480 B at t 4.
+- `GLM53_STACK_NARROW_PC_DRAM=1`: the narrow builds' stacked post / comb tiles (w,1,32,32) in DRAM for 2 <= w <= 4 --
+  the verify's GLM53_SPEC_PC_DRAM allocator (`spec_mtp.verify_allocator`): written by mhc_pre's root through accessors,
+  read by no kernel on the packed path: 16 KB (KDA) + 8 KB (DSA) at w 4.
+`GLM53_L1_REPORT=1` now also prints the census before each width's first sparse_dsa MoE build and at a clash there.
+Expected at B 16 x 1 M narrow 4: full step ~1,295 K, narrow step ~1,287 K (vs the 1,253,888 binder). Host check:
+`tests/test_alloc_policy_host.py::test_dsa_pool_borrows_the_kda_pool`. Device rows: `_logs/mesh/chain_l1_1.sh`.
+
 ## 8. Token lanes past 2: KPH chips per merge helper (2026-11-10, MLA_REV 64)
 
 Every token lane held NCHIPS = 32 merge helpers among its chunk cores, so 64 chunk cores gave 2 lanes and t = 16 ran
