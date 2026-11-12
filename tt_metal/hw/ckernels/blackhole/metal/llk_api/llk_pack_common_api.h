@@ -169,59 +169,6 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
  */
-// The reconfigure's global writes that this kernel's formats keep constant (LLK_PACK_RECONFIG_SKIP_*): a field with the
-// same value for every pack CB was written by hw_configure, and no reconfigure can change it. The strides stay where
-// another stride writer is linked (fast tilize and untilize, the pack_strides_writer tags).
-template <bool is_fp32_dest_acc_en>
-constexpr std::uint32_t llk_pack_reconfig_skip() {
-    using namespace ckernel::packer;
-    std::uint32_t skip = LLK_PACK_RECONFIG_SKIP_PAC_LF8 | LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD |
-                         LLK_PACK_RECONFIG_SKIP_DSTACC | LLK_PACK_RECONFIG_SKIP_STRIDES;
-    bool any = false;
-    std::uint32_t lf8 = 0, thr = 0, acc = 0, src0 = 0;
-    for (std::uint32_t i = 0; i < sizeof(pack_src_format) / sizeof(pack_src_format[0]); i++) {
-        const std::uint32_t src = pack_src_format[i];
-        const std::uint32_t dst = pack_dst_format[i];
-        if (src == to_underlying(DataFormat::Invalid) || dst == to_underlying(DataFormat::Invalid)) {
-            continue;
-        }
-        const std::uint32_t v_lf8 = pack_is_fp8_e4m3(dst);
-        const std::uint32_t v_thr = pack_exp_threshold_bits<is_fp32_dest_acc_en>(masked_data_format(dst));
-        const std::uint32_t v_acc = pack_dstacc_format(src, dst);
-        if (!any) {
-            any = true;
-            lf8 = v_lf8;
-            thr = v_thr;
-            acc = v_acc;
-            src0 = masked_data_format(src);
-            continue;
-        }
-        if (v_lf8 != lf8) {
-            skip &= ~LLK_PACK_RECONFIG_SKIP_PAC_LF8;
-        }
-        if (v_thr != thr) {
-            skip &= ~LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD;
-        }
-        if (v_acc != acc) {
-            skip &= ~LLK_PACK_RECONFIG_SKIP_DSTACC;
-        }
-        // Default-mode strides follow the packer input format alone.
-        if (masked_data_format(src) != src0) {
-            skip &= ~LLK_PACK_RECONFIG_SKIP_STRIDES;
-        }
-    }
-    if (!any) {
-        return 0;
-    }
-    if (pack_fast_tilize_linked<DST_SYNC_MODE> || pack_fast_untilize_linked<DST_SYNC_MODE> || pack_strides_writer<1> ||
-        pack_strides_writer<2> || pack_strides_writer<3> || pack_strides_writer<4> || pack_strides_writer<5> ||
-        pack_strides_writer<6> || pack_strides_writer<7> || pack_strides_writer<8> || pack_strides_writer<9> ||
-        pack_strides_writer<10>) {
-        skip &= ~LLK_PACK_RECONFIG_SKIP_STRIDES;
-    }
-    return skip;
-}
-
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
@@ -237,7 +184,8 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::PartialFace>(false),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
-    constexpr std::uint32_t skip = llk_pack_reconfig_skip<is_fp32_dest_acc_en>();
+    constexpr std::uint32_t skip =
+        ckernel::packer::llk_pack_reconfig_skip<is_fp32_dest_acc_en, DST_SYNC_MODE>(pack_src_format, pack_dst_format);
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip>(
         pack_src_format[output_id],
         pack_dst_format[output_id],

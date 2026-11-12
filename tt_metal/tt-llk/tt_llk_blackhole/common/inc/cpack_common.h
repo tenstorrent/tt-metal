@@ -583,6 +583,66 @@ inline constexpr bool pack_strides_writer = false;
 template <DstSync>
 inline constexpr bool pack_fast_tilize_linked = false;
 
+// The reconfigure's global writes that a kernel's pack formats keep constant (LLK_PACK_RECONFIG_SKIP_*), from the descriptor
+// arrays (constant in the JIT): a field with the same value for every pack CB was written by hw_configure, and no reconfigure
+// can change it. The strides stay where another stride writer is linked (fast tilize and untilize, pack_strides_writer tags).
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n>
+constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n])
+{
+    std::uint32_t skip = LLK_PACK_RECONFIG_SKIP_PAC_LF8 | LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD | LLK_PACK_RECONFIG_SKIP_DSTACC | LLK_PACK_RECONFIG_SKIP_STRIDES;
+    bool any           = false;
+    std::uint32_t lf8 = 0, thr = 0, acc = 0, src0 = 0;
+    for (std::size_t i = 0; i < n; i++)
+    {
+        const std::uint32_t src = pack_src_format[i];
+        const std::uint32_t dst = pack_dst_format[i];
+        if (src == to_underlying(DataFormat::Invalid) || dst == to_underlying(DataFormat::Invalid))
+        {
+            continue;
+        }
+        const std::uint32_t v_lf8 = pack_is_fp8_e4m3(dst);
+        const std::uint32_t v_thr = pack_exp_threshold_bits<is_fp32_dest_acc_en>(masked_data_format(dst));
+        const std::uint32_t v_acc = pack_dstacc_format(src, dst);
+        if (!any)
+        {
+            any  = true;
+            lf8  = v_lf8;
+            thr  = v_thr;
+            acc  = v_acc;
+            src0 = masked_data_format(src);
+            continue;
+        }
+        if (v_lf8 != lf8)
+        {
+            skip &= ~LLK_PACK_RECONFIG_SKIP_PAC_LF8;
+        }
+        if (v_thr != thr)
+        {
+            skip &= ~LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD;
+        }
+        if (v_acc != acc)
+        {
+            skip &= ~LLK_PACK_RECONFIG_SKIP_DSTACC;
+        }
+        // Default-mode strides follow the packer input format alone.
+        if (masked_data_format(src) != src0)
+        {
+            skip &= ~LLK_PACK_RECONFIG_SKIP_STRIDES;
+        }
+    }
+    if (!any)
+    {
+        return 0;
+    }
+    if (pack_fast_tilize_linked<sync> || pack_fast_untilize_linked<sync> || pack_strides_writer<1> || pack_strides_writer<2> || pack_strides_writer<3> ||
+        pack_strides_writer<4> || pack_strides_writer<5> || pack_strides_writer<6> || pack_strides_writer<7> || pack_strides_writer<8> ||
+        pack_strides_writer<9> || pack_strides_writer<10>)
+    {
+        skip &= ~LLK_PACK_RECONFIG_SKIP_STRIDES;
+    }
+    return skip;
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t num_faces = 4, const bool partial_face = false)
