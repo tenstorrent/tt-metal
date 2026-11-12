@@ -508,41 +508,72 @@ inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
  * @tparam is_fp32_dest_acc_en True when Dest register is FP32.
  * @param pack_dst_format Pack output data format.
  */
+// The exponent threshold word for an output format (reconfigure_exp_threshold).
+template <bool is_fp32_dest_acc_en>
+constexpr std::uint32_t pack_exp_threshold_bits(const std::uint32_t pack_dst_format)
+{
+    // Workaround for HW bug: tenstorrent/budabackend#1394
+    // After early format conversion the exponent is EXP_B; packing to BFP-A uses EXP_A.
+    // Zero out values too small to represent in EXP_A.
+    //
+    // For a given EXP_B number to be representable in EXP_A, it must satisfy:
+    // EXP_BIAS_B = 127, EXP_BIAS_A = 15, and EXP_MIN_A = 1 - EXP_BIAS_A = -14
+    //   EXP_B - EXP_BIAS_B >= EXP_MIN_A
+    //   EXP_B - 127 >= -14
+    //   EXP_B >= 113
+    // The packer compares against threshold 113 and forces datums with EXP_B < 113 to zero.
+    const bool enable             = is_fp32_dest_acc_en && IS_BFP_A_FORMAT(pack_dst_format);
+    const std::uint32_t threshold = enable ? 113 : 0;
+    return (threshold << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (static_cast<std::uint32_t>(enable) << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
 {
-    bool enable             = false;
-    std::uint32_t threshold = 0;
-
-    // Workaround for HW bug: tenstorrent/budabackend#1394
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        if (IS_BFP_A_FORMAT(pack_dst_format))
-        {
-            // After early format conversion the exponent is EXP_B; packing to BFP-A uses EXP_A.
-            // Zero out values too small to represent in EXP_A.
-            //
-            // For a given EXP_B number to be representable in EXP_A, it must satisfy:
-            // EXP_BIAS_B = 127, EXP_BIAS_A = 15, and EXP_MIN_A = 1 - EXP_BIAS_A = -14
-            //   EXP_B - EXP_BIAS_B >= EXP_MIN_A
-            //   EXP_B - 127 >= -14
-            //   EXP_B >= 113
-            // The packer compares against threshold 113 and forces datums with EXP_B < 113 to zero.
-            enable    = true;
-            threshold = 113;
-        }
-    }
-
     static_assert(
         THCON_SEC0_REG1_Exp_threshold_en_ADDR32 == THCON_SEC0_REG1_Exp_threshold_ADDR32,
         "THCON_SEC0_REG1_Exp_threshold_en and Exp_threshold must share ADDR32 for combined RMW");
 
     constexpr std::uint32_t THRESHOLD_RMW_MASK = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
 
-    std::uint32_t threshold_rmw_data = (threshold << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (enable << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
-
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(pack_exp_threshold_bits<is_fp32_dest_acc_en>(pack_dst_format));
 }
+
+// PCK_DEST_RD_CTRL for a packer input and output format (set_packer_config, reconfig_packer_data_format): bit 0 Read_32b_data,
+// 1 Read_unsigned, 2 Read_int8, 3 Round_10b_mant.
+template <bool is_fp32_dest_acc_en>
+constexpr std::uint32_t pack_dest_rd_ctrl_bits(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    const bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
+                               pack_src_format == to_underlying(DataFormat::Float32);
+    const bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
+    const bool read_32b       = is_32b_format || is_fp32_dest_acc_en;
+    const bool read_int8      = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
+    const bool read_unsigned  = pack_dst_format == to_underlying(DataFormat::UInt8);
+    // Round to 10 bit mantissa from fp32 dest
+    const bool round_10b = (is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
+                           (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3));
+    return static_cast<std::uint32_t>(read_32b) | (static_cast<std::uint32_t>(read_unsigned) << 1) | (static_cast<std::uint32_t>(read_int8) << 2) |
+           (static_cast<std::uint32_t>(round_10b) << 3);
+}
+
+constexpr bool pack_is_fp8_e4m3(const std::uint32_t pack_dst_format)
+{
+    return (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3);
+}
+
+// ALU_FORMAT_SPEC_REG2_Dstacc for a packer input and output format (configure_pack, reconfig_packer_data_format).
+constexpr std::uint32_t pack_dstacc_format(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    return pack_is_fp8_e4m3(pack_dst_format) ? to_underlying(DataFormat::Float16) : masked_data_format(pack_src_format);
+}
+
+// The reconfigure's global writes a kernel can drop (llk_pack_reconfig_data_format): those whose value is the same for every
+// pack CB, so hw_configure already wrote it and no reconfigure can change it. dest_rd_ctrl is not one: the run-time FP32 DEST
+// switch and fast tilize write it too.
+constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_PAC_LF8       = 2;
+constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD = 4;
+constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_DSTACC        = 8;
 
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
@@ -637,7 +668,7 @@ inline void set_packer_config(
 // the template's first-phase name lookup (ADL cannot find it from a std::uint32_t argument).
 __attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10);
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0>
 __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -674,30 +705,11 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
         "(invariant violated; reduce mask should have been cleared via _llk_pack_reduce_mask_clear_). Please uncomment "
         "DEVICE_PRINT #2111 for debugging.");
 
-    dest_rd_ctrl_u dest_rd_ctrl;
-    dest_rd_ctrl.val = 0;
-
-    bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
-                         pack_src_format == to_underlying(DataFormat::Float32);
-    bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
-
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
-
-    if (pack_dst_format == to_underlying(DataFormat::UInt8))
-    {
-        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
-    }
-    // Round to 10 bit mantissa from fp32 dest
-    if ((is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
-        (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)))
-    {
-        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
-    }
     // Read_int8 is what makes an Int8/UInt8 pack read 16-bit Dest datums as 8-bit integers, so a
     // reconfig onto or away from Int8/UInt8 must write it like the full configure does: the RMW
     // covers every dest_rd_ctrl field.
-    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, PCK_DEST_RD_CTRL_Read_32b_data_SHAMT, PCK_DEST_RD_CTRL_FIELDS_MASK>(dest_rd_ctrl.val);
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, PCK_DEST_RD_CTRL_Read_32b_data_SHAMT, PCK_DEST_RD_CTRL_FIELDS_MASK>(
+        pack_dest_rd_ctrl_bits<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format));
 
     if (IS_BFP_FORMAT(pack_output_dst_format))
     {
@@ -708,14 +720,22 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
         TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
     }
 
-    bool is_fp8_e4m3 = (pack_dst_format & 0x1F) == static_cast<DataFormatType>(DataFormat::Fp8_e4m3);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(is_fp8_e4m3);
+    if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_PAC_LF8))
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(pack_is_fp8_e4m3(pack_dst_format));
+    }
 
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_pack::TILE_HEADER));
 
-    reconfigure_exp_threshold<is_fp32_dest_acc_en>(pack_output_dst_format);
+    if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD))
+    {
+        reconfigure_exp_threshold<is_fp32_dest_acc_en>(pack_output_dst_format);
+    }
 
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
+    if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_DSTACC))
+    {
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_dstacc_format(pack_src_format, pack_dst_format));
+    }
 
     // Set packer strides
     set_packer_strides<PackMode::Default, true, false>(pack_output_src_format, tile_c_dim);
@@ -727,7 +747,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 }
 
 // The packer reconfigure with its pack state store, which set_packer_strides makes in every other call.
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0>
 inline void reconfig_packer_data_format_and_state(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -736,7 +756,7 @@ inline void reconfig_packer_data_format_and_state(
     const std::uint32_t num_faces,
     const bool partial_face)
 {
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    reconfig_packer_data_format<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
     const std::uint32_t state = 0x100;
     __builtin_memcpy(pack_state, &state, sizeof(state));
 }

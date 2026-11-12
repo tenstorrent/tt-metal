@@ -438,7 +438,8 @@ inline void pack_init_apply(
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
  */
-template <bool is_fp32_dest_acc_en>
+// skip: LLK_PACK_RECONFIG_SKIP_* writes the caller knows are redundant (kernel-wide uniform formats).
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -449,7 +450,7 @@ inline void _llk_pack_reconfig_data_format_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    reconfig_packer_data_format_and_state<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    reconfig_packer_data_format_and_state<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
 }
 
 /**
