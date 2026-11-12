@@ -29,7 +29,7 @@ void bind_fill_pad_op(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            sub_core_grids (ttnn.CoreRangeSet, optional): cores to run on for interleaved tensors. Defaults to `None`, which uses all cores.
+            sub_core_grids (ttnn.CoreRangeSet, optional): cores to run on for interleaved tensors. Must contain all L1 shard cores for sharded inputs. Defaults to `None`, which uses all cores.
 
         Returns:
             ttnn.Tensor: the output tensor.

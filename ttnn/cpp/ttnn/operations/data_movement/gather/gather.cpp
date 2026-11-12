@@ -119,6 +119,7 @@ Tensor pre_gather_transform_tensor(
     const int8_t dim,
     const bool is_dim_last_idx,
     const bool is_rank_le_4d,
+    const std::optional<CoreRangeSet>& sub_core_grids,
     const bool padding_index_tensor = false,
     const ttnn::Shape& index_tensor_padded_shape = {},
     const ttnn::Shape& index_tensor_lshape = {}) {
@@ -140,7 +141,8 @@ Tensor pre_gather_transform_tensor(
 
     if (padding_index_tensor) {
         // Index tensor padding
-        return is_tile ? ttnn::fill_implicit_tile_padding(transformed_tensor, 0.0f) : transformed_tensor;
+        return is_tile ? ttnn::fill_implicit_tile_padding(transformed_tensor, 0.0f, std::nullopt, sub_core_grids)
+                       : transformed_tensor;
     }
 
     // Input tensor processing
@@ -155,10 +157,19 @@ Tensor pre_gather_transform_tensor(
         index_tensor_padded_shape[2],
         transformed_tensor.logical_shape()[-1]};
 
-    const Tensor sliced_tensor =
-        ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());
+    const Tensor sliced_tensor = ttnn::slice(
+        transformed_tensor,
+        start_index,
+        end_index,
+        step,
+        input_tensor.memory_config(),
+        std::nullopt,
+        std::nullopt,
+        sub_core_grids);
 
-    return is_tile ? ttnn::fill_implicit_tile_padding(sliced_tensor, std::numeric_limits<float>::min()) : sliced_tensor;
+    return is_tile ? ttnn::fill_implicit_tile_padding(
+                         sliced_tensor, std::numeric_limits<float>::min(), std::nullopt, sub_core_grids)
+                   : sliced_tensor;
 }
 
 /**
@@ -368,13 +379,19 @@ Tensor gather_dispatch(
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
 
     Tensor padded_index_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
-        input_index_tensor, normalized_dim, input_index_tensor_is_dim_last_idx, index_tensor_is_rank_le_4d, true);
+        input_index_tensor,
+        normalized_dim,
+        input_index_tensor_is_dim_last_idx,
+        index_tensor_is_rank_le_4d,
+        sub_core_grids,
+        true);
 
     Tensor padded_input_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
         input_tensor,
         normalized_dim,
         input_tensor_is_dim_last_idx,
         input_tensor_is_rank_le_4d,
+        sub_core_grids,
         false,
         padded_index_tensor.padded_shape(),
         original_index_tensor_lshape);
@@ -383,7 +400,12 @@ Tensor gather_dispatch(
     if (optional_output_tensor.has_value()) {
         auto& output_tensor = optional_output_tensor.value();
         output_tensor = operations::data_movement::CMAKE_UNIQUE_NAMESPACE::pre_gather_transform_tensor(
-            output_tensor, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
+            output_tensor,
+            normalized_dim,
+            input_tensor_is_dim_last_idx,
+            input_tensor_is_rank_le_4d,
+            sub_core_grids,
+            true);
         optional_output_tensor_value = output_tensor;
     }
 

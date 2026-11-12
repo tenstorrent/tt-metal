@@ -1046,7 +1046,7 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
         )
         ttnn.synchronize_device(mesh_device)
         model.sampling.set_trace_bucket(width)
-        model.sampling.sample(lg0, enable_trace=False)
+        model.sampling.precompile(lg0)
         ttnn.synchronize_device(mesh_device)
 
     # Per-width: a decode trace (stable logits tensor) + a sampling trace bound to it.
@@ -1135,7 +1135,7 @@ def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
         ttnn.synchronize_device(mesh_device)
         if on_dev:
             model.sampling.set_trace_bucket(width)
-            model.sampling.sample(lg0, enable_trace=False)
+            model.sampling.precompile(lg0)
             ttnn.synchronize_device(mesh_device)
 
     tids, host_of, dev_of, logits_of = {}, {}, {}, {}

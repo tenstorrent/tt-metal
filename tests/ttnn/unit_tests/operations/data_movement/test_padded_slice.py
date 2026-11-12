@@ -206,10 +206,14 @@ def test_quasar_padded_slice_rm_last_dim_no_pad(device):
 
 
 # Sliced last dim narrower than the output shard: Quasar pad-row path zero-fills the rest of each row.
+# Starts 8, 16 and 32 give aligned output rows with both aligned and unaligned DRAM offsets on
+# Wormhole and Blackhole.
 @pytest.mark.parametrize(
     "begins, ends, shard_shape",
     (
+        ([0, 0, 0, 8], [1, 1, 64, 64], (8, 64)),
         ([0, 0, 0, 16], [1, 1, 64, 64], (8, 64)),
+        ([0, 0, 0, 32], [1, 1, 64, 64], (8, 64)),
         ([0, 0, 0, 0], [1, 1, 64, 40], (8, 48)),
     ),
 )

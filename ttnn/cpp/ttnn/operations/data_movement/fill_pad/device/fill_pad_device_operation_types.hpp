@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <optional>
+
+#include <tt-metalium/core_coord.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {

@@ -29,7 +29,6 @@
 
 void kernel_main() {
     const uint32_t src_byte_offset = get_arg(args::src_byte_offset);  // per-core src offset (begins+width-misalign)
-    const uint32_t padded_stick_size = get_arg(args::padded_stick_size);
     const uint32_t unpadded_stick_size = get_arg(args::unpadded_stick_size);
     const uint32_t stick_size_offset = get_arg(args::stick_size_offset);
     const uint32_t num_dims = get_arg(args::num_dims);
@@ -63,10 +62,10 @@ void kernel_main() {
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
-    uint32_t misalignment = 0;
-    if constexpr (is_non_aligned) {
-        misalignment = src_byte_offset % src_buffer_alignment;
-    }
+    const uint32_t misalignment = src_byte_offset % src_buffer_alignment;
+    // An aligned output row can still start at an unaligned source offset.
+    // Stage those reads too so the source and destination NoC alignments match.
+    const bool needs_staging = is_non_aligned || misalignment != 0;
     const uint32_t src_off_aligned = src_byte_offset - misalignment;
 
     // Pad-row tail: bytes [unpadded_stick_size, stick_size_offset) of every output row are zeroed. The zero
@@ -82,7 +81,7 @@ void kernel_main() {
         }
     }
 
-    if constexpr (is_non_aligned) {
+    if (needs_staging) {
         // TRID-pipelined src->scratch->dest, mirroring the quasar i2s stick reader's unaligned path.
         enum SlotState : uint8_t { IDLE = 0, SRC_PENDING = 1, SCRATCH_READY = 2, SCRATCH_PENDING = 3 };
         constexpr uint32_t trid_base = 1;
@@ -116,7 +115,7 @@ void kernel_main() {
                         noc.async_read<NocOptions::TXN_ID>(
                             s0,
                             scratch_buf,
-                            padded_stick_size + misalignment,
+                            unpadded_stick_size + misalignment,
                             {.page_id = src_stick_id, .offset_bytes = src_off_aligned},
                             {.offset_bytes = scratch_off},
                             NocOptVals{.trid = active_trid});

@@ -23,6 +23,15 @@ void CloneOperation::validate_inputs(
     bool input_sharded = input_memory_layout != TensorMemoryLayout::INTERLEAVED;
     bool output_sharded = output_memory_layout != TensorMemoryLayout::INTERLEAVED;
 
+    if (operation_attributes.sub_core_grids.has_value()) {
+        TT_FATAL(!operation_attributes.sub_core_grids->ranges().empty(), "Clone: sub-core grid must not be empty");
+        if (input_sharded) {
+            TT_FATAL(
+                operation_attributes.sub_core_grids->contains(input.shard_spec()->grid),
+                "Clone: sub-core grid must contain all shard cores");
+        }
+    }
+
     if (input_sharded && output_sharded) {
         TT_FATAL(
             input_memory_layout == output_memory_layout,

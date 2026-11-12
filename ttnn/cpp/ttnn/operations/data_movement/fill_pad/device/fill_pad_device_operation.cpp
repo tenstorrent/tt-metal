@@ -24,10 +24,18 @@ FillPadDeviceOperation::program_factory_t FillPadDeviceOperation::select_program
 }
 
 void FillPadDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.layout() == TILE_LAYOUT, "FillPad should only be used for tile layout");
     TT_FATAL(detail::data_type_to_size.contains(input_tensor.dtype()), "Unsupported datatype {}", input_tensor.dtype());
+    if (args.sub_core_grids.has_value()) {
+        TT_FATAL(!args.sub_core_grids->ranges().empty(), "FillPad sub-core grid must not be empty");
+        if (input_tensor.is_sharded() && input_tensor.memory_config().is_l1()) {
+            TT_FATAL(
+                args.sub_core_grids->contains(input_tensor.shard_spec()->grid),
+                "FillPad sub-core grid must contain all L1 shard cores");
+        }
+    }
 }
 
 tt::tt_metal::TensorSpec FillPadDeviceOperation::compute_output_specs(

@@ -15,6 +15,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import IS_BLACKHOLE
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
@@ -490,6 +491,7 @@ def create_tt_qwen_model(
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
+            "l1_small_size": 16384 if IS_BLACKHOLE else 0,
             "fabric_config": _FABRIC_CONFIG,
         }
     ],

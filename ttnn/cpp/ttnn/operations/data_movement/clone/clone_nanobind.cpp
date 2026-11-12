@@ -22,7 +22,7 @@ void bind_clone_operation(nb::module_& mod) {
             dtype (ttnn.DataType, optional): the target data type of the cloned tensor. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG. Defaults to `None`.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): the configuration for the compute kernel. Defaults to `None`.
-            sub_core_grids (ttnn.CoreRangeSet, optional): cores to run on for interleaved tensors. Defaults to `None`, which uses all cores.
+            sub_core_grids (ttnn.CoreRangeSet, optional): cores to run on for interleaved tensors. Must contain all shard cores for sharded tensors. Defaults to `None`, which uses all cores.
 
         Returns:
             ttnn.Tensor: the cloned output tensor.

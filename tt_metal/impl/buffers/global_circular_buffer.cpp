@@ -12,6 +12,7 @@
 #include "impl/buffers/global_circular_buffer_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
+#include <tt-metalium/experimental/fixed_address_allocation/mesh_buffer.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -36,7 +37,9 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
     distributed::MeshCommandQueue& mesh_cq,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type) :
+    BufferType buffer_type,
+    std::optional<DeviceAddr> buffer_address,
+    std::optional<DeviceAddr> config_address) :
     device_(mesh_cq.device()), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
     const uint32_t num_sender_cores = sender_receiver_core_mapping.size();
     TT_FATAL(num_sender_cores > 0, "At least one sender required");
@@ -55,11 +58,18 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
     TT_FATAL(num_receiver_cores == receiver_cores_.num_cores(), "Duplicate receiver cores found");
     all_cores_ = sender_cores_.merge(receiver_cores_);
     TT_FATAL(all_cores_.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
-    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender, mesh_cq);
+    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender, mesh_cq, buffer_address, config_address);
 }
 
 void GlobalCircularBufferImpl::setup_cb_buffers(
-    BufferType buffer_type, uint32_t max_num_receivers_per_sender, distributed::MeshCommandQueue& mesh_cq) {
+    BufferType buffer_type,
+    uint32_t max_num_receivers_per_sender,
+    distributed::MeshCommandQueue& mesh_cq,
+    std::optional<DeviceAddr> requested_buffer_address,
+    std::optional<DeviceAddr> requested_config_address) {
+    TT_FATAL(
+        requested_buffer_address.has_value() == requested_config_address.has_value(),
+        "Global circular buffer data and configuration addresses must be supplied together");
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global circular buffer can only be created for L1 buffer types");
@@ -67,15 +77,23 @@ void GlobalCircularBufferImpl::setup_cb_buffers(
 
     auto shard_parameters = ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
+    const auto allocate =
+        [this](uint32_t size, const distributed::DeviceLocalBufferConfig& config, std::optional<DeviceAddr> address) {
+            const distributed::ReplicatedBufferConfig mesh_config{.size = size};
+            return address.has_value()
+                       ? fixed_address_allocation::allocate_at_address(mesh_config, config, device_, address.value())
+                       : distributed::MeshBuffer::create(mesh_config, config, device_);
+        };
+
     uint32_t cb_buffer_size = size_ * num_cores;
-    cb_buffer_ = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = cb_buffer_size},
+    cb_buffer_ = allocate(
+        cb_buffer_size,
         distributed::DeviceLocalBufferConfig{
             .page_size = size_,
             .buffer_type = buffer_type,
             .sharding_args = BufferShardingArgs(shard_parameters, TensorMemoryLayout::HEIGHT_SHARDED),
         },
-        device_);
+        requested_buffer_address);
 
     auto l1_alignment = device_->impl().metal_env().get_hal().get_alignment(HalMemType::L1);
     // [0] is_sender, [1] num_receivers, [2] fifo_start_addr, [3] fifo_size, [4] fifo_ptr,
@@ -87,15 +105,17 @@ void GlobalCircularBufferImpl::setup_cb_buffers(
     auto cb_config_page_size = tt::align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
                                (2 * max_num_receivers_per_sender * l1_alignment);
     uint32_t cb_config_size = cb_config_page_size * num_cores;
-    cb_config_buffer_ = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = cb_config_size},
+    cb_config_buffer_ = allocate(
+        cb_config_size,
         distributed::DeviceLocalBufferConfig{
             .page_size = cb_config_page_size,
             .buffer_type = buffer_type,
             .sharding_args = BufferShardingArgs(std::move(shard_parameters), TensorMemoryLayout::HEIGHT_SHARDED),
         },
-        device_);
+        requested_config_address);
 
+    // Both owned allocations must succeed before writing any configuration. If the
+    // second allocation fails, constructor unwinding releases the first allocation.
     // Write the config buffer to the device
     // Only block for the slow dispatch case
     auto config_buffer_address = cb_config_buffer_->address();
@@ -181,31 +201,53 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
-    uint8_t cq_id) :
-    GlobalCircularBuffer(device.mesh_command_queue(cq_id), sender_receiver_core_mapping, size, buffer_type) {}
+    uint8_t cq_id,
+    std::optional<DeviceAddr> buffer_address,
+    std::optional<DeviceAddr> config_address) :
+    GlobalCircularBuffer(
+        device.mesh_command_queue(cq_id),
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        buffer_address,
+        config_address) {}
 
 GlobalCircularBuffer::GlobalCircularBuffer(
     distributed::MeshCommandQueue& mesh_cq,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type) :
-    GlobalCircularBuffer(GlobalCircularBufferImpl(mesh_cq, sender_receiver_core_mapping, size, buffer_type)) {}
+    BufferType buffer_type,
+    std::optional<DeviceAddr> buffer_address,
+    std::optional<DeviceAddr> config_address) :
+    GlobalCircularBuffer(GlobalCircularBufferImpl(
+        mesh_cq, sender_receiver_core_mapping, size, buffer_type, buffer_address, config_address)) {}
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
-    uint8_t cq_id) {
-    return GlobalCircularBuffer(device.mesh_command_queue(cq_id), sender_receiver_core_mapping, size, buffer_type);
+    uint8_t cq_id,
+    std::optional<DeviceAddr> buffer_address,
+    std::optional<DeviceAddr> config_address) {
+    return GlobalCircularBuffer(
+        device.mesh_command_queue(cq_id),
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        buffer_address,
+        config_address);
 }
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshCommandQueue& mesh_cq,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(mesh_cq, sender_receiver_core_mapping, size, buffer_type);
+    BufferType buffer_type,
+    std::optional<DeviceAddr> buffer_address,
+    std::optional<DeviceAddr> config_address) {
+    return GlobalCircularBuffer(
+        mesh_cq, sender_receiver_core_mapping, size, buffer_type, buffer_address, config_address);
 }
 
 GlobalCircularBuffer::GlobalCircularBuffer(GlobalCircularBufferImpl impl) :
@@ -244,6 +286,23 @@ const CoreRangeSet& GlobalCircularBuffer::receiver_cores() const { return impl()
 DeviceAddr GlobalCircularBuffer::buffer_address() const { return impl().buffer_address(); }
 
 DeviceAddr GlobalCircularBuffer::config_address() const { return impl().config_address(); }
+
+void GlobalCircularBufferImpl::deallocate() {
+    cb_buffer_->deallocate();
+    cb_config_buffer_->deallocate();
+}
+
+void GlobalCircularBufferImpl::acknowledge_corruptible() {
+    for (const auto& buffer : {cb_buffer_, cb_config_buffer_}) {
+        TT_FATAL(buffer->is_allocated(), "Cannot acknowledge a deallocated global circular buffer");
+        // Both buffers are owning allocations, so the ID is always present.
+        device_->impl().remove_unsafe_tracked_id(buffer->unique_id().value());
+    }
+}
+
+void GlobalCircularBuffer::deallocate() { impl().deallocate(); }
+
+void GlobalCircularBuffer::acknowledge_corruptible() { impl().acknowledge_corruptible(); }
 
 uint32_t GlobalCircularBuffer::size() const { return impl().size(); }
 
