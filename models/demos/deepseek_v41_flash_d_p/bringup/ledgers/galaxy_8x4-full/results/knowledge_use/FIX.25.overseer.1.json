@@ -1,0 +1,82 @@
+{
+ "used": [
+  {
+   "id": "DS41-233",
+   "how": "the cold sequence (first after the model load) is part of the check and runs first in its process (core/batch.phase -1), so a batched gate keeps the cold-vs-warm comparison that showed chunk 0's 0.24",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-234",
+   "how": "the second prompt is that entry's code prompt (testing/b2b.py), interleaved with the novel one so every warm run follows a different input",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-235",
+   "how": "chose 4 chunks x 3 runs: P.50's off side with that coverage already failed (0.2542, rows [392, 132, 1050, 0]); the selftest's fake non-determinism mimics the arrival-order sum (a term depending on the call count)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to run the framework's CPU selftests without tripping the direct-pytest check (README says python -m pytest; the command check flags any direct pytest): through scripts/run_safe_pytest.sh",
+  "test_perf_ab selftests fail at HEAD (core/batch.hints int(None) on a spec without target.chunk, F259): fixed here",
+  "the batched shared-model process (F259) costs: load 191 s, determinism 93.5 s, warm ladder rung 52 s on 8x4 (probe in FIX.25 BREADCRUMBS)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.25",
+   "answer": "done",
+   "evidence": "core/gate.py with_determinism + gate_limits, testing/model_determinism.py, A/B determinism item; batched probe (determinism then ladder `last`, one process) bit-identical, 93.5 s in-process, ~65-75 s added per gate; selftest/test_model_determinism.py 10 pass incl. a non-deterministic fake failing run_gate; full selftest suite: no new failure vs HEAD"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel, fork or padding touched"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the framework's CPU selftests (through the safe runner), the model-level probe and the gate"
+  }
+ ],
+ "cited_only": [
+  "DS41-237"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.25",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-12T18:54:58",
+  "head": "ca23d67e720",
+  "touched": [
+   "models/demos/common/bringup/README.md",
+   "models/demos/common/bringup/core/batch.py",
+   "models/demos/common/bringup/core/gate.py",
+   "models/demos/common/bringup/defaults.yaml",
+   "models/demos/common/bringup/orchestrator.py",
+   "models/demos/common/bringup/selftest/fixture_model.py",
+   "models/demos/common/bringup/selftest/test_model_determinism.py",
+   "models/demos/common/bringup/selftest/test_overseer.py",
+   "models/demos/common/bringup/testing/b2b.py",
+   "models/demos/common/bringup/testing/model_determinism.py",
+   "models/demos/common/bringup/tests/test_determinism.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.25.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.25.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py"
+  ]
+ }
+}

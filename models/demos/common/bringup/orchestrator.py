@@ -93,6 +93,7 @@ from models.demos.common.bringup.core.gate import (
     format_paths,
     gate_command,
     gate_env,
+    gate_limits,
     gate_outputs,
     gate_units,
     git_commit,
@@ -214,6 +215,17 @@ PROCESS_CRASH = re.compile(
 # Perf picks (F57): the A/B report's lines. A component / swap check that fails prints "FAIL <metric>: <values> (...)".
 FAILED_CHECK = re.compile(r"^FAIL\s+\S.*$", re.M)
 LADDER_TEST = "models/demos/common/bringup/tests/test_ladder.py"
+# FIX.25: what the A/B table and record keep of the model determinism check, and its failure line in the log
+DETERMINISM_KEYS = (
+    "determinism_max_abs_diff",
+    "determinism_max_abs_diff_novel",
+    "determinism_max_abs_diff_code",
+    "determinism_state_max_abs_diff",
+    "determinism_elements_differ",
+    "determinism_s",
+)
+DETERMINISM_IN = re.compile(r"\btest_determinism\.py\b")  # a gate that runs a determinism test (core/gate.py)
+DETERMINISM_FAIL = re.compile(r"AssertionError: (identical inputs gave different outputs[^\n]*)")
 PROFILE_TEST = "models/demos/common/bringup/tests/test_profile.py"
 AB_ROWS = (  # (row, ladder metric); pcc_layer_* is the minimum over the layers
     ("min layer PCC", "pcc_layer_*"),
@@ -727,7 +739,7 @@ class Orchestrator:
         )
         vals["allowed"] = "\n".join(f"- `{p}`" for p in self.allowed_paths(task, role))
         vals["thresholds"] = (
-            "\n".join(f"- `{k}` {v}" for k, v in (task["gate"].get("metrics") or {}).items()) or "- (exit code only)"
+            "\n".join(f"- `{k}` {v}" for k, v in gate_limits(task, self.led.tasks()).items()) or "- (exit code only)"
         )
         vals["previous"] = f"## Previous attempt failed\n```\n{previous[-6000:]}\n```\n" if previous else ""
         notes = OV.for_task(s.ledger_dir, task["id"], role)
@@ -1656,6 +1668,7 @@ class Orchestrator:
             "table": str(d / "table.md"),
         }
         rec.update(rungs=self.ab_rungs(task), tests={}, ladder={}, profile={}, quick={}, positions={}, note="")
+        rec["determinism"] = {}  # FIX.25: {side: result}
         owned = [p for p in changed if allowed(p, list(task.get("paths") or []))]
         base = self.ab_base(old, on, tid)
         before = ab_before(task)
@@ -1700,15 +1713,18 @@ class Orchestrator:
             for side, env in sides:  # F137: every run at the shipped settings, the switch as each side sets it
                 kept_before = before and side == "old"  # F230: measured before the agent; never on the changed tree
                 got = self.ab_measure(task, side, env, base, None if kept_before else code, run=not kept_before)
-                if kept_before and len(got) < len(kinds):
+                lost = [n for n in kinds if n not in got and kinds[n] != "determinism"]  # (FIX.25: optional there)
+                if kept_before and lost:
                     rec["note"] = "the 'before' side is missing runs (measured before the change only): " + ", ".join(
-                        n for n in kinds if n not in got
+                        lost
                     )
                 for n, r in got.items():
                     if kinds[n] == "position":
                         rec["positions"].setdefault(n, {})[side] = r
                     elif kinds[n] == "quick":
                         rec["quick"][side] = r
+                    elif kinds[n] == "determinism":  # FIX.25
+                        rec["determinism"][side] = r
                     elif kinds[n] == "profile":
                         rec["profile"][side] = r
                     else:
@@ -1757,12 +1773,21 @@ class Orchestrator:
     def ab_items(self, task: dict) -> list[tuple[str, str, str, dict]]:
         """The A/B report's runs as (name, kind, command, extra env): each frozen test command of the gate (as the gate
         runs it, gate_command), the ladder at every A/B rung, and the plain profile (with F114's clean wall run)."""
+        # FIX.25: the model determinism check on every side (first in the side's process: core/batch.phase); the
+        # accept gate needs it on the 'on' side (gate_on), quick or full
+        det = [("determinism", "determinism", B.DETERMINISM_CMD, {})]
         if self.ab_quick(task):  # F122: one process a side
             quick = f"BRINGUP_QUICK=1 BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --no-precompile --run-all {PROFILE_TEST}"
-            return [("quick", "quick", quick, {})] + self.ab_position_items(task)
+            if not any(DETERMINISM_IN.search(c) for _, c in gate_units(task)):  # not a model-level device gate
+                det = []
+            return det + [("quick", "quick", quick, {})] + self.ab_position_items(task)
         segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
         tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
-        items = [
+        if any(B.DETERMINISM_TEST in x for x in tests):  # the gate's own (injected) check: the determinism item
+            tests = [x for x in tests if B.DETERMINISM_TEST not in x]
+        else:
+            det = []  # a gate without the model check (no model-level test), or one naming the model's own test
+        items = det + [
             (Path(next((w for w in c.split() if w.endswith(".py")), f"test{i}")).stem, "test", c, {})
             for i, c in enumerate(tests)
         ]
@@ -1788,7 +1813,9 @@ class Orchestrator:
         """F230: the 'before' side of a pick without a switch, measured on the tree before the agent changes it. A
         finished 'before' run is kept whatever the tree holds later; a missing one needs a tree clean under the task's
         paths (an interrupted attempt's edits would be measured as 'before'). A reason to wait for a person, or None."""
-        names = [n for n, _, _, _ in self.ab_items(task)]
+        # FIX.25: a 'before' side measured before the determinism item existed stays valid (the accept gate needs
+        # the check on the 'on' side only)
+        names = [n for n, k, _, _ in self.ab_items(task) if k != "determinism"]
         env, _ = model_precision.switch_env(self.spec, (task.get("ab") or {}).get("env") or {})
         base = self.ab_base(env, env, task["id"])
         kept = self.ab_measure(task, "old", env, base, None, run=False)
@@ -1868,6 +1895,9 @@ class Orchestrator:
             got = {k: v["value"] for k, v in M.load(tid, res).items()}
             if kind == "test":
                 result = {"rc": rc, "checks": [m.strip() for m in FAILED_CHECK.findall(text)][:12]}
+            elif kind == "determinism":  # FIX.25
+                result = {k: got.get(k) for k in DETERMINISM_KEYS}
+                result.update(rc=rc, failed=[m.strip() for m in DETERMINISM_FAIL.findall(text)][:4])
             elif kind == "ladder":
                 result = dict(self.ab_summary(got), rc=rc, limits=ab_limits(got))
             elif kind == "position":  # F230: timing at one position; metric names carry _p<pos>, dropped here
@@ -1982,14 +2012,16 @@ class Orchestrator:
         """Would the gate pass with the change on: every command exited 0 and every threshold holds on its metrics."""
         from models.demos.common.bringup.core.gate import check_metrics
 
+        limits = gate_limits(task, self.led.tasks())  # FIX.25: with determinism_max_abs_diff == 0
+        det = self.ab_determinism_failing(task, rec, d)
         if rec.get("quick"):  # F122: the thresholds the quick run measured; the full gate runs before the final task
             from models.demos.common.bringup.core.gate import measured_only
 
             r = rec["quick"].get("new")
             got = M.load(task["id"], d / "new" / "quick")
-            ok, lines = check_metrics(measured_only(task["gate"].get("metrics") or {}, got), got)
+            ok, lines = check_metrics(measured_only(limits, got), got)
             failing = ["quick: not run" if r is None else f"quick: exit code {r['rc']}"] if not r or r["rc"] else []
-            failing += [x.strip() for x in lines if "FAIL" in x or "MISSING" in x]
+            failing += [x.strip() for x in lines if "FAIL" in x or "MISSING" in x] + det
             return {"ok": ok and not failing, "failing": failing, "partial": True}
         m = re.search(r"BRINGUP_RUNG=(\S+)", task["gate"]["cmd"])
         runs = {n: r.get("new") for n, r in rec["tests"].items()}  # what the gate itself runs, with the change on
@@ -1998,12 +2030,26 @@ class Orchestrator:
         got = {}
         for n in runs:
             got.update(M.load(task["id"], d / "new" / n))
-        ok, lines = check_metrics(task["gate"].get("metrics") or {}, got)
+        if (rec.get("determinism") or {}).get("new") is not None:  # FIX.25
+            got.update(M.load(task["id"], d / "new" / "determinism"))
+        ok, lines = check_metrics(limits, got)
         failing = [
             f"{n}: not run" if r is None else f"{n}: exit code {r['rc']}" for n, r in runs.items() if not r or r["rc"]
         ]
-        failing += [x.strip() for x in lines if "FAIL" in x or "MISSING" in x]
+        failing += [x.strip() for x in lines if "FAIL" in x or "MISSING" in x] + det
         return {"ok": ok and bool(runs) and not failing, "failing": failing}
+
+    def ab_determinism_failing(self, task: dict, rec: dict, d: Path) -> list[str]:
+        """FIX.25: the A/B's model determinism check on the 'on' side: why the accept gate would fail, or []."""
+        if not any(k == "determinism" for _, k, _, _ in self.ab_items(task)):
+            return []
+        r = (rec.get("determinism") or {}).get("new")
+        if r is None:
+            return ["determinism: not run"]
+        if r.get("rc"):
+            why = "; ".join(r.get("failed") or []) or f"exit code {r['rc']}"
+            return [f"determinism: the model is not deterministic or the check failed: {why}"[:1500]]
+        return []
 
     @staticmethod
     def ab_summary(got: dict) -> dict:
@@ -2107,6 +2153,14 @@ class Orchestrator:
                 a, b = new.get(k), old.get(k)
                 d = f"{a - b:+.1f}" if isinstance(a, (int, float)) and isinstance(b, (int, float)) and k != "rc" else ""
                 out.append(f"| {'exit code' if k == 'rc' else k} | {fmt(a)} | {fmt(b)} | {d} |")
+        if rec.get("determinism"):  # FIX.25
+            out += ["", "## Model determinism (same prompts again in one process, bit for bit; == 0 gates)", ""]
+            out += ["| | on | off |", "|---|---|---|"]
+            for k in DETERMINISM_KEYS + ("rc",):
+                vals = [rec["determinism"].get(s, {}).get(k) for s, _ in sides]
+                out.append(f"| {'exit code' if k == 'rc' else k} | " + " | ".join(fmt(v) for v in vals) + " |")
+            for side, label in sides:
+                out += [f"- {label}: {c}" for c in (rec["determinism"].get(side) or {}).get("failed", [])]
         g = rec["gate_on"]
         part = " (the thresholds the quick run measured)" if g.get("partial") else ""
         out += ["", f"## Gate with the change on{part}: {'PASS' if g['ok'] else 'FAIL'}", ""]
@@ -2150,10 +2204,14 @@ class Orchestrator:
         if not stamp_file.exists() or not rec.get("on"):
             return None
         if self.ab_quick(task):  # F122: accept on the quick run; the full gate is pending (run before the final task)
-            it = (json.loads(stamp_file.read_text()).get("items") or {}).get("quick") or {}
-            if it.get("stamp", {}).get("code") != self.ab_code_key(task) or (it.get("result") or {}).get("rc") != 0:
-                return None
-            got = {k: v["value"] for k, v in M.load(tid, side / "quick").items()}
+            items = json.loads(stamp_file.read_text()).get("items") or {}
+            names = [n for n, k, _, _ in self.ab_items(task) if k in ("determinism", "quick")]
+            for name in names:  # FIX.25: the determinism check (when the pick has one) passed on this code too
+                it = items.get(name) or {}
+                if it.get("stamp", {}).get("code") != self.ab_code_key(task) or (it.get("result") or {}).get("rc") != 0:
+                    return None
+            got = {k: v["value"] for k, v in M.load(tid, side / "determinism").items()}
+            got.update({k: v["value"] for k, v in M.load(tid, side / "quick").items()})
             return {"metrics": got, "source": f"quick A/B {side / 'quick'}; full gate pending", "partial": True}
         kept = json.loads(stamp_file.read_text())
         code = self.ab_code_key(task)
@@ -2164,7 +2222,7 @@ class Orchestrator:
                 return None
             kept = {
                 k: {n: items[n]["result"] for n in want if items[n]["kind"] == kind}
-                for k, kind in (("tests", "test"), ("ladder", "ladder"))
+                for k, kind in (("tests", "test"), ("ladder", "ladder"), ("determinism", "determinism"))
             }
             kept["profile"] = next((items[n]["result"] for n in want if items[n]["kind"] == "profile"), None)
         elif (kept.get("stamp") or {}).get("code") != code:
@@ -2174,6 +2232,7 @@ class Orchestrator:
         rcs = [r.get("rc") for r in kept.get("tests", {}).values()] + [
             r.get("rc") for r in kept.get("ladder", {}).values()
         ]
+        rcs += [r.get("rc") for r in (kept.get("determinism") or {}).values()]  # FIX.25
         if (kept.get("profile") or {}).get("rc") is not None:
             rcs.append(kept["profile"]["rc"])
         if any(rc != 0 for rc in rcs) or (rung and rung not in kept.get("ladder", {})):
@@ -2182,7 +2241,13 @@ class Orchestrator:
         names = [
             d.name
             for d in side.iterdir()
-            if d.is_dir() and (d.name in kept["tests"] or d.name in kept["ladder"] or d.name == "profile")
+            if d.is_dir()
+            and (
+                d.name in kept["tests"]
+                or d.name in kept["ladder"]
+                or d.name == "profile"
+                or d.name in (kept.get("determinism") or {})  # FIX.25
+            )
         ]
         ladder = set(kept.get("ladder", {}))
         for name in sorted(names, key=lambda n: (n in ladder, n == "profile")):  # tests, then the gate's rung, profile

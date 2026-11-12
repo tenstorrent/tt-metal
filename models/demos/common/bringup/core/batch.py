@@ -34,7 +34,10 @@ LM_HEAD_ENV = "BRINGUP_BATCH_LM_HEAD"  # load the shared model with its LM head 
 MAX_SEQ_ENV = "BRINGUP_BATCH_MAX_SEQ"  # load it with target.seq at least this (the furthest BRINGUP_POS + chunk)
 BATCH_TEST = "models/demos/common/bringup/tests/test_batch.py"
 TESTS_DIR = "models/demos/common/bringup/tests/"
-SHARED_TESTS = ("test_ladder.py", "test_profile.py", "test_positions.py", "test_smoke.py")
+SHARED_TESTS = ("test_ladder.py", "test_profile.py", "test_positions.py", "test_smoke.py", "test_determinism.py")
+# FIX.25: the model-level determinism check (testing/model_determinism.py) every model-level gate runs (core/gate.py)
+DETERMINISM_TEST = TESTS_DIR + "test_determinism.py"
+DETERMINISM_CMD = f"scripts/run_safe_pytest.sh --run-all --no-precompile {DETERMINISM_TEST}"
 FLAGS = {"--no-precompile", "--run-all"}
 # per-run variables: what a run measures and where it records it; anything else is the model's configuration
 ITEM_VARS = {
@@ -83,11 +86,13 @@ def parse_all(cmd: str) -> list[dict] | None:
 
 
 def phase(run: dict) -> int:
-    """The order inside a batch: ladders first (the process's first model use: their first chunk, the load time and
-    the program cache stay as in a process of their own), then clean walls (F114: before any real-time-profiled run),
-    then the other runs, the profiled runs last."""
+    """The order inside a batch: the determinism check first (FIX.25: its first sequence is the cold one, the first
+    after the load), then ladders (their first chunk and the load time as close to a process of their own as it
+    gets), then clean walls (F114: before any real-time-profiled run), then the other runs, the profiled runs last."""
     test = run["args"][0].split("::")[0]
     env = run["env"]
+    if test.endswith("test_determinism.py"):
+        return -1
     if test.endswith("test_ladder.py"):
         return 0
     if test.endswith("test_profile.py") and env.get("BRINGUP_PROFILE_WALL") == "1":
@@ -109,8 +114,10 @@ def hints(runs: list[dict], spec) -> dict:
     tests = [r["args"][0].split("::")[0] for r in runs]
     if any(t.endswith(("test_ladder.py", "test_smoke.py")) for t in tests):
         out[LM_HEAD_ENV] = "1"
-    chunk = int(spec.get("target.chunk"))
-    seqs = [int(r["env"]["BRINGUP_POS"]) + chunk for r in runs if r["env"].get("BRINGUP_POS")]
+    pos = [int(r["env"]["BRINGUP_POS"]) for r in runs if r["env"].get("BRINGUP_POS")]
+    need = pos or any(t.endswith("test_positions.py") for t in tests)
+    chunk = int(spec.get("target.chunk")) if need else 0  # (only then: FIX.25's determinism run needs no hint)
+    seqs = [p + chunk for p in pos]
     if any(t.endswith("test_positions.py") for t in tests):
         from models.demos.common.bringup.testing.positions import positions
 

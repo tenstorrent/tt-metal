@@ -3792,3 +3792,62 @@ Each item has its own setting (tt/settings.py, default on, off = the path before
 - Perf: not measured (stopped before measure, as the brief says). Expected: 0 on the A/B chunks (full, non-last).
 - Re-run: `gate P.49 --spec <spec> --check --unit 'P.49#test_prefill_end'` (~8 min);
   `DS41_PREFILL_END=end|cap` selects the side.
+
+## FIX.25 (overseer fix, 2026-11-12): determinism in every gate
+
+What changed (framework; the model's code untouched):
+- `testing/model_determinism.py` (new, the one mechanism): the loaded device model runs the novel prompt (the spec's
+  prompt file) and the code prompt (DS41-234's, `testing/b2b.py`) interleaved, 4 chunks of 5120 each from position 0,
+  3 runs each, every sequence on a fresh state. Run 0 of novel is the cold one (the first sequence after the load,
+  DS41-233); every later run follows the other prompt (determinism.py's A, B, A). Each later run must equal its
+  prompt's run 0 bit for bit: every chunk's final hidden and, after the last chunk, every layer's served state
+  (`state.served`: window KV, compressed KV, index keys; a model without it: `state.to_torch`). Compared with
+  testing/determinism.py's snapshot / diff (bits: -0 vs +0 and NaN payloads count). On failure the message names the
+  prompt, the run, the first differing chunk and the first differing layer state. Metrics: determinism_max_abs_diff
+  (gated == 0; a bits-only difference records 2^-149 so it still fails), _novel / _code, _state_, elements_differ,
+  per-chunk lists, determinism_s (cost). Coverage in defaults.yaml `tests.model_determinism` (chunks 4, runs 3).
+- `tests/test_determinism.py` (framework, new): that check on the spec's model. The model's own
+  `tests/test_determinism.py` now calls the same function (keeps P.49 / FIX.25 / FIX.26 gates that name it and P.50's
+  `determinism_max_abs_diff_<COMBINE_SPLIT>` metric); no second mechanism.
+- `core/gate.py` `with_determinism` / `needs_determinism` / `gate_limits`: every device gate (`device: true`) that runs
+  a framework model-level test (ladder, profile, positions, contract, smoke) or is a full-model or fix step, and names
+  no determinism test itself, runs the check without its tasks.yaml entry naming it. It is put FIRST into the gate's
+  first unit whose runs share one process at the shipped configuration (no switch variable), so with
+  tests.one_process it costs no model load and its first sequence is the cold one; without such a unit it is the
+  gate's own first unit `<task>#test_determinism`. `gate_limits` adds `determinism_max_abs_diff: == 0` to the gate's
+  limits (run_units, run_gate, delta_status, the brief's thresholds, the A/B gate_on); a tasks.yaml limit is never
+  replaced. No switch turns it off (owner: no exemption for the model; tests.nondeterministic stays component-only).
+- `orchestrator.py` A/B: a `determinism` item on both sides (quick: added when the pick's gate runs the check; full:
+  the gate's injected segment), first in the side's process (`core/batch.phase` -1). The accept (gate_on, the reuse of
+  the 'on' side) fails without it passing on the 'on' side; the table shows both sides. A 'before' side (ab.before)
+  measured earlier stays valid without it.
+- `core/batch.py`: test_determinism.py is a shared test; `hints` reads target.chunk only when a run needs a position
+  (it raised on a spec without target: 10 test_perf_ab selftests failed at HEAD for that, now pass).
+- `testing/b2b.py` `code_text`: the code prompt falls back to the same kind of text built from the repo's TTNN op
+  sources when /scratch/.../code.txt is missing (another box).
+- Selftest `selftest/test_model_determinism.py` (10 tests): a deterministic fake passes with 0; a deliberately
+  non-deterministic fake (`fixture_model.NondeterministicFakeModel`, a term that depends on the call count, like an
+  arrival-order sum) fails naming chunk 0 and layer state L02; a -0 vs +0 difference fails; injection rules; and end
+  to end, a ladder gate (tasks.yaml names no determinism test) through run_gate passes with the deterministic fake and
+  FAILS with the non-deterministic one (FIXTURE_NONDETERMINISTIC=1), the ladder never running after it.
+  test_overseer's fix-job test now expects the check once, first. Full selftest suite vs HEAD: no new failure.
+
+Numbers (Galaxy 8x4, 40 layers, COMBINE_SPLIT=on, the shipped defaults):
+- Batched probe, exactly as an injected gate unit runs (determinism, then the `last` ladder rung, one process):
+  bit-identical (hidden every chunk, every layer's served state, both prompts, cold and warm); process 347 s = load
+  191 s + determinism 93.5 s + ladder 52 s (warm). A ladder unit alone took 266-285 s (FIX.23 / P.48), so the check
+  adds about 65-75 s per gate; its cold sequence pays the program compiles the ladder then skips. The warm sequences
+  are ~1.5 s each: the 4 x 3 x 2 coverage costs ~10 s over the one cold sequence it cannot avoid.
+- Coverage choice: 4 chunks reach every chunk DS41-233 / 234 moved with COMBINE_SPLIT=off (P.50: 0.2542, rows
+  [392, 132, 1050, 0]); 3 runs give cold vs warm and warm vs warm after the other prompt. Fewer would save seconds
+  only; more chunks need a longer state (max chunks = target.seq / chunk).
+- A gate without a shared unit (e.g. only contract tests) pays its own load: ~260-300 s (the model test's 260 s).
+
+Gotcha: I ran `python -m pytest` once for the CPU selftests (an argument error, nothing ran); the selftests then ran
+through scripts/run_safe_pytest.sh (CPU only, the runner takes the box lock). And one devjob was started with the bare
+safe runner (usage error, rc 3, no device access).
+
+Re-run: `gate FIX.25 --spec <spec> --check`; the batched probe: `BRINGUP_BATCH_LM_HEAD=1 BRINGUP_BATCH_CMD='<determinism
+cmd> && BRINGUP_RUNG=last <ladder cmd>' scripts/run_safe_pytest.sh --no-precompile --run-all
+models/demos/common/bringup/tests/test_batch.py`; selftest: `scripts/run_safe_pytest.sh --run-all --no-precompile
+models/demos/common/bringup/selftest/test_model_determinism.py`.
