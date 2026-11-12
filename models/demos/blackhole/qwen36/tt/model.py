@@ -239,6 +239,9 @@ class Qwen36Model:
         # addresses are baked into the chunk-prefill trace and reused by every prefill_paged_slots
         # replay, so it is never freed/reallocated (only zeroed in place). See _bind_gdn_prefill_scratch.
         self._gdn_prefill_scratch = None
+        # gdn_block_state.GdnBlockState when the GDN request state lives in vLLM KV cache blocks
+        # (Qwen36ForCausalLM.allocate_kv_cache_per_layer); the GDN layers then keep only a batch-1 prefill workspace.
+        self.gdn_blocks = None
 
         # Optional vision tower (DropInVisionTransformer), attached lazily by
         # init_vision_model() for the multimodal serving path. None on the text-only path.
@@ -3680,6 +3683,9 @@ class Qwen36Model:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
         self._chunked_prepared_key = None
+        if self.gdn_blocks is not None:
+            self.gdn_blocks.release()
+            self.gdn_blocks = None
         if getattr(self, "_paged_kv_caches", None) is not None:
             for k_cache, v_cache in self._paged_kv_caches:
                 ttnn.deallocate(k_cache)
