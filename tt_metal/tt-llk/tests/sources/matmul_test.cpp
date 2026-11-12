@@ -412,13 +412,30 @@ constexpr bool matmul_half_end_fold_k = false;
 #define MATMUL_INIT_KEYS 0, 0, matmul_bias_write
 #endif
 #ifdef MATMUL_PRODUCTION
+// the compute API's fidelity for the CB formats of a call that names none (matmul_fe_phase_format), the test's CBs being in0, in1
+// and the output; run-time formats keep the request
+#if !defined(RUNTIME_FORMATS)
+constexpr bool matmul_prod_no_32bit_cb = !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_A_IN)) &&
+                                         !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_B_IN)) &&
+                                         !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
+constexpr ckernel::MathFidelity matmul_prod_fidelity = ckernel::matmul_phase_fidelity<
+    MATH_FIDELITY,
+    static_cast<DataFormat>(UNPACK_B_IN),
+    static_cast<DataFormat>(UNPACK_A_IN),
+    matmul_prod_no_32bit_cb ? DataFormat::Float16_b : DataFormat::Invalid,
+    is_fp32_dest_acc_en,
+    THROTTLE_LEVEL,
+    true>();
+#else
+constexpr ckernel::MathFidelity matmul_prod_fidelity = MATH_FIDELITY;
+#endif
 // llk_math_matmul_init_impl without block keys: tiny 16-row tiles unless half sync with a 32-bit DEST, no keys, the bias word written
 #define MATMUL_PROD_TINY_16_ROWS !(dest_sync == ckernel::DstSync::SyncHalf && is_fp32_dest_acc_en)
-#define MATMUL_MATH_DEFAULT_ARGS MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, false
+#define MATMUL_MATH_DEFAULT_ARGS matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, false
 #define MATMUL_MATH_DEFAULT_INIT_ARGS \
-    MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, MATMUL_PROD_TINY_16_ROWS, matmul_half_end_fold_k, matmul_reuse_dir_k, false, 0, 0, true
-#define MATMUL_MATH_THROTTLE_ARGS      MATH_FIDELITY, 5, false, true, matmul_reuse_dir_k, false
-#define MATMUL_MATH_THROTTLE_INIT_ARGS MATH_FIDELITY, 5, false, true, 0, MATMUL_PROD_TINY_16_ROWS, false, matmul_reuse_dir_k, false, 0, 0, true
+    matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, 0, MATMUL_PROD_TINY_16_ROWS, matmul_half_end_fold_k, matmul_reuse_dir_k, false, 0, 0, true
+#define MATMUL_MATH_THROTTLE_ARGS      matmul_prod_fidelity, 5, false, true, matmul_reuse_dir_k, false
+#define MATMUL_MATH_THROTTLE_INIT_ARGS matmul_prod_fidelity, 5, false, true, 0, MATMUL_PROD_TINY_16_ROWS, false, matmul_reuse_dir_k, false, 0, 0, true
 #else
 #define MATMUL_MATH_DEFAULT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
 #define MATMUL_MATH_DEFAULT_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k, MATMUL_INIT_KEYS

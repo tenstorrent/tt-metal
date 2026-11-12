@@ -92,7 +92,7 @@ ALWI void matmul_tiles(
  */
 // clang-format on
 template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
-ALWI void matmul_block_init(
+ALWI void(matmul_block_init)(
     LLKOperand<F0, S0> /*in0*/,
     LLKOperand<F1, S1> /*in1*/,
     std::uint32_t transpose = 0,
@@ -129,7 +129,7 @@ ALWI void matmul_block_init(
  */
 // clang-format on
 template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
-ALWI void matmul_block(
+ALWI void(matmul_block)(
     LLKOperand<F0, S0> in0,
     LLKOperand<F1, S1> in1,
     std::uint32_t in0_tile_index,
@@ -144,6 +144,16 @@ ALWI void matmul_block(
         in0.l1_address, in1.l1_address, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Block execute takes no operand id; format-free, fixed MM_THROTTLE (no dynamic throttle).
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+}
+
+// api/compute/matmul.h's matmul_block_init / matmul_block macros (Blackhole) send a call with operand descriptors here
+template <std::uint32_t, std::uint32_t, typename... Args>
+ALWI void matmul_block_init_fe(std::uint32_t, Args... args) {
+    (matmul_block_init)(args...);
+}
+template <std::uint32_t, std::uint32_t, typename... Args>
+ALWI void matmul_block_fe(std::uint32_t, Args... args) {
+    (matmul_block)(args...);
 }
 
 }  // namespace experimental

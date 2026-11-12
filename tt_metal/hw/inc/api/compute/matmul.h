@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
@@ -168,13 +169,32 @@ constexpr std::uint32_t llk_matmul_unpack_ttsync() {
     return unpack_auto_ttsync;
 }
 
+// True when no CB of the kernel holds a 32-bit format. The JIT's unpack_src_format holds every CB's buffer format,
+// outputs included (genfiles.cpp generate_unpack_data_formats, equalized with pack_dst_format), so then no section
+// packs to Float32.
+constexpr bool llk_matmul_kernel_no_32bit_cb() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    for (const std::uint8_t f : unpack_src_format) {
+        if (matmul_format_is_32bit(static_cast<DataFormat>(f))) {
+            return false;
+        }
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
 // The fidelity whose phases a matmul runs for operand formats known at compile time (matmul_phase_fidelity); the requested
 // one when they are Invalid, mixed, or the output and DEST width are a cell that measured slower with the phases dropped.
 // Only the math calls take it; the unpack and math forms stay keyed on the requested fidelity (MATH_FIDELITY).
 template <DataFormat in0_format, DataFormat in1_format, DataFormat out_format>
 constexpr MathFidelity matmul_elided_fidelity() {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
-    return matmul_phase_fidelity<MATH_FIDELITY, in0_format, in1_format, out_format, DST_ACCUM_MODE, MM_THROTTLE, true>();
+    // an unknown output of a kernel without 32-bit CBs is not Float32, which is all the keep rule asks
+    constexpr DataFormat keep_out =
+        out_format == DataFormat::Invalid && llk_matmul_kernel_no_32bit_cb() ? DataFormat::Float16_b : out_format;
+    return matmul_phase_fidelity<MATH_FIDELITY, in0_format, in1_format, keep_out, DST_ACCUM_MODE, MM_THROTTLE, true>();
 #else
     return MathFidelity::LoFi;  // the pack thread has no MATH_FIDELITY and never reads this
 #endif
@@ -945,4 +965,81 @@ ALWI void matmul_block_k(
 #endif
 }
 
+#ifdef ARCH_BLACKHOLE
+// A plain call goes through the macros at the end of this file with the cb ids that are constant where it is written;
+// each choice is an if constexpr at instantiation, so a call it does not apply to keeps its instantiation.
+
+// a cb id as a template argument; 0xFF for an argument that is not one
+template <typename T>
+constexpr std::uint32_t matmul_fe_cb(const T& cb) {
+    if constexpr (std::is_convertible_v<T, std::uint32_t>) {
+        return static_cast<std::uint32_t>(cb);
+    } else {
+        return 0xFFu;
+    }
+}
+
+// The format of equal Bfp8_b or Bfp4_b operands whose dropped fidelity phases add exactly 0 (matmul_phase_fidelity,
+// with the output of matmul_elided_fidelity); Invalid where the call keeps the requested fidelity or a cb id is not a
+// constant
+template <std::uint32_t in0_cb, std::uint32_t in1_cb>
+constexpr DataFormat matmul_fe_phase_format() {
+#if defined(UCK_CHLKC_MATH)
+    if constexpr (in0_cb < sizeof(unpack_src_format) && in1_cb < sizeof(unpack_src_format)) {
+        constexpr auto f = static_cast<DataFormat>(unpack_src_format[in0_cb]);
+        if constexpr (
+            f == static_cast<DataFormat>(unpack_src_format[in1_cb]) &&
+            (f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b) &&
+            matmul_elided_fidelity<f, f, DataFormat::Invalid>() != MATH_FIDELITY) {
+            return f;
+        }
+    }
+#endif
+    return DataFormat::Invalid;
+}
+
+template <std::uint32_t in0_cb, std::uint32_t in1_cb>
+ALWI void matmul_block_init_fe(
+    const std::uint32_t call_line,
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t ct_dim = 1,
+    std::uint32_t rt_dim = 1,
+    std::uint32_t kt_dim = 1) {
+    constexpr DataFormat f = matmul_fe_phase_format<in0_cb, in1_cb>();
+    matmul_block_init<false, 0, 0, DataFormat::Invalid, 0, f, f>(
+        in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
+}
+
+template <std::uint32_t in0_cb, std::uint32_t in1_cb>
+ALWI void matmul_block_fe(
+    const std::uint32_t call_line,
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim) {
+    constexpr DataFormat f = matmul_fe_phase_format<in0_cb, in1_cb>();
+    matmul_block<false, 0, 0, DataFormat::Invalid, 0, f, f>(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim, call_line);
+}
+#endif
+
 }  // namespace ckernel
+
+#ifdef ARCH_BLACKHOLE
+// the cb ids of a plain call where they are constant expressions (pk-state's front-end dispatch); a call with template
+// arguments is not a macro call
+#define MATMUL_FE_CB(cb) (__builtin_constant_p(cb) ? ::ckernel::matmul_fe_cb(cb) : 0xFFu)
+#define matmul_block_init(in0_cb_id, in1_cb_id, ...)                        \
+    matmul_block_init_fe<MATMUL_FE_CB(in0_cb_id), MATMUL_FE_CB(in1_cb_id)>( \
+        __builtin_LINE(), in0_cb_id, in1_cb_id, ##__VA_ARGS__)
+#define matmul_block(in0_cb_id, in1_cb_id, ...)                        \
+    matmul_block_fe<MATMUL_FE_CB(in0_cb_id), MATMUL_FE_CB(in1_cb_id)>( \
+        __builtin_LINE(), in0_cb_id, in1_cb_id, __VA_ARGS__)
+#endif
