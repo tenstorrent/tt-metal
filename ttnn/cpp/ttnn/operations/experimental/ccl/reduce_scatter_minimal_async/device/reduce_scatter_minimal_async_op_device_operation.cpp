@@ -66,11 +66,10 @@ bool ReduceScatterMinimalAsyncDeviceOperation::line_runtime_rows(
     const auto [normalized_dim, input_tensor_C, input_tensor_B] =
         shape.rank() == 2 ? ttnn::experimental::ccl::reduce_scatter_map_2d_to_4d(operation_attributes.dim)
                           : ttnn::experimental::ccl::reduce_scatter_map_nd_to_4d(shape, operation_attributes.dim);
-    const auto sharded = [](const std::optional<Tensor>& tensor) { return tensor.has_value() && tensor->is_sharded(); };
+    const auto sharded = [](const auto& optional) { return optional.has_value() && optional->is_sharded(); };
     const bool tiled_interleaved = input_tensor.layout() == tt::tt_metal::Layout::TILE && !input_tensor.is_sharded() &&
                                    !operation_attributes.output_mem_config.is_sharded() &&
-                                   !(operation_attributes.optional_intermediate_mem_config.has_value() &&
-                                     operation_attributes.optional_intermediate_mem_config->is_sharded()) &&
+                                   !sharded(operation_attributes.optional_intermediate_mem_config) &&
                                    !sharded(tensor_args.optional_intermediate_tensor) &&
                                    !sharded(tensor_args.optional_output_tensor);
     return ttnn::experimental::ccl::reduce_scatter_line_runtime_rows(
