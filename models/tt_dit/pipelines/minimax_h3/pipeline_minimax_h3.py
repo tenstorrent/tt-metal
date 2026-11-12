@@ -76,7 +76,7 @@ from ...layers.module import Module
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
-from ...models.transformers.minimax_h3 import prefix_spread
+from ...models.transformers.minimax_h3 import precision, prefix_spread
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables, to_out_weight_tag
 from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
@@ -1794,27 +1794,29 @@ class MiniMaxH3Pipeline:
         return rung, *self._video_streams_by_cap[rung]
 
     def _upload_stream(self, state: StateTensor, rows: torch.Tensor, capacity: int, traced: bool) -> None:
-        """Upload `[n, C]` latent rows as the `[1, 1, capacity, C]` bf16 stream `state`, zero tail included.
+        """Upload `[n, C]` latent rows as the `[1, 1, capacity, C]` stream `state` (bf16; float32 with
+        MINIMAX_H3_FP32_LATENTS), zero tail included.
 
         With `latent_upload_real_rows`, only the tile-aligned head (the real rows, zero-padded to a tile row) crosses
         from the host; the zero tail is a device fill (`ttnn.zeros` fills TILE tensors of this size on device) and the
         two are concatenated on device. The result is the same tensor, pad rows included, as the full upload.
         """
+        dtype = precision.latent_dtype()
         aligned = -(-rows.shape[0] // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         if not self.latent_upload_real_rows or not 0 < aligned < capacity:
             state.update(
                 self._pad_host_rows(rows, capacity).reshape(1, 1, capacity, -1),
                 traced=traced,
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 device=self.mesh_device,
             )
             return
         head = from_torch(
-            self._pad_host_rows(rows, aligned).reshape(1, 1, aligned, -1), device=self.mesh_device, dtype=ttnn.bfloat16
+            self._pad_host_rows(rows, aligned).reshape(1, 1, aligned, -1), device=self.mesh_device, dtype=dtype
         )
         tail = ttnn.zeros(
             (1, 1, capacity - aligned, rows.shape[-1]),
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
         )
@@ -3270,7 +3272,7 @@ class MiniMaxH3Pipeline:
                     1, 1, caps.condition_video_rows, -1
                 ),
                 traced=traced,
-                dtype=ttnn.bfloat16,
+                dtype=precision.latent_dtype(),
                 device=self.mesh_device,
             )
         if self.task == "ref2va":
@@ -3279,7 +3281,7 @@ class MiniMaxH3Pipeline:
                     1, 1, caps.condition_audio_rows, -1
                 ),
                 traced=traced,
-                dtype=ttnn.bfloat16,
+                dtype=precision.latent_dtype(),
                 device=self.mesh_device,
             )
 
@@ -3498,6 +3500,10 @@ class MiniMaxH3Pipeline:
                         dram_probe.report(f"after OOM in step {i + 1}, rung {rung} (forward unwound)")
                     raise
 
+                # Euler, in the stream's dtype: the velocity is cast to it first (a no-op by default), so with
+                # MINIMAX_H3_FP32_LATENTS the step scale and the update both run in float32.
+                video_velocity = precision.cast(video_velocity, tt_video.value.dtype)
+                audio_velocity = precision.cast(audio_velocity, self._tt_audio.value.dtype)
                 ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
                 ttnn.add_(tt_video.value, video_velocity)
                 ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))

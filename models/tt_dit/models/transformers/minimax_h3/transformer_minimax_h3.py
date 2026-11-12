@@ -20,6 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, trace_capture_count, traced_function
+from . import precision
 from .modulation_cache import ModulationTableCache
 from .sol_prepass_fused import SolPrepassFused
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
@@ -431,9 +432,9 @@ class MiniMaxH3Transformer3DModel(Module):
         refined = self.token_refiner(self.context_embedder(prompt_1BLP), cu_window_seqlens=prompt_windows)
         segments = [refined]
         if condition_video_1BKC is not None:
-            segments.append(self.proj_in(condition_video_1BKC))
+            segments.append(self._project_in(self.proj_in, condition_video_1BKC))
         if condition_audio_1BKC is not None:
-            segments.append(self.audio_proj_in(condition_audio_1BKC))
+            segments.append(self._project_in(self.audio_proj_in, condition_audio_1BKC))
         # ROW_MAJOR is what `ttnn.embedding` reads (a TILE table would be untilized every step).
         # The segments are written into the persistent source table by the first `forward` of the
         # request, which is where the audio/video capacities -- and so the table size -- are known.
@@ -442,6 +443,12 @@ class MiniMaxH3Transformer3DModel(Module):
                 ttnn.deallocate(segment)
         self._pending_prefix = [ttnn.to_layout(segment, ttnn.ROW_MAJOR_LAYOUT) for segment in segments]
         self._static_prefix_rows = sum(segment.shape[2] for segment in self._pending_prefix)
+
+    @staticmethod
+    def _project_in(linear: ColParallelLinear, rows_1BRC: ttnn.Tensor) -> ttnn.Tensor:
+        """An input projection of latent rows; a float32 stream (MINIMAX_H3_FP32_LATENTS) is cast to bfloat16 first (the
+        rows themselves by default)."""
+        return linear(precision.bf16_if_fp32(rows_1BRC))
 
     def _write_source_rows(self, segment_1BRC: ttnn.Tensor, row: int) -> int:
         """Write a ``[1, 1, rows, C]`` ROW_MAJOR segment into the source table at ``row``; return the next row."""
@@ -540,8 +547,8 @@ class MiniMaxH3Transformer3DModel(Module):
             t = ttnn.reshape(t, (1, t.shape[-1]))
             return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
-        audio_rows = ttnn.to_layout(self.audio_proj_in(audio_1BAC), ttnn.ROW_MAJOR_LAYOUT)
-        video_rows = ttnn.to_layout(self.proj_in(video_1BVC), ttnn.ROW_MAJOR_LAYOUT)
+        audio_rows = ttnn.to_layout(self._project_in(self.audio_proj_in, audio_1BAC), ttnn.ROW_MAJOR_LAYOUT)
+        video_rows = ttnn.to_layout(self._project_in(self.proj_in, video_1BVC), ttnn.ROW_MAJOR_LAYOUT)
         total_rows = self._static_prefix_rows + audio_rows.shape[2] + video_rows.shape[2]
         self._ensure_source_table(total_rows, audio_rows.shape[3], audio_rows.dtype)
         if self._pending_prefix is not None:
