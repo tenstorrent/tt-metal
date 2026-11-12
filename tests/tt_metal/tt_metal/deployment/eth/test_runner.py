@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from testenums import TestCase, DistTestCase, prepare_filter
 from result_parser import TestRun, TestedLink, process_logs
 
 from argparse import ArgumentParser
@@ -11,7 +12,6 @@ from threading import Thread
 from queue import Queue
 from time import sleep
 from sys import stdout
-from enum import Enum
 import requests
 import asyncio
 import json
@@ -20,19 +20,6 @@ import os
 
 print_logs = True
 missing_links: dict[str, dict] = {}
-
-
-class TestCase(str, Enum):
-    LINK_UP = "LinkUp"
-    BANDWIDTH = "Bandwidth"
-    BANDWIDTH_BIDIR = "BandwidthBidir"
-    DATA_INTEGRITY = "DataIntegrityDram"
-    DATA_INTEGRITY_BIDIR = "DataIntegrityDramBidir"
-    STRESS_TEST = "StressTest"
-
-
-class DistTestCase(str, Enum):
-    BANDWIDTH = "DistBandwidth"
 
 
 def runs_to_json(runs: list[TestRun], **kwargs) -> str:
@@ -67,10 +54,6 @@ def batch_worker(q: Queue, s: requests.Session, http_post_url: Optional[str]):
                 failed_requests += 1
         else:
             sleep(0.1)
-
-
-def prepare_filter(tests: list[TestCase]) -> str:
-    return ":".join(map(lambda x: f"*TensixDeploymentEthernet*{x}", tests))
 
 
 def table(title: str, headers: list[str], rows: list[list]) -> str:
