@@ -15,15 +15,17 @@ def _host(t):
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "T, Hp, Wp, C_pad",
+    "T, Hp, Wp, C_pad, wide_rows",
     [
-        (37, 6, 10, 0),  # partial T, Y and UV tiles
-        (32, 2, 8, 0),  # all tiles full
-        (145, 68, 60, 0),  # LTX 1088x1920 conv_out per chip on 4x8
-        (37, 6, 10, 64),  # channels padded to a tile, as conv3d emits them
+        (37, 6, 10, 0, False),  # partial T, Y and UV tiles
+        (32, 2, 8, 0, False),  # all tiles full
+        (145, 68, 60, 0, False),  # LTX 1088x1920 conv_out per chip on 4x8
+        (37, 6, 10, 64, False),  # channels padded to a tile, as conv3d emits them
+        (32, 2, 8, 0, True),  # wide rows (T <= 32), all tiles full
+        (17, 6, 10, 0, True),  # wide rows, partial T
     ],
 )
-def test_rgb_to_yuv_patch_input(mesh_device, device_params, T, Hp, Wp, C_pad):
+def test_rgb_to_yuv_patch_input(mesh_device, device_params, T, Hp, Wp, C_pad, wide_rows):
     mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
     p = 4
     C = 3 * p * p
@@ -45,8 +47,8 @@ def test_rgb_to_yuv_patch_input(mesh_device, device_params, T, Hp, Wp, C_pad):
     chwt = ttnn.reshape(clipped, (1, T, Hp, Wp, 3, p, p))
     chwt = ttnn.permute(chwt, (0, 4, 2, 6, 3, 5, 1))
     chwt = ttnn.reshape(chwt, (3, Hp * p, Wp * p, T))
-    ref = ttnn.experimental.rgb_to_yuv(chwt, coefficients=coeffs)
-    out = ttnn.experimental.rgb_to_yuv(padded_in, coefficients=coeffs, input_patch_size=p)
+    ref = ttnn.experimental.rgb_to_yuv(chwt, coefficients=coeffs, wide_rows=wide_rows)
+    out = ttnn.experimental.rgb_to_yuv(padded_in, coefficients=coeffs, wide_rows=wide_rows, input_patch_size=p)
 
     for name, a, b in zip("YUV", ref, out):
         assert tuple(a.shape) == tuple(b.shape), name
