@@ -551,11 +551,11 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
                  *   SRCA, SRCB * RT_DIM, SRCA, SRCB * RT_DIM, ...
                  */
 
-                // two_row: SRCB, SRCB, SRCA * CT_DIM per pair of rows (each SrcA tile serves both rows)
+                // two_row: SRCB, SRCB, SRCA * CT_DIM per pair of rows (each SrcA tile serves both rows), one SRCB for an odd last row
                 const std::uint32_t reuse_step = two_row ? 2 : 1;
                 for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += reuse_step)
                 {
-                    for (std::uint32_t i = 0; i < reuse_step; i++)
+                    for (std::uint32_t i = 0; i < std::min(reuse_step, reuse_loop - reuse_iter); i++)
                     {
                         _perf_unpack_set_valid(reuse_reg);
                     }
@@ -636,7 +636,7 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
                  *  SRCB * RT_DIM, SRCA, SRCB * RT_DIM, SRCA, ...
                  */
 
-                // two_row: SRCA * CT_DIM, SRCB, SRCB per pair of rows
+                // two_row: SRCA * CT_DIM, SRCB, SRCB per pair of rows, one SRCB for an odd last row
                 const std::uint32_t reuse_step = two_row ? 2 : 1;
                 for (std::uint32_t reuse_iter = 0; reuse_iter < reuse_loop; reuse_iter += reuse_step)
                 {
@@ -645,7 +645,7 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
                         _perf_math_clear_valid(reload_reg);
                     }
 
-                    for (std::uint32_t i = 0; i < reuse_step; i++)
+                    for (std::uint32_t i = 0; i < std::min(reuse_step, reuse_loop - reuse_iter); i++)
                     {
                         _perf_math_clear_valid(reuse_reg);
                     }

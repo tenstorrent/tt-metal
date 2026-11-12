@@ -1556,11 +1556,10 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
     if constexpr (matmul_two_row<reuse_dir>())
     {
         static_assert(!matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>(), "the two-row scheme is LoFi");
-        LLK_ASSERT((rt_dim % 2) == 0, "matmul: the two-row scheme needs an even rt_dim");
         // With the clear of SrcB disabled, a clear of it only flips the bank, so the two in0 rows stay in its two banks. Set and cleared
         // inside the call: no other op sees it.
         TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK);
-        for (std::uint32_t t = 0; t < rt_dim; t += 2)
+        for (std::uint32_t t = 0; t + 1 < rt_dim; t += 2)
         {
             for (std::uint32_t c = 0; c < ct_dim; c++)
             {
@@ -1589,6 +1588,17 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
                 }
             }
+        }
+        // an odd rt_dim ends on one in0 row, held in one SrcB bank as main holds it
+        if (rt_dim & 1)
+        {
+            for (std::uint32_t c = 0; c < ct_dim; c++)
+            {
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + ct_dim * (rt_dim - 1) + c);
+                ckernel_template::run();
+                TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+            }
+            TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
         }
         TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, 0);
         math::reset_counters(p_setrwc::SET_ABD_F);

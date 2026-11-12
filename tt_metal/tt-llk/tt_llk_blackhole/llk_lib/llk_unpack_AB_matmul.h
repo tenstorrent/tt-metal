@@ -620,9 +620,9 @@ inline void _llk_unpack_AB_matmul_(
     if constexpr (matmul_two_row<reuse_dir>())
     {
         static_assert(kernel_broadcast_a == 0 && kernel_broadcast_b == 0, "the two-row scheme has no kernel broadcast");
-        LLK_ASSERT((rt_dim % 2) == 0 && !unpA_partial_face && !unpB_partial_face, "matmul: the two-row scheme needs an even rt_dim and whole faces");
+        LLK_ASSERT(!unpA_partial_face && !unpB_partial_face, "matmul: the two-row scheme needs whole faces");
         // Two in0 rows go to the two SrcB banks, then the in1 tiles are unpacked once for both.
-        for (std::uint32_t t = 0; t < rt_dim; t += 2)
+        for (std::uint32_t t = 0; t + 1 < rt_dim; t += 2)
         {
             const std::uint32_t row_a = base_address_a + tile_size_a * (tile_index_a + t * kt_dim);
             const std::uint32_t row_b = base_address_b + tile_size_b * tile_index_b;
@@ -648,6 +648,19 @@ inline void _llk_unpack_AB_matmul_(
             TTI_NOP;
             TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
 
+            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+            switch_config_context(unp_cfg_context);
+        }
+        // an odd rt_dim ends on one in0 row in one SrcB bank, then the in1 tiles
+        if (rt_dim & 1)
+        {
+            wait_for_next_context(2);
+            _llk_unpack_configure_addresses_(
+                base_address_b + tile_size_b * tile_index_b, base_address_a + tile_size_a * (tile_index_a + (rt_dim - 1) * kt_dim), cfg);
+            semaphore_post(semaphore::UNPACK_SYNC);
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+            TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
             t6_semaphore_get(semaphore::UNPACK_SYNC);
             switch_config_context(unp_cfg_context);
