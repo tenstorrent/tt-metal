@@ -320,6 +320,7 @@ _WIDTH_3x1 = (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 2, 0)
         ([6, 1, 64, 96], [6, 1, 32, 96], _WIDTH_3x1, [384, 32]),
         ([2, 3, 64, 96], [2, 1, 32, 96], _WIDTH_3x1, [384, 32]),
         ([2, 3, 64, 96], [1, 1, 32, 96], _WIDTH_3x1, [384, 32]),
+        ([2, 1, 1, 32, 64], [2, 1, 1, 32, 64], (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 1, 0), [64, 32]),
     ),
 )
 def test_bcast_h_sharded_batches_of_b(device, a_shape, b_shape, sharding, shard_shape):
@@ -332,8 +333,23 @@ def test_bcast_h_sharded_batches_of_b(device, a_shape, b_shape, sharding, shard_
     )
     b = ttnn.from_torch(_exact_bf16(b_shape, 7), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.to_torch(ttnn.bcast(a, b, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H))
-    expected = ttnn.to_torch(a) + ttnn.to_torch(b)[:, :, 0:1, :]
+    expected = ttnn.to_torch(a) + ttnn.to_torch(b)[..., 0:1, :]
     assert torch.equal(out, expected)
+
+
+# Four batches of b over the two cores along the shard height: the block-sharded offsets divided by
+# ncores / bN == 0.
+def test_bcast_h_block_sharded_more_batches_than_height_cores(device, expect_error):
+    a = ttnn.from_torch(
+        _exact_bf16([1, 4, 32, 64], 0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded_h_bcast_mem_config(*_BLOCK_1x2, [64, 64]),
+    )
+    b = ttnn.from_torch(_exact_bf16([1, 4, 32, 64], 7), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "split evenly between the 4 batches"):
+        ttnn.bcast(a, b, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
 
 
 @pytest.mark.parametrize(
