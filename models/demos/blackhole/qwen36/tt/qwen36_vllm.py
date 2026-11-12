@@ -321,11 +321,15 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         for u in range(N):
             T = int(prompt_lens[u]) if prompt_lens is not None else tokens.shape[1]
             rb = row_blocks(mamba_state, u)
-            segments = self._prefill_segments(int(start_pos[u]) if start_pos is not None else 0, T, rb, visual)
+            segments = self._prefill_segments(int(start_pos[u]) if start_pos is not None else 0, T, rb)
             logger.info(f"Prefilling row {u}: tokens [{segments[0][0]}, {T})")
             if segments[0][0] > 0:
                 blocks.restore(mamba_state, rb.start)
             on_chunk = self._prefill_chunk_hook(u, tokens[u, :T], pt[u : u + 1], mamba_state, kwargs)
+            extra = {} if on_chunk is None else {"on_chunk": on_chunk}
+            if visual:
+                # An image's M-RoPE positions need all of its tokens, and a checkpoint can split an image.
+                extra["rope_token_ids"] = tokens[u : u + 1, :T]
             logits = None
             for a, b in segments:
                 if logits is not None:
@@ -338,7 +342,7 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                     actual_len=b,
                     vision_tokens=vision_tokens,
                     start_pos=a,
-                    **({} if on_chunk is None else {"on_chunk": on_chunk}),
+                    **extra,
                 )
             rows.append(ttnn.to_torch(logits, mesh_composer=comp).reshape(-1, model.args.vocab_size)[:1].float())
             ttnn.deallocate(logits)
@@ -351,21 +355,19 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         or None. The ordinary model reads nothing from the prefill's hidden states."""
         return None
 
-    def _prefill_segments(self, start, end, rb, visual):
+    def _prefill_segments(self, start, end, rb):
         """gdn_block_state.prefill_segments for a row that vLLM schedules from ``start`` to ``end`` with the state
-        blocks ``rb``. A multimodal row restarts at position 0 instead and leaves its start blocks unread: its vision
-        splice and M-RoPE run on the whole prompt, and vllm-tt-plugin does not move the chunk ends of a multimodal
-        prompt onto KV block boundaries. Every other row must start on a KV block boundary, and prefill_segments raises
-        otherwise: vllm-tt-plugin ends the non-final prefill chunks of a MambaSpec model there and rejects a
-        prefix_match_unit below the block size, so vLLM's prefix hits end there too."""
+        blocks ``rb``. The row must start on a KV block boundary, and prefill_segments raises otherwise: vllm-tt-plugin
+        ends the non-final prefill chunks of a MambaSpec model there and rejects a prefix_match_unit below the block
+        size, so vLLM's prefix hits end there too. A multimodal row starts at 0 with every image in it, or, after a
+        preemption, continues on a block boundary after its last image; its segments take their M-RoPE positions from
+        the whole row (prefill_forward), so a checkpoint can also fall inside an image."""
         from models.demos.blackhole.qwen36.tt.gdn_block_state import prefill_segments
 
         block_size = self.model[0].gdn_blocks.layout.block_size
-        if start > 0 and visual:
-            start = 0
-        elif (start == 0 and any(rb.start)) or (start > 0 and min(rb.start) <= 0):
+        if (start == 0 and any(rb.start)) or (start > 0 and min(rb.start) <= 0):
             raise ValueError(f"a prefill row at start_pos {start} has the start blocks {rb.start}")
-        if rb.checkpoint_pos and (visual or rb.checkpoint_pos <= start):
+        if rb.checkpoint_pos and rb.checkpoint_pos <= start:
             raise ValueError(f"this prefill row cannot write the prefill checkpoint after {rb.checkpoint_pos} tokens")
         return prefill_segments(start, end, rb.checkpoint_pos, block_size)
 
