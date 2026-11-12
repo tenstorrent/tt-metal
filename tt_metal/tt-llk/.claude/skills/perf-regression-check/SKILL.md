@@ -42,12 +42,9 @@ already cached) without running a sweep — cheap, use it to confirm the refs fi
   fires on large `TILE_LOOP` values. `0` disables the cycle clause.
 - **iterations**: `--iterations`, default `3` per side.
 - **speed of light**: `--speed-of-light`. The script applies it to both sides.
-- **asserts**: `TT_LLK_DISABLE_ASSERTS=1` by default, matching Wormhole and
-  Blackhole perf CI. This uses a `-noassert` cache variant. Set it to `0` to
-  keep asserts on both sides (`-assert` cache variant). With asserts off, the
-  script refuses a commit whose `test_config.py` predates the asserts toggle,
-  because that side would still compile with asserts; choose a newer baseline
-  or compare both sides with `TT_LLK_DISABLE_ASSERTS=0`.
+- **asserts**: builds drop `LLK_ASSERT` by default, as CI perf does
+  (`TT_LLK_DISABLE_ASSERTS=1`, shown as `-noassert` in the build line).
+  `TT_LLK_DISABLE_ASSERTS=0` keeps them; the setting is part of the cache key.
 
 ## What the script guarantees (so you do not have to)
 - **Your checkout is never touched.** Each commit is a separate sparse git worktree with
@@ -79,15 +76,10 @@ Show the verdict, the top regressions, and the improvements if any. Point at
 - The further apart the two commits are, the more unrelated change is in the delta. For
   "did *this* work regress perf", the merge-base default is the honest baseline.
 - `TILE_LOOP` is the steady-state per-tile cost; `INIT`/`KERNEL` include one-time overheads.
-- The schema version is `PERF_TEST_SCHEMAS[...]["version"]` in
-  `helpers/perf/test_schemas.py`, not a CSV column. It changes when columns
-  change. A schema version change, or a `tile_cnt` change that starts counting
-  both operand tiles, is an accounting change, not a kernel regression. A
-  `tile_cnt` accounting change can make rows incomparable without a version
-  bump. Compare cycle numbers only inside one schema version. A ~2× drop on
-  MATH_ISOLATE after that accounting change is about half a result tile, not
-  a speedup.
-  At 16-bit, `dest_acc=Yes` can also double dest handshakes.
+- A schema version change or a `tile_cnt` accounting change is not a kernel
+  regression or speedup; compare cycle numbers only inside one schema version
+  and one accounting
+  ([perf-facts](../perf-test/references/perf-facts.md), "Accounting").
 
 ## Layout sensitivity: a deterministic delta that is not a code cost
 
@@ -136,15 +128,17 @@ sensitivity, with the level values and the aggregate delta, not as a regression.
 measured code differs, the delta may be real: look at the differing instructions.
 
 These experiments measure uncommitted working-tree variants, which this script cannot do
-(it measures commits only). Run them directly with distinct run tags, and raise
-`PERF_KEEP_RUNS` above its default of 10 so earlier runs are not pruned:
+(it measures commits only). Run each variant through `run-test` with a distinct run tag,
+and raise the retention above its default of 10 so earlier runs are not pruned:
 
 ```bash
-PERF_RUN_TAG=ctrl-pad1-sol PERF_KEEP_RUNS=100 CHIP_ARCH=wormhole \
-  pytest -q --speed-of-light --compile-consumer -n 15 -m perf ./perf_<op>.py
+LLK="$(git rev-parse --show-toplevel)/tt_metal/tt-llk"
+bash "$LLK/.claude/scripts/run_test.sh" run --worktree "$LLK" --arch wormhole \
+  --test perf_<op>.py --perf --speed-of-light --run-tag ctrl-pad1-sol --keep-runs 100
 ```
 
-Reports land in `tt_metal/tt-llk/perf_data/runs/<tag>/<module>/`. Swap only the test's own
+Snapshot the ELFs after the compile phase of each variant (step 1). Reports land in
+`tt_metal/tt-llk/perf_data/runs/<tag>/<module>/`. Swap only the test's own
 files to the baseline with `git restore --source=<ref> --worktree -- <files>`, and restore
 them afterwards. A file that exists on only one side, such as a deleted `[op]_perf.cpp`,
 must be removed by hand.
