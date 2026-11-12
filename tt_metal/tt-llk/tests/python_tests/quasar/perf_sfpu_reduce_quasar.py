@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
-    DestAccumulation,
     DestSync,
     ReducePool,
 )
@@ -34,11 +34,7 @@ def perf_input_dimensions(formats):
     ReduceColumn} x {Max, Sum, Average}, less Int32 row Average). The column axis reduces tile by
     tile, so its rows across these shapes are knowingly duplicates.
     """
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
     return generate_perf_input_dimensions(dest_acc, DestSync.Half) + [
         [2 * TILE_DIM, 2 * TILE_DIM],
         [TILE_DIM, TILE_DIM],

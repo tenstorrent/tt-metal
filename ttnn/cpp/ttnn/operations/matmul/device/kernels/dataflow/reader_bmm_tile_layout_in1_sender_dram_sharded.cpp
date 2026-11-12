@@ -59,6 +59,10 @@ void kernel_main() {
     constexpr auto out_tensor_stride_w_bytes = get_arg(args::out_tensor_stride_w_bytes);
     constexpr auto out_reshard_tensor_stride_w_bytes = get_arg(args::out_reshard_tensor_stride_w_bytes);
     constexpr auto per_core_M = get_arg(args::per_core_M);
+    constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr uint32_t out_tile_bytes = get_tile_size(dfb::out);
+    constexpr uint32_t out_row_tiles = out_tensor_stride_w_bytes / out_tile_bytes;
     constexpr auto workers_per_bank = get_arg(args::workers_per_bank);
     constexpr auto bank_row_stride_tiles = get_arg(args::bank_row_stride_tiles);
     constexpr auto reader_width_tiles = get_arg(args::reader_width_tiles);
@@ -119,13 +123,11 @@ void kernel_main() {
         dfb_in1.push_back(in1_block_num_tiles);
     }
 #else
-    constexpr uint32_t total_num_blocks_in_buffer = 3;
-    constexpr uint32_t total_num_trid = 4;
-    uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
+    constexpr uint32_t total_num_blocks_in_buffer = get_arg(args::in1_buffer_blocks);
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
 
-    // Reserve 2 blocks up front when num_blocks > 1: the loop's reserve_back at line 133
+    // Reserve 2 blocks up front when num_blocks > 1: the loop's reserve_back
     // only fires after block 1's writes complete, so the initial reservation must cover
     // both block 0 and block 1 to avoid writing outside the reserved buffer window.
     // When num_blocks == 1 the buffer is single-buffered, so reserve only 1 block.
@@ -167,15 +169,13 @@ void kernel_main() {
         }
 #endif
 
-        if (num_free_blocks_in_buffer == 2) {
+        if (block > 0) {
             noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
             dfb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
-            block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
+            block_trid_to_wait = block_trid_to_wait == total_num_blocks_in_buffer ? 1 : (block_trid_to_wait + 1);
             // reserve for next block
             dfb_in1.reserve_back(in1_block_num_tiles * 2);
-        } else {
-            num_free_blocks_in_buffer -= 1;
         }
 
         if (curr_block_trid == total_num_blocks_in_buffer) {
@@ -187,7 +187,9 @@ void kernel_main() {
         }
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
-    // last block to wait
+    // The next read's tag setup fences each earlier block's submission. The last
+    // block has no successor, so explicitly fence it before sampling its count.
+    noc_async_read_set_trid(0, noc.get_noc_id());
     noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
     dfb_in1.push_back(in1_block_num_tiles);
 #endif
@@ -252,21 +254,40 @@ void kernel_main() {
 #endif
 
         for (uint32_t h = 0; h < per_core_M; ++h) {
+            // Compute packs subblocks, while tensor shards store complete tile rows.
+            // A one-row or full-width subblock is already contiguous; otherwise split
+            // each destination row at subblock boundaries without an L1 reorder copy.
+            constexpr bool contiguous_rows = out_subblock_h == 1 || out_subblock_w == out_row_tiles;
+            uint32_t written = 0;
+            while (written < per_core_N_reshard_bytes) {
+                uint32_t source = l1_read_addr_out;
+                uint32_t bytes = per_core_N_reshard_bytes;
+                if constexpr (!contiguous_rows) {
+                    const uint32_t col = (l1_read_addr_out_offset + written) / out_tile_bytes;
+                    const uint32_t tile = (h / out_subblock_h) * out_subblock_h * out_row_tiles +
+                                          (col / out_subblock_w) * out_subblock_h * out_subblock_w +
+                                          (h % out_subblock_h) * out_subblock_w + col % out_subblock_w;
+                    source = dfb_out.get_read_ptr() + tile * out_tile_bytes;
+                    const uint32_t subblock_bytes = (out_subblock_w - col % out_subblock_w) * out_tile_bytes;
+                    const uint32_t remaining = per_core_N_reshard_bytes - written;
+                    bytes = subblock_bytes < remaining ? subblock_bytes : remaining;
+                }
 #ifdef ARCH_QUASAR
-            if (reshard_is_local) {
-                local_l1_copy(
-                    l1_uncached(reshard_dest_local_addr), l1_uncached(l1_read_addr_out), per_core_N_reshard_bytes);
-            } else
+                if (reshard_is_local) {
+                    local_l1_copy(l1_uncached(reshard_dest_local_addr + written), l1_uncached(source), bytes);
+                } else
 #endif
-            {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(l1_read_addr_out),
-                    dst_ep,
-                    per_core_N_reshard_bytes,
-                    {},
-                    {.noc_x = in0_mcast_sender_noc_x,
-                     .noc_y = in0_mcast_sender_noc_y,
-                     .addr = reshard_dest_local_addr});
+                {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(source),
+                        dst_ep,
+                        bytes,
+                        {},
+                        {.noc_x = in0_mcast_sender_noc_x,
+                         .noc_y = in0_mcast_sender_noc_y,
+                         .addr = reshard_dest_local_addr + written});
+                }
+                written += bytes;
             }
             l1_read_addr_out += out_tensor_stride_w_bytes;
             reshard_dest_local_addr += out_reshard_tensor_stride_w_bytes;
@@ -287,8 +308,9 @@ void kernel_main() {
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
         dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
 #else
-    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default (VC=1, set in noc_init); a full set_async_read_state
-    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default (VC=1, set in noc_init); a full
+    // set_async_read_state would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's
+    // async_read_*_with_state fast paths read.
     const uint32_t noc_rd_cmd_field =
         NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);

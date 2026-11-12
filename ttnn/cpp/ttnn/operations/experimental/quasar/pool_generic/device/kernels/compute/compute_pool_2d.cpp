@@ -172,8 +172,8 @@ void kernel_main() {
     for (uint32_t n = 0; n < num_out_sticks_per_thread; ++n) {
         const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = in_cb_id_0;
-        DataflowBuffer curr_scalar_cb = in_scalar_cb_0;
-        DataflowBuffer curr_in_cb = in_cb_0;
+        auto& curr_scalar_cb = in_scalar_cb_0;
+        auto& curr_in_cb = in_cb_0;
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.wait_front(1);
         }
@@ -258,6 +258,10 @@ void kernel_main() {
                     // advance by the same number of bytes per round so their rd/wr pointers
                     // stay aligned. The producer-view wait_front/pop_front/reserve_back below
                     // continues to drive the producer pointer ledger.
+                    // The packer wrote these bytes through pre_tilize_cb, so nothing has packed into
+                    // fast_tilize_cb since its reserve_back; on Quasar the push needs a packer op on this
+                    // DFB after that wait (TEN-4746).
+                    dummy_pack(fast_tilize_cb_id);
                     fast_tilize_cb.push_back(in_ntiles_c);
                     fast_tilize_cb.wait_front(in_ntiles_c);
 
@@ -291,7 +295,7 @@ void kernel_main() {
             } else {
 #if PACK_TO_SCRATCH == 1
                 const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
-                DataflowBuffer curr_scratch_cb = scratch_cb_0;
+                auto& curr_scratch_cb = scratch_cb_0;
                 // One full-width stick per output row: reserve/push once, pack each c-block into its channel slice.
                 if (first_c_block) {
                     curr_scratch_cb.reserve_back(1);

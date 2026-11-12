@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 pytestmark = pytest.mark.use_module_device
@@ -9,19 +11,25 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp, merge_gate_subset
 from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
 
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64, 41, 37])
-@pytest.mark.parametrize("w", [32, 64, 31, 63])
-@pytest.mark.parametrize("dim", [-1, -2])
-@pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": {"bf16": ttnn.bfloat16, "fp32": ttnn.float32},
+            "keepdim": [True, False],
+            "dim": [-1, -2],
+            "w": [32, 64, 31, 63],
+            "h": [32, 64, 41, 37],
+            "batch_size": [1, 16],
+        },
+        keep=lambda batch_size, h, w, **_: batch_size == 16 and h in (64, 41) and w in (64, 31),
+    )
+)
 def test_mean(device, batch_size, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
@@ -63,10 +71,21 @@ def test_mean(device, batch_size, h, w, dim, keepdim, dtype):
         )
 
 
-@pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
-@pytest.mark.parametrize("dim", [0, 1, 2, 3, [0, 1], [2, 3], [0, 1, 2]])
-@pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": {"bf16": ttnn.bfloat16, "fp32": ttnn.float32},
+            "keepdim": [True, False],
+            "dim": [0, 1, 2, 3, [0, 1], [2, 3], [0, 1, 2]],
+            "shape": [(2, 3, 4, 5), (7, 17, 41, 31)],
+        },
+        keep=lambda shape, dim, keepdim, dtype: shape == (7, 17, 41, 31)
+        and (
+            (dtype == ttnn.bfloat16 and keepdim and dim in (0, 2, 3, [2, 3], [0, 1, 2]))
+            or (dtype == ttnn.float32 and not keepdim and dim in (3, [0, 1, 2]))
+        ),
+    )
+)
 def test_mean_scaling(device, shape, dim, keepdim, dtype):
     """Ones input → uniform mean; check the exact result via ULP (both dtypes)."""
     torch.manual_seed(0)
@@ -103,9 +122,31 @@ def test_mean_scaling_factor(device, shape, dim, scalar, dtype):
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
-@pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block", "height"])
-@pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_mean_hw_bf16(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no SFPU reduce. Tracked in https://github.com/tenstorrent/tt-metal/issues/54145")
+    torch_input = torch.full((1, 1, 32, 64), 1024.0, dtype=torch.bfloat16)
+    torch_input[0, 0, 16:] = -1024.0
+    torch_input[0, 0, 16:, 0] = -1020.0
+    torch_output = torch.mean(torch_input.double(), dim=[2, 3], keepdim=True).to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.mean(input_tensor, dim=[2, 3], keepdim=True)
+
+    assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
+
+
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": {"bf16": ttnn.bfloat16, "fp32": ttnn.float32},
+            "keepdim": [True, False],
+            "mem_config": [None, ttnn.DRAM_MEMORY_CONFIG, "block", "height"],
+        },
+        keep=lambda mem_config, keepdim, dtype: mem_config in ("block", "height")
+        and ((dtype == ttnn.bfloat16 and keepdim) or (dtype == ttnn.float32 and not keepdim)),
+    )
+)
 def test_mean_shard(device, mem_config, keepdim, dtype):
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
@@ -209,13 +250,47 @@ def test_mean_multi_axis_bf16(device):
 
 
 @pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
-def test_mean_full_tensor_bf16(device, dim):
-    torch_input = torch.full((1, 2, 32, 64), 1024.0, dtype=torch.bfloat16)
+@pytest.mark.parametrize(
+    "shape, layout",
+    [
+        ((1, 2, 32, 64), ttnn.TILE_LAYOUT),
+        ((1, 2, 32, 64), ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 2, 32, 2048), ttnn.TILE_LAYOUT),
+        pytest.param(
+            (1, 2, 32, 2048),
+            ttnn.ROW_MAJOR_LAYOUT,
+            marks=pytest.mark.xfail(
+                reason=(
+                    "https://github.com/tenstorrent/tt-metal/issues/62259: "
+                    "fp32-Dest row reduce leaks column 16 into the chunk accumulator"
+                ),
+                strict=True,
+            ),
+        ),
+    ],
+)
+def test_mean_full_tensor_bf16(device, dim, shape, layout):
+    torch_input = torch.full(shape, 1024.0, dtype=torch.bfloat16)
     torch_input[0, 1] = -1024.0
     torch_input[0, 1, :, 0] = -1020.0
     torch_output = torch.mean(torch_input.double()).to(torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
     output_tensor = ttnn.mean(input_tensor, dim=dim)
 
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())
+
+
+# A mean over several dims counted its elements in an int, which overflows at 2^31 and flipped the mean's sign.
+@pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SIMULATOR")), reason="a 4 GiB tensor is too slow on the ttsim simulator"
+)
+def test_mean_multi_dim_2_31_elements(device):
+    input_tensor = ttnn.full(
+        [1, 512, 2048, 2048], fill_value=1.0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output_tensor = ttnn.mean(input_tensor, dim=[1, 2, 3], keepdim=True)
+    input_tensor.deallocate()
+
+    assert ttnn.to_torch(output_tensor).flatten().tolist() == [1.0]

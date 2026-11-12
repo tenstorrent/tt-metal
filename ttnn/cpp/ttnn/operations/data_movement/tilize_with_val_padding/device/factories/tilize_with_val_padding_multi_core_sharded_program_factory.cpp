@@ -50,7 +50,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     uint32_t nblocks_per_core = output_shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_padded_rows = output.padded_shape()[-2] - a.padded_shape()[-2];
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // ---------------------------------------------------------------------
     // Program-scope resource names (typed handles → generated dfb:: / tensor:: tokens)
