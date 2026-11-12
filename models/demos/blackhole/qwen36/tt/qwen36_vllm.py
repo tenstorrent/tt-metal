@@ -311,7 +311,8 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                 "batched (max_num_seqs>1) serving is text-only; multimodal is single-sequence "
                 "(max_concurrency=1). Run the model at max_num_seqs=1 for image/video requests."
             )
-        vision_tokens = self._compute_vision_tokens(model, kwargs) if visual else None
+        # Read to the host once, before any segment's trace replay can overwrite the device rows (vision_rows_host).
+        vision_tokens = model.vision_rows_host(self._compute_vision_tokens(model, kwargs)) if visual else None
         N = tokens.shape[0]
         start_pos = kwargs.get("start_pos")
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)

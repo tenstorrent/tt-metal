@@ -373,6 +373,7 @@ def adapter(monkeypatch):
         mesh_device=None,
         gdn_blocks=blocks,
         prefill_traced_chunked=prefill,
+        vision_rows_host=lambda rows: events.append(("vision rows to host", rows)) or f"host {rows}",
     )
     monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: t)
     monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda *a, **kw: None)
@@ -450,10 +451,12 @@ def test_multimodal_prefill_writes_its_checkpoint_with_the_whole_row_rope(adapte
     """A whole multimodal prompt with a checkpoint after 2048 tokens runs as two segments, both with the vision rows
     and the RoPE table of all 2500 tokens, so an image across token 2048 keeps its M-RoPE positions in both."""
     events = adapter(0, 2500, (4, 5, 6), checkpoint=(2048, (1, 2, 3)), max_batch_size=1, pixel_values=["x"])
+    # The device rows are read once, before the first segment's trace replays can overwrite them.
     assert events == [
-        ("prefill", 0, 2048, "vision", 2500),
+        ("vision rows to host", "vision"),
+        ("prefill", 0, 2048, "host vision", 2500),
         ("write", (1, 2, 3)),
-        ("prefill", 2048, 2500, "vision", 2500),
+        ("prefill", 2048, 2500, "host vision", 2500),
         ("write", (4, 5, 6)),
     ]
 
@@ -462,6 +465,11 @@ def test_multimodal_prefill_continues_from_its_start_blocks(adapter, multimodal,
     """A multimodal request replayed after preemption that outgrows one step continues after its images from the
     state its first chunk wrote; like a text row, it must start on a KV block boundary."""
     events = adapter(2048, 2500, (4, 5, 6), start_blocks=(1, 2, 3), max_batch_size=1, pixel_values=["x"])
-    assert events == [("restore", (1, 2, 3)), ("prefill", 2048, 2500, "vision", 2500), ("write", (4, 5, 6))]
+    assert events == [
+        ("vision rows to host", "vision"),
+        ("restore", (1, 2, 3)),
+        ("prefill", 2048, 2500, "host vision", 2500),
+        ("write", (4, 5, 6)),
+    ]
     with expect_error(ValueError, "prefill resumes at 1920, inside a 1024-token KV block"):
         adapter(1920, 2500, (4, 5, 6), start_blocks=(1, 2, 3), max_batch_size=1, pixel_values=["x"])
