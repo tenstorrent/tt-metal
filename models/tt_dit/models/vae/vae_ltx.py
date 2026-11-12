@@ -44,6 +44,11 @@ if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 
 
+def _fuse_unpatch_enabled() -> bool:
+    """LTX_VAE_FUSE_UNPATCH=1 lets rgb_to_yuv read conv_out's patchified output (default off)."""
+    return os.environ.get("LTX_VAE_FUSE_UNPATCH", "0") == "1"
+
+
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
     """Cached mask that zeros width-padding columns beyond logical_w (neighbor_pad has no W mask)."""
     sharded_w = x_BTHWC.shape[3]
@@ -989,13 +994,17 @@ class LTXVideoDecoder(Module):
             ttnn.synchronize_device(self.mesh_device)
             _t_dec = time.time()
 
-        # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large
-        # (channels-last would gather a length-3 innermost). conv_out channels are ordered (c, p, r, q).
         p, q, r = 1, self.patch_size, self.patch_size
-        B_, T_, H4, W4, _ = sample_tt.shape
-        sample_tt = ttnn.reshape(sample_tt, (B_, T_, H4, W4, 3, p, r, q))
-        sample_tt = ttnn.permute(sample_tt, (0, 4, 1, 5, 2, 7, 3, 6))
-        sample_tt = ttnn.reshape(sample_tt, (B_, 3, T_ * p, H4 * q, W4 * r))  # (B, 3, T, H, W)
+        # LTX_VAE_FUSE_UNPATCH=1: rgb_to_yuv reads conv_out's patchified output directly (yuv output,
+        # single host), skipping the unpatch below. Off by default: not yet compared on device with it.
+        fuse_unpatch = output_type == "yuv" and _fuse_unpatch_enabled() and not ttnn.using_distributed_env()
+        if not fuse_unpatch:
+            # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large
+            # (channels-last would gather a length-3 innermost). conv_out channels are ordered (c, p, r, q).
+            B_, T_, H4, W4, _ = sample_tt.shape
+            sample_tt = ttnn.reshape(sample_tt, (B_, T_, H4, W4, 3, p, r, q))
+            sample_tt = ttnn.permute(sample_tt, (0, 4, 1, 5, 2, 7, 3, 6))
+            sample_tt = ttnn.reshape(sample_tt, (B_, 3, T_ * p, H4 * q, W4 * r))  # (B, 3, T, H, W)
         if _time:
             ttnn.synchronize_device(self.mesh_device)
             logger.info(
@@ -1012,6 +1021,7 @@ class LTXVideoDecoder(Module):
                 ccl_manager=self.ccl_manager,
                 logical_h=h_out,
                 logical_w=w_out,
+                input_patch_size=q if fuse_unpatch else 0,
             )
             # Reshape flat (T, H*W*3//2) -> self-describing
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)

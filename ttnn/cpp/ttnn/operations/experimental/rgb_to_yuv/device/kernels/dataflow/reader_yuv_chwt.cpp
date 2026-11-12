@@ -24,7 +24,10 @@
 //   [4] cb_scalar_base                      — first of 12 resident scalar CBs
 //   [5] num_t_tiles, [6] T, [7] W, [8] W2, [9] HW
 //   [10] y_tiles (= ceil(2W/32)), [11] uv_tiles (= ceil(W2/32))
-//   [12..] TensorAccessorArgs for input
+//   [12] patch: 0 for CHWT input; an even p for patchified (1, T, H/p, W/p, 3*p*p)
+//        input with channel c*p*p + r*p + q at pixel (row h*p + q, column w*p + r)
+//   [13] Hp, [14] Wp (= H/p, W/p), [15] cb_stage, [16] stage_stride (aligned page bytes)
+//   [17..] TensorAccessorArgs for input
 //
 // Runtime args:
 //   [0] src_addr
@@ -83,7 +86,12 @@ void kernel_main() {
     constexpr uint32_t HW = get_compile_time_arg_val(9);
     constexpr uint32_t y_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t uv_tiles = get_compile_time_arg_val(11);
-    constexpr auto src_tensor_args = TensorAccessorArgs<12>();
+    constexpr uint32_t patch = get_compile_time_arg_val(12);
+    constexpr uint32_t Hp = get_compile_time_arg_val(13);
+    constexpr uint32_t Wp = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_stage = get_compile_time_arg_val(15);
+    constexpr uint32_t stage_stride = get_compile_time_arg_val(16);
+    constexpr auto src_tensor_args = TensorAccessorArgs<17>();
 
     constexpr uint32_t last_tile_elems = T - (num_t_tiles - 1) * TILE_W;
     constexpr uint32_t last_tile_bytes = last_tile_elems * 2;
@@ -111,16 +119,69 @@ void kernel_main() {
 
         // ---- 1. Read this unit's 2 RGB rows from DRAM into L1 scratch (once) ----
         // scratch layout: [c][s][32 T], s in [0, 2W); spatial_global = 2*g*W + s.
-        for (uint32_t c = 0; c < 3; c++) {
-            for (uint32_t s = 0; s < y_sticks; s++) {
-                uint32_t spatial = 2 * g * W + s;
-                uint32_t src_row = c * HW + spatial;
-                uint32_t dst = scratch_base + (c * y_sticks + s) * FULL_TILE_BYTES;
-                noc.async_read(
-                    src, CoreLocalMem<uint8_t>(dst), read_bytes, {.page_id = src_row, .offset_bytes = byte_off}, {});
+        if constexpr (patch == 0) {
+            for (uint32_t c = 0; c < 3; c++) {
+                for (uint32_t s = 0; s < y_sticks; s++) {
+                    uint32_t spatial = 2 * g * W + s;
+                    uint32_t src_row = c * HW + spatial;
+                    uint32_t dst = scratch_base + (c * y_sticks + s) * FULL_TILE_BYTES;
+                    noc.async_read(
+                        src,
+                        CoreLocalMem<uint8_t>(dst),
+                        read_bytes,
+                        {.page_id = src_row, .offset_bytes = byte_off},
+                        {});
+                }
+            }
+            noc.async_read_barrier();
+        } else {
+            // Both rows of the group lie in patch row hp at sub-rows q0 and q0 + 1. Each frame's Wp patch
+            // pages are staged whole, then the RISC moves the 2 x p pixels of each (patch, channel) into
+            // their T-stick slot. q0 is even, so the q0 and q0 + 1 samples are one aligned 32-bit word.
+            constexpr uint32_t pp = patch * patch;
+            constexpr uint32_t page_bytes = 3 * pp * 2;
+            const uint32_t hp = (2 * g) / patch;
+            const uint32_t q0 = (2 * g) % patch;
+            const uint32_t nt = is_last_t ? last_tile_elems : TILE_W;
+            const uint32_t t0 = tt * TILE_W;
+            const uint32_t stage_base = get_write_ptr(cb_stage);
+            volatile tt_l1_ptr uint16_t* scratch16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch_base);
+
+            auto read_frame = [&](uint32_t tl) {
+                const uint32_t page0 = ((t0 + tl) * Hp + hp) * Wp;
+                const uint32_t slot = stage_base + (tl & 1) * Wp * stage_stride;
+                for (uint32_t wp = 0; wp < Wp; wp++) {
+                    noc.async_read(
+                        src,
+                        CoreLocalMem<uint8_t>(slot + wp * stage_stride),
+                        page_bytes,
+                        {.page_id = page0 + wp, .offset_bytes = 0},
+                        {});
+                }
+            };
+
+            read_frame(0);
+            for (uint32_t tl = 0; tl < nt; tl++) {
+                noc.async_read_barrier();
+                invalidate_l1_cache();
+                if (tl + 1 < nt) {
+                    read_frame(tl + 1);
+                }
+                const uint32_t slot = stage_base + (tl & 1) * Wp * stage_stride;
+                for (uint32_t wp = 0; wp < Wp; wp++) {
+                    volatile tt_l1_ptr uint32_t* page =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + wp * stage_stride);
+                    for (uint32_t c = 0; c < 3; c++) {
+                        for (uint32_t r = 0; r < patch; r++) {
+                            const uint32_t pair = page[(c * pp + r * patch + q0) >> 1];
+                            const uint32_t s0 = (2 * c * W + wp * patch + r) * TILE_W + tl;
+                            scratch16[s0] = pair & 0xFFFF;
+                            scratch16[s0 + W * TILE_W] = pair >> 16;
+                        }
+                    }
+                }
             }
         }
-        noc.async_read_barrier();
 
         // ---- 2. Y sub-pass: emit flat 32-stick tiles from scratch ----
         // A full tile (32 sticks, full T) is 32 contiguous 64-byte sticks in
