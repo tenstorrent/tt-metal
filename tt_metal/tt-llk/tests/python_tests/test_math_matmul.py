@@ -5,7 +5,7 @@ from itertools import chain, product
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
@@ -205,15 +205,11 @@ ALL_TEST_PARAMS = list(
         odd_reuse_matmul_params(),
         # Blackhole row MOP (one MOP walks a reuse row of full 32x32 tiles) at throttle 0: every
         # fidelity, rt/ct shape (both reuse directions), transpose, dest mode and dst_index.
+        # Wormhole has only the per-tile MOP: skipped there.
         (
-            (fidelity, combinations, 0, True)
+            pytest.param(fidelity, combinations, 0, True, marks=skip_for_wormhole)
             for fidelity, combinations in product(
-                ALL_MATH_FIDELITIES,
-                (
-                    MATMUL_COMBINATIONS
-                    if get_chip_architecture() == ChipArchitecture.BLACKHOLE
-                    else []
-                ),
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS
             )
         ),
     )
