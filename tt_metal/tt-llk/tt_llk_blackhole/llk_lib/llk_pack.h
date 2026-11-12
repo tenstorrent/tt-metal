@@ -397,6 +397,15 @@ inline void pack_init_apply(
         "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
         "which the mutex cannot cover");
 
+    // The flag store first: behind the config writes it waits for them.
+    if constexpr (pack_mode == PackMode::Default)
+    {
+        LLK_PACK_OTHER_PROGRAM_CLEAR();
+    }
+    else
+    {
+        LLK_PACK_OTHER_PROGRAM_SET();
+    }
     if constexpr (!skip_addrmod_config)
     {
         _llk_pack_configure_addrmod_<pack_mode>();
@@ -406,15 +415,6 @@ inline void pack_init_apply(
     {
         set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
     }
-    if constexpr (pack_mode == PackMode::Default)
-    {
-        LLK_PACK_OTHER_PROGRAM_CLEAR();
-    }
-    else
-    {
-        LLK_PACK_OTHER_PROGRAM_SET();
-    }
-
     // Program the packer X (datum) counter. Per the "inits own SETADCXX" contract, every init sets its
     // own value; on Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
     {

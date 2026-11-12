@@ -445,6 +445,12 @@ inline constexpr bool pack_fast_untilize_linked = false;
 template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
+    // The state store first: behind the config writes it waits for them.
+    if constexpr (store_state)
+    {
+        const std::uint32_t state = reconfigured ? 0x100 : 0;
+        __builtin_memcpy(pack_state, &state, sizeof(state));
+    }
     std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
@@ -465,11 +471,6 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     // channel-1 (Y) stride, in its own init.
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
-    if constexpr (store_state)
-    {
-        const std::uint32_t state = reconfigured ? 0x100 : 0;
-        __builtin_memcpy(pack_state, &state, sizeof(state));
-    }
     TTI_NOP;
     TTI_NOP;
 }
