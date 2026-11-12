@@ -77,65 +77,94 @@ def _end_processes(pids: List[int], grace_s: float = 2.0) -> None:
             return
 
 
-def run_launcher(cmd: List[str], cwd: Path) -> int:
-    """Start the MPI launcher and own it until the job is gone (teardown plan P6, P7, P19).
+class LaunchedJob:
+    """Owns one MPI launcher for the life of a job (teardown plan P6, P7, P19).
 
-    The launcher gets its own session. SIGINT and SIGTERM at tt-run are forwarded to it and tt-run waits: PRRTE's
-    own handler then ends every rank on every host, and tt-run returns the launcher's code. The launcher is never
-    SIGKILLed (that orphans the ranks, which sit in their own process groups). After it returns, any process it left
-    in its session on this host is ended and the job is reported as failed, so tt-run never returns 0 while a rank it
-    started is alive.
+    A context manager: on entry it starts the launcher in its own session and forwards SIGINT and SIGTERM to it
+    (PRRTE's own handler then ends every rank on every host); on exit it restores the previous handlers, always.
+    The launcher is never SIGKILLed — that would orphan the ranks, which sit in their own process groups. The exit
+    code policy and the last-resort sweep of the ranks it leaves behind live in ``run_launcher`` / ``_resolve_exit_code``,
+    not here; this class only owns the process and the signal forwarding. ``leftovers`` reports the ranks still alive.
     """
-    proc = subprocess.Popen(cmd, cwd=cwd, start_new_session=True)
-    # Capture the session and process group WHILE the launcher is alive, so the last-resort sweep below can find its
-    # ranks even if the launcher re-sessioned or was reaped before we look.
-    try:
-        sid, pgid = os.getsid(proc.pid), os.getpgid(proc.pid)
-    except (ProcessLookupError, OSError):
-        sid, pgid = proc.pid, proc.pid
-    forwarded: List[int] = []
 
-    def relay(signum, frame):
-        forwarded.append(signum)
+    def __init__(self, cmd: List[str], cwd: Path):
+        self.cmd = cmd
+        self.cwd = cwd
+        self.proc = None
+        self.sid = -1
+        self.pgid = -1
+        self.forwarded: List[int] = []
+        self._previous: dict = {}
+
+    def __enter__(self) -> "LaunchedJob":
+        self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, start_new_session=True)
+        # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks even if
+        # the launcher re-sessioned or was reaped before we look.
+        try:
+            self.sid, self.pgid = os.getsid(self.proc.pid), os.getpgid(self.proc.pid)
+        except (ProcessLookupError, OSError):
+            self.sid = self.pgid = self.proc.pid
+        self._previous = {s: signal.signal(s, self._relay) for s in (signal.SIGINT, signal.SIGTERM)}
+        return self
+
+    def __exit__(self, *exc) -> None:
+        for s, h in self._previous.items():
+            signal.signal(s, h)
+
+    def _relay(self, signum, frame) -> None:
+        self.forwarded.append(signum)
         logger.warning(
-            f"{TT_RUN_PREFIX} {signal.Signals(signum).name} received, forwarding to the launcher (pid {proc.pid})"
+            f"{TT_RUN_PREFIX} {signal.Signals(signum).name} received, forwarding to the launcher (pid {self.proc.pid})"
         )
         try:
-            proc.send_signal(signum)
+            self.proc.send_signal(signum)
         except ProcessLookupError:
             pass
 
-    previous = {s: signal.signal(s, relay) for s in (signal.SIGINT, signal.SIGTERM)}
-    try:
-        rc = proc.wait()
-    finally:
-        for s, h in previous.items():
-            signal.signal(s, h)
-    if rc < 0:
-        rc = 128 - rc  # the launcher itself died by a signal: the shell's convention (128 + signal number)
-    # Preserve the launcher's own exit code. PRRTE returns PRTE_TIMEOUT_EXIT_CODE when its --timeout (passed through
-    # --mpi-args) expires: it has already ended every rank on every host, so this is a clean, correctly-classified
-    # timeout, not a tt-run failure. We return it unchanged and only sweep for stragglers.
-    timed_out = rc == PRTE_TIMEOUT_EXIT_CODE
-    if timed_out:
+    def wait(self) -> int:
+        """Wait for the launcher; return its exit code, a death by signal normalized to the shell's 128 + signum."""
+        rc = self.proc.wait()
+        return 128 - rc if rc < 0 else rc
+
+    def leftovers(self) -> List[int]:
+        """Processes of this job still alive on this host after the launcher returned — ranks it failed to reap."""
+        return [pid for pid in _procs_in(self.sid, self.pgid) if pid != os.getpid() and pid != self.proc.pid]
+
+
+def _resolve_exit_code(rc: int, job: LaunchedJob) -> int:
+    """The contract: one rank fails, the whole job fails, with a truthful code. The launcher's own code is preserved
+    — a rank's code, a signal, or PRRTE's ``--timeout`` code (241), which means PRRTE already ended every rank, a
+    clean timeout rather than a tt-run failure. But any rank the launcher left on this host is ended, and tt-run
+    never returns 0 while a rank it started is alive (teardown plan P19); if tt-run was signalled and forwarded it
+    yet the launcher still reported success, the signal is reported.
+    """
+    if rc == PRTE_TIMEOUT_EXIT_CODE:
         logger.warning(
             f"{TT_RUN_PREFIX} the job hit its PRRTE --timeout wall clock (exit {rc}); the launcher ended every rank"
         )
-    left = [pid for pid in _procs_in(sid, pgid) if pid != os.getpid() and pid != proc.pid]
+    left = job.leftovers()
     if left:
         logger.error(
             f"{TT_RUN_PREFIX} the launcher returned {rc} but left {len(left)} process(es) of its job running on this "
             f"host: {left}; ending them (last resort; the launcher should have torn the job down itself)"
         )
         _end_processes(left)
-        # A launcher that reported success (0) yet left a rank alive is a failure (teardown plan P19). A non-zero
-        # code (a rank's code, a signal, or the --timeout code) is the truth already and is preserved.
-        if rc == 0:
+        if rc == 0:  # reported success yet left a rank alive -> a failure
             rc = 1
-    if forwarded and rc == 0:
-        # tt-run was signalled and forwarded it, but the launcher still reported success: report the signal.
-        rc = 128 + forwarded[0]
+    if job.forwarded and rc == 0:  # signalled and forwarded, but the launcher still reported success
+        rc = 128 + job.forwarded[0]
     return rc
+
+
+def run_launcher(cmd: List[str], cwd: Path) -> int:
+    """Start the MPI launcher and own it until the job is gone (teardown plan P6, P7, P19): it runs in its own
+    session, SIGINT/SIGTERM at tt-run are forwarded to it and tt-run waits (PRRTE then ends every rank on every
+    host), and afterwards any rank it left on this host is ended and the job is reported failed if the launcher
+    returned 0 with a rank still alive."""
+    with LaunchedJob(cmd, cwd) as job:
+        rc = job.wait()
+    # handlers restored (context exited); now apply the exit-code contract and sweep any leftovers
+    return _resolve_exit_code(rc, job)
 
 
 def sweep_stale_shm_segments() -> int:
