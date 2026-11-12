@@ -13,7 +13,7 @@ from models.demos.gpt_oss.utils.substate import substate
 
 from ..fused_decode.config import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE, QKV_FUSED_ROPE_KV
 from ..fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, qkv_column_order, stream_linear_layout
-from ..stream_relayout import LinearStreamPlan, rebuild_linear
+from ..stream_prefill_linear import StreamPrefillLinear
 from ..weight_source import dense_rounded_tag
 from .config import AttentionConfig
 
@@ -39,33 +39,15 @@ class AttentionWeights:
     # so the padded columns and the slice that drops them after the all-gather are not needed. None when unpadded.
     o_proj_prefill: ttnn.Tensor = None
     o_proj_bias_prefill: ttnn.Tensor = None
-    # Batch-1 fused model: the streams above are the only QKV / o_proj weights; prefill rebuilds wqkv and o_proj_prefill
-    # from them per call (prefill_qkv_weight / prefill_o_proj_weight, stream_relayout.py). None otherwise.
-    qkv_stream_plan: LinearStreamPlan = None
-    o_proj_stream_plan: LinearStreamPlan = None
-    prefill_weight_dtype: ttnn.DataType = None
+    # Batch-1 fused model: the streams above are the only QKV / o_proj weights; prefill multiplies by them directly
+    # (StreamPrefillLinear, stream_prefill_linear.py; their bias tiles add the bias). None otherwise.
+    qkv_prefill_op: StreamPrefillLinear = None
+    o_proj_prefill_op: StreamPrefillLinear = None
 
 
 def has_unpadded_o_proj(weights: AttentionWeights) -> bool:
     """Whether prefill runs o_proj on the unpadded weight + one all_reduce (stored o_proj_prefill or its stream)."""
-    return weights.o_proj_prefill is not None or weights.o_proj_stream_plan is not None
-
-
-def prefill_qkv_weight(weights: AttentionWeights):
-    """(prefill QKV weight [1, 1, hidden, local QKV], owned): owned = rebuilt from wqkv_stream, the caller frees it."""
-    if weights.qkv_stream_plan is None:
-        return weights.wqkv, False
-    return rebuild_linear(weights.wqkv_stream, weights.qkv_stream_plan, weights.prefill_weight_dtype), True
-
-
-def prefill_o_proj_weight(weights: AttentionWeights):
-    """(unpadded prefill o_proj weight [local heads dim, hidden], owned): owned = rebuilt from o_proj_stream, the caller
-    frees it."""
-    if weights.o_proj_stream_plan is None:
-        return weights.o_proj_prefill, False
-    plan = weights.o_proj_stream_plan
-    w = rebuild_linear(weights.o_proj_stream, plan, weights.prefill_weight_dtype)
-    return ttnn.reshape(w, (plan.k, plan.n)), True  # a view (the stored o_proj_prefill's rank)
+    return weights.o_proj_prefill is not None or weights.o_proj_prefill_op is not None
 
 
 def load_attention_weights(
@@ -103,7 +85,7 @@ def load_attention_weights(
     o_proj_cache_suffix = f"_padded" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
     # Blackhole TP > 1 with a padded o_proj: prefill runs the unpadded o_proj (o_proj_prefill, below).
     unpadded_prefill = o_proj_pad_size > 0 and mesh_config.tp > 1 and ttnn.device.is_blackhole(mesh_device)
-    # Batch-1 fused model: prefill rebuilds QKV / o_proj from the decode streams (stream_relayout.py); no prefill copy.
+    # Batch-1 fused model: prefill reads QKV / o_proj from the decode streams (stream_prefill_linear.py), no own copy.
     stream_prefill = fused_decode and unpadded_prefill and weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat16)
     decode_rounded_tag = "_drnd" if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE") else ""
     # TEMP (layer-PCC campaign): GPT_OSS_KV_SMOOTH changes the q / k weight values (utils/lazy_state_dict.py _kv_smooth),
@@ -277,7 +259,7 @@ def load_attention_weights(
     )
 
     wqkv_stream_tt = o_proj_stream_tt = None
-    qkv_plan = o_plan = None
+    qkv_op = o_op = None
     if fused_decode:
         # Fused decode: QKV and o_proj (+ bias) as streamed linears, one per-bank layout per TP shard.
         banks = mesh_device.dram_grid_size().x
@@ -293,8 +275,8 @@ def load_attention_weights(
             else None
         )
         if stream_prefill:
-            qkv_plan = LinearStreamPlan(hidden_size, local_qkv, banks, qkv_order)
-            o_plan = LinearStreamPlan(local_heads_dim, hidden_size, banks)
+            qkv_op = StreamPrefillLinear(mesh_device, hidden_size, local_qkv, qkv_order)
+            o_op = StreamPrefillLinear(mesh_device, local_heads_dim, hidden_size)
         qkv_layouts = o_layouts = None
         if state_dict:
             tp = mesh_config.tp
@@ -379,7 +361,6 @@ def load_attention_weights(
         o_proj_stream=o_proj_stream_tt,
         o_proj_prefill=o_proj_prefill_tt,
         o_proj_bias_prefill=o_proj_bias_prefill_tt,
-        qkv_stream_plan=qkv_plan,
-        o_proj_stream_plan=o_plan,
-        prefill_weight_dtype=weight_dtype if stream_prefill else None,
+        qkv_prefill_op=qkv_op,
+        o_proj_prefill_op=o_op,
     )

@@ -10,25 +10,25 @@ from ..fused_decode.config import FULL_FIDELITY
 from .weights import AttentionWeights
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, program_config=None, weight=None):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, program_config=None):
     """
     Apply QKV projection and add bias.
 
     Args:
         hidden_states: Input tensor [batch, seq_len, hidden_size]
         weights: Attention weights container
-        program_config: matmul program config (None: ttnn default)
-        weight: the QKV weight to use instead of weights.wqkv (prefill: rebuilt from the decode stream)
+        program_config: matmul program config (None: ttnn default; unused with weights.qkv_prefill_op)
+
+    Batch-1 fused model (weights.qkv_prefill_op): the matmul reads the decode stream weights.wqkv_stream directly
+    (stream_prefill_linear.py; the columns come out in Q, K, V order, the stream's bias tile adds the bias).
 
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
+    if weights.qkv_prefill_op is not None:
+        return weights.qkv_prefill_op(hidden_states, weights.wqkv_stream, ttnn.bfloat16)
     xqkv_fused = ttnn.linear(
-        hidden_states,
-        weights.wqkv if weight is None else weight,
-        bias=weights.wqkv_bias,
-        dtype=ttnn.bfloat16,
-        program_config=program_config,
+        hidden_states, weights.wqkv, bias=weights.wqkv_bias, dtype=ttnn.bfloat16, program_config=program_config
     )
     return xqkv_fused
 
@@ -108,9 +108,7 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def apply_output_projection(
-    tensor, weights: AttentionWeights, activation_dtype, unpadded=False, program_config=None, weight=None
-):
+def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype, unpadded=False, program_config=None):
     """
     Apply output projection and bias.
 
@@ -118,19 +116,24 @@ def apply_output_projection(
         tensor: Attention output tensor
         weights: Attention weights container
         activation_dtype: Target dtype for output
-        unpadded: use the prefill o_proj without the CCL padding columns (weights.o_proj_prefill)
-        program_config: matmul program config (None: ttnn default)
-        weight: the o_proj weight to use instead of the stored one (prefill: rebuilt from the decode stream)
+        unpadded: use the prefill o_proj without the CCL padding columns (weights.o_proj_prefill, or in the batch-1
+            fused model weights.o_proj_prefill_op on the decode stream weights.o_proj_stream, whose bias tiles hold
+            the bias on TP device 0 only)
+        program_config: matmul program config (None: ttnn default; unused with weights.o_proj_prefill_op)
 
     Returns:
         Output tensor after projection
     """
-    w, b = (weights.o_proj_prefill, weights.o_proj_bias_prefill) if unpadded else (weights.o_proj, weights.o_proj_bias)
-    w = w if weight is None else weight
     # The prefill attention casts the heads to bf8 before the concat (already bf8 here); the caller owns the input.
     cast = tensor if FULL_FIDELITY or tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
-    # Bias fused into the matmul (one pass over the output instead of a separate in-place add).
-    out = ttnn.linear(cast, w, bias=b, dtype=activation_dtype, program_config=program_config)
+    if unpadded and weights.o_proj_prefill_op is not None:
+        out = weights.o_proj_prefill_op(cast, weights.o_proj_stream, activation_dtype)
+    else:
+        w, b = (
+            (weights.o_proj_prefill, weights.o_proj_bias_prefill) if unpadded else (weights.o_proj, weights.o_proj_bias)
+        )
+        # Bias fused into the matmul (one pass over the output instead of a separate in-place add).
+        out = ttnn.linear(cast, w, bias=b, dtype=activation_dtype, program_config=program_config)
     if cast is not tensor:
         cast.deallocate(True)
     return out
@@ -145,7 +148,6 @@ def apply_output_projection_allreduce_prefill(
     program_config=None,
     scatter=False,
     batch_size=1,
-    weight=None,
 ):
     """Prefill o_proj on the unpadded weight, then one TP all_reduce over the full hidden width.
 
@@ -163,12 +165,8 @@ def apply_output_projection_allreduce_prefill(
 
     batch_size > 1 (batched prefill, rows stacked by user): batched_prefill.per_user_reduce, which reduces every
     user's rows as this function does for that user alone.
-
-    weight: the unpadded o_proj weight to use instead of weights.o_proj_prefill (rebuilt from the decode stream).
     """
-    out = apply_output_projection(
-        tensor, weights, activation_dtype, unpadded=True, program_config=program_config, weight=weight
-    )
+    out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True, program_config=program_config)
     links = batched_reduce_links(ccl_manager, mesh_config.tp_axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
     if batch_size > 1:
         reduced = per_user_reduce(out, batch_size, mesh_config.tp_axis, links, scatter=scatter)

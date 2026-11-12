@@ -19,7 +19,7 @@ from .operations import (
     is_shape_fused_mm_rs_supported,
     split_qkv_heads_prefill,
 )
-from .weights import AttentionWeights, has_unpadded_o_proj, prefill_o_proj_weight, prefill_qkv_weight
+from .weights import AttentionWeights, has_unpadded_o_proj
 
 # (seq_len, sliding window, prefill_l1_end, tuned q / k chunks) -> index of the prefill SDPA candidate that builds
 _SDPA_FIT = {}
@@ -100,16 +100,14 @@ def prefill_forward(
     if seq_len <= 1:
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
-    # QKV projection (batch-1 fused model: the weight is rebuilt from the decode stream and freed after the matmul)
-    wqkv, wqkv_owned = prefill_qkv_weight(weights)
+    # QKV projection (batch-1 fused model: on the decode stream itself, apply_qkv_projection)
     xqkv_fused = apply_qkv_projection(
         hidden_states,
         weights,
-        program_config.get_prefill_proj_config(mesh_device, "qkv", hidden_states, wqkv, mesh_config.tp),
-        weight=wqkv,
+        None
+        if weights.qkv_prefill_op is not None
+        else program_config.get_prefill_proj_config(mesh_device, "qkv", hidden_states, weights.wqkv, mesh_config.tp),
     )
-    if wqkv_owned:
-        ttnn.deallocate(wqkv)
     hidden_states.deallocate(True)  # Free input activations after projection
 
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
@@ -244,23 +242,22 @@ def prefill_forward(
         tt_sdpa_out.deallocate(True)
         tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
     elif mesh_config.tp > 1 and has_unpadded_o_proj(weights):
-        o_proj, o_proj_owned = prefill_o_proj_weight(weights)  # (rebuilt from the decode stream: freed below)
         tt_out_result = apply_output_projection_allreduce_prefill(
             tt_sdpa_out,
             weights,
             activation_dtype,
             mesh_config,
             ccl_manager,
-            # apply_output_projection casts its input to bf8 before the matmul.
-            program_config.get_prefill_proj_config(
-                mesh_device, "o", tt_sdpa_out, o_proj, mesh_config.tp, in0_dtype=ttnn.bfloat8_b
+            # apply_output_projection casts its input to bf8 before the matmul (batch-1 fused model: the matmul reads
+            # the decode stream itself, no program config).
+            None
+            if weights.o_proj_prefill_op is not None
+            else program_config.get_prefill_proj_config(
+                mesh_device, "o", tt_sdpa_out, weights.o_proj_prefill, mesh_config.tp, in0_dtype=ttnn.bfloat8_b
             ),
             scatter=sequence_parallel,
             batch_size=batch_size,
-            weight=o_proj,
         )
-        if o_proj_owned:
-            ttnn.deallocate(o_proj)
         tt_sdpa_out.deallocate(True)
     else:
         tt_out = apply_output_projection(
