@@ -881,6 +881,8 @@ inline void program_packer_destination(std::uint32_t addr)
     // sampled at PACR start -- before the next call's WRCFG reprograms it, and the Last=1 PACR that ends each
     // pack MOP drains the packer and forces the next pack to re-sample L1_Dest_addr. The STALLWAIT below is
     // only the GPR-producer fence: it ensures the SETDMAREG write to OUTPUT_ADDR retires before WRCFG reads it.
+    // Packs issue the byte-wise write before set_dst_write_addr, so its RMWCIBs finish during the pack's SEMWAIT; the WRCFG
+    // write stays after it, as its STALLWAIT would hold SETADC.
     if constexpr (!keep_output_addr)
     {
         // Byte 3 (bit 31) is the row pack init's; another pack program between two row packs replaces the row pack's MOP,

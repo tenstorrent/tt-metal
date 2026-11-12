@@ -644,9 +644,17 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
         "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
         "which the mutex cannot cover");
 
+    if constexpr (rmw_dest)
+    {
+        program_packer_destination<false, w_invalidate>(address);
+    }
+
     set_dst_write_addr<mutex_ADC>(tile_index);
 
-    program_packer_destination<!rmw_dest, w_invalidate>(address);
+    if constexpr (!rmw_dest)
+    {
+        program_packer_destination<true, w_invalidate>(address);
+    }
 
     ckernel::ckernel_template::run();
 
@@ -667,9 +675,17 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
         ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
         "The block exceeds the destination register sync region");
 
+    if constexpr (rmw_dest)
+    {
+        program_packer_destination<false, w_invalidate>(address);
+    }
+
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination<!rmw_dest, w_invalidate>(address);
+    if constexpr (!rmw_dest)
+    {
+        program_packer_destination<true, w_invalidate>(address);
+    }
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
@@ -699,7 +715,10 @@ inline void _llk_pack_block_closed_(
         "The block exceeds the destination register sync region");
     LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
 
-    set_dst_write_addr(start_tile_index);
+    if constexpr (!rmw_dest)
+    {
+        set_dst_write_addr(start_tile_index);
+    }
 
     program_packer_destination<!rmw_dest, w_invalidate>(address);
 
@@ -709,6 +728,11 @@ inline void _llk_pack_block_closed_(
     {
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
         pack_ch1_w_stride_set(tile_stride);
+    }
+
+    if constexpr (rmw_dest)
+    {
+        set_dst_write_addr(start_tile_index);
     }
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
@@ -792,9 +816,9 @@ inline void _llk_pack_block_fast_(const std::uint32_t start_tile_index, const st
         ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
         "The block exceeds the destination register sync region");
 
-    set_dst_write_addr(start_tile_index);
-
     program_packer_destination<false>(address);
+
+    set_dst_write_addr(start_tile_index);
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
@@ -813,8 +837,6 @@ inline void _llk_pack_block_closed_fast_(
         "The block exceeds the destination register sync region");
     LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
 
-    set_dst_write_addr(start_tile_index);
-
     program_packer_destination<false>(address);
 
     if (tile_stride != pack_ch1_w_stride())
@@ -822,6 +844,8 @@ inline void _llk_pack_block_closed_fast_(
         cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
         pack_ch1_w_stride_set(tile_stride);
     }
+
+    set_dst_write_addr(start_tile_index);
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
