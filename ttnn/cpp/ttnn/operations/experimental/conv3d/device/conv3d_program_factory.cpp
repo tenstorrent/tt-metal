@@ -1067,7 +1067,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         operation_attributes.output_pad_h,
         operation_attributes.output_pad_w,
         cb_weight_lo_tiled_id,
-        (uint32_t)operand_split};
+        (uint32_t)operand_split,
+        operation_attributes.output_depth_to_space[0],
+        operation_attributes.output_depth_to_space[1],
+        operation_attributes.output_depth_to_space[2],
+        operation_attributes.output_trim_t_front};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)

@@ -172,6 +172,58 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
             args.output_channels);
     }
 
+    const auto& d2s = args.output_depth_to_space;
+    const uint32_t d2s_factor = d2s[0] * d2s[1] * d2s[2];
+    if (d2s_factor > 1 || args.output_trim_t_front > 0) {
+        TT_FATAL(
+            d2s[0] > 0 && d2s[1] > 0 && d2s[2] > 0 && args.output_channels % d2s_factor == 0,
+            "output_depth_to_space ({}, {}, {}) must be positive and divide output_channels ({})",
+            d2s[0],
+            d2s[1],
+            d2s[2],
+            args.output_channels);
+        const uint32_t d2s_C = args.output_channels / d2s_factor;
+        const uint32_t c_out_block = args.config.C_out_block > 0
+                                         ? args.config.C_out_block
+                                         : tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            d2s_C % tt::constants::TILE_WIDTH == 0 && args.output_channels % c_out_block == 0 &&
+                (c_out_block % d2s_C == 0 || d2s_C % c_out_block == 0) && c_out_block / d2s_C <= 8,
+            "Depth-to-space output needs output_channels / ({} * {} * {}) = {} to be a multiple of {} and to nest "
+            "with C_out_block ({}), with at most 8 groups per block",
+            d2s[0],
+            d2s[1],
+            d2s[2],
+            d2s_C,
+            tt::constants::TILE_WIDTH,
+            c_out_block);
+        TT_FATAL(
+            args.output_pad_h == 0 && args.output_pad_w == 0,
+            "Depth-to-space output does not support padded-output mode");
+        const auto [T_out_conv, H_out_conv, W_out_conv] = detail::compute_output_dims(
+            input_shape[1], input_shape[2], input_shape[3], args.padding, args.stride, args.kernel_size, args.dilation);
+        TT_FATAL(
+            args.output_trim_t_front < T_out_conv * d2s[0],
+            "output_trim_t_front ({}) must be less than the unpacked output frames ({})",
+            args.output_trim_t_front,
+            T_out_conv * d2s[0]);
+
+        // The reader pushes each block's patches in TILE_HEIGHT-page chunks into a vol2col_rm ring of
+        // min(n, 2 * TILE_HEIGHT) pages when n is not tile aligned. For n > 2 * TILE_HEIGHT those pushes
+        // do not divide the ring, a chunk straddles its end and the device hangs. Checked on this path only.
+        const uint32_t num_patches = args.config.T_out_block * args.config.H_out_block * args.config.W_out_block;
+        TT_FATAL(
+            num_patches % tt::constants::TILE_HEIGHT == 0 || num_patches <= 2 * tt::constants::TILE_HEIGHT,
+            "T_out_block * H_out_block * W_out_block ({} * {} * {} = {}) must be a multiple of {} or at most {}: "
+            "other blockings overrun the vol2col CB ring and hang the device.",
+            args.config.T_out_block,
+            args.config.H_out_block,
+            args.config.W_out_block,
+            num_patches,
+            tt::constants::TILE_HEIGHT,
+            2 * tt::constants::TILE_HEIGHT);
+    }
+
     // Validate weight shape and config arguments
     const auto patch_size =
         args.kernel_size[0] * args.kernel_size[1] * args.kernel_size[2] * input_tensor_a.logical_shape()[4];
@@ -359,6 +411,17 @@ tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
     H_out += 2 * args.output_pad_h;
     W_out += 2 * args.output_pad_w;
 
+    // Depth-to-space output: C_out = (p1, p2, p3, C) is unpacked into T, H and W.
+    const auto& d2s = args.output_depth_to_space;
+    const uint32_t d2s_factor = d2s[0] * d2s[1] * d2s[2];
+    if (d2s_factor > 1 || args.output_trim_t_front > 0) {
+        C_out /= d2s_factor;
+        padded_C_out = C_out;
+        T_out = (T_out * d2s[0]) - args.output_trim_t_front;
+        H_out *= d2s[1];
+        W_out *= d2s[2];
+    }
+
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
     ttnn::Shape padded_output_shape({N, T_out, H_out, W_out, padded_C_out});
 
@@ -455,7 +518,9 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const std::optional<Tensor>& pad_offset_tensor,
     uint32_t output_pad_h,
     uint32_t output_pad_w,
-    const std::optional<Tensor>& weight_lo_tensor) {
+    const std::optional<Tensor>& weight_lo_tensor,
+    const std::array<uint32_t, 3>& output_depth_to_space,
+    uint32_t output_trim_t_front) {
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -479,7 +544,9 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .logical_h_mask = logical_h_mask,
         .logical_w_mask = logical_w_mask,
         .output_pad_h = output_pad_h,
-        .output_pad_w = output_pad_w};
+        .output_pad_w = output_pad_w,
+        .output_depth_to_space = output_depth_to_space,
+        .output_trim_t_front = output_trim_t_front};
     TT_FATAL(
         config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
