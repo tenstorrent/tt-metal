@@ -61,7 +61,7 @@ def test_norm_adaln_route(monkeypatch, fuse, x_shape, mod_shape, fused):
         assert out == "addcmul"
 
 
-@pytest.mark.parametrize("env,expected_calls", [(None, 0), ("0", 0), ("1", 2)])
+@pytest.mark.parametrize("env,expected_calls", [(None, 0), ("0", 0), ("", 0), ("false", 0), ("1", 2), ("true", 2)])
 def test_latent_stats_flag(monkeypatch, env, expected_calls):
     if env is None:
         monkeypatch.delenv("LTX_LATENT_STATS", raising=False)
