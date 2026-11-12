@@ -32,7 +32,11 @@ grids at M=4768:
     12x8   96 mm cores,  5 RS workers/link   M=4 K=8 N=14 sb(2,2)   1.313 ms   <- best, -25.0%
     12x9  108 mm cores,  2 RS workers/link   M=6 K=2 N=8  sb(2,2)   1.487 ms
 
-The optimum is interior: 12x9 starves the reduce-scatter and 12x7 starves the matmul. Ms without a
+The optimum is interior: 12x9 starves the reduce-scatter and 12x7 starves the matmul. That 12x8
+M4/K8/N14 blocking is deliberately *not* registered: it was measured 2026-08-13, before the windowed
+L1 MM->RS handoff became mandatory (#54239) and moved every MMRS timing, and at M=4768, which no
+current run produces -- 768P 5 s is 4736 rows/device with SP * TILE padding and 4864 bucketed, and
+`fused_mmrs_configs` is keyed on exact M. Ms without a
 swept entry are NOT registered here: they fall through to the v2.3 rule engine inside
 `get_fused_mmrs_config` (`utils/mmrs_rules.py`), which picks the 12x8 blocking per M. Measured
 across the 41 swept H3 Ms, the rules average +1.9% over each M's swept optimum (worst +5.3%),

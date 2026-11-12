@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....layers.feedforward import ParallelFeedForward
 from ....layers.linear import ColParallelLinear
@@ -456,4 +457,4 @@ class MiniMaxH3TransformerBlock(Module):
         none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
         if not self.use_fused_agmm:
             return {}
-        return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])
+        return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2], rules_fallback=is_blackhole())

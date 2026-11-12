@@ -93,6 +93,18 @@ class MiniMaxH3Attention(Module):
         4736: (320, 384),
         9184: (256, 512),
         13664: (256, 512),
+        # 4x8 bucket rungs (MINIMAX_H3_BUCKET_LADDER_4X8 / SP=8) the 768P durations land on with
+        # bucket_denoise, which the 4x8 presets enable. 10 s -> 76800 and 15 s -> 111616 are in the
+        # long-sequence regime measured at 9184 / 13664 above; the entries equal the generic
+        # fallback and only make the coverage explicit.
+        9600: (256, 512),
+        13952: (256, 512),
+        # 5 s -> 38912. UNTESTED, needs a sweep: kept at the fallback (256, 512), 19 Q chunks x 14
+        # heads = 266 items on 110 cores (3 per core, 768 Q rows). The measured 4736 point does not
+        # transfer: (320, 384) gives 16 chunks here, 224 items, still 3 per core (960 rows). Slot math
+        # favours q = 352 (14 chunks, 196 items, 2 per core, 704 rows), whose L1 fit at k = 384 is
+        # unverified -- an overflow fails the program build, so it is not landed blind.
+        4864: (256, 512),
     }
 
     def __init__(
@@ -674,7 +686,7 @@ class MiniMaxH3Attention(Module):
         none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
         if not self.use_fused_agmm:
             return {}
-        return agmm_kwargs(pins, k, n, x.padded_shape[-2])
+        return agmm_kwargs(pins, k, n, x.padded_shape[-2], rules_fallback=is_blackhole())
 
     def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
         """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""

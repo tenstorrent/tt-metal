@@ -22,6 +22,7 @@ these shapes need an entry rather than falling back.
 from __future__ import annotations
 
 import math
+import os
 from typing import NamedTuple
 
 import ttnn
@@ -87,6 +88,11 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
 }
 
 
+# Set to 1 to restore the divisor borrowing below on Blackhole too, for an on-device A/B of the
+# rules fallback against it.
+_LEGACY_DIVISOR_ENV = "MINIMAX_H3_AGMM_DIVISOR_FALLBACK"
+
+
 # Blocking of the dynamic-length path per (K, N) layer and length class; to_qkv and to_out take one
 # blocking at every length, ff1 one per class.
 AGMM_PINNED_BLOCKING: dict[tuple[int, int], dict[str, tuple[int, int, int]]] = {
@@ -140,11 +146,11 @@ def agmm_pins(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> d
     return {cls.name: pins[AGMM_PINNED_BLOCKING[(k, n)][cls.name]] for cls in LENGTH_CLASSES}
 
 
-def agmm_kwargs(pins: dict[str, AgmmPin] | None, k: int, n: int, rows: int) -> dict:
+def agmm_kwargs(pins: dict[str, AgmmPin] | None, k: int, n: int, rows: int, *, rules_fallback: bool = False) -> dict:
     """The linear's blocking kwargs for a `(K, N)` layer at `rows` per-device rows: the length class's pin,
     else (legacy path) the length-keyed swept table."""
     if pins is None:
-        return {"default_block_size": agmm_block_size(k, n, rows)}
+        return {"default_block_size": agmm_block_size(k, n, rows, rules_fallback=rules_fallback)}
     pin = pins[length_class(rows).name]
     return {
         "matmul_config": pin.config,
@@ -153,11 +159,33 @@ def agmm_kwargs(pins: dict[str, AgmmPin] | None, k: int, n: int, rows: int) -> d
     }
 
 
-def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
+def agmm_block_size(k: int, n: int, m: int, *, rules_fallback: bool = False) -> tuple[int, int, int] | None:
     """Block sizes for an all-gather matmul of this `(K, N)` at sequence length `M`, or None to let
-    the generic path decide. Uses the largest swept `per_core_M` that divides the runtime one.
+    the generic path decide.
+
+    A runtime `per_core_M` that was swept gets its own entry. Any other one -- every 768P production
+    length: 13 to 47 M tiles per core, past the swept 1..12 -- either borrows the entry of the largest
+    swept `per_core_M` dividing it, or, with `rules_fallback`, returns None so that `get_agmm_config`
+    resolves the shape with the v3 rule engine (`utils/agmm_rules.py`).
+
+    Borrowing keys on divisibility, not on similarity, so it degrades badly off the swept range: a
+    prime `per_core_M` such as 37 (H3 15 s bucketed, 13952 rows) or 13 (5 s to_out) borrows the
+    `per_core_M = 1` entry, an M_block of 2 walking 19 blocks per core. The v3 rules were fitted on
+    these same three H3 projections from M = 320 to 15,356 and land within 5% of the swept optimum
+    on 86/89 blind shapes, so on Blackhole -- the only arch they cover -- they are the better fallback.
+    Pass `rules_fallback=is_blackhole()` only from call sites whose `force_transpose` matches the op's
+    own `M > N` choice (the H3 attention and block do; the token refiner's ff1 does not), since
+    `get_agmm_config` skips the rules otherwise and would land on its generic fallback.
+    A/B'd on a BH Galaxy 4x8 at 160 W (2026-11-05, one H3 block, bucketed lengths, device kernel time
+    averaged over the mesh), rules vs borrowing: at 15 s (13952 rows) qkv 7416 -> 3466 us, to_out
+    3177 -> 2587 us, ff1 9668 -> 5387 us; at 5 s (4864 rows) to_out 1166 -> 916 us, qkv and ff1
+    within 1-4%. `MINIMAX_H3_AGMM_DIVISOR_FALLBACK=1` restores the borrowing for further comparison.
     """
     per_core_m = _per_core_m(m, n)
+    if (k, n, per_core_m) in AGMM_BLOCK_SIZES:
+        return AGMM_BLOCK_SIZES[(k, n, per_core_m)]
+    if rules_fallback and os.environ.get(_LEGACY_DIVISOR_ENV) != "1":
+        return None
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:
