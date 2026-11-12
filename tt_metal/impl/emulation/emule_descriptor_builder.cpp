@@ -29,6 +29,7 @@
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
 #include "emule_tile_geometry.hpp"           // resolve_tile_geometry, ResolvedTileGeometry
 #include "host_sanitizers.hpp"               // emule_asan_enabled (host ASAN master switch)
+#include "jit_build/build_env_manager.hpp"   // BuildEnvManager (kernel build-env defines)
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
 #include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
@@ -264,7 +265,6 @@ static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
 }
 
 EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
-    (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
     auto& metal_context = MetalContext::instance(impl.get_context_id());
@@ -287,6 +287,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
     pd.config.asan_enabled = tt::tt_metal::emule::emule_asan_enabled();
+    pd.config.build_env_defines = MetalContext::instance(impl.get_context_id())
+                                      .build_env_manager()
+                                      .get_device_build_env(device->build_id())
+                                      .build_env.get_defines();
 
     // Per (programmable core type, logical core) -> the kernels placed there with resolved launch
     // offsets + unique RTA; stitched into each CoreDescriptor below. pct is part of the key because a

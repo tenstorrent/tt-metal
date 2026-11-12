@@ -266,6 +266,10 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                 throw;
             }
         }
+    } else if (cluster_.get_target_device_type() == tt::TargetDevice::Emule) {
+        for (tt::ChipId device_id : device_ids) {
+            initialize_emulated_firmware_state(device_id);
+        }
     }
     initialized_ = true;
 }
@@ -1498,6 +1502,43 @@ void RiscFirmwareInitializer::initialize_firmware(
         default:
             TT_THROW(
                 "Unsupported programable core type {} to initialize build states", enchantum::to_string(core_type));
+    }
+}
+
+void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId device_id) {
+    // Each core's core_info message and the reset jump word at the firmware launch address, as
+    // initialize_and_launch_firmware writes them; the watcher and kernels read both.
+    auto write_core_state = [&](HalProgrammableCoreType core_type, CoreType coord_type, const CoreCoord& logical_core) {
+        const CoreCoord virtual_core =
+            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, coord_type);
+        auto core_info = populate_core_info_msg(device_id, core_type);
+        core_info.view().absolute_logical_x() = logical_core.x;
+        core_info.view().absolute_logical_y() = logical_core.y;
+        cluster_.write_core_immediate(
+            core_info.data(),
+            core_info.size(),
+            {static_cast<size_t>(device_id), virtual_core},
+            hal_.get_dev_addr(core_type, HalL1MemAddrType::CORE_INFO));
+        const auto jit_build_config = hal_.get_jit_build_config(hal_.get_programmable_core_type_index(core_type), 0, 0);
+        cluster_.write_core_immediate(
+            &jit_build_config.fw_launch_addr_value,
+            sizeof(uint32_t),
+            {static_cast<size_t>(device_id), virtual_core},
+            jit_build_config.fw_launch_addr);
+    };
+    const CoreCoord grid = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    for (uint32_t y = 0; y < grid.y; y++) {
+        for (uint32_t x = 0; x < grid.x; x++) {
+            write_core_state(HalProgrammableCoreType::TENSIX, CoreType::WORKER, CoreCoord(x, y));
+        }
+    }
+    if (hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
+        !rtoptions_.get_use_quasar_tensix_dispatch_cores() &&
+        cluster_.get_soc_desc(device_id).get_num_dispatch_engine_cores() > 0) {
+        for (const CoreCoord& logical_core :
+             detail::get_quasar_soc_dispatch_engine_logical_cores(cluster_.get_soc_desc(device_id))) {
+            write_core_state(HalProgrammableCoreType::DISPATCH, CoreType::DISPATCH, logical_core);
+        }
     }
 }
 
