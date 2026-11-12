@@ -3489,6 +3489,54 @@ tasks:
     cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/selftest/test_core.py models/demos/common/bringup/selftest/test_ledger_chunks.py
     metrics:
       ledger_files_over_limit: == 0
+- id: P.51
+  title: 'DECODER_SKIP=decode (Kartik''s cut): prefill never runs layers 21-39; per-position encoder replay below global_write_start with no history-cache writes'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - FIX.26
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/migration_configs.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-12, CONTRACT CHANGE AUTHORIZED: decode's proposal (Kartik Paigwar, #blaze-deepseek-v4, 2026-11-12), the model's side only. tt-d-gen will (not yet implemented there): compute the prefill stop P = floor((N - 128) / KV_BLOCK_SIZE) x KV_BLOCK_SIZE (N = prompt length; example N 5002 -> P 4864) and send prefill chunks with actual_end <= P, exclusive (positions outside [actual_start, actual_end) are PAD, no state updates); decode runs [P, N) through all 40 layers itself (128..191 tokens, DeepSeek's Decoder SWA Bounded Replay on decode's side: arXiv 2609.19969 section 3.2.2). The chunk header grows by one field: {slot_id, actual_start, actual_end, global_write_start}; global_write_start = Xp, the frontier of the long-range caches decode / the prefix cache already hold. Example (N 5002, Xp 4096): encoder replay [3968, 4096), new computation [4096, 4864), decode [4864, 5002).
+      MODEL BEHAVIOUR, per valid position p of a chunk: p < global_write_start: ENCODER REPLAY - layers 0-19 only, their sliding windows rebuilt with every window truncated at the replay start (DeepSeek's Encoder SWA Bounded Replay; the model already has begin_chunk(.., replay=True) for a chunk-level replay: reuse it), the compressed KV, index keys and layer 20's KV are READ but NEVER WRITTEN (today every history-cache write covers the chunk's whole [start, end): model.py:699 compressor.write, attention.py:1494 / 1659 cache.write - gate them at global_write_start), layer 20's KV / index head not run. p >= global_write_start: layers 0-19 plus layer 20's KV / index head, writes as today. Layers 21-39 NEVER run on any chunk; every chunk still acks every layer 0-39 as completed (sink.layers_completed; tt-d-gen stays unaware which layers run - Jonathan Azpur's ask). Served: history caches [0, P), the window snapshot of layers 0-19 at P (rows [P - 128, P)); say what is served for layers 20-39's windows and update serving_contract.md / migration_configs.md.
+      SWITCHES: a new DECODER_SKIP value `decode` (keep the shipped default `off`: the owner decides after the A/B). The adapter takes an optional global_write_start; missing = actual_start = no replay (today's engine keeps working).
+      VERIFICATION, nothing loosened: (1) no prefix hit (global_write_start = actual_start): every served byte of the history caches and of the layer 0-19 window snapshot is BIT-IDENTICAL between DECODER_SKIP=off and decode for the same chunks (the encoder does not depend on the decoder); several prompt lengths, both prompts (novel, code). (2) prefix hit: the cached rows below global_write_start are bit-identical before and after the replay chunk (never written); the rows from global_write_start on vs a fresh full prefill: report their errors against the existing limits and against the golden (approximate by design for positions whose encoder windows reach before the replay start); a golden state at P where a check needs one (reuse FIX.26's reference/handoff.py, same pipeline). (3) acks: every layer once per chunk. (4) determinism (automatic in every gate since FIX.25). (5) if an existing check measures something this mode no longer computes (the decoder's states, a final hidden), do not change or drop it: run it on DECODER_SKIP=off and say so, as P.49 did for test_contract (DS41-236); stop and ask if that is not enough. (6) perf: device time per chunk off vs decode (P.30 measured a skipped chunk at 83.6 vs 167.9 ms at 51200).
+      Report: the per-position rule as implemented, the files touched, the bit-identity tables, accuracy, acks, perf. Agent rules 18 and 19 hold. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+  ab:
+    env:
+      DECODER_SKIP: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      DECODER_SKIP: decode
+      ENGRAM_TABLE: resident
+    keep_default: true
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      contract_checks_failed: == 0
+      acks_early: == 0
+      served_bytes_differ: == 0
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
