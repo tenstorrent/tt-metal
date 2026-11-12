@@ -181,6 +181,10 @@ void kernel_main() {
     // Drain the pipeline - the last txn in flight
     noc_async_read_barrier_with_trid(trid_to_wait);
     cb_r2c_w.push_back(w_tiles_per_block);
+
+    // The custom VC programmed into the read cmd buf's NOC_CTRL persists across kernel launches; restore the
+    // firmware default (VC=1) so later readers on this core don't inherit it.
+    noc_read_init_state<read_cmd_buf>(noc_index);
 }
 
 #undef ADVANCE_TRID
