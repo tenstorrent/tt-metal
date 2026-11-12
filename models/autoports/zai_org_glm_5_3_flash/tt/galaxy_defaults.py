@@ -47,6 +47,11 @@ KNOBS = {
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",
+    # the TP prefill mixes the mHC streams with one program per sublayer on the flat residual (prefill_tp._layer_fused_mhc;
+    # exact fp32 like the composite chain, only the summation order differs): TTFT 1 M x 1 344.7 -> 332.1 s, 32 K x 4
+    # 35.7 -> 34.1 s, ISL 128 x 16 7.56 -> 7.01 s, decode unchanged, 16 identical prompts still agree; the ids move at a
+    # near-tie after 7 (32 K x 4) / 35 (1 M x 1) tokens. The packed and batched prefill (GLM53_PF_PACKED / _BATCH) need it
+    "GLM53_PF_MHC_POST": "fused",
     # opt-in, not a default: GLM53_DSA_SHARD_COMB (the fold combine on the lane roots: correct, but its fp32 order moves
     # the ids at a near-tie -- fails the strict ids gate)
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE

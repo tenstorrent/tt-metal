@@ -220,6 +220,23 @@ lane skew: shard_plan.rs1_early_gates); rev 67 alone at 4 K x 16 distinct had le
 which was the routed-expert scratch race (section 12): on the fixed stack RS1_EARLY and AGB give the knob-off digest in
 every one of 3 in-process runs at 4 K x 16.
 
+### Prefill: the fused mHC mix (2026-11-12, default on the 8x4)
+
+`GLM53_PF_MHC_POST=fused` runs each sublayer's mHC pre- and post-mix as one program on the flat residual
+(`prefill_tp._layer_fused_mhc`, `_mhc_mix`) instead of the composite op chain. Both are exact fp32 (3e-8 rel rms vs
+float64, doc/mhc/README.md); only the summation order differs, so the greedy ids move at a near-tie.
+
+| row | composite (ops) | fused | ids |
+|---|---|---|---|
+| 1 M x 1 TTFT / decode | 344.7 s / 52.8 tok/s | 332.1 s / 53.6 tok/s | first 24 identical (694d88ef), text splits at ~35 tokens |
+| 32 K x 4 TTFT / decode | 35.7 s / 47.5 tok/s | 34.1 s / 47.5 tok/s | 785 ... 1293, then 1467 vs 57681 (the new CI expectation) |
+| ISL 128 x 16 distinct, TTFT | 7.56 s | 7.01 s | user 0 identical (9c01868e) |
+| ISL 128 x 16 identical prompts | agree | agree (6.98 s) | - |
+
+The packed prefill (`GLM53_PF_PACKED`) needs it but stays opt-in: a packed segment's rows land on other chips than the
+per-user path's, whose reduce-scatter sums in another order, so identical prompts in different pack slots move at a
+near-tie (16 identical prompts, 2048:8: slot 6 differs in both replays).
+
 ### RSB: the reduce-scatters in block chunks (2026-11-11, default on the 8x4)
 
 Today both scatters signal per token. RS1 (FabricStreamScatter axis 0, one lane) ships per destination t chunks of

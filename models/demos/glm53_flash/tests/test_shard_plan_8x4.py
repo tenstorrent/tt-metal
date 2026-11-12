@@ -1124,7 +1124,8 @@ def _protect_env(monkeypatch, keys) -> None:
 
 def test_galaxy_defaults_shard_tail(monkeypatch):
     """tt/galaxy_defaults.py: the 8x4 default turns on AGK, AGB, RS1_EARLY, RSB, R8 and RSNP (validated: 4 K x 16
-    bit-identical to knob-off over 3 runs; 32 K x 4 ids identical) and leaves COMB (ids move at a near-tie) opt-in; an
+    bit-identical to knob-off over 3 runs; 32 K x 4 ids identical) and the fused prefill mHC mix, and leaves COMB (ids
+    move at a near-tie) opt-in; an
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
     default); other meshes get nothing"""
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
@@ -1135,6 +1136,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert "GLM53_DSA_SHARD_COMB" not in GD.KNOBS
     assert GD.KNOBS["GLM53_DSA_SHARD_RSB"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_R8"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_RSNP"] == "1"
+    assert GD.KNOBS["GLM53_PF_MHC_POST"] == "fused"
     keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
     keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB"]
     _protect_env(monkeypatch, keys)
@@ -1145,6 +1147,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_RSB"] == "1" and SP.shard_rsb(8)
     assert got["GLM53_DSA_SHARD_R8"] == "1" and SP.shard_r8(8)
     assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)
+    assert got["GLM53_PF_MHC_POST"] == "fused"
     _protect_env(monkeypatch, keys)
     monkeypatch.setenv("GLM53_DSA_SHARD_AGK", "0")  # an explicit value wins
     got = GD.apply((8, 4), 4096, 4096)
