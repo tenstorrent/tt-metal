@@ -30,9 +30,11 @@ with ``null_block=0``.
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import gc
+import hashlib
 import importlib
 import os
 import sys
@@ -627,9 +629,14 @@ class GLM53StackForCausalLM:
             raise ValueError(
                 f"prefill chunks [start, end) {list(zip(starts, ends))} outside tokens [{B}, {tokens.shape[1]}]"
             )
+        # GLM53StackForConditionalGeneration (``_mm_plan``): the rows' image feature rows, an off-grid continuation
+        # re-run from position 0, the rows of failed image requests; the text class never gets here with one
+        plan = self._mm_plan(tokens, starts, ends, slots, kwargs) if mm else None
+        gen_starts = starts if plan is None else plan["starts"]
+        lens = [e - s for s, e in zip(gen_starts, ends)]
         chunk = torch.zeros(B, max(lens), dtype=torch.int64)
         for i in range(B):
-            chunk[i, : lens[i]] = tokens[i, starts[i] : ends[i]].to(torch.int64)
+            chunk[i, : lens[i]] = tokens[i, gen_starts[i] : ends[i]].to(torch.int64)
         if page_table is None:
             raise ValueError("prefill_forward needs the rows' page table")
         rows = trim_page_rows(page_table)
@@ -645,19 +652,15 @@ class GLM53StackForCausalLM:
                     f"prefill rows {bad} are sampled (temperature > 0 without top_k 1): the stack samples greedily on "
                     "device only; the plugin routes such rows to host sampling under max_device_top_k=1"
                 )
-        gslots = self._admit(kv, slots, starts)
-        extra = {}
+        gslots = self._admit(kv, slots, starts)  # (a re-run continuation keeps its slot: admitted at its own start)
+        extra = {"mm_rows": plan["rows"]} if plan is not None and plan["rows"] else {}
         if self.prefix is not None:  # GLM53_STACK_PREFIX: attach confirmed hits, snapshot the on-grid chunk ends
-            starts, extra = self.prefix.plan(tokens, rows, gslots, starts, ends)
-            lens = [e - s for s, e in zip(starts, ends)]
+            gen_starts, pfx = self.prefix.plan(tokens, rows, gslots, gen_starts, ends)
+            extra.update(pfx)
+            lens = [e - s for s, e in zip(gen_starts, ends)]
             chunk = torch.zeros(B, max(lens), dtype=torch.int64)
             for i in range(B):
-                chunk[i, : lens[i]] = tokens[i, starts[i] : ends[i]].to(torch.int64)
-        # GLM53StackForConditionalGeneration: the rows' image feature rows (``_mm_rows``) beside the chunk ids
-        if mm:
-            mm_rows = self._mm_rows(tokens, starts, ends, kwargs)
-            if mm_rows:
-                extra["mm_rows"] = mm_rows
+                chunk[i, : lens[i]] = tokens[i, gen_starts[i] : ends[i]].to(torch.int64)
         try:
             out = self.gen.prefill_forward(
                 chunk,
@@ -665,7 +668,7 @@ class GLM53StackForCausalLM:
                 kv_cache=kv,
                 prompt_lens=lens,
                 empty_slots=gslots,
-                start_pos=starts,
+                start_pos=gen_starts,
                 sampling_params=params,
                 **extra,
             )
@@ -675,6 +678,8 @@ class GLM53StackForCausalLM:
             raise
         if self.prefix is not None:
             self.prefix.commit()
+        if plan is not None and plan["failed"]:
+            return self._mm_failed_rows(out, plan["failed"], [gslots[i] for i in plan["failed"]], params is not None)
         if params is not None:
             return out.reshape(B, 1).to(torch.int32), None
         return out.reshape(B, 1, -1).float()
@@ -1038,6 +1043,10 @@ class DeviceVisionEncoder:
         built = time.perf_counter() - t0
         l1 = self._l1()
         self.warm_s = self.runtime.warmup()
+        if int(getattr(self.backend, "mm_extra_rows", 0) or 0) > 0:  # the image warm-up's staging half: M1's host write
+            self.backend.stage_mm_rows(
+                torch.zeros(1, 4096, dtype=torch.bfloat16)
+            )  # + SlotOps copy, before the captures
         ttnn.synchronize_device(self.mesh)
         gc.collect()
         self.programs = int(self.mesh.num_program_cache_entries())
@@ -1182,10 +1191,13 @@ def declare_multimodal_class(api=None):
     ``TT_MODEL_CLASS_OVERRIDES="Glm5NextForConditionalGeneration=<MM_ADAPTER_TARGET>"``.
 
     Per prefill row with image items (the plugin's per-row ``pixel_values`` / ``image_grid_thw`` lists + placeholder
-    ranges, ``tt/mm_inputs.py``): the items' prompt rows (``feature_rows`` on the row's prefix), the items whose rows
-    meet this chunk encoded (``mm_encoder``: ``DeviceVisionEncoder``), the chunk's rows handed to the generator as
-    ``mm_rows`` -> the stack's extra embedding rows (``Glm53Generator._mm_stage``, GLM53_STACK_MM=1, set by this class's
-    construction). Videos are refused (images only).
+    ranges + identifiers, ``tt/mm_inputs.py``; ``_mm_plan``): the items' prompt rows (``feature_rows`` on the row's
+    prefix), the items whose rows meet this chunk encoded once each (``mm_encoder``: ``DeviceVisionEncoder``; the
+    features cached by vLLM's identifier across the request's chunks and identical images), the chunk's rows handed to
+    the generator as ``mm_rows`` -> the stack's extra embedding rows (``Glm53Generator._mm_stage``, GLM53_STACK_MM=1, set
+    by this class's construction). An off-grid continuation (the plugin leaves an image prompt's chunk ends where vLLM
+    put them) re-runs the request from position 0 in its slot; a request whose image input fails (an encoder error, a
+    video: images only) ends on a stop token while the engine and the other rows go on.
 
     ``api``: ``_vllm_multimodal_api()`` (the class gains ``SupportsMultiModal`` and the processor registration, which
     is what makes ``vllm serve`` accept ``image_url`` content) or None (the same flags on a plain subclass)."""
@@ -1200,6 +1212,25 @@ def declare_multimodal_class(api=None):
         supports_mm_device_do_normalize = False
         requires_raw_input_tokens = False
         mm_encoder = None  # the image encoder (initialize_vllm_model: make_mm_encoder)
+
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            # image features by item (vLLM's content identifier, else a hash of the pixels): one encoder call per item
+            # for every chunk of its request (and identical images of other requests), at most
+            # GLM53_STACK_MM_FEATURE_CACHE_ROWS rows (LRU; default 32768 = 256 MB of bf16)
+            self._feat_cache: collections.OrderedDict = collections.OrderedDict()
+            self._feat_rows_cap = int(os.environ.get("GLM53_STACK_MM_FEATURE_CACHE_ROWS", "32768"))
+            self._mm_failed: set = set()  # generator slots of image requests that failed (their chunks run as text)
+            self.mm_stats = dict(items_encoded=0, cache_hits=0, rows_staged=0, restarts=0, failed=0, encode_s=0.0)
+
+        def allocate_kv_cache(self, shape, dtype, num_layers: int):
+            self._mm_failed = set()
+            return super().allocate_kv_cache(shape, dtype, num_layers)
+
+        def release_request(self, slot: int) -> None:
+            if self.kv_cache is not None and 0 <= int(slot) < self.max_batch:
+                self._mm_failed.discard(self._alias[int(slot)])
+            super().release_request(slot)
 
         @classmethod
         def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size: int, max_seq_len: int, *a, **kw):
@@ -1219,47 +1250,136 @@ def declare_multimodal_class(api=None):
             )
             return model
 
-        def _mm_rows(self, tokens: torch.Tensor, starts: list, ends: list, kwargs: dict) -> dict:
-            """{row: (positions [m] absolute, rows [m, 4096] bf16)} of this prefill's chunks [starts[i], ends[i]) (the
-            rows of every image item that meets the chunk; ``tokens [B, T]`` = every row's history from 0)"""
+        def _mm_plan(self, tokens: torch.Tensor, starts: list, ends: list, slots: list, kwargs: dict) -> dict:
+            """The multimodal side of one prefill call (``tokens [B, T]`` = every row's history from 0, row i's chunk
+            [starts[i], ends[i])): {"starts": the generator's chunk starts, "rows": {row: (positions [m] absolute,
+            rows [m, 4096] bf16)}, "failed": rows whose request failed}.
+            - An off-grid continuation (start not a multiple of the backend's continuation_align, 128 with the TP
+              prefill: the plugin leaves an image prompt's chunk ends where vLLM put them -- before an image item, at
+              the budget) cannot resume the slot's state: the row re-runs [0, end) from position 0 in its own slot (the
+              history is in ``tokens``; the earlier images come from the feature cache), wherever the cut lies, an
+              image item included.
+            - Image rows: every image item whose prompt rows (``feature_rows`` on the row's prefix) meet the chunk is
+              encoded once per item (``_mm_features``: cached) and its rows inside the chunk staged (M1).
+            - A row whose image input fails (an encoder error, a video, no encoder, no extra rows, inconsistent items)
+              fails ITS request, not the engine: the chunk runs as text (its slot stays consistent) and the head
+              returns a stop token (``_mm_failed_rows``); its later chunks do the same until the request is released."""
             from models.demos.glm53_flash.tt.mm_inputs import feature_rows, items_in_range, mm_items, mm_present
 
-            if not mm_present(kwargs):  # a text batch on this class arrives with pixel_values=[None] * B
-                return {}
+            align = int(getattr(self.gen.backend, "continuation_align", 1) or 1)
+            present = mm_present(kwargs)  # (a text batch on this class arrives with pixel_values=[None] * B)
+            gen_starts, out, failed = list(starts), {}, set()
+            for i in range(int(tokens.shape[0])):
+                s, e = starts[i], ends[i]
+                if s > 0 and s % align:
+                    gen_starts[i] = 0
+                    self.mm_stats["restarts"] += 1
+                    logger.info(
+                        f"GLM53 stack MM: plugin slot {slots[i]}: chunk [{s}, {e}) starts off the {align}-token grid: "
+                        "re-run from 0"
+                    )
+                if s > 0 and self._alias[slots[i]] in self._mm_failed:
+                    failed.add(i)
+                    continue
+                if not present:
+                    continue
+                try:
+                    rows_i = self._mm_row(tokens, i, gen_starts[i], e, kwargs, (feature_rows, items_in_range, mm_items))
+                except Exception as exc:  # noqa: BLE001  (this request fails; the engine and the other rows go on)
+                    failed.add(i)
+                    self.mm_stats["failed"] += 1
+                    logger.error(
+                        f"GLM53 stack MM: plugin slot {slots[i]}, chunk [{s}, {e}): image input failed "
+                        f"({type(exc).__name__}: {exc}); the request ends with a stop token"
+                    )
+                    continue
+                if rows_i is not None:
+                    out[i] = rows_i
+                    self.mm_stats["rows_staged"] += int(rows_i[0].numel())
+            return dict(starts=gen_starts, rows=out, failed=failed)
+
+        def _mm_row(self, tokens, i: int, start: int, end: int, kwargs: dict, fns) -> tuple | None:
+            """row i's (positions, rows) inside [start, end), or None (no image row there)"""
+            feature_rows, items_in_range, mm_items = fns
+            items = mm_items(kwargs, i)
+            if not items:
+                return None
+            kinds = sorted({it.kind for it in items} - {"image"})
+            if kinds:
+                raise NotImplementedError(f"{kinds} items: the stack adapter serves images only")
             if int(getattr(self.gen.backend, "mm_extra_rows", 0) or 0) <= 0:
                 raise NotImplementedError(f"image input needs the stack's extra embedding rows ({MM_ENV}=1)")
-            out = {}
-            for i in range(int(tokens.shape[0])):
-                items = mm_items(kwargs, i)
-                if not items:
-                    continue
-                kinds = sorted({it.kind for it in items} - {"image"})
-                if kinds:
-                    raise NotImplementedError(f"row {i}: {kinds} items: the stack adapter serves images only")
-                rows = feature_rows(tokens[i, : ends[i]], items)
-                need = items_in_range(rows, starts[i], ends[i])
-                if not need:
-                    continue
-                if self.mm_encoder is None:
-                    raise NotImplementedError(
-                        f"row {i}: an image prompt without an image encoder ({MM_ENCODER_ENV}=none)"
-                    )
-                pos, vals = [], []
-                for k, feats in zip(need, self.mm_encoder([items[k] for k in need])):
-                    feats = torch.as_tensor(feats)
-                    if tuple(feats.shape[:1]) != (items[k].n_tokens,):
-                        raise ValueError(
-                            f"row {i} item {k}: {tuple(feats.shape)} features for {items[k].n_tokens} tokens"
-                        )
-                    r = rows[k]
-                    f = feats[: int(r.numel())]  # an item the prefix cuts: its rows so far
-                    sel = (r >= starts[i]) & (r < ends[i])
-                    pos.append(r[sel])
-                    vals.append(f[sel])
-                p_, v_ = torch.cat(pos).to(torch.int64), torch.cat(vals).to(torch.bfloat16)
-                order = torch.argsort(p_)
-                out[i] = (p_[order], v_[order])
-            return out
+            rows = feature_rows(tokens[i, :end], items)
+            need = items_in_range(rows, start, end)
+            if not need:
+                return None
+            if self.mm_encoder is None:
+                raise NotImplementedError(f"an image prompt without an image encoder ({MM_ENCODER_ENV}=none)")
+            ids = list((kwargs.get("mm_identifiers") or [None] * (i + 1))[i] or [])
+            pos, vals = [], []
+            for k in need:
+                feats = self._mm_features(items[k], ids[k] if k < len(ids) else None)
+                r = rows[k]
+                f = feats[: int(r.numel())]  # an item the prefix cuts: its rows so far
+                sel = (r >= start) & (r < end)
+                pos.append(r[sel])
+                vals.append(f[sel])
+            p_, v_ = torch.cat(pos).to(torch.int64), torch.cat(vals).to(torch.bfloat16)
+            order = torch.argsort(p_)
+            return p_[order], v_[order]
+
+        def _mm_features(self, item, identifier) -> torch.Tensor:
+            """one image item's [n_tokens, 4096] bf16 rows: from the cache, else ONE encoder call"""
+            if identifier:
+                key = ("id", str(identifier))
+            else:
+                h = hashlib.sha1(item.pixel_values.contiguous().numpy().tobytes())
+                h.update(str(item.grid_thw.tolist()).encode())
+                key = ("px", h.hexdigest())
+            hit = self._feat_cache.get(key)
+            if hit is not None:
+                self._feat_cache.move_to_end(key)
+                self.mm_stats["cache_hits"] += 1
+                return hit
+            t0 = time.perf_counter()
+            (feats,) = self.mm_encoder([item])
+            dt = time.perf_counter() - t0
+            feats = torch.as_tensor(feats).to(torch.bfloat16)
+            if feats.dim() != 2 or int(feats.shape[0]) != item.n_tokens:
+                raise ValueError(f"{tuple(feats.shape)} features for an item of {item.n_tokens} tokens")
+            self.mm_stats["items_encoded"] += 1
+            self.mm_stats["encode_s"] += dt
+            logger.info(
+                f"GLM53 stack MM: image item grid {item.grid_thw.reshape(-1).tolist()} -> {item.n_tokens} rows encoded "
+                f"in {dt * 1e3:.0f} ms ({type(self.mm_encoder).__name__})"
+            )
+            self._feat_cache[key] = feats
+            while (
+                len(self._feat_cache) > 1
+                and sum(int(v.shape[0]) for v in self._feat_cache.values()) > self._feat_rows_cap
+            ):
+                self._feat_cache.popitem(last=False)
+            return feats
+
+        def _stop_id(self) -> int:
+            stops = sorted(int(t) for t in (getattr(self.gen, "stop_token_ids", ()) or ()))
+            if not stops:
+                raise RuntimeError("a failed image request needs a stop token to end on (the tokenizer has none)")
+            return stops[0]
+
+        def _mm_failed_rows(self, out, rows: set, gen_slots: list, sampled: bool):
+            """the call's output with every failed row's head on the stop token (vLLM finishes the request there); the
+            generator slots are remembered so the request's later chunks fail too (until release_request)"""
+            self._mm_failed.update(int(g) for g in gen_slots)
+            stop, idx = self._stop_id(), sorted(rows)
+            if sampled:
+                ids = out.reshape(-1, 1).to(torch.int32).clone()
+                ids[idx, 0] = stop
+                return ids, None
+            logits = out.reshape(int(out.shape[0]), 1, -1).float().clone()
+            logits[idx] = -1e9
+            logits[idx, 0, stop] = 0.0
+            return logits
 
         @classmethod
         def get_placeholder_str(cls, modality: str, i: int) -> str | None:

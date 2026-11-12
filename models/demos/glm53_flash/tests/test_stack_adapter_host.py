@@ -16,7 +16,7 @@ blocks: snapshots at the on-grid chunk ends, the hit confirmation, the attach of
 on shared pages, the release, the LRU reuse of unpinned entries, and the fallbacks to a prefill from 0. Image input
 (GLM53_STACK_MM): the generator's per-chunk staging + id remap into the mock's extra embedding rows, image prompts kept
 out of the batched / packed replays, ``GLM53StackForConditionalGeneration`` (declaration with / without vLLM, the 0.31 /
-0.30 processor module, the plugin's per-row image items routed to the generator through a fake encoder, the device tower's L1 plan and encoder selection) and, with a
+0.30 processor module, the plugin's per-row image items routed to the generator through a fake encoder: the feature cache, an off-grid continuation re-run from 0, a failed image request ending on a stop token beside served rows; the device tower's L1 plan and encoder selection) and, with a
 vLLM interpreter (``GLM53_VLLM_PYTHON``, a subprocess: this process stays vLLM- and ttnn-free) and the checkpoint, the
 real processor the class registers run on the demo image.
 
@@ -231,7 +231,10 @@ class _MockStackBackend(ModelBackend):
             st.clear()
         assert len(st) == chunk_start, f"slot {slot}: state holds {len(st)} tokens, chunk starts at {chunk_start}"
         self.chunk_ids.append(tokens[:n_valid].clone())
-        st.extend(t if t < VOCAB else ("img", int(self.mm_table[t - VOCAB][0])) for t in tokens[:n_valid].tolist())
+        st.extend(
+            t if t < VOCAB or t - VOCAB not in self.mm_table else ("img", int(self.mm_table[t - VOCAB][0]))
+            for t in tokens[:n_valid].tolist()
+        )  # fmt: skip  (a raw image token: a failed image request's text run)
         self.chunks.append((slot, chunk_start, n_valid, logits_rows, sample is not None))
         if logits_rows == "none":
             return None
@@ -1307,26 +1310,46 @@ def test_vllm_multimodal_api_takes_the_031_module_then_the_030_one(monkeypatch):
     assert issubclass(cls, sys.modules["vllm.model_executor.models.interfaces"].SupportsMultiModal)
 
 
-def test_multimodal_adapter_routes_image_items_to_the_generator(monkeypatch):
-    """The plugin's per-row image items (pixel_values / image_grid_thw lists + placeholder ranges) on the multimodal
-    class: the item's rows found in the row's prefix, the item encoded (fake encoder), the chunk's rows handed to the
-    generator -- an image straddling the two scheduler chunks of a 200-token prompt is staged by both; text rows of the
-    same batch and a text-only batch (pixel_values=[None]) take the text path; videos, a missing encoder and a backend
-    without extra rows are refused; the text class still refuses pixels."""
+STOP = VOCAB - 1  # the mock tokenizer's stop token (a failed image request ends on it)
+
+
+def _mm_adapter(encoder=None):
+    """the multimodal class over the CPU mock (plain declaration: no vLLM here), warmed, with a recording encoder"""
     cls = declare_multimodal_class(None)
     backend = _MockStackBackend(B)
-    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=(STOP,)), max_batch=B, max_seq_len=SEQ)
     ad = cls(gen, B, SEQ)
     kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
     ad.warmup_model_prefill(kv_cache=kv, enable_trace=True)
     ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B)
     encoded = []
 
-    def encoder(items):  # row j of an item = its j-th feature row; the first value names it (offset + j)
+    def default_encoder(items):  # row j of an item = its j-th feature row; the first value names it (offset + j)
         encoded.append([it.n_tokens for it in items])
         return [_img_rows(torch.arange(it.offset, it.offset + it.n_tokens)) for it in items]
 
-    ad.mm_encoder = encoder
+    ad.mm_encoder = encoder or default_encoder
+    return ad, backend, gen, kv, encoded
+
+
+def _items(lo: int, n_tokens: int, w: int = 16, ident=None) -> dict:
+    """the plugin's per-row lists of ONE row holding one image item of n_tokens tokens at [lo, lo + n_tokens)"""
+    h = n_tokens * 4 // w
+    out = dict(pixel_values=[[torch.zeros(h * w, 4)]], image_grid_thw=[[torch.tensor([[1, h, w]])]],
+               mm_placeholder_offsets=[[lo]], mm_placeholder_lengths=[[n_tokens]])  # fmt: skip
+    if ident is not None:
+        out["mm_identifiers"] = [[ident]]
+    return out
+
+
+def test_multimodal_adapter_routes_image_items_to_the_generator(monkeypatch):
+    """The plugin's per-row image items (pixel_values / image_grid_thw lists + placeholder ranges) on the multimodal
+    class: the item's rows found in the row's prefix, the item encoded ONCE (the second chunk reads the feature cache),
+    the chunk's rows handed to the generator -- an image straddling the two scheduler chunks of a 200-token prompt is
+    staged by both; text rows of the same batch and a text-only batch (pixel_values=[None]) take the text path; a
+    video, a missing encoder and a backend without extra rows fail THAT request (the head returns the stop token, the
+    slot stays consistent); the text class still refuses pixels."""
+    ad, backend, gen, kv, encoded = _mm_adapter()
     lo, n_img = 112, 32  # grid (1, 8, 16): 128 patches -> 32 image tokens at [112, 144)
     img = _mm_prompt(200, lo, lo + n_img, 9)
     text = _prompt(90, 4)
@@ -1335,55 +1358,102 @@ def test_multimodal_adapter_routes_image_items_to_the_generator(monkeypatch):
     kw = dict(pixel_values=[None, [pv]], image_grid_thw=[None, [grid]], mm_placeholder_offsets=[None, [lo]],
               mm_placeholder_lengths=[None, [n_img]])  # fmt: skip
     # step 1: the text prompt whole + the image prompt's first 128 tokens (host-routed intermediate chunk)
-    first = ad.prefill_forward(
-        _history([text, img[:128]]),
-        page_table=_table([_blocks(0, 90), _blocks(1, 128)], 2),
-        kv_cache=kv,
-        prompt_lens=[90, 128],
-        start_pos=[0, 0],
-        empty_slots=[0, 1],
-        sampling_params=None,
-        **kw,
-    )
+    first = ad.prefill_forward(_history([text, img[:128]]), page_table=_table([_blocks(0, 90), _blocks(1, 128)], 2),
+                               kv_cache=kv, prompt_lens=[90, 128], start_pos=[0, 0], empty_slots=[0, 1],
+                               sampling_params=None, **kw)  # fmt: skip
     assert first.shape == (2, 1, VOCAB) and encoded == [[32]]
     assert [k for k, _ in backend.mm_stages] == [1] and backend.mm_stages[0][1][:, 0].tolist() == list(range(112, 128))
     assert kv.state[0] == text and kv.state[1] == _ledger(img[:128], lo, lo + n_img)
-    # step 2: the rest of the image prompt; the plugin sends the item again, its remaining rows are staged
-    out = ad.prefill_forward(
-        _history([img]),
-        page_table=_table([_blocks(1, 200)], 1),
-        kv_cache=kv,
-        prompt_lens=[200],
-        start_pos=[128],
-        empty_slots=[1],
-        sampling_params=_greedy(1),
-        **{k: [v[1]] for k, v in kw.items()},
-    )
-    assert int(out[0][0, 0]) == (img[-1] + 1) % VOCAB and encoded == [[32], [32]]
+    # step 2: the rest of the image prompt; the plugin sends the item again: its features come from the cache
+    out = ad.prefill_forward(_history([img]), page_table=_table([_blocks(1, 200)], 1), kv_cache=kv, prompt_lens=[200],
+                             start_pos=[128], empty_slots=[1], sampling_params=_greedy(1),
+                             **{k: [v[1]] for k, v in kw.items()})  # fmt: skip
+    assert int(out[0][0, 0]) == (img[-1] + 1) % VOCAB and encoded == [[32]]
+    assert ad.mm_stats["cache_hits"] == 1 and ad.mm_stats["items_encoded"] == 1 and ad.mm_stats["rows_staged"] == 32
     assert backend.mm_stages[-1][1][:, 0].tolist() == list(range(128, 144))
     assert kv.state[1] == _ledger(img, lo, lo + n_img)
     # a text-only batch on the multimodal class: the text path (no encoder call, no stage)
     ad.prefill_forward(_history([text]), page_table=_table([_blocks(2, 90)], 1), kv_cache=kv, prompt_lens=[90],
                        start_pos=[0], empty_slots=[2], sampling_params=_greedy(1), pixel_values=[None],
                        image_grid_thw=[None], mm_placeholder_offsets=[None], mm_placeholder_lengths=[None])  # fmt: skip
-    assert len(encoded) == 2 and len(backend.mm_stages) == 2
-    # refusals
+    assert len(encoded) == 1 and len(backend.mm_stages) == 2
+    # failures: the request ends on the stop token, its chunk ran as text (raw image token ids), nothing raised
     one = dict(page_table=_table([_blocks(3, 200)], 1), kv_cache=kv, prompt_lens=[200], start_pos=[0], empty_slots=[3],
                sampling_params=_greedy(1))  # fmt: skip
-    with expect_error(NotImplementedError, "images only"):
-        ad.prefill_forward(_history([img]), pixel_values_videos=[[torch.zeros(256, 4)]],
-                           video_grid_thw=[[torch.tensor([[2, 8, 16]])]], **one)  # fmt: skip
-    ad.mm_encoder = None
-    with expect_error(NotImplementedError, "without an image encoder"):
-        ad.prefill_forward(_history([img]), **{k: [v[1]] for k, v in kw.items()}, **one)
-    ad.mm_encoder = encoder
-    backend.mm_extra_rows = 0
-    with expect_error(NotImplementedError, "GLM53_STACK_MM=1"):
-        ad.prefill_forward(_history([img]), **{k: [v[1]] for k, v in kw.items()}, **one)
+    video = dict(pixel_values_videos=[[torch.zeros(256, 4)]], video_grid_thw=[[torch.tensor([[2, 8, 16]])]])
+    for setup, args in (
+        (lambda: None, video),
+        (lambda: setattr(ad, "mm_encoder", None), {k: [v[1]] for k, v in kw.items()}),
+        (lambda: setattr(backend, "mm_extra_rows", 0), {k: [v[1]] for k, v in kw.items()}),
+    ):
+        setup()
+        ids, _ = ad.prefill_forward(_history([img]), **args, **one)
+        assert int(ids[0, 0]) == STOP and kv.state[ad._alias[3]][lo] == IMAGE_TOKEN_ID
+        ad.release_request(3)
+    assert ad.mm_stats["failed"] == 3 and ad._mm_failed == set()
     text_ad, *_ = _adapter()
     with expect_error(NotImplementedError, "text-only"):
         text_ad.prefill_forward(_history([img]), **{k: [v[1]] for k, v in kw.items()}, **one)
     assert "ttnn" not in sys.modules and "vllm" not in sys.modules
+
+
+def test_off_grid_continuation_inside_an_image_reruns_from_zero():
+    """vLLM may end an image prompt's chunk anywhere (the plugin aligns text prompts only): a continuation off the
+    backend's 64-token grid -- here [96, 260) after [0, 96), the cut inside the image item [80, 112) -- re-runs [0, 260)
+    from position 0 in the request's own slot, the image's rows from the feature cache (one encoder call in all);
+    the slot's state is the whole prompt with every image row, the head is the prompt's next token."""
+    ad, backend, gen, kv, encoded = _mm_adapter()
+    lo, n_img = 80, 32
+    img = _mm_prompt(260, lo, lo + n_img, 5)
+    kw = _items(lo, n_img)
+    ad.prefill_forward(_history([img[:96]]), page_table=_table([_blocks(0, 96)], 1), kv_cache=kv, prompt_lens=[96],
+                       start_pos=[0], empty_slots=[0], sampling_params=None, **kw)  # fmt: skip
+    g = ad._alias[0]
+    assert backend.chunks == [(g, 0, 96, "last", False)] and kv.state[g] == _ledger(img[:96], lo, lo + n_img)
+    out = ad.prefill_forward(_history([img]), page_table=_table([_blocks(0, 260)], 1), kv_cache=kv, prompt_lens=[260],
+                             start_pos=[96], empty_slots=[0], sampling_params=_greedy(1), **kw)  # fmt: skip
+    assert backend.chunks[1:] == [(g, 0, 128, "none", False), (g, 128, 128, "none", False), (g, 256, 4, "last", True)]
+    assert kv.state[g] == _ledger(img, lo, lo + n_img) and int(out[0][0, 0]) == (img[-1] + 1) % VOCAB
+    assert encoded == [[32]] and ad.mm_stats["restarts"] == 1 and ad.mm_stats["cache_hits"] == 1
+    assert gen.live_slots(kv) == [g]
+
+
+def test_failed_image_request_does_not_stop_the_batch_or_the_engine():
+    """An encoder error on one row of a batch: that request's head is the stop token (host route: the logits row
+    carries it) while the text row beside it is served; its next chunk fails too without another encoder call (the
+    failure is kept per generator slot) and release_request clears it -- a fresh image request in the same plugin
+    slot is served. Identical images of two requests (vLLM's identifier) are encoded once."""
+    calls = []
+
+    def flaky(items):
+        calls.append(items[0].grid_thw.reshape(-1).tolist())
+        if int(items[0].grid_thw.reshape(-1)[1]) == 4:  # the 4 x 16 grid: the "tower" fails
+            raise RuntimeError("tower down")
+        return [_img_rows(torch.arange(it.offset, it.offset + it.n_tokens)) for it in items]
+
+    ad, backend, gen, kv, _ = _mm_adapter(flaky)
+    bad = _mm_prompt(200, 10, 26, 3)  # 16 image tokens: grid (1, 4, 16)
+    text = _prompt(90, 4)
+    kw = {k: [v[0], None] for k, v in _items(10, 16).items()}
+    out = ad.prefill_forward(_history([bad[:128], text]), page_table=_table([_blocks(0, 128), _blocks(1, 90)], 2),
+                             kv_cache=kv, prompt_lens=[128, 90], start_pos=[0, 0], empty_slots=[0, 1],
+                             sampling_params=None, **kw)  # fmt: skip
+    assert int(out[0, 0].argmax()) == STOP and int(out[1, 0].argmax()) == (text[-1] + 1) % VOCAB
+    g = ad._alias[0]
+    assert ad._mm_failed == {g} and calls == [[1, 4, 16]] and kv.state[ad._alias[1]] == text
+    ids, _ = ad.prefill_forward(_history([bad]), page_table=_table([_blocks(0, 200)], 1), kv_cache=kv,
+                                prompt_lens=[200], start_pos=[128], empty_slots=[0], sampling_params=_greedy(1),
+                                **_items(10, 16))  # fmt: skip
+    assert int(ids[0, 0]) == STOP and calls == [[1, 4, 16]] and len(kv.state[g]) == 200
+    ad.release_request(0)
+    assert ad._mm_failed == set()
+    good = _mm_prompt(120, 20, 52, 7)  # 32 image tokens: grid (1, 8, 16)
+    for slot, req in ((0, 0), (2, 2)):  # two requests, the same image (one identifier): one encoder call
+        ids, _ = ad.prefill_forward(_history([good]), page_table=_table([_blocks(req, 120)], 1), kv_cache=kv,
+                                    prompt_lens=[120], start_pos=[0], empty_slots=[slot], sampling_params=_greedy(1),
+                                    **_items(20, 32, ident="img-hash-1"))  # fmt: skip
+        assert int(ids[0, 0]) == (good[-1] + 1) % VOCAB and kv.state[ad._alias[slot]] == _ledger(good, 20, 52)
+    assert calls == [[1, 4, 16], [1, 8, 16]] and ad.mm_stats["cache_hits"] == 1 and ad.mm_stats["failed"] == 1
 
 
 # the HF reference prompt of demo/sample_prompts/shapes_hello.png + the question (doc/vision/multimodal.md: 286 tokens,
