@@ -705,6 +705,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
 
         tokens, start_pos, page_table = _read("tokens", 0), _read("start_pos", 1), _read("page_table", 2)
         remap = _read("slot_remap", 9)
+        # page_tables_per_layer is not read: the attention layers form one group whose table is page_table, and the
+        # GDN layers read their blocks from mamba_state.
         mamba_state = kwargs.pop("mamba_state", None)
         if mamba_state is None:
             raise ValueError(
@@ -716,7 +718,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         accepted_counts = kwargs.pop("accepted_counts")
         spec_mode = kwargs.pop("spec_mode")
         check_spec_side_tensors(num_valid_drafts, accepted_counts, int(tokens.shape[0]), self._SPEC_K)
-        assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
         eng = self._ensure_ready()
         res = eng.decode_forward(
             tokens,
@@ -746,7 +747,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
 
             check_spec_side_tensors(torch.zeros(B, dtype=torch.int32), ac, B, self._SPEC_K, call="decode")
         acc = torch.ones(B, dtype=torch.int32) if ac is None else torch.as_tensor(ac).reshape(B).to(torch.int32)
-        assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
         K = self._SPEC_K
         tok = torch.full((B, K + 1), -1, dtype=torch.int32)
         tok[:, 0] = torch.as_tensor(tokens).reshape(B).to(torch.int32)

@@ -138,6 +138,8 @@ class PluginRunner:
             drafts = proposal[:n]
             verify = n > 0 or acc > 1
             mamba_state = self.state.state({0: self.state.decode(0, pos0, 1 + n)}, bmax)
+            # The plugin also sends one table per layer when the cache has MambaSpec groups.
+            per_layer = [self._table(pos0)] * len(self.m.model[0].layer_indices)
             if not verify:
                 # Ordinary narrow decode: no spec_mode, host sampling on logits[:, -1, :].
                 tt_out = m.decode_forward(
@@ -154,6 +156,7 @@ class PluginRunner:
                     reload_sampling_params=False,
                     reset_sampling_state=False,
                     mamba_state=mamba_state,
+                    page_tables_per_layer=per_layer,
                 )
                 assert tuple(tt_out.shape[:2]) == (1, 1), f"narrow logits shape {tuple(tt_out.shape)}"
                 new, j, hidden = [self._pick(tt_out[:, -1, :][0])], 0, None
@@ -177,6 +180,7 @@ class PluginRunner:
                     reload_sampling_params=False,
                     reset_sampling_state=False,
                     mamba_state=mamba_state,
+                    page_tables_per_layer=per_layer,
                 )
                 assert res.spec_mode == "argmax_ids"
                 ids = res.argmax_ids[0].tolist()
