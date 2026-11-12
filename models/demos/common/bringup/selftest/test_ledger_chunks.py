@@ -200,7 +200,9 @@ def test_the_ledger_reads_and_writes_every_chunk(tmp_path):
     led.update("T.0", status="PASS")
     assert led.state()["T.1"]["metrics"] == state["T.1"]["metrics"]
     rec = led.record_paths()
-    assert led.state_store.dir in rec and led.metrics_store.dir in rec and led.state_path in rec
+    assert led.state_store.dir in rec and led.metrics_store.dir in rec
+    # OV-38: an old single file neither on disk nor known to git is never named (git add would refuse it)
+    assert led.state_path not in rec and led.metrics_path not in rec
 
 
 def test_timing_reads_the_chunked_state(tmp_path):
@@ -229,6 +231,43 @@ def test_a_gate_commit_stages_the_chunks_and_the_old_files_deletion(sandbox):
     assert "D\tbringup/state_metrics.json" in shown
     assert "A\tbringup/state_metrics.chunks/0001.json" in shown and "A\tbringup/state.chunks/0001.json" in shown
     assert led.metrics_store.read() == {"OLD.1": {"pcc_out": 0.5}, "A.1": {"pcc_out": 0.995}}
+
+
+def test_a_gate_commit_after_the_migration_was_staged_names_no_vanished_file(sandbox):
+    """OV-38: the migration's deletions of the old single files were already staged (FIX.27's WIP commit); the gate's
+    commit listed history_state.json, git add said "pathspec did not match any files" and the passed gate did not
+    commit. The commit takes the staged deletions and the chunks; a second commit names no old file at all."""
+    from models.demos.common.bringup.core.gate import _commit_files, git_commit, run_gate
+    from models.demos.common.bringup.selftest.conftest import record_cmd
+
+    led = sandbox.tasks(
+        {"id": "A.1", "title": "task A.1", "deps": [], "gate": {"cmd": record_cmd(pcc_out=0.995), "metrics": {}}},
+        {"id": "A.2", "title": "task A.2", "deps": [], "gate": {"cmd": record_cmd(pcc_out=0.99), "metrics": {}}},
+    )
+    led.metrics_path.write_text(json.dumps({"OLD.1": {"pcc_out": 0.5}}, indent=1, sort_keys=True) + "\n")
+    led.side_path.write_text(json.dumps({"OLD.1": {"agent_runs": [1]}}) + "\n")
+    sandbox.git("add", "-f", str(led.metrics_path), str(led.side_path))
+    sandbox.git("commit", "-q", "-m", "old single files")
+    led.migrate()
+    sandbox.git("add", "-A", "--", str(led.metrics_path), str(led.side_path))  # deletions staged, as the WIP left them
+    assert not led.metrics_path.exists() and not led.side_path.exists()
+    repo = sandbox.spec.repo
+    rel = [str(p.relative_to(repo)) for p in led.record_paths(committed_only=False)]
+    res = run_gate(sandbox.spec, led, "A.1", commit=True)
+    assert res.verdict == "PASS" and res.commit, res.summary()
+    # the whole ledger directory as a pathspec, the way a run's ledger is committed (gate.stage_paths)
+    git_commit(sandbox.spec, [str(led.dir.relative_to(repo))], "rest", "rest")
+    shown = sandbox.git("log", "--name-status", "--no-renames", "--format=", "-2").split("\n")
+    assert "D\tbringup/state_metrics.json" in shown and "D\tbringup/history_state.json" in shown
+    assert not sandbox.git("diff", "--cached", "--name-only").strip()
+    # after the deletions are committed, the layout no longer names the old files
+    names = [p.name for p in led.record_paths(committed_only=False)]
+    assert "state_metrics.json" not in names and "history_state.json" not in names, names
+    assert all(n.endswith(".chunks") for n in names), (names, rel)
+    res = run_gate(sandbox.spec, led, "A.2", commit=True)
+    assert res.verdict == "PASS" and res.commit, res.summary()
+    assert not _commit_files(repo, [str(p.relative_to(repo)) for p in led.record_paths(committed_only=False)])
+    assert led.metrics_store.read() == {"OLD.1": {"pcc_out": 0.5}, "A.1": {"pcc_out": 0.995}, "A.2": {"pcc_out": 0.99}}
 
 
 # ---------------------------------------------------------------- append-only logs

@@ -572,13 +572,30 @@ def _commit_files(repo: Path, paths: list[str]) -> list[str]:
     return sorted({f for f in out if not any(fnmatch.fnmatch(f, g) for g in GENERATED)})
 
 
+def _stage(repo: Path, files: list[str]) -> None:
+    """git add the files that are on disk or in the index. A deletion already staged (the file gone from disk and
+    index, still in HEAD) is left as staged: `git add -A -- <it>` fails with "pathspec did not match any files"
+    (OV-38: FIX.27's gate commit after the chunk migration had staged history_state.json's deletion), while
+    `git commit -- <it>` commits the deletion."""
+    in_index = set()
+    if files:
+        in_index = set(
+            subprocess.run(
+                ["git", "ls-files", "-z", "--", *files], cwd=repo, capture_output=True, text=True, check=True
+            ).stdout.split("\0")
+        )
+    add = [f for f in files if (repo / f).exists() or f in in_index]
+    if add:
+        _git_retry(["git", "add", "-A", "--", *add], repo)
+
+
 def git_commit(spec: Spec, paths: list[str], subject: str, body: str) -> str | None:
     """Commit only the given paths, so work in progress elsewhere in the tree never leaks into a gate commit."""
     repo = spec.repo
     files = _commit_files(repo, paths)
     if not files:
         return None
-    _git_retry(["git", "add", "-A", "--", *files], repo)
+    _stage(repo, files)
     if subprocess.run(["git", "diff", "--cached", "--quiet", "--", *files], cwd=repo).returncode == 0:
         return None
     trailer = spec.get("commit_trailer", DEFAULT_TRAILER)
@@ -586,7 +603,7 @@ def git_commit(spec: Spec, paths: list[str], subject: str, body: str) -> str | N
     commit = ["git", "commit", "-q", "-m", msg, "--", *files]
     # pre-commit hooks may still rewrite files (black, EOF fixer): re-stage and retry once.
     if _git_retry(commit, repo, check=False).returncode != 0:
-        _git_retry(["git", "add", "-A", "--", *files], repo)
+        _stage(repo, files)
         r = _git_retry(commit, repo, check=False)
         if r.returncode != 0:
             raise RuntimeError(f"git commit failed:\n{r.stdout}\n{r.stderr}")
