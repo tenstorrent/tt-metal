@@ -148,6 +148,13 @@ DENSE_DECODE_FUSION_ON = {
     # composite 0.746 / 0.951 and 0.714 / 0.945; on the QB2 runner 31B 0.7993 / 0.9624, 12B 0.7285 / 0.9570 vs the
     # composite 0.7202 / 0.9448); Blackhole only (qkv_norm_rope_prefill_enabled refuses the flag on Wormhole)
     "GEMMA4_QKV_NORM_ROPE_PREFILL": "1",
+    # prefill: the residual row-sharded over TP between a column reduce-scatter + all-to-all and a row all-gather
+    # (ccl.py, GEMMA4_PREFILL_SEQ_PARALLEL) and matmul slabs that divide the chunk (dram_sharded.py,
+    # GEMMA4_PREFILL_DIVISOR_SLAB); last-token logits bitwise unchanged on every arm. Eager 4K chunk at position 0 /
+    # after an 8K prefix, both off -> on (2026-11-12, Galaxy, served env): 31B (1,8) 863 / 954 -> 690 / 780 ms, 12B
+    # (1,8) 487 / 551 -> 396 / 440, 31B (1,4) 1213 / 1368 -> 1038 / 1200, 12B (1,4) 604 / 647 -> 503 / 544.
+    "GEMMA4_PREFILL_SEQ_PARALLEL": "1",
+    "GEMMA4_PREFILL_DIVISOR_SLAB": "1",
 }
 # GEMMA4_SDPA_DECODE_SPLITFREE: the split-independent paged decode SDPA (custom_ops/sdpa_decode_splitfree; "1" the
 # global layers, "2" the sliding layers too). Off in every profile until device-validated; a build turns it on by
@@ -187,20 +194,11 @@ DENSE_FUSED_SHAPES = FOUR_CHIP_SHAPES + (GALAXY_LINE_SHAPE,)
 # set. Measured served on the 31B Galaxy row engines (2026-11-11, AgentX 256K c16 ci window, TIS 712dcec35): plain
 # b4 step 28.4..59.9 -> 29.6..46.4 ms over 0..262K, (5,3) verify at the 131K rung 78.6..82.9 -> 57.8..69.0 ms,
 # total 24,321 -> 28,154 tok/s, TPOT mean 50.6 -> 42.4 ms; needles 14/14 to 248K on every engine. Env overrides win.
-# The prefill side of the same line (eager 4K chunks, 2026-11-11 on a Galaxy row, served env, last-token logits
-# bitwise against both off): GEMMA4_PREFILL_SEQ_PARALLEL (ccl.py: norms and residual adds on S / 8 rows between a
-# column reduce-scatter + all-to-all and a row all-gather) and GEMMA4_PREFILL_DIVISOR_SLAB (dram_sharded.py: 4096
-# rows as 2 x 2048 in one matmul, no slice / concat): 4K chunk at position 0 865 -> 692 ms, after an 8K prefix
-# 955 -> 783 ms (device-bound: the chunk's device span was 818 of its 863 ms).
+# The prefill pair GEMMA4_PREFILL_SEQ_PARALLEL / GEMMA4_PREFILL_DIVISOR_SLAB comes with the dense set
+# (DENSE_DECODE_FUSION_ON, measurements there).
 PREFILL_SEQ_PARALLEL_ENV = "GEMMA4_PREFILL_SEQ_PARALLEL"
 PREFILL_DIVISOR_SLAB_ENV = "GEMMA4_PREFILL_DIVISOR_SLAB"
-GALAXY_LINE_PAIR_ON = {
-    **DENSE_DECODE_FUSION_ON,
-    SDPA_PAIR_SPLIT_ENV: "1",
-    VERIFY_PREFIX_LSE_ENV: "1",
-    PREFILL_SEQ_PARALLEL_ENV: "1",
-    PREFILL_DIVISOR_SLAB_ENV: "1",
-}
+GALAXY_LINE_PAIR_ON = {**DENSE_DECODE_FUSION_ON, SDPA_PAIR_SPLIT_ENV: "1", VERIFY_PREFIX_LSE_ENV: "1"}
 # The Galaxy lane engine (the 26B-A4B on the (8,4) Blackhole mesh): the fused QKV norm + RoPE program on the lane
 # decode frame, the rest as before (the lane entry's catalog carries its own set). Window 13 (2026-10-25, lane layer
 # (2,4) gate fused vs composite pcc 0.999755; served): c1 32.4 -> 37.1 tok/s/user, c32 33.4 -> 36.3, c128 29.3 ->
