@@ -39,7 +39,7 @@ IMAGE_END = 200030  # "]<]end of image[>["
 # Resized images, (height, width) in pixels, that load runs once so that the chip's programs for their patch counts
 # are compiled before the first request: 576 tokens (672 x 672, and 16:9 photos resized to 896 x 504) and 540 tokens
 # (4:3 photos resized to 756 x 560). The programs depend on the patch count only; an image of another count compiles
-# them on its first encode, 15 to 42 s with an empty kernel cache. model_options.warmup replaces this list.
+# them on its first encode, 15 to 42 s with an empty kernel cache. model_options.warmup_sizes replaces this list.
 WARMUP_SIZES = ((672, 672), (560, 756))
 
 
@@ -75,19 +75,19 @@ def smart_resize(height: int, width: int) -> tuple[int, int]:
 
 
 def _warmup_sizes(options: dict) -> list[tuple[int, int]]:
-    """options["warmup"] (default WARMUP_SIZES): a list of [height, width] sizes of resized images, each one that the
-    encoder takes (check_size). Raises ValueError otherwise, before load imports ttnn."""
-    sizes = options.get("warmup", WARMUP_SIZES)
+    """options["warmup_sizes"] (default WARMUP_SIZES): a list of [height, width] sizes of resized images, each one
+    that the encoder takes (check_size). Raises ValueError otherwise, before load imports ttnn."""
+    sizes = options.get("warmup_sizes", WARMUP_SIZES)
     if not isinstance(sizes, (list, tuple)):
-        raise ValueError(f"warmup must be a list of [height, width] sizes, got {sizes!r}")
+        raise ValueError(f"warmup_sizes must be a list of [height, width] sizes, got {sizes!r}")
     checked = []
     for size in sizes:
         if not (isinstance(size, (list, tuple)) and len(size) == 2 and all(type(s) is int and s > 0 for s in size)):
-            raise ValueError(f"warmup sizes must be [height, width] in pixels, got {size!r}")
+            raise ValueError(f"warmup_sizes entries must be [height, width] in pixels, got {size!r}")
         try:
             check_size(*size)
         except ValueError as error:
-            raise ValueError(f"warmup size {list(size)}: {error}") from None
+            raise ValueError(f"warmup_sizes entry {list(size)}: {error}") from None
         checked.append(tuple(size))
     return checked
 
@@ -149,10 +149,11 @@ class MiniMaxM3Media:
         """Get ready to encode: stub embeddings with options["stub_embeddings"], else the TT vision encoder with the
         vision weights of the MiniMax-M3 checkpoint in weights_path, on mesh_device, a mesh of one chip that the caller
         opens (with device_params) and closes. The encoder raises ValueError for a mesh of more chips before it reads
-        a weight. Then load encodes one blank image of each warm-up size (options["warmup"], default WARMUP_SIZES) to
-        compile the chip's programs. Raises ValueError for a weights_path that is not a directory, a bad warm-up size
-        or a mesh_device of None (load opens no chip) before it imports ttnn. If building the encoder or a warm-up
-        fails, load frees what it put on the chip and raises the error. encode and close wait for a load in progress."""
+        a weight. Then load encodes one blank image of each warm-up size (options["warmup_sizes"], default
+        WARMUP_SIZES) to compile the chip's programs. Raises ValueError for a weights_path that is not a directory, a
+        bad warm-up size or a mesh_device of None (load opens no chip) before it imports ttnn. If building the encoder
+        or a warm-up fails, load frees what it put on the chip and raises the error. encode and close wait for a load
+        in progress."""
         if kind not in self.placeholder_token_ids:
             raise ValueError(f"MiniMax-M3 does not accept {kind}")
         with self._lock:
@@ -163,7 +164,7 @@ class MiniMaxM3Media:
                 return
             if not weights_path or not os.path.isdir(weights_path):
                 raise ValueError(f"weights_path must be a MiniMax-M3 checkpoint directory, got {weights_path!r}")
-            warmup = _warmup_sizes(options)
+            warmup_sizes = _warmup_sizes(options)
             if mesh_device is None:
                 raise ValueError("mesh_device is None: load runs the encoder on the chip that the caller opened")
             import ttnn
@@ -171,7 +172,7 @@ class MiniMaxM3Media:
 
             try:
                 encoder = TtMiniMaxM3VisionEncoder.from_weights_path(mesh_device, weights_path, self.hf_config)
-                for height, width in warmup:
+                for height, width in warmup_sizes:
                     ttnn.deallocate(encoder.forward(np.zeros((height, width, 3), dtype=np.uint8)))
             except BaseException as error:
                 encoder = None

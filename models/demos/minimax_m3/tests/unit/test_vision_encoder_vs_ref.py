@@ -163,7 +163,7 @@ def test_vision_media_load_and_encode(mesh_device, device_params, vision_referen
     write_checkpoint(tmp_path, reference.weights, hf_config)
     media = MiniMaxM3Media(hf_config)
     assert media.device_params == MEDIA_DEVICE_PARAMS, "the test's chip is not opened as the service opens it"
-    media.load(mesh_device, str(tmp_path), "image", {"warmup": [[224, 224]]})
+    media.load(mesh_device, str(tmp_path), "image", {"warmup_sizes": [[224, 224]]})
     try:
         cache_entries = mesh_device.num_program_cache_entries()
         assert cache_entries > 0, "load's warm-up compiled no program"

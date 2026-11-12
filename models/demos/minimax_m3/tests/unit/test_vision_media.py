@@ -220,7 +220,7 @@ def test_failed_load_frees_what_it_put_on_the_chip(tmp_path, monkeypatch, expect
     monkeypatch.setattr(ttnn, "close_mesh_device", closed.append)
     monkeypatch.setattr(encoder_module.TtMiniMaxM3VisionEncoder, "from_weights_path", staticmethod(from_weights_path))
     with expect_error(RuntimeError, "out of device memory") as failed:
-        MiniMaxM3Media(CONFIG).load("the caller's chip", str(tmp_path), "image", {"warmup": []})
+        MiniMaxM3Media(CONFIG).load("the caller's chip", str(tmp_path), "image", {"warmup_sizes": []})
     assert failed.value is not None
     assert tensors[0]() is None, "load raised with the failed call's tensors alive"
     assert closed == [], f"load closed the caller's chip: {closed}"
@@ -253,7 +253,7 @@ def test_failed_warmup_frees_the_encoder(tmp_path, monkeypatch, expect_error):
     monkeypatch.setattr(ttnn, "close_mesh_device", closed.append)
     monkeypatch.setattr(encoder_module.TtMiniMaxM3VisionEncoder, "from_weights_path", staticmethod(from_weights_path))
     with expect_error(RuntimeError, "in the warm-up") as failed:
-        MiniMaxM3Media(CONFIG).load("the caller's chip", str(tmp_path), "image", {"warmup": [[224, 224]]})
+        MiniMaxM3Media(CONFIG).load("the caller's chip", str(tmp_path), "image", {"warmup_sizes": [[224, 224]]})
     assert failed.value is not None
     assert all(ref() is None for ref in held), "load raised with the encoder of the failed warm-up alive"
     assert closed == [], f"load closed the caller's chip: {closed}"
@@ -299,7 +299,7 @@ def test_failed_encode_keeps_no_device_tensors_past_close(tmp_path, monkeypatch,
     monkeypatch.setattr(encoder_module.TtMiniMaxM3VisionEncoder, "from_weights_path", staticmethod(from_weights_path))
     monkeypatch.setattr(encoder_module, "read_embeddings", read_embeddings)
     media = MiniMaxM3Media(CONFIG)
-    media.load("the caller's chip", str(tmp_path), "image", {"warmup": []})
+    media.load("the caller's chip", str(tmp_path), "image", {"warmup_sizes": []})
     item = media.prepare("image", rgb(56, 56))
     with expect_error(RuntimeError, "the chip went away") as failed:
         media.encode([item], [memoryview(bytearray(media.stored_nbytes(item)))])
@@ -311,18 +311,18 @@ def test_failed_encode_keeps_no_device_tensors_past_close(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize(
-    "warmup, message",
+    "warmup_sizes, message",
     [
         ([[100, 100]], "multiples of 28"),
         ([5], r"\[height, width\] in pixels"),
         ([[28, 28]], r"got 1 \(1 down"),
         ([[700, 700]], "got 625"),
         ([[28, 16128]], "aspect ratio must be at most 339"),  # 576 tokens, but 576:1
-        (None, "must be a list"),
+        (None, "warmup_sizes must be a list"),
     ],
 )
-def test_load_rejects_bad_warmup_sizes(tmp_path, expect_error, warmup, message):
-    """A warmup that is not a list of sizes, or a warm-up size that no resized image has, raises ValueError before
+def test_load_rejects_bad_warmup_sizes(tmp_path, expect_error, warmup_sizes, message):
+    """A warmup_sizes that is not a list of sizes, or a warm-up size that no resized image has, raises ValueError before
     load imports ttnn or builds the encoder."""
     with expect_error(ValueError, message):
-        MiniMaxM3Media(CONFIG).load(None, str(tmp_path), "image", {"warmup": warmup})
+        MiniMaxM3Media(CONFIG).load(None, str(tmp_path), "image", {"warmup_sizes": warmup_sizes})
