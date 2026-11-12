@@ -7,12 +7,14 @@ Host tests (CPU, fake engine): spec_plan, capabilities, wrapper plumbing.
 Device test: drive the class exactly as the plugin runner (#131) calls a model, without a server:
 initialize_vllm_model -> allocate_kv_cache_per_layer -> 2-phase warmup -> prefill_forward / decode_forward /
 propose_draft_tokens / release_request per request -> release_persistent_capture, with the mamba_state of the GDN state
-blocks (mamba_cache_mode "none", tests/spec_block_helpers.py). Output must stay lossless vs model-level plain greedy
-(exact up to the first bf16 near-tie flip).
+blocks (mamba_cache_mode "none", tests/spec_block_helpers.py). Output must stay lossless against greedy decoding of
+Qwen36ForCausalLM, the class that serves the model without speculation, on its own vLLM blocks (exact up to the first
+bf16 near-tie flip).
 Runs under TT_METAL_TRACE_ALLOC_TRACKING=1 unchanged.
 """
 
 import functools
+import gc
 import math
 import os
 from types import SimpleNamespace
@@ -33,21 +35,14 @@ from vllm_tt_plugin.spec_decode import DraftOutput, SpecPlan, SpecReject, Verify
 
 import ttnn  # noqa: E402
 from models.common.utility_functions import run_for_blackhole  # noqa: E402
-from models.demos.blackhole.qwen36.demo.text_demo import (  # noqa: E402
-    _MESH_SHAPE,
-    _MULTI,
-    BLOCK_SIZE,
-    DEVICE_PARAMS,
-    _get_prompt,
-)
+from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, DEVICE_PARAMS, _get_prompt  # noqa: E402
 from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout  # noqa: E402
 from models.demos.blackhole.qwen36.tests.spec_block_helpers import SpecBlocks  # noqa: E402
 from models.demos.blackhole.qwen36.tests.spec_helpers import (  # noqa: E402
     PAD,
     _assert_matches_ref,
-    _perm_table,
-    _plain_greedy,
     _prompt_pool,
+    _top2_gap,
 )
 from models.demos.blackhole.qwen36.tests.test_spec_lossless import _N_LAYERS  # noqa: E402
 from models.demos.blackhole.qwen36.tt import qwen36_vllm  # noqa: E402
@@ -66,7 +61,6 @@ from models.demos.blackhole.qwen36.tt.spec_engine import (  # noqa: E402
 
 K = 3
 MAX_MODEL_LEN = 8192
-W = math.ceil(MAX_MODEL_LEN / BLOCK_SIZE)  # page-table width of the plain reference (128)
 
 
 def _sample(logits, gen, temperature=0.7, top_p=0.95):
@@ -76,6 +70,68 @@ def _sample(logits, gen, temperature=0.7, top_p=0.95):
     keep = (sp.cumsum(-1) - sp) < top_p  # always keeps the top token
     sp = sp * keep
     return int(si[torch.multinomial(sp / sp.sum(), 1, generator=gen)])
+
+
+def _ordinary_greedy(ref, reqs):
+    """Greedy references {name: (tokens, top-2 gaps)} of ``reqs`` [(name, prompt, n)] from ``ref``, a
+    Qwen36ForCausalLM built with initialize_vllm_model as the plugin builds it, on its own vLLM blocks
+    (mamba_cache_mode "none") with traced decode: the computation that serves the model without speculation. Its GDN
+    decode is gdn_decode_step, which gdn_spec_step equals bit for bit, so the two classes differ only in the attention
+    kernels. Releases the class's traces and KV cache before it returns, so the MTP class allocates after them."""
+    model = ref.model[0]
+    probe = PluginLayout.for_model(model, num_blocks=1)
+    width = math.ceil(MAX_MODEL_LEN / probe.block_size)
+    layout = PluginLayout.for_model(model, num_blocks=1 + width + probe.num_groups + 8)
+    kv = ref.allocate_kv_cache_per_layer(layout.per_layer_specs)
+    for enable_trace in (False, True):
+        ref.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv, can_sample_on_device=False)
+        ref.warmup_model_decode(
+            enable_trace=enable_trace, kv_cache=kv, max_batch_size=1, num_blocks=width, can_sample_on_device=False
+        )
+    pages = list(range(1, 1 + width))
+    table = torch.tensor([pages], dtype=torch.int32)
+    vocab = model.args.vocab_size
+    refs = {}
+    for name, prompt, n in reqs:
+        state = SpecBlocks(layout, 0, "none", free=range(1 + width, layout.num_blocks))
+        state.admit(0)
+        ref.zero_kv_cache_blocks(kv, pages)  # vLLM's new_block_ids_to_zero for a new request's attention blocks
+        P = len(prompt)
+        logits, _ = ref.prefill_forward(
+            torch.tensor([prompt], dtype=torch.int32),
+            table,
+            kv,
+            prompt_lens=np.array([P]),
+            start_pos=np.array([0]),
+            empty_slots=[0],
+            enable_trace=True,
+            mamba_state=state.state({0: state.prefill(0, 0, P)}, 1, intermediate=()),
+        )
+        row = logits[0, -1, :vocab].float()
+        toks, gaps = [int(row.argmax())], [_top2_gap(row)]
+        for pos in range(P, P + n - 1):
+            out = ref.decode_forward(
+                tokens=torch.tensor([[toks[-1]]], dtype=torch.int32),
+                start_pos=torch.tensor([pos], dtype=torch.int32),
+                page_table=table,
+                kv_cache=kv,
+                enable_trace=True,
+                read_from_device=True,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
+                mamba_state=state.state({0: state.decode(0, pos, 1)}, 1),
+            )
+            out = out[0] if isinstance(out, tuple) else out
+            row = out[0, -1, :vocab].float()
+            toks.append(int(row.argmax()))
+            gaps.append(_top2_gap(row))
+        refs[name] = (toks, gaps)
+        logger.info(f"[vllm_class] reference {name}: {n} tokens from Qwen36ForCausalLM")
+    ref.release_persistent_capture()
+    model.free_kv_caches()
+    return refs
 
 
 class PluginRunner:
@@ -252,21 +308,11 @@ def test_spec_vllm_class_runner(mesh_device, monkeypatch, warmup):
             qwen36_vllm, "create_tt_model", functools.partial(qwen36_vllm.create_tt_model, n_layers=_N_LAYERS)
         )
     mesh_device.enable_program_cache()
-
-    # --- startup: initialize_vllm_model (loads weights via HF_MODEL) ------------------------------ #
     hf_config = SimpleNamespace(_name_or_path=os.environ.get("HF_MODEL"))
-    cls = Qwen36MTPContractForCausalLM.initialize_vllm_model(
+    ref = Qwen36ForCausalLM.initialize_vllm_model(
         hf_config, mesh_device, max_batch_size=1, max_seq_len=MAX_MODEL_LEN, tt_data_parallel=1, optimizations=None
     )
-    model = cls.model[0]
-    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
-
-    # Plain reference KV shape: (num_blocks, num_kv_heads // min(num_devices, num_kv_heads), block_size, head_size).
-    tc = model.args.hf_config.get_text_config()
-    n_kv = tc.num_key_value_heads
-    kv_shape = (W + 8, n_kv // min(model.num_devices, n_kv), BLOCK_SIZE, model.args.head_dim)
-    assert kv_shape[1] == model.args.n_local_kv_heads, f"plugin kv heads {kv_shape[1]} != model local heads"
-
+    tokenizer = AutoTokenizer.from_pretrained(ref.model[0].args.CKPT_DIR, trust_remote_code=True)
     pool = _prompt_pool(tokenizer, 4096 + 512)
     p1 = _get_prompt(130, tokenizer)[0].tolist()
     p2 = pool[200 : 200 + 4300]  # two recorded 2048 chunks + a 204-token tail
@@ -274,11 +320,16 @@ def test_spec_vllm_class_runner(mesh_device, monkeypatch, warmup):
     assert len(p2) == 4300 and len(p3) == 4096
     reqs = [("P1", p1, 64), ("P2", p2, 48), ("P3", p3, 48)]
 
-    # --- plain references first (model-level, own KV alloc/free), before the class allocates KV ----- #
-    refs = {
-        name: _plain_greedy(model, list(kv_shape), prompt, _perm_table(W, seed=7 + i), max_new)
-        for i, (name, prompt, max_new) in enumerate(reqs)
-    }
+    # --- references first: Qwen36ForCausalLM on its own blocks, released before the MTP class starts ------ #
+    refs = _ordinary_greedy(ref, reqs)
+    del ref
+    gc.collect()
+
+    # --- startup: initialize_vllm_model (loads weights via HF_MODEL) ------------------------------ #
+    cls = Qwen36MTPContractForCausalLM.initialize_vllm_model(
+        hf_config, mesh_device, max_batch_size=1, max_seq_len=MAX_MODEL_LEN, tt_data_parallel=1, optimizations=None
+    )
+    model = cls.model[0]
 
     # --- allocate the KV cache the plugin way, then the 4 warmup calls in plugin order (or the lazy path) -- #
     probe = PluginLayout.for_model(model, num_blocks=1)
