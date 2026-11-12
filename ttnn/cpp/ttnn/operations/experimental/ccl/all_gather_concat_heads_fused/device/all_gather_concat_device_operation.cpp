@@ -20,10 +20,10 @@ namespace ttnn::experimental::prim {
 void AllGatherConcatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
     const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
     const auto& padded_input_shape = input_tensor.padded_shape();
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
+    TT_FATAL(page_size % input_tensor.mesh_buffer().alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
         (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM),

@@ -61,8 +61,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     uint32_t input_bytes_per_row = actual_input_w * element_size;
     uint32_t cb_page_size = input_bytes_per_row;
 
-    auto src_buffer_alignment = input_tensor.buffer()->alignment();
-    auto dst_buffer_alignment = output.buffer()->alignment();
+    auto src_buffer_alignment = input_tensor.mesh_buffer().alignment();
+    auto dst_buffer_alignment = output.mesh_buffer().alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     uint32_t cb_page_size_aligned = tt::round_up(cb_page_size, alignment);

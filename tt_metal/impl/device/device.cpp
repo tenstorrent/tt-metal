@@ -380,7 +380,8 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 
 void Device::init_command_queue_host() {
     // SystemMemoryManager now has internal stubs for mock/emulated devices
-    sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, this->num_hw_cqs());
+    sysmem_manager_ =
+        std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
 
     // For mock/emulated devices, skip HWCommandQueue creation (they don't need real command queues)
     if (MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
@@ -862,7 +863,8 @@ SystemMemoryManager& Device::sysmem_manager() {
     // SystemMemoryManager handles mock devices internally with stubs
     // For mock devices, ensure lazy initialization if not already done
     if (!sysmem_manager_) {
-        sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, 1);
+        sysmem_manager_ =
+            std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, 1);
     }
     return *sysmem_manager_;
 }
