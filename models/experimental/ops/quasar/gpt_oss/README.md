@@ -43,7 +43,10 @@ QSR_N_LAYERS=2 MESH_DEVICE=N150 HF_MODEL=... \
 Why it exists: each layer's experts cost ~448 MB (`down_proj` is 32 x 2880 x 2880 at bf4 =
 149 MB, `gate_up_proj` twice that), so the full 24-layer gpt-oss-20b needs ~10.7 GB of expert
 weights before attention, embeddings or KV cache — a single device's ~12.75 GB of DRAM runs out
-on the last layer. 2-4 layers leaves room to actually run something.
+on the last layer. 2-4 layers leaves room to actually run something. On Quasar, the model uses
+bfloat16 instead of the block float formats (see the `quasar_block_float_to_bf16` fixture in
+`models/experimental/ops/quasar/gpt_oss/conftest.py`), so each layer's experts cost ~1.6 GB, and
+the weights go to a separate cache directory whose name ends in `_quasar_bf16`.
 
 Generated text is meaningless with a truncated model; this is for getting ops onto the device.
 The weight cache records the layer count (`tt/model_config.py:349`), so a partial build never

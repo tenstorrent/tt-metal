@@ -22,17 +22,9 @@ class DeepSeekV3Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Divisor on combine_fabric2d's forwarding region. No value can deadlock the ring -- the region is
-    # split by movement class -- so this trades DRAM against throughput and nothing else, and where the
-    # curve bends is per-model. Measured 8x4 over 1x-64x: 16 costs this model 3.1% on hot_expert traffic
-    # and nothing on balanced, for 47 -> 23 MB a chip.
-    COMBINE_FWD_REDUCTION = 16
-    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
-    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
-    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
-    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
-    # region on both traffic shapes, at +3.4% balanced and +1.9% hot_expert.
-    DISPATCH_FWD_VC_PAGES = 64
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    MOE_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 8
     NUM_LIMITED_GROUPS = 4

@@ -103,7 +103,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t per_core_N = a.shard_spec().value().shape[1];
     uint32_t per_core_Mt = per_core_M / tile_height;
     uint32_t per_core_Nt = (per_core_N + tile_width - 1) / tile_width;
-    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
+    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.mesh_buffer().alignment());
     bool reader_repack_output = (per_core_N % tile_width) != 0;
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
@@ -338,7 +338,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
-    uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
+    uint32_t in0_CB_size = a.mesh_buffer().aligned_size_per_bank();  // use buffer size to handle both RM and Tile
     // Scalar CBs (scaler c_2, scaler-c c_4, eps c_3, ones c_26) are written as bf16 bit patterns, so
     // they stay bf16 even on the legacy fp32 path where cb_data_format is Float32.
     const tt::DataFormat eps_cb_data_format = tt::DataFormat::Float16_b;
@@ -886,7 +886,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     constexpr uint32_t in0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t in0_welford_alias_index = tt::CBIndex::c_29;
     constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t in0_cb_page_size = reader_repack_output ? a.buffer()->page_size() : in_single_tile_size;
+    uint32_t in0_cb_page_size = reader_repack_output ? a.mesh_buffer().page_size() : in_single_tile_size;
     if (inplace) {
         // input and output share the same CB and globally allocated buffer
         CBDescriptor in0_desc{
@@ -933,8 +933,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }
         desc.cbs.push_back(std::move(in0_desc));
 
-        uint32_t out_cb_total_size = reader_repack_output ? output.buffer()->aligned_size_per_bank() : out_CB_size;
-        uint32_t out_cb_page_size = reader_repack_output ? output.buffer()->page_size() : out_single_tile_size;
+        uint32_t out_cb_total_size = reader_repack_output ? output.mesh_buffer().aligned_size_per_bank() : out_CB_size;
+        uint32_t out_cb_page_size = reader_repack_output ? output.mesh_buffer().page_size() : out_single_tile_size;
         desc.cbs.push_back(CBDescriptor{
             .total_size = out_cb_total_size,
             .core_ranges = all_cores,

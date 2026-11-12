@@ -20,7 +20,7 @@ std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-distributed::Program program = distributed::CreateProgram();
+distributed::Program program = distributed::CreateProgram(*mesh_device);
 ```
 
 We start the source code by creating an object that designates the physical mesh of devices that we will be using for the program. For this example, we select the device with an ID of 0 to create a 1x1 mesh.

@@ -61,9 +61,10 @@ void check_on_full_mesh(const Tensor& t, const distributed::MeshDevice* mesh, st
 // The same per-bank range of the same bank kind: an allocation, or a view of one (a view wraps the address in a buffer
 // of its own, so comparing Buffer pointers misses it).
 bool shares_memory(const Tensor& a, const Tensor& b) {
-    const Buffer* x = a.buffer();
-    const Buffer* y = b.buffer();
-    return x->buffer_type() == y->buffer_type() && x->address() < y->address() + y->aligned_size_per_bank() &&
+    const auto* x = &a.mesh_buffer();
+    const auto* y = &b.mesh_buffer();
+    return x->device_local_config().buffer_type == y->device_local_config().buffer_type &&
+           x->address() < y->address() + y->aligned_size_per_bank() &&
            y->address() < x->address() + x->aligned_size_per_bank();
 }
 
@@ -105,54 +106,6 @@ void validate_output(const MatmulReduceScatterPrefillParams& attrs, const Matmul
         !shares_memory(output, t.input_tensor) && !shares_memory(output, t.weight),
         "matmul_reduce_scatter_prefill: output_tensor must not share a buffer with input_tensor or weight (in place is "
         "refused)");
-}
-
-// The staging the call writes: the op's own (allocate_staging) or the caller's staging_tensor. The kernels use it as
-// raw bf16 tile slots at one address on every matmul core of every chip, so it must be an L1 height-sharded bf16 tile
-// tensor over the full grid on every device of the mesh, with at least the plan's tiles per core (a larger one, e.g.
-// sized for another shape, serves too). The key holds its spec, so a hit rechecks only what can change per call.
-void validate_staging(const MatmulReduceScatterPrefillParams& attrs, const MatmulReduceScatterPrefillInputs& t) {
-    const Tensor& staging = t.staging;
-    distributed::MeshDevice* mesh = t.input_tensor.device();
-    check_on_full_mesh(staging, mesh, "staging_tensor");
-    const MemoryConfig& mc = staging.memory_config();
-    const CoreCoord g = mesh->compute_with_storage_grid_size();
-    const CoreRange full_grid(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1));
-    TT_FATAL(
-        mc.buffer_type() == BufferType::L1 && mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
-            mc.shard_spec().has_value() && mc.shard_spec()->grid.contains(full_grid),
-        "matmul_reduce_scatter_prefill: staging_tensor must be L1 height-sharded over the full {}x{} grid, got {}",
-        g.x,
-        g.y,
-        mc);
-    TT_FATAL(
-        staging.dtype() == DataType::BFLOAT16 && staging.layout() == Layout::TILE &&
-            staging.tensor_spec().tile() == Tile(),
-        "matmul_reduce_scatter_prefill: staging_tensor must be bfloat16 in default 32x32 tiles, got {} {}",
-        staging.dtype(),
-        staging.layout());
-    const uint32_t staging_tiles = detail::staging_tiles(attrs.plan());
-    const uint64_t needed = static_cast<uint64_t>(staging_tiles) * tt::tile_size(tt::DataFormat::Float16_b);
-    TT_FATAL(
-        staging.buffer()->aligned_size_per_bank() >= needed,
-        "matmul_reduce_scatter_prefill: staging_tensor holds {} bytes per core; this call needs {} ({} tiles; "
-        "ttnn.experimental.matmul_reduce_scatter_prefill_staging sizes one)",
-        staging.buffer()->aligned_size_per_bank(),
-        needed,
-        staging_tiles);
-}
-
-// Per call: the staging is on this mesh and shares no memory with what the call reads or writes.
-void validate_staging_placement(const MatmulReduceScatterPrefillInputs& t) {
-    TT_FATAL(
-        t.staging.device() == t.input_tensor.device(),
-        "matmul_reduce_scatter_prefill: staging_tensor must be on the input_tensor's mesh");
-    const bool aliases = shares_memory(t.staging, t.input_tensor) || shares_memory(t.staging, t.weight) ||
-                         (t.output_tensor.has_value() && shares_memory(t.staging, *t.output_tensor));
-    TT_FATAL(
-        !aliases,
-        "matmul_reduce_scatter_prefill: staging_tensor must not share a buffer with input_tensor, weight or "
-        "output_tensor");
 }
 
 }  // namespace
@@ -253,14 +206,11 @@ void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_miss(
         std::nullopt);
     check_operands(t.input_tensor, t.weight, attrs.output_memory_config);
     check_group(t.input_tensor, t.weight, static_cast<int32_t>(attrs.cluster_axis), attrs.scatter_dim);
-    validate_staging(attrs, t);
-    validate_staging_placement(t);
     validate_output(attrs, t);
 }
 
 void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
-    validate_staging_placement(t);
     validate_output(attrs, t);
 }
 
@@ -316,15 +266,13 @@ Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
     const std::optional<Tensor>& output_tensor,
-    const Tensor& staging,
     const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams&
         params) {
     using OperationType =
         ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         params,
-        OperationType::tensor_args_t{
-            .input_tensor = input_tensor, .weight = weight, .output_tensor = output_tensor, .staging = staging});
+        OperationType::tensor_args_t{.input_tensor = input_tensor, .weight = weight, .output_tensor = output_tensor});
 }
 
 }  // namespace ttnn::prim

@@ -39,6 +39,7 @@ def test_forwarding_buffer_rejects_zero_combine_links(device, expect_error):
             experts_per_chip=1,
             num_experts_per_tok=1,
             seq_len_per_chip=32,
+            combine_fwd_vc_pages=64,
             combine_axis=0,
             combine_num_links=0,
         )

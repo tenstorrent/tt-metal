@@ -202,7 +202,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     // and device index.
     ////////////////////////////////////////////////////////////////
 
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
+    const uint32_t input_page_size = input_tensor.mesh_buffer().aligned_page_size();
     const auto& input_shape = input_tensor.padded_shape();
 
     // --- Copy mode ---
@@ -213,8 +213,8 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each chunk
     //                        lands at a byte offset within a shared output page.
     //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
-    const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
-    const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
+    const uint32_t input_unaligned_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t output_unaligned_page_size = output_tensor.mesh_buffer().page_size();
     // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
     // split writes output-content-sized pieces to separate output page bases.
     const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
@@ -225,7 +225,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
         "concat requires an unpadded input page");  // so slots align to content
 
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
+    const uint32_t num_input_pages = input_tensor.mesh_buffer().num_pages();
     const uint32_t num_output_chunks = num_input_pages * split_factor;
     TT_FATAL(
         num_output_chunks / split_factor == num_input_pages,

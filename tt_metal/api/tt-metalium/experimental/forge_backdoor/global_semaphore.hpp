@@ -26,7 +26,6 @@ namespace tt::tt_metal::experimental {
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
  * | address        | Address of the semaphore to create                     | uint64_t                                                  |              | Yes      |
- * | cq_id          | Command queue for the initial-value write (fast dispatch) | uint8_t                                                |              | No       |
  */
 // clang-format on
 GlobalSemaphore CreateGlobalSemaphore(
@@ -36,4 +35,13 @@ GlobalSemaphore CreateGlobalSemaphore(
     BufferType buffer_type,
     uint64_t address,
     uint8_t cq_id = 0);
+
+// Same as above, but the semaphore is created on `mesh_cq`'s mesh device and the initial value is written through
+// `mesh_cq` with fast dispatch. The queue is not used for the write on slow dispatch / simulator.
+GlobalSemaphore CreateGlobalSemaphore(
+    distributed::MeshCommandQueue& mesh_cq,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address);
 }  // namespace tt::tt_metal::experimental

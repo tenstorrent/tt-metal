@@ -485,7 +485,7 @@ class Transformer(LightweightModule):
             (1, 1, get_last_token + 32, hidden_states.shape[-1]),
         )
         # Apply norm (this is the final layer norm before LM head)
-        hidden_states = self.norm(hidden_states, mode="prefill")
+        hidden_states = self.norm(hidden_states, mode=Mode.PREFILL)
         # Convert to row major layout for output (but don't apply LM head)
         hidden_states = ttnn.to_layout(
             hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG

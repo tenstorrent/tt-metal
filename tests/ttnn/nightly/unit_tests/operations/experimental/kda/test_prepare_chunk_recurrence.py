@@ -487,6 +487,60 @@ def test_prepare_chunk_recurrence_gate_scale_matches_prescaled_gate(device: ttnn
         ttnn.deallocate(tensor)
 
 
+def test_prepare_chunk_recurrence_gate_exponent_error_is_one_anchor_rounding(device: ttnn.Device) -> None:
+    """The decay factors' exponent error is the anchor's TF32 rounding, nothing from G or G - a.
+
+    Gate: BF16 g_0 = -1.2578125 (= -(1 + 33/128), exact in BF16), g_1..31 = -1, in every key column; scale 1.
+    Then every prefix sum G_i is a multiple of 2^-7 below 33 in magnitude, so the centered-mask product
+    G - a = s/2 * (sum_{j<=i} g_j - sum_{j>i} g_j) is exact in FP32 DST, and its exponential carries only SFPU error.
+    The anchor a = G_last / 2 = -16.12890625 = -(16 + 8.25 * 2^-6). The anchor's exponential still reads a from L1
+    through SrcA, i.e. rounded to TF32 (10 explicit mantissa bits; ulp 2^-6 on [16, 32)). Rounding to nearest and
+    truncation both give -(16 + 8 * 2^-6), so the anchor error is delta = 2^-8 exactly, whichever the unpacker does.
+    kd, q_decay and k_dec_t are exp(+-(G - a)) * exp(+-a~) times the normalised q or k (and beta), so each carries a
+    relative error of about delta. final_decay = expm1(2 * a~) is about -1 + 1e-14 here, so the anchor error moves it
+    by far less than its own rounding; test_prepare_chunk_recurrence_final_decay_keeps_small_decay owns its precision.
+    `budget` covers the SFPU exponential of an exact FP32 exponent and the TF32 rounding of FP32 operands in the
+    downstream FPU products: four half-ulps, 4 * 2^-11 = 2^-9.
+    Before the exponent was kept in DST, G and G - a were each rounded to TF32 (ulp up to 2^-5 at |G_last| = 32.26),
+    which exceeds these bounds: kd, q_decay and k_dec_t err by 9.8e-3 to 1.5e-2 on this input.
+    """
+    key_dim = value_dim = CHUNK_SIZE
+    g = torch.full((1, CHUNK_SIZE, key_dim), -1.0)
+    g[:, 0, :] = -1.2578125
+    q = torch.full((1, CHUNK_SIZE, key_dim), 0.5)
+    k = torch.full((1, CHUNK_SIZE, key_dim), 0.5)
+    v = torch.full((1, CHUNK_SIZE, value_dim), 0.25)
+    beta_logits = torch.zeros((1, CHUNK_SIZE, 1))
+    host_inputs = (q, k, v, g, beta_logits)
+    for tensor in host_inputs:
+        assert torch.equal(tensor, tensor.to(torch.bfloat16).float()), "inputs must be exact in BF16"
+    anchor = float(g[0, :, 0].sum()) / 2
+    assert anchor == -(16 + 8.25 * 2**-6)
+
+    delta = 2**-8
+    budget = 2**-9
+    bounds = {
+        "kd": delta + budget,
+        "q_decay": delta + budget,
+        "k_dec_t": delta + budget,
+    }
+    expected = _oracle(host_inputs, 1, 0)
+    inputs = _device_inputs(host_inputs, device)
+    outputs = _run(inputs, 1, compute_kernel_config=_production_compute_config(device))
+    failures = []
+    for name, bound in bounds.items():
+        index = OUTPUT_NAMES.index(name)
+        actual = ttnn.to_torch(outputs[index]).double()
+        assert torch.isfinite(actual).all(), f"{name} contains nonfinite values"
+        relative = (actual / expected[index].double() - 1).abs().max().item()
+        logger.info(f"gate exponent {name}: max relative error {relative:.3e}, bound {bound:.3e}")
+        if relative > bound:
+            failures.append(f"{name} {relative:.3e} > {bound:.3e}")
+    assert not failures, "decay factors exceed the anchor-rounding bound: " + ", ".join(failures)
+    for tensor in (*outputs, *inputs):
+        ttnn.deallocate(tensor)
+
+
 @pytest.mark.parametrize("beta_offset", [32, 64])
 @pytest.mark.parametrize("start_row", [0, 32, 48], ids=["start0", "chunk-aligned-start", "mid-chunk-start"])
 def test_prepare_chunk_recurrence_beta_logits_column_window(
@@ -606,16 +660,27 @@ def test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program(de
     )
 
 
+@pytest.mark.parametrize(
+    ("math_fidelity", "packer_l1_acc", "message"),
+    [
+        pytest.param(ttnn.MathFidelity.HiFi4, True, "packer_l1_acc=true is unsupported", id="packer-l1-acc"),
+        pytest.param(ttnn.MathFidelity.HiFi3, False, "math_fidelity must be HiFi4", id="hifi3"),
+    ],
+)
 def test_prepare_chunk_recurrence_rejects_unsupported_compute_config(
-    device: ttnn.Device, expect_error: Callable
+    device: ttnn.Device,
+    expect_error: Callable,
+    math_fidelity: ttnn.MathFidelity,
+    packer_l1_acc: bool,
+    message: str,
 ) -> None:
     case = _UNIT_TEST_CASE
     inputs = _device_inputs(_case_host_inputs(case, seed=819), device)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        packer_l1_acc=True,
+        math_fidelity=math_fidelity,
+        packer_l1_acc=packer_l1_acc,
     )
-    with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
+    with expect_error(RuntimeError, message):
         _run(inputs, case.num_heads, compute_kernel_config=unsupported_config)
 
 

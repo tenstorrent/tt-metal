@@ -548,7 +548,6 @@ safe-outputs:
       - galaxy-stress-tests
 
       - t3000-tests
-      - t3000-dispatch-tests
       - t3000-profiler-tests
 
       - single-card-profiler-tests
@@ -775,7 +774,6 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `galaxy-stress-tests` | Galaxy | Stability and long-run behaviour |
 | `t3000-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
 | `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
-| `t3000-dispatch-tests` | T3000 (8×WH) | The T3K fast (sanity) suite, on request |
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |

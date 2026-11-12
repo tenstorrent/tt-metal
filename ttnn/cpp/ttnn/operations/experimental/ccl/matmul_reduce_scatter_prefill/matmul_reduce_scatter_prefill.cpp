@@ -13,11 +13,13 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt_stl/indestructible.hpp>
 
 #include "device/matmul_reduce_scatter_prefill_device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 
 namespace ttnn {
 
@@ -113,8 +115,37 @@ size_t usable_links(tt::tt_metal::distributed::MeshDevice* mesh, int32_t cluster
     return it->second;
 }
 
-// Everything a call resolves before launch (the checks, the links, the plan's inputs), shared by the op and the staging
-// helper so both size the staging alike.
+// Bytes per L1 bank of an interleaved output the op allocates after planning (0 outside L1): it lands in the same free
+// block below the live tensors as the circular buffers, so the live budget leaves room for it.
+uint64_t l1_output_bytes_per_bank(
+    tt::tt_metal::distributed::MeshDevice* mesh, const MemoryConfig& out_mem, uint32_t Mt, uint32_t Nt, uint32_t G) {
+    if (out_mem.buffer_type() != tt::tt_metal::BufferType::L1) {
+        return 0;
+    }
+    const auto& allocator = *mesh->allocator();
+    const uint64_t banks = allocator.get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint64_t tiles = static_cast<uint64_t>(Mt) * Nt / G;
+    const uint64_t bytes = tt::div_up(tiles, banks) * tt::tile_size(tt::DataFormat::Float16_b);
+    // the L1 free lists allocate in DRAM-alignment granules (see BankManager::init_allocators)
+    return tt::round_up(bytes, uint64_t{allocator.get_alignment(tt::tt_metal::BufferType::DRAM)});
+}
+
+// Lowers the budget to the solved plan's own footprint when that resolves the same plan. The solver takes the first
+// K block, super-block and chunk split that fit, so a budget at the footprint normally does; the program hash then
+// covers the plan, not how much L1 happened to be live, and calls with different live L1 share one program.
+void canonicalize_budget(detail::PlanInputs& in) {
+    const detail::Plan& plan = detail::solve_plan(in);
+    detail::PlanInputs at_footprint = in;
+    at_footprint.budget = plan.footprint;
+    const auto knobs = [](const detail::Plan& p) {
+        return std::make_tuple(p.n_m, p.n_n, p.resident, p.kb, p.depths, p.super_block, p.zone_sets);
+    };
+    if (knobs(detail::solve_plan(at_footprint)) == knobs(plan)) {
+        in = at_footprint;
+    }
+}
+
+// Everything a call resolves before launch: the checks, the links, the plan's inputs.
 MatmulReduceScatterPrefillParams resolve_params(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -124,7 +155,8 @@ MatmulReduceScatterPrefillParams resolve_params(
     const std::optional<int32_t>& num_links,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<uint32_t>& l1_headroom) {
+    const std::optional<uint32_t>& l1_headroom,
+    bool output_preallocated) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 
@@ -165,7 +197,7 @@ MatmulReduceScatterPrefillParams resolve_params(
         L = static_cast<uint32_t>(*num_links);
     }
 
-    // geometry and the plan (STAGING_POLICY exact: no staging floor)
+    // geometry and the plan
     const uint32_t Mt = M / TILE_HEIGHT;
     const uint32_t Kt = K / TILE_WIDTH;
     const uint32_t Nt = N / TILE_WIDTH;
@@ -177,7 +209,7 @@ MatmulReduceScatterPrefillParams resolve_params(
         "matmul_reduce_scatter_prefill: l1_headroom={} must be smaller than the L1 bank size ({} bytes)",
         headroom,
         l1_bank);
-    const detail::PlanInputs plan_inputs{
+    detail::PlanInputs plan_inputs{
         .G = G,
         .kind = kind,
         .L = L,
@@ -188,11 +220,20 @@ MatmulReduceScatterPrefillParams resolve_params(
         .block_n = canonical_dim == -2 ? Nt : Nt / G,
         .gx = static_cast<uint32_t>(grid.x),
         .gy = static_cast<uint32_t>(grid.y),
-        .tA = static_cast<uint32_t>(input_tensor.buffer()->aligned_page_size()),
-        .tW = static_cast<uint32_t>(weight.buffer()->aligned_page_size()),
+        .tA = static_cast<uint32_t>(input_tensor.mesh_buffer().aligned_page_size()),
+        .tW = static_cast<uint32_t>(weight.mesh_buffer().aligned_page_size()),
         .scatter_dim = canonical_dim,
         .budget = l1_bank - headroom,
     };
+    // L1 tensors fill from the top; the CBs (staging included) and an L1 output share the free L1 below them
+    const uint64_t output = output_preallocated ? 0 : l1_output_bytes_per_bank(mesh, out_mem, Mt, Nt, G);
+    // the mesh's semaphores and mailbox first, so the measurement sees them; rounded so the plan memo stays small
+    ensure_mesh_resources(mesh);
+    constexpr uint64_t kLiveL1Granule = 16 * 1024;
+    const uint64_t free_below_live =
+        ttnn::operations::core::available_program_l1_capacity(mesh) / kLiveL1Granule * kLiveL1Granule;
+    plan_inputs.budget = std::min(plan_inputs.budget, free_below_live > output ? free_below_live - output : 0);
+    canonicalize_budget(plan_inputs);
 
     return MatmulReduceScatterPrefillParams{
         .cluster_axis = static_cast<uint32_t>(cluster_axis),
@@ -206,21 +247,6 @@ MatmulReduceScatterPrefillParams resolve_params(
         .output_memory_config = out_mem,
         .plan_inputs = plan_inputs,
     };
-}
-
-// A caller-held staging larger than the plan needs occupies its whole size, which the plan must leave room for: re-plan
-// with it as the staging floor. One of exactly the plan's size keeps the plan (and the program the op's own staging
-// uses); a smaller one is left for validation to refuse.
-void plan_for_held_staging(MatmulReduceScatterPrefillParams& params, const Tensor& staging) {
-    if (staging.storage_type() != StorageType::DEVICE || !staging.is_allocated()) {
-        return;  // refused by validation
-    }
-    const uint64_t held = staging.buffer()->aligned_size_per_bank();
-    const uint64_t needed =
-        static_cast<uint64_t>(detail::staging_tiles(params.plan())) * tt::tile_size(tt::DataFormat::Float16_b);
-    if (held > needed) {
-        params.plan_inputs.staging_floor = held;
-    }
 }
 
 }  // namespace
@@ -237,10 +263,9 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
-    const std::optional<uint32_t>& l1_headroom,
-    const std::optional<Tensor>& staging_tensor) {
+    const std::optional<uint32_t>& l1_headroom) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
-    MatmulReduceScatterPrefillParams params = resolve_params(
+    const MatmulReduceScatterPrefillParams params = resolve_params(
         input_tensor,
         weight,
         cluster_axis,
@@ -249,33 +274,10 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         num_links,
         compute_kernel_config,
         memory_config,
-        l1_headroom);
-    if (staging_tensor.has_value()) {
-        plan_for_held_staging(params, *staging_tensor);
-    }
+        l1_headroom,
+        output_tensor.has_value());
     record_last_plan(params);
-    auto* mesh = input_tensor.device();
-    ensure_mesh_resources(mesh);
-    if (staging_tensor.has_value()) {  // the caller's: checked against the plan on a program-cache miss
-        return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, *staging_tensor, params);
-    }
-    // freed when this call returns, like any op intermediate (see allocate_staging), so it holds no L1 between calls
-    const Tensor staging = allocate_staging(mesh, detail::staging_tiles(params.plan()));
-    return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, staging, params);
-}
-
-Tensor experimental::matmul_reduce_scatter_prefill_staging(
-    const Tensor& input_tensor,
-    const Tensor& weight,
-    int32_t cluster_axis,
-    int32_t scatter_dim,
-    ttnn::ccl::Topology topology,
-    const std::optional<int32_t>& num_links,
-    const std::optional<uint32_t>& l1_headroom) {
-    using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
-    const MatmulReduceScatterPrefillParams params = resolve_params(
-        input_tensor, weight, cluster_axis, scatter_dim, topology, num_links, std::nullopt, std::nullopt, l1_headroom);
-    return allocate_staging(input_tensor.device(), detail::staging_tiles(params.plan()));
+    return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, params);
 }
 
 }  // namespace ttnn

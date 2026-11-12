@@ -237,8 +237,8 @@ void BernoulliDeviceOperation::BernoulliProgramFactory::override_runtime_argumen
     constexpr uint32_t compute_kernel_idx = 2;
 
     const auto ws = bernoulli_work_split(output);
-    const uint32_t in_addr = tensor_args.input.buffer()->address();
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t in_addr = tensor_args.input.mesh_buffer().address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     const auto layout = bernoulli_core_layout(ws);
     for (uint32_t i = 0; i < layout.size(); ++i) {

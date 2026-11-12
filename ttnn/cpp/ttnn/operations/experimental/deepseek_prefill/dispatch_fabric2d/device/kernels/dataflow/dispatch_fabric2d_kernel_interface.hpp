@@ -120,8 +120,7 @@ constexpr uint32_t MAX_VCS = 16;
 // "Not queued anywhere" -- a page delivered to the next chip's output rather than forwarded again.
 constexpr uint32_t VC_NONE = 0xFFFFFFFFu;
 
-// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1, and
-// a channel shallower than a read batch spends all its time announcing.
+// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1.
 constexpr uint32_t MIN_VC_PAGES = 4;
 
 // fwd_meta: the routing data a queue entry carries after its token, at entry_base + token_size_bytes.
@@ -245,8 +244,6 @@ struct ScratchGeometry {
     uint32_t topk = 0;
     uint32_t num_forward = 0;  // forward_descriptors_per_stream(extent), the same for every stream
 };
-
-// Chunk starts: one per (forward descriptor, expert), which is also what the outgoing list expands to.
 
 constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t block) {
     switch (block) {

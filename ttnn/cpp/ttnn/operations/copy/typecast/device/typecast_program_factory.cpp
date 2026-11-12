@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -94,24 +95,24 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const auto* device = input.device();
 
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
-    const uint32_t num_pages = input.buffer()->num_pages();
+    const uint32_t num_pages = input.mesh_buffer().num_pages();
 
     // Each DFB entry holds one tile, because the compute kernel unpacks and packs whole tiles.
     // A ROW_MAJOR page can be shorter or longer than a tile, so it takes as many entries as it needs.
-    const uint32_t input_page_size = is_row_major ? input.buffer()->page_size() : single_tile_size_input;
-    const uint32_t output_page_size = is_row_major ? output.buffer()->page_size() : single_tile_size_output;
+    const uint32_t input_page_size = is_row_major ? input.mesh_buffer().page_size() : single_tile_size_input;
+    const uint32_t output_page_size = is_row_major ? output.mesh_buffer().page_size() : single_tile_size_output;
     // Each input page is written to the output page at the same index.
     if (is_row_major) {
         const uint32_t input_elements_per_page = input_page_size / tt::datum_size(cb_data_format_input);
         const uint32_t output_elements_per_page = output_page_size / tt::datum_size(cb_data_format_output);
         TT_FATAL(
-            input.buffer()->num_pages() == output.buffer()->num_pages() &&
+            input.mesh_buffer().num_pages() == output.mesh_buffer().num_pages() &&
                 input_elements_per_page == output_elements_per_page,
             "Row-major typecast requires matching page geometry, got input {} pages of {} elements and output {} "
             "pages of {} elements",
-            input.buffer()->num_pages(),
+            input.mesh_buffer().num_pages(),
             input_elements_per_page,
-            output.buffer()->num_pages(),
+            output.mesh_buffer().num_pages(),
             output_elements_per_page);
     }
     const uint32_t entries_per_page =
