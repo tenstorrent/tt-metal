@@ -325,6 +325,8 @@ public:
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
         } else if (variant == IpVariant::TRINITY) {
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
+        } else if (variant == IpVariant::SATURN) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.3/meta");
         }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
