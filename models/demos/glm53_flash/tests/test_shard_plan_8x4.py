@@ -1123,10 +1123,10 @@ def _protect_env(monkeypatch, keys) -> None:
 
 
 def test_galaxy_defaults_shard_tail(monkeypatch):
-    """tt/galaxy_defaults.py: the 8x4 default turns on AGK, AGB, RS1_EARLY, RSB and R8 (validated: 4 K x 16 bit-identical
-    to knob-off over 3 runs, 32 K x 4 ids identical) and leaves COMB (ids move at a near-tie) and RSNP (pending its
-    device run) opt-in; an explicit
-    environment value wins (an explicit AGK=0 drops the AGB default with it); other meshes get nothing"""
+    """tt/galaxy_defaults.py: the 8x4 default turns on AGK, AGB, RS1_EARLY, RSB, R8 and RSNP (validated: 4 K x 16
+    bit-identical to knob-off over 3 runs; 32 K x 4 ids identical) and leaves COMB (ids move at a near-tie) opt-in; an
+    explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
+    default); other meshes get nothing"""
     from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
 
     assert GD.KNOBS["GLM53_DSA_SHARD_AGK"] == "1"
@@ -1134,7 +1134,7 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.KNOBS["GLM53_DSA_SHARD_RS1_EARLY"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_AGB"] == "1"
     assert "GLM53_DSA_SHARD_COMB" not in GD.KNOBS
     assert GD.KNOBS["GLM53_DSA_SHARD_RSB"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_R8"] == "1"
-    assert "GLM53_DSA_SHARD_RSNP" not in GD.KNOBS  # opt-in until its device run
+    assert GD.KNOBS["GLM53_DSA_SHARD_RSNP"] == "1"
     keys = list(GD.KNOBS) + ["GLM53_MODEL_TRACE_MB", "GLM53_PF_SPARSE_T", "GLM53_PREFILL_BUCKETS"]
     keys += [v for v in KNOB_ENV.values() if v not in keys] + ["GLM53_DSA_SHARD_AGB"]
     _protect_env(monkeypatch, keys)
@@ -1142,13 +1142,21 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     got = GD.apply((8, 4), 4096, 4096)
     assert got["GLM53_DSA_SHARD_AGK"] == got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_RS1_EARLY"] == "1"
     assert SP.shard_agk(8) and SP.shard_agb(8) and SP.shard_rs1_early(8) and not SP.shard_comb(8)
-    assert got["GLM53_DSA_SHARD_RSB"] == "1" and SP.shard_rsb(8) and not SP.shard_rsnp(8)
+    assert got["GLM53_DSA_SHARD_RSB"] == "1" and SP.shard_rsb(8)
     assert got["GLM53_DSA_SHARD_R8"] == "1" and SP.shard_r8(8)
+    assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)
     _protect_env(monkeypatch, keys)
     monkeypatch.setenv("GLM53_DSA_SHARD_AGK", "0")  # an explicit value wins
     got = GD.apply((8, 4), 4096, 4096)
     assert "GLM53_DSA_SHARD_AGK" not in got and not SP.shard_agk(8)
     assert "GLM53_DSA_SHARD_AGB" not in got and not SP.shard_agb(8)  # dropped with AGK, no AGB-needs-AGK error
+    assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)  # (RSB still on)
+    _protect_env(monkeypatch, keys)
+    monkeypatch.setenv("GLM53_DSA_SHARD_RSB", "0")  # an explicit RSB=0 drops the RSNP default with it
+    got = GD.apply((8, 4), 4096, 4096)
+    assert "GLM53_DSA_SHARD_RSB" not in got and not SP.shard_rsb(8)
+    assert "GLM53_DSA_SHARD_RSNP" not in got and not SP.shard_rsnp(8)  # no RSNP-needs-RSB error
+    assert got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_R8"] == "1"
 
 
 def test_zz_no_ttnn_was_imported_by_the_suite():

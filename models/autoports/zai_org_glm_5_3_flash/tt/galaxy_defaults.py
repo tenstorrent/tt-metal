@@ -39,6 +39,11 @@ KNOBS = {
     # same T / T_g, quotas and tie order): 1 M x 16 40.5 -> 38.2 ms (user 0 ids identical), 4 K x 16 bit-identical over
     # 3 runs (merge -31 us per DSA layer), 32 K x 4 ids identical
     "GLM53_DSA_SHARD_R8": "1",
+    # GLM53_DSA_SHARD_RSNP (on RSB): the scatter lanes send only the slices' data pages (9 of 10 / 3 of 4: the pad page
+    # only made the page pairs even), paired across slices to their RSB pages: 4 K x 16 32.7 -> 32.2 ms, bit-identical
+    # over 3 runs (digest e2f3c86090b7); probe B 16 layers 0-3 2925.7 -> 2876.2 us (RS1 wait 287.5 -> 246.9 us, RS2
+    # landed 45.2 -> 35.2 us, the root-local marks flat)
+    "GLM53_DSA_SHARD_RSNP": "1",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",
@@ -81,6 +86,8 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
     want = dict(KNOBS)
     if os.environ.get("GLM53_DSA_SHARD_AGK", want["GLM53_DSA_SHARD_AGK"]) != "1":
         want.pop("GLM53_DSA_SHARD_AGB")  # AGB rides on AGK: an explicit AGK=0 drops the AGB default with it
+    if os.environ.get("GLM53_DSA_SHARD_RSB", want["GLM53_DSA_SHARD_RSB"]) != "1":
+        want.pop("GLM53_DSA_SHARD_RSNP")  # RSNP rides on RSB: an explicit RSB=0 drops the RSNP default with it
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))
     ladder = sparse_t(int(seq))
     if ladder:

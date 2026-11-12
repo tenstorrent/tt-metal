@@ -199,7 +199,8 @@ edit fs_read.cpp but different streams: FS_KEYPACK builds the AG1 lane (plain FS
 lane; one build never takes both (FS_KEYPACK `#error`s under FS_SCATTER; FS_SUBD `#error`s without FS_SCATTER or with
 FS_KEYPACK, and composes with FS_WAIT2). With every knob off the shard kernels are
 instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to the compiler's two stack-slot variants).
-`tt/galaxy_defaults.py` turns on AGK, AGB and RS1_EARLY (2026-11-11).
+`tt/galaxy_defaults.py` turns on AGK, AGB and RS1_EARLY (2026-11-11), then RSB, R8 and RSNP (an explicit RSB=0 drops
+the RSNP default, as AGK=0 drops AGB's).
 
 | knob | probe: B 16, pos 4095, layers 0-3 (one DSA layer) | e2e (45 layers, greedy) | ids | 8x4 default |
 |---|---|---|---|---|
@@ -211,7 +212,7 @@ instruction-identical to rev 64 (472b7d63e85; att_c TRISC1 up to the compiler's 
 | AGB (on AGK) | - | 4 K x 16 36.8 -> 35.7 ms; with RS1_EARLY 34.3 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical with RS1_EARLY | on |
 | RSB | 2977.0 -> 2925.4 us (layers 0-3 with UG16; RS1 wait 325 -> 287, RS2 58 -> 45) | 4 K x 16 33.3 -> 32.7 ms | bit-identical at B 16 (3 runs); 32 K x 4 identical | on |
 | R8 (8-bit radix digits) | 2925.5 -> 2899.6 us (B 16 pos 4095; merge 121 -> 89.5 us) | 4 K x 16 32.7 (both); 1 M x 16 40.5 -> 38.2 ms | bit-identical at B 16 (3 runs); 32 K x 4 and 1 M x 16 user 0 identical | on |
-| RSNP (on RSB) | pending device run (expected RS1 wait 287 -> ~258 us, RS2 45 -> <= ~34 us) | pending device run | pending (offline: every landed byte = RSB's) | off |
+| RSNP (on RSB) | 2925.7 -> 2876.2 us (B 16, layers 0-3 traced; RS1 wait 287.5 -> 246.9, RS2 landed 45.2 -> 35.2; root-local marks flat) | 4 K x 16 32.7 -> 32.2 ms | bit-identical at B 16 (3 runs, digest e2f3c86090b7); 32 K x 4 ids and text identical (21.2 ms) | on |
 
 The rows ran on the single-knob trees (wt_mrg e7f7dc8443f, wt_rsc ab4bd43c343 / 4d61833e021, wt_rs1 4e59a2c95c0),
 whose knob-off kernels equal this tree's. RS1_EARLY only moves send timing (the two-field gates are sound for every
@@ -297,7 +298,7 @@ select and merge pass. Probe (test_mk_backend_probe, MLA_PROBE=1): owner_dm1_max
 (AG + merge), ix_dm0 4 -> 5 (the merge alone: ~121 us at B 16 today) must drop; the AG window and everything after mark 2
 must not move.
 
-### RSNP: the reduce-scatters without pad pages (2026-11-11, opt-in, MLA_REV 71)
+### RSNP: the reduce-scatters without pad pages (2026-11-11, MLA_REV 71, default on the 8x4)
 
 Why the pad page exists: fs_send.cpp ships PAGE PAIRS -- one fabric scatter packet = 2 x 2 KiB to two NoC addresses --
 and a pair never straddled a batch or a chunk (`static_assert(PPC % NB == 0 && NB % 2 == 0)`), so the per-token
@@ -342,6 +343,11 @@ owner_dm1 marks 5 -> 6) drops 287 -> ~258 us at B 16; RS2 (7 -> 8) 45 -> at most
 ~40 us per DSA layer (~0.4 ms per 4 K x 16 step), proportionally less at B 4 / 8; marks 6 -> 7 and 8 -> 9 are root-local
 and must not move. The device run: ids / top-4 values bit-identical to the RSB default (4 K x 16 distinct, 3 runs;
 32 K x 4), then the probe.
+
+Device (wt_rsnp 3c8a0a3bf92 = these kernels / streams on 0687018fd13): 4 K x 16 distinct, 3 in-process runs, every run
+the RSB default's digest (e2f3c86090b7), 32.7 -> 32.2 ms; probe B 16 layers 0-3 (traced) 2925.7 -> 2876.2 us: RS1 wait
+287.5 -> 246.9 us (-40.6 us, more than the bytes alone: 10 % fewer packets and 25 % fewer RS1 batches too), RS2 landed
+45.2 -> 35.2 us, the root-local marks flat. `tt/galaxy_defaults.py` turns it on.
 
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 
