@@ -336,15 +336,52 @@ class Qwen36Model:
         hidden = video_features.shape[-1]
         return ttnn.reshape(video_features, (-1, hidden))
 
-    def _vision_placeholder_token_id(self):
-        """The input-id the current request's vision embeddings splice into: ``video_token_id`` for
-        a video request (video grid stashed), else ``image_token_id``. The vision-splice paths
-        (_scatter_vision_tokens / _set_vision_merge / _vis_row_offset_for) use this to locate the
-        placeholder positions, mirroring HF's ``input_ids == image_token_id`` /
-        ``input_ids == video_token_id`` masks."""
+    def _vision_placeholder_mask(self, token_ids):
+        """True at the tokens that the current request's vision rows splice into: ``image_token_id`` when an image
+        grid is stashed, ``video_token_id`` when a video grid is, ``image_token_id`` when neither is. The vision rows
+        are packed in the order of these tokens (vision_rows). The vision-splice paths (_scatter_vision_tokens /
+        _set_vision_merge / _vis_row_offset_for) use this to locate the placeholder positions, mirroring HF's
+        ``input_ids == image_token_id`` / ``input_ids == video_token_id`` masks."""
+        cfg = self.args.hf_config
+        ids = []
+        if self._req_image_grid_thw is not None or self._req_video_grid_thw is None:
+            ids.append(int(cfg.image_token_id))
         if self._req_video_grid_thw is not None:
-            return int(self.args.hf_config.video_token_id)
-        return int(self.args.hf_config.image_token_id)
+            ids.append(int(cfg.video_token_id))
+        return torch.isin(token_ids, torch.tensor(ids, dtype=token_ids.dtype))
+
+    def vision_rows(self, token_ids, image=None, video=None):
+        """Run the vision tower over one prompt's images and videos and return the host rows that its prefill splices
+        (vision_rows_host): one row per image or video placeholder token, in the order of the tokens, or None for a
+        text prompt. ``image`` and ``video`` are (pixel values [num_patches, patch_dim], grid_thw [n, 3]) or None.
+        ``token_ids`` holds the prompt from position 0 through at least its last placeholder token. Stashes both
+        grids, which select the prompt's M-RoPE table (_build_request_rope) and placeholder tokens
+        (_vision_placeholder_mask). Raises ValueError when a modality's rows and placeholder tokens differ in number.
+        """
+        cfg = self.args.hf_config
+        rows = {}
+        # Each forward allocates its rows on device, so each modality is read to the host before the next forward.
+        if image is not None:
+            rows[int(cfg.image_token_id)] = self.vision_rows_host(self.get_image_features(*image))
+        if video is not None:
+            rows[int(cfg.video_token_id)] = self.vision_rows_host(self.get_video_features(*video))
+        self._req_image_grid_thw = None if image is None else image[1]
+        self._req_video_grid_thw = None if video is None else video[1]
+        if not rows:
+            return None
+        ids = torch.as_tensor(token_ids).reshape(-1)
+        placeholders = ids[self._vision_placeholder_mask(ids)]
+        for token, r in rows.items():
+            n = int((placeholders == token).sum())
+            if n != int(r.shape[0]):
+                raise ValueError(f"the prompt has {n} placeholder tokens {token} for {int(r.shape[0])} vision rows")
+        if len(rows) == 1:
+            return next(iter(rows.values()))
+        first = next(iter(rows.values()))
+        packed = torch.empty(int(placeholders.numel()), first.shape[-1], dtype=first.dtype)
+        for token, r in rows.items():
+            packed[placeholders == token] = r
+        return packed
 
     def _build_request_rope(self, token_ids, vision_tokens):
         """Stage the per-request RoPE for this prefill: M-RoPE (3D position ids + rope_delta) when
@@ -446,7 +483,7 @@ class Qwen36Model:
         program compiles). ``vision_tokens`` None clears the mask (where becomes identity); otherwise
         packed image rows are read back to host, placed at their token positions in a zero
         [1, chunk_size, dim] buffer, and uploaded with the 0/1 mask. ``ids_host`` locates image
-        placeholders (== hf_config.image_token_id). ``vis_row_offset`` is the count of image
+        placeholders (_vision_placeholder_mask). ``vis_row_offset`` is the count of image
         placeholders before this segment, so a large image spanning chunks splices
         ``vis_host[vis_row_offset : vis_row_offset + n]``. A segment with no placeholders clears
         the mask (identity merge).
@@ -464,7 +501,7 @@ class Qwen36Model:
         cs = self._vis_buf.shape[-2]  # seq dim: dim 1 (3D single) / dim 2 (4D TP)
         Hg = self.args.dim  # global hidden (the buffer's last dim is dim/TP on a mesh)
         flat = ids_host.reshape(-1)
-        pos = torch.nonzero(flat[:cs] == self._vision_placeholder_token_id(), as_tuple=False).reshape(-1)
+        pos = torch.nonzero(self._vision_placeholder_mask(flat[:cs]), as_tuple=False).reshape(-1)
         n = int(pos.numel())
         # No image placeholders in this segment (text-only chunk, or a tail that holds none of the
         # image rows): the merge is the identity, so just clear the mask.
@@ -529,7 +566,7 @@ class Qwen36Model:
         owns — used to splice a large image whose placeholders span multiple chunks / the tail."""
         if chunk_start <= 0:
             return 0
-        return int((token_ids[:, :chunk_start] == self._vision_placeholder_token_id()).sum())
+        return int(self._vision_placeholder_mask(token_ids[:, :chunk_start]).sum())
 
     def switch_mode(self, mode):
         """Generator mode-change hook; no-op (no prefetcher)."""
@@ -776,7 +813,7 @@ class Qwen36Model:
         # special_image_mask = input_ids == image_token_id, computed on host from the
         # token ids and uploaded. torch.nonzero gives the placement positions directly.
         flat_ids = token_ids.reshape(-1)
-        mask_bool = flat_ids == self._vision_placeholder_token_id()
+        mask_bool = self._vision_placeholder_mask(flat_ids)
         pos = torch.nonzero(mask_bool, as_tuple=False).reshape(-1)
         n = int(pos.numel())
         if n == 0:
