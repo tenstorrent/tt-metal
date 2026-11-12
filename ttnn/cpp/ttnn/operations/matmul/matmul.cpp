@@ -14,6 +14,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -614,7 +615,14 @@ Tensor addmm(
         output_tile,
         /*global_cb=*/std::nullopt,
         /*sub_device_id=*/std::nullopt};
-    auto out_tensor = bound_matmul(mat1_tensor, mat2_tensor, std::nullopt, matmul_params, optional_output_tensor);
+    // The product is accumulated into the matmul output before input_tensor is added, so an output that shares
+    // input_tensor's buffer (the torch addmm_ pattern) would overwrite input_tensor with the product first.
+    // Compute into a fresh tensor in that case and copy the result into the provided output at the end.
+    const bool output_aliases_input = optional_output_tensor.has_value() && optional_output_tensor->is_allocated() &&
+                                      input_tensor.is_allocated() &&
+                                      optional_output_tensor->buffer() == input_tensor.buffer();
+    std::optional<Tensor> matmul_output = output_aliases_input ? std::nullopt : optional_output_tensor;
+    auto out_tensor = bound_matmul(mat1_tensor, mat2_tensor, std::nullopt, matmul_params, matmul_output);
 
     if (alpha != 1.0) {
         multiply_(out_tensor, alpha);
@@ -628,6 +636,10 @@ Tensor addmm(
             add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
         }
         add_(out_tensor, add_tensor);
+    }
+
+    if (output_aliases_input) {
+        return ttnn::copy(out_tensor, *optional_output_tensor);
     }
 
     return out_tensor;

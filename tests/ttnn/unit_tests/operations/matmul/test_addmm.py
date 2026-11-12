@@ -673,3 +673,44 @@ def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
         pcc_threshold=0.9999,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize(
+    "dtype, size",
+    [(ttnn.bfloat16, 512), (ttnn.float32, 256)],
+)
+@pytest.mark.parametrize("alpha, beta", [(1.0, 1.0), (2.0, 1.0), (1.0, 0.5), (1.0, 0.0)])
+def test_addmm_output_tensor_aliases_input(device, dtype, size, alpha, beta):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((size, size), dtype=torch.bfloat16)
+    torch_mat1_tensor = torch.randn((size, size), dtype=torch.bfloat16)
+    torch_mat2_tensor = torch.randn((size, size), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch.addmm(
+        torch_input_tensor.clone(), torch_mat1_tensor, torch_mat2_tensor, beta=beta, alpha=alpha
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    mat1_tensor = ttnn.from_torch(torch_mat1_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    mat2_tensor = ttnn.from_torch(torch_mat2_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+
+    returned_tensor = ttnn.addmm(
+        input_tensor, mat1_tensor, mat2_tensor, alpha=alpha, beta=beta, optional_output_tensor=input_tensor
+    )
+
+    returned = ttnn.to_torch(returned_tensor)
+    provided = ttnn.to_torch(input_tensor)
+
+    # Same tolerances as test_addmm_square_matrices, with atol doubled for alpha = 2.
+    atol, rtol = (0.008, 5.032) if dtype == ttnn.bfloat16 else (0.004, 0.299)
+    for actual in (returned, provided):
+        assert_numeric_metrics(
+            torch_output_tensor,
+            actual,
+            atol=atol * size,
+            rtol=rtol * size,
+            frobenius_threshold=0.001 * size,
+            pcc_threshold=0.9999,
+            check_ulp=False,
+        )
