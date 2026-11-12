@@ -2261,18 +2261,23 @@ class PACK_API(TemplateParameter):
         return "\n".join(lines)
 
 
-@dataclass
+@dataclass(repr=False)
 class PACK_API_GEOMETRY(TemplateParameter):
-    """pack_api_shim.h's output tile geometry for a test whose geometry is a run-time parameter: faces, rows per face, partial faces."""
+    """pack_api_shim.h's output tile geometry for a test whose geometry is a run-time parameter: faces, rows per face, partial faces.
+    NUM_FACES and TEST_FACE_DIMS own num_faces and face_r_dim, so the fields carry a shim_ prefix; the repr, which the variant hash
+    reads, keeps the earlier text."""
 
-    num_faces: int = 4
-    face_r_dim: int = 16
+    shim_num_faces: int = 4
+    shim_face_r_dim: int = 16
     partial_face: bool = False
+
+    def __repr__(self) -> str:
+        return f"PACK_API_GEOMETRY(num_faces={self.shim_num_faces}, face_r_dim={self.shim_face_r_dim}, partial_face={self.partial_face})"
 
     def convert_to_cpp(self) -> str:
         lines = [
-            f"#define PACK_API_SHIM_NUM_FACES {self.num_faces}",
-            f"#define PACK_API_SHIM_FACE_R_DIM {self.face_r_dim}",
+            f"#define PACK_API_SHIM_NUM_FACES {self.shim_num_faces}",
+            f"#define PACK_API_SHIM_FACE_R_DIM {self.shim_face_r_dim}",
         ]
         if self.partial_face:
             lines.append("#define PACK_API_SHIM_PARTIAL_FACE 1")
