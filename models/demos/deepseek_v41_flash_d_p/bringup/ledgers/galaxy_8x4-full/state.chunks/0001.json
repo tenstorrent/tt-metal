@@ -1074,7 +1074,7 @@
   },
   "attempt": 1,
   "attempts": 0,
-  "duration_s": 1.8,
+  "duration_s": 1207.2,
   "history": [
    {
     "reused": [
@@ -1098,45 +1098,33 @@
    {
     "status": "COMMIT_PENDING",
     "t": "2026-11-12T20:25:48"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-11-12T21:17:49"
+   },
+   {
+    "s": 1207.2,
+    "status": "PASS",
+    "t": "2026-11-12T21:38:01"
    }
   ],
-  "last_run": "2026-11-12T20:06:49",
+  "last_run": "2026-11-12T21:38:01",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/FIX.26.log",
   "rc": 0,
-  "reason": [
-   "  the gate passed; git refused its commit. Nothing re-runs: fix what the hook names, then `python -m models.demos.common.bringup gate FIX.26 --commit-only --spec <spec>` (or `resume`)",
-   "  too large for the repo: models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state_metrics.json (a framework fix keeps it out of the commit)",
-   "    git commit failed:",
-   "    [WARNING] Unstaged files detected.",
-   "    [INFO] Stashing unstaged files to /home/dnijemcevic/.cache/pre-commit/patch1794515146-3102756.",
-   "    check for large files (>500 KB)..............................................................Failed",
-   "    - hook id: check-large-files",
-   "    - exit code: 1",
-   "    models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state_metrics.json (504 KB) exceeds the 500 KB limit.",
-   "    - hook id: llk-dest-to-src-wait",
-   "    - hook id: llk-sticky-cfg-restore",
-   "    - hook id: llk-xthread-cfg-wormhole",
-   "    - hook id: llk-xthread-cfg-blackhole",
-   "    - hook id: llk-redundant-drain",
-   "    [INFO] Restored changes from /home/dnijemcevic/.cache/pre-commit/patch1794515146-3102756."
-  ],
+  "reason": [],
   "role": "overseer",
   "stamp": {
-   "reused": [
-    "FIX.26#test_ladder",
-    "FIX.26#test_contract",
-    "FIX.26#test_contract.3.0",
-    "FIX.26#test_determinism"
-   ],
+   "reused": [],
    "units": {
-    "FIX.26#test_contract": "8740e12374fcc172",
-    "FIX.26#test_contract.3.0": "6f54232cd0c0293f",
-    "FIX.26#test_determinism": "1a8fd05f1f3e1431",
-    "FIX.26#test_ladder": "601d57b351a3237c"
+    "FIX.26#test_contract": "32a07ec88190d8bf",
+    "FIX.26#test_contract.3.0": "87fb4a038af3f2b6",
+    "FIX.26#test_determinism": "42480b24849c3e1c",
+    "FIX.26#test_ladder": "acdc32aa338747f6"
    }
   },
-  "started": "2026-11-12T20:06:47",
-  "status": "COMMIT_PENDING",
+  "started": "2026-11-12T21:17:54",
+  "status": "PASS",
   "units": {
    "FIX.26#test_contract": "PASS",
    "FIX.26#test_contract.3.0": "PASS",

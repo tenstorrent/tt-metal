@@ -1,0 +1,20 @@
+{
+ "used": [
+  {"id": "DS41-236", "how": "the symptom this step fixes: the contract judged 10208, a state PREFILL_END=cap never computes; the new cap golden's engram tail [5306, 14, 237] equals the device's"},
+  {"id": "DS41-219", "how": "the handoff point is decode's cap = actual_end // 64 x 64 (tt/attention.snapshot_cap), 10176 for the 10208 request"},
+  {"id": "DS41-124", "how": "non-step layers' window KV is checked against golden ring snapshots; added the cap snapshot to golden_window so the 128-row snapshot at cap is compared on all rows (was 96)"},
+  {"id": "DS41-93", "how": "engram_tail is an integer fixed state checked exactly; the handoff drift keeps only float states, as drift-s10240.json"}
+ ],
+ "contradicted": [],
+ "missing": [
+  "how the golden's fixed-state snapshots are produced (generate_golden tail_at: deep copy before the last chunk, then [last start, seq - tail)) and that adding a file to a golden changes its content_hash unless golden.derived() excludes it",
+  "Golden.verify() is False on trimmed goldens (F164); verify_copy / files.json is the integrity route",
+  "framework selftests building the fixture prompt fail at HEAD: prompt.DEFAULT_SOURCE still points at models/tt_transformers/tests/tale-of-two-cities.txt.bz2 (moved to models/ttt_compat, #62523)"
+ ],
+ "overseer": [
+  {"id": "FIX.26", "answer": "done", "evidence": "reference/handoff.py golden: chunk 0 state at 5120 byte-equal to the golden (40 layers), cap snapshot at 10176 (40 files); handoff drift at 10176 (51 entries, same keys as drift-s10240.json); test_contract cap path: contract_state_at 10176, ring 0.98793 >= 0.94787, producer window/compress/index 0.98705/0.98877/0.99334 >= 0.94787/0.93695/0.94648, engram tail exact, contract_checks_failed 0"},
+  {"id": "OV-3", "answer": "n/a", "evidence": "no kernel, padding or op change; test and golden tooling only"},
+  {"id": "OV-23", "answer": "n/a", "evidence": "no Python-built op added or touched"},
+  {"id": "OV-25", "answer": "done", "evidence": "no fork suites run on the 8x4; only the gate's model-level units and new CPU selftests"}
+ ]
+}
