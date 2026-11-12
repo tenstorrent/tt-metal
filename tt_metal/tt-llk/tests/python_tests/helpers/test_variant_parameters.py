@@ -1029,6 +1029,32 @@ class PACK_BLOCK(TemplateParameter):
         )
 
 
+@dataclass
+class PACK_API(TemplateParameter):
+    """The compute API's pack_block through pack_api_shim.h (Blackhole): arm "0" the form tables, "T", "B" or "W" one form, "M" main's per-tile loop; tiles per block and the matmul K as pack_block<tiles, acc, kt>; the output CB and the kernel's matmul and pack-thread SFPU API traits."""
+
+    arm: str = "0"
+    tiles: int = 1
+    kt: int = 0
+    out: int = 16
+    matmul: bool = False
+    sfpu: bool = False
+
+    def convert_to_cpp(self) -> str:
+        arm = "0" if self.arm == "0" else f"'{self.arm}'"
+        lines = [
+            f"constexpr char pack_api_arm = {arm};",
+            f"constexpr std::uint32_t pack_api_tiles = {self.tiles};",
+            f"constexpr std::uint32_t pack_api_kt = {self.kt};",
+            f"#define PACK_API_SHIM_OUT {self.out}",
+        ]
+        if self.matmul:
+            lines.append("#define PACK_API_SHIM_MATMUL")
+        if self.sfpu:
+            lines.append("#define PACK_API_SHIM_SFPU")
+        return "\n".join(lines)
+
+
 class PACK_RMW_DEST(TemplateParameter):
     """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_; on when LLK_PACK_RMW=1."""
 
