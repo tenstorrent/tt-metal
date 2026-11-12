@@ -433,10 +433,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                           bool is_relay,
                                                           uint8_t pipe,
                                                           const std::optional<LLKMetadata>& llk,
-                                                          uint8_t /*pap*/,
-                                                          uint8_t /*cap*/) {
+                                                          uint8_t pap,
+                                                          uint8_t cap) {
                 kd.bindings.dfb.push_back(
-                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : ""});
+                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : "", pap, cap});
             });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
