@@ -644,7 +644,7 @@ class AudioTraceControlTest(unittest.TestCase):
         ]
         a, native, _, _ = fixture()
         decode(a, Tensor())
-        p = SimpleNamespace(_trace_state={}, transformer=None, _audio_adapter=a, vae_decoder=None)
+        p = SimpleNamespace(_trace_state={}, transformer=None, _audio_adapter=a, vae_decoder=None, vae_encoder=None)
         method(p)
         self.assertIsNone(a._warm_trace_identity)
         self.assertEqual(native.traces, {})

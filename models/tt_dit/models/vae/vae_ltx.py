@@ -1634,13 +1634,22 @@ class LTXVideoEncoder(Module):
                 # Allocate the trace input and run the prep run now (below every capture); the trace
                 # itself is recorded later by capture_traces(), after every other persistent allocation.
                 tracer = Tracer(self.encode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
-                self._encode_tracers[key] = tracer
                 # A host round-trip cannot be captured: the downsample gathers on device inside the trace.
-                self._set_device_gather(True)
                 try:
-                    sample_tt = tracer.prepare(sample_tt, logical_h, logical_w)
-                finally:
-                    self._set_device_gather(False)
+                    self._set_device_gather(True)
+                    try:
+                        sample_tt = tracer.prepare(sample_tt, logical_h, logical_w)
+                    finally:
+                        self._set_device_gather(False)
+                except BaseException:
+                    # Staging can retain inputs even when prepare() never completes. Do not cache
+                    # the failed tracer or let a secondary release failure replace the original error.
+                    try:
+                        tracer.release_trace()
+                    except BaseException:
+                        logger.exception("image encoder: failed to release interrupted preparation")
+                    raise
+                self._encode_tracers[key] = tracer
                 self._encode_logical_hw[key] = self._last_logical_hw
                 logger.info(f"image encoder: trace input + prep run for {key}, capture deferred")
             elif tracer is not None and tracer.trace_captured:
@@ -1733,6 +1742,7 @@ class LTXVideoEncoder(Module):
 
     def release_trace(self) -> None:
         """Release every encode capture before rebuilding or unloading weights."""
+        self.capture_open = False
         for tracer in self._encode_tracers.values():
             tracer.release_trace()
         self._encode_tracers.clear()

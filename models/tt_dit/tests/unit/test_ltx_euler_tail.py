@@ -418,6 +418,7 @@ class EulerTraceContract(unittest.TestCase):
             transformer=transformer,
             _audio_adapter=None,
             vae_decoder=None,
+            vae_encoder=None,
         )
         ns["release_traces"](pipeline)
         self.assertEqual(order, ["tail", "producer", "prompt_clear", "prompt_clear"])

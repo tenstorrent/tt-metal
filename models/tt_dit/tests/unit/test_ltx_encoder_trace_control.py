@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""CPU lifetime controls executing production encoder methods with a fake Tracer."""
+"""CPU encoder lifetime controls, including real Tracer transitions with fake native transfers."""
 import ast
 import os
 import time
@@ -190,7 +190,7 @@ class EncoderTraceTests(unittest.TestCase):
         for eager, expected in (("", [False, False, True, True]), ("enc", [False, False])):
             with self.subTest(eager=eager), patch.dict(os.environ, {"LTX_GEN_EAGER_STAGES": eager}):
                 calls = []
-                enc = SimpleNamespace(traced=True, capture_open=False)
+                enc = SimpleNamespace(traced=True, capture_open=False, _encode_tracers={})
                 pipe = SimpleNamespace(vae_encoder=enc, _warmup_encode=lambda h, w: calls.append(enc.traced))
                 exec(
                     code,
@@ -350,7 +350,7 @@ class EncoderLifecycleTests(unittest.TestCase):
         torch.testing.assert_close(self.enc.forward(self.image() + 2), self.image() + 2)
         self.assertEqual(self.created[-1].replay_count, 1)
 
-    def check_warmup_failure(self, error_type, shape, fail_eager=False):
+    def check_warmup_failure(self, error_type, shape, fail_eager=False, release_error=False):
         # Existing valid state is unrelated to this two-shape transaction and must survive.
         self.enc.forward(self.image(12))
         self.enc.capture_traces()
@@ -363,7 +363,12 @@ class EncoderLifecycleTests(unittest.TestCase):
             if h == shape and self.enc.traced != fail_eager:
                 raise error
             return original(x, h, w)
-        with patch.object(self.enc, "encode_device", fail):
+        original_release = self.tracer_type.release_trace
+        def release(tracer):
+            original_release(tracer)
+            if release_error:
+                raise RuntimeError("secondary warmup cleanup failure")
+        with patch.object(self.enc, "encode_device", fail), patch.object(self.tracer_type, "release_trace", release):
             with self.assertRaises(error_type) as caught:
                 self.warm()
         self.assertIs(caught.exception, error)
@@ -381,6 +386,12 @@ class EncoderLifecycleTests(unittest.TestCase):
         for size in (4, 8, 12):
             torch.testing.assert_close(self.enc.forward(self.image(size) + 1), self.image(size) + 1)
         self.assertEqual(len(self.enc._encode_tracers), 3)
+
+    def test_warmup_rollback_cleanup_failure_preserves_runtime_error(self):
+        self.check_warmup_failure(RuntimeError, 8, release_error=True)
+
+    def test_warmup_rollback_cleanup_failure_preserves_interrupt(self):
+        self.check_warmup_failure(KeyboardInterrupt, 8, release_error=True)
 
 
 def _preparation_case(error_type, phase, release_error):
