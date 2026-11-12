@@ -21,7 +21,7 @@ from .base import AdapterState, UnsupportedTrainingConfig
 from .hub import model_dir
 from .peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
 
-SUPPORTED_DTYPES = ("bfloat16", "torch.bfloat16")
+SUPPORTED_DTYPES = ("bfloat16",)
 TILE = 32
 
 # The HF projections each LoRA-able layer of ttml's Llama holds, and the regex ``LoraModel`` matches

@@ -79,7 +79,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 |---|---|---|
 | `dataset_id` | | `sst2`, `alpaca` or `custom`. |
 | `model_name` | | An HF hub id or a local HF model directory. |
-| `dtype` | `bfloat16` | Must be bf16; `torch.bfloat16` is accepted too. |
+| `dtype` | `bfloat16` | Must be `bfloat16`. |
 | `max_length` | | Tokens per example: a multiple of 32, at most the model's `max_position_embeddings`. |
 | `batch_size` | | Examples per micro-batch. |
 | `gradient_accumulation_steps` | `1` | Micro-batches per optimizer step. |

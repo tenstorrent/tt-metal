@@ -95,6 +95,7 @@ def test_gradient_checkpointing_passes():
     "overrides, hf_overrides, error",
     [
         ({"dtype": "float32"}, {}, "dtype: ttml Llama weights"),
+        ({"dtype": "torch.bfloat16"}, {}, "dtype: ttml Llama weights"),
         ({"max_length": 48}, {}, "max_length: must be a multiple of 32"),
         ({"max_length": 256}, {}, "max_length: exceeds the model's max_position_embeddings"),
         ({"lora": {"r": 4, "alpha": 8, "target_modules": ATTENTION, "task_type": "SEQ_CLS"}}, {}, "lora.task_type"),
