@@ -112,6 +112,11 @@ PREFIX_CACHE = os.environ.get("GLM53_STACK_PREFIX", "0") == "1"
 PREFIX_HEAD = int(os.environ.get("GLM53_STACK_PREFIX_HEAD", "16384"))
 SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
 SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
+# GLM53_SPEC_MULTI=1 (default off; design doc/perf/mtp_multi_user_design.md): every live user speculates on a B 16
+# build (GLM53_SPEC_MULTI_W, default 16) with generator.spec_multi_plan's row groups. Until the backend's multi-user
+# step exists (``spec_multi_capable``) the plan only widens the launch: rows the lone step cannot verify keep
+# DraftOutput.num_valid = 0 (plain decode), exactly as the single-user plan's multi-row steps
+SPEC_MULTI_ENV = "GLM53_SPEC_MULTI"
 
 
 def spec_enabled(env=os.environ) -> bool:
@@ -166,6 +171,25 @@ def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.envir
         return types["SpecReject"](
             reason=f"the stack's speculative step drafts exactly K = {K} (GLM53_SPEC_K); num_speculative_tokens {req}",
             supported_k=(K,),
+        )
+    if env.get(SPEC_MULTI_ENV, "0") == "1":
+        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_k_by_rows
+
+        W = int(env.get("GLM53_SPEC_MULTI_W", "16") or 16)
+        if not K + 1 <= B <= W:
+            return types["SpecReject"](
+                reason=f"{SPEC_MULTI_ENV}=1: max_num_seqs {B} outside [K + 1, {W}] (the B {W} build's verify width)",
+                supported_k=tuple(k for k in (1, 2, 3) if k + 1 <= B) if B <= W else (),
+            )
+        return types["SpecPlan"](
+            effective_k=K,
+            lanes_per_request=1,
+            extra_bytes_per_seq=0,
+            extra_bytes_per_token=0,
+            accept_modes=("argmax_ids",),
+            drafter_state="internal",
+            supports_narrow_decode=True,
+            k_by_rows=spec_multi_k_by_rows(K, B, W),
         )
     if not K + 1 <= B <= SPEC_MAX_ROWS:
         ok = tuple(k for k in (1, 2, 3) if k + 1 <= B) if B <= SPEC_MAX_ROWS else ()

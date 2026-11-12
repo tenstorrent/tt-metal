@@ -687,6 +687,52 @@ def spec_widths(K: int, chunk: int, widths=()) -> dict:
     return dict(w=w, lone=lone, wv=wv, cu=cu, ch=ch, mode=mode, ts=ts)
 
 
+def spec_multi_plan(K: int, live: int, widths=(), full: int = 16) -> dict:
+    """GLM53_SPEC_MULTI (design: models/demos/glm53_flash/doc/perf/mtp_multi_user_design.md; pure): the multi-user
+    speculative step's row layout for ``live`` speculating users on a build with decode programs at ``widths`` (its
+    narrow <= 4 and native widths) and the full width ``full`` (the B 16 1 M build: narrow (1, 2, 4), native (8,), 16):
+      g      rows per user = min(K + 1, full // live): user u's verify group is rows [u g, u g + g) -- its token rows, its
+             candidate KDA states / conv histories, per-row positions c_u + j, page-table rows = user u's row
+      k      drafts per user = g - 1 (0: no speculation at this many live users -- live > full // 2)
+      slots  the generator slots the users occupy: the group bases u g (rows u g + 1 .. u g + g - 1 are the group's
+             candidate rows and hold no live request, as slot 0's rows 1..K in the lone step)
+      rows   live x g, the verify's live rows
+      wv     the verify's program width: the smallest width >= rows (one user, K 3: 4 = today's lone narrow width)
+      cu/ch  the MTP catch-up width (= wv: every group's K + 1 rows) / the chained rows' width (the smallest width >=
+             live: one row per user per chain step)"""
+    K, live, full = int(K), int(live), int(full)
+    assert K >= 1 and live >= 1 and full >= 1, (K, live, full)
+    ws = sorted({int(w) for w in widths} | {full})
+    g = min(K + 1, full // live) if live <= full else 1
+    if g < 2:
+        return dict(g=1, k=0, slots=tuple(range(live)), rows=live, wv=None, cu=None, ch=None)
+    rows = live * g
+
+    def pick(n):
+        return min(w for w in ws if w >= n)
+
+    return dict(g=g, k=g - 1, slots=tuple(u * g for u in range(live)), rows=rows, wv=pick(rows), cu=pick(rows),
+                ch=pick(live))  # fmt: skip
+
+
+def spec_multi_k_by_rows(K: int, max_num_seqs: int, full: int = 16) -> tuple:
+    """the plugin's ``SpecPlan.k_by_rows`` for the multi-user step (pure): ascending (max live rows, drafts per row)
+    entries, k = ``spec_multi_plan``'s k at that many live users; live counts past the last k >= 1 keep the last cap
+    (the contract's floor is k >= 1) and decline per row (``DraftOutput.num_valid`` = 0). Reaches ``max_num_seqs``."""
+    out = []
+    for live in range(1, int(max_num_seqs) + 1):
+        k = spec_multi_plan(K, live, (), full)["k"]
+        if k == 0:
+            break
+        if out and out[-1][1] == k:
+            out[-1] = (live, k)
+        else:
+            out.append((live, k))
+    if out and out[-1][0] < int(max_num_seqs):
+        out.append((int(max_num_seqs), out[-1][1]))
+    return tuple(out)
+
+
 def mtp_prefill_span(chunk_start: int, n_valid: int, prompt_len: int) -> tuple:
     """the MTP-cache rows a prefill chunk fills (pure): MTP position p takes (the prompt token at p + 1, the main
     model's final-norm hidden of position p) -- vLLM MTP semantics, as the catch-up's row j (token a_j, h row j) at
