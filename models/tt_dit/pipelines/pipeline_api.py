@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+import ttnn
+
 if TYPE_CHECKING:
     from ..layers.module import Module
     from .events import PipelineEventCallback
@@ -29,6 +31,9 @@ class Pipeline:
     A subclass calls ``Pipeline.__init__`` before it builds modules or runs a warm-up, registers
     every eviction through ``register_coresident_exclusions`` or ``register_evictable``, and
     implements ``_run``. It does not define ``__call__``: that would skip the rule.
+
+    Tracing is decided at construction. A call that still passes the former per-call ``traced``
+    argument runs as the pipeline was constructed, whatever the value, and logs a warning.
     """
 
     def __init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
@@ -101,13 +106,65 @@ class Pipeline:
             msg = f"{', '.join(widened)} cannot be set on a pipeline constructed with trace=False"
             raise ValueError(msg)
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        if "traced" in kwargs:
-            msg = (
-                "tracing is fixed when the pipeline is constructed (trace=...); a call takes no `traced` "
-                "argument. For one eager run, use run_untraced()"
+    def warn_if_no_trace_region(self, mesh_device: ttnn.MeshDevice, *, by_default: bool) -> None:
+        """Log when the pipeline traces on a mesh opened without a trace region.
+
+        ttnn then takes the trace buffers from DRAM, which works but shrinks what the model has.
+        ``by_default`` says the caller did not ask for tracing: the pipeline's default turned it on.
+        """
+        # Device-free tests construct pipelines with no device, or a stand-in for one.
+        if not self.trace or not isinstance(mesh_device, ttnn.MeshDevice):
+            return
+        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
+        if view.total_bytes_per_bank * view.num_banks > 0:
+            return
+        name = type(self).__name__
+        if by_default:
+            logger.warning(
+                f"{name}: tracing is on by default on this mesh and no trace region is reserved, so trace "
+                "buffers are taken from DRAM. Pass trace=False to run eager, or open the mesh with a "
+                "trace_region_size."
             )
-            raise TypeError(msg)
+        else:
+            logger.warning(f"{name}: trace=True with no trace region reserved; trace buffers are taken from DRAM.")
+
+    def _drop_legacy_traced(self, kwargs: dict[str, Any]) -> None:
+        """Remove a per-call ``traced`` from ``kwargs``; it never changes how the call runs."""
+        if "traced" not in kwargs:
+            return
+        value = kwargs.pop("traced")
+        trace = bool(getattr(self, "trace", False))
+        name = type(self).__name__
+        # Two flags: a disagreement must be reported even after an agreeing call was.
+        if value is None or bool(value) == trace:
+            if not getattr(self, "_legacy_traced_warned", False):
+                self._legacy_traced_warned = True
+                logger.warning(
+                    f"{name}: the per-call `traced` argument is deprecated and ignored; it will be removed "
+                    "after tt-inference-server passes trace at construction (TDM-130 follow-up). Tracing is "
+                    "set at construction (trace=...)."
+                )
+            return
+        if getattr(self, "_legacy_traced_disagreement_warned", False):
+            return
+        self._legacy_traced_disagreement_warned = True
+        if trace:
+            logger.warning(
+                f"{name}: traced=False IGNORED: the pipeline was constructed with trace=True, so this call "
+                "runs traced and its trace buffers stay in use (in DRAM when the mesh has no trace region). "
+                "To run eager, construct the pipeline with trace=False. run_untraced() gives one eager call "
+                "where the pipeline supports it, on most pipelines only before the first traced call."
+            )
+        else:
+            cause = " because it offloads weights (TDM-130)" if self.offload_weights else ""
+            logger.warning(
+                f"{name}: traced=True IGNORED: the pipeline was constructed with trace=False and runs "
+                f"eager{cause}. To trace, construct the pipeline with trace=True; an offloading pipeline "
+                "cannot trace."
+            )
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        self._drop_legacy_traced(kwargs)
         self._check_trace_rule()
         self._check_component_flags(kwargs)
         return self._run(*args, **kwargs)

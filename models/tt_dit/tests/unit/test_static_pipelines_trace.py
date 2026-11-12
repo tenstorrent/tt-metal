@@ -83,8 +83,6 @@ def test_trace_is_a_config_field_with_the_former_default(
 def test_calls_go_through_the_base(pipeline_class: type[Pipeline], config_class: type, default: bool) -> None:
     assert issubclass(pipeline_class, Pipeline)
     assert pipeline_class.__call__ is Pipeline.__call__
-    with pytest.raises(TypeError, match="takes no `traced` argument"):
-        object.__new__(pipeline_class)(prompts=["a"], num_inference_steps=1, traced=True)
 
 
 @pytest.mark.parametrize(("pipeline_class", "config_class", "default"), _PIPELINES)

@@ -40,8 +40,6 @@ def test_call_raises_on_an_offloading_traced_pipeline(pipeline_class: type[WanPi
 @pytest.mark.parametrize("pipeline_class", [WanPipeline, WanPipelineI2V, WanPipelineSVI])
 def test_calls_go_through_the_base(pipeline_class: type[WanPipeline]) -> None:
     assert pipeline_class.__call__ is Pipeline.__call__
-    with pytest.raises(TypeError, match="takes no `traced` argument"):
-        object.__new__(pipeline_class)(prompts=["a"], num_inference_steps=1, traced=True)
 
 
 @pytest.mark.parametrize("blackhole", [False, True])
