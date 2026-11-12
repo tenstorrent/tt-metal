@@ -142,6 +142,45 @@ computes and attends every position up to prompt_len" and its cap formula.** tt-
   past_cap_written == 0). The contract / acks / runner tests compare [lo, cap) and [0, cap) under cap
   (caches.served_end); under end every range is as before.
 
+**P.51 (OWNER-AUTHORIZED CONTRACT CHANGE 2026-11-12, decode's proposal: Kartik Paigwar, #blaze-deepseek-v4
+2026-11-12; the model's side only, tt-d-gen not yet changed). `DECODER_SKIP=decode` (the shipped default stays `off`
+until the owner decides from the A/B).**
+- **What tt-d-gen will send.** Prefill stop P = (N - 128) // KV_BLOCK_SIZE x KV_BLOCK_SIZE (N = prompt length; N 5002
+  -> P 4864); chunks with actual_end <= P (positions outside [actual_start, actual_end) are pad); decode runs [P, N)
+  through all 40 layers itself (DeepSeek's Decoder SWA Bounded Replay, arXiv 2609.19969 3.2.2). The chunk header gains
+  `global_write_start` = Xp, the frontier of the long-range caches decode / the prefix cache already hold: header
+  {slot_id, actual_start, actual_end, global_write_start}; `prefill_chunk(..., global_write_start=None)` (missing =
+  actual_start: no replay, so today's engine calls still work). Example (N 5002, Xp 4096): encoder replay
+  [3968, 4096), new computation [4096, 4864), decode [4864, 5002).
+- **Per valid position p of a chunk, as implemented** (tt/model.py begin_chunk(.., last=False, write_start=g),
+  TtDS41Model.write_from, tt/compressor.py TtCompressor.write(write_from=) / _write_from):
+  - p < g (encoder replay): layers 0-19 run; every encoder window is truncated at the chunk's start (begin_chunk's
+    replay: carry masked, start class 0); the compressed KV and index keys (and layer 20's) are read as cached and no
+    row of a position < g is written: the served row write starts at g (the chunk's rows shifted by (g - start) / r and
+    written as a chunk at g), the private attention table's rows below g are put back as they were, and a KV source
+    whose chunk lies wholly below g skips its compressor. Layer 20's KV / index head (kv_only) does not run on a chunk
+    wholly below g.
+  - p >= g: layers 0-19 plus layer 20's KV / index head (attn_hc, attn_collapse, attn_norm, compressor), writes as
+    before.
+  - Layers 21-39 (and layer 20's attention / MoE) never run on any chunk; every chunk still acks every served layer
+    0-39 once, in order, naming the engine's (actual_start, actual_end) (tt-d-gen does not know which layers ran).
+  - The window ring (the model's own working rows for the next chunk's carry, never served) is written for every
+    computed position, replayed ones included. A replay under WINDOW_KV_KEEP=full is refused (ValueError): its served
+    0_window_kv of every position would be written below g. A global_write_start above actual_start under any other
+    DECODER_SKIP value is refused (ValueError).
+- **What is served.** History caches (1_compress_kv_r2, 2_index_k_r2, 3_compress_kv_r1, 4_index_k_r1 + aliases) for
+  [0, P); 0_window_kv snapshot of layers 0-19 at P (rows [P - 128, P) at p % 128), written on every chunk. Layers
+  20-39's snapshot records are **not written** under decode (their table entries stay; the bytes are whatever the
+  slot held: zeros on a fresh slot, an earlier request's rows otherwise). Decode must not read them: it rebuilds
+  those windows from P with its own bounded replay.
+- **Checks.** tests/test_decoder_skip_decode.py: no prefix hit, every served byte (history [0, P) and layers 0-19's
+  snapshot) bit-identical between off and decode, both prompts, 5 prompt lengths; decode never writes a decoder
+  snapshot; acks once per layer per chunk; prefix hit: no history record below global_write_start written, rows from
+  it on vs a fresh prefill and vs the golden reported (approximate by design). The framework's ladder / profile drive
+  the model directly with `last` unset: under decode they run every layer (the off path); the contract tests that
+  check layers 20-39's windows (test_contract, test_adapter_acks) measure what decode no longer computes and run on
+  off (DS41-240).
+
 **Index keys (P.39, owner 2026-11-06, PD migration first cut: compatibility with Blaze decode for now; P.42 replaced
 the re-index copies with aliases, above).** Setting
 `INDEX_K_SERVED` (tt/settings.py): `fp8_row192` (default) or `bf16` (the earlier contract: bf16 rows of 128, 256 B,

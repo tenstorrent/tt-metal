@@ -695,8 +695,11 @@ class TtDS41Block:
         def compressor(ctx, x):
             if self.compressor is None:  # (P.31, the decoder tail: the main model's kv_only wrote the chunk's groups)
                 return Keep()
+            lo = self.model.write_from(ctx.start)  # DECODER_SKIP=decode (P.51): no history row below it is written
+            if lo >= ctx.extra["end"]:  # (an encoder replay chunk: its groups are the cached ones, read as they are)
+                return Keep()
             ckv, k = self.compressor(x, ctx.start)
-            self.compressor.write(ckv, k, ctx.start, ctx.extra["end"], ctx.state.compress[i])
+            self.compressor.write(ckv, k, ctx.start, ctx.extra["end"], ctx.state.compress[i], write_from=lo)
             dealloc(ckv)
             dealloc(k)
             return Keep()  # the chunk's rows live in the served caches the indexer and the attention read
@@ -886,6 +889,8 @@ class TtDS41Block:
         rows = h.streams.shape[-2] * self.mesh.shape[SP_AXIS] * (self.mesh.shape[TP_AXIS] if self.own else 1)
         assert rows == self.model.chunk, f"chunk of {rows} rows; the model was built for {self.model.chunk}"
         end = start + rows if end is None else int(end)
+        if self.model.write_from(start) >= end:  # DECODER_SKIP=decode (P.51): a chunk wholly below global_write_start
+            return SKIPPED  # (the KV head writes nothing there, so it does not run)
         ctx = Ctx(self.layer, start, rows, state, extra={"end": end})
         held = h.tensors()  # (as __call__: the wrappers alive until the call returns, FIX.5)
         protect = {id(t) for t in held}
@@ -1100,11 +1105,14 @@ class TtDS41Model:
         self._snap = True  # WINDOW_KV_KEEP=snapshot128 (P.42): this chunk rewrites the served window snapshots
         self._last = False  # P.43: the caller marked this chunk the request's last (begin_chunk(.., last=True))
         self._req = 0  # P.43: the start of the running request when this chunk is its first (0 or a replay start)
+        # DECODER_SKIP=decode (P.51): the first position of this chunk whose history-cache rows are written (the
+        # engine's global_write_start, never below the chunk's start); None = the chunk's start (every row written)
+        self._write_from = None
         mode = settings.get("DECODER_SKIP")
         # (WINDOW_KV_KEEP=ring | none, P.32: begin_chunk truncates a window whose carry is not kept under exact /
         # replay128 and refuses the chunk under off; the decoder tail model never decides it)
         self.skip_mode = mode if tail_of is None else "off"
-        if mode in ("exact", "replay128") and tail_of is None:
+        if mode in ("exact", "replay128", "decode") and tail_of is None:
             assert not self.deep, "DECODER_SKIP and DEEP_LAYERS=tail are two different skips: one at a time"
             self.decoder = [i for i in self.layers if cfg.cand_source >= 0 and i >= cfg.cand_source]
             self.kv_only = frozenset(i for i in self.decoder if cfg.is_kv_source(i))
@@ -1274,7 +1282,14 @@ class TtDS41Model:
     ) -> DS41DeviceState:
         return DS41DeviceState(self, max_seq, slabs=slabs, keep_history=keep_history, keep=keep)
 
-    def begin_chunk(self, tokens: torch.Tensor, start: int, last: bool | None = None, replay: bool = False) -> None:
+    def begin_chunk(
+        self,
+        tokens: torch.Tensor,
+        start: int,
+        last: bool | None = None,
+        replay: bool = False,
+        write_start: int | None = None,
+    ) -> None:
         """The host input of every engram layer: hash the chunk's ids (pad past actual_end skipped, DS41-26) with the
         active slot's tail, look the rows up (memory-mapped) and send them to the device once. Also empties the
         active slot's ChunkMemo (INDEXER_GLUE=on, P.16; FIX.5): every run of a chunk builds its shared tensors
@@ -1287,10 +1302,25 @@ class TtDS41Model:
         DECODER_SKIP=off.
         ``replay`` (P.31): the chunk starts a request on a cached prefix, ``replay_rows`` before its new tokens (the
         caller pulls back). Under replay128 every layer's window is truncated at ``start`` (the carry masked: start
-        class 0); under exact nothing changes (the pull-back recomputes exactly from the complete caches)."""
+        class 0); under exact nothing changes (the pull-back recomputes exactly from the complete caches).
+        ``write_start`` (P.51, DECODER_SKIP=decode only: the engine's global_write_start; None = ``start``): positions
+        below it are an encoder replay: no history-cache row (compressed KV, index keys, layer 20's caches) below it is
+        written, layer 20's KV head does not run on a chunk wholly below it, and the chunk is a replay (every window
+        truncated at ``start``, as ``replay``) when it starts below it."""
+        g = int(start) if write_start is None else int(write_start)
+        if g > start:
+            if self.skip_mode != "decode":
+                raise ValueError(
+                    f"global_write_start {g} > the chunk's start {start} (an encoder replay) needs DECODER_SKIP=decode "
+                    f"(this model: {self.skip_mode})"
+                )
+            assert g % 32 == 0, f"global_write_start {g} must be 32-aligned (a kv block)"
+            replay = True  # (DeepSeek's Encoder SWA Bounded Replay: every window truncated at the replay start)
+        self._write_from = g if g > start else None
         self._skip = bool(self.decoder) and last is False and self.skip_mode != "off"
-        # WINDOW_KV_KEEP=snapshot128 (P.42): every chunk not marked not-last rewrites the served window snapshots
-        self._snap = last is not False
+        # WINDOW_KV_KEEP=snapshot128 (P.42): every chunk not marked not-last rewrites the served window snapshots;
+        # DECODER_SKIP=decode (P.51): every chunk (the encoder's windows are decode's handoff; the decoder's never run)
+        self._snap = last is not False or self.skip_mode == "decode"
         self._last = last is True
         if start == 0 or replay:  # (P.43: the request starts here, the clamp of last_start)
             self._req = int(start)
@@ -1299,6 +1329,11 @@ class TtDS41Model:
         st = self.state
         if self._tail_mode:
             self.build_tail()
+        if self._write_from is not None and st is not None and st.keep == "full":
+            raise ValueError(
+                "DECODER_SKIP=decode, an encoder replay (global_write_start > start) with WINDOW_KV_KEEP=full: the served "
+                "0_window_kv of every position would be written below global_write_start; serve snapshot128"
+            )
         if st is not None and st.keep != "full":  # WINDOW_KV_KEEP=ring | none (P.32, host only)
             self._window_policy(st, start, replay)
         elif self.replay and st is not None and (replay or st.cut is not None):  # (host only)
@@ -1341,7 +1376,7 @@ class TtDS41Model:
             if not c.history:
                 c.origin = start
             if start > 0 and i in reads:
-                if replay and (self.replay or st.keep == "none"):
+                if replay and (self.replay or self.skip_mode == "decode" or st.keep == "none"):
                     want = start
                 elif not c.carry_ready(start):
                     if self.skip_mode == "off" and c.history and not (c.origin is not None and start <= c.origin):
@@ -1363,6 +1398,11 @@ class TtDS41Model:
         st.cut = start if any(v is not None for v in cut.values()) else None
 
     # ------------------------------------------------------------------ SKIP_TAIL_START (P.43)
+    def write_from(self, start: int) -> int:
+        """DECODER_SKIP=decode (P.51): the first position of the chunk at ``start`` whose history-cache rows are written
+        (begin_chunk's write_start when above ``start``, else ``start``)."""
+        return int(start) if self._write_from is None else max(int(start), self._write_from)
+
     def tail_from_cap(self) -> bool:
         """SKIP_TAIL_START=cap (P.43): the last chunk's start and replay128's tail placed relative to decode's cap."""
         return settings.get("SKIP_TAIL_START") == "cap"
@@ -1389,7 +1429,7 @@ class TtDS41Model:
                 lim = (
                     min(end - self.last_rows, cap - self.exact_rows()) if self.tail_from_cap() else end - self.last_rows
                 )
-            elif self.tail_from_cap():
+            elif self.skip_mode == "replay128" and self.tail_from_cap():
                 lim = min(end - w, cap - w)
         return max(int(request_start), 0, lim // 32 * 32)
 
@@ -1408,7 +1448,7 @@ class TtDS41Model:
         before any decoder work) a start past last_start(end) whose decoder rows before it were not computed (exact: a
         decoder window's carry masked, skipped or truncated; replay128: always, but at the request's own start), so
         decode's snapshot rows [cap - 128, cap) would be inexact or missing. The model never pulls back by itself."""
-        if not (self._last and self.tail_from_cap() and self.decoder and self.skip_mode != "off"):
+        if not (self._last and self.tail_from_cap() and self.decoder and self.skip_mode in ("exact", "replay128")):
             return
         lim = self.last_start(end, self._req if start == self._req else 0)
         if start <= lim:
@@ -1428,12 +1468,14 @@ class TtDS41Model:
         )
 
     def use_decoder_skip(self, mode: str) -> None:
-        """Tests only (tests/bringup/test_window_ring.py, P.32): run a model loaded with DECODER_SKIP=replay128 (its
-        decoder tail built) as exact, replay128 or off (host only: the same decoder layers, the numbers
-        ``replay_rows`` / ``last_rows`` of the value; off: no chunk skips the decoder, every window carry must be kept).
-        """
-        assert mode in ("off", "exact", "replay128"), mode
-        assert self.decoder and self.tail_chunk, "use_decoder_skip needs a model loaded with DECODER_SKIP=replay128"
+        """Tests only (tests/bringup/test_window_ring.py, P.32; tests/test_decoder_skip_decode.py, P.51): run a model
+        loaded with a DECODER_SKIP other than off as exact, decode or off (and as replay128 when loaded with it: its
+        decoder tail built) (host only: the same decoder layers, the numbers ``replay_rows`` / ``last_rows`` of the
+        value; off: no chunk skips the decoder, every window carry must be kept). The serving runtime reads
+        ``skip_mode``, so its chunks follow the value too."""
+        assert mode in ("off", "exact", "replay128", "decode"), mode
+        assert self.decoder, "use_decoder_skip needs a model loaded with DECODER_SKIP=exact / replay128 / decode"
+        assert mode != "replay128" or self.tail_chunk, "replay128 needs a model loaded with DECODER_SKIP=replay128"
         self.skip_mode = mode
         self.replay = mode == "replay128"
         w = self.cfg.window

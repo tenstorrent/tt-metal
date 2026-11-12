@@ -35,6 +35,13 @@ PREFILL_END=end: P.42's path, everything up to actual_end.
      command queue, no host sync
 No host round trip inside a layer (the ladder gates host_transfers_per_layer at 0).
 
+DECODER_SKIP=decode (P.51, decode's proposal, owner 2026-11-12): every chunk is marked not the request's last, so the
+model runs layers 0-19, layer 20's KV / index head (kv_only) and skips layers 21-39; every served layer is still acked
+once per chunk (tt-d-gen does not know which layers ran). The chunk's optional ``global_write_start`` (the frontier of
+the long-range caches decode / the prefix cache hold; missing = actual_start: no replay) goes to begin_chunk: no
+history-cache row below it is written, and a chunk starting below it is an encoder replay (windows truncated at
+actual_start). Other DECODER_SKIP values refuse a global_write_start above actual_start (ValueError).
+
 Import-light: all device / model imports happen inside the methods.
 """
 
@@ -213,7 +220,17 @@ class DS41PrefillRuntime:
         return nat
 
     def _run(
-        self, inp, kv, slot, start, end, acks: bool, d2h_service=None, metadata_msg=None, last: bool | None = None
+        self,
+        inp,
+        kv,
+        slot,
+        start,
+        end,
+        acks: bool,
+        d2h_service=None,
+        metadata_msg=None,
+        last: bool | None = None,
+        write_start: int | None = None,
     ):
         ttnn = self._ttnn
         model = self.model
@@ -236,7 +253,10 @@ class DS41PrefillRuntime:
             return
         ids = self._host_ids(inp, start, run_end)
         st.note_tokens(ids, start, run_end)
-        model.begin_chunk(ids, start, last=last)  # (P.30 / P.31: False skips the decoder; None = not told, every layer)
+        if model.skip_mode == "decode":  # P.51: the decoder never runs in prefill (decode runs [P, N) itself)
+            last = False
+        # (P.30 / P.31: False skips the decoder; None = not told, every layer. P.51: write_start = global_write_start)
+        model.begin_chunk(ids, start, last=last, write_start=write_start)
         h = None
         for k, i in enumerate(self.layer_ids):
             if k == 0 or (self.gap_feed is not None and i in self.gap_feed.starts):
@@ -297,6 +317,7 @@ class DS41PrefillRuntime:
         d2h_service=None,
         metadata_msg=None,
         last=None,
+        global_write_start=None,
         **_unused,
     ):
         """``last`` (P.30): whether the chunk is the request's last. tt-d-gen's chunk header has no such flag yet, so
@@ -306,7 +327,10 @@ class DS41PrefillRuntime:
         caller starts the request's last chunk at or before model.last_start(actual_end) (SKIP_TAIL_START, P.43:
         cap: exact min(end - 2688, cap - 2668), replay128 min(end - 128, cap - 128), cap = end // 64 x 64 (P.49); the
         chunk before it ending there); the model refuses a later start (ValueError), it never pulls back. Under
-        WINDOW_KV_KEEP=snapshot128 every layer's snapshot is then written on the last chunk."""
+        WINDOW_KV_KEEP=snapshot128 every layer's snapshot is then written on the last chunk.
+        ``global_write_start`` (P.51, chunk header field 4; None = actual_start): under DECODER_SKIP=decode no
+        history-cache row below it is written and a chunk starting below it replays the encoder (module docstring);
+        other DECODER_SKIP values refuse a value above actual_start."""
         c, m = self.config.chunk_size, self.config.max_seq_len
         start, end = int(actual_start), int(actual_end)
         assert start % 32 == 0, f"actual_start {start} must be tile (32) aligned"
@@ -314,6 +338,7 @@ class DS41PrefillRuntime:
         assert start + c <= m, "chunk overruns the slot (the server pulls the last chunk back)"
         assert 0 <= int(slot_id) < kv_cache.contract.num_users, (slot_id, kv_cache.contract.num_users)
         assert tuple(input_tensor.shape)[-1] * self.geo.sp == c, input_tensor.shape
+        gws = start if global_write_start is None else max(start, int(global_write_start))
         self._run(
             input_tensor,
             kv_cache,
@@ -324,6 +349,7 @@ class DS41PrefillRuntime:
             d2h_service=d2h_service,
             metadata_msg=metadata_msg,
             last=None if last is None else bool(last),
+            write_start=gws,
         )
         return None  # last / single rank: the populated cache is the output
 

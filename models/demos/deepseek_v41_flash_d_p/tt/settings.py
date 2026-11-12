@@ -998,7 +998,7 @@ TABLE = {
     ),
     "DECODER_SKIP": Setting(
         "off",
-        ("off", "exact", "replay128"),
+        ("off", "exact", "replay128", "decode"),
         "P.30 (owner 2026-11-03, the Causal Encoder-Decoder's decoder skip, arXiv 2609.19969; default off until the "
         "owner decides). off = every layer on every chunk (the caller's ``last`` is ignored). exact = on a chunk the "
         "caller marks not the request's last (TtDS41Model.begin_chunk(tokens, start, last=False)) layers 0-19 run in "
@@ -1013,7 +1013,17 @@ TABLE = {
         "every window truncated to the tail; a request on a cached prefix starts replay_rows (128) before its new "
         "tokens, begin_chunk(.., replay=True): every layer's window truncated at that start. Where the request's last "
         "chunk starts and where replay128's tail starts: SKIP_TAIL_START (the caller asks TtDS41Model.last_start(end)). "
-        "last=None (not told: the harness, the engine) runs every layer in both values",
+        "last=None (not told: the harness, the engine) runs every layer in both values. "
+        "decode = P.51 (OWNER 2026-11-12, decode's proposal, Kartik Paigwar: prefill never runs layers 21-39; decode "
+        "runs [P, N) through all 40 layers itself, P = (N - 128) // KV_BLOCK_SIZE x KV_BLOCK_SIZE): the serving runtime "
+        "(tt/runners/adapter.py) marks every chunk not-last, so layers 0-19 run in full, layer 20 only its KV / index "
+        "head (kv_only: the compressed KV and index keys) and layers 21-39 never; every layer is still acked. Per "
+        "position p of a chunk with the engine's global_write_start g (begin_chunk(.., write_start=g)): p < g is an "
+        "encoder replay (layers 0-19, every window truncated at the chunk's start, DeepSeek's Encoder SWA Bounded "
+        "Replay; no history-cache row below g is written: compressed KV, index keys, layer 20's caches; layer 20's KV "
+        "head does not run on a chunk wholly below g); p >= g as today. Layers 0-19's window snapshot is written on "
+        "every chunk; layers 20-39's never (decode recomputes their windows). The model's own callers (the ladder, "
+        "the profile: last unset) run every layer, as off; BRINGUP_CHUNK_LAST=0 times the skipped chunk",
     ),
     "WINDOW_KV_KEEP": Setting(
         "snapshot128",
