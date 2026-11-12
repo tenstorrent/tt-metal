@@ -84,7 +84,7 @@ docopt==0.6.2
 tabulate==0.9.0
 blobfile==3.1.0 # Required for llama3
 numpy>=1.24.4,<2
-pydantic==2.9.2 # Required for Superset benchmarking and ttml.unified_trainer configs
+pydantic==2.9.2 # Required for Superset benchmarking
 fiftyone==0.25.2 # Required for Yolo benchmarking
 jiwer==3.0.5 # Required for speech recognition evaluation
 toolz==0.12.0 # Required for Save environment data step
