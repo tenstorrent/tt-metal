@@ -254,8 +254,8 @@ class Trainer(ABC):
         """Return ``(total_params, trainable_params)``."""
 
     @abstractmethod
-    def current_learning_rate(self) -> float:
-        pass
+    def current_learning_rate(self) -> list[float]:
+        """The LR of each optimizer, in ``config.optimizer`` order."""
 
     @abstractmethod
     def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:

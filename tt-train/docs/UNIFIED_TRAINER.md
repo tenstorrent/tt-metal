@@ -81,17 +81,16 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `model_name` | | An HF hub id or a local HF model directory. |
 | `dtype` | `bfloat16` | Must be bf16; `torch.bfloat16` is accepted too. |
 | `max_length` | | Tokens per example: a multiple of 32, at most the model's `max_position_embeddings`. |
-| `learning_rate` | | AdamW's learning rate, constant. |
 | `batch_size` | | Examples per micro-batch. |
 | `gradient_accumulation_steps` | `1` | Micro-batches per optimizer step. |
 | `num_epochs` | `1` | |
 | `max_steps` | `0` | Stop after this many optimizer steps; 0 runs every epoch. |
-| `weight_decay` | `0.0` | AdamW's decoupled weight decay. |
 | `max_grad_norm` | `0.0` | Clip the global gradient norm to this; 0 disables clipping. |
 | `val_steps_freq` | `0` | Validate before training and every this many optimizer steps; 0 disables validation. |
 | `gradient_checkpointing` | `false` | Recompute activations in the backward pass to save memory. |
 | `master_dtype` | `bfloat16` | `float32` keeps fp32 master weights for AdamW; full fine-tuning needs it (see below). |
 | `seed` | `0` | Seeds initialization, LoRA dropout and data shuffling. |
+| `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
 | `lora` | unset | `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). Unset trains every weight. |
 | `custom_dataset` | unset | `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
 | `metrics` | | `steps_freq` (10): train metrics are averaged over and logged every this many steps. `train_metrics` (`[loss]`, `learning_rate` also works), `val_metrics` (`[loss]`). |
@@ -102,6 +101,25 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 to most weights, so a bf16 weight doesn't move. `master_dtype: float32` stores the trainable weights in fp32; the
 forward and backward passes still run in bf16. LoRA doesn't need it, as its adapters start at zero. See
 [fp32 master weights](MIXED_PRECISION.md#fp32-master-weights).
+
+### Several optimizers
+
+A list under `optimizer` trains different weights with different optimizers or settings:
+
+```yaml
+optimizer:
+  - lr: 1.0e-3
+    modules: [attention_norm, mlp_norm]  # these weights train here
+  - lr: 1.0e-4                           # no modules: every other trainable weight
+    weight_decay: 0.01
+```
+
+A trainable weight goes to the first optimizer whose `modules` lists a `/`-separated part of its ttml name (for
+example `llama/blocks/0/attention/qkv_linear/lora_A`), as in ttml's param groups, else to the one optimizer without
+`modules`. Every trainable weight must get an optimizer and every optimizer a weight; `setup` raises otherwise, so a
+weight is never left untrained by a missing pattern. One optimizer without `modules` trains every trainable weight.
+With several optimizers, the `learning_rate` metric is logged per optimizer, as `learning_rate/0`, `learning_rate/1`
+and so on, in list order.
 
 ---
 
@@ -166,8 +184,9 @@ finally:
   `on_validation_end`, `on_train_end` and `on_error`. They don't have to subclass `Callback`.
 - **Stopping.** An exception from a callback ends the run: `on_error` sees it, then `train` raises it. To cancel a
   job, raise an exception of your own and catch it around `train`.
-- **Reading the run.** `trainer.loss_to_float(loss)`, `trainer.current_learning_rate()`,
-  `trainer.parameter_counts()` (total, trainable), `trainer.global_step` and `trainer.epoch`.
+- **Reading the run.** `trainer.loss_to_float(loss)`, `trainer.current_learning_rate()` (a list, one LR per
+  optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step` and
+  `trainer.epoch`.
 - **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint, and
   `trainer.load_checkpoint(path)` loads one.
 

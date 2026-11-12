@@ -53,6 +53,14 @@ def test_metrics_averages_the_loss_over_steps_freq_and_logs_validation():
     assert [step for metrics, step, commit in logged.calls if commit] == [1, 2, 3, 4]
 
 
+def test_metrics_logs_each_learning_rate_of_several_optimizers():
+    logged = LoggedMetrics()
+    trainer = FakeTrainer([logged, MetricsCallback()])
+    trainer.current_learning_rate = lambda: [0.1, 0.01]
+    run(trainer, metrics={"steps_freq": 4, "train_metrics": ["learning_rate"], "val_metrics": []})
+    assert logged.logged() == [({"train/learning_rate/0": 0.1, "train/learning_rate/1": 0.01}, 4)]
+
+
 def test_metrics_logs_only_what_is_asked_for():
     logged = LoggedMetrics()
     run(FakeTrainer([logged, MetricsCallback()]), metrics={"steps_freq": 4, "train_metrics": [], "val_metrics": []})

@@ -11,6 +11,7 @@ from .dataset import CustomDatasetConfig
 from .logging import LoggingConfig
 from .lora import LoraConfig
 from .metrics import MetricsConfig
+from .optimizer import OptimizerConfigs
 
 
 class TrainerConfig(BaseModel):
@@ -25,10 +26,11 @@ class TrainerConfig(BaseModel):
     model_name: str
     dtype: str = "bfloat16"
 
-    learning_rate: float = Field(ge=0.0)
+    # One optimizer, or a list of them that each train the weights their `modules` match. Every trainable weight
+    # must get an optimizer. `type` picks one (see ``OPTIMIZERS``), and with it the other fields it takes.
+    optimizer: OptimizerConfigs
     batch_size: int = Field(gt=0)
     num_epochs: int = Field(default=1, gt=0)
-    weight_decay: float = Field(default=0.0, ge=0.0)
     gradient_accumulation_steps: int = Field(default=1, gt=0)
     # Validate before training and every this many optimizer steps; 0 disables validation.
     val_steps_freq: int = Field(default=0, ge=0)

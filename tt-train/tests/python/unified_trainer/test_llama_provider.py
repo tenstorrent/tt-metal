@@ -35,7 +35,12 @@ EVERY_PROJECTION = ATTENTION + ["gate_proj", "up_proj", "down_proj"]
 
 
 def config(targets=ATTENTION, **overrides):
-    fields = {"dataset_id": "sst2", "model_name": "meta-llama/Llama-3.2-1B", "learning_rate": 1e-4, "batch_size": 2}
+    fields = {
+        "dataset_id": "sst2",
+        "model_name": "meta-llama/Llama-3.2-1B",
+        "optimizer": {"lr": 1e-4},
+        "batch_size": 2,
+    }
     fields["max_length"] = 64
     if targets is not None:
         fields["lora"] = {"r": 4, "alpha": 8, "target_modules": list(targets)}

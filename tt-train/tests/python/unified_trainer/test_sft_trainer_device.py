@@ -131,7 +131,7 @@ def sft_config(model_dir, tmp_path, checkpoint=None, **overrides):
             "val_dataset_path": write_jsonl(tmp_path / "val.jsonl", rows[:4]),
         },
         "max_length": MAX_LENGTH,
-        "learning_rate": 1e-2,
+        "optimizer": {"lr": 1e-2},
         "batch_size": 2,
         "max_steps": 8,
         "val_steps_freq": 4,
@@ -328,7 +328,7 @@ def test_init_from_checkpoint_restores_the_adapters(tiny_llama, tmp_path, no_ope
                 tmp_path,
                 checkpoint=resume,
                 lora=lora(ATTENTION),
-                learning_rate=0.0,
+                optimizer={"lr": 0.0},
                 max_steps=1,
                 val_steps_freq=0,
             )
@@ -348,7 +348,7 @@ def test_init_from_checkpoint_restores_the_adapters(tiny_llama, tmp_path, no_ope
 
 def test_a_full_fine_tune_saves_an_hf_model_directory(tiny_llama, tmp_path, no_open_device, char_tokenizer):
     config = sft_config(
-        tiny_llama, tmp_path, learning_rate=1e-3, max_steps=4, max_grad_norm=1.0, master_dtype="float32"
+        tiny_llama, tmp_path, optimizer={"lr": 1e-3}, max_steps=4, max_grad_norm=1.0, master_dtype="float32"
     )
     losses = Losses()
     ids = sample_ids()
@@ -387,7 +387,11 @@ def test_one_trainer_runs_a_lora_job_and_then_a_full_one(tiny_llama, tmp_path, n
     jobs = [
         sft_config(tiny_llama, tmp_path, checkpoint={"project_dir": str(tmp_path / "lora")}, lora=lora()),
         sft_config(
-            tiny_llama, tmp_path, checkpoint={"project_dir": str(tmp_path / "full")}, learning_rate=1e-3, max_steps=4
+            tiny_llama,
+            tmp_path,
+            checkpoint={"project_dir": str(tmp_path / "full")},
+            optimizer={"lr": 1e-3},
+            max_steps=4,
         ),
     ]
     for job in jobs:

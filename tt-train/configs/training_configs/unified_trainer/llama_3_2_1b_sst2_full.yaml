@@ -8,7 +8,6 @@
 dataset_id: sst2
 model_name: meta-llama/Llama-3.2-1B-Instruct
 max_length: 64
-learning_rate: 1.0e-5
 batch_size: 8
 num_epochs: 1
 max_steps: 500
@@ -17,6 +16,10 @@ max_grad_norm: 1.0
 # fp32 master weights: AdamW updates at this learning rate are below bf16's resolution.
 master_dtype: float32
 seed: 0
+
+optimizer:
+  type: adamw
+  lr: 1.0e-5
 
 metrics:
   steps_freq: 10

@@ -24,6 +24,7 @@ from .checkpoint_io import (
 from .configs import SFTTrainerConfig
 from .data import DATASETS, build_dataloader, clear_cache, get_dataset, load_tokenizer
 from .managers.device import DeviceManager
+from .optimizers import CombinedOptimizer, assign_parameters
 from .providers import UnsupportedTrainingConfig, get_provider
 from .trainer import Trainer
 
@@ -77,21 +78,23 @@ class SFTTrainer(Trainer):
     def _load_model(self) -> Any:
         return self.provider.build(self.config, self.hf_config)
 
-    def _load_optimizer(self) -> Any:
-        """AdamW over the trainable parameters (the adapters, for LoRA), at a constant learning rate."""
+    def _load_optimizer(self) -> CombinedOptimizer:
+        """The config's optimizers, each over its trainable parameters (the adapters, for LoRA), at a constant LR."""
         if self.config.max_grad_norm > 0:
             validate_clip_grad_norm(self.model)
+        names = [name for name, tensor in self.model.parameters().items() if tensor.get_requires_grad()]
+        assigned = assign_parameters(names, self.config.optimizer)
         if self.config.master_dtype == "float32":
             # Before the optimizer, whose state follows the parameters' dtype. Checkpoints load after it.
             ttml.core.store_trainable_parameters_as(self.model.parameters(), ttnn.DataType.FLOAT32)
-        trainable = ttml.NamedParameters()
-        for name, tensor in self.model.parameters().items():
-            if tensor.get_requires_grad():
-                trainable[name] = tensor
-        return ttml.optimizers.create_optimizer(
-            {"type": "AdamW", "lr": self.config.learning_rate, "weight_decay": self.config.weight_decay},
-            trainable,
-        )
+        parameters = self.model.parameters()
+        optimizers = []
+        for optimizer, optimizer_names in zip(self.config.optimizer, assigned):
+            trainable = ttml.NamedParameters()
+            for name in optimizer_names:
+                trainable[name] = parameters[name]
+            optimizers.append(ttml.optimizers.create_optimizer(optimizer.to_ttml(), trainable))
+        return CombinedOptimizer(optimizers)
 
     # ------------------------------------------------------------------ steps
 
@@ -154,8 +157,8 @@ class SFTTrainer(Trainer):
         trainable = sum(int(np.prod(t.shape())) for t in tensors if t.get_requires_grad())
         return total, trainable
 
-    def current_learning_rate(self) -> float:
-        return float(self.optimizer.get_group_lrs()[0])
+    def current_learning_rate(self) -> list[float]:
+        return [float(lr) for lr in self.optimizer.get_group_lrs()]
 
     def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
         """A PEFT adapter directory for a LoRA run, else an HF model directory; with ``trainer_state.json``."""

@@ -187,7 +187,7 @@ def test_cleanup_is_idempotent_and_safe_before_setup():
 def test_setup_again_cleans_up_the_previous_run():
     trainer = FakeTrainer()
     trainer.setup(make_config())
-    trainer.setup(make_config(learning_rate=0.5))
+    trainer.setup(make_config(optimizer={"lr": 0.5}))
     assert trainer.events.count("device.close") == 1
-    assert trainer.current_learning_rate() == 0.5
+    assert trainer.current_learning_rate() == [0.5]
     trainer.cleanup()

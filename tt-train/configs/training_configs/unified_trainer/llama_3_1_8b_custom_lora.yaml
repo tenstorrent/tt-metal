@@ -9,10 +9,8 @@
 dataset_id: custom
 model_name: meta-llama/Llama-3.1-8B-Instruct
 max_length: 256
-learning_rate: 1.0e-4
 batch_size: 4
 num_epochs: 1
-weight_decay: 0.01
 val_steps_freq: 100
 gradient_checkpointing: true
 seed: 0
@@ -22,6 +20,11 @@ custom_dataset:
   train_dataset_path: data/train.jsonl
   val_dataset_path: data/val.jsonl
   template: alpaca
+
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  weight_decay: 0.01
 
 lora:
   r: 8

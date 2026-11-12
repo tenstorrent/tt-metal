@@ -86,7 +86,7 @@ def test_a_job_stopped_by_a_callback_ends_cleanly(tmp_path):
     run_job(trainer, job_config(tmp_path))
 
     assert [m[:3] for m in job.metrics] == [(2, 0, 3.5)]
-    assert job.metrics[0][3] == pytest.approx(0.1)
+    assert job.metrics[0][3] == pytest.approx([0.1])
     assert job.saved == [f"{tmp_path}/ckpt-step-2"]
     assert list(trainer.saved) == job.saved
     assert job.batches_per_epoch == 4
@@ -98,10 +98,10 @@ def test_the_next_job_starts_from_scratch(tmp_path):
     job, recorder = JobCallback(max_steps=100), Recorder()
     trainer = FakeTrainer(callbacks=[job, recorder])
     run_job(trainer, job_config(tmp_path / "a"))
-    run_job(trainer, job_config(tmp_path / "b", learning_rate=0.5))
+    run_job(trainer, job_config(tmp_path / "b", optimizer={"lr": 0.5}))
 
     assert recorder.args("on_step_end") == [(1,), (2,), (3,), (4,)] * 2
-    assert [m[3] for m in job.metrics] == pytest.approx([0.1, 0.1, 0.5, 0.5])
+    assert [m[3] for m in job.metrics] == [[0.1], [0.1], [0.5], [0.5]]
     assert trainer.events.count("device.open") == trainer.events.count("device.close") == 2
 
 

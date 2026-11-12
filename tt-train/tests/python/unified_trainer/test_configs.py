@@ -9,12 +9,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ttml.unified_trainer import SFTTrainerConfig, load_config
+from ttml.unified_trainer import AdamWConfig, OptimizerConfig, SFTTrainerConfig, load_config
 from ttml.unified_trainer.configs import apply_override
 
 RECIPES = Path(__file__).resolve().parents[3] / "configs" / "training_configs" / "unified_trainer"
 
-MINIMAL = {"dataset_id": "sst2", "model_name": "meta-llama/Llama-3.2-1B", "learning_rate": 1e-4, "batch_size": 8}
+MINIMAL = {"dataset_id": "sst2", "model_name": "meta-llama/Llama-3.2-1B", "optimizer": {"lr": 1e-4}, "batch_size": 8}
 
 
 def sft(**overrides):
@@ -33,6 +33,8 @@ def test_defaults_train_every_weight_without_checkpoints():
     )
     assert config.metrics.train_metrics == ["loss"]
     assert not config.logging.use_wandb
+    assert len(config.optimizer) == 1 and config.optimizer[0].modules is None
+    assert isinstance(config.optimizer[0], AdamWConfig) and config.optimizer[0].weight_decay == 0.0
 
 
 @pytest.mark.parametrize(
@@ -40,11 +42,12 @@ def test_defaults_train_every_weight_without_checkpoints():
     [
         {"epochs": 2},
         {"lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "rank": 4}},
+        {"optimizer": {"lr": 1e-4, "momentum": 0.9}},
         {"checkpoint": {"save_every": 10}},
         {"metrics": {"log_freq": 10}},
         {"logging": {"wandb_watch_mode": "all"}},
     ],
-    ids=["top level", "lora", "checkpoint", "metrics", "logging"],
+    ids=["top level", "lora", "optimizer", "checkpoint", "metrics", "logging"],
 )
 def test_unknown_fields_are_rejected(overrides, expect_error):
     with expect_error(ValidationError, "Extra inputs are not permitted"):
@@ -55,7 +58,14 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
     "overrides, field",
     [
         ({"batch_size": 0}, "batch_size"),
-        ({"learning_rate": -1.0}, "learning_rate"),
+        ({"optimizer": {"lr": -1.0}}, "optimizer.0.lr"),
+        ({"optimizer": {"lr": 1e-4, "weight_decay": -1.0}}, "optimizer.0.weight_decay"),
+        ({"optimizer": {"lr": 1e-4, "beta2": 1.0}}, "optimizer.0.beta2"),
+        ({"optimizer": {"type": "sgd", "lr": 1e-4}}, "optimizer.0"),
+        ({"optimizer": OptimizerConfig(lr=1e-4)}, "optimizer.0"),
+        ({"optimizer": {}}, "optimizer.0.lr"),
+        ({"optimizer": []}, "optimizer"),
+        ({"optimizer": {"lr": 1e-4, "modules": []}}, "optimizer.0.modules"),
         ({"max_length": 0}, "max_length"),
         ({"gradient_accumulation_steps": 0}, "gradient_accumulation_steps"),
         ({"lora": {"r": 0, "alpha": 8, "target_modules": ["q_proj"]}}, "lora.r"),
@@ -69,6 +79,51 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
 def test_invalid_values_are_rejected(overrides, field, expect_error):
     with expect_error(ValidationError, rf"\n{field}\n"):
         sft(**overrides)
+
+
+def test_the_optimizer_type_picks_its_config():
+    assert sft(optimizer={"type": "adamw", "lr": 1e-4, "beta1": 0.8}).optimizer[0].beta1 == 0.8
+    assert sft(optimizer=AdamWConfig(lr=1e-4)).optimizer[0].lr == 1e-4
+
+
+def test_unset_optimizer_fields_keep_ttmls_defaults_and_modules_stay_out():
+    assert sft(optimizer={"lr": 1e-4, "epsilon": 1e-6, "modules": ["gamma"]}).optimizer[0].to_ttml() == {
+        "type": "AdamW",
+        "lr": 1e-4,
+        "weight_decay": 0.0,
+        "epsilon": 1e-6,
+    }
+
+
+def test_the_run_config_logs_the_optimizers_own_fields():
+    assert sft(optimizer={"lr": 1e-4, "weight_decay": 0.01}).model_dump(mode="json")["optimizer"] == [
+        {
+            "lr": 1e-4,
+            "modules": None,
+            "type": "adamw",
+            "weight_decay": 0.01,
+            "beta1": None,
+            "beta2": None,
+            "epsilon": None,
+            "amsgrad": None,
+            "stochastic_rounding": None,
+        }
+    ]
+
+
+def test_several_optimizers_each_name_their_weights():
+    config = sft(
+        optimizer=[
+            {"lr": 1e-3, "modules": ["gamma"]},
+            {"lr": 1e-4, "weight_decay": 0.01},
+        ]
+    )
+    assert [(optimizer.lr, optimizer.modules) for optimizer in config.optimizer] == [(1e-3, ["gamma"]), (1e-4, None)]
+
+
+def test_only_one_optimizer_may_take_the_remaining_weights(expect_error):
+    with expect_error(ValidationError, "at most one optimizer may leave modules unset"):
+        sft(optimizer=[{"lr": 1e-3}, {"lr": 1e-4}])
 
 
 def test_a_custom_dataset_needs_its_files(expect_error):
@@ -89,7 +144,7 @@ def test_model_name_is_a_field():
     "override, expected",
     [
         ("lora.r=16", {"lora": {"r": 16}}),
-        ("learning_rate=1.0e-5", {"learning_rate": 1e-5}),
+        ("optimizer.lr=1.0e-5", {"optimizer": {"lr": 1e-5}}),
         ("lora.target_modules=[q_proj, k_proj]", {"lora": {"target_modules": ["q_proj", "k_proj"]}}),
         ("checkpoint.save_strategy=step", {"checkpoint": {"save_strategy": "step"}}),
         (
@@ -109,19 +164,22 @@ def test_apply_override_parses_values_as_yaml(override, expected):
     [
         ("lora.r", "expected dotted.key=value"),
         ("=4", "expected dotted.key=value"),
-        ("learning_rate.x=1", "'learning_rate' is not a section"),
+        ("batch_size.x=1", "'batch_size' is not a section"),
     ],
 )
 def test_apply_override_rejects_malformed_overrides(override, error, expect_error):
     with expect_error(ValueError, error):
-        apply_override({"learning_rate": 1.0}, override)
+        apply_override({"batch_size": 1}, override)
 
 
 def test_load_config_applies_overrides(tmp_path):
     recipe = tmp_path / "recipe.yaml"
-    recipe.write_text("dataset_id: sst2\nmodel_name: m\nlearning_rate: 1.0e-4\nbatch_size: 8\nmax_length: 64\n")
-    config = load_config(recipe, ["batch_size=2", "lora.r=4", "lora.alpha=8", "lora.target_modules=[o_proj]"])
+    recipe.write_text("dataset_id: sst2\nmodel_name: m\noptimizer:\n  lr: 1.0e-4\nbatch_size: 8\nmax_length: 64\n")
+    config = load_config(
+        recipe, ["batch_size=2", "optimizer.lr=1.0e-5", "lora.r=4", "lora.alpha=8", "lora.target_modules=[o_proj]"]
+    )
     assert config.batch_size == 2 and config.lora.target_modules == ["o_proj"]
+    assert config.optimizer[0].lr == 1e-5
 
 
 def test_load_config_rejects_a_non_mapping(tmp_path, expect_error):

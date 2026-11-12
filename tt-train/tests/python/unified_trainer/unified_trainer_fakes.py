@@ -20,7 +20,7 @@ from ttml.unified_trainer.trainer import Trainer
 
 
 def make_config(**overrides: Any) -> TrainerConfig:
-    fields = {"dataset_id": "sst2", "model_name": "fake", "learning_rate": 0.1, "batch_size": 1}
+    fields = {"dataset_id": "sst2", "model_name": "fake", "optimizer": {"lr": 0.1}, "batch_size": 1}
     return TrainerConfig.model_validate({**fields, **overrides})
 
 
@@ -76,7 +76,7 @@ class FakeTrainer(Trainer):
         return SimpleNamespace(mode="train")
 
     def _load_optimizer(self):
-        return SimpleNamespace(steps=0, zero_grads=0, lr=self.config.learning_rate)
+        return SimpleNamespace(steps=0, zero_grads=0, lr=self.config.optimizer[0].lr)
 
     def _prepare_batch(self, batch):
         return batch
@@ -112,8 +112,8 @@ class FakeTrainer(Trainer):
     def parameter_counts(self) -> tuple[int, int]:
         return 10, 2
 
-    def current_learning_rate(self) -> float:
-        return self.optimizer.lr
+    def current_learning_rate(self) -> list[float]:
+        return [self.optimizer.lr]
 
     def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
         os.makedirs(path, exist_ok=True)

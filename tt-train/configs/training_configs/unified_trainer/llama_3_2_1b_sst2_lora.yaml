@@ -7,12 +7,15 @@
 dataset_id: sst2
 model_name: meta-llama/Llama-3.2-1B-Instruct
 max_length: 64
-learning_rate: 1.0e-4
 batch_size: 8
 num_epochs: 1
 max_steps: 500
 val_steps_freq: 50
 seed: 0
+
+optimizer:
+  type: adamw
+  lr: 1.0e-4
 
 lora:
   r: 4

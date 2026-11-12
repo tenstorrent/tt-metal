@@ -58,8 +58,20 @@ class MetricsCallback(Callback):
             trainer.logger.error(f"Training failed: {exception}", traceback.format_exc())
 
 
-def _select(available: dict[str, float], requested: list[str], phase: str) -> dict[str, float]:
-    return {f"{phase}/{name}": available[name] for name in requested if name in available}
+def _select(available: dict[str, Any], requested: list[str], phase: str) -> dict[str, float]:
+    """``{phase}/{name}`` per requested metric; a metric of several values logs ``{phase}/{name}/{i}`` for each."""
+    metrics = {}
+    for name in requested:
+        if name not in available:
+            continue
+        value = available[name]
+        if not isinstance(value, list):
+            metrics[f"{phase}/{name}"] = value
+        elif len(value) == 1:
+            metrics[f"{phase}/{name}"] = value[0]
+        else:
+            metrics.update({f"{phase}/{name}/{i}": v for i, v in enumerate(value)})
+    return metrics
 
 
 def _dataset_size(dataloader: Any, batch_size: int) -> Any:

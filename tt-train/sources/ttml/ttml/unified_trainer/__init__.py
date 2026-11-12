@@ -19,11 +19,14 @@ A host builds a trainer once with its callbacks and runs any number of jobs on i
 
 from .callbacks import Callback, CallbackHandler, CheckpointCallback, MetricsCallback
 from .configs import (
+    OPTIMIZERS,
+    AdamWConfig,
     CheckpointConfig,
     CustomDatasetConfig,
     LoggingConfig,
     LoraConfig,
     MetricsConfig,
+    OptimizerConfig,
     SFTTrainerConfig,
     TrainerConfig,
     load_config,
@@ -33,6 +36,8 @@ from .sft_trainer import SFTTrainer
 from .trainer import Trainer
 
 __all__ = [
+    "OPTIMIZERS",
+    "AdamWConfig",
     "Callback",
     "CallbackHandler",
     "CheckpointCallback",
@@ -42,6 +47,7 @@ __all__ = [
     "LoraConfig",
     "MetricsCallback",
     "MetricsConfig",
+    "OptimizerConfig",
     "SFTTrainer",
     "SFTTrainerConfig",
     "Trainer",
