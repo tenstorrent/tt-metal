@@ -104,7 +104,7 @@ def test_the_seeded_graph_carries_the_seed_and_ports_its_layers(fx):
     git = lambda *a: subprocess.run(
         ["git", "-c", "user.email=t@e", "-c", "user.name=t", *a], cwd=grown.repo, check=True
     )  # noqa: E731
-    git("add", "-f", str(led.state_path))
+    git("add", "-f", *[str(p) for p in led.record_paths() if p.exists()])  # F265: the state's chunk files
     git("commit", "-q", "-m", "seed")
     out = generate(grown)
     ids = [t["id"] for t in out["tasks"]]

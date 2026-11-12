@@ -1,0 +1,17 @@
+{
+ "metrics": {
+  "ledger_files_over_limit": {
+   "t": "2026-11-12T21:00:22",
+   "value": 0
+  },
+  "selftest_failed": {
+   "t": "2026-11-12T21:00:22",
+   "value": 0
+  },
+  "selftest_passed": {
+   "t": "2026-11-12T21:00:22",
+   "value": 14
+  }
+ },
+ "task": "FIX.27"
+}

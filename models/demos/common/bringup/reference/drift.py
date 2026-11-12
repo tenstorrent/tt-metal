@@ -101,11 +101,15 @@ def _region(full: torch.Tensor, part: torch.Tensor, lo: bool) -> list | None:
     return [a, part.shape[a], full.shape[a]] if lo else [a, 0, part.shape[a]]
 
 
-def replay(s, ref, g: Golden, layers: list[int], first: int, tail_at: int | None = None) -> dict:
+def replay(
+    s, ref, g: Golden, layers: list[int], first: int, tail_at: int | None = None, full_last: bool = True
+) -> dict:
     """The official reference over the golden's tokens as the ladder feeds the device: from chunk ``first`` (the
     golden's state prefix loaded before it), each run of the layer subset after a gap from the golden block input of
     its first layer (written into the block input forward_chunk records, which run_block hands to the steps).
-    ``tail_at``: also the last chunk ending there, from the state before it (the contract)."""
+    ``tail_at``: also the last chunk ending there, from the state before it (the contract). ``full_last`` False (F264,
+    a handoff point): the whole last chunk is not run (out["trail"] / out["state"] then end at the last chunk's start),
+    only the one ending at ``tail_at``."""
     from models.demos.common.bringup.reference.generate_golden import run_starts
 
     seq, chunk = g.seq, g.chunk
@@ -146,12 +150,17 @@ def replay(s, ref, g: Golden, layers: list[int], first: int, tail_at: int | None
     before = None
     for c in range(first, g.n_chunks):
         if tail_at is not None and c == last:
+            if not full_last:  # F264: the request's last chunk ends at tail_at only
+                before = state
+                break
             before = copy.deepcopy(state)
         run(c, (c + 1) * chunk, state, c == last)
-    missing = sorted({li for li in starts} - {li for _, li in fed})
+    missing = sorted({li for li in starts} - {li for _, li in fed}) if full_last else []
     if missing:
         raise SystemExit(f"forward_chunk recorded no block input L<i>.in for layers {missing}: cannot feed them (F134)")
-    for li in starts:  # the feed must reach the steps: the first step from the golden input gives the recorded output
+    for li in (
+        starts if full_last else ()
+    ):  # the feed must reach the steps: the first step from the golden input gives the recorded output
         st0 = out["first_step"][li]
         if tuple(st0.inputs) != ("in",) or st0.stateful or li not in firsts:
             print(f"note: layer {li}'s first step {st0.name} reads more than its block input; the feed is not checked")
@@ -208,14 +217,15 @@ def entries(s, ref, g: Golden, layers: list[int], rep: dict, first: int) -> dict
     return out
 
 
-def contract_entries(s, ref, g: Golden, layers: list[int], rep: dict, tail_at: int) -> dict:
+def contract_entries(s, ref, g: Golden, layers: list[int], rep: dict, tail_at: int, growing: str = "full") -> dict:
     """The states as the contract reads them back: growing ones over [0, tail_at rounded down to BLOCK) of the full
-    run, fixed ones after the last chunk ending at tail_at."""
+    run (``growing`` "tail", F264: of the run whose last chunk ends at tail_at), fixed ones after the last chunk
+    ending at tail_at."""
     keep, fixed = tuple(s.get("golden.keep_fp32", [])), set(g.state_fixed)
     length = tail_at - tail_at % BLOCK
     out = {}
     for i in layers:
-        full = ref.state_tensors(rep["state"], i, g.seq)
+        full = ref.state_tensors(rep["state" if growing == "full" else "tail_state"], i, g.seq)
         part = ref.state_tensors(rep["state"], i, length)
         tail = ref.state_tensors(rep["tail_state"], i, tail_at)
         want_at = g.state(i, at=tail_at) if fixed & set(full) else {}

@@ -24,6 +24,10 @@ Checks (each failure is listed in ``contract_failures``; metric ``contract_check
                     ``contract_state_pcc(spec, runtime, kv, slot, length, golden) -> {name: pcc}`` compares them with
                     the golden snapshot at ``length`` (``pcc_contract_state_*``); a spec with fixed state and no such
                     hook fails the contract
+  handoff (F264)    a model whose serving path stops before the engine's actual_end (hooks.contract_end, e.g. decode's
+                    cap) is judged there: the producer / independent read-back over [0, it rounded down to 32), the
+                    fixed state at it, limits from the official drift at it (reference/handoff.py,
+                    ``handoff-drift-<rung>.json``); ``contract_state_at`` records the position
 
 Engine env (PREFILL_MODEL, PREFILL_SP/TP, PREFILL_CHUNK_SIZE, PREFILL_MAX_SEQ_LEN, PREFILL_NUM_LAYERS,
 PREFILL_NUM_USERS) must be set before the adapter is imported: call ``engine_env(spec)`` at module import.
@@ -335,26 +339,38 @@ def run_contract_test(s, mesh) -> list[str]:
     if rt.kv_migration_base_address(kv) != table.lookup(0, 0, 0, 0).noc_addr & 0xFFFFFFFF:
         failed.append("migration base address != table entry (layer 0, pos 0, slot 0, config 0)")
 
+    # F264: the state and the served caches are judged where the model's serving path hands off (hooks.contract_end:
+    # e.g. decode's cap when prefill stops there), never at a position it does not compute; their limits come from
+    # the official drift at that point (reference/handoff.py), the golden's snapshot there from the same pipeline
+    from models.demos.common.bringup.reference import handoff as HO
+
+    at = HO.contract_end(s, actual_len)
+    metrics.record("contract_state_at", at)
+    if not 0 < at <= actual_len:
+        failed.append(f"hooks.contract_end({actual_len}) = {at}: not in (0, {actual_len}]")
+        at = actual_len
+    print(f"contract: state and served caches judged at {at} (request end {actual_len})")
     dmap = device_map(mesh)
-    mins = producer._read_slot_kv_and_check_pcc(table, dmap, slot, actual_len - actual_len % BLOCK, str(g.dir))
+    mins = producer._read_slot_kv_and_check_pcc(table, dmap, slot, at - at % BLOCK, str(g.dir))
     for k, v in mins.items():
         metrics.record(f"pcc_producer_kv_{k}", v)
     hooks = s.hooks()
     if hasattr(hooks, "contract_independent_pcc"):
         # Guards against a stubbed comp_pcc inside the producer (run_safe_pytest's precompile pass stubs it).
-        ind = hooks.contract_independent_pcc(s, table, dmap, slot, actual_len - actual_len % BLOCK, g)
+        ind = hooks.contract_independent_pcc(s, table, dmap, slot, at - at % BLOCK, g)
         metrics.record("pcc_kv_independent_min", min(ind.values()))
         gap = max(abs(mins[k] - ind[k]) for k in mins if k in ind)
         metrics.record("producer_vs_independent_pcc_gap", gap)
         if gap > 1e-4:
             failed.append(f"producer PCC {mins} disagrees with the independent read-back {ind}")
-    drift = E.load(g.dir, rung["name"])  # F128 / F134: calib x the reference's drift as the contract reads it back
+    # F128 / F134: calib x the reference's drift as the contract reads it back (F264: at the handoff point)
+    drift = E.load(g.dir, rung["name"]) if at == actual_len else HO.load_drift(g.dir, rung["name"], at)
     producer_limits(s, adapter, mins, drift, failed)
     if s.state_fixed:
         if not hasattr(hooks, "contract_state_pcc"):
             failed.append(f"fixed-size state {s.state_fixed} unchecked: hooks.contract_state_pcc is missing")
         else:
-            fixed = hooks.contract_state_pcc(s, rt, kv, slot, actual_len, g)
+            fixed = hooks.contract_state_pcc(s, rt, kv, slot, at, g)
             if not fixed:
                 failed.append("fixed-size state read-back: hooks.contract_state_pcc returned nothing")
             for k, v in fixed.items():

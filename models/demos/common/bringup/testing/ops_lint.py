@@ -127,7 +127,9 @@ def stock_problems(repo: Path, model_dir: str, files: list[str], breadcrumbs: Pa
     if not alt:
         return []
     pats = {s: re.compile(r"(?<![\w.])" + re.escape(s) + r"\s*\(") for s in alt}
-    notes = breadcrumbs.read_text().lower() if breadcrumbs.exists() else ""
+    from models.demos.common.bringup.core.chunked import read_log
+
+    notes = read_log(breadcrumbs).lower()  # F265: the rolled chunks too
     model_dir = model_dir.rstrip("/") + "/"
     out = []
     for rel in files:

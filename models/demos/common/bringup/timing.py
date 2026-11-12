@@ -148,7 +148,9 @@ def device_log(path: Path) -> dict:
 
 def breakdown(bringup_dir: Path, run_dir: Path, tasks: dict, now: float | None = None) -> dict:
     now = now or datetime.now().timestamp()
-    state = json.loads((Path(bringup_dir) / "state.json").read_text())
+    from models.demos.common.bringup.core.ledger import Ledger
+
+    state = Ledger(Path(bringup_dir)).state()  # F265: state.json or its chunks
     agents = [agent_times(p) for p in sorted((Path(run_dir) / "agents").glob("*.jsonl"))]
     gates = gate_times(state, tasks)
     tl_path = Path(run_dir) / TIMELINE

@@ -2753,3 +2753,37 @@ Selftests: 670 pass, 1 old failure (xing40 server_rules.py:393 fixed threshold).
 - Selftest: test_realtime_profiler.py (windows at and across 65536, a stale record, the too-wide window, the fake
   device now sends 16-bit ids), test_one_process.py (a unit of two clean walls then the profiled run, the id past
   65535 when it starts, its sections charged).
+
+## F265: ledger files that grow with every task are chunk files below the repo's 500 KB limit (owner 2026-11-12, DS41 FIX.27)
+- Problem: DeepSeek-V4.1 FIX.26's passed gate could not commit: the repo's check-large-files hook refused
+  ledgers/galaxy_8x4-full/state_metrics.json (515,706 bytes; F253 had moved the metrics out of state.json at X.3).
+  Owner: "split the file, if this is something that gets appended to split it into chunks, do not compact".
+- Fix: core/chunked.py `ChunkedJson`: a {task: record} file `<name>.json` lives as `<name>.chunks/0001.json`,
+  `0002.json`, ... (disjoint keys, same JSON format). Rule: a key stays in its chunk; a new key goes to the newest
+  chunk, or opens the next one when that would pass 256 KB (CHUNK_BYTES); a chunk a grown record pushes past the bound
+  moves its last keys to a new chunk; one record over the bound gets a chunk of its own; only changed chunk files are
+  rewritten. Ledger (core/ledger.py) reads and writes state.json, state_metrics.json and history_state.json only
+  through its three stores; `record_paths()` is what a commit stages (chunk dirs and the old files' deletion), used by
+  gate.stage_paths, the op-ready and REJECTED commits; ledger_gen's seed commit lookup and timing.breakdown read the
+  stores. `Ledger.migrate()` moves an old file once, checks the merged chunks equal it, and leaves
+  `<name>.chunks/MIGRATED.json` (bytes, sha256, git blob id written with hash-object -w, a hash per key).
+- Lossless: the F129 trim and F246 6-digit rounding now apply only to the metrics an update writes; a recorded entry
+  is never trimmed or rounded again (before, every save re-trimmed every task against today's gate globs). A metrics or
+  history record of a task with no state entry is carried, never dropped.
+- Transition: a process still running the pre-F265 code (an orchestrator started before the change) reads and writes
+  the old single files. A store with chunks and an old file merges the old file over the chunks (state and history:
+  field by field, `history` / `agent_runs` lists extended; metrics: the record replaced); the next write folds it in
+  and deletes it.
+- Append-only logs: `roll_log` (gate.stage_paths, before every gate commit): BREADCRUMBS.md and supervision.md past
+  256 KB move their older `## ` sections, byte for byte, to `<stem>.0001.md`, ... (each <= 256 KB); the live file keeps
+  the newest sections (<= 64 KB). `read_log` = chunks then the live file (ops_lint's BREADCRUMBS justifications).
+- Patterns: stamps.RECORDS / SKIP (`*state.chunks/*`, `*state_metrics.chunks/*`, `*history_state.json`,
+  `*history_state.chunks/*`), orchestrator IGNORED (history/metrics chunk files, supervision chunks), info/exclude
+  (`**/bringup/history_state.chunks/`, the same reach as the F180 line).
+- Not chunked: tasks.yaml (hand-edited by the overseer and the plan step; 245 KB, ~4.2 KB per task: the next file to
+  reach the limit, in ~60 tasks), known_issues*.md (read whole by every agent), results/* (one file per task).
+- Selftest: test_ledger_chunks.py (round trip past 500 KB, the bound, appending across a boundary touches only the
+  newest chunk, a grown record, a huge record, removed keys, duplicate keys, migrate + manifest, a late old-format
+  write merged, the ledger reading every chunk, timing, a gate commit staging chunks and the old file's deletion, the
+  log roll byte for byte, the model's BREADCRUMBS rolled, the live ledger's migration and `ledger_files_over_limit`);
+  test_core.py reads the stores instead of the old files.

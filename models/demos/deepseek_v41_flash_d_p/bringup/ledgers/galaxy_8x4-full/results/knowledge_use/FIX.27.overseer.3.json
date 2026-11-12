@@ -1,0 +1,46 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "the overseer's task template writes CPU selftest gates as `python -m pytest`, which core/gate.py device_policy_errors refuses for every task, device or not; write them as `scripts/run_safe_pytest.sh --no-precompile --run-all <files>`"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.27",
+   "answer": "done",
+   "evidence": "Split done in attempt 1, unchanged since: state_metrics 515,706 B -> chunks 256,402 + 259,307 B; history_state 290,493 B -> 255,251 + 35,243 B; state 146,416 B -> 1 chunk; lossless per MIGRATED.json and test_ledger_chunks.py. With the overseer's corrected cmd (scripts/run_safe_pytest.sh) `gate FIX.27 --check` printed PASS FIX.27, ledger_files_over_limit = 0 (65 tests passed)."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or op change"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no device use; CPU selftests only, through the safe runner"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.27",
+  "role": "overseer",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-11-12T21:00:55",
+  "head": "8a5e0f82931",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.27.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.27.overseer.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/tasks.yaml"
+  ]
+ }
+}

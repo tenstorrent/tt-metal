@@ -3851,3 +3851,110 @@ Re-run: `gate FIX.25 --spec <spec> --check`; the batched probe: `BRINGUP_BATCH_L
 cmd> && BRINGUP_RUNG=last <ladder cmd>' scripts/run_safe_pytest.sh --no-precompile --run-all
 models/demos/common/bringup/tests/test_batch.py`; selftest: `scripts/run_safe_pytest.sh --run-all --no-precompile
 models/demos/common/bringup/selftest/test_model_determinism.py`.
+
+## FIX.26 (overseer, attempt 1): test_contract judges PREFILL_END=cap at cap (2026-11-12)
+
+What changed (DS41-236 -> DS41-238; framework finding F264):
+- How the golden snapshots are made: `reference/generate_golden.py` runs the native reference (fp32, keep_fp32) chunk by
+  chunk from 0 and saves the fixed state (window ring, compress_partial, engram tail) before every dumped chunk and,
+  on the contract rung, after `seq - contract_tail_pad` = 10208 tokens (a deep copy of the state before the last
+  chunk, then [5120, 10208)). Nothing at 10176.
+- New `models/demos/common/bringup/reference/handoff.py`. `handoff golden`: same reference, same calls: chunk 0 from
+  position 0, then a check that the state at 5120 equals the golden's stored state byte for byte (fixed and growing,
+  all 40 layers; it did: same reference, same code), then [5120, 10176) and the fixed state saved as
+  `kv_cache/handoff_layer_<i>_at_10176.safetensors` (40 files), sha256 in `handoff.json`, tied to the golden's
+  content_hash. The handoff files are "derived" (golden.derived: name starts with `handoff`), so the pinned golden
+  (content_hash, files.json, frozen manifest) is unchanged. Golden.state(i, at=p) falls back to them (sha-checked).
+  The point comes from the model: hooks.contract_handoffs(spec, 10208) = [snapshot_cap(10208)] = [10176].
+- `handoff drift`: the limits follow the framework's existing rule (F128 / F134: calib x the official bf16 reference's
+  drift on the same comparison): the official reference from 0, last chunk ending at 10176, vs the native golden;
+  same 51 contract_state_* keys as drift-s10240.json, written to `handoff-drift-s10240.json` {"10176": ...}. No
+  existing limit or drift file was edited. drift.replay(full_last=False), contract_entries(growing="tail") are new
+  options (defaults unchanged).
+- testing/contract.py: at = hooks.contract_end(spec, actual_end) (DS41: tt/attention.prefill_end, so 10176 under
+  PREFILL_END=cap, 10208 under end); producer / independent read-back over [0, at rounded to 32), fixed state at at,
+  limits from drift-<rung>.json when at == actual_end, else the handoff drift. New metric contract_state_at.
+- tt/runners/kv_contract.golden_window: also takes the handoff snapshots, so a non-step layer's 128-row window
+  snapshot at cap is compared on all 128 rows (before: 96; [10048, 10080) was in no golden ring).
+- selftest/test_handoff.py (3 CPU tests on the fixture).
+
+Numbers:
+- CPU: handoff golden 1727 s (chunk 0 858 s, [5120, 10176) 852 s, 16 threads); handoff drift 2171 s (bf16, 16
+  threads, run side by side). Golden cap vs 10208 snapshot: window ring PCC 0.72-0.78 (L1 / L20 / L39), engram tail
+  [5306, 14, 237] vs [16, 43, 783] (the device's "wrong" tail in DS41-236 was the right one for cap).
+- New limits at cap (end limits in brackets): window_kv 0.94787 (0.94341), compress_kv 0.93695 (0.93703), index_k
+  0.94648 (0.94653), compress_partial 1.0.
+- test_contract, PREFILL_END=cap (default), before the golden_window change: contract_state_at 10176, ring 0.98793,
+  producer window_kv 0.98705 / compress_kv 0.98877 / index_k 0.99334, engram tail exact, checks failed 0, acks_early 0.
+
+Gotchas: Golden.verify() is False on this golden already (F164 trimmed 32 files); the index route (files.json) is the
+check, and the handoff files add nothing to it. The framework selftests that build the fixture prompt fail at HEAD
+(text source models/tt_transformers/... moved to models/ttt_compat, #62523); test_handoff.py sets text.source.
+
+For the owner: P.49's gate unit can go back to plain test_contract (no DS41_PREFILL_END=end):
+`scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`.
+
+Re-run: `python -m models.demos.common.bringup.reference.handoff golden --spec <spec>` then `... handoff drift`
+(golden skips points it already has), `python -m models.demos.common.bringup.reference.golden sync --spec <spec>`, `gate FIX.26 --check`.
+- Full gate `gate FIX.26 --check` (after the golden_window change): PASS, 4 units, 1301 s. test_contract (cap):
+  judged at 10176, KV over [0, 10176) window 0.98793 / compress 0.98877 / index 0.99334, every layer's window
+  snapshot on 128 rows (min 0.98793), ring min 0.98793, engram tail equal on both engram layers, checks failed 0;
+  test_contract.3.0 (end): judged at 10208, ring 0.98725 vs 0.94341, KV 0.98793 / 0.98879 / 0.99336, checks failed 0;
+  test_ladder pass; test_determinism max abs diff 0.
+
+## FIX.27 (overseer fix, attempt 1): ledger files split into chunks below the 500 KB repo limit (framework F265)
+What: FIX.26's commit was refused because state_metrics.json was 515,706 bytes (over the repo's 500 KB hook).
+The three ledger records that grow with every task are now chunk files (core/chunked.py, Ledger stores):
+`state.chunks/`, `state_metrics.chunks/`, `history_state.chunks/` in ledgers/galaxy_8x4-full, `0001.json`, `0002.json`,
+... Rule: a task's record stays in its chunk; a new task goes to the newest chunk, or opens the next one when that
+chunk would pass 256 KB. Nothing is compacted, rounded or dropped (the old per-save re-trim of every task's metrics
+now applies only to the entry being written). BREADCRUMBS.md and supervision.md roll at a gate commit once past
+256 KB: their older sections move unchanged to `BREADCRUMBS.0001.md`, ...; the live file keeps the newest <= 64 KB.
+Migration (once, `Ledger.migrate()`), each chunk-merge equal to the old file as parsed JSON:
+- state_metrics.json 515,706 B -> 0001.json 256,402 + 0002.json 259,307
+- history_state.json 290,493 B -> 0001.json 255,251 + 0002.json 35,243
+- state.json 146,416 B -> 0001.json 146,416
+Each chunk dir has MIGRATED.json (old size, sha256, git blob id, a hash per task). Pre-migration copies:
+/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/FIX.27_premigration/.
+Gotcha: the orchestrator now running FIX.27 was started with the old ledger code. state.json is left in place
+(byte-identical to the chunk) so that code still sees every status. Its writes after the migration (small
+state_metrics.json / history_state.json, a state.json) are merged over the chunks by the new reader, and the first
+new-code write folds them in and deletes them. Simulated on a copy: no other task's record changed.
+Restart the orchestrator before FIX.26's commit-only so the new code does it.
+Files checked (bytes today; growth per task over the last 14 tasks):
+state_metrics.json 515,706 (+8.0 KB) chunked; history_state.json 290,493 (+3.0 KB) chunked; state.json 146,416
+(+2.4 KB) chunked; BREADCRUMBS.md 384,453 (+4.4 KB) rolls; supervision.md 201,778 (+0.7 KB) rolls; tasks.yaml
+245,491 (+4.2 KB) NOT chunked (hand-edited; ~60 tasks of headroom); known_issues.md 84,786 (+0.8 KB) and
+known_issues_detail.md 101,558 not chunked (read whole by agents); results/* one file per task (largest 291,685,
+X/FIX ops.json.gz); results/knowledge_use one file per attempt (~5 KB); dashboard/*.html 1.5 MB, never committed (F210).
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.27 --spec <spec> --check`.
+Gate: `gate FIX.27 --check` refuses before running anything: "gate calls pytest directly" (core/gate.py
+device_policy_errors: no gate command may call pytest directly, CPU gates included). The command is tasks.yaml's,
+which an agent may not edit. The framework's own selftest gates use the safe runner (dev/tasks.yaml), and the same
+units pass that way: `scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/test_core.py
+models/demos/common/bringup/selftest/test_ledger_chunks.py` -> 65 passed, ledger_files_over_limit = 0 (19 s, no device
+opened). Overseer: change FIX.27's gate cmd to that line. Full selftest dir: 182 failed / 576 passed. 164 are the missing
+fixture text (tale-of-two-cities, known), and 17 A/B / runner-contract tests fail identically on unchanged HEAD.
+The one this change broke (test_seeded: `git add state.json`) is fixed.
+
+## FIX.27 (overseer fix, attempt 2): no code change; the gate command is still the blocker
+- `gate FIX.27 --check` again refused before running: "gate calls pytest directly" (core/gate.py:149
+  device_policy_errors; tasks.yaml FIX.27 cmd is `python -m pytest ...`, which an agent may not edit). Not loosened:
+  the policy is the owner's (selftest test_core.py::test_device_policy pins `python -m pytest` as refused, device or not).
+- The ledger after attempt 1: the orchestrator (old code) has since rewritten state.json (87 tasks, FIX.27's record
+  differs: its attempt / history, merged field by field over the chunks), state_metrics.json `{}` and
+  history_state.json 925 B (FIX.27's agent run). The chunks read 87 state / 79 metrics records.
+- Same units via the safe runner: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all -q
+  models/demos/common/bringup/selftest/test_core.py models/demos/common/bringup/selftest/test_ledger_chunks.py`
+  -> 65 passed (19 s). pre-commit on every changed file passes, except check-large-files on
+  dashboard/index.html 1.59 MB and teletext.html 1.58 MB: generated pages, kept out of every gate commit
+  (gate.GENERATED, F210), rewritten whole after each gate, not appended to; not chunked.
+- Overseer: replace FIX.27's gate cmd with the safe-runner line above, then it passes as is.
+
+## FIX.27 (overseer fix, attempt 3): gate passes with the corrected command
+- The overseer changed FIX.27's gate cmd to `scripts/run_safe_pytest.sh --run-all --no-precompile <test_core.py>
+  <test_ledger_chunks.py>`. No code change in this attempt.
+- `gate FIX.27 --check` -> PASS, ledger_files_over_limit = 0 (65 passed). Chunks: state_metrics 256,402 + 259,307 B,
+  history_state 255,251 + 35,243 B, state 146,416 B (1 chunk); live state.json 147,268 B, state_metrics.json 3 B.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.27 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
