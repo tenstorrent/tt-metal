@@ -134,25 +134,17 @@ Set only what is specific to the deployment:
   adapter defaults. For an MTP variant, also `TT_GLM53_MTP_TTNN_CACHE`; the
   manifest pins the MTP cache to the weka path.
 
-### Building missing weight-cache pieces from the FP8 checkpoint (GLM-5.3)
+### Missing weight-cache pieces
 
-By default the runner only reads the TTNN cache and fails at start-up when it is incomplete. A site that lacks a
-piece (a new gate bias, the final norm / LM head, the MTP tree) can let the runner build just that piece from the
-FP8 checkpoint (`PREFILL_HF_MODEL`, default `/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4`) instead of
-rsyncing the whole cache:
-
-```bash
-export PREFILL_WEIGHT_CATEGORIES=moe_gate,lm_head   # or: all
-```
-
-Categories: `embedding, norms, mla, dense_ffn, moe_gate, shared_experts, routed_experts, lm_head, mtp`. Each rank
-checks its own layer slice. Anything missing that is not selected still fails early and is listed in the error.
-`routed_experts` and `mtp` dequantise 256 FP8 experts per layer inside the serving process (minutes, ~20 GB of host
-RAM per layer); prefer `moe_gate` / `lm_head` / `embedding` for small changes. The MTP cache root is
-`TT_GLM53_MTP_TTNN_CACHE` (the default derived from the trunk path is only right on exabox).
+For a model whose adapter sets `builds_missing_weight_cache`, the runner checks the TTNN cache at start-up, per rank
+and per weight category of that rank's layers, and converts whatever is missing from the checkpoint
+(`PREFILL_HF_MODEL`) while the model builds. Nothing needs to be selected, and a site that lacks a piece does not
+need to rsync the whole cache. A complete cache is loaded from disk unchanged. Converting expert weights
+dequantises every expert of a layer inside the serving process (minutes, ~20 GB of host RAM per layer), so
+populate large pieces before going live where possible. For other models an incomplete cache is an error.
 
 Chunk size: `PREFILL_CHUNK_SIZE` (default in `deepseek_v3_d_p/utils/chunk_config.py`) must be identical for the runner
-and the producer, and a multiple of `SP * TP * 32` (1024 on 8x4); GLM-5.3 runs 2048, 3072, 4096 and the default.
+and the producer, and a multiple of `SP * TP * 32` (1024 on 8x4).
 
 ### Launching through `ttrun`
 
