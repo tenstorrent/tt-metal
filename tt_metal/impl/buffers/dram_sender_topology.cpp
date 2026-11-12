@@ -168,8 +168,7 @@ uint32_t package_dram_core_index(const metal_SocDescriptor& soc_desc, const Core
     const tt::umd::CoreCoord location = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(translated.x, translated.y, tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED),
         tt::CoordSystem::LOGICAL);
-    const uint32_t cores_per_channel = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    return (location.x * cores_per_channel) + location.y;
+    return soc_desc.get_dram_core_index(location.x, location.y);
 }
 
 }  // namespace tt::tt_metal
