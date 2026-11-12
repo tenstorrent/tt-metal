@@ -885,6 +885,10 @@ class MiniMaxH3Pipeline:
             raise ValueError(f"vae_output_type must be 'float', 'uint8' or 'yuv420', got {vae_output_type!r}")
         self.vae_output_type = vae_output_type
         self.vae_waves_per_device = 2
+        # MINIMAX_H3_VAE_UNITS_PER_DEVICE=2: the strips stitch decodes two tiles per chip per decoder call, pairing
+        # consecutive waves of the one-tile schedule (dense packing included), so it never adds a wave. The stitch is
+        # unchanged and runs per wave. Unset = 1 (one tile per chip per call). Other values raise in the VAE.
+        self.vae_strip_units = int(os.environ.get("MINIMAX_H3_VAE_UNITS_PER_DEVICE", "1"))
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -936,7 +940,12 @@ class MiniMaxH3Pipeline:
             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
+            strip_units_per_device=self.vae_strip_units,
         )
+        if self.vae_strip_units != 1:
+            self._host_log(
+                f"VAE strips decode: {self.vae_strip_units} tiles per chip per call (MINIMAX_H3_VAE_UNITS_PER_DEVICE)"
+            )
         self._vae.load_state(self._read_safetensors("vae"))
 
         if not self.coresident:
