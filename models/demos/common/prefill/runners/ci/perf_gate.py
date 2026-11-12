@@ -22,6 +22,16 @@ def fail(msg):
         print(f"::error title=Prefill perf gate::{escaped}")
 
 
+def fail_deterministic(msg):
+    """fail() for a verdict a re-run of the same commit would repeat; also tells CI auto-retry to skip it."""
+    fail(msg)
+    try:
+        from models.common.ci_failure import record_deterministic_failure
+    except ImportError:  # run outside the repo's PYTHONPATH; only the auto-retry skip is lost
+        return
+    record_deterministic_failure(msg)
+
+
 def power_class():
     """This host's power class: 14kw, 8kw, or unknown when tt-smi cannot report the TDP (no tt-smi here,
     or it timed out). An unreadable TDP is not evidence of a low-power host."""
@@ -34,6 +44,15 @@ def power_class():
     cls = "unknown" if not isinstance(tdp, int) else "14kw" if tdp >= 130 else "8kw"
     print(f"perf baseline: TDP_LIMIT_MAX={tdp} -> {cls} (14kw needs >= 130 W)", file=sys.stderr)
     return cls
+
+
+def probe_tokens(label):
+    """Tokens a probe label stands for ("@5k" -> 5120, "@1M" -> 1048576, "@123" -> 123); -1 if unparsable."""
+    scale = {"k": 1024, "M": 1048576}.get(label[-1:], 1)
+    try:
+        return int(label[1 : -1 if scale > 1 else None]) * scale
+    except ValueError:
+        return -1
 
 
 class GateError(Exception):
@@ -86,7 +105,7 @@ def check(rec, path, label, metric, expected, margin):
     if value < lo or value > hi:
         faster = (value > hi) == higher_is_better
         hint = "; faster than the baseline, update the configured baseline in this change" if faster else ""
-        fail(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]{hint}")
+        fail_deterministic(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]{hint}")
         return False, [label, f"{name} ({unit})", f"{value:{fmt}}", band, "FAIL (faster)" if faster else "FAIL"]
     print(f"{name} GATE PASS")
     return True, [label, f"{name} ({unit})", f"{value:{fmt}}", band, "PASS"]
@@ -161,10 +180,12 @@ def main():
 
     gated = [probe for probe, _ in baselines if probe is not None]
     if gated and label not in gated:
-        fail(
-            f"TPS GATE FAIL: baseline covers {', '.join(gated)} but the deepest probe is {label}; "
-            f"the context length changed, so re-measure and update perf_baselines.json"
-        )
+        msg = f"TPS GATE FAIL: baseline covers {', '.join(gated)} but the deepest probe is {label}"
+        if probe_tokens(label) > max(map(probe_tokens, gated)):
+            fail_deterministic(f"{msg}; the context length changed, so re-measure and update perf_baselines.json")
+        else:
+            # Shallower than the baseline: as likely a lost deep sample as a shorter context, so retryable.
+            fail(f"{msg}; the deeper probes were not measured or the context length shrank")
         return 1
 
     results = [

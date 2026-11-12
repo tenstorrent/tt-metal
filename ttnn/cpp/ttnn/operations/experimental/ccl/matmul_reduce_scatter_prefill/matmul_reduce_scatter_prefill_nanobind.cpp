@@ -48,6 +48,7 @@ nb::dict last_plan_dict() {
     out["hold_depth"] = plan.depth_hold;
     out["grid"] = nb::make_tuple(plan.grid.grid_m, plan.grid.grid_n);
     out["strip"] = plan.grid.strip == detail::Strip::Row ? "row" : "col";
+    out["orient"] = plan.grid.orient == detail::Orient::MOnX ? "m_on_x" : "m_on_y";
     out["half_split"] = half_split_name(plan.half_split);
     out["waves"] = plan.waves.n;
     out["chunks"] = nb::make_tuple(plan.n_m, plan.n_n);
@@ -90,16 +91,9 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
                 and full sync are always on. Defaults to HiFi2.
             memory_config (ttnn.MemoryConfig, optional): interleaved output placement. Defaults to DRAM interleaved.
             output_tensor (ttnn.Tensor, optional): preallocated output matching the spec the op would allocate.
-            l1_headroom (int, optional): bytes of each core's L1 the plan leaves free for tensors the op does not
-                own, such as L1 operands or other resident L1 tensors (the planner does not see them). Defaults
-                to 64 KiB.
-            staging_tensor (ttnn.Tensor, optional): caller-held staging from
-                ``ttnn.experimental.matmul_reduce_scatter_prefill_staging``; the op then allocates none per call.
-                Any staging at least as large as the call needs serves (one sized for the largest shape serves
-                every smaller one); a larger one counts at its full size, so a smaller shape's plan leaves room for
-                it and may differ from the plan with the op's own staging. Other stagings held at the same time are
-                L1 the op does not see (raise ``l1_headroom``). Keep it alive while calls that use it run, traced
-                replays included.
+            l1_headroom (int, optional): bytes of each core's L1 the plan always leaves free. Defaults to 64 KiB.
+                The plan also stays below every L1 tensor live at the call (L1 operands, resident tensors) and leaves
+                room for an L1 output it allocates.
 
         Returns:
             ttnn.Tensor: bfloat16 TILE output, the scattered dim divided by the group size.
@@ -119,38 +113,6 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
-        nb::arg("l1_headroom") = nb::none(),
-        nb::arg("staging_tensor") = nb::none());
-
-    ttnn::bind_function<"matmul_reduce_scatter_prefill_staging", "ttnn.experimental.">(
-        mod,
-        R"doc(
-        Allocates a staging tensor for ``ttnn.experimental.matmul_reduce_scatter_prefill`` calls with these arguments,
-        to pass as its ``staging_tensor``: L1, height-sharded bfloat16 tiles over the full grid, on every device of
-        the mesh. The arguments resolve the plan exactly as the op does.
-
-        Args:
-            input_tensor (ttnn.Tensor): A, as the op takes it.
-            weight (ttnn.Tensor): W, as the op takes it.
-
-        Keyword Args:
-            cluster_axis (int): the mesh axis of the group (0 or 1).
-            scatter_dim (int, optional): -2 (M) or -1 (N). Defaults to -2.
-            topology (ttnn.Topology, optional): Linear or Ring. Defaults to Linear.
-            num_links (int, optional): fabric links per hop (1 or 2); None uses every usable link, up to 2.
-            l1_headroom (int, optional): as the op takes it. Defaults to 64 KiB.
-
-        Returns:
-            ttnn.Tensor: the staging, sized exactly for these arguments.
-        )doc",
-        &ttnn::experimental::matmul_reduce_scatter_prefill_staging,
-        nb::arg("input_tensor"),
-        nb::arg("weight"),
-        nb::kw_only(),
-        nb::arg("cluster_axis"),
-        nb::arg("scatter_dim") = -2,
-        nb::arg("topology") = ttnn::ccl::Topology::Linear,
-        nb::arg("num_links") = nb::none(),
         nb::arg("l1_headroom") = nb::none());
 
     mod.def(

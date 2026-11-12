@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -21,6 +22,8 @@ struct IndexedEntryCopyInputs {
     Tensor source;
     Tensor destination;
     Tensor index;
+    // Read on device like `index`: 0 fills the destination entry with zeros instead of the source's.
+    std::optional<Tensor> zero_fill_at_zero;
 };
 
 }  // namespace ttnn::experimental::prim

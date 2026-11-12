@@ -48,8 +48,6 @@ _TIMING_BASES = (
     "UNPACK_ISOLATE",
     "MATH_ISOLATE",
     "PACK_ISOLATE",
-    "L1_CONGESTION[UNPACK]",
-    "L1_CONGESTION[PACK]",
 )
 _TIMING_COLUMNS = [
     Column(stat_column(base, kind), "float64", True, "timing")
@@ -85,6 +83,7 @@ DB_SCHEMA = [
     Column("alpha_bits", "int64", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
     Column("beta_bits", "int64", True, "configuration"),
+    Column("binary_init_before_ema", "bool", True, "configuration"),
     Column("binop_mathop", "string", True, "configuration"),
     Column("block_ct_dim", "int64", True, "configuration"),
     Column("block_rt_dim", "int64", True, "configuration"),

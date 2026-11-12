@@ -104,6 +104,16 @@ void kernel_main() {
     const DataflowBuffer dfb_partial_size_ref(dfb::ex_partial);
 #endif
     const uint32_t single_tile_size_bytes = dfb_partial_size_ref.get_tile_size();
+#ifdef ARCH_WORMHOLE
+    constexpr bool split_exchange = !use_welford;
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+#else
+    constexpr bool split_exchange = false;
+#endif
+    const uint32_t face_bytes = single_tile_size_bytes / 4;
+    const bool read_half_tiles = split_exchange && single_tile_size_bytes == 2048;
+    constexpr uint32_t partial_push_blocks = 3;
+    const bool send_half_tiles = split_exchange && (single_tile_size_bytes == 2048 || single_tile_size_bytes == 4096);
 
     // Compute the NOC coordinates for remote cores that interact with this core
     df::RemoteNocCoords<num_blocks> remote_coords{};
@@ -175,18 +185,51 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_tiles_per_worker; ++i) {
             dfb_external_obj.reserve_back(static_cast<uint16_t>(num_blocks_first_stage * num_tiles_scaler));
             uint32_t write_offset = 0;
+            uint32_t num_pushed = 0;
+            uint32_t num_read = 0;
             for (uint32_t block = 0; block < num_blocks_first_stage; ++block) {
-                noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                    remote_ep,
-                    dfb_external_obj,
-                    num_tiles_scaler * single_tile_size_bytes,
-                    {.noc_x = remote_coords[block].x, .noc_y = remote_coords[block].y, .addr = l1_read_addr_ex_par},
-                    {.offset_bytes = write_offset});
+                if (read_half_tiles) {
+                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        remote_ep,
+                        dfb_external_obj,
+                        face_bytes,
+                        {.noc_x = remote_coords[block].x, .noc_y = remote_coords[block].y, .addr = l1_read_addr_ex_par},
+                        {.offset_bytes = write_offset});
+                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        remote_ep,
+                        dfb_external_obj,
+                        face_bytes,
+                        {.noc_x = remote_coords[block].x,
+                         .noc_y = remote_coords[block].y,
+                         .addr = l1_read_addr_ex_par + 2 * face_bytes},
+                        {.offset_bytes = write_offset + 2 * face_bytes});
+#ifdef ARCH_WORMHOLE
+                    const uint32_t l1_write_addr = dfb_external_obj.get_write_ptr() + write_offset;
+                    noc_async_read(zeros_noc_addr, l1_write_addr + face_bytes, face_bytes);
+                    noc_async_read(zeros_noc_addr, l1_write_addr + 3 * face_bytes, face_bytes);
+#endif
+                } else {
+                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        remote_ep,
+                        dfb_external_obj,
+                        num_tiles_scaler * single_tile_size_bytes,
+                        {.noc_x = remote_coords[block].x, .noc_y = remote_coords[block].y, .addr = l1_read_addr_ex_par},
+                        {.offset_bytes = write_offset});
+                }
                 write_offset += num_tiles_scaler * single_tile_size_bytes;
+                ++num_read;
+                if constexpr (split_exchange) {
+                    if (num_read % partial_push_blocks == 0 && num_read < num_blocks_first_stage) {
+                        noc.async_read_barrier();
+                        dfb_external_obj.push_back(static_cast<uint16_t>(partial_push_blocks * num_tiles_scaler));
+                        num_pushed += partial_push_blocks;
+                        write_offset = 0;
+                    }
+                }
             }
             l1_read_addr_ex_par += num_tiles_scaler * single_tile_size_bytes;
             noc.async_read_barrier();
-            dfb_external_obj.push_back(static_cast<uint16_t>(num_blocks_first_stage * num_tiles_scaler));
+            dfb_external_obj.push_back(static_cast<uint16_t>((num_blocks_first_stage - num_pushed) * num_tiles_scaler));
 
             // ---------------------------------------------------------------------------
             // Handle the two-stage reduce
@@ -245,7 +288,21 @@ void kernel_main() {
             const uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1
                                                  ? num_tiles_per_worker_last_bytes
                                                  : num_tiles_per_worker_bytes;
-            if constexpr (num_tiles_per_worker_bytes * gather_tiles_scaler <= NOC_MAX_BURST_SIZE) {
+            if (send_half_tiles) {
+                for (uint32_t offset = 0; offset < num_tiles_scaler * num_tiles_bytes;
+                     offset += single_tile_size_bytes) {
+                    for (uint32_t face = 0; face < 4; face += 2) {
+                        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                            remote_ep,
+                            dfb_ex_global_obj,
+                            face_bytes,
+                            {.noc_x = remote_coords[block].x,
+                             .noc_y = remote_coords[block].y,
+                             .addr = l1_read_addr_ex_remote + offset + face * face_bytes},
+                            {.offset_bytes = gather_write_offset + offset + face * face_bytes});
+                    }
+                }
+            } else if constexpr (num_tiles_per_worker_bytes * gather_tiles_scaler <= NOC_MAX_BURST_SIZE) {
                 noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                     remote_ep,
                     dfb_ex_global_obj,
@@ -275,18 +332,39 @@ void kernel_main() {
                                                      ? num_tiles_per_worker_last_bytes
                                                      : num_tiles_per_worker_bytes;
 
-                noc.async_write_multicast(
-                    dfb_ex_global_obj,
-                    mcast_ep,
-                    num_tiles_scaler * num_tiles_bytes,
-                    num_mcast_dests,
-                    {.offset_bytes = mcast_src_offset},
-                    {.noc_x_start = mcast_dest_noc_start_x,
-                     .noc_y_start = mcast_dest_noc_start_y,
-                     .noc_x_end = mcast_dest_noc_end_x,
-                     .noc_y_end = mcast_dest_noc_end_y,
-                     .addr = l1_read_addr_ex_global + mcast_src_offset},
-                    true);
+                if (send_half_tiles) {
+                    for (uint32_t offset = 0; offset < num_tiles_scaler * num_tiles_bytes;
+                         offset += single_tile_size_bytes) {
+                        for (uint32_t face = 0; face < 4; face += 2) {
+                            const uint32_t src_offset = mcast_src_offset + offset + face * face_bytes;
+                            noc.async_write_multicast(
+                                dfb_ex_global_obj,
+                                mcast_ep,
+                                face_bytes,
+                                num_mcast_dests,
+                                {.offset_bytes = src_offset},
+                                {.noc_x_start = mcast_dest_noc_start_x,
+                                 .noc_y_start = mcast_dest_noc_start_y,
+                                 .noc_x_end = mcast_dest_noc_end_x,
+                                 .noc_y_end = mcast_dest_noc_end_y,
+                                 .addr = l1_read_addr_ex_global + src_offset},
+                                true);
+                        }
+                    }
+                } else {
+                    noc.async_write_multicast(
+                        dfb_ex_global_obj,
+                        mcast_ep,
+                        num_tiles_scaler * num_tiles_bytes,
+                        num_mcast_dests,
+                        {.offset_bytes = mcast_src_offset},
+                        {.noc_x_start = mcast_dest_noc_start_x,
+                         .noc_y_start = mcast_dest_noc_start_y,
+                         .noc_x_end = mcast_dest_noc_end_x,
+                         .noc_y_end = mcast_dest_noc_end_y,
+                         .addr = l1_read_addr_ex_global + mcast_src_offset},
+                        true);
+                }
                 reduce_sender_sem.set_multicast(
                     noc,
                     mcast_dest_noc_start_x,

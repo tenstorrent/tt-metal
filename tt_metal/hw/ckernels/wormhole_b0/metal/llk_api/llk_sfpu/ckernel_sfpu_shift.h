@@ -32,6 +32,11 @@ using shift_vtype = std::conditional_t<LAYOUT == sfpi::DataLayout::U16, sfpi::vU
 
 constexpr std::uint32_t dst_tile_size = 32;
 
+// log2 of the 32-bit lane width: (unsigned)shift >> shift_range_log2 is non-zero exactly when
+// shift < 0 or shift >= 32, so the out-of-range guard is one logical shift plus one SETCC.
+constexpr int shift_range_log2 = 5;
+constexpr int shift_lane_bits = 1 << shift_range_log2;
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
 inline void calculate_binary_left_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -53,9 +58,19 @@ inline void calculate_binary_left_shift(
         // A positive shift amount shifts left (logical).
         sfpi::vUInt result = sfpi::shft(value, shift, sfpi::ShiftMode::Logical);
 
-        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0.
-        v_if(shift < 0 || shift >= 32) { result = 0; }
-        v_endif;
+        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0. U16 zero-extends shift
+        // on load, so only shift >= 32 can occur there: one SFPIADD compare. Otherwise tested as
+        // (unsigned)shift >> shift_range_log2 != 0, the last read of shift, so the SFPSHFT works
+        // in place and shift needs no copy.
+        if constexpr (layout == sfpi::DataLayout::U16) {
+            v_if(shift >= shift_lane_bits) { result = 0; }
+            v_endif;
+        } else {
+            v_if(sfpi::shft(sfpi::as<sfpi::vUInt>(shift), -shift_range_log2, sfpi::ShiftMode::Logical) != 0) {
+                result = 0;
+            }
+            v_endif;
+        }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
         sfpi::dst_reg++;
@@ -80,22 +95,36 @@ inline void calculate_binary_right_shift(
         sfpi::vUInt value = sfpi::as<sfpi::vUInt>(a);
         sfpi::vInt shift = sfpi::as<sfpi::vInt>(s);
 
-        // Right shift by `shift` (a negative shift amount shifts left). Out-of-range lanes are
-        // fixed up to 0 by the final guard below, so their intermediate result here is don't-care.
-        sfpi::vUInt result = sfpi::shft(value, 0 - shift, sfpi::ShiftMode::Logical);
+        sfpi::vUInt result;
+        if constexpr (layout == sfpi::DataLayout::U16) {
+            // U16 zero-extends both operands on load: shift < 0 cannot occur and the arithmetic
+            // shift is the logical one. Zeroing the value of the shift >= 32 lanes up front lets
+            // the SFPIADD negate shift in place.
+            v_if(shift >= shift_lane_bits) { value = 0; }
+            v_endif;
+            result = sfpi::shft(value, 0 - shift, sfpi::ShiftMode::Logical);
+        } else {
+            // Right shift by `shift` (a negative shift amount shifts left). Out-of-range lanes are
+            // fixed up to 0 by the guard below, so their intermediate result here is don't-care.
+            const sfpi::vInt neg_shift = 0 - shift;
+            result = sfpi::shft(value, neg_shift, sfpi::ShiftMode::Logical);
 
-        // Arithmetic shift: when the original value is negative (and the shift is non-zero) the
-        // vacated high bits must be filled with 1's rather than 0's.
-        v_if(sfpi::as<sfpi::vInt>(value) < 0 && shift != 0) {
-            sfpi::vUInt high_ones = sfpi::shft(~sfpi::vUInt(0), 32 - shift, sfpi::ShiftMode::Logical);
-            result = result | high_ones;
+            // Arithmetic shift through the sign-extension identity: with x = value >>u shift and
+            // b = sign_bit_mask >>u shift = 1 << (31 - shift), (x ^ b) - b sign-extends x from bit
+            // (31 - shift). For shift == 0, b = 2^31 and (value ^ 2^31) - 2^31 == value (mod 2^32).
+            constexpr std::uint32_t sign_bit_mask = 0x80000000u;
+            const sfpi::vUInt b = sfpi::shft(sfpi::vUInt(sign_bit_mask), neg_shift, sfpi::ShiftMode::Logical);
+            result = (result ^ b) - b;
+
+            // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0, matching the
+            // sibling kernels. Tested as (unsigned)shift >> shift_range_log2 != 0. The SFPIADD
+            // that negates shift above overwrites its operand (VD = VC - VD), so shift is copied
+            // once to stay live until here.
+            v_if(sfpi::shft(sfpi::as<sfpi::vUInt>(shift), -shift_range_log2, sfpi::ShiftMode::Logical) != 0) {
+                result = 0;
+            }
+            v_endif;
         }
-        v_endif;
-
-        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0, matching the sibling
-        // kernels and the original "shift_amount < 0 OR >= 32 -> 0" contract.
-        v_if(shift < 0 || shift >= 32) { result = 0; }
-        v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
         sfpi::dst_reg++;

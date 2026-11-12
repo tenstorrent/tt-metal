@@ -65,6 +65,33 @@
 #include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
 #endif
 
+// Reads one in1 block (BLOCK_H x BLOCK_W tiles, of which the first block_w_to_read per row exist) from an
+// interleaved tensor. Kept out of line, with its inputs by value, so the per-tile loop is register-allocated on its
+// own: inlined into kernel_main it competes with the multicast and writer state and spills per tile.
+template <
+    uint32_t BLOCK_H,
+    uint32_t BLOCK_W,
+    uint32_t STRIDE_W,
+    uint32_t STRIDE_H,
+    uint32_t TILE_BYTES,
+    uint32_t ALIGNED_TILE_BYTES,
+    typename Accessor>
+__attribute__((noinline)) void read_in1_block(
+    const Noc noc, const Accessor s1, uint32_t l1_write_addr, uint32_t start_tile_id, uint32_t block_w_to_read) {
+    uint32_t row_start_tile_id = start_tile_id;
+    for (uint32_t h = 0; h < BLOCK_H; ++h) {
+        uint32_t tile_id = row_start_tile_id;
+        uint32_t tile_l1_addr = l1_write_addr;
+        for (uint32_t w = 0; w < block_w_to_read; ++w) {
+            noc.async_read(s1, CoreLocalMem<uint32_t>(tile_l1_addr), TILE_BYTES, {.page_id = tile_id}, {});
+            tile_l1_addr += ALIGNED_TILE_BYTES;
+            tile_id += STRIDE_W;
+        }
+        l1_write_addr += BLOCK_W * ALIGNED_TILE_BYTES;
+        row_start_tile_id += STRIDE_H;
+    }
+}
+
 void kernel_main() {
     // READER
 #if defined(FUSE_OP_ALL_GATHER) || defined(FUSE_OP_REDUCE_SCATTER)
@@ -487,28 +514,22 @@ void kernel_main() {
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
-                        uint32_t in1_write_offset = 0;
                         in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
                         // Copy in1 block into the buffer, as the default kernel
-                        uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
-                        for (uint32_t h = 0; h < in1_block_h; ++h) {
-                            uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
-                            for (uint32_t w = 0; w < in1_block_w; ++w) {
-                                if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-                                    noc.async_read(
-                                        s1,
-                                        dfb_in1,
-                                        in1_single_tile_size_bytes,
-                                        {.page_id = in1_tensor_tile_id},
-                                        {.offset_bytes = in1_write_offset});
-                                }
-                                in1_write_offset += in1_aligned_tile_size_bytes;
-                                in1_tensor_tile_id += in1_tensor_stride_w;
-                            }
-                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
-                        }
+                        read_in1_block<
+                            in1_block_h,
+                            in1_block_w,
+                            in1_tensor_stride_w,
+                            in1_tensor_stride_h,
+                            in1_single_tile_size_bytes,
+                            in1_aligned_tile_size_bytes>(
+                            noc,
+                            s1,
+                            static_cast<uint32_t>(in1_start_address),
+                            in1_tensor_current_inner_dim_block_start_tile_id,
+                            bw < num_blocks_w_dim - 1 ? in1_block_w : last_block_w);
                         in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 
                         // Barrier! make sure the reads are done

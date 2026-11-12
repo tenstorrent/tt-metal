@@ -329,7 +329,7 @@ void validate_runtime_args(
                 name,
                 meta.logical_volume());
             TT_FATAL(!meta.is_sharded(), "metadata tensor {} must not be sharded", name);
-            // The writer resolves meta.buffer()->address() against cache.device(); a tensor on a
+            // The writer resolves meta.mesh_buffer().address() against cache.device(); a tensor on a
             // different mesh device would bake the wrong address and fail obscurely downstream.
             TT_FATAL(meta.device() == cache.device(), "metadata tensor {} must be on the same device as cache", name);
             // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses
@@ -631,7 +631,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         writer_tile_height = TILE_HEIGHT;
     } else if (is_row_major) {
         // ROW_MAJOR: page = one token row; use the buffer's aligned page size (handles row padding).
-        single_page_size = cache.buffer()->aligned_page_size();
+        single_page_size = cache.mesh_buffer().aligned_page_size();
         Wt = 1;
         input_Ht = input_shape[-2];
         cache_HtWt = cache_shape[-2];
@@ -819,8 +819,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // [9]=kv_actual_global tensor's raw DRAM address; scalar path -> [8]=slot_idx, [9]=kv_actual_global.
     // The kernel composes batch_idx = slot_idx*num_layers + layer_idx.
     if (has_metadata) {
-        const uint32_t slot_idx_addr = tensor_args.slot_idx->buffer()->address();
-        const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->buffer()->address();
+        const uint32_t slot_idx_addr = tensor_args.slot_idx->mesh_buffer().address();
+        const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->mesh_buffer().address();
         writer_kernel.emplace_common_runtime_args({
             linear_coord,
             linear_factor,
@@ -835,7 +835,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             kv_actual_global_addr,  // smuggled-rta-ok: 1-element metadata tensor DRAM addr; read on-device
             // Arg 10: valid_global's DRAM addr when clamping, else an inert 0 (always present so the
             // indices never shift).
-            has_valid ? tensor_args.valid_global->buffer()->address() : 0u,  // smuggled-rta-ok: as above
+            has_valid ? tensor_args.valid_global->mesh_buffer().address() : 0u,  // smuggled-rta-ok: as above
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
@@ -858,7 +858,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // the kv_actual_global tensor's raw DRAM address, which the reader reads element [0] of on-device;
     // scalar path -> the value itself. Same dual use as the writer's args 8/9.
     const uint32_t reader_kv_actual =
-        has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
+        has_metadata ? tensor_args.kv_actual_global->mesh_buffer().address() : args.kv_actual_global;
     reader_kernel.emplace_common_runtime_args({
         linear_coord,
         linear_factor,
@@ -965,10 +965,10 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     const bool window = has_input_window(args, tensor_args.input.padded_shape()[-2]);
     const uint32_t input_row_offset_t = input_row_offset_page_rows(args, tensor_args.cache);
     const bool has_metadata = tensor_args.slot_idx.has_value();
-    const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->buffer()->address() : args.slot_idx;
-    const uint32_t arg9 = has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
+    const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->mesh_buffer().address() : args.slot_idx;
+    const uint32_t arg9 = has_metadata ? tensor_args.kv_actual_global->mesh_buffer().address() : args.kv_actual_global;
     // Arg 10: valid_global's address (metadata) or token count (scalar); 0 when not clamping.
-    const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->buffer()->address()
+    const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->mesh_buffer().address()
                                                                 : args.valid_global.value_or(0);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);

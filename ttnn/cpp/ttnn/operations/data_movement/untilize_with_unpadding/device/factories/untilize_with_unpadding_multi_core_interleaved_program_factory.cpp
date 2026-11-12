@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -142,6 +143,9 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
               (uint32_t)(input_dfb_data_format == tt::DataFormat::Float32 or
                          input_dfb_data_format == tt::DataFormat::UInt32 or
                          input_dfb_data_format == tt::DataFormat::Int32)},
+             {"one_byte_dtype",
+              (uint32_t)(input_dfb_data_format == tt::DataFormat::UInt8 ||
+                         input_dfb_data_format == tt::DataFormat::Int8)},
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"padded_X_size", "start_stick_id", "n_block_reps"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
@@ -151,7 +155,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
      */
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, a.dtype())) {
         compute_hw_config.unpack_modes = {{MCI_IN, UnpackMode::UnpackToDest}};
     }
     const std::string compute_kernel(

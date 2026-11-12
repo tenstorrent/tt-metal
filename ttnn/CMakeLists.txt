@@ -98,6 +98,17 @@ add_library(TTNN::Core ALIAS ttnn_core)
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
+# These declare ttnn::experimental and include tt-metalium/experimental/command_list.hpp, which declares
+# tt::tt_metal::experimental::detail. Either changes unqualified `experimental::` / `detail::` lookup in files that
+# share a unity translation unit with them.
+set_source_files_properties(
+    core/command_list.cpp
+    cpp/ttnn-nanobind/operations/command_list.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_compile_definitions(ttnn_core PRIVATE "TT_METAL_BUILD_TYPE=\"$<CONFIG>\"")
 
@@ -239,7 +250,11 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${ttnn_kernels}
+        FILES
+            ${ttnn_kernels}
+            cpp/ttnn/operations/common/shared_with_host/runtime_length.hpp
+            cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_worker_split.hpp
+            cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/nlp_concat_heads_split.hpp
     PRIVATE
         ${TTNNCPP_SRCS}
 )
@@ -380,7 +395,6 @@ if(WITH_PYTHON_BINDINGS)
             "$<BUILD_INTERFACE:TTNN::CPP>"
         PRIVATE
             TT::Nanobind
-            Boost::algorithm
             TT::Metalium
     )
     # .. enable size optimizations

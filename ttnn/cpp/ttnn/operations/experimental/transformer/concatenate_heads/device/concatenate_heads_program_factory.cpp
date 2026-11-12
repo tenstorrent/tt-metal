@@ -38,7 +38,7 @@ ConcatenateHeadsDeviceOperation::ConcatenateHeadsProgramFactory::create_program_
     tt::DataFormat dfb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
-    TT_ASSERT(tensor_args.input.buffer()->size() % single_tile_size == 0);
+    TT_ASSERT(tensor_args.input.mesh_buffer().device_local_size() % single_tile_size == 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup

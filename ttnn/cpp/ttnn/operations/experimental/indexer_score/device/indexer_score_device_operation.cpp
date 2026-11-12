@@ -1324,23 +1324,18 @@ ttnn::Tensor ring_indexer_score_dsa(
             "ring_indexer_score_dsa cluster_axis=None requires a 2D fabric config (FABRIC_2D or "
             "FABRIC_2D_TORUS_X/Y/XY), got {}",
             fabric_config);
-        const std::array<tt::tt_fabric::Topology, 2> axis_topology{
-            ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
-        const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            q, std::nullopt, num_links, axis_topology, true, "ring_indexer_score_dsa", /*allow_open_path=*/true);
-        TT_FATAL(route.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh route");
         TT_FATAL(
-            route->plan.ring_size <= ttnn::operations::experimental::indexer_score::kMaxRingSize,
-            "ring_indexer_score_dsa supports at most {} full-mesh ranks, got {}",
+            mesh_shape.dims() == 2 && mesh_size <= ttnn::operations::experimental::indexer_score::kMaxRingSize,
+            "ring_indexer_score_dsa supports a 2D mesh of at most {} full-mesh ranks, got {}",
             ttnn::operations::experimental::indexer_score::kMaxRingSize,
-            route->plan.ring_size);
+            mesh_shape);
         fused_ring.full_mesh = true;
-        // The proved route decides closure; the caller's topology only asked for a full-mesh gather.
-        fused_ring.topology = route->topology;
-        fused_ring.snake_orientation = route->plan.orientation;
-        fused_ring.mesh_rows = route->plan.mesh_rows;
-        fused_ring.mesh_cols = route->plan.mesh_cols;
-        fused_ring.route_plan_hash = route->plan.route_plan_hash;
+        // The route is proved on a program-cache miss (resolve_full_mesh_route in the program factory), not here,
+        // where it would walk the fabric control plane on every call. It decides closure (Ring or Linear); the
+        // caller's topology only asked for a full-mesh gather, so it is not kept and Ring and Linear share a program.
+        fused_ring.topology = ttnn::ccl::Topology::Ring;
+        fused_ring.mesh_rows = mesh_shape[0];
+        fused_ring.mesh_cols = mesh_shape[1];
     } else {
         TT_FATAL(
             *cluster_axis < mesh_shape.dims(),

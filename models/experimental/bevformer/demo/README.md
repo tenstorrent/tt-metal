@@ -51,20 +51,28 @@ on Blackhole only.
 
 ## Recorded smoke results
 
-These runs were performed on a BH P100 with tt-metal commit
-`2c3d948c7166911d109cf9cdf15b30a69f828087`, with the commands above:
+These runs used the commands above:
 
-| Variant | BEV size | Encoder layers | Device FPS | E2E FPS |
-| --- | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 12.50 | 10.41 |
-| small | 150 | 3 | 2.35 | 2.34 |
-| base | 200 | 6 | 1.11 | 1.11 |
+| Variant | BEV size | Encoder layers | Device FPS (Snapshot #1) | Device FPS (Snapshot #2) | Device FPS (Snapshot #3) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| tiny | 50 | 3 | 44.12 | 53.19 | 54.58 |
+| small | 150 | 3 | 13.03 | 14.72 | 15.70 |
+| base | 200 | 6 | 4.89 | 5.88 | 6.44 |
 
-Compare runs by Device FPS (see [Output](#output)). E2E FPS is informative: it depends on the host's
-CPU. On small and base the host keeps up with the device, so E2E FPS matches Device FPS; on tiny the
-host's preparation is the slower side. These come from one ten-frame run per variant with random
-weights and validate end-to-end execution only; they are not statistically characterized benchmark
-results.
+Each snapshot is one card and compute grid, measured on one branch:
+
+| Snapshot | Card | Enabled Tensix cores | Compute grid | DRAM channels | Branch |
+| --- | --- | ---: | ---: | ---: | --- |
+| #1 | P100 | 120 | 11x10 | 7 | `main` |
+| #2 | P100 | 120 | 11x10 | 7 | `ctr-ikasic/bevformer-integration-dcn-backbone-stem-encoder` |
+| #3 | P150 | 140 | 13x10 | 8 | `ctr-ikasic/bevformer-integration-dcn-backbone-stem-encoder` |
+
+Snapshot #3 used firmware 19.12.0 with the Tensix column disable count patched from 2 to 0,
+which enables all 14 columns. One column goes to dispatch, which leaves a 13x10 compute grid.
+
+Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
+with random weights and validate end-to-end execution only; they are not statistically characterized
+benchmark results.
 
 ## Model configuration
 

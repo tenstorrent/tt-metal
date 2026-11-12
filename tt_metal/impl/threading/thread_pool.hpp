@@ -6,7 +6,6 @@
 
 #include <memory>
 #include <optional>
-#include <thread>
 #include <vector>
 
 #include <tt_stl/move_only_function.hpp>

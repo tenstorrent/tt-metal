@@ -23,7 +23,7 @@ Environment:
     KDA_TRACE_DIR            the vLLM trace whose token ids the golden used
     KDA_DEV_TOKENS           tokens to run (default: the whole golden; a multiple of 5,120)
     KDA_DEV_PROGRAM_CONFIG   JSON overrides of the program config, e.g.
-                             {"recurrence.scan_math_fidelity": "HiFi3", "input_projection_math_fidelity": "HiFi4"}
+                             {"recurrence.scan_math_fidelity": "HiFi2", "input_projection_math_fidelity": "HiFi4"}
 """
 
 from __future__ import annotations

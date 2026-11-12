@@ -168,6 +168,7 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
         out.append("chunk_time, ttft: n/a (the runner acks each chunk in one message)")
     else:
         out.append("chunk_time = the chunk's first layer ack -> its last layer ack")
+        rec["chunk_time_curve_ms"] = [(span[1] - span[0]) * 1000.0 for span in spans]
         for lbl, d in probes((0, 50000, max_seq // 2, max_seq - chunk_size)):
             rec["chunk_index"][lbl] = d
             rec["chunk_time_ms"][lbl] = (spans[d][1] - spans[d][0]) * 1000.0

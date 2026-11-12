@@ -16,6 +16,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
+from models.common.ci_failure import assert_perf_gate
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
@@ -997,7 +998,10 @@ def _run_high_bw_all_gather_perf(
         f"median={median_ns / 1e6:.3f}ms effective_receive_bw={bandwidth_gbps:.3f}GB/s "
         f"samples_ms={[round(duration / 1e6, 3) for duration in durations_ns]}"
     )
-    assert bandwidth_gbps >= min_bandwidth_gbps
+    assert_perf_gate(
+        bandwidth_gbps >= min_bandwidth_gbps,
+        f"effective receive bandwidth {bandwidth_gbps:.3f} GB/s below the {min_bandwidth_gbps:.3f} GB/s floor",
+    )
     return bandwidth_gbps, median_ns
 
 

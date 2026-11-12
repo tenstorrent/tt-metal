@@ -471,29 +471,12 @@ inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Keep machine interrupts enabled so an FDS machine-external go interrupt can reach DM0.
 }
 #else
-inline __attribute__((interrupt, hot)) void handle_interrupt() {
-    uint32_t trisc_id = internal_::get_trisc_id();
-    uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
-    if (error_code == trisc_id || (35 - error_code) == trisc_id ||
-        (error_code > 3 && error_code < 32 && trisc_id == 0)) {
-        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
-        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
-        (void)hirv;
-    } else {
-        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
-        (void)hirv;
-        return;
-    }
-#if !defined(WATCHER_ENABLED)  // hang anyway
-    while (1) {
-        ;
-    }
-#endif
-}
+// HW error interrupt entry, in trisc.cc.
+extern "C" void trisc_irq_entry();
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(handle_interrupt);
+    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(trisc_irq_entry);
     *(RISC_PIC_BRISC_HW_INT_EN(trisc_id)) = 1 << HW_ERROR_INTERRUPT_INDEX;
     RISCV_DEBUG_REGS->ERR_MASK = 0xFFFF;  // enable all errors
 }

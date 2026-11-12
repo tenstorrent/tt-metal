@@ -4,6 +4,7 @@
 
 #include <string>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>

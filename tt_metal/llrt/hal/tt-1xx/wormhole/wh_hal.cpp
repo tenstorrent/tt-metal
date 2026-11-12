@@ -17,7 +17,7 @@
 #include "stream_io_map.h"
 #include "tensix.h"
 #include "wormhole/wh_hal.hpp"
-#include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
 #include "hal_1xx_common.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 
