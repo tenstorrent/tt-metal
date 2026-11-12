@@ -36,6 +36,14 @@ Run it (ttnn venv)::
     DEEPSEEK_V4_MAX_NEW_TOKENS=16 pytest -s \\
       models/experimental/deepseek_v41_flash/tests/decode/test_full_model_decode_demo.py
 
+The ``tp4_1stage_persistent_moe12`` case runs the model's ``persistent_moe`` layout instead: one TP4 stage (the
+1x4 submesh at row 4) holds the embedding, every layer's Engram, attention, hyper-connections and norms and
+``lm_head``, and every layer's MoE runs on one persistent TP12 ``fused_experts`` launch on the 3x4 submesh at
+row 5. It needs the TP12 expert cache (``tools/fill_expert_cache.py --all-layers --tp-size 12 --mesh-rows 3``)::
+
+    DEEPSEEK_V4_MAX_NEW_TOKENS=64 pytest -s \\
+      models/experimental/deepseek_v41_flash/tests/decode/test_full_model_decode_demo.py -k persistent_moe
+
 Set ``DEEPSEEK_V4_START_POS`` to begin prefill at a non-zero absolute position,
 for example ``DEEPSEEK_V4_START_POS=1024``. Engram hashes then have no earlier
 tokens, so a non-zero start only matches a run that never built an Engram layer.
@@ -215,9 +223,10 @@ def _construct_model(
     layer_submesh_ids=None,
     verify_rows: int = 1,
     prefill_layer_submesh_ids=None,
+    persistent_moe: bool = False,
 ):
-    """Build ``DeepSeekV41Model`` + ``lm_head`` and attach the prefetcher session (``verify_rows`` and
-    ``prefill_layer_submesh_ids``: see the model)."""
+    """Build ``DeepSeekV41Model`` + ``lm_head`` and attach the prefetcher session (``verify_rows``,
+    ``prefill_layer_submesh_ids`` and ``persistent_moe``: see the model)."""
     if loader is None:
         loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     if config is None:
@@ -246,6 +255,7 @@ def _construct_model(
         verify_rows=verify_rows,
         balance_dram_banks=_BALANCE_DRAM_BANKS,
         prefill_layer_submesh_ids=prefill_layer_submesh_ids,
+        persistent_moe=persistent_moe,
     )
     lm_head = DeepSeekV41LMHead(
         dequantized(loader, "lm_head.weight", translate=True),
@@ -268,7 +278,9 @@ def _construct_model(
     return model, lm_head, loader, config
 
 
-def _assert_decode_parallelism(model: DeepSeekV41Model, tp_size: int, num_stages: int | None = None) -> None:
+def _assert_decode_parallelism(
+    model: DeepSeekV41Model, tp_size: int, num_stages: int | None = None, persistent_moe: bool = False
+) -> None:
     """The TP / pipeline layout this demo pins."""
     if num_stages is None:
         num_stages = pipeline_stage_count()
@@ -276,6 +288,17 @@ def _assert_decode_parallelism(model: DeepSeekV41Model, tp_size: int, num_stages
     assert model.num_submeshes == num_stages
     assert model.pipeline_devices == model.num_submeshes * tp_size
     assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
+    if persistent_moe:
+        server = model.moe_server
+        assert server is not None, "persistent_moe must launch the TP12 MoE server"
+        assert server.layer_ids == list(range(model.num_layers)), f"the server serves layers {server.layer_ids}"
+        assert tuple(server.moe_mesh.shape) == (3, 4) and server.request_meshes == [model.submeshes[0]]
+        assert all(layer.mlp is None and layer.moe_server is server for layer in model.layers)
+        logger.info(
+            f"parallelism: 1 stage x TP{tp_size} for all {model.num_layers} layers' attention and hyper-connections, "
+            "every MoE on the persistent TP12 3x4 mesh"
+        )
+        return
     assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
     assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
     assert all(
@@ -321,6 +344,8 @@ def _assert_prefetch_rings(model: DeepSeekV41Model) -> None:
             assert q_a_ring is not None, "q_a must stream through the prefetcher"
         assert not hasattr(layer.attn_hc.fn, "prefetcher_pipes"), "attention hyper-connection fn must not use a ring"
         assert not hasattr(layer.ffn_hc.fn, "prefetcher_pipes"), "FFN hyper-connection fn must not use a ring"
+        if layer.mlp is None:  # persistent_moe: the MoE's weights live on the TP12 server
+            continue
         proj = getattr(layer.mlp.gate, "gate", None)
         if proj is not None and hasattr(proj, "dram_sharded_weight"):
             assert (
@@ -367,6 +392,7 @@ def _build_and_prefill(
     *,
     tp_size: int = 4,
     num_stages: int | None = None,
+    persistent_moe: bool = False,
 ):
     """Build the full ttnn model, prepare the static traced-decode buffers, and
     prefill ``text`` one token at a time."""
@@ -406,6 +432,7 @@ def _build_and_prefill(
         loader=loader,
         config=config,
         num_stages=num_stages,
+        persistent_moe=persistent_moe,
     )
 
     # --- prefill the prompt by replaying decode one token at a time --------- #
@@ -609,16 +636,21 @@ class _InterruptFlag:
     ids=["fabric_1d"],
 )
 @pytest.mark.parametrize(
-    "mesh_device,tp_size,num_stages",
+    "mesh_device,tp_size,num_stages,persistent_moe",
     [
         # TP4 opens the full Galaxy as (8, 4) so no reshape changes the per-device grid.
         # DEEPSEEK_V4_NUM_STAGES (default 8) submeshes are created; the other rows stay idle.
-        pytest.param((8, 4), 4, _NUM_STAGES, id=f"tp4_{_NUM_STAGES}stage"),
+        pytest.param((8, 4), 4, _NUM_STAGES, False, id=f"tp4_{_NUM_STAGES}stage"),
+        # One TP4 stage (row 4) for every layer's attention and hyper-connections, every MoE on the persistent
+        # TP12 3x4 mesh below it (rows 5-7).
+        pytest.param((8, 4), 4, 1, True, id="tp4_1stage_persistent_moe12"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
-def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: int, num_stages: int) -> None:
+def test_full_model_decode_demo(
+    mesh_device, reset_seeds, text: str, tp_size: int, num_stages: int, persistent_moe: bool
+) -> None:
     import time
 
     # Per-program L1 / DRAM block maps, written as each program compiles (before its circular-buffer
@@ -628,6 +660,9 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
 
     # The prefetcher session spans prefill and generation both, so it is opened inside
     # ``_build_and_prefill`` (once the model exists) against this stack.
+    if persistent_moe and _SERVER_BUILD:
+        pytest.skip("the server build has no persistent_moe layout")
+    extra = {"persistent_moe": True} if persistent_moe else {}
     with contextlib.ExitStack() as prefetcher:
         state = (_build_like_server if _SERVER_BUILD else _build_and_prefill)(
             mesh_device,
@@ -635,6 +670,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
             prefetcher,
             tp_size=tp_size,
             num_stages=num_stages,
+            **extra,
         )
         model, tokenizer = state["model"], state["tokenizer"]
         prompt_ids, real_len = state["prompt_ids"], state["real_len"]
@@ -642,7 +678,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
         next_id = state["next_id"]
         generated: list[int] = [next_id]
-        _assert_decode_parallelism(model, tp_size, num_stages)
+        _assert_decode_parallelism(model, tp_size, num_stages, persistent_moe)
         _assert_prefetch_rings(model)
         assert model.paged, "traced decode must use the shared compressed-KV pools"
 

@@ -77,10 +77,14 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import (
     uses_candidate_pool,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import SHARED_RING_PAGES, make_prefetch_buffers
-from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
+from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import (
+    DeepSeekV41DecoderLayer,
+    DeepSeekV41PersistentMoeDecoderLayer,
+)
 from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
+from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
 from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     ENGRAM_RAM_MARGIN,
@@ -204,6 +208,18 @@ class SessionSnapshot:
         return sum(t.numel() * t.element_size() for t in tensors)
 
 
+def _l1_report(device) -> str:
+    """The stage's persistent L1: bytes allocated per bank, the number of buffers, and the lowest address any of them
+    starts at -- where every program's statically allocated circular buffers have to end."""
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    blocks = [(int(b["address"]), int(b["size"])) for b in view.block_table if b["allocated"] == "yes"]
+    lowest = min((a for a, _ in blocks), default=None)
+    return (
+        f"L1 {view.total_bytes_allocated_per_bank / 1024:.1f} KiB allocated per bank in {len(blocks)} buffers, "
+        f"lowest at {lowest}"
+    )
+
+
 class DeepSeekV41Model(DeepSeekV4Model):
     """V4.1 decode stack on V4's traced pipeline.
 
@@ -233,6 +249,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
     ``balance_dram_banks`` (on by default) builds the routed experts with K-split gate_up shards that cover every
     DRAM bank (see :class:`~.decode.moe.DeepSeekV41PreloadedExperts`); the decode and prefill expert ops both read
     that layout.
+
+    ``persistent_moe`` runs every layer's MoE on one persistent TP12 ``fused_experts`` launch
+    (:class:`~.decode.persistent_moe.PersistentMoE`, :attr:`moe_server`) on the 3x4 submesh at row 5 of the 8x4
+    Galaxy, and everything else -- embedding, every layer's Engram, attention, hyper-connections and norms, the
+    final norm and ``lm_head`` -- on one TP4 stage, the 1x4 submesh at row 4 right above it (unless ``submeshes``
+    gives that stage), which is the server's only requester. Each layer's FFN step is one
+    ``persistent_moe_request`` in the stage's trace (:class:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer`).
+    The server takes requests from its requesters in strict turn, so the layers must all be on that one stage
+    (``num_stages=1``). One decode row per step: no ``verify_rows``, DSpark, prefill model, image tokens or
+    vision. :meth:`shutdown` stops the server's kernels, which must happen before the mesh closes.
 
     Do not call :meth:`DeepSeekV4Model.__init__`. It builds V4 layers, reads ``compress_rates`` and
     ``mlp_layer_types``, and constructs ``hc_head``, none of which exist on this checkpoint.
@@ -264,8 +290,41 @@ class DeepSeekV41Model(DeepSeekV4Model):
         verify_rows: int = 1,
         balance_dram_banks: bool = True,
         prefill_layer_submesh_ids: Optional[Sequence[int]] = None,
+        persistent_moe: bool = False,
     ):
         self.config = config
+        self.persistent_moe = persistent_moe
+        self.moe_server: Optional[pmoe.PersistentMoE] = None
+        self.moe_mesh: Optional[ttnn.MeshDevice] = None
+        if persistent_moe:
+            if tuple(full_device.shape) != pmoe.GALAXY_MESH:
+                raise ValueError(f"persistent_moe needs the {pmoe.GALAXY_MESH} mesh, got {tuple(full_device.shape)}")
+            if tp_size != 4:
+                raise ValueError(f"persistent_moe runs everything but the MoE at TP4, got TP{tp_size}")
+            if num_stages is None:
+                num_stages = 1
+            if num_stages != 1:
+                raise ValueError(
+                    f"persistent_moe serves one requester stage (its requests go in strict turn), got {num_stages}"
+                )
+            unsupported = {
+                "verify_rows > 1": verify_rows > 1,
+                "image_rows": bool(image_rows),
+                "vision_stage": vision_stage is not None,
+                "prefill_layer_submesh_ids": prefill_layer_submesh_ids is not None,
+            }
+            if any(unsupported.values()):
+                raise NotImplementedError(
+                    f"persistent_moe decodes one text row per step; unsupported: "
+                    f"{[k for k, v in unsupported.items() if v]}"
+                )
+            if submeshes is None:
+                submeshes = [
+                    full_device.create_submesh(ttnn.MeshShape(1, tp_size), ttnn.MeshCoordinate(pmoe.REQUESTER_ROW, 0))
+                ]
+            self.moe_mesh = full_device.create_submesh(
+                ttnn.MeshShape(*pmoe.MOE_MESH_SHAPE), ttnn.MeshCoordinate(*pmoe.MOE_MESH_OFFSET)
+            )
         self.image_rows = image_rows
         self.verify_rows = verify_rows
         self.balance_dram_banks = balance_dram_banks
@@ -376,6 +435,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._mtp_pack = None
         self._mtp_hiddens = None
 
+        if persistent_moe:
+            self._launch_moe_server(n)
+
         self._stage_and_require_engram_ram()
         # A verify block's rows outnumber a socket's pages, so decode_verify writes them from a second thread.
         engram_sockets = {
@@ -455,6 +517,23 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     if self.use_prefetcher
                     else None
                 )
+                if self.moe_server is not None:
+                    self.layers[li] = DeepSeekV41PersistentMoeDecoderLayer(
+                        config,
+                        li,
+                        decoder_layer_weights(loader, li, config),
+                        current_device,
+                        self.moe_server,
+                        cache=layer_cache,
+                        weight_dtype=weight_dtype,
+                        tp_size=tp_size,
+                        use_prefetcher=self.use_prefetcher,
+                        prefetch_buffers=prefetch_buffers,
+                        engram_sockets=engram_sockets.get(li),
+                    )
+                    _profile(current_device)
+                    logger.info(f"Layer {li} built: {_l1_report(current_device)}")
+                    continue
                 experts = DeepSeekV41PreloadedExperts(
                     config,
                     expert_provider(loader, li),
@@ -825,7 +904,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 "has_r2_select": 2 in index_ratios,
                 "has_candidates": any(li in self._candidate_layers for li in layers_here),
                 # A hash-routed MoE takes no ranking bias, so only a learned router tells image tokens apart.
-                "routes_images": any(not self.layers[li].mlp.is_hash for li in layers_here),
+                # The persistent MoE's layer table holds the text bias only, so it routes no image tokens.
+                "routes_images": self.moe_server is None and any(not self.layers[li].mlp.is_hash for li in layers_here),
                 "traces": {},
                 "tids": {},
                 "outputs": {},
@@ -869,6 +949,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             self.submeshes_io.append(sm)
 
         self._allocate_shared_caches()
+        if self.moe_server is not None:
+            logger.info(f"decode caches and step buffers allocated: {_l1_report(self.submeshes[0])}")
         self._output_sm_index = self.pipeline_submesh_ids.index(ids[self.num_layers - 1])
         self._traced_captured = False
         self._traces_compiled = False
@@ -1932,6 +2014,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         if self._decode_max_seq is None:
             raise RuntimeError("call prepare_static_decode() before build_prefill()")
+        if self.moe_server is not None:
+            raise NotImplementedError("the prefill model reads per-stage routed experts; persistent_moe has none")
         n = self.num_layers
         if kv_only:
             n = max(i for i in self.config.kv_source_layer_ids if i < self.num_layers) + 1
@@ -2333,6 +2417,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         group's ``verify_rows``-row selections on each stage, the stages' verify streams layout and the
         buffers of its traces (:meth:`_prepare_verify_traces`).
         """
+        if self.moe_server is not None:
+            raise NotImplementedError("speculative decode verifies several rows per step; persistent_moe takes one")
         if self._traces_compiled or self._traced_captured:
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
         if self._slotted and self.verify_rows > 1:
@@ -2834,6 +2920,22 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if host is not None:
             host.close()
         super().shutdown()
+        # After the replay thread: the stop request queues behind every step already dispatched to the stage.
+        if self.moe_server is not None:
+            self.moe_server.stop()
+
+    def _launch_moe_server(self, num_layers: int) -> None:
+        """Load layers ``0 .. num_layers - 1``'s MoE at TP12 on :attr:`moe_mesh` and launch the persistent op, its
+        one requester the decode stage. Its sockets take L1 on the stage before the Engram sockets and the rings."""
+        start = time.perf_counter()
+
+        def log(layer):
+            logger.info(f"Layer {layer}'s MoE is on the TP12 MoE mesh ({time.perf_counter() - start:.0f}s so far)")
+
+        moes = pmoe.build_moe_layers(self.config, self.loader, self.moe_mesh, self.cache, range(num_layers), log=log)
+        self.moe_server = pmoe.PersistentMoE(self.moe_mesh, [self.submeshes[0]], moes)
+        logger.info(f"persistent MoE launched over layers 0..{num_layers - 1} ({time.perf_counter() - start:.0f}s)")
+        logger.info(f"stage before its layers: {_l1_report(self.submeshes[0])}")
 
     def _send_step_row(self, tapped: dict, taps: dict, pkt: ttnn.Tensor) -> None:
         """On the output stage, inside a decode step: send the step's target-layer means ``[1, 1, 1, targets * D]``

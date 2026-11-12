@@ -128,6 +128,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         engram_sockets,
         verify_rows: int,
         build_mlp=None,
+        hc_bias_in_l1: bool = True,
     ):
         """The Engram, attention, both hyper-connections and both norms; ``self.mlp`` is ``build_mlp()`` (built
         after attention, where the layer always built it, so the allocations keep their order), or ``None``."""
@@ -171,10 +172,20 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             weights["post_attention_layernorm.weight"], eps, device, cache.file("ffn_norm"), sharded=True
         )
         self.attn_hc = DeepSeekV4HyperConnection(
-            config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("hc_attn"), row_major_streams=True
+            config,
+            _strip_prefix(weights, "attn_hc"),
+            device,
+            cache=cache.sub("hc_attn"),
+            row_major_streams=True,
+            bias_in_l1=hc_bias_in_l1,
         )
         self.ffn_hc = DeepSeekV4HyperConnection(
-            config, _strip_prefix(weights, "ffn_hc"), device, cache=cache.sub("hc_ffn"), row_major_streams=True
+            config,
+            _strip_prefix(weights, "ffn_hc"),
+            device,
+            cache=cache.sub("hc_ffn"),
+            row_major_streams=True,
+            bias_in_l1=hc_bias_in_l1,
         )
 
     def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True):
@@ -343,6 +354,10 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             prefetch_buffers=prefetch_buffers,
             engram_sockets=engram_sockets,
             verify_rows=1,
+            # One device holds every layer here, and each HC module's L1 bias tiles take 6 KB of every core's L1:
+            # ~480 KB over 40 layers, past where the step's circular buffers have to end. The single-row program
+            # reads them from DRAM instead, ~0.2 us per call.
+            hc_bias_in_l1=False,
         )
         self.moe_server = moe_server
         self.requester = requester
