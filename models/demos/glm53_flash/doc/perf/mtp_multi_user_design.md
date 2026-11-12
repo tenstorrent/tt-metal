@@ -83,3 +83,40 @@ and the MTP rows add the catch-up (16 rows) + 2 chained 4-row launches. With tau
 rate is ~3.2 tokens per (29 + MTP ~8) ms ~ 86 tok/s per user vs ~47 plain at 4 users: ~1.8x; at 1-2 users the
 narrow / native widths keep today's ~2.5x. Agentic traffic accepts less (Gemma 31B AgentX: draft-1 acceptance
 0.36-0.49): measure tau on AgentX before assuming the gain.
+
+## 6. Batch 2 implementation plan (not started; anchors in tt/spec_mtp.py, tt/generator.py, the adapter, test_mk_e2e.py)
+
+Batches 1 + item 3 (commits 0df437eed8d, 8336baae69c) give the verify kernels their groups: REC_CHAIN_GROUPS,
+KDA_VERIFY_GROUPS, SPEC_GROUPS, MLA_DSA_GROUP_ROWS. Batch 2 builds and drives them. Fixed-G first: one SpecMTP per
+process for exactly G = GLM53_SPEC_MULTI_USERS live users (default 4), speculating only while exactly G requests are
+live on the group bases; variable live counts (a G = 4 build with inactive groups, SpecCtl skipping c < 0) after.
+
+1. SpecMTP.__init__ (spec_mtp.py ~432): G from GLM53_SPEC_MULTI / _USERS; self.w = G (K + 1); wv = the smallest build
+   width >= w (B 16 build, K 3: 8 at G 2, 16 at G 4; spec_widths grows a `groups` argument, the single-user rules
+   unchanged at G 0); drop the `wv <= 8` assert for G > 1; masks_v rows < w; self.ctl = SpecCtl(mesh, K, groups=G);
+   self.rec = dram_rows(G pages of 64 words); mpos_ch pages: row u = user u (ch = the smallest width >= G);
+   mw_cu = wv, mw_ch = ch; MtpLayer ts {cu, ch} (watch L1 at t 16: GLM53_MLA_S1_DRAM=1, trimmed ts).
+2. _build_verify_stacks (~600): around the KDA layer builds `env(GLM53_REC_UGROUPS=str(G))` and
+   `wts.attn.kda_verify_groups = True` (deleted / restored with kda_verify_sel); the sparse_dsa verify launches are
+   built with GLM53_MLA_VERIFY_GROUPS=str(G) wherever GLM53_MLA_ATT_VERIFY=1 is set around a verify launch (prepare /
+   capture), so mk_mla emits MLA_DSA_GROUP_ROWS (item 3 builds here first).
+3. set_page_table (~1113) -> set_page_tables(rows[G]): pt_v rows u g .. u g + K = user u's row (shard: each user's
+   local rows via be.shard_local_rows); the MTP private cache becomes G caches of nb_cap blocks: pt_m rows u g + j =
+   group u's identity row offset by u nb_cap; chain row u -> group u's.
+4. _dsa_rings (~870): group-major [dsa_slot_addrs(be._dsa_st(kv, i, u g), 1)[1] for u in range(G) for i in dsa].
+5. MTP chain source rows: MkEh.norm_h_proj(sel=) reads word 0 (kernels/spec/eh_dm0.cpp EH_SEL, T = 1). New define
+   EH_SEL_ROWS: output row t's source = selector word t (the chained launch's row u = MTP output row u (K + 1) + n_u =
+   SpecCtl's selector word u). The catch-up (cu = wv rows) needs no selection (row r = verify row r).
+6. Heads (_make_heads ~691): verify = head_clone(be.head, wv); mtp_cu at cu; mtp_ch at ch (K - 1 clones).
+7. Generator (generator.py ~2316-2420): spec_enter(kv, slots=(0, g, 2 g, ..)) seeds every group (BOOT); spec_step /
+   spec_step_submit / spec_step_collect return per-group {n, tokens}; _spec_settle per slot; spec_room per slot;
+   generate_batch(spec_k=K) with GLM53_SPEC_MULTI and live == G places the prompts on the group bases (no slot moves
+   in v1) and walks every user's accepted tokens.
+8. Adapter: backend.spec.groups > 0 -> spec_multi_capable; the gate "live == G (v1; later live <= 8), every live row
+   greedy, every position < GLM53_SPEC_MAX_CTX" turns num_valid on for the live rows; else plain (num_valid 0).
+9. test_mk_e2e.py _spec_ab: live > 1 -> every user's spec ids == its plain ids (the first mismatch, the top-2 gap),
+   tau per user, the step ms.
+
+First device rows after batch 2 (frozen b3): e2e knob-on B 16 at SEQ 1 M (GLM53_STACK_NARROW_WIDTHS=1,2,4
+GLM53_STACK_NATIVE_WIDTHS=8), GLM53_SPEC_MULTI=1 GLM53_SPEC_MULTI_USERS=4 / 2 with GLM53_MK_LIVE=4 / 2, ISL 128 and
+4 K: per-user ids == plain; a knob-off e2e regression (single-user K 3 at ISL 128 on B 4) on the same snapshot.
