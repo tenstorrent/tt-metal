@@ -136,7 +136,8 @@ class MiniMaxM3Media:
         if media.dtype != np.uint8 or media.ndim != 3 or media.shape[2] != 3 or 0 in media.shape:
             raise ValueError(f"expected a non-empty uint8 RGB [height, width, 3], got {media.dtype} {media.shape}")
         h, w = smart_resize(*media.shape[:2])
-        chw = torch.from_numpy(media).permute(2, 0, 1)
+        # torch.from_numpy warns about a read-only array and rejects negative strides, so copy those first.
+        chw = torch.from_numpy(np.require(media, requirements=("C_CONTIGUOUS", "WRITEABLE"))).permute(2, 0, 1)
         resized = tvF.resize(chw, [h, w], interpolation=tvF.InterpolationMode.BICUBIC, antialias=True)
         return M3Image(resized.permute(1, 2, 0).contiguous().numpy(), h // FACTOR, w // FACTOR)
 
