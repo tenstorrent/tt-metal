@@ -10,6 +10,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <shared_mutex>
 
 using namespace tt::tt_metal;
@@ -1319,6 +1321,18 @@ uint32_t align_buffer(uint32_t size) {
     uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
     return factor * alignment_bytes;
 };
+
+void append_size_independent_accessor_args(
+    const tt::tt_metal::Buffer& buffer, std::vector<uint32_t>& compile_time_args) {
+    std::vector<uint32_t> args = tt::tt_metal::TensorAccessorArgs(buffer).get_compile_time_args();
+    // Interleaved accessor args are [args_config, aligned_page_size].
+    TT_FATAL(
+        !tt::tt_metal::is_sharded(buffer.buffer_layout()) && args.size() == 2,
+        "expected an interleaved config tensor buffer, got {} compile-time accessor args",
+        args.size());
+    args[1] = 0;
+    compile_time_args.insert(compile_time_args.end(), args.begin(), args.end());
+}
 
 std::string SlidingWindowConfig::to_string() const {
     // Key the effective ceil padding rather than the raw ceil_pad_hw override: the override is ignored outside ceil
