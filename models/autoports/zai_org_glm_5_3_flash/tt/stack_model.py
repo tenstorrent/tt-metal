@@ -470,6 +470,10 @@ class StackBackend(ModelBackend):
             if why:
                 raise ValueError(f"GLM53_DSA_SHARD=1 needs: {', '.join(why)}")
         self.prefill_state_io = False  # True once the TP prefill's in-trace StateIO exists (prepare_prefill)
+        # callables run ONCE right before the first trace capture (capture_decode, after the TP prefill's warm-up):
+        # what must be allocated and compiled under the capture-time device state without sitting in a trace's
+        # transients (image input: the vision tower's weights and every patch bucket's programs); none by default
+        self.pre_capture_hooks: list = []
         source = FdTileCacheSource(CACHE_DIR, MANIFEST)
         ids = list(layers) if layers is not None else list(range(self.cfg.num_hidden_layers))
         self.fl = None
@@ -2202,6 +2206,9 @@ class StackBackend(ModelBackend):
             # memory (02:04Z leak_micro on the pair; the TP8 128-bucket 'alive before replay' at 00:32Z)
             tpp.warm()
             self._warm_groups()  # W1: the prewarmed group keys too, under the same capture-time device state
+        hooks, self.pre_capture_hooks = list(getattr(self, "pre_capture_hooks", [])), []
+        for hook in hooks:  # before every capture (the decode, spec and TP-prefill traces all start below)
+            hook()
         self._capture_spec()
         if int(width) in self.native_widths or int(width) in self.narrow_widths:  # its own programs, shared state
             if (

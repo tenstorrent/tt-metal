@@ -30,7 +30,9 @@ with ``null_block=0``.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import gc
 import importlib
 import os
 import sys
@@ -55,7 +57,7 @@ HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
 ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForCausalLM"
 MM_ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm_stack:GLM53StackForConditionalGeneration"
 MM_ENV = "GLM53_STACK_MM"  # "1": the stack's embedding table carries the image rows (mk_head.mm_extra_rows)
-MM_ENCODER_ENV = "GLM53_STACK_MM_ENCODER"  # the image encoder of the multimodal class: "hf_cpu" (default) | "none"
+MM_ENCODER_ENV = "GLM53_STACK_MM_ENCODER"  # the multimodal class's image encoder: device (default) | hf_cpu | none
 LATENT_DIM = 512  # kv_lora_rank: the latent page row, the only "KV" vLLM accounts for (generator_vllm.LATENT_DIM)
 
 
@@ -987,14 +989,151 @@ class HostVisionEncoder:
         return out
 
 
-def make_mm_encoder(snapshot: Path, env=os.environ):
-    """``GLM53_STACK_MM_ENCODER``: ``hf_cpu`` (default) = ``HostVisionEncoder`` (weights loaded now, not on the first
-    request), ``none`` = no encoder (an image request is refused)"""
-    kind = env.get(MM_ENCODER_ENV, "hf_cpu")
+class DeviceVisionEncoder:
+    """The image encoder on the stack's own mesh (GLM53_STACK_MM_ENCODER=device): ``multimodal.VisionRuntime`` -- the
+    resident ``tt/vision.py`` tower, weights replicated on every chip (~1.1 GB each) -- with the L1-bounded programs the
+    stack's worker L1 needs (``TtVisionTower(mm_l1_budget=, sdpa_chunks=, split_swiglu=True)``: GLM53_STACK_MM_TOWER_MM_KB
+    per-core matmul CBs, default 512; GLM53_STACK_MM_TOWER_SDPA "q,k", default "32,1024"). Construction registers
+    ``attach`` as a pre-capture hook of the backend (``StackBackend.pre_capture_hooks``): the tower is built and every
+    patch bucket's programs (1024 .. GLM53_STACK_MM_TOWER_PATCHES, default 4096, in steps of 1024) are compiled and run
+    once right before the first trace capture, after every other allocation, so no tower buffer or program sits in a
+    trace's transients and the text programs and buffers are the text build's. A call (after the captures) settles the
+    device, then runs the tower with a host sync before every op launch (GLM53_STACK_MM_TOWER_FENCE=1: a trace replay can
+    leave the dispatcher's expected worker count short of the device's, so eager programs right after replays could
+    otherwise overlap; ``TPPrefill.quiesce``) and with program-cache misses forbidden (GLM53_STACK_MM_TOWER_SEAL=1: a
+    tower program first built after the captures would put its binaries under live traces -- the call fails naming the
+    op instead) -> per item ``[n_tokens, 4096]`` bf16 rows (chip 0's; HF's cast)."""
+
+    def __init__(self, backend, snapshot: Path, env=os.environ):
+        self.backend, self.mesh, self.snapshot = backend, backend.mesh, Path(snapshot)
+        self.max_patches = int(env.get("GLM53_STACK_MM_TOWER_PATCHES", "4096"))
+        q, k = (int(v) for v in env.get("GLM53_STACK_MM_TOWER_SDPA", "32,1024").split(","))
+        self.tower_kw = dict(mm_l1_budget=int(env.get("GLM53_STACK_MM_TOWER_MM_KB", "512")) * 1024, sdpa_chunks=(q, k),
+                             split_swiglu=True)  # fmt: skip
+        self.fence = env.get("GLM53_STACK_MM_TOWER_FENCE", "1") == "1"
+        self.seal = env.get("GLM53_STACK_MM_TOWER_SEAL", "1") == "1"
+        self.runtime, self.warm_s, self.calls, self.encode_s, self.fenced = None, None, 0, 0.0, 0
+        backend.pre_capture_hooks.append(self.attach)
+
+    def _l1(self) -> dict:
+        import ttnn
+
+        try:
+            v = ttnn.get_memory_view(self.mesh, ttnn.BufferType.L1)
+            return dict(alloc_per_bank=int(v.total_bytes_allocated_per_bank),
+                        largest_free_per_bank=int(v.largest_contiguous_bytes_free_per_bank))  # fmt: skip
+        except Exception as e:  # noqa: BLE001  (a diagnostic never stops the build)
+            return dict(error=str(e)[:120])
+
+    def attach(self) -> None:
+        """the pre-capture hook: build the resident tower and warm every patch bucket (eager; before any capture)"""
+        if self.runtime is not None:
+            return
+        import ttnn
+        from models.demos.glm53_flash.tt.multimodal import VisionRuntime
+
+        t0 = time.perf_counter()
+        self.runtime = VisionRuntime(self.mesh, self.snapshot, resident=True, max_patches=self.max_patches,
+                                     tower_kw=self.tower_kw)  # fmt: skip
+        built = time.perf_counter() - t0
+        l1 = self._l1()
+        self.warm_s = self.runtime.warmup()
+        ttnn.synchronize_device(self.mesh)
+        gc.collect()
+        self.programs = int(self.mesh.num_program_cache_entries())
+        plans = getattr(self.runtime.tower.mm, "plans", {}) if self.runtime.tower is not None else {}
+        logger.info(
+            f"GLM53 stack vision: tower built in {built:.1f} s, every patch bucket up to {self.max_patches} warmed in "
+            f"{self.warm_s:.1f} s before the first capture ({self.tower_kw}); L1 {l1}; matmul plans "
+            f"{len(plans)}, largest {max([p_['l1_bytes'] for p_ in plans.values()] or [0])} B per core; "
+            f"{self.programs} programs cached"
+        )
+
+    @contextlib.contextmanager
+    def _fenced(self):
+        """a host sync before every ttnn op launch (prefill_tp.install_launch_fence's mechanism, scoped to the call)"""
+        if not self.fence:
+            yield
+            return
+        import ttnn.decorators as D
+
+        import ttnn
+
+        call, gop, busy = D.FastOperation.__call__, ttnn.generic_op, [False]
+
+        def sync():
+            if not busy[0]:
+                busy[0] = True
+                try:
+                    ttnn.synchronize_device(self.mesh)
+                    self.fenced += 1
+                finally:
+                    busy[0] = False
+
+        def fast_call(op, *a, **k):
+            sync()
+            return call(op, *a, **k)
+
+        def generic_op(*a, **k):
+            sync()
+            return gop(*a, **k)
+
+        D.FastOperation.__call__ = fast_call
+        if not isinstance(gop, D.FastOperation):
+            ttnn.generic_op = generic_op
+        try:
+            yield
+        finally:
+            D.FastOperation.__call__ = call
+            ttnn.generic_op = gop
+
+    @contextlib.contextmanager
+    def _sealed(self):
+        if not self.seal:
+            yield
+            return
+        self.mesh.set_program_cache_misses_allowed(False)
+        try:
+            yield
+        finally:
+            self.mesh.set_program_cache_misses_allowed(True)
+
+    def __call__(self, items: list) -> list[torch.Tensor]:
+        if self.runtime is None:
+            raise RuntimeError("the device vision tower is built by the backend's pre-capture hook (warm-up capture)")
+        for it in items:
+            if it.kind != "image":
+                raise NotImplementedError(f"the stack adapter encodes images only (item kind {it.kind!r})")
+        import ttnn
+
+        t0 = time.perf_counter()
+        ttnn.synchronize_device(self.mesh)  # an in-flight step (a head-less prefill, an async decode) settles first
+        before = int(self.mesh.num_program_cache_entries())
+        with self._fenced(), self._sealed():
+            feats = self.runtime.encode(items)
+        ttnn.synchronize_device(self.mesh)
+        after = int(self.mesh.num_program_cache_entries())
+        if after != before:  # (only reachable with GLM53_STACK_MM_TOWER_SEAL=0)
+            logger.error(f"GLM53 stack vision: {after - before} tower program(s) built after the captures")
+        gc.collect()
+        self.calls += 1
+        self.encode_s += time.perf_counter() - t0
+        return [torch.as_tensor(f).float().to(torch.bfloat16) for f in feats]
+
+
+def make_mm_encoder(snapshot: Path, env=os.environ, backend=None):
+    """``GLM53_STACK_MM_ENCODER``: ``device`` (the default on a mesh backend) = ``DeviceVisionEncoder`` (built by the
+    backend's pre-capture hook), ``hf_cpu`` (the default without a backend) = ``HostVisionEncoder`` (weights loaded
+    now), ``none`` = no encoder (an image request is refused)"""
+    kind = env.get(MM_ENCODER_ENV) or ("device" if backend is not None else "hf_cpu")
     if kind == "none":
         return None
+    if kind == "device":
+        if backend is None:
+            raise ValueError(f"{MM_ENCODER_ENV}=device needs the stack backend (its mesh and pre-capture hooks)")
+        return DeviceVisionEncoder(backend, snapshot, env)
     if kind != "hf_cpu":
-        raise ValueError(f"{MM_ENCODER_ENV}={kind!r}: hf_cpu | none")
+        raise ValueError(f"{MM_ENCODER_ENV}={kind!r}: device | hf_cpu | none")
     return HostVisionEncoder(snapshot).build()
 
 
@@ -1044,7 +1183,7 @@ def declare_multimodal_class(api=None):
 
     Per prefill row with image items (the plugin's per-row ``pixel_values`` / ``image_grid_thw`` lists + placeholder
     ranges, ``tt/mm_inputs.py``): the items' prompt rows (``feature_rows`` on the row's prefix), the items whose rows
-    meet this chunk encoded (``mm_encoder``: ``HostVisionEncoder``), the chunk's rows handed to the generator as
+    meet this chunk encoded (``mm_encoder``: ``DeviceVisionEncoder``), the chunk's rows handed to the generator as
     ``mm_rows`` -> the stack's extra embedding rows (``Glm53Generator._mm_stage``, GLM53_STACK_MM=1, set by this class's
     construction). Videos are refused (images only).
 
@@ -1065,7 +1204,8 @@ def declare_multimodal_class(api=None):
         @classmethod
         def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size: int, max_seq_len: int, *a, **kw):
             """The text construction with GLM53_STACK_MM=1 (the table's extra rows; an explicit 0 is refused: this
-            class serves images) + the image encoder (``GLM53_STACK_MM_ENCODER``)."""
+            class serves images) + the image encoder (``GLM53_STACK_MM_ENCODER``: the device tower by default, built
+            by the backend's pre-capture hook during the warm-up's capture phase)."""
             os.environ.setdefault(MM_ENV, "1")
             if os.environ[MM_ENV] != "1":
                 raise ValueError(f"{cls.__name__} serves images: {MM_ENV}={os.environ[MM_ENV]!r} (needs 1)")
@@ -1074,7 +1214,9 @@ def declare_multimodal_class(api=None):
             model = super().initialize_vllm_model(hf_config, mesh_device, max_batch_size, max_seq_len, *a, **kw)
             if int(getattr(model.gen.backend, "mm_extra_rows", 0) or 0) <= 0:
                 raise RuntimeError(f"{cls.__name__}: the backend was built without the extra embedding rows")
-            model.mm_encoder = make_mm_encoder(_snapshot_dir(hf_config, default_snapshot_dir))
+            model.mm_encoder = make_mm_encoder(
+                _snapshot_dir(hf_config, default_snapshot_dir), backend=model.gen.backend
+            )
             return model
 
         def _mm_rows(self, tokens: torch.Tensor, starts: list, ends: list, kwargs: dict) -> dict:

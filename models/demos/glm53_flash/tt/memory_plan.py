@@ -169,6 +169,111 @@ def vision_transient_bytes(patches: int, weights_resident: bool = True, weight_b
     return patches * VISION_TRANSIENT_BYTES_PER_PATCH + weights
 
 
+# ---- the vision tower's L1 on the persistent stack (GLM53_STACK_MM_ENCODER=device: the tower's eager programs run on the
+# mesh the 45-layer stack holds). Every op of the tower places its circular buffers from the CB base up; they must end
+# below the stack's binding L1 buffers. The served stack opens the mesh with worker_l1_size 1,280,896, so the first CB
+# byte is 1,572,864 - 1,280,896 = 291,968, and its TP-prefill programs keep their CB end <= 1,330,000 (the coordinator's
+# ruling; the binding L1 buffer floor is 1,334,720: autoports .../tt/pmk_layer.py CB_END_CEILING / STAGE16_CB_END_RULING).
+# The tower ops that size themselves from the live L1 floor (norms, data movement, auto-configured matmuls: ttnn's
+# available_program_l1_capacity) fit by construction; the SDPA's CBs follow its program config only and the matmuls get
+# explicit program configs here (tower_mm_plan), so both are bounded independently of the L1 occupancy.
+STACK_L1_TOTAL = 1_572_864  # Blackhole Tensix L1
+STACK_WORKER_L1 = 1_280_896  # the served stack's worker_l1_size (pmk_layer.WORKER_L1_SERVED)
+STACK_CB_BASE = STACK_L1_TOTAL - STACK_WORKER_L1  # 291,968
+STACK_CB_END = 1_330_000  # the CB end ruling for programs beside the stack (binding L1 floor 1,334,720)
+TILE_BYTES = {"bf16": 2048, "fp32": 4096, "bfp8": 1088, "u32": 4096}
+
+
+def tower_sdpa_cb_bytes(q_chunk: int, k_chunk: int, rows: int, *, head_dim: int = 64, heads: int = 16,
+                        cores: int = 120) -> int:  # fmt: skip
+    """Per-core CB bytes of the tower's SDPA (tt/vision.py TtVisionAttention: bf16 q / k / v / out, the windowed
+    non-causal path with fp32 destination accumulation, the non-streaming kernel), replaying the CB list of
+    ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp: q (double-buffered when a core runs
+    more than one Q chunk), k / v (two K/V slots: no chain on the windowed path), the generated window mask (Sq x Sk,
+    double-buffered, Float16_b), the windowed control CBs, the two scalar tiles, the fp32 QK^T block, the bf16
+    out / max / exp-diff and fp32 sum statistics, the output block. ``rows`` = the padded tower call (all heads)."""
+    sq, sk, dh = q_chunk // TILE, k_chunk // TILE, head_dim // TILE
+    bf16, fp32 = TILE_BYTES["bf16"], TILE_BYTES["fp32"]
+    q_chunks = heads * -(-rows // q_chunk)
+    q_buf = 2 if -(-q_chunks // cores) > 1 else 1
+    return (
+        sq * dh * q_buf * bf16  # q_in
+        + 2 * sk * dh * 2 * bf16  # k_in, v_in (kv_slots 2)
+        + sq * sk * 2 * bf16  # mask_in (windowed: generated, double-buffered)
+        + 2 * TILE_BYTES["u32"]
+        + 2 * 16  # cu_window_seqlens + its reader copy, the k-range control
+        + 2 * bf16  # identity scale + column identity (bf16 q)
+        + sq * sk * fp32  # qk_im (fp32 with fp32_dest_acc_en)
+        + 2 * sq * dh * bf16  # out_im A / B
+        + 3 * sq * bf16  # max A / B, exp_max_diff
+        + 2 * sq * fp32  # sum A / B
+        + sq * dh * bf16  # out
+    )
+
+
+def _round_block(tiles: int, cores: int, quantum: int = 4) -> int:
+    """optimized_decoder._round_block: the per-core block covering ``tiles`` over at most ``cores`` cores, rounded up
+    to a multiple of ``quantum`` (4; 2 / 1 for small blocks)"""
+    b = -(-tiles // cores)
+    q = min(quantum, 4 if b >= 4 else (2 if b >= 2 else 1))
+    return -(-b // q) * q
+
+
+def tower_mm_bytes(out_h: int, out_w: int, block_w: int, in0: int, in1: int, out: int, bias: int) -> int:
+    """Per-core CB bytes (upper bound) of a 2D-multicast matmul (matmul_multicore_reuse_mcast_2d_program_factory.cpp):
+    double-buffered in0 (out_h x K block) and in1 (K block x out_w) blocks, the output block and its fp32 partials
+    counted apart (they share one buffer when the formats agree), the bias row (out_w tiles); byte sizes per tile"""
+    return (
+        2 * out_h * block_w * in0
+        + 2 * block_w * out_w * in1
+        + out_h * out_w * (out + TILE_BYTES["fp32"])
+        + out_w * bias
+    )
+
+
+def tower_mm_plan(grid_x: int, grid_y: int, m_tiles: int, k_tiles: int, n_tiles: int, *, in0: int, in1: int, out: int,
+                  bias: int = 0, budget: int, max_block_w: int = 8, max_subblock: int = 4) -> dict:  # fmt: skip
+    """An explicit MatmulMultiCoreReuseMultiCastProgramConfig for [M, K] x [K, N] (tiles) whose CBs stay within
+    ``budget`` bytes per core (tower_mm_bytes): the stack TP prefill's layout (optimized_decoder.prefill_program --
+    per-core M / N blocks over the grid rows / columns, the out block spanning the core's whole N range, bounded
+    through out_block_h), the largest out_block_h dividing per_core_M and then the largest K block <= ``max_block_w``
+    dividing K that fit, the largest output sub-block (<= ``max_subblock`` tiles: fp32 destination accumulation). ``in0``
+    / ``in1`` / ``out`` / ``bias``: bytes per tile (0: no bias). ValueError when nothing fits."""
+    pm, pn = _round_block(m_tiles, grid_y), _round_block(n_tiles, grid_x)
+    for out_h in sorted((d for d in range(1, pm + 1) if pm % d == 0), reverse=True):
+        for bw in sorted((d for d in range(1, min(k_tiles, max_block_w) + 1) if k_tiles % d == 0), reverse=True):
+            nbytes = tower_mm_bytes(out_h, pn, bw, in0, in1, out, bias)
+            if nbytes <= budget:
+                sub = max(((h, w) for h in range(1, max_subblock + 1) for w in range(1, max_subblock + 1)
+                           if h * w <= max_subblock and out_h % h == 0 and pn % w == 0),
+                          key=lambda hw: (hw[0] * hw[1], hw[1]))  # fmt: skip
+                return dict(per_core_M=pm, per_core_N=pn, out_block_h=out_h, out_block_w=pn, in0_block_w=bw,
+                            out_subblock_h=sub[0], out_subblock_w=sub[1], l1_bytes=nbytes,
+                            cores=(-(-n_tiles // pn), -(-m_tiles // pm)))  # fmt: skip
+    raise ValueError(f"no tower matmul plan for M {m_tiles} K {k_tiles} N {n_tiles} tiles within {budget} B per core")
+
+
+def tower_matmul_shapes(rows: int, *, patch_dim_padded: int = 1184, hidden: int = 1024, intermediate: int = 4096,
+                        out_hidden: int = 4096, proj_intermediate: int = 10240) -> list:  # fmt: skip
+    """The tower's matmuls of one call of ``rows`` padded patches (tt/vision.py with split SwiGLU weights):
+    [(name, M, K, N tiles, in0, in1, out, bias bytes per tile)] -- fp32 activations / outputs / biases, bf16 weights
+    (the patch embed's weight fp32), the attention output projection's input bf16 (the SDPA heads)"""
+    f32, b16 = TILE_BYTES["fp32"], TILE_BYTES["bf16"]
+    m, m4 = -(-rows // TILE), -(-(rows // 4) // TILE)
+    t = lambda d: -(-d // TILE)  # noqa: E731
+    return [
+        ("patch_embed", m, t(patch_dim_padded), t(hidden), f32, f32, f32, f32),
+        ("qkv", m, t(hidden), t(3 * hidden), f32, b16, f32, f32),
+        ("proj", m, t(hidden), t(hidden), b16, b16, f32, f32),
+        ("mlp_gate_up", m, t(hidden), t(intermediate), f32, b16, f32, f32),
+        ("mlp_down", m, t(intermediate), t(hidden), f32, b16, f32, f32),
+        ("downsample", m4, t(4 * hidden), t(out_hidden), f32, b16, f32, f32),
+        ("merger_proj", m4, t(out_hidden), t(out_hidden), f32, b16, f32, 0),
+        ("merger_gate_up", m4, t(out_hidden), t(proj_intermediate), f32, b16, f32, 0),
+        ("merger_down", m4, t(proj_intermediate), t(out_hidden), f32, b16, f32, 0),
+    ]
+
+
 def default_prefill_qblock(max_seq_len: int | None) -> int:
     """The sparse prefill's score sub-block rows when ``GLM53_PREFILL_QBLOCK`` is unset: 2048 up to 256 K, 512 at
     512 K, 256 at 1 M. The scorer keeps a [rows, pools] bf16 score block and its ranking copy (``_rank_pools``) live

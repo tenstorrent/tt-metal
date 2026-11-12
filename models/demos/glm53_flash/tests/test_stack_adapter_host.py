@@ -16,7 +16,7 @@ blocks: snapshots at the on-grid chunk ends, the hit confirmation, the attach of
 on shared pages, the release, the LRU reuse of unpinned entries, and the fallbacks to a prefill from 0. Image input
 (GLM53_STACK_MM): the generator's per-chunk staging + id remap into the mock's extra embedding rows, image prompts kept
 out of the batched / packed replays, ``GLM53StackForConditionalGeneration`` (declaration with / without vLLM, the 0.31 /
-0.30 processor module, the plugin's per-row image items routed to the generator through a fake encoder) and, with a
+0.30 processor module, the plugin's per-row image items routed to the generator through a fake encoder, the device tower's L1 plan and encoder selection) and, with a
 vLLM interpreter (``GLM53_VLLM_PYTHON``, a subprocess: this process stays vLLM- and ttnn-free) and the checkpoint, the
 real processor the class registers run on the demo image.
 
@@ -1453,3 +1453,60 @@ def test_registered_processor_encodes_the_demo_image():
     assert got["ids"] == DEMO_HEAD + [IMAGE_TOKEN_ID] * 256 + DEMO_TAIL
     assert got["grid"] == [1, 32, 32] and got["pixels"] == [1024, 1176] and got["placeholder"] == [11, 256]
     assert got["ttnn"] is False
+
+
+# ------------------------------------------------------------------------------- the device tower (GLM53_STACK_MM_ENCODER)
+def test_device_tower_l1_plan_fits_beside_the_stack():
+    """The stack's device tower (DeviceVisionEncoder's TtVisionTower kwargs) at every patch bucket of a tower call
+    (VisionRuntime: 1024 .. 4096 patches + the 32-row pad window): every linear has an explicit 2D-multicast plan
+    within the 512 KiB per-core budget on the 8x4's 12 x 10 grid (and 13 / 11 x 10) whose blocks satisfy the matmul
+    factory's divisibility rules and core counts, ending below the stack's CB end ruling; the SDPA with the 32-row Q
+    chunk ends below it too, while the default tower's 64-row chunk would cross the stack's binding L1 floor."""
+    from models.demos.glm53_flash.tt import memory_plan as MP
+
+    assert MP.STACK_CB_BASE == 291_968 and MP.STACK_CB_END == 1_330_000
+    budget = 512 * 1024
+    for gx, gy in ((12, 10), (13, 10), (11, 10)):
+        for patches in (1024, 2048, 3072, 4096):
+            rows = patches + 32
+            for name, m, k, n, in0, in1, out, bias in MP.tower_matmul_shapes(rows):
+                p = MP.tower_mm_plan(gx, gy, m, k, n, in0=in0, in1=in1, out=out, bias=bias, budget=budget)
+                pm, pn, oh, ow, bw = (p[f] for f in ("per_core_M", "per_core_N", "out_block_h", "out_block_w",
+                                                     "in0_block_w"))  # fmt: skip
+                sh, sw = p["out_subblock_h"], p["out_subblock_w"]
+                assert pm % oh == 0 and pn % ow == 0 and oh % sh == 0 and ow % sw == 0 and sh * sw <= 4, (name, p)
+                assert (
+                    k % bw == 0 and -(-m // pm) <= gy and -(-n // pn) <= gx and p["cores"] == (-(-n // pn), -(-m // pm))
+                )
+                assert p["l1_bytes"] == MP.tower_mm_bytes(oh, ow, bw, in0, in1, out, bias) <= budget, (name, p)
+                assert MP.STACK_CB_BASE + p["l1_bytes"] < MP.STACK_CB_END
+            sdpa = MP.tower_sdpa_cb_bytes(32, 1024, rows, cores=gx * gy)
+            assert MP.STACK_CB_BASE + sdpa < MP.STACK_CB_END, (rows, sdpa)
+    assert MP.tower_sdpa_cb_bytes(32, 1024, 1056) == 833_568  # the 448 x 448 call
+    assert MP.STACK_CB_BASE + MP.tower_sdpa_cb_bytes(64, 1024, 1056) > 1_334_720  # the validated default-L1 chunk
+    with expect_error(ValueError, "no tower matmul plan"):  # the merger's gate | up as ONE weight does not fit
+        MP.tower_mm_plan(12, 10, 9, 128, 640, in0=4096, in1=2048, out=4096, bias=0, budget=budget)
+
+
+def test_mm_encoder_selection():
+    """GLM53_STACK_MM_ENCODER: device (the default with a backend) registers the tower's build + warm-up as the
+    backend's pre-capture hook and refuses a call before it ran; hf_cpu is the default without one; none disables
+    image input; another value is refused. The device encoder's tower kwargs follow the GLM53_STACK_MM_TOWER_* knobs."""
+    backend = SimpleNamespace(mesh=object(), pre_capture_hooks=[])
+    enc = gvs.make_mm_encoder(Path("/nonexistent"), env={}, backend=backend)
+    assert isinstance(enc, gvs.DeviceVisionEncoder) and backend.pre_capture_hooks == [enc.attach]
+    assert enc.tower_kw == dict(mm_l1_budget=512 * 1024, sdpa_chunks=(32, 1024), split_swiglu=True)
+    assert enc.max_patches == 4096 and enc.fence and enc.seal and enc.runtime is None
+    with expect_error(RuntimeError, "pre-capture hook"):
+        enc([])
+    env = {"GLM53_STACK_MM_TOWER_MM_KB": "384", "GLM53_STACK_MM_TOWER_SDPA": "32,512", "GLM53_STACK_MM_TOWER_PATCHES": "1024",
+           "GLM53_STACK_MM_TOWER_FENCE": "0", "GLM53_STACK_MM_TOWER_SEAL": "0"}  # fmt: skip
+    enc2 = gvs.make_mm_encoder(Path("/nonexistent"), env=dict(env, GLM53_STACK_MM_ENCODER="device"), backend=backend)
+    assert enc2.tower_kw["mm_l1_budget"] == 384 * 1024 and enc2.tower_kw["sdpa_chunks"] == (32, 512)
+    assert enc2.max_patches == 1024 and not enc2.fence and not enc2.seal and len(backend.pre_capture_hooks) == 2
+    assert gvs.make_mm_encoder(Path("/nonexistent"), env={"GLM53_STACK_MM_ENCODER": "none"}, backend=backend) is None
+    with expect_error(ValueError, "needs the stack backend"):
+        gvs.make_mm_encoder(Path("/nonexistent"), env={"GLM53_STACK_MM_ENCODER": "device"})
+    with expect_error(ValueError, "device \\| hf_cpu \\| none"):
+        gvs.make_mm_encoder(Path("/nonexistent"), env={"GLM53_STACK_MM_ENCODER": "gpu"}, backend=backend)
+    assert "ttnn" not in sys.modules

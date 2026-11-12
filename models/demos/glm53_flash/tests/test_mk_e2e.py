@@ -13,11 +13,16 @@ a request A whose state at GLM53_MK_PREFIX_LEN = 32,768 tokens is snapshotted in
 same document and another question attaching to it with A's pages shared, and B prefilled from scratch); B's greedy ids
 must equal the cold run's. Logs MK_PREFIX: lines (TTFT of the attach vs the cold prefill, decode, ids, counters).
 
-Image input (GLM53_MK_IMAGE_FEATS=<.pt>, optionally GLM53_MK_IMAGE=<png>): every user's prompt is the file's image
-prompt (the HF processor's ids: chat template + image placeholder run) and its image positions take the file's bf16
-feature rows (the HF CPU tower) through the stack's extra embedding rows (GLM53_STACK_MM=1, set here); gate = the
-HF greedy reference ids (GLM53_MK_IMAGE_EXPECT, else the file's expect_ids): first token and every id, the stack's
-top-5 per step (teacher-forced on the reference) logged when they differ. GLM53_MK_ISL = the prompt's length.
+Image input (GLM53_MK_IMAGE_FEATS=<.pt> and / or GLM53_MK_IMAGE=<png>): every user's prompt is the image prompt (the
+HF processor's ids: chat template + image placeholder run; from the file, else the processor on the png) and its
+image positions take bf16 feature rows through the stack's extra embedding rows (GLM53_STACK_MM=1, set here).
+GLM53_MK_IMAGE_TOWER: "feats" (the default with a file) = the file's HF CPU tower rows; "device" (the default without
+one) = the stack's own tower (generator_vllm_stack.DeviceVisionEncoder: built and warmed by the backend's pre-capture
+hook) on the file's / processor's pixel patches, its PCC vs the file's HF rows logged and gated (GLM53_MK_TOWER_PCC_MIN,
+default 0.96), and a text user's ids generated before and after the tower call compared (GLM53_MK_TOWER_TEXT_CHECK,
+default 1). Gate = the HF greedy reference ids (GLM53_MK_IMAGE_EXPECT, else the file's expect_ids): first token and
+every id, the stack's top-5 per step (teacher-forced on the reference) logged when they differ. GLM53_MK_ISL = the
+prompt's length.
 """
 
 from __future__ import annotations
@@ -68,6 +73,10 @@ QUESTION = "Summarize the text above in two sentences."
 QUESTION_B = "Which parts of the system does the text above describe? Answer in one sentence."
 IMAGE = os.environ.get("GLM53_MK_IMAGE", "")
 IMAGE_FEATS = os.environ.get("GLM53_MK_IMAGE_FEATS", "")
+IMAGE_TOWER = os.environ.get("GLM53_MK_IMAGE_TOWER", "") or ("feats" if IMAGE_FEATS else "device")
+IMAGE_QUESTION = os.environ.get(
+    "GLM53_MK_IMAGE_QUESTION", "What shapes and what word are in this image? Answer in one sentence."
+)
 # the HF greedy reference of demo/sample_prompts/shapes_hello.png + "What shapes and what word are in this image? Answer
 # in one sentence." (doc/vision/multimodal.md): 'The image contains a red circle, a blue square, a green triangle, and'
 SHAPES_HELLO_IDS = [785, 2168, 5610, 264, 2518, 12665, 11, 264, 6303, 9331, 11, 264, 6176, 21445, 11, 323]
@@ -184,24 +193,83 @@ def run_prefix(gen, kv, ids_a: list[int], ids_b: list[int], prefix_len: int, osl
     return out
 
 
-def image_input() -> dict:
-    """GLM53_MK_IMAGE_FEATS: {ids, rows, feats, expect} of one image prompt -- the file's prompt ids, its image
-    positions (every image-token id, in order) and their [rows, 4096] bf16 feature rows; GLM53_MK_IMAGE, when set, must
-    be the image the file was made from (its sha256)"""
-    d = torch.load(IMAGE_FEATS, weights_only=False)
+def image_input(snapshot) -> dict:
+    """{ids, rows, feats, pixel_values, grid, expect} of one image prompt: from GLM53_MK_IMAGE_FEATS -- the file's
+    prompt ids, its image positions (every image-token id, in order), their [rows, 4096] bf16 HF feature rows and the
+    processor's pixel patches / grid (GLM53_MK_IMAGE, when set, must be the file's image: its sha256) -- else from the
+    HF processor on GLM53_MK_IMAGE + GLM53_MK_IMAGE_QUESTION (needs a transformers with glm5_next; no HF rows)"""
+    if IMAGE_FEATS:
+        d = torch.load(IMAGE_FEATS, weights_only=False)
+        if IMAGE:
+            with open(IMAGE, "rb") as f:
+                sha = hashlib.sha256(f.read()).hexdigest()
+            assert d.get("image_sha256") in (None, sha), f"{IMAGE} is not the image of {IMAGE_FEATS}"
+    else:
+        from transformers import AutoProcessor
+
+        from models.demos.glm53_flash.tt.multimodal import encode_prompt
+
+        try:
+            processor = AutoProcessor.from_pretrained(str(snapshot))
+        except Exception as e:  # noqa: BLE001
+            pytest.fail(f"GLM53_MK_IMAGE without GLM53_MK_IMAGE_FEATS needs the GLM-5.3-Flash HF processor: {e}")
+        enc = encode_prompt(processor, [{"type": "image", "image": IMAGE}, {"type": "text", "text": IMAGE_QUESTION}])
+        d = dict(input_ids=enc.input_ids, rows=torch.nonzero(enc.input_ids[0] == 154854).reshape(-1),
+                 pixel_values=enc.pixel_values, image_grid_thw=enc.image_grid_thw)  # fmt: skip
     ids = [int(v) for v in d["input_ids"].reshape(-1).tolist()]
     rows = d["rows"].reshape(-1).to(torch.int64)
-    feats = d["feats"].to(torch.bfloat16)
+    feats = d["feats"].to(torch.bfloat16) if d.get("feats") is not None else None
     tok_id = int(d.get("image_token_id", 154854))
-    assert tuple(feats.shape) == (int(rows.numel()), 4096), (tuple(feats.shape), int(rows.numel()))
+    assert feats is None or tuple(feats.shape) == (int(rows.numel()), 4096), (tuple(feats.shape), int(rows.numel()))
     assert [i for i, t in enumerate(ids) if t == tok_id] == rows.tolist(), "the rows are not the prompt's image tokens"
-    if IMAGE:
-        with open(IMAGE, "rb") as f:
-            sha = hashlib.sha256(f.read()).hexdigest()
-        assert d.get("image_sha256") in (None, sha), f"{IMAGE} is not the image of {IMAGE_FEATS}"
+    assert IMAGE_TOWER in ("feats", "device"), f"GLM53_MK_IMAGE_TOWER={IMAGE_TOWER}: feats | device"
+    assert IMAGE_TOWER == "device" or feats is not None, "GLM53_MK_IMAGE_TOWER=feats needs the HF rows of a FEATS file"
+    pv, grid = d.get("pixel_values"), d.get("image_grid_thw")
+    assert IMAGE_TOWER == "feats" or pv is not None, "the device tower needs the pixel patches (pixel_values)"
     env = os.environ.get("GLM53_MK_IMAGE_EXPECT", "")
     expect = [int(v) for v in env.split(",") if v.strip()] or [int(v) for v in d.get("expect_ids", SHAPES_HELLO_IDS)]
-    return dict(ids=ids, rows=rows, feats=feats, expect=expect)
+    return dict(ids=ids, rows=rows, feats=feats, expect=expect, tower=IMAGE_TOWER,
+                pixel_values=None if pv is None else torch.as_tensor(pv).float(),
+                grid=None if grid is None else torch.as_tensor(grid).reshape(-1, 3).long())  # fmt: skip
+
+
+def device_tower_rows(gen, enc, tok, mm_in: dict) -> torch.Tensor:
+    """the stack's own tower on the prompt's pixel patches (after the warm-up captures): its PCC vs the HF rows and,
+    GLM53_MK_TOWER_TEXT_CHECK=1, a text user's greedy ids generated before and after the tower call (equal: the tower
+    leaves the text path's buffers and traces alone), both kept in mm_in["tower"] for the gates at the end of the test
+    (tower_gates) -> its bf16 rows"""
+    from models.demos.glm53_flash.tt.mm_inputs import MMItem
+
+    assert enc.runtime is not None, "the device tower was not built by the backend's pre-capture hook"
+    check = os.environ.get("GLM53_MK_TOWER_TEXT_CHECK", "1") == "1"
+    text, n_chk = chat_prompt(tok, ISL), min(OSL, 16)
+    before = gen.generate_batch([text], n_chk, stop_on_eos=False, enable_trace=True)[0] if check else None
+    item = MMItem("image", mm_in["pixel_values"], mm_in["grid"][0])
+    t0 = time.perf_counter()
+    (rows,) = enc([item])
+    tower_s = time.perf_counter() - t0
+    assert tuple(rows.shape) == (int(mm_in["rows"].numel()), 4096), tuple(rows.shape)
+    after = gen.generate_batch([text], n_chk, stop_on_eos=False, enable_trace=True)[0] if check else None
+    pcc = None
+    if mm_in["feats"] is not None:
+        a, b = rows.float().flatten(), mm_in["feats"].float().flatten()
+        pcc = float(torch.corrcoef(torch.stack([a, b]))[0, 1])
+    logger.info(f"MK_E2E_TOWER: device tower {tuple(rows.shape)} in {tower_s * 1e3:.0f} ms (warm-up {enc.warm_s:.1f} s, "
+                f"{enc.fenced} fenced launches); PCC vs the HF rows {pcc}; text user {len(text)} tokens: ids before "
+                f"{before} after {after} equal {before == after}")  # fmt: skip
+    mm_in["tower_check"] = dict(pcc=pcc, before=before, after=after, tower_s=tower_s)
+    return rows
+
+
+def tower_gates(mm_in: dict) -> None:
+    """the device tower's gates (after the ids are logged): PCC vs the HF rows >= GLM53_MK_TOWER_PCC_MIN (0.96; the
+    default-L1 tower on one chip scored 0.988 on this image) and the text user's ids unchanged across the call"""
+    t = mm_in.get("tower_check")
+    if t is None:
+        return
+    floor = float(os.environ.get("GLM53_MK_TOWER_PCC_MIN", "0.96"))
+    assert t["pcc"] is None or t["pcc"] >= floor, f"device tower PCC {t['pcc']:.5f} vs the HF features < {floor}"
+    assert t["before"] == t["after"], f"a text user's ids changed across the tower call: {t['before']} -> {t['after']}"
 
 
 def image_topk_report(gen, mm_in: dict, k: int = 5) -> list:
@@ -246,11 +314,11 @@ def test_mk_e2e(mesh_device, monkeypatch):
 
     # every knob an explicit environment value does not already set (the prefix run's prompts take the 8,192 buckets)
     DEFAULTS = GD.apply(MESH, SEQ, _ISL_SEQ)
-    mm_in = image_input() if IMAGE_FEATS else None
+    snapshot = default_snapshot_dir()
+    mm_in = image_input(snapshot) if (IMAGE_FEATS or IMAGE) else None
     if mm_in is not None:  # the embedding table's extra rows (tt/mk_head.py mm_extra_rows), before the backend is built
         monkeypatch.setenv("GLM53_STACK_MM", os.environ.get("GLM53_STACK_MM", "1"))
         assert os.environ["GLM53_STACK_MM"] == "1", "an image prompt needs GLM53_STACK_MM=1"
-    snapshot = default_snapshot_dir()
     cfg = load_hf_text_config(str(snapshot))
     tok = load_tokenizer(snapshot)
     if DEFAULTS:
@@ -277,6 +345,11 @@ def test_mk_e2e(mesh_device, monkeypatch):
     logger.info(f"StackBackend built in {time.perf_counter() - t0:.0f} s: mesh {MESH}, {len(layers)} layers, B {B}")
     if isinstance(source, MkTileCacheSource) and not source.ready:
         source.complete()
+    encoder = None
+    if mm_in is not None and mm_in["tower"] == "device":  # built + warmed by the pre-capture hook (gen.warmup below)
+        from models.demos.glm53_flash.tt.generator_vllm_stack import DeviceVisionEncoder
+
+        encoder = DeviceVisionEncoder(backend, snapshot)
     gen = Glm53Generator(backend, tokenizer=tok, max_batch=B, max_seq_len=SEQ)
     if PREFIX:
         _prefix_e2e(gen, tok, mesh_device, source)
@@ -285,6 +358,8 @@ def test_mk_e2e(mesh_device, monkeypatch):
     gen.warmup(capture=True)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"generator warm-up (prefill buckets, decode, traces) {time.perf_counter() - t0:.1f} s")
+    if encoder is not None:  # the stack's own tower rows replace the file's in the prompt
+        mm_in["feats"] = device_tower_rows(gen, encoder, tok, mm_in)
     ids = chat_prompt(tok, ISL) if mm_in is None else mm_in["ids"]
     # GLM53_MK_LIVE=n (default B): the live users of the run on a backend built for B rows (the speculative step,
     # GLM53_SPEC_K, serves ONE live user in slot 0 of a backend whose max_batch >= K + 1)
@@ -330,14 +405,17 @@ def test_mk_e2e(mesh_device, monkeypatch):
     if mm_in is not None and sampling is None:  # the image gate: the HF greedy reference's ids
         exp = mm_in["expect"]
         got = outs[0][: len(exp)]
+        tw = mm_in.get("tower_check")
         logger.info(f"MK_E2E_IMAGE: ids {got} vs HF {exp}: first {got[:1] == exp[:1]}, all {got == exp} "
-                    f"({sum(a == b_ for a, b_ in zip(got, exp))}/{len(exp)} equal)")  # fmt: skip
+                    f"({sum(a == b_ for a, b_ in zip(got, exp))}/{len(exp)} equal); rows from the "
+                    f"{'device tower (' + format(tw['tower_s'] * 1e3, '.0f') + ' ms)' if tw else 'HF CPU file'}")  # fmt: skip
         if got != exp:
             try:
                 for step, ref, tk in image_topk_report(gen, mm_in):
                     logger.info(f"MK_E2E_IMAGE top-5 step {step}: HF {ref} -> {tk}")
             except Exception as e:  # noqa: BLE001  (a diagnostic never hides the gate below)
                 logger.warning(f"MK_E2E_IMAGE top-5 report failed: {type(e).__name__}: {e}")
+        tower_gates(mm_in)
         assert got[:1] == exp[:1], f"first token {got[:1]} != the HF reference's {exp[:1]}"
         assert got == exp, f"ids {got} != the HF reference {exp}"
     # the gates (a PASS means the numerics, not only the run): identical prompts decode identically across the users;

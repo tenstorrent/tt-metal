@@ -531,8 +531,12 @@ class VisionRuntime:
         resident: bool = True,
         max_patches: int = DEFAULT_VISION_BATCH_PATCHES,
         weight_dtype=ttnn.bfloat16,
+        tower_kw: dict | None = None,
     ):
+        """``tower_kw``: extra ``TtVisionTower`` arguments (the persistent stack's L1-bounded programs:
+        ``mm_l1_budget`` / ``sdpa_chunks`` / ``split_swiglu``); none = the validated default tower"""
         self.device = device
+        self.tower_kw = dict(tower_kw or {})
         self.snapshot = snapshot
         self.resident = resident
         self.max_patches = int(max_patches)
@@ -572,7 +576,9 @@ class VisionRuntime:
     def _build(self) -> TtVisionTower:
         if self.weights is None:
             self.weights = load_vision_weights(self.snapshot)
-        tower = build_vision_tower(self.device, self.snapshot, weights=self.weights, weight_dtype=self.weight_dtype)
+        tower = build_vision_tower(
+            self.device, self.snapshot, weights=self.weights, weight_dtype=self.weight_dtype, **self.tower_kw
+        )
         if self.resident:
             self.weights = None  # the host copy is not needed again
         return tower

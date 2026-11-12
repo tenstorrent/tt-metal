@@ -21,6 +21,14 @@ flash SDPA runs on bf16 q/k/v (the kernel accepts nothing else; a 1024-key chunk
 image a single softmax pass). Weights are bf16 by default (1.13 GB, the design's budget) with
 bfp8_b optional (-0.002..0.004 PCC). ``act_dtype=bfloat16`` is the all-bf16 variant (same accuracy
 as HF run in bf16). Weights are uploaded once; no torch inside ``forward``.
+
+Beside the persistent stack (``TtVisionTower(..., mm_l1_budget=, sdpa_chunks=, split_swiglu=True)``, the stack's
+image encoder): the mesh's worker L1 is the stack's 1,280,896 B with its binding L1 buffers from 1,334,720 up, so the
+programs whose CBs do not follow the live L1 floor are bounded explicitly -- every linear gets a 2D-multicast program
+config within ``mm_l1_budget`` bytes per core (``memory_plan.tower_mm_plan``; the SwiGLU gate / up as two weights so
+the merger's 20,480 columns fit), the SDPA a 32-row Q chunk (one 1024-key K chunk as before: the same softmax pass;
+``memory_plan.tower_sdpa_cb_bytes``: 0.83 MB of CBs instead of the 1.13 MB of the 64-row chunk). Without these
+arguments the tower is the validated default-L1 one, call for call.
 """
 
 from __future__ import annotations
@@ -40,6 +48,7 @@ from models.demos.glm53_flash.reference.checkpoint import (
     load_tensors,
     shard_headers,
 )
+from models.demos.glm53_flash.tt.memory_plan import tower_mm_plan
 
 VISUAL_PREFIX = "model.visual."
 TILE = 32
@@ -212,6 +221,48 @@ def _bias(device, t: torch.Tensor, dtype):
     return _upload(device, t.float().reshape(1, -1), dtype)
 
 
+_TILE_BYTES = {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}
+
+
+class TowerMatmuls:
+    """Explicit 2D-multicast program configs for the tower's linears, each within ``budget`` bytes of CBs per core
+    (``memory_plan.tower_mm_plan`` over the device's compute grid), cached per (M, K, N, dtypes): the programs and
+    their L1 do not depend on the L1 the device holds when they are built (the stack's eager tower calls run after
+    its trace captures, with misses of the program cache forbidden)."""
+
+    def __init__(self, device, budget: int):
+        g = device.compute_with_storage_grid_size()
+        self.grid, self.budget, self.plans, self.configs = (int(g.x), int(g.y)), int(budget), {}, {}
+
+    def __call__(self, x: ttnn.Tensor, w: ttnn.Tensor, bias, dtype):
+        xs, ws = [int(v) for v in x.padded_shape], [int(v) for v in w.padded_shape]
+        m = xs[-2] // TILE  # fuse_batch: [1, 1, S, K] -> S / 32 rows of tiles
+        for v in xs[:-2]:
+            m *= v
+        key = (m, xs[-1] // TILE, ws[-1] // TILE, x.dtype, w.dtype, dtype, None if bias is None else bias.dtype)
+        cfg = self.configs.get(key)
+        if cfg is None:
+            plan = tower_mm_plan(*self.grid, key[0], key[1], key[2], in0=_TILE_BYTES[x.dtype], in1=_TILE_BYTES[w.dtype],
+                                 out=_TILE_BYTES[dtype], bias=0 if bias is None else _TILE_BYTES[bias.dtype],
+                                 budget=self.budget)  # fmt: skip
+            self.plans[key] = plan
+            cfg = self.configs[key] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=self.grid, in0_block_w=plan["in0_block_w"],
+                out_subblock_h=plan["out_subblock_h"], out_subblock_w=plan["out_subblock_w"],
+                out_block_h=plan["out_block_h"], out_block_w=plan["out_block_w"], per_core_M=plan["per_core_M"],
+                per_core_N=plan["per_core_N"], transpose_mcast=False, fused_activation=None, fuse_batch=True)  # fmt: skip
+        return cfg
+
+
+def _linear(x: ttnn.Tensor, w: ttnn.Tensor, *, bias=None, dtype, compute, mm: TowerMatmuls | None = None):
+    """``ttnn.linear``: auto-configured (the default tower) or with ``mm``'s explicit program config"""
+    if mm is None:
+        return ttnn.linear(x, w, bias=bias, dtype=dtype, compute_kernel_config=compute)
+    return ttnn.linear(
+        x, w, bias=bias, dtype=dtype, compute_kernel_config=compute, program_config=mm(x, w, bias, dtype)
+    )
+
+
 def _cast(x: ttnn.Tensor, dtype) -> ttnn.Tensor:
     """typecast (consuming ``x``) unless already ``dtype``."""
     if x.dtype == dtype:
@@ -240,30 +291,55 @@ class TtClampedSwiGLUBias(LightweightModule):
     """``down(silu(clamp(gate, max=L)) * clamp(up, -L, L))`` with optional biases (vision MLP, merger)."""
 
     def __init__(
-        self, device, gate_w, up_w, down_w, *, gate_b=None, up_b=None, down_b=None, limit, weight_dtype, act_dtype
+        self,
+        device,
+        gate_w,
+        up_w,
+        down_w,
+        *,
+        gate_b=None,
+        up_b=None,
+        down_b=None,
+        limit,
+        weight_dtype,
+        act_dtype,
+        split: bool = False,
+        mm: TowerMatmuls | None = None,
     ):
+        """``split``: gate and up as two weights (two linears, no slices) instead of the concatenated ``w13``"""
         self.limit = float(limit)
         self.act_dtype = act_dtype
         self.intermediate = gate_w.shape[0]
-        self.w13 = _upload(device, torch.cat([gate_w.t(), up_w.t()], dim=-1).float(), weight_dtype)
-        self.b13 = _bias(device, torch.cat([gate_b, up_b]), act_dtype) if gate_b is not None else None
+        self.split, self.mm = bool(split), mm
+        if self.split:
+            self.w1 = _upload(device, gate_w.t().float(), weight_dtype)
+            self.w3 = _upload(device, up_w.t().float(), weight_dtype)
+            self.b1 = _bias(device, gate_b, act_dtype) if gate_b is not None else None
+            self.b3 = _bias(device, up_b, act_dtype) if up_b is not None else None
+        else:
+            self.w13 = _upload(device, torch.cat([gate_w.t(), up_w.t()], dim=-1).float(), weight_dtype)
+            self.b13 = _bias(device, torch.cat([gate_b, up_b]), act_dtype) if gate_b is not None else None
         self.w2 = _upload(device, down_w.t().float(), weight_dtype)
         self.b2 = _bias(device, down_b, act_dtype) if down_b is not None else None
         self.compute = _compute(device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         S = x.shape[-2]
-        gu = ttnn.linear(x, self.w13, bias=self.b13, dtype=self.act_dtype, compute_kernel_config=self.compute)
-        gate = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, S, self.intermediate])
-        up = ttnn.slice(gu, [0, 0, 0, self.intermediate], [1, 1, S, 2 * self.intermediate])
-        ttnn.deallocate(gu)
+        if self.split:
+            gate = _linear(x, self.w1, bias=self.b1, dtype=self.act_dtype, compute=self.compute, mm=self.mm)
+            up = _linear(x, self.w3, bias=self.b3, dtype=self.act_dtype, compute=self.compute, mm=self.mm)
+        else:
+            gu = _linear(x, self.w13, bias=self.b13, dtype=self.act_dtype, compute=self.compute, mm=self.mm)
+            gate = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, S, self.intermediate])
+            up = ttnn.slice(gu, [0, 0, 0, self.intermediate], [1, 1, S, 2 * self.intermediate])
+            ttnn.deallocate(gu)
         gate = ttnn.clamp(gate, min=None, max=self.limit, output_tensor=gate)
         up = ttnn.clamp(up, min=-self.limit, max=self.limit, output_tensor=up)
         act = ttnn.silu(gate)
         ttnn.deallocate(gate)
         h = ttnn.multiply(act, up, output_tensor=act)
         ttnn.deallocate(up)
-        y = ttnn.linear(h, self.w2, bias=self.b2, dtype=self.act_dtype, compute_kernel_config=self.compute)
+        y = _linear(h, self.w2, bias=self.b2, dtype=self.act_dtype, compute=self.compute, mm=self.mm)
         ttnn.deallocate(h)
         return y
 
@@ -272,9 +348,22 @@ class TtVisionAttention(LightweightModule):
     """HF ``Glm5NextVisionAttention``: qkv (+bias) -> per-head q/k RMSNorm -> 2D rope -> SDPA within each
     window (bf16) -> proj (+bias). Everything but the SDPA runs in ``act_dtype``."""
 
-    def __init__(self, device, cfg: GLM53VisionConfig, w: dict, prefix: str, *, weight_dtype, act_dtype, rot_mat):
+    def __init__(
+        self,
+        device,
+        cfg: GLM53VisionConfig,
+        w: dict,
+        prefix: str,
+        *,
+        weight_dtype,
+        act_dtype,
+        rot_mat,
+        sdpa_chunks: tuple[int, int] = (64, 1024),
+        mm: TowerMatmuls | None = None,
+    ):
         self.cfg = cfg
         self.act_dtype = act_dtype
+        self.mm = mm
         self.wqkv = _upload(device, w[f"{prefix}qkv.weight"].t().float(), weight_dtype)  # [hidden, 3*H*D]
         self.bqkv = _bias(device, w[f"{prefix}qkv.bias"], act_dtype)
         self.q_norm_w = _row(device, w[f"{prefix}q_norm.weight"], act_dtype)
@@ -287,8 +376,9 @@ class TtVisionAttention(LightweightModule):
         self.hifi4 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
         grid = device.compute_with_storage_grid_size()
         # one K chunk per 1024-token window: no online-softmax rescaling of bf16 partials for a 448x448 image
+        q_chunk, k_chunk = (int(v) for v in sdpa_chunks)
         self.sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid, q_chunk_size=64, k_chunk_size=1024, exp_approx_mode=False
+            compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk, exp_approx_mode=False
         )
 
     def _norm_rope(self, x: ttnn.Tensor, w: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -304,7 +394,7 @@ class TtVisionAttention(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, cu_window: ttnn.Tensor | None):
         H = self.cfg.num_heads
-        qkv = ttnn.linear(x, self.wqkv, bias=self.bqkv, dtype=self.act_dtype, compute_kernel_config=self.compute)
+        qkv = _linear(x, self.wqkv, bias=self.bqkv, dtype=self.act_dtype, compute=self.compute, mm=self.mm)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=H, num_kv_heads=H, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -327,20 +417,41 @@ class TtVisionAttention(LightweightModule):
         ttnn.deallocate(v)
         cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,S,H*D] bf16
         ttnn.deallocate(attn)
-        out = ttnn.linear(cat, self.wo, bias=self.bo, dtype=self.act_dtype, compute_kernel_config=self.compute)
+        out = _linear(cat, self.wo, bias=self.bo, dtype=self.act_dtype, compute=self.compute, mm=self.mm)
         ttnn.deallocate(cat)
         return out
 
 
 class TtVisionBlock(LightweightModule):
-    def __init__(self, device, cfg: GLM53VisionConfig, w: dict, idx: int, *, weight_dtype, act_dtype, rot_mat):
+    def __init__(
+        self,
+        device,
+        cfg: GLM53VisionConfig,
+        w: dict,
+        idx: int,
+        *,
+        weight_dtype,
+        act_dtype,
+        rot_mat,
+        sdpa_chunks: tuple[int, int] = (64, 1024),
+        split_swiglu: bool = False,
+        mm: TowerMatmuls | None = None,
+    ):
         self.cfg = cfg
         self.act_dtype = act_dtype
         p = f"blocks.{idx}."
         self.norm1_w = _row(device, w[f"{p}norm1.weight"], act_dtype)
         self.norm2_w = _row(device, w[f"{p}norm2.weight"], act_dtype)
         self.attn = TtVisionAttention(
-            device, cfg, w, f"{p}attn.", weight_dtype=weight_dtype, act_dtype=act_dtype, rot_mat=rot_mat
+            device,
+            cfg,
+            w,
+            f"{p}attn.",
+            weight_dtype=weight_dtype,
+            act_dtype=act_dtype,
+            rot_mat=rot_mat,
+            sdpa_chunks=sdpa_chunks,
+            mm=mm,
         )
         self.mlp = TtClampedSwiGLUBias(
             device,
@@ -353,6 +464,8 @@ class TtVisionBlock(LightweightModule):
             limit=cfg.swiglu_limit,
             weight_dtype=weight_dtype,
             act_dtype=act_dtype,
+            split=split_swiglu,
+            mm=mm,
         )
         self.norm_compute = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
 
@@ -401,11 +514,19 @@ class TtVisionTower(LightweightModule):
         weight_dtype=ttnn.bfloat16,
         act_dtype=ttnn.float32,
         out_dtype=ttnn.bfloat16,
+        mm_l1_budget: int | None = None,
+        sdpa_chunks: tuple[int, int] = (64, 1024),
+        split_swiglu: bool = False,
     ):
+        """``mm_l1_budget`` (bytes per core): every linear with an explicit program config within it (TowerMatmuls);
+        ``sdpa_chunks``: the SDPA's (q, k) chunk rows; ``split_swiglu``: the SwiGLU gate / up as two weights. The
+        defaults are the validated default-L1 tower; the persistent stack's encoder sets all three (module docstring).
+        """
         self.device = device
         self.cfg = cfg
         self.act_dtype = act_dtype
         self.out_dtype = out_dtype
+        self.mm = None if not mm_l1_budget else TowerMatmuls(device, int(mm_l1_budget))
         w = weights
         # patch embed: Conv3d(3 -> hidden, kernel == stride [2, 14, 14]) over unfolded patches == matmul
         pe = w["patch_embed.proj.weight"].float().reshape(cfg.hidden_size, cfg.patch_dim)
@@ -414,7 +535,18 @@ class TtVisionTower(LightweightModule):
         self.b_patch = _bias(device, w["patch_embed.proj.bias"], act_dtype)
         self.rot_mat = _upload(device, rotate_half_matrix(cfg.head_dim), act_dtype)
         self.blocks = [
-            TtVisionBlock(device, cfg, w, i, weight_dtype=weight_dtype, act_dtype=act_dtype, rot_mat=self.rot_mat)
+            TtVisionBlock(
+                device,
+                cfg,
+                w,
+                i,
+                weight_dtype=weight_dtype,
+                act_dtype=act_dtype,
+                rot_mat=self.rot_mat,
+                sdpa_chunks=sdpa_chunks,
+                split_swiglu=split_swiglu,
+                mm=self.mm,
+            )
             for i in range(cfg.depth)
         ]
         self.post_norm_w = _row(device, w["post_layernorm.weight"], act_dtype)
@@ -434,6 +566,8 @@ class TtVisionTower(LightweightModule):
             limit=cfg.swiglu_limit,
             weight_dtype=weight_dtype,
             act_dtype=act_dtype,
+            split=split_swiglu,
+            mm=self.mm,
         )
         self.compute = _compute(device)
         self.hifi4 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
@@ -478,8 +612,8 @@ class TtVisionTower(LightweightModule):
     # ---- device ------------------------------------------------------------------------------
     def embed(self, inputs: VisionInputs) -> ttnn.Tensor:
         """Patch embed -> residual stream ``[1, 1, S, hidden]`` in ``act_dtype``."""
-        return ttnn.linear(
-            inputs.patches, self.w_patch, bias=self.b_patch, dtype=self.act_dtype, compute_kernel_config=self.hifi4
+        return _linear(
+            inputs.patches, self.w_patch, bias=self.b_patch, dtype=self.act_dtype, compute=self.hifi4, mm=self.mm
         )
 
     def run_blocks(self, x: ttnn.Tensor, inputs: VisionInputs, start: int = 0, stop: int | None = None):
@@ -494,9 +628,9 @@ class TtVisionTower(LightweightModule):
         ttnn.deallocate(x)
         g = _fold_rows(h, cfg.merged_dim)  # [1, 1, S/4, 4 * hidden]
         ttnn.deallocate(h)
-        y = ttnn.linear(g, self.w_down, bias=self.b_down, dtype=self.act_dtype, compute_kernel_config=self.compute)
+        y = _linear(g, self.w_down, bias=self.b_down, dtype=self.act_dtype, compute=self.compute, mm=self.mm)
         ttnn.deallocate(g)
-        p = ttnn.linear(y, self.w_mproj, dtype=self.act_dtype, compute_kernel_config=self.compute)
+        p = _linear(y, self.w_mproj, dtype=self.act_dtype, compute=self.compute, mm=self.mm)
         ttnn.deallocate(y)
         n = ttnn.layer_norm(
             p, epsilon=cfg.layer_norm_eps, weight=self.ln_w, bias=self.ln_b, compute_kernel_config=self.hifi4
@@ -523,6 +657,7 @@ __all__ = [
     "GLM53VisionConfig",
     "TtVisionTower",
     "TtVisionBlock",
+    "TowerMatmuls",
     "VisionInputs",
     "load_vision_weights",
     "vision_position_ids",
