@@ -90,6 +90,11 @@ jiwer==3.0.5 # Required for speech recognition evaluation
 toolz==0.12.0 # Required for Save environment data step
 open_clip_torch==2.26.1 # Required for SDXL accuracy evaluation
 
+# For deployment tests
+parallel-ssh>=2.16.0.post1
+typed_configparser>=1.1.0
+asyncio-gevent>=0.2.5
+
 # Suff that used to be in pyproject.toml
 # Needed for various tests
 pyyaml>=5.4

@@ -5,7 +5,8 @@ import configparser
 
 from time import time
 from pathlib import Path
-from dataclasses import dataclass
+from argparse import ArgumentParser
+from dataclasses import dataclass, field
 from typing import Union, Optional, Iterator
 
 from pssh.clients import ParallelSSHClient
@@ -17,12 +18,14 @@ from gevent.queue import Queue
 
 from typed_configparser import ConfigParser
 
+from testenums import TestCase, DistTestCase, prepare_filter
+
 
 @dataclass
 class GeneralSettings:
     hosts: list[str]
     syseng: str
-    dbpath: str
+    dbpath: str = "cluster.db"
 
 
 @dataclass
@@ -51,7 +54,7 @@ class HostSettings:
 
 def parse_config(p: str) -> tuple[GeneralSettings, list[HostSettings]]:
     parser = ConfigParser()
-    parser.read("hosts.ini")
+    parser.read(p)
     general = parser.parse_section(using_dataclass=GeneralSettings, section_name="general")
     host_configs = [parser.parse_section(using_dataclass=HostSettings, section_name=h) for h in general.hosts]
     for h, hn in zip(host_configs, general.hosts):
@@ -59,9 +62,6 @@ def parse_config(p: str) -> tuple[GeneralSettings, list[HostSettings]]:
 
     return general, host_configs
 
-
-hostsini = "hosts.ini"
-dbpath = "cluster.db"
 
 asicsquery = """
 WITH hosts AS (
@@ -109,6 +109,33 @@ def envtostr(e: dict[str, str]) -> str:
     return " ".join(f"{k}={shlex.quote(str(e[k]))}" for k in e)
 
 
+def run_single(host: HostSettings, argv: str, env: dict) -> int:
+    hostnames = [host.hostname]
+    hostconfigs = [host.host_config]
+
+    args = [(shlex.quote(host.workdir),)]
+
+    client = ParallelSSHClient(hosts=hostnames, host_config=hostconfigs, compress=True)
+
+    e = envtostr(env)
+    outputs = client.run_command(f"cd %s && {e} {argv}", host_args=args)
+
+    def handle_output(h: HostSettings, host_output):
+        host = h.hostname
+        for line in host_output.stdout:
+            print(f"[{host:<15}] {line}")
+        for line in host_output.stderr:
+            print(f"[err {host:<11}] {line}")
+        print(f"{host:<15} exit code: {host_output.exit_code}")
+
+    readers = [spawn(handle_output, host, host_output) for host, host_output in zip([host], outputs)]
+
+    joinall(readers)
+    client.join(outputs)
+
+    return tuple(host_output.exit_code for host_output in outputs)
+
+
 def run_pair(hosts: tuple[HostSettings, HostSettings], argv: str, env: dict, sync: bool = True) -> tuple[int, int]:
     hostnames = [h.hostname for h in hosts]
     hostconfigs = [h.host_config for h in hosts]
@@ -140,15 +167,52 @@ def run_pair(hosts: tuple[HostSettings, HostSettings], argv: str, env: dict, syn
     return tuple(host_output.exit_code for host_output in outputs)
 
 
-def test_pair(db: sqlite3.Connection, hosts: tuple[HostSettings, HostSettings], precompile=True) -> bool:
+def test_one(
+    db: sqlite3.Connection, host: HostSettings, test: TestCase, links: Optional[str], precompile=False
+) -> bool:
+    # endpoint_pairs = getlinks(db, *[h.hostname for h in host])  # TODO
+    # if len(endpoint_pairs) == 0:
+    #     return False  # TODO
+    # links = " ".join(endpoint_pairs)
+
+    f = prepare_filter([test])
+    cmd = f"sh -c '. ./run2.sh && ./build/test/tt_metal/unit_tests_deployment --gtest_filter={f}'"
+
+    env = {
+        "TT_METAL_SLOW_DISPATCH_MODE": 1,
+    }
+    if links:
+        env["ETH_TEST_ENDPOINTS"] = links
+
+    if precompile:
+        e = env.copy()
+        e["ETH_TEST_PRECOMPILE"] = 1
+        exitcodes = run_single(host, cmd, e)
+        if sum(exitcodes) > 0:
+            print(f"Kernel precompilation failed with exit code: {', '.join(str(e) for e in exitcodes)}")
+            return False
+
+    exitcodes = run_single(host, cmd, env)
+    if sum(exitcodes) > 0:
+        print(f"Test run failed with exit code: {', '.join(str(e) for e in exitcodes)}")
+        return False
+
+    return True
+
+
+def test_pair(
+    db: sqlite3.Connection, hosts: tuple[HostSettings, HostSettings], test: DistTestCase, links: str, precompile=True
+) -> bool:
     endpoint_pairs = getlinks(db, *[h.hostname for h in hosts])  # TODO
     if len(endpoint_pairs) == 0:
         return False  # TODO
 
-    links = " ".join(endpoint_pairs)
+    if not links:  # TODO
+        links = " ".join(endpoint_pairs)
 
-    cmd = "sh run2.sh"
-    args = [(shlex.quote(h.workdir),) for h in hosts]
+    f = prepare_filter([test])
+    cmd = f"sh -c '. ./run2.sh && ./build/test/tt_metal/unit_tests_deployment --gtest_filter={f}'"
+    # cmd = "sh run2.sh"
 
     bw = 200  # TODO
     env = {
@@ -179,17 +243,48 @@ def pairs(hosts: list[HostSettings]) -> Iterator[tuple[HostSettings, HostSetting
             yield hosts[i], hosts[j]
 
 
-def test_dist(db: sqlite3.Connection, hosts: list[HostSettings]) -> None:
+def test_single(db: sqlite3.Connection, tests: list[TestCase], hosts: list[HostSettings], links: Optional[str]) -> None:
+    for h in hosts:
+        for t in tests:
+            print(f"Testing {t} on {h.hostname}")
+            test_one(db, h, t, links)  # TODO: In parallel
+
+
+def test_dist(db: sqlite3.Connection, tests: list[DistTestCase], hosts: list[HostSettings], links: str) -> None:
     for p in pairs(hosts):
-        print(f"Testing {p[0].hostname} <-> {p[1].hostname}")
-        test_pair(db, p)  # TODO: In parallel
+        for t in tests:
+            print(f"Testing {t} on {p[0].hostname} <-> {p[1].hostname}")
+            test_pair(db, p, t, links)  # TODO: In parallel
 
 
 def main() -> None:
-    db: sqlite3.Connection = sqlite3.connect(dbpath)
+    parser = ArgumentParser()
+    parser.add_argument("-c", type=str, help="INI host config file")
+    parser.add_argument("-l", type=str, help="List of links to test")
+    parser.add_argument("-t", type=str, help="Test to run")
+    parser.add_argument("-m", type=str, help="Host or comma separated list of hosts to run the tests on")
+    opts = parser.parse_args()
+
+    hostsini = opts.c if opts.c else "hosts.ini"
     general, hosts = parse_config(hostsini)
 
-    test_dist(db, hosts)
+    links = opts.l
+
+    db: sqlite3.Connection = sqlite3.connect(general.dbpath)
+
+    hostnames = opts.m.split(",")  # TODO validation
+    hs = []
+    for h in hostnames:
+        for hc in hosts:
+            if h == hc.hostname:
+                hs.append(hc)
+                break
+
+    if opts.t in [t.value for t in TestCase]:
+        test_single(db, [TestCase.LINK_UP], hs, links)
+
+    if opts.t in [t.value for t in DistTestCase]:
+        test_dist(db, [DistTestCase.BANDWIDTH_BIDIR], hs, links)
 
 
 if __name__ == "__main__":
