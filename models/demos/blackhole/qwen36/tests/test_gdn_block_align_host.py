@@ -354,8 +354,13 @@ def adapter(monkeypatch):
     events = []
     vocab = 8
 
-    def prefill(tokens, pt, actual_len, vision_tokens=None, start_pos=0):
-        events.append(("prefill", start_pos, actual_len, vision_tokens))
+    def prefill(tokens, pt, actual_len, vision_tokens=None, start_pos=0, rope_token_ids=None):
+        assert tokens.shape[1] == actual_len
+        if rope_token_ids is not None:
+            # The RoPE table of a multimodal row comes from the whole row.
+            events.append(("prefill", start_pos, actual_len, vision_tokens, rope_token_ids.shape[1]))
+        else:
+            events.append(("prefill", start_pos, actual_len, vision_tokens))
         return torch.full((1, 1, vocab), float(actual_len))
 
     blocks = SimpleNamespace(
@@ -368,6 +373,7 @@ def adapter(monkeypatch):
         mesh_device=None,
         gdn_blocks=blocks,
         prefill_traced_chunked=prefill,
+        vision_rows_host=lambda rows: events.append(("vision rows to host", rows)) or f"host {rows}",
     )
     monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: t)
     monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda *a, **kw: None)
@@ -419,8 +425,7 @@ def test_prefill_resumes_from_the_start_blocks_and_only_reads_them(adapter):
 def test_prefill_refuses_a_start_inside_a_kv_block(adapter, expect_error):
     """A text row that starts inside a KV block is refused in both cache modes (start block equal to the destination,
     or another block): the attention fill writes from the first row of a block, and vllm-tt-plugin ends prefill chunks
-    on block boundaries. A multimodal row restarts at position 0 instead (test_multimodal_prefill_restarts_at_position_0).
-    """
+    on block boundaries."""
     for start_blocks in ("same", (1, 2, 3)):
         with expect_error(ValueError, "prefill resumes at 1920, inside a 1024-token KV block"):
             adapter(1920, 2500, (4, 5, 6), start_blocks=start_blocks)
@@ -433,11 +438,38 @@ def test_prefill_checks_the_start_blocks(adapter, expect_error):
         adapter(0, 2500, (4, 5, 6), start_blocks=(1, 2, 3))
 
 
-def test_multimodal_prefill_restarts_at_position_0(adapter, monkeypatch):
+@pytest.fixture
+def multimodal(monkeypatch):
+    """Rows carry pixels, and the vision tower answers "vision"."""
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
     monkeypatch.setattr(Qwen36ForCausalLM, "_has_visual", staticmethod(lambda kwargs, key: key == "pixel_values"))
     monkeypatch.setattr(Qwen36ForCausalLM, "_compute_vision_tokens", lambda self, model, kwargs: "vision")
-    for start in (2048, 1920):
-        events = adapter(start, 2500, (4, 5, 6), start_blocks="same", max_batch_size=1, pixel_values=["x"])
-        assert events == [("prefill", 0, 2500, "vision"), ("write", (4, 5, 6))]
+
+
+def test_multimodal_prefill_writes_its_checkpoint_with_the_whole_row_rope(adapter, multimodal):
+    """A whole multimodal prompt with a checkpoint after 2048 tokens runs as two segments, both with the vision rows
+    and the RoPE table of all 2500 tokens, so an image across token 2048 keeps its M-RoPE positions in both."""
+    events = adapter(0, 2500, (4, 5, 6), checkpoint=(2048, (1, 2, 3)), max_batch_size=1, pixel_values=["x"])
+    # The device rows are read once, before the first segment's trace replays can overwrite them.
+    assert events == [
+        ("vision rows to host", "vision"),
+        ("prefill", 0, 2048, "host vision", 2500),
+        ("write", (1, 2, 3)),
+        ("prefill", 2048, 2500, "host vision", 2500),
+        ("write", (4, 5, 6)),
+    ]
+
+
+def test_multimodal_prefill_continues_from_its_start_blocks(adapter, multimodal, expect_error):
+    """A multimodal request replayed after preemption that outgrows one step continues after its images from the
+    state its first chunk wrote; like a text row, it must start on a KV block boundary."""
+    events = adapter(2048, 2500, (4, 5, 6), start_blocks=(1, 2, 3), max_batch_size=1, pixel_values=["x"])
+    assert events == [
+        ("vision rows to host", "vision"),
+        ("restore", (1, 2, 3)),
+        ("prefill", 2048, 2500, "host vision", 2500),
+        ("write", (4, 5, 6)),
+    ]
+    with expect_error(ValueError, "prefill resumes at 1920, inside a 1024-token KV block"):
+        adapter(1920, 2500, (4, 5, 6), start_blocks=(1, 2, 3), max_batch_size=1, pixel_values=["x"])

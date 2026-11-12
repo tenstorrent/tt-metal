@@ -310,13 +310,10 @@ class Qwen36Model:
         # Clear any stale video grid so the modality (and thus the placeholder token id) is image.
         self._req_image_grid_thw = image_grid_thw
         self._req_video_grid_thw = None
-        image_features = self.vision_model.forward(pixel_values, grid_thw=image_grid_thw)
-        # The vision tower returns [1, B, S, H]; flatten the leading (batch/seq) dims to the
-        # packed [num_image_tokens, H] rows the text-model splice (_scatter_vision_tokens /
-        # _set_vision_merge) expects. The hidden dim is unchanged so the mesh hidden-fracture
-        # is preserved. B == 1 for now.
-        hidden = image_features.shape[-1]
-        return ttnn.reshape(image_features, (-1, hidden))
+        # host_trim: every device op of the tower depends only on the padded patch bucket, and the packed
+        # [num_image_tokens, H] rows (hidden-fractured) are trimmed on the host, so a new image size creates no
+        # program after the serving traces are captured.
+        return self.vision_model.forward(pixel_values, grid_thw=image_grid_thw, host_trim=True)
 
     def get_video_features(self, pixel_values_videos, video_grid_thw):
         """Run the vision tower over a single user's video frames.
@@ -332,9 +329,7 @@ class Qwen36Model:
         # placeholder token id) is video.
         self._req_video_grid_thw = video_grid_thw
         self._req_image_grid_thw = None
-        video_features = self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw)
-        hidden = video_features.shape[-1]
-        return ttnn.reshape(video_features, (-1, hidden))
+        return self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw, host_trim=True)
 
     def _vision_placeholder_token_id(self):
         """The input-id the current request's vision embeddings splice into: ``video_token_id`` for
@@ -480,12 +475,7 @@ class Qwen36Model:
         # the hidden fracture, so the round-trip gather->place->reshard preserves the per-device
         # columns. ConcatMeshToTensor(dim=1) over the 2D [rows, dim/TP] is the inverse of the
         # dims=(None,-1) hidden shard used on re-upload.
-        if tp:
-            vis_host = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
-                torch.bfloat16
-            )
-        else:
-            vis_host = ttnn.to_torch(vision_tokens).to(torch.bfloat16)  # [num_image_tokens, Hg]
+        vis_host = self.vision_rows_host(vision_tokens)  # [num_image_tokens, Hg]
         seg = vis_host[vis_row_offset : vis_row_offset + n]
         if tp:
             shard = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape)
@@ -513,6 +503,19 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._vis_mask_buf
         )
+
+    def vision_rows_host(self, vision_tokens):
+        """The packed vision rows as one host bf16 tensor [num_image_tokens, dim] (what _set_vision_merge splices); a
+        host tensor passes through. A traced prefill reads the rows once, before its first replay: the vision tower
+        allocates the device rows per request, after the traces were captured, so a replay can overwrite them before
+        a later chunk splices them."""
+        if vision_tokens is None or isinstance(vision_tokens, torch.Tensor):
+            return vision_tokens
+        if self.num_devices > 1:
+            return ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1)).to(
+                torch.bfloat16
+            )
+        return ttnn.to_torch(vision_tokens).to(torch.bfloat16)
 
     def _vis_row_offset_for(self, token_ids, chunk_start):
         """Packed-vision-row offset for the prefill segment starting at absolute position
@@ -3070,6 +3073,7 @@ class Qwen36Model:
         vision_tokens=None,
         vis_row_offset=0,
         return_hidden=False,
+        stage_rope=True,
     ):
         """Masked fixed-bucket prefill for a segment of `actual_len` real tokens.
 
@@ -3079,7 +3083,9 @@ class Qwen36Model:
         parked (avoids the compile-clobbers-trace hang). ``return_hidden`` also returns per-position
         pre-final-norm hidden [1,1,bucket,dim/tp] (MTP KV-warming; caller deallocates). ``chunk_start``
         is the segment's absolute start (0 for a short prompt; num_full*chunk_size for a long tail —
-        carried GDN/KV must already be in place). ``vis_row_offset`` is image-placeholder tokens before this segment. Returns host [1,1,vocab] logits at actual_len-1.
+        carried GDN/KV must already be in place). ``vis_row_offset`` is image-placeholder tokens before this segment.
+        ``stage_rope`` False keeps the RoPE table the caller staged (prefill_traced_chunked, from the whole prompt).
+        Returns host [1,1,vocab] logits at actual_len-1.
         """
         B_batch, _ = token_ids.shape
         assert B_batch == 1, "masked-bucket prefill is single-sequence"
@@ -3093,7 +3099,8 @@ class Qwen36Model:
             # Stage the per-request RoPE for this segment (M-RoPE for multimodal, 1D for text).
             # Only at the sequence start; a carried tail (chunk_start>0) keeps the table the
             # long-prompt entry (prefill_traced_chunked) already staged.
-            self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
+            if stage_rope:
+                self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
 
         real = token_ids[:, :actual_len].to(torch.int32)
         if bucket > actual_len:
@@ -3230,7 +3237,9 @@ class Qwen36Model:
                 ttnn.deallocate(pt)
             ttnn.deallocate(k_full)
 
-    def prefill_traced_chunked(self, token_ids, page_table, actual_len, vision_tokens=None, on_chunk=None, start_pos=0):
+    def prefill_traced_chunked(
+        self, token_ids, page_table, actual_len, vision_tokens=None, on_chunk=None, start_pos=0, rope_token_ids=None
+    ):
         """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk, then
         processing the final partial chunk eagerly with minimal padding. Only the real prompt
         (token_ids[:, :actual_len]) is processed. Full chunks replay from the trace; the tail
@@ -3247,21 +3256,26 @@ class Qwen36Model:
         hidden is the pre-final-norm [1,1,2048,dim/tp]; on_chunk must NOT free it (it is the trace's
         persistent output), and must enqueue its reads before returning (the next replay overwrites it).
 
-        ``start_pos > 0`` (TP, text only) continues a prefill: it computes tokens [start_pos, actual_len) from the GDN
-        state that the batch-1 workspace (rec_state, conv_carry) already holds, attending over the KV cache that the
-        page table holds for [0, start_pos). token_ids still starts at position 0. start_pos must be a multiple of the
-        KV block size: paged_fill_cache writes a chunk from the first row of its first block.
+        ``start_pos > 0`` (TP) continues a prefill: it computes tokens [start_pos, actual_len) from the GDN state that
+        the batch-1 workspace (rec_state, conv_carry) already holds, attending over the KV cache that the page table
+        holds for [0, start_pos). token_ids still starts at position 0. start_pos must be a multiple of the KV block
+        size: paged_fill_cache writes a chunk from the first row of its first block. A multimodal continuation splices
+        the vision rows of its own image tokens, which the vision rows of the image tokens before start_pos precede.
+
+        ``rope_token_ids`` (default token_ids[:, :actual_len]) are the tokens the request's RoPE table is built from:
+        the M-RoPE positions of an image need all of the image's tokens, so a multimodal prefill that runs in segments
+        passes the whole prompt for each segment, including one that ends inside an image.
         """
         # Default to the standard 2048-token chunk when no trace is captured (e.g. the TP MVP,
         # which serves <=2048 prompts entirely via the masked bucket below and so needs no chunk
         # trace). The chunk trace is only required once there is at least one full chunk to replay.
         chunk_size = self._chunked_chunk_size or 2048
+        vision_tokens = self.vision_rows_host(vision_tokens)  # before the first replay (see vision_rows_host)
         B, T = token_ids.shape
         assert 0 <= start_pos < actual_len <= T, f"need 0 <= start_pos {start_pos} < actual_len {actual_len} <= {T}"
         block_size = get_block_size(self._paged_kv_caches)
         if start_pos:
             assert self.num_devices > 1, "a prefill continues at start_pos > 0 only on the TP path"
-            assert vision_tokens is None, "a prefill continues at start_pos > 0 for text only"
             assert start_pos % block_size == 0, f"start_pos {start_pos} is not on a {block_size}-token KV block"
         blocks_per_chunk = chunk_size // block_size
         num_full = (actual_len - start_pos) // chunk_size
@@ -3272,9 +3286,8 @@ class Qwen36Model:
 
         # Stage the per-request RoPE once for the whole prompt (M-RoPE for multimodal, 1D for text).
         # The chunk-replay loops + the masked tail then slice this sequence-indexed table by chunk
-        # position, and decode offsets by the stored rope_delta. (The num_full==0 short path below
-        # re-stages it inside prefill_masked_bucket; that is idempotent.)
-        self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
+        # position, and decode offsets by the stored rope_delta.
+        self._build_request_rope(token_ids[:, :actual_len] if rope_token_ids is None else rope_token_ids, vision_tokens)
 
         # Short prompt (no full chunks): route the whole prompt through the SAME masked
         # fixed-bucket path the long-prompt tail uses. chunk_start=0 makes prefill_masked_bucket
@@ -3302,25 +3315,21 @@ class Qwen36Model:
                     )
                 elif page_table.shape[1] > buf_blocks:
                     page_table = page_table[:, :buf_blocks]
+            short = dict(
+                actual_len=tail_real,
+                chunk_start=start_pos,
+                vision_tokens=vision_tokens,
+                vis_row_offset=self._vis_row_offset_for(token_ids, start_pos),
+                stage_rope=False,
+            )
             if on_chunk is not None:
                 logits, hidden = self.prefill_masked_bucket(
-                    token_ids[:, start_pos:actual_len],
-                    page_table,
-                    actual_len=tail_real,
-                    chunk_start=start_pos,
-                    vision_tokens=vision_tokens,
-                    return_hidden=True,
+                    token_ids[:, start_pos:actual_len], page_table, return_hidden=True, **short
                 )
                 on_chunk(hidden, start_pos, tail_real)
                 ttnn.deallocate(hidden)
                 return logits
-            return self.prefill_masked_bucket(
-                token_ids[:, start_pos:actual_len],
-                page_table,
-                actual_len=tail_real,
-                chunk_start=start_pos,
-                vision_tokens=vision_tokens,
-            )
+            return self.prefill_masked_bucket(token_ids[:, start_pos:actual_len], page_table, **short)
 
         assert on_chunk is None or (
             self.num_devices > 1 and self._chunked_trace_id is not None
