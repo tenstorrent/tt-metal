@@ -15,7 +15,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

@@ -33,7 +33,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-umd/types/arch.hpp>
 
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include "llk_device_fixture.hpp"
 #include "test_golden_impls.hpp"
 #include "tt_metal/test_utils/packing.hpp"

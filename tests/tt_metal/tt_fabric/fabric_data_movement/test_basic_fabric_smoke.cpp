@@ -29,6 +29,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <tt-umd/types/core_coordinates.hpp>
+#include "tt_metal/test_utils/launch_program.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 

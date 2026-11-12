@@ -20,7 +20,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"

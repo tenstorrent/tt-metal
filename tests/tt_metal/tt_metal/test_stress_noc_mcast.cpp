@@ -36,7 +36,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

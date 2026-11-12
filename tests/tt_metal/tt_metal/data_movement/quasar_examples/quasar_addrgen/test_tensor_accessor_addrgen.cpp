@@ -56,6 +56,7 @@
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include "tt_metal/test_utils/launch_program.hpp"
 
 namespace tt::tt_metal {
 

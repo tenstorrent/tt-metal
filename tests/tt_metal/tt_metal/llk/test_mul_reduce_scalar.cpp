@@ -23,7 +23,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/program/program_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/arch.hpp>
