@@ -255,6 +255,36 @@ enum class ReplayMode : std::uint32_t
     REPLAY,
 };
 
+/**
+ * @brief Dest distance between the two 16-row groups that load16_rows_x2 puts in LREG0-3 and LREG4-7.
+ *
+ * LREG0-3 read rows base + {0, 4, 8, 12}; LREG4-7 read the same four rows GroupOffset further on. It is also the
+ * distance the stride-16 step compares across, LREG k against LREG k + 4. A Dest address counts rows of 16 columns
+ * and a face is 16 rows, except bit 1, which picks the odd columns: ODD_COLUMNS (+2) reads the odd columns of the
+ * same rows, the other column of each SFPU lane.
+ */
+enum class GroupOffset : std::uint32_t
+{
+    ODD_COLUMNS = EIGHTH_FACE_INC, // 2: same rows, odd columns
+    ONE_FACE    = FACE_INC,        // 16: the next 16 rows
+    TWO_FACES   = TWO_FACE_INC,    // 32
+    FOUR_FACES  = 4 * FACE_INC,    // 64
+};
+
+/**
+ * @brief Dst advance folded into the last SFPSTORE of store16_rows_x2, so no separate INCRWC is needed.
+ *
+ * Each value is one ADDR_MOD the topk_xl inits program: NONE is ADDR_MOD_7 (+0), ONE_FACE ADDR_MOD_5 (+16 rows),
+ * TWO_FACES ADDR_MOD_6 (+32) and THREE_FACES ADDR_MOD_1 (+48).
+ */
+enum class DstAdvance : std::uint32_t
+{
+    NONE        = 0,
+    ONE_FACE    = FACE_INC,
+    TWO_FACES   = TWO_FACE_INC,
+    THREE_FACES = THREE_FACE_INC,
+};
+
 // Strides 1 and 2 run after SFPTRANSP, so neighbouring positions sit in neighbouring LREGs.
 constexpr bool is_after_transpose(Stride stride)
 {
@@ -388,6 +418,8 @@ constexpr bool topk_xl_blaze_compat = false;
 // Load 16 rows × 2 strips into LREG0..LREG7 (fused path).
 //   group 1: LREG0..3 at base+{0,4,8,12}
 //   group 2: LREG4..7 at base+group_2_offset+{0,4,8,12}
+// group_2_offset stays an int: the merges load runs whole tiles apart (any multiple of 64 below 1024). Fixed in-tile
+// offsets are named by @ref detail::GroupOffset.
 template <int group_2_offset = 16>
 inline void load16_rows_x2()
 {
@@ -401,15 +433,9 @@ inline void load16_rows_x2()
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 12);
 }
 
-// Store LREG0..LREG7 back to Dst (fused path), mirror of `load16_rows_x2`.
-//
-// `inc_dst_addr` picks the ADDR_MOD used by the LREG7 store, which is what
-// folds a trailing Dst advance into the store itself:
-//   0  → no advance
-//   16 → +16 (one half face row)
-//   32 → +32 (one face row)
-//   48 → +48 = 32 + 16 (folds the trailing +16 INCRWC into the store)
-template <int group_2_offset = 16, int inc_dst_addr = 0>
+// Store LREG0..LREG7 back to Dst (fused path), mirror of `load16_rows_x2`. `advance` picks the ADDR_MOD of the LREG7
+// store, which folds a trailing Dst advance into the store itself (see @ref detail::DstAdvance).
+template <int group_2_offset = 16, detail::DstAdvance advance = detail::DstAdvance::NONE>
 inline void store16_rows_x2()
 {
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
@@ -419,25 +445,25 @@ inline void store16_rows_x2()
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 4);
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 8);
-    if constexpr (inc_dst_addr == 48)
+    if constexpr (advance == detail::DstAdvance::THREE_FACES)
     {
         TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_1, group_2_offset + 12);
     }
-    else if constexpr (inc_dst_addr == 32)
+    else if constexpr (advance == detail::DstAdvance::TWO_FACES)
     {
         TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_6, group_2_offset + 12);
     }
-    else if constexpr (inc_dst_addr == 16)
+    else if constexpr (advance == detail::DstAdvance::ONE_FACE)
     {
         TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_5, group_2_offset + 12);
     }
-    else if constexpr (inc_dst_addr == 0)
+    else if constexpr (advance == detail::DstAdvance::NONE)
     {
         TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, group_2_offset + 12);
     }
     else
     {
-        static_assert(false, "Invalid inc_dst_addr, must be 0, 16, 32, or 48");
+        static_assert(false, "advance must be one of the DstAdvance values the inits program");
     }
 }
 
@@ -799,7 +825,98 @@ inline void sort_32_rows(const bool ascending, const bool dir)
             TTI_SFPTRANSP(0, 0, 0, 0);
         });
     lltt::replay(w32_slot, w32_half);
-    store16_rows_x2<16, 32>();
+    store16_rows_x2<16, detail::DstAdvance::TWO_FACES>();
+}
+
+namespace detail
+{
+
+// A W16 or W32 sort that runs from stride 8 or above down to 1 ends in 8 4 · T · 2 1 · T, and the two halves emit
+// the same SFPSWAPs (after SFPTRANSP the LREG pairs of strides 8 and 4 give strides 2 and 1).
+template <WindowSize WINDOW, Stride FROM, Stride TO>
+constexpr bool has_repeated_half = static_cast<std::uint32_t>(WINDOW) >= 16 && static_cast<std::uint32_t>(FROM) >= 8 && TO == Stride::ONE;
+
+/**
+ * @brief Run `iterations` × (load · window_sort<WINDOW, FROM, TO>(dir) · store) from the replay buffer.
+ *
+ * The first iteration records the body while executing it; the others replay it. The layout is chosen at compile time:
+ *
+ *     body fits 32 slots:            [load][sort][store]                         1 issue per later iteration
+ *     otherwise, a repeated half:    [load][strides above 8][8 4 · T][store]     2 issues per later iteration
+ *
+ * In the second layout each iteration replays [load .. 8 4 · T], then [8 4 · T][store] again, which issues 2 1 · T.
+ *
+ * @tparam LOAD_LEN: Instructions `load` emits
+ * @tparam STORE_LEN: Instructions `store` emits
+ * @param iterations: Bodies to run, at least 1
+ * @param dir: Direction of every window_sort; it must not change between iterations
+ * @note Overwrites the replay slots it uses, from slot 0.
+ */
+template <WindowSize WINDOW, Stride FROM, Stride TO, std::uint32_t LOAD_LEN, std::uint32_t STORE_LEN, typename Load, typename Store>
+inline void window_sort_replay_loop(const int iterations, const bool dir, Load load, Store store)
+{
+    constexpr std::uint32_t whole = LOAD_LEN + window_sort_len<WINDOW, FROM, TO>() + STORE_LEN;
+    if constexpr (whole <= 32)
+    {
+        load_replay_buf<Exec>(
+            0,
+            whole,
+            [&]
+            {
+                load();
+                window_sort<WINDOW, FROM, TO>(dir);
+                store();
+            });
+        for (int i = 1; i < iterations; i++)
+        {
+            lltt::replay(0, whole);
+        }
+    }
+    else
+    {
+        static_assert(has_repeated_half<WINDOW, FROM, TO>, "the body does not fit 32 replay slots and has no repeated half to replay");
+        constexpr std::uint32_t half      = window_sort_len<WINDOW, Stride::EIGHT, Stride::FOUR>() + 1; // 8 4 · T
+        constexpr std::uint32_t first     = LOAD_LEN + window_sort_len<WINDOW, FROM, Stride::FOUR>() + 1;
+        constexpr std::uint32_t half_slot = first - half;
+        static_assert(first + STORE_LEN <= 32, "load, the sort up to its first half and store must fit 32 replay slots");
+        load_replay_buf<Exec>(
+            0,
+            first,
+            [&]
+            {
+                load();
+                window_sort<WINDOW, FROM, Stride::FOUR>(dir);
+                TTI_SFPTRANSP(0, 0, 0, 0);
+            });
+        lltt::replay(half_slot, half);
+        load_replay_buf<Exec>(first, STORE_LEN, [&] { store(); });
+        for (int i = 1; i < iterations; i++)
+        {
+            lltt::replay(0, first);
+            lltt::replay(half_slot, half + STORE_LEN);
+        }
+    }
+}
+
+} // namespace detail
+
+/**
+ * @brief Run `iterations` × (load16_rows_x2 · window_sort<WINDOW, FROM, TO>(dir) · store16_rows_x2), recorded once and
+ * replayed after.
+ *
+ * @tparam GROUP_OFFSET: Dest distance from the LREG0-3 rows to the LREG4-7 rows, values = <ODD_COLUMNS/ONE_FACE/TWO_FACES/FOUR_FACES>
+ * @tparam ADVANCE: Dst advance folded into the last store, values = <NONE/ONE_FACE/TWO_FACES/THREE_FACES>
+ * @param iterations: Bodies to run, at least 1
+ * @param dir: Direction of every window_sort; it must not change between iterations
+ * @note See @ref detail::window_sort_replay_loop for the replay layout. Overwrites the replay slots it uses, from 0.
+ */
+template <detail::WindowSize WINDOW, detail::Stride FROM, detail::Stride TO, detail::GroupOffset GROUP_OFFSET, detail::DstAdvance ADVANCE>
+inline void window_sort_rows(const int iterations, const bool dir)
+{
+    constexpr int group_offset          = static_cast<int>(GROUP_OFFSET);
+    constexpr std::uint32_t rows_x2_len = 8; // load16_rows_x2 / store16_rows_x2: one SFPLOAD / SFPSTORE per LREG
+    detail::window_sort_replay_loop<WINDOW, FROM, TO, rows_x2_len, rows_x2_len>(
+        iterations, dir, [] { load16_rows_x2<group_offset>(); }, [] { store16_rows_x2<group_offset, ADVANCE>(); });
 }
 
 // =============================================================================
@@ -1483,38 +1600,35 @@ inline void len32_stores()
 constexpr int len32_loads_len  = 11;
 constexpr int len32_stores_len = 8;
 
-// Out of line: the K = 2048 math image has little room.
-inline NOINLINE void bitonic_sort_len_32_tail(bool ascending)
+// `iterations` × (len32_loads · W32 sort from stride 8 · len32_stores) with one `dir`, from the replay buffer. Out of
+// line: the K = 2048 math image has little room.
+inline NOINLINE void len32_groups(const int iterations, const bool dir)
 {
-    window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(ascending);
-}
-
-inline NOINLINE void record_len32_group(const bool dir)
-{
-    if (dir)
-    {
-        load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads<true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads<false>(); });
-    }
-    bitonic_sort_len_32_tail(dir);
-    if (dir)
-    {
-        load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores<true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores<false>(); });
-    }
-}
-
-inline NOINLINE void replay_len32_group(const bool dir)
-{
-    lltt::replay(0, len32_loads_len);
-    bitonic_sort_len_32_tail(dir);
-    lltt::replay(len32_loads_len, len32_stores_len);
+    detail::window_sort_replay_loop<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE, len32_loads_len, len32_stores_len>(
+        iterations,
+        dir,
+        [dir]
+        {
+            if (dir)
+            {
+                len32_loads<true>();
+            }
+            else
+            {
+                len32_loads<false>();
+            }
+        },
+        [dir]
+        {
+            if (dir)
+            {
+                len32_stores<true>();
+            }
+            else
+            {
+                len32_stores<false>();
+            }
+        });
 }
 
 } // namespace topk_xl_fused_macro
@@ -1552,7 +1666,7 @@ inline void fused_step_group(const bool ascending)
 #else
     load16_rows_x2<group_2_offset>();
     bitonic_sort_len_k(ascending);
-    store16_rows_x2<group_2_offset, inc_dst_addr>();
+    store16_rows_x2<group_2_offset, static_cast<detail::DstAdvance>(inc_dst_addr)>();
 #endif
 }
 
@@ -1818,23 +1932,10 @@ inline void topk_rebuild_build2048_mop_config()
 // the column run is half as deep, so stride-32 is the first scale; for
 // K=512 only the stride-16 tail runs.
 //
-// Replay-buffer layout (re-recorded fresh in sub-blocks A and C because
-// the load/store immediates differ; sub-block B is left inline since
-// recording it doesn't pay back at this size). Recording is `<Exec>` and
-// IS iter 0 of each inner loop:
-//   sub-block A: slots [0..7]  = load16_rows_x2<64>
-//                slots [8..15] = store16_rows_x2<64, 16>
-//   sub-block C: slots [0..7]  = load16_rows_x2<16>
-//                slots [8..15] = store16_rows_x2<16, 32>
-//
-// With TOPK_XL_FUSED_MACRO, sub-blocks A and B are software-pipelined: A records
-// one `step_group_pipelined<64, 16>` in slots [0..11] behind a `prologue_loads`,
-// and B runs `step_group_pipelined` inline behind its own prologue. A K=2048
-// sub-block C records its loads in [0..10] and stores in [11..18]; K=1024's C
-// keeps the plain [0..15] layout.
-//
-// `dir` is runtime so the sort calls stay inline (the conditional inside
-// them would not fold under replay anyway).
+// Sub-blocks A and C record their first iteration and replay the rest (`window_sort_rows`, or `len32_groups` for a
+// K=2048 sub-block C with macros); sub-block B is left inline since recording it doesn't pay back at this size.
+// With TOPK_XL_FUSED_MACRO, sub-blocks A and B are software-pipelined: A records one `step_group_pipelined<64, 16>` in
+// slots [0..11] behind a `prologue_loads`, and B runs `step_group_pipelined` inline behind its own prologue.
 template <int row_scale_factor>
 inline void canonical_big_block_with_replay_body(bool dir)
 {
@@ -1852,15 +1953,12 @@ inline void canonical_big_block_with_replay_body(bool dir)
             lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
         }
 #else
-        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<64>(); });
-        bitonic_sort_len_k(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<64, 16>(); });
-        for (int i = 1; i < row_scale_factor; i++)
-        {
-            lltt::replay(0, 8);
-            bitonic_sort_len_k(dir);
-            lltt::replay(8, 8);
-        }
+        window_sort_rows<
+            detail::WindowSize::THIRTY_TWO,
+            detail::Stride::SIXTEEN,
+            detail::Stride::SIXTEEN,
+            detail::GroupOffset::FOUR_FACES,
+            detail::DstAdvance::ONE_FACE>(row_scale_factor, dir);
 #endif
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
@@ -1894,24 +1992,17 @@ inline void canonical_big_block_with_replay_body(bool dir)
         // At K = 1024 each recording serves two groups only, too few for the macro loads to pay off.
         if constexpr (row_scale_factor >= 4)
         {
-            topk_xl_fused_macro::record_len32_group(dir);
-            for (int i = 1; i < row_scale_factor; i++)
-            {
-                topk_xl_fused_macro::replay_len32_group(dir);
-            }
+            topk_xl_fused_macro::len32_groups(row_scale_factor, dir);
         }
         else
 #endif
         {
-            load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-            window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-            load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
-            for (int i = 1; i < row_scale_factor; i++)
-            {
-                lltt::replay(0, 8);
-                window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-                lltt::replay(8, 8);
-            }
+            window_sort_rows<
+                detail::WindowSize::THIRTY_TWO,
+                detail::Stride::SIXTEEN,
+                detail::Stride::ONE,
+                detail::GroupOffset::ONE_FACE,
+                detail::DstAdvance::TWO_FACES>(row_scale_factor, dir);
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
@@ -1922,7 +2013,7 @@ inline void canonical_big_block_with_replay_body(bool dir)
         // recording across.
         load16_rows_x2<consecutive_32_offset>();
         window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        store16_rows_x2<consecutive_32_offset, 32>();
+        store16_rows_x2<consecutive_32_offset, detail::DstAdvance::TWO_FACES>();
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
 }
@@ -2096,7 +2187,6 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     bool dir                            = ascending;
     const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
-    constexpr int consecutive_32_offset = 16;
     // Kept as a local so the inner `if constexpr (row_scale_factor > 1)`
     // checks below match the historical K=2048 codegen byte-for-byte.
     constexpr int row_scale_factor = 4;
@@ -2143,26 +2233,24 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         // ── Phase 3 — stride-16 W32 sort (4 effective iters) ────────────────
         // `dir` flips once per outer pass below.
 #if TOPK_XL_FUSED_MACRO
-        topk_xl_fused_macro::record_len32_group(dir);
-        topk_xl_fused_macro::replay_len32_group(dir);
+        topk_xl_fused_macro::len32_groups(2, dir);
         dir = !dir;
-        topk_xl_fused_macro::record_len32_group(dir);
-        topk_xl_fused_macro::replay_len32_group(dir);
+        topk_xl_fused_macro::len32_groups(2, dir);
         dir = !dir;
 #else
-        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
+        window_sort_rows<
+            detail::WindowSize::THIRTY_TWO,
+            detail::Stride::SIXTEEN,
+            detail::Stride::ONE,
+            detail::GroupOffset::ONE_FACE,
+            detail::DstAdvance::TWO_FACES>(2, dir);
         dir = !dir;
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
+        window_sort_rows<
+            detail::WindowSize::THIRTY_TWO,
+            detail::Stride::SIXTEEN,
+            detail::Stride::ONE,
+            detail::GroupOffset::ONE_FACE,
+            detail::DstAdvance::TWO_FACES>(2, dir);
         dir = !dir;
 #endif
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -2196,15 +2284,12 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
     }
 #else
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_k(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < 8; i++)
-    {
-        lltt::replay(0, 8);
-        bitonic_sort_len_k(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<
+        detail::WindowSize::THIRTY_TWO,
+        detail::Stride::SIXTEEN,
+        detail::Stride::SIXTEEN,
+        detail::GroupOffset::ODD_COLUMNS,
+        detail::DstAdvance::ONE_FACE>(8, dir);
 #endif
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int col = 0; col < 2; col++)
@@ -2231,15 +2316,8 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
     // Stride-2 (load + TRANSP + W4 sort + store<2, 16>), N = 8.
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < 8; i++)
-    {
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE, detail::GroupOffset::ODD_COLUMNS, detail::DstAdvance::ONE_FACE>(
+        8, dir);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
@@ -2257,15 +2335,8 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
     // Stride-2 (load + W8 sort + store<2, 16>), N = 8.
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < 8; i++)
-    {
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE, detail::GroupOffset::ODD_COLUMNS, detail::DstAdvance::ONE_FACE>(
+        8, dir);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
@@ -2283,15 +2354,12 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
     // Stride-2 (load + W32 sort from stride 8 + store<2, 16>), N = 8.
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < 8; i++)
-    {
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<
+        detail::WindowSize::THIRTY_TWO,
+        detail::Stride::EIGHT,
+        detail::Stride::ONE,
+        detail::GroupOffset::ODD_COLUMNS,
+        detail::DstAdvance::ONE_FACE>(8, dir);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     transpose_8_faces<true, 256, false /* manage_outer_cfg */>();
 
@@ -2405,12 +2473,11 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
             // ── stride-16 W32 sort × rsf, dir alternates per pair ───────────
             //
             // Same recording pattern as the K=2048 fast path's Phase 3:
-            // iter 0 is recorded into slots [0..7] / [8..15] in Exec mode;
-            // remaining iters replay. `dir` flips after iters 1, 3, ...
-            // so pairs of iters share a direction.
+            // iter 0 records the load and store into slots [0..7] / [8..15] in Exec mode; the remaining iters replay
+            // them. The sort stays inline because `dir` flips after iters 1, 3, ..., so pairs of iters share a direction.
             load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
             window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-            load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
+            load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, detail::DstAdvance::TWO_FACES>(); });
             for (int i = 1; i < row_scale_factor; i++)
             {
                 lltt::replay(0, 8);
@@ -2461,15 +2528,12 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     else
 #endif
     {
-        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-        bitonic_sort_len_k(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-        for (int i = 1; i < n_iters_stride2; i++)
-        {
-            lltt::replay(0, 8);
-            bitonic_sort_len_k(dir);
-            lltt::replay(8, 8);
-        }
+        window_sort_rows<
+            detail::WindowSize::THIRTY_TWO,
+            detail::Stride::SIXTEEN,
+            detail::Stride::SIXTEEN,
+            detail::GroupOffset::ODD_COLUMNS,
+            detail::DstAdvance::ONE_FACE>(n_iters_stride2, dir);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int col = 0; col < 2; col++)
@@ -2501,15 +2565,8 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
 
     // ── build bitonic sequences of len=(K/4) ──────────────────────────────
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < n_iters_stride2; i++)
-    {
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<detail::WindowSize::FOUR, detail::Stride::TWO, detail::Stride::ONE, detail::GroupOffset::ODD_COLUMNS, detail::DstAdvance::ONE_FACE>(
+        n_iters_stride2, dir);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
@@ -2523,15 +2580,8 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
 
     // ── build bitonic sequences of len=(K/2) ──────────────────────────────
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < n_iters_stride2; i++)
-    {
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<detail::WindowSize::EIGHT, detail::Stride::FOUR, detail::Stride::ONE, detail::GroupOffset::ODD_COLUMNS, detail::DstAdvance::ONE_FACE>(
+        n_iters_stride2, dir);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
@@ -2545,15 +2595,12 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
 
     // ── build bitonic sequences of len=K ──────────────────────────────────
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < n_iters_stride2; i++)
-    {
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::EIGHT, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<
+        detail::WindowSize::THIRTY_TWO,
+        detail::Stride::EIGHT,
+        detail::Stride::ONE,
+        detail::GroupOffset::ODD_COLUMNS,
+        detail::DstAdvance::ONE_FACE>(n_iters_stride2, dir);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     transpose_N_faces</* N */ row_scale_factor * 2, true /* fused */, 256 /* indices_offset */, false /* manage_outer_cfg */>();
 
@@ -2736,7 +2783,6 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 #endif
 
     bool dir                                             = ascending;
-    [[maybe_unused]] constexpr int consecutive_32_offset = 16;
     const std::uint32_t tile_offset                      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
 
     if constexpr (fused)
@@ -2774,7 +2820,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         load_replay_buf<Exec>(
             16, 8, [dir] { window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NONE>(dir); });
         TTI_SFPTRANSP(0, 0, 0, 0);
-        load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, 16>(); });
+        load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
         ckernel_unpack_template::run(7);
 
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -3047,7 +3093,6 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     bool dir                                             = ascending;
     constexpr int num_tiles_per_sequence                 = K == 512 ? 1 : K == 1024 ? 1 : 2;
-    [[maybe_unused]] constexpr int consecutive_32_offset = 16;
     const std::uint32_t tile_offset                      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
     constexpr int row_scale_factor                       = K == 512 ? 1 : K == 1024 ? 2 : 4;
     constexpr int n_iters_stride2                        = row_scale_factor * 2;
@@ -3087,7 +3132,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
         load_replay_buf<Exec>(
             16, 8, [dir] { window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NONE>(dir); });
         TTI_SFPTRANSP(0, 0, 0, 0);
-        load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, 16>(); });
+        load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
         ckernel_unpack_template::run(n_iters_stride2 - 1);
 
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -4027,7 +4072,6 @@ template <bool macros = false>
 inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const bool ascending)
 {
     _topk_xl_split_begin_(tile_offset);
-    constexpr int consecutive_32_offset = 16;
     bool dir                            = ascending;
 
     for (int col = 0; col < 2; col++)
@@ -4051,12 +4095,12 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
     else
 #endif
     {
-        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-        bitonic_sort_len_k(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-        lltt::replay(0, 8);
-        bitonic_sort_len_k(dir);
-        lltt::replay(8, 8);
+        window_sort_rows<
+            detail::WindowSize::THIRTY_TWO,
+            detail::Stride::SIXTEEN,
+            detail::Stride::SIXTEEN,
+            detail::GroupOffset::ODD_COLUMNS,
+            detail::DstAdvance::ONE_FACE>(2, dir);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int col = 0; col < 2; col++)
@@ -4072,7 +4116,6 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
 inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, const bool ascending)
 {
     _topk_xl_split_begin_(tile_offset);
-    constexpr int consecutive_32_offset = 16;
     bool dir                            = ascending;
 
     for (int col = 0; col < 2; col++)
@@ -4102,12 +4145,12 @@ inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, cons
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
+        window_sort_rows<
+            detail::WindowSize::THIRTY_TWO,
+            detail::Stride::SIXTEEN,
+            detail::Stride::ONE,
+            detail::GroupOffset::ONE_FACE,
+            detail::DstAdvance::TWO_FACES>(2, dir);
         if constexpr (!topk_xl_blaze_compat)
         {
             dir = !dir;
@@ -4129,15 +4172,12 @@ inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, cons
         lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
     }
 #else
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_k(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < 4; i++)
-    {
-        lltt::replay(0, 8);
-        bitonic_sort_len_k(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<
+        detail::WindowSize::THIRTY_TWO,
+        detail::Stride::SIXTEEN,
+        detail::Stride::SIXTEEN,
+        detail::GroupOffset::ODD_COLUMNS,
+        detail::DstAdvance::ONE_FACE>(4, dir);
 #endif
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int col = 0; col < 2; col++)
@@ -4152,7 +4192,6 @@ inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, cons
 inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, const bool ascending)
 {
     _topk_xl_split_begin_(tile_offset);
-    constexpr int consecutive_32_offset = 16;
     bool dir                            = ascending;
 
     for (int col = 0; col < 2; col++)
@@ -4183,26 +4222,24 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
 #if TOPK_XL_FUSED_MACRO
-        topk_xl_fused_macro::record_len32_group(dir);
-        topk_xl_fused_macro::replay_len32_group(dir);
+        topk_xl_fused_macro::len32_groups(2, dir);
         dir = !dir;
-        topk_xl_fused_macro::record_len32_group(dir);
-        topk_xl_fused_macro::replay_len32_group(dir);
+        topk_xl_fused_macro::len32_groups(2, dir);
         dir = !dir;
 #else
-        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
+        window_sort_rows<
+            detail::WindowSize::THIRTY_TWO,
+            detail::Stride::SIXTEEN,
+            detail::Stride::ONE,
+            detail::GroupOffset::ONE_FACE,
+            detail::DstAdvance::TWO_FACES>(2, dir);
         dir = !dir;
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
-        lltt::replay(0, 8);
-        window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::SIXTEEN, detail::Stride::ONE>(dir);
-        lltt::replay(8, 8);
+        window_sort_rows<
+            detail::WindowSize::THIRTY_TWO,
+            detail::Stride::SIXTEEN,
+            detail::Stride::ONE,
+            detail::GroupOffset::ONE_FACE,
+            detail::DstAdvance::TWO_FACES>(2, dir);
         dir = !dir;
 #endif
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -4223,15 +4260,12 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
     }
 #else
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    bitonic_sort_len_k(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < 8; i++)
-    {
-        lltt::replay(0, 8);
-        bitonic_sort_len_k(dir);
-        lltt::replay(8, 8);
-    }
+    window_sort_rows<
+        detail::WindowSize::THIRTY_TWO,
+        detail::Stride::SIXTEEN,
+        detail::Stride::SIXTEEN,
+        detail::GroupOffset::ODD_COLUMNS,
+        detail::DstAdvance::ONE_FACE>(8, dir);
 #endif
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int col = 0; col < 2; col++)
@@ -4281,7 +4315,7 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::Yes>(dir);
         topk_xl_fused_macro::record_stride2_len16_loads(dir);
         window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::FOUR, detail::Stride::ONE>(dir);
-        load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
+        load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, topk_xl_fused_macro::stride2_len16_loads_len);
@@ -4301,7 +4335,7 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         loadmacro_configure<detail::Stride::FOUR, detail::WindowSize::EIGHT, detail::Fused::Yes>(dir);
         topk_xl_fused_macro::record_stride2_len8_loads(dir);
         window_sort<detail::WindowSize::EIGHT, detail::Stride::TWO, detail::Stride::ONE>(dir);
-        load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
+        load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, topk_xl_fused_macro::stride2_len8_loads_len);
@@ -4316,7 +4350,7 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
     {
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
         _topk_xl_split_stride2_sort_<sort_len>(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
+        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, 8);
@@ -4409,7 +4443,7 @@ inline void _topk_xl_split_rebuild_build_(const std::uint32_t tile_offset, const
     load_replay_buf<Exec>(
         16, 8, [dir] { window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::TWO, detail::Stride::ONE, detail::Transposes::NONE>(dir); });
     TTI_SFPTRANSP(0, 0, 0, 0);
-    load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, 16>(); });
+    load_replay_buf<Exec>(24, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
     ckernel_unpack_template::run(split_n_iters<K> - 1);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
