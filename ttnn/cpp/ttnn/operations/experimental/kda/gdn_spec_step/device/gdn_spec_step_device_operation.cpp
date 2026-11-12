@@ -85,10 +85,8 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         kOp);
     const uint32_t Nv = a.num_value_heads, Nk = a.num_key_heads, Dk = a.key_dim, Dv = a.value_dim;
     const uint32_t T = a.T, B = a.B, K = a.conv_kernel;
-    const uint32_t M = a.max_users ? a.max_users : B;  // ring/ctrl layout width
-    TT_FATAL(M >= B, "{}: max_users ({}) must be >= B ({})", kOp, M, B);
     TT_FATAL(Nv > 0 && Nk > 0 && Nv % Nk == 0, "{}: num_value_heads must be a multiple of num_key_heads", kOp);
-    // one core per (user, value head); the a|b gate pair may span two tiles (Nv = 24 at TP = 2), see the factory
+    // one core per (user, value head)
     const auto grid = in.qkvzab.device()->compute_with_storage_grid_size();
     TT_FATAL(
         B * Nv <= static_cast<uint32_t>(grid.x * grid.y),
@@ -108,17 +106,10 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         kOp,
         T,
         B);
-    TT_FATAL(a.hnew_depth == 2 || a.hnew_depth == 4, "{}: hnew_depth must be 2 or 4", kOp);
-    TT_FATAL(a.value_blocks <= 4, "{}: value_blocks must be in [0, 4] (got {})", kOp, a.value_blocks);
-    TT_FATAL(
-        (a.kernel_opts & ~static_cast<uint32_t>(kGdnSpecOptAll)) == 0,
-        "{}: unknown kernel_opts bits {:#x}",
-        kOp,
-        a.kernel_opts);
     const uint32_t C = 2 * Nk * Dk + Nv * Dv;
     TT_FATAL(
-        a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % TW == 0,
-        "{}: qkvz_dim must equal 2*Nk*Dk + 2*Nv*Dv and be tile aligned",
+        a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % TW == 0 && 2 * Nv <= TW,
+        "{}: qkvz_dim must equal 2*Nk*Dk + 2*Nv*Dv (tile aligned) and 2*Nv <= 32 (a|b in one tile)",
         kOp);
     const auto& qs = in.qkvzab.logical_shape();
     // R may exceed B*T only within the users' last tile row: the op zero-fills rows [B*T, round_up(B*T, 32)) of the
@@ -187,26 +178,26 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
                 "{}: ring_pool2 must hold at least Dk * Dv / 1024 tiles",
                 kOp);
         }
-        // a held head reads ring block u*Nv + h as a placeholder state, so blocks [0, M*Nv) must exist
+        // a held head reads ring block u*Nv + h as a placeholder state, so blocks [0, B*Nv) must exist
         TT_FATAL(
-            in.ring.buffer()->num_pages() >= static_cast<uint64_t>(M) * Nv * (Dk / TW) * (Dv / TW),
-            "{}: ring pool must hold at least M * Nv * Dk * Dv / 1024 tiles (M = max_users or B; got {})",
+            in.ring.buffer()->num_pages() >= static_cast<uint64_t>(B) * Nv * (Dk / TW) * (Dv / TW),
+            "{}: ring pool must hold at least B * Nv * Dk * Dv / 1024 tiles (got {})",
             kOp,
             in.ring.buffer()->num_pages());
     } else {
         TT_FATAL(!in.ring_pool2.has_value(), "{}: ring_pool2 needs ring_page_idx", kOp);
         TT_FATAL(
-            in.ring.logical_volume() >= static_cast<uint64_t>(T) * M * Nv * Dk * Dv &&
+            in.ring.logical_volume() >= static_cast<uint64_t>(T) * B * Nv * Dk * Dv &&
                 in.ring.logical_shape()[-1] == Dv && in.ring.logical_shape()[-2] == Dk,
-            "{}: ring must hold >= T*M*Nv blocks (M = max_users or B) of [Dk, Dv] (got {})",
+            "{}: ring must hold >= T*B*Nv blocks of [Dk, Dv] (got {})",
             kOp,
             in.ring.logical_shape());
     }
     const auto& cs = in.ctrl.logical_shape();
     const uint32_t words = static_cast<uint32_t>(cs[-1]);
     TT_FATAL(
-        static_cast<uint64_t>(words) == in.ctrl.logical_volume() && words >= 1 + M + M * Nv && (words * 4) % 64 == 0,
-        "{}: ctrl must be one row-major page [.., N] with N >= 1 + M + M*Nv and N*4 %% 64 == 0 (got {})",
+        static_cast<uint64_t>(words) == in.ctrl.logical_volume() && words >= 1 + B + B * Nv && (words * 4) % 64 == 0,
+        "{}: ctrl must be one row-major page [.., N] with N >= 1 + B + B*Nv and N*4 %% 64 == 0 (got {})",
         kOp,
         cs);
     TT_FATAL(
@@ -249,15 +240,11 @@ Tensor gdn_spec_step(
     float scale,
     float l2_epsilon,
     float norm_epsilon,
-    uint32_t hnew_depth,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     DataType output_dtype,
     bool fast_mode,
     bool fp32_state,
-    uint32_t max_users,
-    uint32_t value_blocks,
-    uint32_t kernel_opts,
     const std::optional<Tensor>& ring_page_idx,
     const std::optional<Tensor>& ring_pool2) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
@@ -269,22 +256,16 @@ Tensor gdn_spec_step(
             .value_dim = value_dim,
             .T = T,
             .B = B,
-            .max_users = max_users,
             .conv_kernel = conv_kernel,
             .qkvz_dim = qkvz_dim,
             .scale = scale,
             .l2_epsilon = l2_epsilon,
             .norm_epsilon = norm_epsilon,
-            .hnew_depth = hnew_depth,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
             .compute_kernel_config = compute_kernel_config,
             .fast_mode = fast_mode,
             .fp32_state = fp32_state,
-            .value_blocks = value_blocks,
-            // the restructurings exist for the fast_mode + fp32_state arithmetic only: other modes keep opts 0 (and so
-            // their original program and hash)
-            .kernel_opts = (fast_mode && fp32_state) ? kernel_opts : 0u,
         },
         GdnSpecStepInputs{
             .qkvzab = qkvzab,

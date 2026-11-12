@@ -44,15 +44,11 @@ Tensor gdn_spec_step(
     float scale,
     float l2_epsilon,
     float norm_epsilon,
-    uint32_t hnew_depth,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     tt::tt_metal::DataType output_dtype,
     bool fast_mode = false,
     bool fp32_state = false,
-    uint32_t max_users = 0,
-    uint32_t value_blocks = 1,
-    uint32_t kernel_opts = 0,
     const std::optional<Tensor>& ring_page_idx = std::nullopt,
     const std::optional<Tensor>& ring_pool2 = std::nullopt);
 

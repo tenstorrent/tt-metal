@@ -43,6 +43,14 @@ ttnn::Tensor gdn_spec_step(
     TT_FATAL(
         qkvzab.storage_type() == StorageType::DEVICE && qkvzab.buffer() != nullptr,
         "gdn_spec_step: qkvzab must be an allocated device tensor");
+    TT_FATAL(hnew_depth == 2, "gdn_spec_step: hnew_depth must be 2 (got {})", hnew_depth);
+    TT_FATAL(
+        max_users == 0 || max_users == B,
+        "gdn_spec_step: max_users must be 0 or B (got {}, B = {}); ring and ctrl are laid out for exactly B users",
+        max_users,
+        B);
+    TT_FATAL(value_blocks <= 1, "gdn_spec_step: value_blocks > 1 is not supported (got {})", value_blocks);
+    TT_FATAL(kernel_opts == 0, "gdn_spec_step: kernel_opts are not supported (got {:#x})", kernel_opts);
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const auto kernel_config = init_device_compute_kernel_config(
         qkvzab.device()->arch(),
@@ -73,15 +81,11 @@ ttnn::Tensor gdn_spec_step(
         scale_value,
         l2_epsilon,
         norm_epsilon,
-        hnew_depth,
         output_memory_config,
         kernel_config,
         output_dtype,
         fast_mode,
         fp32_state,
-        max_users,
-        value_blocks,
-        kernel_opts,
         ring_page_idx,
         ring_pool2);
 }

@@ -10,13 +10,14 @@
 
 namespace ttnn::experimental::kda {
 
-// Fused GDN spec-verify step: conv window rebuild + depthwise causal conv + SiLU + l2norms + gates + T-step gated
-// delta rule with per-token fp32 state ring writes + gated RMSNorm + silu(z) gate, one core per (user, value head).
-// ring, win_a/win_b are updated in place; the ctrl page carries parity, mi and the initial ring block per (u,h)
-// (HOLD sentinel 0xFFFFFFFF: no ring writes for that head, window rows copied through unchanged).
-// fast_mode / fp32_state select the same per-token arithmetic as gdn_decode_step(fast_mode, fp32_state): the
-// beta/decay gates computed in software fp32 on the reader and (fp32_state) the recurrent-state decay/add on the
-// SFPU in exact fp32. With both on, a T = 1 step is bit-identical to the plain decode op's fast/fp32 path.
+// Fused GDN speculative-verify step: conv window rebuild + depthwise causal conv + SiLU + l2norms + gates + T-step
+// gated delta rule with the state after every token written out + gated RMSNorm + silu(z) gate, one core per (user,
+// value head). ring (or the pages ring_page_idx names) and win_a / win_b are updated in place; the ctrl page carries
+// the window parity, mi and the start state per (u,h) (HOLD sentinel 0xFFFFFFFF: no state writes for that head, window
+// rows copied through). fast_mode / fp32_state select the per-token arithmetic of gdn_decode_step(fast_mode,
+// fp32_state), so a T-token call equals T chained gdn_decode_step calls at B = 1.
+// hnew_depth, max_users, value_blocks and kernel_opts accept only hnew_depth 2, max_users 0 or B, value_blocks 0 or 1
+// and kernel_opts 0.
 ttnn::Tensor gdn_spec_step(
     const ttnn::Tensor& qkvzab,
     const ttnn::Tensor& win_a,
@@ -44,9 +45,9 @@ ttnn::Tensor gdn_spec_step(
     ttnn::DataType output_dtype = ttnn::DataType::BFLOAT16,
     bool fast_mode = false,
     bool fp32_state = false,
-    uint32_t max_users = 0,     // 0 = B; ring/ctrl layout width when > B (rows 0..B-1 of a max_users-wide layout)
-    uint32_t value_blocks = 1,  // cores per (u, h) state (column split, bit-identical); clamped to the grid
-    uint32_t kernel_opts = 0,   // GdnSpecStepKernelOpt bits (bit-identical restructurings); 0 = the original program
+    uint32_t max_users = 0,
+    uint32_t value_blocks = 1,
+    uint32_t kernel_opts = 0,
     const std::optional<ttnn::Tensor>& ring_page_idx = std::nullopt,  // [>= B, T*Nv]: per-token, per-head ring pages
     const std::optional<ttnn::Tensor>& ring_pool2 = std::nullopt);    // second fp32 pool past ring's pages
 
