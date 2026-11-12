@@ -480,7 +480,7 @@ void append_selective_reduce_combine_to_descriptor(
             source_shard_shape[0],
             source_shard_shape[1],
             hidden_size / num_data_parallel_cores,
-            input_tensor.buffer()->aligned_size_per_bank(),
+            input_tensor.mesh_buffer().aligned_size_per_bank(),
             token_segment_buffer_size_bytes,
             num_buffers);
         expert_token_segment_buffer_block_size_bytes = fused_source_layout.buffer_block_size_bytes;
