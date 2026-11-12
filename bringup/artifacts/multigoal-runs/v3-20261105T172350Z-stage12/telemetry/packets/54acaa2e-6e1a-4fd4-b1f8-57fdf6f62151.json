@@ -3,7 +3,7 @@
   "run_id": "fd5fbe5a-7c1a-4995-aa51-fd89114fe560",
   "stage": "12-agentic-evals",
   "attempt_id": "54acaa2e-6e1a-4fd4-b1f8-57fdf6f62151",
-  "kind": "vllm",
+  "kind": "layer",
   "workload": {
     "input_tokens": 4096,
     "output_tokens": 128,
@@ -31,19 +31,21 @@
     "decode_dram_pct": null,
     "ttft_ms": 754.9548402457731,
     "decode_tps": 35.3096386576596,
-    "evidence": "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1.json"
+    "evidence": "Supplied candidate reports exact-target stage-11 measurements from models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1.json; not a stage-12 measurement."
   },
   "accuracy": [],
   "missing_reasons": {
-    "device_metrics": "Live vLLM profiling prohibited. Host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "No scored runs yet. Three secondary smoke jobs queued; local Docker AutoFix failed and local GPQA credential unavailable by operator decision.",
-    "stage12_performance": "No stage12 eval timings or release measurement. Headline performance reuses exact-target stage11 evidence."
+    "artifact_verification": "Filesystem reads failed because the sandbox launcher could not find bubblewrap. Retained measurements and mesh are from the supplied evidence packet and were not independently reverified.",
+    "layer_types": "No separate whole-layer measurements by real layer type were supplied.",
+    "device_metrics": "Live vLLM profiling is prohibited. Host-wall phase rooflines cannot populate device-time or device-roofline fields.",
+    "stage12_accuracy": "Supplied evidence reports no scored runs: secondary smoke jobs were queued, local Docker AutoFix failed, and local GPQA credentials were unavailable.",
+    "stage12_performance": "No stage-12 eval timings or release measurements were supplied. Headline values are retained stage-11 evidence."
   },
   "notes": [
-    "Stage11 accepted complete by operator decision7.",
-    "Reused stage11 headline: eight serial requests, full60-layer model, pinned HF revision842da3794eaa0b77d5f08bae87a17459d91ff475.",
-    "No new benchmark or profiler run for telemetry.",
-    "Stage12 blocked on mandatory local release Docker prerequisite after AutoFix failed. Functional_at0; CI smoke jobs42166117505,42166151590,42166175324 remain queued, not cancelled. No release.",
-    "Source packaging repaired with host checks; selected policy and generator class bodies unchanged. No new live performance claim."
+    "Stage 11 was accepted complete by operator decision 7.",
+    "Supplied stage-11 headline covers eight serial requests with the full 60-layer model at HF revision 842da3794eaa0b77d5f08bae87a17459d91ff475.",
+    "Supplied stage-12 evidence reports a block on the mandatory local release Docker prerequisite after AutoFix failed; no release.",
+    "CI smoke jobs 42166117505, 42166151590 and 42166175324 were reported queued; current status was not verified.",
+    "No benchmarks, profiling or code changes were performed during this repair."
   ]
 }

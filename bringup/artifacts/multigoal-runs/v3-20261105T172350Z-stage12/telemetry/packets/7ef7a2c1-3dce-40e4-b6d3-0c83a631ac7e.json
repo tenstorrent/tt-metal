@@ -29,24 +29,24 @@
     "decode_device_us": null,
     "prefill_flops_pct": null,
     "decode_dram_pct": null,
-    "ttft_ms": 755.0985858542845,
-    "decode_tps": 35.30414379625733,
-    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/framed-benchmark-dry/RESULT.json; publication f57978407eaacf09587f5793b8ae46ca7af839ea; full60/B1/C1 eight exact4096/128 serial requests"
+    "ttft_ms": 752.6009546418209,
+    "decode_tps": 35.298792474107316,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/frozen-benchmark-release/RESULT.json; full60 eight exact4096/128/B1/C1 serial token-out requests"
   },
   "accuracy": [
     {
       "name": "r1_gpqa_diamond",
-      "value": 0.625,
+      "value": 0.71875,
       "unit": "fraction",
       "phase": "agentic-evals-larger",
-      "completed_samples": 40,
+      "completed_samples": 160,
       "dataset_samples": 198,
       "scope": "subset",
       "confidence_interval_95": [
-        0.47032439137301096,
-        0.7577702083276673
+        0.6445855244726805,
+        0.7826567651397861
       ],
-      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/gpqa40-c8-saturation-comparison/audit.json"
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/runs/larger-gpqa160-c8/RESULT.json"
     },
     {
       "name": "terminal_bench_2_1",
@@ -79,24 +79,20 @@
   ],
   "missing_reasons": {
     "device_metrics": "Live vLLM profiling prohibited; host-wall rooflines are not device-time measurements.",
-    "stage12_accuracy": "Banked GPQA40/198, C8 same40 accepted; seven capped loops count as failures. C4/80 and C8/80 remain unbanked in progress. SWE2/500 and Terminal2/89 retain measured stops.",
-    "release": "Local frozen benchmark arm and frozen40 C8 fallback dry passed. Full-cap initial replies preserved; cancellation before grading confirmed. Final largest fitting cohort selection, its dry if upgraded, and unchanged release remain pending.",
-    "layer_types": "Template kind=layer is preserved as required metadata; this is stage12 full-model vLLM serving, not a layer measurement. No layer values measured."
+    "stage12_accuracy": "GPQA valid160/198 includes21 capped failures. SWE and Terminal valid2 retain measured stops; invalid SWE nightly excluded.",
+    "release": "Frozen local benchmark release passed unchanged. GPQA160 release42388198738 running; no final release score yet.",
+    "layer_types": "Template kind=layer is preserved as required metadata; this is stage12 full-model vLLM serving, not a layer measurement. No layer values measured.",
+    "historical_effort_forecasts": "18 historical saving forecasts unavailable after AutoFix evidence reconciliation; not invented. See runs/release-ledger-reconciliation/RESULT.json."
   },
   "notes": [
-    "Published runtime f579 measured on frozen local benchmark arm with complete idle-drained accounting; combined dry/release still pending. No vLLM profiling.",
-    "C4 same-ten scored pair9/10 each; C4 642.445722s versus C2 938.039050s. Repeated tasks are not additional independent accuracy samples.",
-    "Default-off model-owned token retention accepted by exact native paired outputs and583matched decode IDs; no client-emission identity claim.",
-    "Local execution checkout remains without remotes; source-only publication uses separate authorized checkouts.",
-    "Repaired GPQA20 run42273660905 valid16/20 in1.5557604843eval hours. Complete retained20chains classify both capped empty answers as periodic failures. Earlier unretained attempts remain unbanked. Evidence: runs/larger-gpqa20-c4-retention-retry/audit.json.",
-    "Six full60 conditional HF/TT prefill and forced incremental-decode checkpoints support captured loop continuations; no originalservedstate or autonomousHF claim. Evidence: runs/gpqa-loop-logits-discriminator/RESULT.json and runs/gpqa-decode-state-discriminator/RESULT.json.",
-    "SWE retained5: raw1/5 (Wilson95%3.62\u201362.45%), invalid Xarray external retrieval; functional2 retained, no retry/advance. Eval8190.434942s; native Astropy cap32768 with18047-token periodic suffix. Nine discarded outputs and failed phase archive limit attribution. Evidence: runs/nightly-swe-decode-retention/audit.json.",
-    "Selected headline remains unbuffered B1. Stock response debug buffers SSE (measured experiment excluded from decoderateclaims); enabled only for nonstreamingGPQA. Evidence: runs/response-logging-runtime-benchmark/AUTOFIX.md.",
-    "C8 same20 valid16/20; all outputs/retained chains exact versusC4, but1.786983eval hours is14.86% slower. C4 stayed selected on20; later C8/40 comparison is complete and accepted on40. Repeated tasks are not extra independent accuracy samples. Evidence: runs/gpqa20-c8-expanded-pool-comparison/audit.json.",
-    "Valid C4/40:25/40,3.640636eval hours; normal80 dispatched42323448662 on measured9.882469h sensitivity. Full4h additive scenario12.258136h exceeds12; projection is not bound.",
-    "New doc160 period3: exact4699-token overlap from fresh native capture; four conditional HF/TT checkpoints agree, no actionable discrepancy, no serving change. Cost.136083deviceh. No autonomousHF/originalstateclaim. Evidence: runs/gpqa40-new-loop-diagnosis/RESULT.json.",
-    "C8/40 valid25/40 in2.501182eval hours:31.298% shorter thanC4 with equal1102630 active decode work/all40 visible outputs;39/40 hidden chains exact. C8 selected at40,80 gain unconfirmed. Evidence: runs/gpqa40-c8-saturation-comparison/audit.json",
-    "C8/80 comparison42332785769 dispatched on eef534/TTI42dc4075 with measured8.051161h empirical-tail projection and7.5device-hour box; full4h tail sensitivity10.203404h. No release claim.",
-    "Operator9 authorizes CI-proven eef image fallback; f579 old-image reuse rejected by source provenance. Optional unchanged build retries>=90min; release still pending."
+    "Exact4096/128/B1/C1 performance from completed full60 frozen release; eight requests, all text equal dry. No serving profiling.",
+    "GPQA160 score115/160, eval7.474426h; release forecast10.442046h includes queue and extra measured tail. Full198 projection12.217222h exceeds12h; functional_at160.",
+    "21 capped looping/degenerate failures included. Conditional HF/TT diagnostics found no actionable discrepancy; not autonomous HF evidence.",
+    "All160 native replies and phase chains retained. Two post-run replay corruption flags remain, bytewise reconciled against intact live originals.",
+    "Same80 C8 versusC4 eval4.281695h versus6.895968h; outputs/chains/work equal, different hosts and pool settings limit causal attribution.",
+    "Exact160 and local benchmark operational dry passed; release source/settings unchanged and no fixes or redispatch permitted.",
+    "SWE nightly external retrieval invalidated its raw score; Terminal nightly projected beyond12h. Both retain functional_at2.",
+    "Device/roofline values unavailable; host-wall intervals never substituted. Template layer kind preserved without layer claims.",
+    "Execution checkout has no remotes; source publication used separate authorized checkouts. Filesystem-specific CI free space remains unavailable."
   ]
 }

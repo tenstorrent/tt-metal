@@ -20,5 +20,20 @@
   "local_checkout_has_remote": false,
   "live_pipeline_started": false,
   "advertised_context_tokens": 262144,
-  "serving_registration_requirement": "Local serving must resolve the generated autoport adapter, not the stock Gemma4 adapter."
+  "serving_registration_requirement": "Local serving must resolve the generated autoport adapter, not the stock Gemma4 adapter.",
+  "operator_decisions": {
+    "PC-01": "not authorized; keep stock plugin; mixed intermediate/final prefill host sampling accepted as documented plugin limit (see AGENTS.md, Operator decisions)",
+    "served_top_k": "authorized: --override-generation-config '{\"top_k\":32}', temperature 1.0 and top_p 0.95 unchanged",
+    "keep_stock_scope": "runtime only (src/, defaults, capabilities, interfaces); test-only corrections per plugin-change rules allowed",
+    "PC-02": "authorized: apply test-only patch, validate, local plugin commit, never push",
+    "PC-03": "authorized: apply test-only patch, validate, local plugin commit, never push",
+    "PC-04": "not authorized; full-phase accounting from adapter-observed submission/completion boundaries, plugin host work and gaps counted inside intervals",
+    "gpqa_local": "no HF credential on this host; record GPQA not covered locally, no unofficial mirror; gated suites may run on operator-defined devices in stage 12",
+    "stage_11": "accepted complete by operator; installed benchmark checker defect (non-empty accuracy, 3600 s cap) recorded, package stays read-only",
+    "release_route": "no Docker in local container; qb2-ci authorized for all Docker task-container work incl. dry run and release; local device for serving measurements; plan for CI queueing",
+    "ci_image_build_f5797840": {
+      "date": "2026-11-07T02:40Z",
+      "decision": "EPEL 403 infrastructure failure; no restored access and no exact-commit image from operator. Unchanged stock retries allowed at most every 90 min with a free slot; docker-image reuse only if every changed file demonstrably reaches the test job from dispatched commits; no workflow/mirror/dependency changes. Logging candidate optional: if not built in time, dry run and release use the last CI-proven SHAs/image (e.g. eef534 route) and record the candidate as locally verified, CI-unverified. Record all runs, including failed benchmark runs 42239308813/42252352037/42264721517 and builds 42326665396/42327188063, in compute.json."
+    }
+  }
 }

@@ -1,7 +1,7 @@
 {
   "arm": "larger-gpqa160-c8",
   "device": "qb2-ci",
-  "status": "completed_valid",
+  "status": "completed_awaiting_audit",
   "purpose": "Next normal larger rung after valid80",
   "eval": "r1_gpqa_diamond",
   "tasks": [
