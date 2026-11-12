@@ -19,6 +19,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 from .fused_decode.config import DECODE_ROUTER_FAST_TOPK, ROUTER_DECODE_TERMS, ROUTER_DECODE_WEIGHT_DTYPE
 from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from .stream_relayout import LinearStreamPlan, rebuild_linear
 from .weight_source import dense_rounded_tag
 
 
@@ -109,14 +110,21 @@ class TopKRouter:
             state_dict["weight_decode"].transpose(0, 1) if state_dict and "weight_decode" in state_dict else None
         )
         torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
-        self.weight = ttnn.as_tensor(
-            torch_weight,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"weight{dense_rounded_tag()}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Batch-1 fused model (one decode stream term): the decode weight_stream is the only router weight; prefill
+        # rebuilds the bf16 [hidden, experts] weight from it per call (_prefill_weight, stream_relayout.py).
+        self._prefill_plan = None
+        if indexed_decode and ROUTER_DECODE_TERMS == 1:
+            self._prefill_plan = LinearStreamPlan(self.hidden_dim, self.num_experts, mesh_device.dram_grid_size().x)
+        self.weight = None
+        if self._prefill_plan is None:
+            self.weight = ttnn.as_tensor(
+                torch_weight,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"weight{dense_rounded_tag()}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         self.bias = ttnn.as_tensor(
             torch_bias,
             device=mesh_device,
@@ -186,6 +194,14 @@ class TopKRouter:
             get_cache_file_name(tensor_cache_path, f"weight_stream_e{self.num_experts}_b{banks}_nb{NBIAS}{tag}"),
         )
 
+    def _prefill_weight(self):
+        """(the [hidden, experts] BF16 router weight, owned): owned = rebuilt from the decode weight_stream (its bf8
+        values), which the caller frees."""
+        if self.weight is not None:
+            return self.weight, False
+        w = rebuild_linear(self.weight_stream, self._prefill_plan, ttnn.bfloat16)
+        return ttnn.reshape(w, (self.hidden_dim, self.num_experts)), True  # a view
+
     def _init_fused_op(self, device, B):
         """Lazily initialize fused op tensors (bias broadcast + output pre-alloc)."""
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
@@ -223,7 +239,7 @@ class TopKRouter:
         assert sorted(perm.tolist()) == list(range(self.num_experts)), f"not a permutation of the experts: {order}"
         out = copy.copy(self)
         for name in ("weight", "bias"):
-            t = getattr(self, name)
+            t, owned = self._prefill_weight() if name == "weight" else (self.bias, False)
             host = ttnn.to_torch(ttnn.get_device_tensors(t)[0])
             host = host.reshape(-1, host.shape[-1])[:, perm]
             setattr(
@@ -238,9 +254,11 @@ class TopKRouter:
                     mesh_mapper=ttnn.ReplicateTensorToMesh(t.device()),
                 ),
             )
+            if owned:  # (out keeps the permuted copy: a stored weight of its own)
+                ttnn.deallocate(t)
         return out
 
-    def _batched_router_linear(self, x4):
+    def _batched_router_linear(self, x4, weight):
         """Router logits of a batched prefill of short users, x4 [B, 1, S, H] (S <= 128) -> [B, 1, S, E] in DRAM.
 
         Bit-identical to the batch-1 linear of each user (L1 output: MatmulMultiCoreProgramConfig, one output tile per
@@ -250,7 +268,7 @@ class TopKRouter:
         (l20/mb_router2.py): 0.200 -> 0.118 ms per linear, 0 / 131072 logits differ; the DRAM output also keeps the
         top-k's pad multi-core (from L1 it runs on one core, 80 us). Users of a partial tile of rows, or more rows per
         core than _BATCHED_ROUTER_MAX_PER_CORE_M (L1 of the full-K blocks), keep the [B, 1, S, H] linear with the L1
-        output (ttnn picks the batch-1 call's program), copied to DRAM."""
+        output (ttnn picks the batch-1 call's program), copied to DRAM. weight: _prefill_weight()."""
         M_tiles = x4.shape[0] * (x4.shape[-2] // ttnn.TILE_SIZE)
         k_tiles = self.hidden_dim // ttnn.TILE_SIZE
         grid = x4.device().compute_with_storage_grid_size()
@@ -263,7 +281,7 @@ class TopKRouter:
         ):
             logits = ttnn.linear(
                 x4,
-                self.weight,
+                weight,
                 bias=self.bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_config,
@@ -292,7 +310,7 @@ class TopKRouter:
         )
         return ttnn.linear(
             x4,
-            self.weight,
+            weight,
             bias=self.bias,
             program_config=program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -300,6 +318,14 @@ class TopKRouter:
         )
 
     def __call__(self, hidden_states, use_throughput_experts, batch_size=1):
+        weight, owned = self._prefill_weight()
+        try:
+            return self._route(hidden_states, use_throughput_experts, batch_size, weight)
+        finally:
+            if owned:  # (after the linear is enqueued: the queue orders the free after it)
+                ttnn.deallocate(weight)
+
+    def _route(self, hidden_states, use_throughput_experts, batch_size, weight):
         # Compute actual token count from the tensor volume before reshape,
         # since shape[0] after reshape returns the tile-padded dimension
         # (e.g. 8 tokens padded to 32 in TILE_LAYOUT).
@@ -312,7 +338,7 @@ class TopKRouter:
             # test_batched_prefill.py checks ids and weights against the batch-1 router of each user).
             per_user = actual_tokens // batch_size
             x4 = ttnn.reshape(hidden_states, (batch_size, 1, per_user, self.hidden_dim))
-            router_logits = ttnn.reshape(self._batched_router_linear(x4), (actual_tokens, self.num_experts))
+            router_logits = ttnn.reshape(self._batched_router_linear(x4, weight), (actual_tokens, self.num_experts))
             expert_indices, expert_weights = topk_router(
                 router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
             )
@@ -330,7 +356,7 @@ class TopKRouter:
             # one (measured 77.5 -> 12.3 us at 128 tokens). Not at 256 rows: there the default linear sums K in more
             # than one block and the logits differ.
             x4 = ttnn.reshape(hidden_states, (1, 1, actual_tokens, self.hidden_dim))
-            router_logits = ttnn.reshape(self._batched_router_linear(x4), (actual_tokens, self.num_experts))
+            router_logits = ttnn.reshape(self._batched_router_linear(x4, weight), (actual_tokens, self.num_experts))
             expert_indices, expert_weights = topk_router(
                 router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
             )
@@ -347,7 +373,7 @@ class TopKRouter:
         mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
         router_logits = ttnn.linear(
             hidden_states,
-            self.weight,
+            weight,
             bias=self.bias,
             memory_config=mem_config,
             compute_kernel_config=self.compute_config,

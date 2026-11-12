@@ -319,7 +319,7 @@ def test_model_on_device_sampling(mesh_device, device_params, B, L, expect_error
             model_id=0,
             batch_size=B,
         )
-        assert out.shape[-1] == model.lm_head_weight.shape[-1] != model.hf_config.hidden_size, tuple(out.shape)
+        assert out.shape[-1] == model.prefill_vocab_per_device != model.hf_config.hidden_size, tuple(out.shape)
         assert out.shape[-2] == B * L, tuple(out.shape)
         full = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).float()
         rows = full[0, 0, [b * L + L - 1 for b in range(B)], : logits.shape[-1]]

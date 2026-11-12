@@ -13,6 +13,7 @@ from models.demos.gpt_oss.utils.substate import substate
 
 from ..fused_decode.config import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE, QKV_FUSED_ROPE_KV
 from ..fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, qkv_column_order, stream_linear_layout
+from ..stream_relayout import LinearStreamPlan, rebuild_linear
 from ..weight_source import dense_rounded_tag
 from .config import AttentionConfig
 
@@ -38,6 +39,33 @@ class AttentionWeights:
     # so the padded columns and the slice that drops them after the all-gather are not needed. None when unpadded.
     o_proj_prefill: ttnn.Tensor = None
     o_proj_bias_prefill: ttnn.Tensor = None
+    # Batch-1 fused model: the streams above are the only QKV / o_proj weights; prefill rebuilds wqkv and o_proj_prefill
+    # from them per call (prefill_qkv_weight / prefill_o_proj_weight, stream_relayout.py). None otherwise.
+    qkv_stream_plan: LinearStreamPlan = None
+    o_proj_stream_plan: LinearStreamPlan = None
+    prefill_weight_dtype: ttnn.DataType = None
+
+
+def has_unpadded_o_proj(weights: AttentionWeights) -> bool:
+    """Whether prefill runs o_proj on the unpadded weight + one all_reduce (stored o_proj_prefill or its stream)."""
+    return weights.o_proj_prefill is not None or weights.o_proj_stream_plan is not None
+
+
+def prefill_qkv_weight(weights: AttentionWeights):
+    """(prefill QKV weight [1, 1, hidden, local QKV], owned): owned = rebuilt from wqkv_stream, the caller frees it."""
+    if weights.qkv_stream_plan is None:
+        return weights.wqkv, False
+    return rebuild_linear(weights.wqkv_stream, weights.qkv_stream_plan, weights.prefill_weight_dtype), True
+
+
+def prefill_o_proj_weight(weights: AttentionWeights):
+    """(unpadded prefill o_proj weight [local heads dim, hidden], owned): owned = rebuilt from o_proj_stream, the caller
+    frees it."""
+    if weights.o_proj_stream_plan is None:
+        return weights.o_proj_prefill, False
+    plan = weights.o_proj_stream_plan
+    w = rebuild_linear(weights.o_proj_stream, plan, weights.prefill_weight_dtype)
+    return ttnn.reshape(w, (plan.k, plan.n)), True  # a view (the stored o_proj_prefill's rank)
 
 
 def load_attention_weights(
@@ -73,6 +101,10 @@ def load_attention_weights(
     padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
     o_proj_pad_size = padded_local_hidden - local_hidden
     o_proj_cache_suffix = f"_padded" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
+    # Blackhole TP > 1 with a padded o_proj: prefill runs the unpadded o_proj (o_proj_prefill, below).
+    unpadded_prefill = o_proj_pad_size > 0 and mesh_config.tp > 1 and ttnn.device.is_blackhole(mesh_device)
+    # Batch-1 fused model: prefill rebuilds QKV / o_proj from the decode streams (stream_relayout.py); no prefill copy.
+    stream_prefill = fused_decode and unpadded_prefill and weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat16)
     decode_rounded_tag = "_drnd" if os.environ.get("GPT_OSS_DENSE_ROUNDED_DECODE") else ""
     # TEMP (layer-PCC campaign): GPT_OSS_KV_SMOOTH changes the q / k weight values (utils/lazy_state_dict.py _kv_smooth),
     # so their caches get their own names (the scales file + mode) instead of being read stale or overwritten.
@@ -200,15 +232,17 @@ def load_attention_weights(
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
 
     # Load QKV weight
-    wqkv = ttnn.as_tensor(
-        qkv_cat,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=weight_dtype,
-        mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{kv_smooth_tag}{dense_rounded_tag()}"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    wqkv = None
+    if not stream_prefill:
+        wqkv = ttnn.as_tensor(
+            qkv_cat,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=weight_dtype,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{kv_smooth_tag}{dense_rounded_tag()}"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     wqkv_bias = ttnn.as_tensor(
         qkv_bias_cat,
@@ -220,15 +254,17 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    o_proj_tt = ttnn.as_tensor(
-        o_proj,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=weight_dtype,
-        mesh_mapper=row_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{dense_rounded_tag()}"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    o_proj_tt = None
+    if not stream_prefill:
+        o_proj_tt = ttnn.as_tensor(
+            o_proj,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=weight_dtype,
+            mesh_mapper=row_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{dense_rounded_tag()}"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     o_proj_bias_tt = ttnn.as_tensor(
         o_proj_bias,
@@ -241,23 +277,27 @@ def load_attention_weights(
     )
 
     wqkv_stream_tt = o_proj_stream_tt = None
+    qkv_plan = o_plan = None
     if fused_decode:
         # Fused decode: QKV and o_proj (+ bias) as streamed linears, one per-bank layout per TP shard.
         banks = mesh_device.dram_grid_size().x
         local_qkv = (config.num_heads + 2 * config.num_kv_heads) * config.head_dim // mesh_config.tp
         local_heads_dim = config.num_heads * config.head_dim // mesh_config.tp
+        qkv_order = (
+            qkv_column_order(
+                local_qkv // ttnn.TILE_SIZE,
+                config.num_heads * config.head_dim // mesh_config.tp // ttnn.TILE_SIZE,
+                banks,
+            )
+            if QKV_FUSED_ROPE_KV
+            else None
+        )
+        if stream_prefill:
+            qkv_plan = LinearStreamPlan(hidden_size, local_qkv, banks, qkv_order)
+            o_plan = LinearStreamPlan(local_heads_dim, hidden_size, banks)
         qkv_layouts = o_layouts = None
         if state_dict:
             tp = mesh_config.tp
-            qkv_order = (
-                qkv_column_order(
-                    local_qkv // ttnn.TILE_SIZE,
-                    config.num_heads * config.head_dim // mesh_config.tp // ttnn.TILE_SIZE,
-                    banks,
-                )
-                if QKV_FUSED_ROPE_KV
-                else None
-            )
             qkv_layouts = [
                 stream_linear_layout(w[0, 0], b, banks, qkv_order)
                 for w, b in zip(torch.chunk(qkv_decode, tp, -1), torch.chunk(qkv_bias_cat, tp, -1))
@@ -307,13 +347,14 @@ def load_attention_weights(
     )
 
     o_proj_prefill_tt = o_proj_bias_prefill_tt = None
-    if o_proj_pad_size > 0 and mesh_config.tp > 1 and ttnn.device.is_blackhole(mesh_device):
+    if unpadded_prefill:
         # Blackhole only (measured there; other architectures keep the padded RS + AG path).
         # The padding columns sit after column hidden_size of every device's [K_local, padded_hidden] shard.
-        w_shape = list(o_proj_tt.shape)
-        o_proj_prefill_tt = ttnn.slice(
-            o_proj_tt, [0] * len(w_shape), w_shape[:-1] + [hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        if o_proj_tt is not None:
+            w_shape = list(o_proj_tt.shape)
+            o_proj_prefill_tt = ttnn.slice(
+                o_proj_tt, [0] * len(w_shape), w_shape[:-1] + [hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         b_shape = list(o_proj_bias_tt.shape)
         o_proj_bias_prefill_tt = ttnn.slice(
             o_proj_bias_tt, [0] * len(b_shape), b_shape[:-1] + [hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -322,7 +363,8 @@ def load_attention_weights(
             # Prefill reads the unpadded slices (the fused matmul + reduce-scatter that takes the padded o_proj is not
             # supported on Blackhole, operations.py is_shape_fused_mm_rs_supported) and fused decode its stream, so
             # the padded o_proj would be an unused copy.
-            ttnn.deallocate(o_proj_tt)
+            if o_proj_tt is not None:
+                ttnn.deallocate(o_proj_tt)
             ttnn.deallocate(o_proj_bias_tt)
             o_proj_tt = o_proj_bias_tt = None
 
@@ -337,4 +379,7 @@ def load_attention_weights(
         o_proj_stream=o_proj_stream_tt,
         o_proj_prefill=o_proj_prefill_tt,
         o_proj_bias_prefill=o_proj_bias_prefill_tt,
+        qkv_stream_plan=qkv_plan,
+        o_proj_stream_plan=o_plan,
+        prefill_weight_dtype=weight_dtype if stream_prefill else None,
     )

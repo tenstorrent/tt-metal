@@ -22,7 +22,12 @@ from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
 from .host_readback import DecodeHostReadback, DecodeHostRows
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
+from .stream_relayout import LinearStreamPlan, rebuild_linear, resplit_vocab
 from .weight_source import dense_rounded_tag
+
+# Batch-1 fused model: the prefill LM head weight is rebuilt from the decode LM-head stream in this many DRAM-bank groups
+# one after the other (stream_relayout.relayout bank_groups), so its bf16 intermediates are ~1/4 of the whole.
+LM_HEAD_REBUILD_BANK_GROUPS = 4
 
 # Sequence-parallel prefill (Model._forward_layers_and_head, DecoderLayer._prefill_forward_sp): on by default
 # where every layer supports it; GPT_OSS_PREFILL_SP=0 keeps the residual stream replicated.
@@ -319,7 +324,19 @@ class Model:
         sampling_splits = mesh_device.shape[1]
         per_device_padded = compute_per_device_vocab(self.vocab_size, sampling_splits)
         padded_vocab_size = per_device_padded * sampling_splits
-        if state_dict:
+        self.prefill_vocab_per_device = per_device_padded  # the prefill logits' width per device
+        # Batch-1 fused model: the decode LM-head stream (fused_decode/terminal.py, vocab split evenly: device d holds
+        # ids [d * vd, (d + 1) * vd)) is the only LM-head weight. Prefill rebuilds that device's [hidden, vd] weight,
+        # zero-padded to per_device_padded columns (the stored copy's shape: same matmul program), and moves the logits
+        # to this split (device d: ids [d * per_device_padded, ...)) with _stream_lm_head.
+        self._lm_head_plan = None
+        if self.decode_terminal is not None:
+            term = self.decode_terminal
+            assert term.tp == sampling_splits and term.vd <= per_device_padded, (term.tp, term.vd, per_device_padded)
+            self._lm_head_plan = LinearStreamPlan(term.hidden, term.vd, mesh_device.dram_grid_size().x)
+        if self._lm_head_plan is not None:
+            lm_head_weight = None
+        elif state_dict:
             lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
             if lm_head_weight.shape[1] < padded_vocab_size:
                 lm_head_weight = torch.nn.functional.pad(
@@ -327,17 +344,21 @@ class Model:
                 )
         else:
             lm_head_weight = None
-        self.lm_head_weight = ttnn.as_tensor(
-            lm_head_weight,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=(
-                ttnn.bfloat16 if FULL_FIDELITY and os.environ.get("GPT_OSS_FF_DENSE_BF8") != "1" else ttnn.bfloat8_b
-            ),
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head_padded_pow2{dense_rounded_tag()}.weight"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_config.column_parallel(mesh_device),
-        )
+        self.lm_head_weight = None
+        if self._lm_head_plan is None:
+            self.lm_head_weight = ttnn.as_tensor(
+                lm_head_weight,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=(
+                    ttnn.bfloat16 if FULL_FIDELITY and os.environ.get("GPT_OSS_FF_DENSE_BF8") != "1" else ttnn.bfloat8_b
+                ),
+                cache_file_name=get_cache_file_name(
+                    tensor_cache_path, f"lm_head_padded_pow2{dense_rounded_tag()}.weight"
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.mesh_config.column_parallel(mesh_device),
+            )
 
         # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
         self._supports_on_device_sampling = per_device_padded <= 64 * 1024
@@ -636,10 +657,27 @@ class Model:
         """Final norm + vocab-sharded LM head (logits [..., vocab / TP] per device, bf8). x: replicated [..., H].
         Also the generator's batched on-device sampling hook (after extract_last_tokens_batched_prefill)."""
         normed = self.norm(x)
-        logits = ttnn.matmul(normed, self.lm_head_weight, dtype=ttnn.bfloat16 if FULL_FIDELITY else ttnn.bfloat8_b)
+        if self._lm_head_plan is not None:
+            logits = self._stream_lm_head(normed)
+        else:
+            logits = ttnn.matmul(normed, self.lm_head_weight, dtype=ttnn.bfloat16 if FULL_FIDELITY else ttnn.bfloat8_b)
         normed.deallocate(True)
         self._prefill_sampling_active = False
         return logits
+
+    def _stream_lm_head(self, normed):
+        """Batch-1 fused model: the prefill LM head on the weight rebuilt from the decode LM-head stream (freed after
+        the matmul). The matmul runs in the decode vocab split on the stored copy's [hidden, per_device_padded] shape;
+        the bf8 logits then move to the prefill split by tile-aligned copies (stream_relayout.resplit_vocab), so the
+        logits are the stored copy's for the same weight values."""
+        term, width = self.decode_terminal, self.prefill_vocab_per_device
+        w = rebuild_linear(
+            term.weights, self._lm_head_plan, ttnn.bfloat8_b, bank_groups=LM_HEAD_REBUILD_BANK_GROUPS, pad_n=width
+        )
+        w2 = ttnn.reshape(w, (term.hidden, width))  # a view (the stored copy's rank)
+        logits = ttnn.matmul(normed, w2, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(w2)
+        return resplit_vocab(logits, term.tp, term.vd, width, self.mesh_config.tp_axis)
 
     def extract_last_tokens_batched_prefill(
         self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None
