@@ -447,7 +447,8 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
     // prior program touching this address space is complete before the counter is bumped.
     wait_for_cores_idle();
     // A kernel that sees the counter reads DRAM next, so the buffer writes before this call must have
-    // landed first; the barrier is what orders them ahead of the counter write.
+    // landed first. On PCIe-attached chips DRAM writes are posted, so the barrier makes them land before the
+    // counter releases the kernel; simulation and Grendel JTAG chips have no posted writes, so it is a no-op there.
     auto& cluster = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster();
     std::unordered_set<ChipId> barriered_devices;
     for (const auto& target : targets) {
