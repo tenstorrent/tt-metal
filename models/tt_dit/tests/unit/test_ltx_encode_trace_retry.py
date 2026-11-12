@@ -53,7 +53,9 @@ class EncodeTraceRetry(unittest.TestCase):
             n
             for n in ast.walk(block)
             if isinstance(n, ast.Assign)
-            and any(isinstance(t, ast.Subscript) and getattr(t.value, "attr", None) == "_encode_tracers" for t in n.targets)
+            and any(
+                isinstance(t, ast.Subscript) and getattr(t.value, "attr", None) == "_encode_tracers" for t in n.targets
+            )
         ]
         self.assertEqual(len(stores), 1)
         self.assertGreater(stores[0].lineno, prep.end_lineno, "tracer cached before prepare succeeded")
@@ -69,13 +71,22 @@ class EncodeTraceRetry(unittest.TestCase):
                     if release_fails:
                         tracer.release_trace.side_effect = RuntimeError("release failed")
                     encoder = SimpleNamespace(
-                        encode_device=Mock(), mesh_device=object(), _set_device_gather=Mock(),
-                        _encode_tracers={}, _encode_logical_hw={}, _last_logical_hw=(3, 4),
+                        encode_device=Mock(),
+                        mesh_device=object(),
+                        _set_device_gather=Mock(),
+                        _encode_tracers={},
+                        _encode_logical_hw={},
+                        _last_logical_hw=(3, 4),
                     )
                     sample = object()
                     namespace = dict(
-                        self=encoder, Tracer=Mock(return_value=tracer), logger=Mock(),
-                        key="same-shape", sample_tt=sample, logical_h=3, logical_w=4,
+                        self=encoder,
+                        Tracer=Mock(return_value=tracer),
+                        logger=Mock(),
+                        key="same-shape",
+                        sample_tt=sample,
+                        logical_h=3,
+                        logical_w=4,
                     )
                     with self.assertRaises(error_type) as raised:
                         exec(code, namespace)
