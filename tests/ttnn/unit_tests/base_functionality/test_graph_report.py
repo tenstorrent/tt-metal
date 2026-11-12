@@ -149,6 +149,7 @@ _SQLITE_TABLES_WITH_RANK = (
     "buffer_chunks",
     "local_tensor_comparison_records",
     "global_tensor_comparison_records",
+    "rank_metadata",
 )
 
 
@@ -1011,6 +1012,55 @@ class TestDeallocateTensorLookup:
         finally:
             conn.close()
         assert live == [(0, self.DRAM), (1, self.L1)]
+
+
+class TestImportReportRankMetadata:
+    """Every rank's capture metadata lands in rank_metadata; report_metadata holds the lowest rank's."""
+
+    @staticmethod
+    def _import_ranks(tmp_path, world_size=3):
+        """Rank r is captured at time 1000 * (r + 1). Ranks are imported in order, so a last-file-wins
+        report_metadata would show the highest rank's."""
+        report_dir = tmp_path / "reports_in"
+        captures = []
+        for rank in range(world_size):
+            name, report = _rank_capture(rank, world_size)
+            report["metadata"]["capture_timestamp_ns"] = 1000 * (rank + 1)
+            captures.append((name, report))
+        _write_reports(report_dir, captures)
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        return sqlite3.connect(db_path)
+
+    def test_rank_metadata_holds_every_rank(self, tmp_path):
+        conn = self._import_ranks(tmp_path)
+        try:
+            rows = conn.execute(
+                "SELECT rank, value FROM rank_metadata WHERE key = 'capture_timestamp_ns' ORDER BY rank"
+            ).fetchall()
+            assert rows == [(0, "1000"), (1, "2000"), (2, "3000")]
+        finally:
+            conn.close()
+
+    def test_report_metadata_holds_the_lowest_rank(self, tmp_path):
+        conn = self._import_ranks(tmp_path)
+        try:
+            metadata = dict(conn.execute("SELECT key, value FROM report_metadata").fetchall())
+            assert (metadata["rank"], metadata["capture_timestamp_ns"]) == ("0", "1000")
+            assert metadata["schema_version"] == graph_report.DATABASE_SCHEMA_VERSION
+        finally:
+            conn.close()
+
+    def test_single_file_import_keeps_its_own_rank_metadata(self, tmp_path):
+        name, report = _rank_capture(1, 2)
+        _write_reports(tmp_path / "reports_in", [(name, report)])
+        db_path = graph_report.import_report(tmp_path / "reports_in" / name, tmp_path / "output")
+        conn = sqlite3.connect(db_path)
+        try:
+            metadata = dict(conn.execute("SELECT key, value FROM report_metadata").fetchall())
+            assert metadata["rank"] == "1"
+            assert conn.execute("SELECT DISTINCT rank FROM rank_metadata").fetchall() == [(1,)]
+        finally:
+            conn.close()
 
 
 @pytest.fixture
