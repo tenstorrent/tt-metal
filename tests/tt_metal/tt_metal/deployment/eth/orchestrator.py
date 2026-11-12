@@ -242,21 +242,27 @@ def pairs(hosts: list[HostSettings]) -> Iterator[tuple[HostSettings, HostSetting
             yield hosts[i], hosts[j]
 
 
-def test_single(db: sqlite3.Connection, tests: list[TestCase], hosts: list[HostSettings], links: Optional[str]) -> None:
+def test_single(db: sqlite3.Connection, tests: list[TestCase], hosts: list[HostSettings], links: Optional[str]) -> bool:
+    test_pass = True
     for h in hosts:
         for t in tests:
             print(f"Testing {t} on {h.hostname}")
-            test_one(db, h, t, links)  # TODO: In parallel
+            test_pass = test_pass and test_one(db, h, t, links)  # TODO: In parallel
+
+    return test_pass
 
 
-def test_dist(db: sqlite3.Connection, tests: list[DistTestCase], hosts: list[HostSettings], links: str) -> None:
+def test_dist(db: sqlite3.Connection, tests: list[DistTestCase], hosts: list[HostSettings], links: str) -> bool:
+    test_pass = True
     for p in pairs(hosts):
         for t in tests:
             print(f"Testing {t} on {p[0].hostname} <-> {p[1].hostname}")
-            test_pair(db, p, t, links)  # TODO: In parallel
+            test_pass = test_pass and test_pair(db, p, t, links)  # TODO: In parallel
+
+    return test_pass
 
 
-def main() -> None:
+def main() -> int:
     parser = ArgumentParser()
     parser.add_argument("-d", type=str, help="Path to the sqlite3 db with hardware info")
     parser.add_argument("-c", type=str, help="INI host config file")
@@ -281,12 +287,15 @@ def main() -> None:
 
     links = opts.l
 
+    test_pass = True
     if opts.t in [t.value for t in TestCase]:
-        test_single(db, [TestCase.LINK_UP], hs, links)
+        test_pass = test_pass and test_single(db, [TestCase.LINK_UP], hs, links)
 
     if opts.t in [t.value for t in DistTestCase]:
-        test_dist(db, [DistTestCase.BANDWIDTH_BIDIR], hs, links)
+        test_pass = test_pass and test_dist(db, [DistTestCase.BANDWIDTH_BIDIR], hs, links)
+
+    return 0 if test_pass else 1
 
 
 if __name__ == "__main__":
-    main()
+    exit(main())
