@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.experimental.sparse_push_plan + sparse_kv_push, bit-exact on every chip of an 8x4 torus.
+"""ttnn.experimental.sparse_push_plan + sparse_kv_push, bit-exact on every chip of an 8x4 torus, and on the other 2D
+fabrics a Galaxy can run (no wraparound, one axis wrapped, and submeshes with a linear or a 2-chip axis).
 
 Each cache row encodes its own global row and slot, so reading the compact buffer through the plan's rewritten indices
 must return exactly the rows the top-k names. Index patterns are synthetic edge cases for the plan's per-owner runs,
@@ -22,15 +23,14 @@ packet_shape = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape
 
 SENTINEL = 0xFFFFFFFF
 FILL = 0x5A5A5A5A
-N_DEV = 32
 TOPK = 2048
 
 
-def _device_params():
+def _device_params(fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY):
     router = ttnn.FabricRouterConfig()
     router.max_packet_payload_size_bytes = 6144
     return {
-        "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        "fabric_config": fabric_config,
         "fabric_router_config": router,
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "l1_small_size": 2048,
@@ -50,6 +50,39 @@ def galaxy(fn):
     return fn
 
 
+# The other 2D fabrics, as (id, fabric config, submesh shape and offset or None for the whole 8x4). The push sends only
+# on the links each chip has, so a chip at the end of a line has fewer channels than one in a ring. Submeshes are cut
+# from the open 8x4, as the model splits a Galaxy: a fabric opened on fewer chips than its torus spans fails router sync.
+FABRICS = [
+    ("2d-8x4", ttnn.FabricConfig.FABRIC_2D, None),  # no wraparound
+    ("torus_x-8x4", ttnn.FabricConfig.FABRIC_2D_TORUS_X, None),  # rows of 4 wrap, columns of 8 are lines
+    ("torus_y-8x4", ttnn.FabricConfig.FABRIC_2D_TORUS_Y, None),  # columns of 8 wrap, rows of 4 are lines
+    ("torus_xy-4x4", ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ((4, 4), (4, 0))),  # half a Galaxy: [LINE, RING]
+    ("torus_xy-2x4", ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ((2, 4), (0, 0))),  # a 2-chip axis never wraps
+]
+
+
+def other_fabrics(fn):
+    return pytest.mark.parametrize(
+        "device_params, mesh_device, submesh",
+        [(_device_params(config), (8, 4), submesh) for _, config, submesh in FABRICS],
+        ids=[name for name, _, _ in FABRICS],
+        indirect=["device_params", "mesh_device"],
+    )(fn)
+
+
+def _mesh(mesh_device, submesh):
+    """The whole mesh, or its (shape, offset) submesh."""
+    if submesh is None:
+        return mesh_device
+    shape, offset = submesh
+    return mesh_device.create_submesh(ttnn.MeshShape(*shape), ttnn.MeshCoordinate(*offset))
+
+
+def _num_devices(mesh_device):
+    return mesh_device.get_num_devices()
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Cache, buffers and the plan + push
 # ----------------------------------------------------------------------------------------------------------------------
@@ -63,10 +96,11 @@ def _row_words(rows, slot, width):
 
 def _cache(mesh_device, slots, max_rows, sc, width):
     """Block-cyclic cache: global row n lives on chip (n / sc) % N at local row (n / sc / N) * sc + n % sc."""
-    per_chip = max_rows // N_DEV
+    num_chips = _num_devices(mesh_device)
+    per_chip = max_rows // num_chips
     p = np.arange(max_rows)
     chip, local = p // per_chip, p % per_chip
-    global_row = ((local // sc) * N_DEV + chip) * sc + local % sc
+    global_row = ((local // sc) * num_chips + chip) * sc + local % sc
     host = np.stack([_row_words(global_row, s, width) for s in range(slots)])[:, None]
     return ttnn.from_torch(
         torch.from_numpy(host),
@@ -105,12 +139,12 @@ def _semaphores(mesh_device):
 
 def _required_rows(idx, sc, unit):
     """Compact rows the plan lays out: every owner's run padded to whole units; at least the op's lower bound."""
-    need = 0
-    for d in range(N_DEV):
+    n, need = idx.shape[0], 0
+    for d in range(n):
         rows = np.unique(idx[d][idx[d] != SENTINEL])
-        counts = np.bincount((rows // sc) % N_DEV, minlength=N_DEV)
+        counts = np.bincount((rows // sc) % n, minlength=n)
         need = max(need, int((-(-counts // unit) * unit).sum()))
-    return max(need, N_DEV * unit)
+    return max(need, n * unit)
 
 
 class Push:
@@ -118,6 +152,7 @@ class Push:
 
     def __init__(self, mesh_device, cache, idx, *, max_rows, sc, page_bytes, chunk_start, links=2, start_tensor=True):
         self.mesh_device, self.cache, self.idx = mesh_device, cache, idx
+        self.n = _num_devices(mesh_device)
         self.max_rows, self.sc, self.links = max_rows, sc, links
         self.width = page_bytes // 4
         p, banks = packet_shape(mesh_device, page_bytes)
@@ -149,7 +184,7 @@ class Push:
         # The plan op labels each chip's table as its share of the rows, for the full-mesh gather.
         assert all(isinstance(p, ttnn.PlacementShard) and p.dim == 2 for p in table.tensor_topology().placements())
         if self.tables is None:
-            self.tables = _replicated(self.mesh_device, np.zeros((1, 1, table.shape[2] * N_DEV, table.shape[3])))
+            self.tables = _replicated(self.mesh_device, np.zeros((1, 1, table.shape[2] * self.n, table.shape[3])))
         ttnn.experimental.high_bw_all_gather(
             table, dim=2, output_tensor=self.tables, cluster_axis=None, num_links=self.links
         )
@@ -177,10 +212,10 @@ def _check(push, out, *, slot, part, chunk_start, tag):
     masked. PREFIX pushes the blocks before the one holding chunk_start and REST the others, so each leaves the
     other's rows untouched."""
     mesh = push.mesh_device
-    got = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).numpy().reshape(N_DEV, -1, push.width)
+    got = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).numpy().reshape(push.n, -1, push.width)
     compact = ttnn.to_torch(push.compact_indices, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
     compact = (compact.to(torch.int64).numpy() & 0xFFFFFFFF).reshape(push.idx.shape)
-    for d in range(N_DEV):
+    for d in range(push.n):
         idx, cmp = push.idx[d], compact[d]
         valid = idx != SENTINEL
         assert np.all(cmp[~valid] == SENTINEL), f"{tag}: chip {d} rewrote a masked index"
@@ -201,9 +236,9 @@ def _check(push, out, *, slot, part, chunk_start, tag):
 # ----------------------------------------------------------------------------------------------------------------------
 # Index patterns: per chip, the set of rows its top-k references, laid out over its queries
 # ----------------------------------------------------------------------------------------------------------------------
-def _owner_rows(owner, sc, end):
-    """Every row below `end` that `owner` holds."""
-    blocks = np.arange(owner, -(-end // sc), N_DEV)
+def _owner_rows(owner, sc, end, n):
+    """Every row below `end` that `owner` of `n` chips holds."""
+    blocks = np.arange(owner, -(-end // sc), n)
     rows = (blocks[:, None] * sc + np.arange(sc)).reshape(-1)
     return rows[rows < end]
 
@@ -211,7 +246,7 @@ def _owner_rows(owner, sc, end):
 def _lay_out(row_sets, queries, rng):
     """[N, queries, TOPK]: each query takes a window of its chip's rows (so rows repeat across queries, never within
     one), in shuffled order, padded with masked entries."""
-    idx = np.full((N_DEV, queries, TOPK), SENTINEL, dtype=np.int64)
+    idx = np.full((len(row_sets), queries, TOPK), SENTINEL, dtype=np.int64)
     for d, rows in enumerate(row_sets):
         rows = rng.permutation(np.asarray(rows, dtype=np.int64))
         n = min(len(rows), TOPK)
@@ -222,53 +257,59 @@ def _lay_out(row_sets, queries, rng):
     return idx
 
 
-def _pattern(name, rng, *, sc, end, start):
-    """Row sets per chip for the synthetic pattern `name`; rows are below `end` (the populated cache)."""
+def _pattern(name, rng, *, sc, end, start, shape=(8, 4)):
+    """Row sets per chip of a `shape` mesh for the synthetic pattern `name`; rows are below `end` (the populated
+    cache)."""
     pick = lambda pool, k: rng.choice(pool, size=min(k, len(pool)), replace=False)
+    mesh_rows, mesh_cols = shape
+    n = mesh_rows * mesh_cols
+    owner_rows = lambda owner: _owner_rows(owner, sc, end, n)
     if name == "random":
-        return [pick(np.arange(end), 3000) for _ in range(N_DEV)]
+        return [pick(np.arange(end), 3000) for _ in range(n)]
     if name == "clustered":
-        centers = rng.integers(0, end, size=(N_DEV, 8))
+        centers = rng.integers(0, end, size=(n, 8))
         return [np.unique((c[:, None] + np.arange(400)) % end) for c in centers]
     if name == "one_owner":
-        return [pick(_owner_rows((d + 1) % N_DEV, sc, end), 3000) for d in range(N_DEV)]
+        return [pick(owner_rows((d + 1) % n), 3000) for d in range(n)]
     if name == "local_only":
-        return [pick(_owner_rows(d, sc, end), 3000) for d in range(N_DEV)]
+        return [pick(owner_rows(d), 3000) for d in range(n)]
     if name == "routing_ties":
-        # The chip opposite on both rings of the 8x4 torus: both directions are equally short on each axis.
-        opposite = lambda d: ((d // 4 + 4) % 8) * 4 + (d % 4 + 2) % 4
-        return [pick(_owner_rows(opposite(d), sc, end), 3000) for d in range(N_DEV)]
+        # The chip opposite on both axes: on a torus both directions are equally short on each axis.
+        opposite = (
+            lambda d: ((d // mesh_cols + mesh_rows // 2) % mesh_rows) * mesh_cols
+            + (d % mesh_cols + mesh_cols // 2) % mesh_cols
+        )
+        return [pick(owner_rows(opposite(d)), 3000) for d in range(n)]
     if name == "run_lengths":
         # Per-owner counts around one packet (8 rows) and one bank-lane unit (64 rows).
         counts = [1, 7, 8, 9, 63, 64, 65]
         return [
-            np.concatenate([pick(_owner_rows(o, sc, end), counts[(o + d) % len(counts)]) for o in range(N_DEV)])
-            for d in range(N_DEV)
+            np.concatenate([pick(owner_rows(o), counts[(o + d) % len(counts)]) for o in range(n)]) for d in range(n)
         ]
     if name == "edges":
         # Block and bitmap-word edges, the reader's 16-block window edge, and the first and last row.
-        blocks = np.array([o + N_DEV * b for o in range(N_DEV) for b in (0, 15, 16)])
+        blocks = np.array([o + n * b for o in range(n) for b in (0, 15, 16)])
         rows = (blocks[:, None] * sc + np.array([0, 31, 32, sc - 1])).reshape(-1)
         rows = np.unique(np.concatenate([rows[rows < end], [0, end - 1]]))
-        return [rows for _ in range(N_DEV)]
+        return [rows for _ in range(n)]
     if name == "duplicates":
         hot = pick(np.arange(end), 50)
-        return [hot for _ in range(N_DEV)]
+        return [hot for _ in range(n)]
     if name == "remainder_only":
-        return [pick(np.arange(start, end), 3000) for _ in range(N_DEV)]
+        return [pick(np.arange(start, end), 3000) for _ in range(n)]
     if name == "prefix_only":
-        return [pick(np.arange(start), 3000) for _ in range(N_DEV)]
+        return [pick(np.arange(start), 3000) for _ in range(n)]
     if name == "everything":
-        return [np.arange(end) for _ in range(N_DEV)]
+        return [np.arange(end) for _ in range(n)]
     if name == "tiny_prefix":
-        return [np.arange(min(end, 3 * sc)) for _ in range(N_DEV)]
+        return [np.arange(min(end, 3 * sc)) for _ in range(n)]
     raise ValueError(name)
 
 
 def _mask(idx, rng):
     """Masked tails of varying length, fully masked queries, and one fully masked chip."""
     q, k = idx.shape[1], idx.shape[2]
-    for d in range(N_DEV):
+    for d in range(idx.shape[0]):
         for j in range(q):
             idx[d, j, k - (j * 131) % k :] = SENTINEL
         idx[d, ::7] = SENTINEL
@@ -308,18 +349,29 @@ def _run_parts(mesh_device, push, *, slot, chunk_start, tag, **slot_args):
     _check(push, both, slot=slot, part=Part.ALL, chunk_start=chunk_start, tag=f"{tag} prefix + rest")
 
 
-@galaxy
-@pytest.mark.parametrize("pattern, max_rows, offset", PATTERNS, ids=[p[0] for p in PATTERNS])
-def test_sparse_kv_push_patterns(mesh_device, pattern, max_rows, offset):
+def _run_pattern(mesh_device, pattern, max_rows, offset):
     sc, page_bytes = 160, 704
     rng = np.random.default_rng(zlib.crc32(pattern.encode()))
-    start = max_rows - sc * N_DEV + offset
-    rows = _pattern("random" if pattern == "unaligned_start" else pattern, rng, sc=sc, end=max_rows, start=start)
+    start = max_rows - sc * _num_devices(mesh_device) + offset
+    rows = _pattern(
+        "random" if pattern == "unaligned_start" else pattern,
+        rng,
+        sc=sc,
+        end=max_rows,
+        start=start,
+        shape=tuple(mesh_device.shape),
+    )
     # Masked entries in every pattern; query 0 and the unmasked heads of the others still reference rows.
     idx = _mask(_lay_out(rows, sc, rng), rng)
     cache = _cache(mesh_device, 2, max_rows, sc, page_bytes // 4)
     push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
     _run_parts(mesh_device, push, slot=1, chunk_start=start, tag=pattern, batch_index=1)
+
+
+@galaxy
+@pytest.mark.parametrize("pattern, max_rows, offset", PATTERNS, ids=[p[0] for p in PATTERNS])
+def test_sparse_kv_push_patterns(mesh_device, pattern, max_rows, offset):
+    _run_pattern(mesh_device, pattern, max_rows, offset)
 
 
 # Every pair of values of any two settings appears in some case; the first case is production.
@@ -332,17 +384,16 @@ CONFIGS = [
 ]
 
 
-@galaxy
-@pytest.mark.parametrize(
-    "page_bytes, sc, links, slot_tensor",
-    CONFIGS,
-    ids=[f"{p}B-stripe{sc}-{l}link-{'slot_tensor' if t else 'slot_int'}" for p, sc, l, t in CONFIGS],
-)
-def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor):
+def _config_id(page_bytes, sc, links, slot_tensor):
+    return f"{page_bytes}B-stripe{sc}-{links}link-{'slot_tensor' if slot_tensor else 'slot_int'}"
+
+
+def _run_config(mesh_device, page_bytes, sc, links, slot_tensor):
     max_rows = 92160
     rng = np.random.default_rng(sc * 7 + links)
-    start = max_rows - sc * N_DEV
-    idx = _mask(_lay_out(_pattern("clustered", rng, sc=sc, end=max_rows, start=start), sc, rng), rng)
+    start = max_rows - sc * _num_devices(mesh_device)
+    rows = _pattern("clustered", rng, sc=sc, end=max_rows, start=start, shape=tuple(mesh_device.shape))
+    idx = _mask(_lay_out(rows, sc, rng), rng)
     cache = _cache(mesh_device, 4, max_rows, sc, page_bytes // 4)
     # The slot and the chunk start both as tensors (the traced path) or both as ints (the eager path).
     push = Push(
@@ -366,15 +417,22 @@ def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor)
 
 
 @galaxy
+@pytest.mark.parametrize("page_bytes, sc, links, slot_tensor", CONFIGS, ids=[_config_id(*c) for c in CONFIGS])
+def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor):
+    _run_config(mesh_device, page_bytes, sc, links, slot_tensor)
+
+
+@galaxy
 def test_sparse_kv_push_worst_case_union(mesh_device):
     """Every query names TOPK rows no other query names, the most a chip can need: the buffer the op sizes for
     queries x top-k distinct rows (that many plus one unit per owner) must hold it. 32 queries keep it cheap; the bound
     is the same for the model's 160."""
     sc, page_bytes, queries = 160, 64, 32
+    n = _num_devices(mesh_device)
     distinct = queries * TOPK
-    max_rows = -(-distinct // (sc * N_DEV)) * sc * N_DEV
-    idx = np.stack([np.random.default_rng(d).permutation(distinct).reshape(queries, TOPK) for d in range(N_DEV)])
-    start = max_rows - sc * N_DEV
+    max_rows = -(-distinct // (sc * n)) * sc * n
+    idx = np.stack([np.random.default_rng(d).permutation(distinct).reshape(queries, TOPK) for d in range(n)])
+    start = max_rows - sc * n
     cache = _cache(mesh_device, 1, max_rows, sc, page_bytes // 4)
     push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
     cap = ttnn.experimental.sparse_kv_push_output_spec(
@@ -388,10 +446,11 @@ def test_sparse_kv_push_worst_case_union(mesh_device):
 def test_sparse_kv_push_traced(mesh_device):
     """Plan + table gather + push captured once, replayed with new indices, chunk start and user slot in place."""
     sc, page_bytes, max_rows = 160, 704, 92160
+    n = _num_devices(mesh_device)
     rng = np.random.default_rng(3)
-    first, second = max_rows - sc * N_DEV, max_rows - 2 * sc * N_DEV
+    first, second = max_rows - sc * n, max_rows - 2 * sc * n
     idx_a = _lay_out(_pattern("clustered", rng, sc=sc, end=max_rows, start=first), sc, rng)
-    idx_b = _lay_out(_pattern("random", rng, sc=sc, end=second + sc * N_DEV, start=second), sc, rng)
+    idx_b = _lay_out(_pattern("random", rng, sc=sc, end=second + sc * n, start=second), sc, rng)
     cache = _cache(mesh_device, 4, max_rows, sc, page_bytes // 4)
     # Size the buffer for either set of indices: the capture fixes its address.
     unit = np.prod(packet_shape(mesh_device, page_bytes))
@@ -467,25 +526,26 @@ def _marker_set(marker):
     return any(float(ttnn.to_torch(chip).item()) != 0.0 for chip in ttnn.get_device_tensors(host))
 
 
-@galaxy
-def test_sparse_kv_push_determinism(mesh_device):
+def _run_determinism(mesh_device):
     """The prefix push then the rest, repeated on one plan, fill every referenced slot bit-identically. Compared on
     device, one buffer reused across runs; only referenced slots count, since the rest of a packet is undefined."""
     sc, page_bytes, max_rows, runs = 160, 704, 92160, 5
+    n = _num_devices(mesh_device)
     rng = np.random.default_rng(11)
-    start = max_rows - sc * N_DEV
-    idx = _mask(_lay_out(_pattern("clustered", rng, sc=sc, end=max_rows, start=start), sc, rng), rng)
+    start = max_rows - sc * n
+    rows = _pattern("clustered", rng, sc=sc, end=max_rows, start=start, shape=tuple(mesh_device.shape))
+    idx = _mask(_lay_out(rows, sc, rng), rng)
     cache = _cache(mesh_device, 2, max_rows, sc, page_bytes // 4)
     push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
     push.plan()
 
     compact = ttnn.to_torch(push.compact_indices, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
-    compact = (compact.to(torch.int64).numpy() & 0xFFFFFFFF).reshape(N_DEV, -1)
-    referenced = np.zeros((N_DEV, push.rows), dtype=np.float32)
-    for d in range(N_DEV):
+    compact = (compact.to(torch.int64).numpy() & 0xFFFFFFFF).reshape(n, -1)
+    referenced = np.zeros((n, push.rows), dtype=np.float32)
+    for d in range(n):
         referenced[d, compact[d][compact[d] != SENTINEL]] = 1
     mask = ttnn.from_torch(
-        torch.from_numpy(referenced).reshape(1, 1, N_DEV * push.rows, 1),
+        torch.from_numpy(referenced).reshape(1, 1, n * push.rows, 1),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -512,3 +572,36 @@ def test_sparse_kv_push_determinism(mesh_device):
         run(out)
         marker = _merge_markers(marker, _mismatch_marker(reference, out, mask))
     assert not _marker_set(marker), f"a push differs from the first of {runs} in a referenced slot"
+
+
+@galaxy
+def test_sparse_kv_push_determinism(mesh_device):
+    _run_determinism(mesh_device)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Other 2D fabrics: a few patterns (incl. the axis-opposite chips), one non-production config, and determinism
+# ----------------------------------------------------------------------------------------------------------------------
+FABRIC_PATTERNS = [p for p in PATTERNS if p[0] in ("random", "routing_ties", "run_lengths")]
+FABRIC_CONFIGS = [(1152, 64, 1, True)]
+
+
+@other_fabrics
+@pytest.mark.parametrize("pattern, max_rows, offset", FABRIC_PATTERNS, ids=[p[0] for p in FABRIC_PATTERNS])
+def test_sparse_kv_push_fabric_patterns(mesh_device, submesh, pattern, max_rows, offset):
+    mesh = _mesh(mesh_device, submesh)
+    assert ttnn.experimental.is_sparse_kv_push_supported(mesh, 160, max_rows)
+    _run_pattern(mesh, pattern, max_rows, offset)
+
+
+@other_fabrics
+@pytest.mark.parametrize(
+    "page_bytes, sc, links, slot_tensor", FABRIC_CONFIGS, ids=[_config_id(*c) for c in FABRIC_CONFIGS]
+)
+def test_sparse_kv_push_fabric_configs(mesh_device, submesh, page_bytes, sc, links, slot_tensor):
+    _run_config(_mesh(mesh_device, submesh), page_bytes, sc, links, slot_tensor)
+
+
+@other_fabrics
+def test_sparse_kv_push_fabric_determinism(mesh_device, submesh):
+    _run_determinism(_mesh(mesh_device, submesh))

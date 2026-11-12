@@ -133,24 +133,39 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
     auto* mesh_device = input.device();
     const auto mesh_shape = mesh_device->shape();
     const uint32_t num_devices = mesh_shape.mesh_size();
-    TT_FATAL(mesh_shape.dims() == 2, "the sparse KV push needs a 2D device mesh, got {}", mesh_shape);
+    TT_FATAL(
+        fabric_supported(mesh_device),
+        "the sparse KV push needs a 2D fabric (FABRIC_2D or a 2D torus) on a 2D mesh of at least 2 chips, got {} on {}",
+        params.fabric_config,
+        mesh_shape);
     TT_FATAL(
         num_devices <= ::sparse_push::plan_table::kMaxDevices,
         "the plan table holds at most {} owners, the mesh has {}",
         ::sparse_push::plan_table::kMaxDevices,
         num_devices);
     TT_FATAL(
-        params.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
-        "the sparse KV push needs a 2D torus fabric (FABRIC_2D_TORUS_XY), got {}",
-        params.fabric_config);
-    TT_FATAL(
         params.num_links >= 1 && params.num_links <= 2,
         "the sparse KV push supports 1 or 2 links, got {}",
         params.num_links);
+    // Every direction must forward on num_links links; the fabric gives some neighbours fewer.
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        for (const auto& direction : fabric_directions(input, coord)) {
+            TT_FATAL(
+                direction.links.size() >= params.num_links,
+                "the sparse KV push needs {} links from chip {} to its neighbour {}, the fabric has {}: {}",
+                params.num_links,
+                coord,
+                direction.neighbor,
+                direction.links.size(),
+                direction.links);
+        }
+    }
+    // Chips with fewer fabric neighbours use a prefix of the grid.
+    const uint32_t cores = cores_needed(params.num_links, max_fabric_directions(input));
     TT_FATAL(
-        params.core_grid.num_cores() >= cores_needed(params.num_links),
+        params.core_grid.num_cores() >= cores,
         "the sparse KV push needs {} cores on {} links, core_grid has {}",
-        cores_needed(params.num_links),
+        cores,
         params.num_links,
         params.core_grid.num_cores());
     validate_stripe_chunk(params.stripe_chunk, params.max_rows);
