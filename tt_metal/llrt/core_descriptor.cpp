@@ -303,7 +303,7 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        !dispatch_cores.empty() || get_rtoptions().is_simulator_or_emulated() ||
+        !dispatch_cores.empty() || grid_size.x * grid_size.y == 0 || get_rtoptions().is_simulator_or_emulated() ||
             get_rtoptions().get_target_device() == tt::TargetDevice::Mock,
         "Dispatch cores size must be positive");
 
