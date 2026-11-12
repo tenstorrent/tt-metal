@@ -345,7 +345,13 @@ class MuseGlimmerForConditionalGeneration:
         digests = prefix_cache.chain_hashes(tokens, self._prefix_salt())
         if not cached:
             return PrefillPlan(0, None, 0), digests
-        return self._prefix.plan(tokens, cached, digests), digests
+        plan = self._prefix.plan(tokens, cached, digests)
+        r = self._prefix
+        logger.info(
+            f"prefix cache: prompt={len(tokens)} vllm_cached={cached} resume_at={plan.start} "
+            f"snapshot_hits={r.hits} misses={r.misses} stale_cached_tokens={r.stale_cached_tokens}"
+        )
+        return plan, digests
 
     def _prefix_salt(self) -> bytes:
         a = self.args
