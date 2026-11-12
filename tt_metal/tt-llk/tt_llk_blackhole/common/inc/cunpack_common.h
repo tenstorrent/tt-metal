@@ -1004,6 +1004,12 @@ inline void wait_for_dest_available()
     TTI_SEMGET(semaphore::t6_sem(semaphore::MATH_DONE));
 }
 
+// Pairs with math_unpack_to_dest_math_ready_risc_ack, where the math thread takes MATH_DONE back itself.
+inline void wait_for_dest_available_unpack_to_dest_max()
+{
+    t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST);
+}
+
 // The srcA Z stride stays at canonical_unpA_z_stride of the operand's dst format, which its configure or srca reconfig programmed.
 inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
 {

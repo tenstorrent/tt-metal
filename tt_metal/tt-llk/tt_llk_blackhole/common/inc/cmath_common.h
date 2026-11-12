@@ -251,6 +251,17 @@ inline void math_unpack_to_dest_math_ready()
     t6_semaphore_post<p_stall::MATH | p_stall::WAIT_SFPU>(semaphore::MATH_DONE);
 }
 
+// Pairs with wait_for_dest_available_unpack_to_dest_max: the RISC waits for its own MATH_DONE post to land and takes it back.
+inline void math_unpack_to_dest_math_ready_risc_ack()
+{
+    t6_semaphore_wait_on_max<p_stall::STALL_SYNC>(semaphore::MATH_DONE);
+    t6_semaphore_post<p_stall::MATH | p_stall::WAIT_SFPU>(semaphore::MATH_DONE);
+    while (semaphore_read(semaphore::MATH_DONE) == 0)
+    {
+    }
+    semaphore_get(semaphore::MATH_DONE);
+}
+
 inline void math_unpack_to_dest_tile_ready()
 {
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::UNPACK_TO_DEST);
