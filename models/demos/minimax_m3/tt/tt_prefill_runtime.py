@@ -118,6 +118,7 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
         self.media_embedding_reader = media_embedding_reader
+        self.media_buffers = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -364,6 +365,7 @@ class TtPrefillRuntime:
             x_embd,
             rows,
             mask,
+            cache=self,
             mesh_shape=cfg.mesh_shape,
             sp_axis=cfg.sp_axis,
             tp_axis=cfg.tp_axis,
