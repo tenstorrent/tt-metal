@@ -79,7 +79,8 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
 
-    if (dim >= rank - 2) {
+    if (get_parallelization_strategy(operation_attributes, tensor_args) !=
+        MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C) {
         // The H/W readers fill the scaler/mask buffers (sized in the input_grad format) with raw bfloat16 tiles,
         // so block-float formats are not supported.
         TT_FATAL(output_tensor.dtype() == DataType::BFLOAT16, "Output_tensor dtype should be bfloat16");

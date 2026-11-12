@@ -578,6 +578,7 @@ def test_moreh_softmax_backward_rejects_mismatched_input_grad(device, expect_err
         ([1, 1, 32 * 4, 32], 2, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.SMALL_H),
         ([1, 1, 32, 32 * 4], 3, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_W),
         ([1, 1, 32, 32 * 4], 3, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.SMALL_W),
+        ([32 * 4], 0, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.NONE),
     ],
 )
 @pytest.mark.parametrize(
