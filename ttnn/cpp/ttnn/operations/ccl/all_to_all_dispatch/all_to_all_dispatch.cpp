@@ -48,11 +48,11 @@ std::array<ttnn::Tensor, 2> all_to_all_dispatch(
         const auto& metadata_tensor = output_tensors.at(1);
 
         if (output_tensor.buffer()->is_l1()) {
-            total_size_bytes += output_tensor.buffer()->aligned_size_per_bank();
+            total_size_bytes += output_tensor.mesh_buffer().aligned_size_per_bank();
         }
 
         if (metadata_tensor.buffer()->is_l1()) {
-            total_size_bytes += metadata_tensor.buffer()->aligned_size_per_bank();
+            total_size_bytes += metadata_tensor.mesh_buffer().aligned_size_per_bank();
         }
     } else if (memory_config_.buffer_type() == tt::tt_metal::BufferType::L1) {
         std::array<tt::tt_metal::TensorSpec, 2> specs = AllToAllDispatchDeviceOperation::compute_output_specs(

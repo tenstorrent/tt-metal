@@ -1974,9 +1974,9 @@ void py_module(nb::module_& mod) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
     bind_unary_composite_2param<"normalize_global", &ttnn::normalize_global>(
         mod,
-        R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc",
+        R"doc(Normalizes :attr:`input_tensor` over all of its elements as :math:`(x - \mu) / \sigma`, where :math:`\mu` and :math:`\sigma` are the mean and the population standard deviation over N, C, H and W. Both divide by the logical element count, so tile padding is not counted. The input must be rank 4; the output has the input's shape and dtype, in TILE layout.)doc",
         "",
-        R"doc(BFLOAT16, FLOAT32)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(ROW_MAJOR, TILE)doc");
 
     bind_unary_clip(mod);

@@ -429,6 +429,7 @@ public:
 
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
+    static uint64_t close_count();  // MeshDevice closes so far.
     void enable_program_cache() override;
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;

@@ -108,14 +108,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.rand(1, 1, 32, 32)
         test_tensor = (
-            ttnn.Tensor(
-                inp.reshape(-1).tolist(),
-                inp.shape,
-                ttnn.bfloat16,
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
+            ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
         )
         shard_spec_1_cores_grid = ttnn.CoreRangeSet(
             {

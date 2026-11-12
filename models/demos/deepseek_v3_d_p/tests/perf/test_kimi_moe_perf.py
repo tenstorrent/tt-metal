@@ -23,6 +23,7 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -69,8 +70,7 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    # Mean of CI runs 40424879138, 40494538796, 40532334659 and 40610708699 (2.991-3.000 ms).
-    expected_ns=2_996_000,
+    expected_ns=2_896_000,
     margin=0.03,
     shape_note="384 experts / top-8, 7168 emb",
 )
@@ -78,8 +78,7 @@ _K2_7 = _MoEPerfCase(
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    # K3 does not opt into the routed expert / combine overlap. CI run 41411540803 / job 125169241093.
-    expected_ns=6_102_000,
+    expected_ns=6_030_000,
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(
@@ -205,6 +204,8 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         **case.extra,
         measure=measure,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(case.config),
+        dispatch_fwd_vc_pages=case.config.MOE_FWD_VC_PAGES,
+        combine_fwd_vc_pages=case.config.MOE_FWD_VC_PAGES,
     )
 
     assert replays_ns, f"no traced replay was timed for the {case.label} MoE forward"
@@ -244,7 +245,10 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), expected {expected_ns:,} ns, "
         f"band [{lower:,.0f}, {upper:,.0f}] (margin +/- {margin * 100:.1f}%)"
     )
-    assert lower <= total_ns <= upper, (
-        f"{case.label}: traced replay {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
-        f"(expected {expected_ns:,} ns, margin +/- {margin * 100:.1f}%)"
+    assert_perf_gate(
+        lower <= total_ns <= upper,
+        (
+            f"{case.label}: traced replay {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+            f"(expected {expected_ns:,} ns, margin +/- {margin * 100:.1f}%)"
+        ),
     )

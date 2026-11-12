@@ -72,8 +72,11 @@
 // After both halves, so it sees the dataflow API they pulled in; compiles to nothing on a compute
 // kernel, which has no NoC of its own.
 #include "hybrid_pass_barrier.hpp"
+#include "hybrid_rt_expand.hpp"
 
 void kernel_main() {
+    // Before anything reads a runtime argument: the host sent only what differs between cores.
+    hybrid_expand_runtime_args();
 #ifdef HYB_WEIGHT_TABLE
     // Before either pass: both read their per-expert weight addresses from this page.
     hyb_wait_weight_table();

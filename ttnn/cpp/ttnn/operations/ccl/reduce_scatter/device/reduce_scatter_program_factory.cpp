@@ -88,7 +88,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterDeviceOperation::ReduceScatterProg
         const std::vector<tt::tt_metal::GlobalSemaphore> op_semaphores(
             multidevice_semaphores.begin(), multidevice_semaphores.begin() + 3);
         if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-            ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
+            ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_descriptor(
                 program,
                 tensor_args.input_tensor,
                 tensor_return_value.at(0),
@@ -113,7 +113,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterDeviceOperation::ReduceScatterProg
                 first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
                 operation_attributes.compute_kernel_config);
         } else {
-            ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts(
+            ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_descriptor(
                 program,
                 tensor_args.input_tensor,
                 tensor_return_value.at(0),

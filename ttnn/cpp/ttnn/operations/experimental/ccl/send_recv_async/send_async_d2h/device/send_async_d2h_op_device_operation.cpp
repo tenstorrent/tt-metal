@@ -41,7 +41,7 @@ void SendAsyncD2HDeviceOperation::validate_on_program_cache_miss(
     // socket page size must match the tensor's aligned page size. The D2HSocket's page
     // size is configured by the host before the op runs; we cross-check here so
     // program-cache misses surface mis-configuration loudly.
-    const uint32_t tensor_page_size = input_tensor.buffer()->aligned_page_size();
+    const uint32_t tensor_page_size = input_tensor.mesh_buffer().aligned_page_size();
     const uint32_t socket_page_size = d2h_socket->get_page_size();
     TT_FATAL(
         socket_page_size == 0 || socket_page_size == tensor_page_size,

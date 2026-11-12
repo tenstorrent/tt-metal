@@ -22,6 +22,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -30,7 +31,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    DEST_DEPTH_BLOCK_COUNTS,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     quasar_dest_sync_modes,
     quasar_mx_smoke,
@@ -303,6 +306,80 @@ def test_reduce_quasar(
         tile_shape=tile_shape,
         print_errors=True,
     ), "Assert against golden failed"
+
+
+# Tiles folded into the single output tile: N >= 8.
+REDUCE_TO_ONE_TILE_COUNTS = [8, 16]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
+    pool_type=POOL_TYPES,
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    tile_count=runtime(REDUCE_TO_ONE_TILE_COUNTS),
+)
+def test_reduce_quasar_multi_tile_to_one(
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    dest_sync_mode,
+    tile_count,
+):
+    """Reduce N > 1 tiles into one DEST tile for every pool type and reduce dimension."""
+    test_reduce_quasar(
+        formats,
+        (32, 32),
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        MathFidelity.LoFi,
+        True,
+        dest_sync_mode,
+        [PerfRunType.L1_TO_L1],
+        1,
+        input_dimensions=[32 * tile_count, 32],
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column],
+    pool_type=[ReducePool.Max, ReducePool.Sum],
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    blocks=runtime(list(DEST_DEPTH_BLOCK_COUNTS)),
+)
+def test_reduce_quasar_dest_depth(
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    dest_sync_mode,
+    blocks,
+):
+    """Per-tile reduce over 4 and 8 Dest sections of SyncHalf size.
+
+    reduce_quasar_test.cpp sizes sections at the SyncHalf capacity in both sync modes, so the
+    DestSync.Full variants repeat the Full dvalid/section-done handshake at Half depth.
+    """
+    test_reduce_quasar(
+        formats,
+        (32, 32),
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        MathFidelity.LoFi,
+        False,
+        dest_sync_mode,
+        [PerfRunType.L1_TO_L1],
+        1,
+        input_dimensions=[32 * blocks * max_dest_tiles(dest_acc, DestSync.Half), 32],
+    )
 
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture

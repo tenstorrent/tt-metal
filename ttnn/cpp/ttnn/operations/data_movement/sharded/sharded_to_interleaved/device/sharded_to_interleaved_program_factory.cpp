@@ -89,10 +89,10 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     bool convert_df = input_data_format != output_data_format;
 
     uint32_t num_input_units = num_units_per_shard;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->device_local_config().buffer_type == tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     // ---- Resource names ----

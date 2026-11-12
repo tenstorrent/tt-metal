@@ -516,16 +516,20 @@ def test_specific_tensor_combination(device):
     )
 
 
-@pytest.mark.parametrize(
-    "input_shape, dim",
-    [
-        ((1, 3, 56, 56, 3), -1),
-        ((3, 5, 63, 56, 33), -2),
-        ((7, 2, 56, 67, 31), -3),
-        ((4, 9, 6, 86, 13), -4),
-        ((32, 32, 32, 32, 32), -5),
-    ],
-)
+# Every dim other than the last two runs the same general-C factory whatever the size. Sanity runs dim=-5 on a
+# small input; the (32, 32, 32, 32, 32) input runs nightly (#62486).
+SOFTMAX_5D_CASES = [
+    ((1, 3, 56, 56, 3), -1),
+    ((3, 5, 63, 56, 33), -2),
+    ((7, 2, 56, 67, 31), -3),
+    ((4, 9, 6, 86, 13), -4),
+    ((5, 3, 6, 56, 33), -5),
+    ((32, 32, 32, 32, 32), -5),
+]
+SOFTMAX_5D_NIGHTLY_CASES = [((32, 32, 32, 32, 32), -5)]
+
+
+@pytest.mark.parametrize("input_shape, dim", [c for c in SOFTMAX_5D_CASES if c not in SOFTMAX_5D_NIGHTLY_CASES])
 def test_5d_softmax(device, input_shape, dim):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
@@ -963,11 +967,19 @@ def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, 
     )
 
 
-def test_scale_mask_softmax_causal_large_kernel(device):
+# Any row too wide for L1 selects the large kernel: Wt = 256 already does (see
+# test_scale_mask_softmax_causal_mask_height_differs_from_width). Sanity runs Wt = 256; the original
+# Wt = 637 runs nightly (#62486).
+CAUSAL_LARGE_KERNEL_WTS = [256, 637]
+CAUSAL_LARGE_KERNEL_SANITY_WTS = [256]
+
+
+@pytest.mark.parametrize("Wt", CAUSAL_LARGE_KERNEL_SANITY_WTS)
+def test_scale_mask_softmax_causal_large_kernel(device, Wt):
     # #51231: the large-kernel reader must read each row's own causal mask row, not row 0's.
-    # Wt = 637 selects the large kernel; 256 tile-rows give every core 2+ rows to expose a stale mask.
+    # A wide row (Wt tiles) selects the large kernel; 256 tile-rows give every core 2+ rows to expose a stale mask.
     torch.manual_seed(0)
-    shape = (1, 1, 256 * 32, 637 * 32)
+    shape = (1, 1, 256 * 32, Wt * 32)
     scale = 0.75
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     attention_mask = torch.zeros(shape, dtype=torch.bfloat16)

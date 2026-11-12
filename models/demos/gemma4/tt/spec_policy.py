@@ -320,6 +320,10 @@ RUN_LENGTH_RUNS = 4
 BUCKET_TRIALS = 1.5
 #: The hold's credit while a run serves: an EWMA at this weight of the run's own samples (None: their mean).
 RUN_CREDIT_ALPHA = None
+#: A run shorter than this that reads below its pool is credited its own samples shrunk toward the pool's credit
+#: (the pool stands in for the samples it lacks): one post-switch sample does not under-price a record a fresh
+#: pool measured over hundreds of steps; a short run reading above its pool decides at once.
+RUN_SHRINK_SAMPLES = 3
 
 
 def _env_float(env, name, default, *, low, high=None):
@@ -867,6 +871,7 @@ class Calibration:
         # the next entry, and one that failed says the pool's older samples describe another text).
         self.run = {}
         self.last_run = {}
+        self._last_noted_mode = None  # the mode of the previous noted step: a switch between records opens a run
         # The walls a retry cycle pays under asynchronous scheduling, as served: per shape the interval that
         # starts with a reseed (the reseed and the replay the in-flight plain step overtakes), and the plain
         # step right after a record step (the runner's reload and the drained pipeline bubble); [count, ms].
@@ -883,6 +888,15 @@ class Calibration:
         compared to ``table_ms``, the warmup table at the step's position; an unclean step names its ``cause``,
         an ``idle`` one (every row of the previous step ended before this one) is reported and never counted."""
         mode = tuple(mode)
+        previous, self._last_noted_mode = self._last_noted_mode, mode
+        # a switch from one record to another (a probe to the next draft length, a sibling the ranking preferred),
+        # not the first record step after a plain one (a resume, an overtaken entry)
+        between_records = (
+            cause == "switch"
+            and previous is not None
+            and previous[0] == "step"
+            and self.run_samples(previous) >= RUN_SHRINK_SAMPLES  # ... from an established run, not a trial's
+        )
         self.intervals += 1
         if idle:
             clean, cause = False, "idle"
@@ -922,12 +936,30 @@ class Calibration:
             # run and lost the ranking to its sibling for the rest of the request (2026-10-30 replay)
             key = self._tokens_pool_key(mode)
             per_row = float(tokens) / max(int(live_rows), 1)
-            pool = self.tokens_pool.setdefault(key, [collections.deque(maxlen=CALIB_WINDOW), 0, 0])
+            pool = self.tokens_pool.get(key)
+            # whether the pool was fresh and measured before this sample fed it (the sample itself refreshes it)
+            was_fresh = pool is not None and pool[1] >= self.min_samples and self.intervals - pool[2] <= self.pool_stale
+            if pool is None:
+                pool = self.tokens_pool[key] = [collections.deque(maxlen=CALIB_WINDOW), 0, 0]
             pool[0].append(per_row)
             pool[1] += 1
             pool[2] = self.intervals
             if mode[0] == "step":
-                run = self.run.setdefault(key, [collections.deque(maxlen=CALIB_WINDOW), 0, 0.0, None])
+                run = self.run.get(key)
+                if run is None:
+                    # [window, count, sum, ewma, opened between records, pool fresh at the open]: a run a switch
+                    # from another record opened (a probe to the next draft length, a sibling the ranking
+                    # preferred; no reseed) over a fresh measured pool is shrunk toward that pool while short
+                    # (``tokens_per_row``); a run a reseed opened (a trial, a retry, an entry), a resume after a
+                    # plain step, or one over a stale or unmeasured pool, reads its own steps
+                    run = self.run[key] = [
+                        collections.deque(maxlen=CALIB_WINDOW),
+                        0,
+                        0.0,
+                        None,
+                        between_records,
+                        was_fresh,
+                    ]
                 run[0].append(per_row)
                 run[1] += 1
                 run[2] += per_row
@@ -954,7 +986,7 @@ class Calibration:
         the run fed keeps the run's mean as its last run, and the steps served on each shape since the last run
         ended are one run of the shape for ``run_length`` -- unless the run was a ``trial`` that failed: a
         declined trial is exploration, not a record the batch kept leaving."""
-        for key, (_window, count, total, _ewma) in self.run.items():
+        for key, (_window, count, total, _ewma, _switched, _fresh) in self.run.items():
             self.last_run[key] = (total / count, count)
         self.run = {}
         for runs in self.shape_runs.values():
@@ -1088,9 +1120,11 @@ class Calibration:
 
     def tokens_per_row(self, mode):
         """The measured tokens per row and step of ``mode``, or None (the model decides). While the batch serves
-        a record, the mean of the last ``CALIB_WINDOW`` counted steps of the current run on ``mode``'s pool (one
-        sample is enough: the run says what the record delivers now, and the window bounds how long a text
-        that stopped accepting is held); between runs the pool's credit, once it holds ``min_samples`` samples
+        a record, the mean of the last ``CALIB_WINDOW`` counted steps of the current run on ``mode``'s pool (the
+        run says what the record delivers now, and the window bounds how long a text that stopped accepting is
+        held; a run shorter than ``RUN_SHRINK_SAMPLES`` reading below a fresh pool's credit is shrunk toward it,
+        so one post-switch sample does not under-price a record hundreds of samples measured); between runs the
+        pool's credit, once it holds ``min_samples`` samples
         in all. A record's samples are pooled over the
         records of its draft length at its rung (``("step", (rows, k), width)`` for every ``rows``): the
         drafter's acceptance does not depend on the record's rows, so a record the serving never replayed
@@ -1108,9 +1142,29 @@ class Calibration:
         key = self._tokens_pool_key(mode)
         run = self.run.get(key)
         if run is not None and run[1] > 0:
-            if RUN_CREDIT_ALPHA is not None:
-                return run[3]
-            return sum(run[0]) / len(run[0])
+            credit = run[3] if RUN_CREDIT_ALPHA is not None else sum(run[0]) / len(run[0])
+            n = int(run[1])
+            if n < RUN_SHRINK_SAMPLES and run[4] and run[5]:
+                # A run a switch from another record opened (a probe to the next draft length, a sibling the
+                # ranking preferred; the batch moved between records without a reseed) that reads BELOW its pool
+                # while short is shrunk toward the pool's credit (the pool's mean stands in for the samples the
+                # run lacks): the one step of a probe to the next draft length, or of a switch the batch left
+                # again, read 3.0 tokens a row against a fresh pool of 4.2 over 198 verifies and priced the
+                # (5,5) record at 1.02x for the rest of a 40-question run on the 12B QB2 (the batch held the
+                # plain step at the 32K rung where that record measured 1.45x; at rows nothing explores, so an
+                # under-priced record is never retried, 2026-11-04). A run a reseed opened (a trial, a retry, an
+                # entry) or a resume after a plain step reads its own steps as before: random text must be
+                # declined at once, and prose after random text is the regime change the run exists to catch.
+                # The pool must have been fresh and measured when the run opened; else the run's samples.
+                pool_credit = self._fresh_pool_credit(key)
+                if pool_credit is not None and credit < pool_credit:
+                    credit = (credit * n + pool_credit * (RUN_SHRINK_SAMPLES - n)) / RUN_SHRINK_SAMPLES
+            return credit
+        return self._fresh_pool_credit(key)
+
+    def _fresh_pool_credit(self, key):
+        """The between-runs credit of a pool: the whole mean of its last run when that run had ``min_samples``
+        samples, else the mean of its last ``CALIB_WINDOW`` samples; None when the pool is unmeasured or stale."""
         pool = self.tokens_pool.get(key)
         if pool is not None and pool[0] and pool[1] >= self.min_samples:
             if self.intervals - pool[2] <= self.pool_stale:

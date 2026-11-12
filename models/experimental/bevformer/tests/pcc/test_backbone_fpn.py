@@ -22,6 +22,7 @@ from models.experimental.bevformer.tests.common import (
     build_reference_fpn,
     from_conv_layout,
     random_image_batch,
+    to_image_layout,
     to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import (
@@ -50,7 +51,7 @@ def test_backbone_fpn(device, reset_seeds):
     assert tt_backbone.output_dtypes == BACKBONE_OUTPUT_DTYPES
     tt_fpn = TTFPN(fpn_parameters, device, input_dtypes=tt_backbone.output_dtypes)
 
-    tt_input = to_conv_layout(torch_input, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_input = to_image_layout(torch_input, device)
     tt_features = tt_backbone(tt_input)
     # Read before the FPN runs: it deallocates its inputs.
     for torch_feature, tt_feature in zip(torch_features, tt_features, strict=True):

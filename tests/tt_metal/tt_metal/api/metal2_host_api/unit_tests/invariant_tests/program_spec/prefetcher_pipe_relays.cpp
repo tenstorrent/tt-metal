@@ -57,12 +57,12 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNotCoveringRingFails) {
     EXPECT_SPEC_REJECTED(spec, "bytes of whole entries in relayed PrefetcherPipeParameter 'weights'");
 }
 
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNodesNotReceiversFails) {
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayNodesMissReceiverFails) {
     // Relay DFB (and its kernels) on 2 of the 3 receivers, without binding the pipe directly.
     ProgramSpec spec = MakeFullPipeSpec();
     KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings.clear();
     spec.work_units[1].target_nodes = NodeRange{NodeCoord{0, 1}, NodeCoord{0, 2}};
-    EXPECT_SPEC_REJECTED(spec, "receiver nodes do not match the DFB's node set");
+    EXPECT_SPEC_REJECTED(spec, "receiver nodes are not all in the DFB's node set");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayComputeProducerFails) {
@@ -141,7 +141,8 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayProducerBindsSubsetFails)
     // also fails tiling (it runs on both receiver sets). The tiling rule fires first.
     ProgramSpec spec = MakeTwoPipeReceiverSpec();
     KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].pipe_parameter_names = {pipe_param_name};
-    EXPECT_SPEC_REJECTED(spec, "Kernel covers 6 node(s): 3 of the 3 receiver node(s), 3 outside the receivers");
+    EXPECT_SPEC_REJECTED(
+        spec, "Kernel covers 6 node(s) besides 0 extra node(s): 3 of the 3 receiver node(s), 3 outside the receivers");
 }
 
 }  // namespace

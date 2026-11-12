@@ -109,12 +109,12 @@ const COPILOT_CODING_AGENT_LOGINS = new Set(['copilot-swe-agent', 'copilot']);
 // suffix stripped, and the actor must be GraphQL type Bot. Verified against real Copilot
 // PRs in this repo (2026-09-28):
 //   copilot-pull-request-reviewer  Copilot code review (ruleset "Automatic Copilot PR Review")
-//   github-actions                 the gh-aw reviewers (tenstorrent-skills-reviewer,
-//                                  mattpocock-skills-reviewer) post their review threads
-//                                  with GITHUB_TOKEN, so this is their GraphQL login; the
-//                                  repo has no GH_AW_GITHUB_TOKEN secret that would change
-//                                  it. Any other repo workflow posting review threads as
-//                                  github-actions is repo-controlled code.
+//   github-actions                 the gh-aw reviewer (mattpocock-skills-reviewer) posts
+//                                  its review threads with GITHUB_TOKEN, so this is its
+//                                  GraphQL login; the repo has no GH_AW_GITHUB_TOKEN
+//                                  secret that would change it. Any other repo workflow
+//                                  posting review threads as github-actions is
+//                                  repo-controlled code.
 // NOT on the list, and seen on Copilot PRs here: `cycode-security` (Bot). Its threads —
 // and any other bot's — are treated exactly like a human reviewer's: listed for Copilot to
 // answer, never resolved by this workflow.

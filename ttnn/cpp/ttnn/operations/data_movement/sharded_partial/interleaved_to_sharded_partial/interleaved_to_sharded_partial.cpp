@@ -22,6 +22,11 @@ Tensor interleaved_to_sharded_partial(
     tt::tt_metal::ShardOrientation shard_orientation,
     const std::optional<DataType>& data_type_arg) {
     TT_FATAL(num_slices > 0, "num_slices must be greater than 0, got {}", num_slices);
+    TT_FATAL(num_slices <= UINT32_MAX, "num_slices must be at most UINT32_MAX, got {}", num_slices);
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] > 0,
+        "Input tensor width must be greater than 0, got shape {}",
+        input_tensor.padded_shape());
     TT_FATAL(
         shard_shape[0] > 0 && shard_shape[1] > 0,
         "shard_shape must be greater than 0 in both dims, got [{}, {}]",

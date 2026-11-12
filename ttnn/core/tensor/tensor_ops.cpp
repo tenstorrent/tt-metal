@@ -29,6 +29,7 @@
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_host_pad_apis.hpp>
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using tt::tt_metal::BufferRegion;
 using tt::tt_metal::DataType;
@@ -242,8 +243,9 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
         output = Tensor(cq.enqueue_read_tensor(input_tensor.mesh_tensor(), blocking));
     } else {
         auto coords = input_tensor.device_storage().get_coords();
-        output = Tensor(tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
-            cq, input_tensor.mesh_tensor(), coords, blocking));
+        output = Tensor(
+            tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
+                cq, input_tensor.mesh_tensor(), coords, blocking));
     }
     // The read labels the host tensor with the MeshTensor's topology; a storage that labels its own shards
     // (get_device_tensors) carries that label to the host instead.
@@ -453,7 +455,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     auto new_spec = TensorSpec(
         new_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             input_tensor.tensor_spec().page_config(),
             output_memory_config,

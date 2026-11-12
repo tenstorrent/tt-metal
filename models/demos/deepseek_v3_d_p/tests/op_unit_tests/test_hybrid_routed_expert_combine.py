@@ -63,6 +63,8 @@ _MESHES = {
 }
 _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
+# Pages one of combine's forwarding channels holds, for the overlap and the standalone combine alike.
+_FWD_VC_PAGES = 64
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
 _MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config}
 # Routing captured off-device from total_counts_per_expert, one dispatch group of a 32-chip chunked prefill
@@ -500,6 +502,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             seq_len_per_chip=_SEQ_LEN_PER_CHIP,
             cluster_axis=sp_axis,
             num_links=num_links,
+            fwd_vc_pages=_FWD_VC_PAGES,
             topology=per_axis_topology(device_params["fabric_config"])[0],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -537,6 +540,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             final_arrived_semaphore=final_arrived,
             expert_go_semaphore=expert_go,
             channel_semaphores=overlap_semaphores[3:],
+            combine_fwd_vc_pages=_FWD_VC_PAGES,
         )
 
     reference = []

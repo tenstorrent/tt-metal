@@ -223,14 +223,18 @@ class _FabricPlan:
                 assert valid, f"no forwarding links from {coord} to its {label} neighbor"
                 links.append(int(valid[core_link % len(valid)]))
             args = [len(dst_nodes)]
-            args += list(ttnn.setup_routing_plane_connection(src, dst_nodes, links, program, writer_kernel_idx, core))
+            args += list(
+                ttnn.setup_routing_plane_connection(
+                    self.mesh_device, src, dst_nodes, links, program, writer_kernel_idx, core
+                )
+            )
             return args
         neighbors, _ = mesh_neighbors((self.rows, self.cols), coord, self.topology, self.axis)
         args = []
         for n in neighbors:
             if n == tuple(coord):
                 continue
-            args += list(ttnn.setup_fabric_connection(src, self.node(n), core_link, program, core))
+            args += list(ttnn.setup_fabric_connection(self.mesh_device, src, self.node(n), core_link, program, core))
         return args
 
 

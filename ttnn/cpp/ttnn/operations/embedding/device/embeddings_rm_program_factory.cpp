@@ -40,7 +40,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    bool output_sharded = is_sharded(output.buffer()->buffer_layout());
+    bool output_sharded = is_sharded(output.mesh_buffer().device_local_config().sharding_args.buffer_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
@@ -56,7 +56,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     uint32_t batch_size = a.padded_shape()[0];
     uint32_t num_output_rows_per_batch = a.padded_shape()[-1];
     uint32_t num_output_rows = num_output_rows_per_batch * batch_size;
-    auto alignment = a.buffer()->alignment();
+    auto alignment = a.mesh_buffer().alignment();
     uint32_t block_height = (alignment / input_element_size_bytes);
     uint32_t num_blocks = num_output_rows;
     uint32_t num_blocks_per_batch = num_output_rows_per_batch;
@@ -116,7 +116,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
 
     uint32_t out_dfb_total_size;
     if (output_sharded) {
-        out_dfb_total_size = output.buffer()->aligned_size_per_bank();
+        out_dfb_total_size = output.mesh_buffer().aligned_size_per_bank();
     } else {
         out_dfb_total_size = buffering_size * chunk_size;
     }

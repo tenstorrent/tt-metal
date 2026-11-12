@@ -8,9 +8,14 @@ from itertools import product
 
 import pytest
 import torch
+from conftest import wormhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
-from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
+from helpers.data_format_inference import (
+    dest_acc_for,
+    effective_dest_acc,
+    unpacks_to_dest,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     UnarySFPUGolden,
@@ -72,6 +77,7 @@ from helpers.test_variant_parameters import (
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
+    SFPU_SOFTPLUS_PARAMS,
     STABLE_SORT,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -423,7 +429,7 @@ def _assert_signed_zero_partition_valid():
         ),
         MathOperation.Heaviside: (
             "heaviside(-0.0) returns the scalar now. Its zero arm ignores the sign bit, as Sign's "
-            "does (SFPABS + SFPSETCC NE0 on Wormhole, sfpi::abs(v) on Blackhole), for the same SFPSETCC "
+            "does (SFPLZ NOSGN on Wormhole, sfpi::abs(v) on Blackhole), for the same SFPSETCC "
             "reasoning."
         ),
         MathOperation.Signbit: (
@@ -1063,6 +1069,51 @@ def test_eltwise_unary_sfpu_polygamma_order(
     )
 
 
+# beta 1 / threshold 20 is the unit-beta loop with no threshold predicate
+# (threshold >= 16). The other three are the remaining bf16 loops.
+_SOFTPLUS_PARAMS = [
+    pytest.param(1.0, 20.0, id="unit_beta"),
+    pytest.param(2.0, 20.0, id="beta2"),
+    pytest.param(-1.0, 20.0, id="beta_neg"),
+    pytest.param(1.0, 5.0, id="threshold5"),
+]
+
+
+@pytest.mark.parametrize("softplus_beta,softplus_threshold", _SOFTPLUS_PARAMS)
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_softplus_params(
+    formats: InputOutputFormat,
+    softplus_beta: float,
+    softplus_threshold: float,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """One calculate_softplus loop per pair. The golden uses the same beta and threshold."""
+    _skip_bh_unless_fp32(formats, dest_acc)
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            reason="Float32 reaches a 16-bit Dest as Float16_b, which is swept already"
+        )
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.Softplus,
+        FastMode.No,
+        input_dimensions,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-40.0, high=40.0),
+        custom_atol=0.0,
+        custom_rtol=(1.1e-3 if formats.output_format == DataFormat.Float32 else 0.02),
+        softplus_beta=softplus_beta,
+        softplus_threshold=softplus_threshold,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -1262,6 +1313,121 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
+# calculate_comp answers these with integer interval tests on the raw bits, so the
+# patterns at each interval end (+-0, denormals, +-inf, NaN payloads) are fed exactly.
+_COMPARE_ZERO_OPS = [
+    MathOperation.EqualZero,
+    MathOperation.NotEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.LessThanEqualZero,
+    MathOperation.GreaterThanEqualZero,
+]
+
+# fmt: off
+_COMPARE_ZERO_FP32_BITS = (
+    0x00000000, 0x80000000,  # +0, -0
+    0x00000001, 0x80000001,  # smallest denormals
+    0x007FFFFF, 0x807FFFFF,  # largest denormals
+    0x00800000, 0x80800000,  # smallest normals
+    0x3F800000, 0xBF800000,  # +-1
+    0x7F7FFFFF, 0xFF7FFFFF,  # largest finite
+    0x7F800000, 0xFF800000,  # +-inf
+    0x7F800001, 0xFF800001,  # the NaNs next to +-inf
+    0x7FC00000, 0xFFC00000,  # quiet NaNs
+    0x7FFFFFFF, 0xFFFFFFFF,  # largest NaN payloads: INT_MAX and -1
+)
+
+# The same 20 classes in bf16. A period of 20 on 16-lane face rows varies every row.
+_COMPARE_ZERO_BF16_BITS = (
+    0x0000, 0x8000,  # +0, -0
+    0x0001, 0x8001,  # smallest denormals
+    0x007F, 0x807F,  # largest denormals
+    0x0080, 0x8080,  # smallest normals
+    0x3F80, 0xBF80,  # +-1
+    0x7F7F, 0xFF7F,  # largest finite
+    0x7F80, 0xFF80,  # +-inf
+    0x7F81, 0xFF81,  # the NaNs next to +-inf
+    0x7FC0, 0xFFC0,  # quiet NaNs
+    0x7FFF, 0xFFFF,  # largest NaN payloads
+)
+# fmt: on
+
+
+def _compare_zero_bit_stimulus(input_format, num_elements):
+    """The pattern list for *input_format*, repeated over every lane."""
+    if input_format == DataFormat.Float32:
+        bits = torch.tensor(_COMPARE_ZERO_FP32_BITS, dtype=torch.int64).to(torch.int32)
+        values = bits.view(torch.float32)
+    else:
+        bits = torch.tensor(_COMPARE_ZERO_BF16_BITS, dtype=torch.int32).to(torch.int16)
+        values = bits.view(torch.bfloat16)
+    return values.repeat(num_elements // values.numel() + 1)[:num_elements]
+
+
+@wormhole_only
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    ],
+    mathop=_COMPARE_ZERO_OPS,
+    dest_acc=lambda formats: [dest_acc_for(formats.input_format)],
+)
+def test_eltwise_unary_sfpu_compare_zero_bit_patterns(
+    formats: InputOutputFormat,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+):
+    """Each comparison-to-zero op against IEEE, exactly, on a 32-bit Dest (Float32)
+    and a 16-bit Dest (Float16_b via SrcA: denormals flush, in the golden too)."""
+    input_dimensions = [64, 64]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = _compare_zero_bit_stimulus(formats.input_format, num_elements)
+    input_bits = src_A.view(
+        torch.int16 if src_A.dtype == torch.bfloat16 else torch.int32
+    )
+    delivered = src_A
+    if not unpacks_to_dest(formats.input_format, dest_acc):
+        tiny = torch.finfo(src_A.dtype).tiny
+        delivered = torch.where(src_A.abs() < tiny, torch.zeros_like(src_A), src_A)
+
+    golden = get_golden_generator(UnarySFPUGolden)(
+        mathop,
+        delivered,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        input_dimensions,
+    ).to(torch.float32)
+
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=dest_acc,
+        approx_mode=ApproximationMode.No,
+        mathop=mathop,
+        fast_mode=FastMode.No,
+        input_dimensions=input_dimensions,
+        # raw words: the bf16 host packer would rewrite every NaN payload to 0x7FC0/0xFFC0
+        src_A=input_bits.numpy().tobytes(),
+        src_B=torch.zeros_like(src_A),
+        check_golden=False,
+    )
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.float32)
+    assert res_tensor.shape == golden.shape, "Result and golden differ in length"
+    mismatch = torch.nonzero(res_tensor != golden).flatten()
+    bits_mask = (1 << (8 * src_A.element_size())) - 1
+    assert mismatch.numel() == 0, (
+        f"{mismatch.numel()} of {golden.numel()} lanes differ from IEEE; first: "
+        + ", ".join(
+            f"[{i}] in {int(input_bits[i]) & bits_mask:#x} got {res_tensor[i].item()} "
+            f"want {golden[i].item()}"
+            for i in mismatch[:MAX_REPORTED_MISMATCHES].tolist()
+        )
+    )
+
+
 # Ops whose behaviour turns on a comparison against a fixed scalar. A random float sweep
 # reaches such a scalar with probability ~0, so the tie -- the one input where a `>` / `>=`
 # slip is visible -- never gets driven. The 0/1 ops are here because their output would
@@ -1348,6 +1514,8 @@ def eltwise_unary_sfpu(
     relu_min_int_threshold=None,
     relu_max_threshold=None,
     polygamma_order=None,
+    softplus_beta=None,
+    softplus_threshold=None,
     twos_complement=False,
     gate_on_step_budget=False,
     *,
@@ -1461,6 +1629,14 @@ def eltwise_unary_sfpu(
                 else {"relu_max_threshold": relu_max_threshold}
             ),
             **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
+            **(
+                {}
+                if softplus_beta is None
+                else {
+                    "softplus_beta": softplus_beta,
+                    "softplus_threshold": softplus_threshold,
+                }
+            ),
         )
 
     configuration = build_eltwise_unary_sfpu_config(
@@ -1480,6 +1656,8 @@ def eltwise_unary_sfpu(
         relu_min_int_threshold=relu_min_int_threshold,
         relu_max_threshold=relu_max_threshold,
         polygamma_order=polygamma_order,
+        softplus_beta=softplus_beta,
+        softplus_threshold=softplus_threshold,
         twos_complement=twos_complement,
         clamp_negative=clamp_negative,
         iterations=iterations,
@@ -1556,6 +1734,8 @@ def build_eltwise_unary_sfpu_config(
     relu_min_int_threshold=None,
     relu_max_threshold=None,
     polygamma_order=None,
+    softplus_beta=None,
+    softplus_threshold=None,
     twos_complement=False,
     clamp_negative=True,
     iterations=32,
@@ -1609,6 +1789,16 @@ def build_eltwise_unary_sfpu_config(
                 []
                 if polygamma_order is None
                 else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
+            ),
+            *(
+                []
+                if softplus_beta is None
+                else [
+                    SFPU_SOFTPLUS_PARAMS(
+                        softplus_beta=softplus_beta,
+                        softplus_threshold=softplus_threshold,
+                    )
+                ]
             ),
         ],
         "runtimes": [

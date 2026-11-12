@@ -118,21 +118,33 @@ def _fpu_add_bf16(a, b):
     return torch.where((a == 0) | (b == 0), (a + b).float().to(torch.bfloat16), rounded)
 
 
-# The bf16 sum as each Quasar target rounds it: twice on the hardware and on ttsim, once on craq-sim. An element is
-# right when it matches either.
-# TODO: keep only _fpu_add_bf16 when craq-sim rounds the FPU add as the hardware does.
-_FPU_ADD_ROUNDINGS = (_fpu_add_bf16, lambda a, b: (a.float() + b.float()).to(torch.bfloat16))
+# The bf16 sum as Quasar rounds it: twice, on the hardware, on ttsim and on craq-sim from b05091aa. A craq-sim build
+# older than b05091aa rounds once, so the FPU add and subtract cases fail on it (_ROUNDING_HINT says so).
+_FPU_ADD_ROUNDINGS = (_fpu_add_bf16,)
+
+# What a failed FPU add or subtract comparison tells the reader who runs on an older craq-sim.
+_ROUNDING_HINT = (
+    "On craq-sim, a bf16 add or subtract on the FPU kernel is exact only from build b05091aa, which rounds the FPU add "
+    "twice, as the hardware does. An older build rounds once and fails here."
+)
 
 
 def _add_goldens(ta, tb):
-    """The oracles of a bf16 add, on the operands as the device holds them."""
+    """The oracles of a bf16 add (one today), on the operands as the device holds them."""
     a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
     return [rounding(a, b) for rounding in _FPU_ADD_ROUNDINGS]
 
 
 def _matches_none(got, goldens, bound=0):
-    """Per element: True where `got` is more than `bound` ULP from every golden."""
-    return torch.stack([ulp_distance(got, golden) > bound for golden in goldens]).all(dim=0)
+    """Per element: True where `got` is more than `bound` ULP from every golden. As assert_with_ulp's allow_nonfinite
+    treats them, a NaN matches a NaN whatever its payload, and an inf matches only an inf of the same sign."""
+
+    def differs(golden):
+        far = ulp_distance(got, golden) > bound
+        inf_differs = (got.isinf() | golden.isinf()) & (got != golden)
+        return (far | inf_differs) & ~(got.isnan() & golden.isnan())
+
+    return torch.stack([differs(golden) for golden in goldens]).all(dim=0)
 
 
 # Activations that keep the golden exact: RELU, and SQUARE in fp32.
@@ -390,8 +402,8 @@ def _run_scalar(
 ):
     # Tensor-SCALAR sibling of _run: operand A is a tensor, the RHS is a Python number (not a tensor),
     # and the golden uses that same scalar. Same op->torch map, PCC thresholds, and degenerate-constant
-    # guard as _run. On Quasar the DFB path is the only path that can run (the descriptor throws as
-    # unsupported), so a passing PCC here is itself the proof the op routed to the v2/DFB tensor-scalar
+    # guard as _run. On Quasar a DFB factory is the only path that can run (an op outside the native and Metal 2.0
+    # slices raises an error), so a passing PCC here is itself the proof the op routed to the v2/DFB tensor-scalar
     # factory -- the same implicit v2-routing check the no-broadcast / subtile-broadcast suites rely on
     # (there is no explicit DFB-path assertion helper in this module). The scalar is passed as the second
     # positional arg, which the nanobind binding routes to the tensor-scalar overload.

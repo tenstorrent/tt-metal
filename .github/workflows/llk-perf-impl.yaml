@@ -86,6 +86,7 @@ on:
         type: number
 
 permissions:
+  actions: read
   checks: write
   contents: read
   packages: write
@@ -105,6 +106,7 @@ jobs:
     needs: [build-images]
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
+      split-durations: ${{ steps.upload-durations.outcome == 'success' }}
     env:
       TESTS_YAML_PATH: ${{ inputs.tests-yaml }}
     steps:
@@ -115,6 +117,7 @@ jobs:
           sparse-checkout: |
             .github
             tests/pipeline_reorg
+            tt_metal/tt-llk/perf
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
@@ -162,6 +165,38 @@ jobs:
           enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name == 'merge_group' && 'merge_group' || '' }}
+
+      # Durations do not scale between run types or to speed of light, so the
+      # source is the run that measures the same way, not the same pipeline.
+      - name: Fetch test durations
+        id: durations
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_TYPES: ${{ inputs.perf-run-types }}
+          SOL: ${{ inputs.speed-of-light }}
+        run: |
+          if [ "$SOL" = true ]; then
+            set -- llk-perf.yaml main schedule
+          elif [ "$RUN_TYPES" = L1_TO_L1 ]; then
+            set -- merge-gate.yaml "" merge_group
+          else
+            set -- llk-perf-gate.yaml main schedule
+          fi
+          .github/scripts/llk-fetch-test-durations.sh "$1" "$2" "$3" split-durations
+      # The legs read the outcome of this upload, so an artifact fault here
+      # falls back to the tables instead of skipping every leg.
+      - name: Upload test durations for the legs
+        id: upload-durations
+        if: steps.durations.outputs.found == 'true'
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: split-durations-${{ inputs.architecture }}${{ inputs.artifact-suffix }}
+          path: split-durations
 
   compile-quasar-perf:
     if: ${{ inputs.compile-quasar && (inputs.architecture == 'all' || inputs.architecture == 'quasar') }}
@@ -213,6 +248,19 @@ jobs:
             exit 1
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+      - name: Download test durations
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: split-durations-${{ inputs.architecture }}${{ inputs.artifact-suffix }}
+          path: split-durations
+      - name: Use the test durations for --perf-splits
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        shell: bash
+        run: |
+          if [[ -f "split-durations/$CHIP_ARCH.json" ]]; then
+            echo "LLK_SPLIT_DURATIONS=$PWD/split-durations/$CHIP_ARCH.json" >> "$GITHUB_ENV"
+          fi
       - name: Compile
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
@@ -341,6 +389,19 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
+      - name: Download test durations
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: split-durations-${{ inputs.architecture }}${{ inputs.artifact-suffix }}
+          path: split-durations
+      - name: Use the test durations for --perf-splits
+        if: needs.load-test-matrix.outputs.split-durations == 'true'
+        shell: bash
+        run: |
+          if [[ -f "split-durations/$CHIP_ARCH.json" ]]; then
+            echo "LLK_SPLIT_DURATIONS=$PWD/split-durations/$CHIP_ARCH.json" >> "$GITHUB_ENV"
+          fi
       - name: Download the node list
         if: ${{ inputs.node-list-artifact != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -429,6 +490,17 @@ jobs:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           path: ${{ env.LLK_PATH }}/perf_data/runs/
           overwrite: true
+
+      # Behind the perf data and bounded: this only feeds the next run's split.
+      # Before stage 2 and shadow, which rewrite the file.
+      - name: Upload test durations
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test-durations-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/.perf_split_durations
+          include-hidden-files: true
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

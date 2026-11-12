@@ -288,7 +288,9 @@ bool flatten_stress(
         distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, *src_vec, false);
         // Share ownership of buffer with program
         AssignGlobalBufferToProgram(
-            std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program_on_workload);
+            std::shared_ptr<Buffer>(
+                src_dram_buffer, src_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0))),
+            program_on_workload);
         // Main thread gives up ownership of buffer and src data (this is what python does)
         src_dram_buffer.reset();
         src_vec.reset();

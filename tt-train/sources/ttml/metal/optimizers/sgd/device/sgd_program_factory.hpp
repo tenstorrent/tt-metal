@@ -4,34 +4,29 @@
 
 #pragma once
 
+#include <optional>
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "metal/ttnn_all_includes.hpp"
 #include "sgd_device_operation_types.hpp"
 
 namespace ttml::metal::optimizers::sgd::device {
 
 struct SGDProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
-        tt::tt_metal::KernelHandle compute_kernel_group_1_id;
-        tt::tt_metal::KernelHandle compute_kernel_group_2_id;
-        tt::tt_metal::CoreRangeSet core_group_1;
-        tt::tt_metal::CoreRangeSet core_group_2;
-        uint32_t num_cores{};
-        uint32_t num_cores_y{};
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
+    // Runs on every cache hit instead of buffer-binding patching. lr, momentum, dampening and weight_decay are left out
+    // of the program hash, so it re-applies every buffer address and every runtime arg derived from those values, on
+    // every core.
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 };
 
 }  // namespace ttml::metal::optimizers::sgd::device

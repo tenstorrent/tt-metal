@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -21,6 +22,8 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     collect_accuracy_and_determinism_results,
+    decode_tail,
+    encode_tail,
     assert_equal,
 )
 
@@ -61,6 +64,8 @@ def _qkv_causal_conv1d_silu_ops(
     history: torch.Tensor | ttnn.Tensor,
     taps: tuple[torch.Tensor | ttnn.Tensor, ...],
     outputs: tuple[torch.Tensor | ttnn.Tensor, ...],
+    *,
+    page_channels: int | None,
 ) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
     if len(taps) != 4 or len(outputs) != 3:
         raise ValueError("QKV causal Conv1D plus SiLU requires four taps and three outputs")
@@ -77,7 +82,7 @@ def _qkv_causal_conv1d_silu_ops(
 
     batch, sequence, width = input_tensor.shape
     if (
-        history.shape != (batch, 3, width)
+        tuple(history.shape) != tuple(encode_tail(torch.empty((1, 3, width)), page_channels).shape)
         or any(tap.shape[-1] != width or math.prod(tap.shape) != width for tap in taps)
         or any(output.shape != (batch, sequence, output.shape[-1]) for output in outputs)
         or sum(output.shape[-1] for output in outputs) != width
@@ -99,8 +104,9 @@ def _qkv_causal_conv1d_silu_performance(
     *,
     measured_ns: float,
     math_fidelity: ttnn.MathFidelity,
+    page_channels: int | None,
 ) -> perf_model.KdaPerformance:
-    fpu, sfpu = _qkv_causal_conv1d_silu_ops(input_tensor, history, taps, outputs)
+    fpu, sfpu = _qkv_causal_conv1d_silu_ops(input_tensor, history, taps, outputs, page_channels=page_channels)
     return perf_model.performance(
         fpu=fpu,
         sfpu=sfpu,
@@ -111,16 +117,36 @@ def _qkv_causal_conv1d_silu_performance(
     )
 
 
-def test_qkv_causal_conv1d_silu_work_golden() -> None:
-    fpu, sfpu = _qkv_causal_conv1d_silu_ops(
+def _work_golden_ops(
+    history_shape: tuple[int, int, int], page_channels: int | None
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    return _qkv_causal_conv1d_silu_ops(
         torch.empty((1, 2, 4)),
-        torch.empty((1, 3, 4)),
+        torch.empty(history_shape),
         tuple(torch.empty((1, 1, 4)) for _ in range(4)),
         (torch.empty((1, 2, 1)), torch.empty((1, 2, 2)), torch.empty((1, 2, 1))),
+        page_channels=page_channels,
     )
+
+
+@pytest.mark.parametrize(("history_shape", "page_channels"), [((1, 3, 4), None), ((1, 2, 6), 2)])
+def test_qkv_causal_conv1d_silu_work_golden(history_shape: tuple[int, int, int], page_channels: int | None) -> None:
+    fpu, sfpu = _work_golden_ops(history_shape, page_channels)
 
     assert fpu == perf_model.FpuOps(multiply_ops=32, add_ops=24)
     assert sfpu == perf_model.SfpuOps(silu_ops=8)
+
+
+# Same element count as the expected tail, wrong shape for the requested layout.
+@pytest.mark.parametrize(
+    ("history_shape", "page_channels"),
+    [((1, 4, 3), None), ((1, 6, 2), None), ((1, 3, 4), 2), ((1, 4, 3), 2), ((1, 3, 4), 4), ((1, 2, 6), 4)],
+)
+def test_qkv_causal_conv1d_silu_work_rejects_wrong_tail_shape(
+    expect_error: Callable, history_shape: tuple[int, int, int], page_channels: int | None
+) -> None:
+    with expect_error(ValueError, "tensor shapes are inconsistent"):
+        _work_golden_ops(history_shape, page_channels)
 
 
 def _run(
@@ -133,6 +159,7 @@ def _run(
     widths: tuple[int, int, int] = _DEFAULT_WIDTHS,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+    page_channels: int | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     return ttnn.experimental.kda.qkv_causal_conv1d_silu(
         input_tt,
@@ -144,15 +171,32 @@ def _run(
         program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
+        page_channels=page_channels,
+    )
+
+
+def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelConfig:
+    """The KDA layer's compute config (FP32 DST), which its QKV convolution call runs."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
     )
 
 
 @pytest.mark.parametrize(
-    ("widths", "channel_chunk_size", "full_contract"),
+    ("widths", "channel_chunk_size", "full_contract", "page_channels"),
     [
-        pytest.param((512, 512, 512), 1536, False, id="single-block"),
-        pytest.param((1024, 1024, 1024), 768, False, id="multiple-blocks"),
-        pytest.param((512, 256, 128), 896, True, id="asymmetric-split-full-contract"),
+        pytest.param((512, 512, 512), 1536, False, None, id="single-block"),
+        pytest.param((1024, 1024, 1024), 768, False, None, id="multiple-blocks"),
+        pytest.param((512, 256, 128), 896, True, None, id="asymmetric-split-full-contract"),
+        # Channel-paged history: 3-tile blocks over 2-tile pages, so blocks start and end inside a page.
+        pytest.param((128, 128, 128), 96, False, 64, id="channel-paged-64-straddling-blocks"),
+        pytest.param((64, 64, 128), 128, False, 32, id="channel-paged-32"),
+        # W == 3P: the channel-paged history is [1, 3, W], the token-paged shape; page_channels tells them apart.
+        pytest.param((32, 32, 32), 96, False, 32, id="channel-paged-32-three-pages"),
     ],
 )
 def test_qkv_causal_conv1d_silu_contract(
@@ -161,9 +205,10 @@ def test_qkv_causal_conv1d_silu_contract(
     widths: tuple[int, int, int],
     channel_chunk_size: int,
     full_contract: bool,
+    page_channels: int | None,
 ) -> None:
-    """Cover every geometry numerically and the invariant output/trace contract once."""
-    host, device_inputs = qkv_device_inputs(device, widths=widths)
+    """Cover every geometry and history layout numerically and the invariant output/trace contract once."""
+    host, device_inputs = qkv_device_inputs(device, widths=widths, page_channels=page_channels)
     inputs, history, taps = host
     input_tt, history_tt, taps_tt = device_inputs
     expected = qkv_reference(inputs, history, taps, widths)
@@ -179,6 +224,7 @@ def test_qkv_causal_conv1d_silu_contract(
                 widths=widths,
                 channel_chunk_size=channel_chunk_size,
                 actual_start=zero_actual_start,
+                page_channels=page_channels,
             )
 
     outputs = run()
@@ -351,42 +397,6 @@ def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults
         )
 
 
-@pytest.mark.parametrize(
-    ("widths", "channel_chunk_size"),
-    [
-        # Two channel tiles per block: one destination group, eight diagonal tiles in two FP32 groups.
-        pytest.param((128, 128, 128), 64, id="kimi-k3-block"),
-        # Twelve channel tiles per block: three FP32 groups of four, against two BFLOAT16 groups of six.
-        pytest.param((128, 128, 128), 384, id="wide-block"),
-    ],
-)
-def test_qkv_causal_conv1d_silu_fp32_accumulation(
-    zero_actual_start, device: ttnn.Device, widths: tuple[int, int, int], channel_chunk_size: int
-) -> None:
-    """FP32 destination accumulation halves the tiles per destination acquire and still matches the reference."""
-    (inputs, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
-        device, sequence=64, widths=widths, seed=819
-    )
-    fp32_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
-    outputs = _run(
-        input_tt,
-        history_tt,
-        taps_tt,
-        widths=widths,
-        channel_chunk_size=channel_chunk_size,
-        compute_kernel_config=fp32_config,
-        actual_start=zero_actual_start,
-    )
-    for name, golden, output in zip(("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs):
-        assert_accurate(golden, ttnn.to_torch(output), name=f"fp32 {name}", pcc_threshold=0.999, nrmse_threshold=0.008)
-
-
 def test_qkv_causal_conv1d_silu_rejects_approximate_math(
     zero_actual_start, device: ttnn.Device, expect_error: Callable
 ) -> None:
@@ -468,6 +478,7 @@ def test_qkv_causal_conv1d_silu_production_performance(
         outputs,
         measured_ns=duration_ns,
         math_fidelity=ttnn.MathFidelity.HiFi4,
+        page_channels=None,
     )
     logger.info(
         f"QKV causal Conv1D plus SiLU {case.case_id}: measured_ns={duration_ns:.0f}, "
@@ -493,7 +504,10 @@ _K3_ROWS = 640
 _K3_WIDTHS = (3072, 3072, 3072)
 _K3_TRAILING_COLUMNS = 128 + 3072 + 32
 _K3_CHANNEL_CHUNK_SIZE = 64
-_K3_EXPECTED_DURATION_NS = 54_100
+# P150b median under FP32 DST (70,516 ns), scaled by the BF16-DST CI/P150b ratio (54,100 / 51,534).
+_K3_EXPECTED_DURATION_NS = 74_000
+# Kimi-K3's channel-paged convolution tail: half a 128-channel head per page.
+_K3_PAGE_CHANNELS = 64
 
 
 @pytest.mark.requires_host_iommu
@@ -503,7 +517,9 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for QKV causal Conv1D plus SiLU performance checks")
 
-    (inputs, history, taps), (_, history_tt, taps_tt) = qkv_device_inputs(device, sequence=_K3_ROWS, widths=_K3_WIDTHS)
+    (inputs, history, taps), (_, history_tt, taps_tt) = qkv_device_inputs(
+        device, sequence=_K3_ROWS, widths=_K3_WIDTHS, page_channels=_K3_PAGE_CHANNELS
+    )
     projected = torch.cat((inputs, torch.randn(1, _K3_ROWS, _K3_TRAILING_COLUMNS, dtype=inputs.dtype)), dim=-1)
     projected_tt = qkv_to_device(projected, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     exchange_core = ttnn._ttnn.operations.experimental.kda.qkv_causal_conv1d_silu_exchange_core(
@@ -521,6 +537,8 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
         for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
     ]
 
+    compute_kernel_config = _production_compute_config(device)
+
     def run() -> tuple[ttnn.Tensor, ...]:
         return ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             projected_tt,
@@ -528,10 +546,12 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
             *taps_tt,
             *_K3_WIDTHS,
             program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=_K3_CHANNEL_CHUNK_SIZE),
+            compute_kernel_config=compute_kernel_config,
             actual_start=zero_actual_start,
             exchange_buffer=exchange_buffer,
             exchange_semaphores=exchange_semaphores,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            page_channels=_K3_PAGE_CHANNELS,
         )
 
     # Warm the program cache so the profiled call measures the cached program.
@@ -551,7 +571,11 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
         assert_accurate(
             golden, ttnn.to_torch(output), name=f"Kimi-K3 {name}", pcc_threshold=0.999, nrmse_threshold=0.008
         )
-    assert_bit_identical(inputs[:, -3:, :], ttnn.to_torch(carry), name="Kimi-K3 replacement carry")
+    assert_bit_identical(
+        inputs[:, -3:, :],
+        decode_tail(ttnn.to_torch(carry), _K3_PAGE_CHANNELS),
+        name="Kimi-K3 replacement carry",
+    )
     logger.info(f"QKV causal Conv1D plus SiLU kimi-k3: measured_ns={duration_ns:.0f}, runtime_id={runtime_id}")
     lower = _K3_EXPECTED_DURATION_NS * (1 - _PRODUCTION_PERF_MARGIN)
     upper = _K3_EXPECTED_DURATION_NS * (1 + _PRODUCTION_PERF_MARGIN)
@@ -571,6 +595,28 @@ def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(
     assert device.num_program_cache_entries() == entries + 1
     _run(input_tt, history_tt, taps_tt, widths=(64, 128, 192), channel_chunk_size=384, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
+
+
+def test_qkv_causal_conv1d_silu_program_key_includes_history_layout(
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    # Same widths, one history per layout: token-paged, channel-paged with 64 and with 32 channels per page. At W = 192
+    # the first two histories are both [1, 3, 192]: only page_channels tells their programs apart.
+    widths = (64, 64, 64)
+    layouts = (None, 64, 32)
+    cases = [
+        (qkv_device_inputs(device, widths=widths, sequence=32, seed=774, page_channels=page_channels)[1], page_channels)
+        for page_channels in layouts
+    ]
+    run = lambda case: _run(
+        *case[0], widths=widths, channel_chunk_size=192, actual_start=zero_actual_start, page_channels=case[1]
+    )
+    # The first run also compiles the ROW_MAJOR input's tilize.
+    run(cases[0])
+    entries = device.num_program_cache_entries()
+    for case in cases[1:] + cases:
+        run(case)
+    assert device.num_program_cache_entries() == entries + 2
 
 
 def test_qkv_causal_conv1d_silu_program_key_includes_channel_chunk_size(
@@ -633,7 +679,7 @@ def test_qkv_causal_conv1d_silu_rejects_channel_chunk_size_over_l1(
     [
         ("host_input", "allocated device tensor"),
         ("batch", r"input must be \[1,T,W\]"),
-        ("history_shape", r"history must be \[1,3,Q\+K\+V\]"),
+        ("history_shape", r"history must be Shape\(\[1, 3, 384\]\) .* got Shape\(\[1, 2, 384\]\)"),
         ("tap_last_dimension", r"tap2 last dimension must equal Q\+K\+V"),
         ("tap_volume", "tap2 logical volume must equal"),
         ("history_layout", "history must use ROW_MAJOR layout, got Layout::TILE"),
@@ -699,6 +745,129 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
         )
 
 
+def _cancelling_tap_inputs(
+    sequence: int, widths: tuple[int, int, int], seed: int
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]]:
+    """Massive activations (|x| 32-96, as real projected q/k/v channels) under taps whose sum nearly cancels.
+
+    Taps 0-2 share a sign and tap 3 cancels them to within ``delta`` (|delta| <= 0.02 of the tap sum in [0.15, 0.45)),
+    so the partial sums are about S/2 with S = sum_j |x_j w_j|, while the pre-activation is about |x| delta ~ 1. Rows
+    vary by about 1 % so neighbouring outputs differ. All values are bf16, so the reference products are exact.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    channels = sum(widths)
+    rows = 3 + sequence
+    magnitude = 32 + 64 * torch.rand(channels, generator=generator)
+    sign = torch.where(torch.rand(channels, generator=generator) < 0.5, -1.0, 1.0)
+    window = (sign * magnitude * (1 + 0.01 * torch.randn(rows, channels, generator=generator))).bfloat16()
+    same_sign = (0.05 + 0.1 * torch.rand(3, channels, generator=generator)).bfloat16().float()
+    delta = 0.02 * (2 * torch.rand(channels, generator=generator) - 1)
+    tap_sign = torch.where(torch.rand(channels, generator=generator) < 0.5, -1.0, 1.0)
+    taps = [(tap_sign * same_sign[j]).bfloat16() for j in range(3)]
+    taps.append((tap_sign * (delta - same_sign.sum(0))).bfloat16())
+    window = window[None]
+    return window[:, 3:].contiguous(), window[:, :3].contiguous(), tuple(tap[None, None] for tap in taps)
+
+
+@pytest.mark.parametrize(
+    ("widths", "channel_chunk_size"),
+    [
+        # Two channel tiles per block: one destination group, eight diagonal tiles in two FP32 groups.
+        pytest.param((128, 128, 128), 64, id="kimi-k3-block"),
+        # Twelve channel tiles per block: three FP32 groups of four, against two BFLOAT16 groups of six.
+        pytest.param((128, 128, 128), 384, id="wide-block"),
+        pytest.param(_DEFAULT_WIDTHS, 768, id="default-widths"),
+    ],
+)
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32-dst", "bf16-dst"])
+def test_qkv_causal_conv1d_silu_fp32_accumulation(
+    zero_actual_start,
+    device: ttnn.Device,
+    widths: tuple[int, int, int],
+    channel_chunk_size: int,
+    fp32_dest_acc_en: bool,
+) -> None:
+    """With fp32_dest_acc_en the four taps accumulate in FP32 destination registers, not rounded to BF16 per tap.
+
+    Contract: per element, |out - silu(sum x_j w_j)| <= 2^-8 |out| + 2^-12 S with S = sum_j |x_j w_j|. The relative
+    term covers the BF16 output rounding and the SiLU's relative error. The absolute term covers the accumulation:
+    FP32 roundings of partial sums of magnitude <= S cost about 2^-24 S, while one rounding of a ~S/2 partial sum
+    to a 10-bit mantissa (TF32) already costs about 2^-12 S, so the bound rejects accumulators of TF32 precision or
+    worse. BF16 destination registers must breach it on these inputs (the case is sensitive to the accumulation).
+    """
+    inputs, history, taps = _cancelling_tap_inputs(_SEQUENCE, widths, seed=519)
+    window = torch.cat((history, inputs), dim=1).double()
+    terms = torch.stack([window[:, j : j + _SEQUENCE] * taps[j].double() for j in range(4)])
+    expected = F.silu(terms.sum(0))
+    bound = 2.0**-8 * expected.abs() + 2.0**-12 * terms.abs().sum(0)
+    assert float(terms[:3].sum(0).abs().median()) > 8 * float(terms.sum(0).abs().median()), "taps must cancel"
+
+    # The BF16 arm runs the op default, which is BF16 DST.
+    config = _production_compute_config(device) if fp32_dest_acc_en else None
+    outputs = _run(
+        qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        compute_kernel_config=config,
+        actual_start=zero_actual_start,
+    )
+    actual = torch.cat([ttnn.to_torch(output) for output in outputs], dim=-1).double()
+    ratio = (actual - expected).abs() / bound
+    worst = int(ratio.argmax())
+    logger.info(
+        f"cancelling taps (fp32_dest_acc_en={fp32_dest_acc_en}): peak error/bound {float(ratio.max()):.3f}, "
+        f"median {float(ratio.median()):.3f}, elements over bound {int((ratio > 1).sum())}/{ratio.numel()}, "
+        f"peak abs error {float((actual - expected).abs().max()):.4e}"
+    )
+    if not fp32_dest_acc_en:
+        assert float(ratio.max()) > 1.0, "BF16 DST must breach the FP32 DST bound on cancelling taps"
+        return
+    assert float(ratio.max()) <= 1.0, (
+        f"element {worst}: |out - ref| = {float((actual - expected).flatten()[worst].abs()):.4e} exceeds "
+        f"2^-8 |ref| + 2^-12 sum|terms| = {float(bound.flatten()[worst]):.4e} "
+        f"({int((ratio > 1).sum())} of {ratio.numel()} elements over)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("history_page_channels", "page_channels", "message"),
+    [
+        # A channel-paged history declared token-paged, and the reverse.
+        (64, None, r"history must be Shape\(\[1, 3, 384\]\) for Q\+K\+V = 384 and page_channels = None"),
+        (None, 64, r"history must be Shape\(\[1, 6, 192\]\) for Q\+K\+V = 384 and page_channels = 64"),
+        # Channel-paged with another page size than declared.
+        (32, 64, r"history must be Shape\(\[1, 6, 192\]\) .* got Shape\(\[1, 12, 96\]\)"),
+        (None, 0, r"page_channels must be a positive multiple of 32 dividing Q\+K\+V = 384, got 0"),
+        (None, 48, r"page_channels must be a positive multiple of 32 dividing Q\+K\+V = 384, got 48"),
+        (None, 256, r"page_channels must be a positive multiple of 32 dividing Q\+K\+V = 384, got 256"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_rejects_history_not_matching_page_channels(
+    zero_actual_start,
+    device: ttnn.Device,
+    expect_error: Callable,
+    history_page_channels: int | None,
+    page_channels: int | None,
+    message: str,
+) -> None:
+    widths = (128, 128, 128)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(
+        device, widths=widths, sequence=32, page_channels=history_page_channels
+    )
+    with expect_error(RuntimeError, message):
+        _run(
+            input_tt,
+            history_tt,
+            taps_tt,
+            widths=widths,
+            channel_chunk_size=384,
+            actual_start=zero_actual_start,
+            page_channels=page_channels,
+        )
+
+
 @pytest.mark.parametrize(
     ("widths", "message"),
     [
@@ -740,11 +909,14 @@ def test_qkv_causal_conv1d_silu_rejects_sharded_output(
 
 
 @pytest.mark.parametrize(
-    ("widths", "channel_chunk_size", "column_offset", "trailing_columns", "sequence"),
+    ("widths", "channel_chunk_size", "column_offset", "trailing_columns", "sequence", "page_channels"),
     [
-        pytest.param((512, 512, 512), 64, 0, 0, 64, id="exact-width"),
-        pytest.param((256, 128, 128), 128, 32, 96, 96, id="column-window"),
-        pytest.param((128, 128, 128), 384, 64, 32, 32, id="one-tile-row"),
+        pytest.param((512, 512, 512), 64, 0, 0, 64, None, id="exact-width"),
+        pytest.param((256, 128, 128), 128, 32, 96, 96, None, id="column-window"),
+        pytest.param((128, 128, 128), 384, 64, 32, 32, None, id="one-tile-row"),
+        # The replacement carry is written back in history's channel-paged layout.
+        pytest.param((256, 128, 128), 128, 32, 96, 96, 64, id="column-window-channel-paged-64"),
+        pytest.param((64, 64, 128), 256, 0, 0, 32, 32, id="one-tile-row-channel-paged-32"),
     ],
 )
 def test_qkv_causal_conv1d_silu_tiled_input(
@@ -755,10 +927,11 @@ def test_qkv_causal_conv1d_silu_tiled_input(
     column_offset: int,
     trailing_columns: int,
     sequence: int,
+    page_channels: int | None,
 ) -> None:
     """A TILE input read in place from a wider tensor matches the reference; the exchanging variant, on a single rank,
     also returns the replacement carry."""
-    host, device_inputs = qkv_device_inputs(device, widths=widths, sequence=sequence)
+    host, device_inputs = qkv_device_inputs(device, widths=widths, sequence=sequence, page_channels=page_channels)
     inputs, history, taps = host
     _, history_tt, taps_tt = device_inputs
     rows = inputs.shape[1]
@@ -785,6 +958,7 @@ def test_qkv_causal_conv1d_silu_tiled_input(
         actual_start=zero_actual_start,
         predecessor_carry=history_tt,
         input_column_offset=column_offset,
+        page_channels=page_channels,
     )
     for name, golden, output in zip(("q", "k", "v"), expected, (q, k, v), strict=True):
         assert_accurate(golden, ttnn.to_torch(output), name=f"tiled {name}", pcc_threshold=0.999, nrmse_threshold=0.008)
@@ -808,6 +982,7 @@ def test_qkv_causal_conv1d_silu_tiled_input(
             ttnn.create_global_semaphore(device, exchange_cores, 0) for _ in range(KDA_HISTORY_EXCHANGE_SEMAPHORES)
         ],
         input_column_offset=column_offset,
+        page_channels=page_channels,
     )
     for name, golden, output in zip(("q", "k", "v"), expected, (q, k, v), strict=True):
         assert_accurate(
@@ -815,4 +990,4 @@ def test_qkv_causal_conv1d_silu_tiled_input(
         )
     # One rank: the carry is the last three tokens.
     last_rows = inputs[:, -3:, :]
-    assert_bit_identical(last_rows, ttnn.to_torch(carry), name="replacement carry")
+    assert_bit_identical(last_rows, decode_tail(ttnn.to_torch(carry), page_channels), name="replacement carry")

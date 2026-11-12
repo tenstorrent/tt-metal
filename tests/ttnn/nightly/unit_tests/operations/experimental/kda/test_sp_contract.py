@@ -12,7 +12,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import encode_tail, make_actual_start
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     device_protocol,
     host_protocol,
@@ -275,16 +275,31 @@ def test_sp_rectangular_recurrent_reset(mesh_device, axis, key_dim, value_dim):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("axis", [0, 1])
-def test_sp_convolution_rebinds_histories(mesh_device, axis):
-    widths = (32, 32, 32)
+@pytest.mark.parametrize(
+    ("widths", "page_channels", "channel_chunk_size"),
+    [
+        pytest.param((32, 32, 32), None, 96, id="token-paged"),
+        # 3-tile blocks over 2-tile pages: the predecessor read starts and ends inside a page.
+        pytest.param((128, 128, 128), 64, 96, id="channel-paged-64"),
+        pytest.param((64, 64, 128), 32, 128, id="channel-paged-32"),
+    ],
+)
+def test_sp_convolution_rebinds_histories(mesh_device, axis, widths, page_channels, channel_chunk_size):
     previous = []
     cache_entries = None
     for actual_start_value in (0, 32, 64, 96, 32):
         (host, history, taps), (input_tt, history_tt, taps_tt) = qkv_device_inputs(
-            mesh_device, widths=widths, sequence=64, history_rows=3, seed=2011 + actual_start_value
+            mesh_device,
+            widths=widths,
+            sequence=64,
+            history_rows=3,
+            seed=2011 + actual_start_value,
+            page_channels=page_channels,
         )
         predecessor = history + 2
-        predecessor_tt = to_device(predecessor, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        predecessor_tt = to_device(
+            encode_tail(predecessor, page_channels), mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         # Match the BF16 payload used by the native operation exactly.
         predecessor = predecessor.bfloat16()
         actual_start = make_actual_start(mesh_device, actual_start_value)
@@ -295,10 +310,11 @@ def test_sp_convolution_rebinds_histories(mesh_device, axis):
             history_tt,
             *taps_tt,
             *widths,
-            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=96),
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
             actual_start=actual_start,
             sequence_parallel_axis=axis,
             predecessor_carry=predecessor_tt,
+            page_channels=page_channels,
         )
         ttnn.synchronize_device(mesh_device)
         if cache_entries is None:
@@ -349,8 +365,6 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     head_only = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=None)
-    with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.reduce_affine_transforms(summaries, 1, actual_start=None, local_rows=128)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.affine_exclusive_scan(summaries, seed, 1, local_rows=128, tail_entry_states=seed)
     # A sequence-parallel mesh can split at runtime, so the scan needs the tail slot and its seed.

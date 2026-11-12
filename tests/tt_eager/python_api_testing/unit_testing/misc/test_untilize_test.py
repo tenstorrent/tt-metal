@@ -33,13 +33,7 @@ def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
 
     inp = torch.rand(*shape).bfloat16()
 
-    a = ttnn.Tensor(
-        inp.flatten().tolist(),
-        shape,
-        dtype,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp.reshape(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
@@ -118,13 +112,7 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
     else:
         inp = torch.rand(*shape).bfloat16()
 
-    a = ttnn.Tensor(
-        inp.flatten().tolist(),
-        shape,
-        dtype,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp.reshape(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 

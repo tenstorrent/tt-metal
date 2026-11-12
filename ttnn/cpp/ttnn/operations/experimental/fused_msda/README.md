@@ -145,9 +145,9 @@ nothing. The two forms build separate programs; pass at most one.
 
 `(B, Q, H*D)` ROW_MAJOR bf16 — chosen, not accidental. Every consumer in this
 repo (BEVFormer, UniAD, VADv2) wants `(bs, num_queries, embed_dims)` immediately
-after MSDA. The writer emits each head's `D` values as a `D*2`-byte NoC write at
-byte offset `h * D * 2` inside query `(b, q)`'s output page, so the head
-concatenation costs nothing and no post-op `reshape`/`permute` is needed.
+after MSDA. The writer places each head's `D` values at byte offset `h * D * 2`
+inside query `(b, q)`'s output page, so the head concatenation costs nothing and
+no post-op `reshape`/`permute` is needed.
 `(B, Q, H, D)` is deliberately **not** offered; it would be a strictly worse
 default and is one `ttnn.reshape` away for anyone who wants it.
 
@@ -319,7 +319,6 @@ reader pops a point's corner tile, or a tiled block's corner tiles, only after
 | `c_2` `loc_scratch` | reader-only arena for sampling locations (V1) / offsets (V2) | 32 (packed) or 32*L*P | `align(loc_stick)` |
 | `c_3` `input_tile` | reader → compute, the `V_corner` values: tiles, or a row-major `[NW \| NE \| SW \| SE]` block per point when `D % 32 == 0` | `8 * n_d_tiles` | 2048 |
 | `c_4` `scalar_tile` | compute → compute, `attn * bilinear_coeff` per row | 8 | 2048 |
-| `c_5` `output_scratch` | writer-only assembly of one head's `D`-stick | 1 | `align(D*2)` |
 | `c_6` `ref_scratch` | **V2 only** — reference points arena, in the tensor's dtype. float32 builds a separate program, which keeps the point float32 through `geom_x` / `geom_y`, or `ref_tile` and its exact three-way bf16 split | 32*R | `align(2*sizeof(ref))` (raw stick 4 B bf16, 8 B fp32) |
 | `c_7` `geom_x`, `c_8` `geom_y` | reader → compute, the primary operand (location, or reference point for V2) in column 0 and, on V2, the raw sampling offset in column 16 (per-point geometry) | 4 | 2048, or 4096 when the reference point is float32 |
 | `c_11` `attn_tile` | reader → compute, the attention weight (per-point geometry) | 4 | 2048 |
@@ -543,9 +542,15 @@ float32 when `reference_points` are float32.
   first, so the accumulator lives in L1 on the owning core for the whole
   reduction. Nothing is written back to DRAM per sample.
 
-**Writer** (shared). Waits on `n_d_tiles` accumulated tiles, gathers each query
-row's `D` values across them into a stick, and writes it at
-`page_id = b*Q + q`, `offset_bytes = h*D*2`. No SCA/BEV scatter logic, ever.
+**Writer** (shared). Waits on `n_d_tiles` accumulated tiles and NoC-writes each
+query row straight from them: every 16-value face half (32 B) of d-tile `k` goes
+to `page_id = b*Q + q`, `offset_bytes = h*D*2 + k*64 (+32 for the high half)`.
+The last d-tile has no high half when `D % 32 == 16`. No RISC copies the block,
+so the writes read the CB pages in place: the writer flushes them
+(`async_writes_flushed`) before `pop_front`, and one `async_write_barrier` at
+kernel end makes them complete. 32 B is a multiple of the NoC write alignment of
+L1 and DRAM on every architecture (static_asserted in the writer). No SCA/BEV
+scatter logic, ever.
 With the split gather it first gathers rows `[SPLIT_ROW, 32)` of every point of
 the block. It always receives the `value` accessor and address, and reads them
 only then.
@@ -584,7 +589,7 @@ Wormhole keeps the reader-only gather; the split has not been measured there.
 | dtype | `bfloat16` (all tensors); `reference_points` may be `float32` | tile format of the FPU path; a float32 reference point keeps all 24 significant bits into `px` (whole into the SFPU per point, split exactly into three bf16 tiles for the FPU when tiled), where a bf16 point in [0, 1] would move in steps of up to 0.8 px at `W = 200` |
 | layout | `ROW_MAJOR` (all tensors) | reader/writer address by stick |
 | memory | `INTERLEAVED` only | `TensorAccessor` page indexing |
-| `D` | positive multiple of 16, and `D*2` a multiple of the device's buffer alignment when `H > 1` | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves, and the writer's per-head byte offset `h*D*2` must be a legal NoC destination. `D = 16` gives a 32-B stride, which is fine where the alignment is 32 B but is rejected where it is 64 B; `D = 32` and up are unconstrained. Validated in the program factory, not assumed. |
+| `D` | positive multiple of 16; with packed `value` and `H > 1`, `D*2` a multiple of `value`'s buffer alignment | a `D`-stick is scattered across `ceil(D/32)` tiles in 16-value face halves. The writer's per-head output offset `h*D*2` is a multiple of 32 B, which every architecture's NoC write alignment divides (static_asserted in the writer), so any `H` works for the output. Packed `value` reads each head at `h*D*2` within one page, which must be a legal NoC read address: on Blackhole, whose DRAM alignment is 64 B, every `D % 32 == 16` (16, 48, ...) is rejected in DRAM. Validated in the program factory, not assumed. |
 | `L` | `1 <= L <= 8` | per-level geometry is held in a fixed reader array |
 | `H_l`, `W_l` | `<= 256` | the largest extent the op is tested at. The corner word's index field holds extents up to 361, and the tiled geometry falls back to the per-point path for an extent that is not bf16-exact. Rejected in `derive_shapes`, pinned by `test_fused_msda_rejects_spatial_shape_beyond_extent_limit` |
 | `Q`, `P`, `H`, `B` | any positive value | `Q % 32 != 0` handled by `v_rows` |

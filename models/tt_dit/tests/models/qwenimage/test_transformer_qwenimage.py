@@ -13,6 +13,8 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache, tensor
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.dbcache import DBCacheConfig
+from models.tt_dit.utils.dbcache_runner import DBCache
 from models.tt_dit.utils.padding import PaddingConfig, torch_pad
 from models.tt_dit.utils.test import line_params_req_exact_devices
 from models.tt_dit.utils.tracing import Tracer
@@ -297,3 +299,93 @@ def test_transformer_edit(
     assert_quality(
         torch_output[:, :noisy_seq_len], tt_output_torch[:, :noisy_seq_len], pcc=pcc, relative_rmse=relative_rmse
     )
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links"),
+    [
+        pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
+        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "traced",
+    [
+        pytest.param(False, id="not_traced"),
+        pytest.param(True, id="traced"),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{**line_params_req_exact_devices, "trace_region_size": 60000000}],
+    ids=["line"],
+    indirect=True,
+)
+def test_transformer_dbcache(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    traced: bool,
+) -> None:
+    """A computed DBCache step matches ``forward``, and repeating its input skips the next one."""
+    torch.manual_seed(0)
+    latents_height, latents_width, prompt_seq_len = 128, 128, 512
+    in_channels, joint_attention_dim = 64, 3584
+
+    checkpoint = QwenImageCheckpoint("Qwen/Qwen-Image")
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
+    )
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    tt_model = checkpoint.build(ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=False)
+
+    spatial_seq_len = (latents_height // checkpoint.patch_size) * (latents_width // checkpoint.patch_size)
+    spatial_rope, prompt_rope = checkpoint.rope_tables(
+        latents_height=latents_height,
+        latents_width=latents_width,
+        image_latents_sizes=[],
+        prompt_sequence_length=prompt_seq_len,
+        padded_spatial_sequence_length=spatial_seq_len,
+        device=mesh_device,
+        sp_axis=sp_axis,
+    )
+    inputs = {
+        "spatial": tensor.from_torch(
+            torch.randn([1, spatial_seq_len, in_channels]), device=mesh_device, mesh_axes=[None, sp_axis, None]
+        ),
+        "prompt": tensor.from_torch(torch.randn([1, prompt_seq_len, joint_attention_dim]), device=mesh_device),
+        "timestep": tensor.from_torch(torch.full([1, 1], fill_value=500.0), dtype=ttnn.float32, device=mesh_device),
+        "spatial_rope": spatial_rope,
+        "prompt_rope": prompt_rope,
+        "spatial_sequence_length": spatial_seq_len,
+    }
+
+    def to_torch(x: ttnn.Tensor) -> torch.Tensor:
+        return tensor.to_torch(x, mesh_axes=[None, sp_axis, None])
+
+    expected = to_torch(tt_model.forward(**inputs))
+
+    dbcache = DBCache([tt_model], DBCacheConfig(residual_diff_threshold=1.0, max_warmup_steps=1), devices=[mesh_device])
+
+    def run(*, traced: bool) -> list[torch.Tensor]:
+        dbcache.reset()
+        outputs = []
+        for _ in range(2):
+            dbcache.start(0, **inputs, traced=traced)
+            outputs.append(to_torch(dbcache.finish()[0]))
+        return outputs
+
+    if traced:
+        # Each geometry runs untraced first.
+        run(traced=False)
+    computed, cached = run(traced=traced)
+
+    assert dbcache.cached_steps == [1]
+    assert dbcache.diffs == {1: 0.0}
+    assert torch.equal(computed, expected)
+    assert_quality(computed, cached, pcc=0.9999)
