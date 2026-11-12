@@ -745,6 +745,13 @@ class GLM53StackForCausalLM:
             chunk = torch.zeros(B, max(lens), dtype=torch.int64)
             for i in range(B):
                 chunk[i, : lens[i]] = tokens[i, gen_starts[i] : ends[i]].to(torch.int64)
+        # Stage 17: a chunk of generator slot 0 (the slot that can speculate) also fills the MTP layer's cache (the
+        # TP prefill's in-trace fill, StackBackend.arm_mtp_prefill) from its history; a chunk's last row (the next
+        # chunk's first token unknown here) and the prompt's last one (the seed below) are left to the step
+        armed = False
+        if self.spec and 0 in gslots and callable(getattr(self.gen.backend, "arm_mtp_prefill", None)):
+            i0 = gslots.index(0)
+            armed = bool(self.gen.backend.arm_mtp_prefill(0, tokens[i0, : ends[i0]].to(torch.int64)))
         try:
             out = self.gen.prefill_forward(
                 chunk,
@@ -760,6 +767,9 @@ class GLM53StackForCausalLM:
             if self.prefix is not None:
                 self.prefix.abort()
             raise
+        finally:
+            if armed:
+                self.gen.backend.disarm_mtp_prefill()
         if self.prefix is not None:
             self.prefix.commit()
         if self.spec:

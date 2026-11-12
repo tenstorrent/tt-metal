@@ -2053,6 +2053,7 @@ def test_served_spec_lone_user_flow():
                                 empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
     stream, pos = [int(out[0, 0])], 100  # pos: where the last committed token sits (the next input's position)
     assert ad.spec_stats["seeds"] == 1 and backend.spec.counters["enters"] == backend.spec.counters["leaves"] == 1
+    assert [sp[:2] for sp in backend.mtp_spans] == [(0, 99)] and backend.mtp_spans[0][2] == prompt[1:]  # the MTP fill
     ids = ad.decode_forward(torch.tensor([[stream[-1]], [0], [0], [0]]), torch.tensor([pos, -1, -1, -1]),
                             page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
     stream.append(int(ids[0, 0]))
@@ -2078,6 +2079,7 @@ def test_served_spec_lone_user_flow():
     out2, _ = ad.prefill_forward(_history([p2]), page_table=table2[1:2], kv_cache=kv, prompt_lens=[80], start_pos=[0],
                                  empty_slots=[1], sampling_params=_greedy(1))  # fmt: skip
     assert getattr(gen._binding(kv), "spec", None) is None and backend.spec.counters["leaves"] == 2
+    assert len(backend.mtp_spans) == 1  # (slot 1's prefill: not armed -- only slot 0 can speculate)
     # the plugin still verifies the first request's outstanding drafts beside the new row: an ordinary decode answers
     tok2 = int(out2[0, 0])
     ids, (committed, counts) = _verify(ad, kv, K, {0: (stream[-1], pos, drafts), 1: (tok2, 80, [])}, table2)
