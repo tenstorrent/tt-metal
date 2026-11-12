@@ -97,9 +97,9 @@ def test_kvm_migrate_posts_one_layer_run(kvm_driver):
     "code, reply",
     [(200, {"status": "FAILED", "reason": "migration_timeout"}), (500, {"error": "boom"}), (200, {})],
 )
-def test_kvm_migrate_raises_unless_successful(kvm_driver, code, reply):
+def test_kvm_migrate_raises_unless_successful(kvm_driver, code, reply, expect_error):
     driver, _, server = kvm_driver([(code, reply)])
-    with pytest.raises(RuntimeError, match="KVM /migrate"):
+    with expect_error(RuntimeError, "KVM /migrate"):
         driver._post_kvm_migrate(
             command_id=1, migration_id=1, src_slot=0, dst_slot=1, layer_begin=0, layer_end=1, pos_begin=0, pos_end=1
         )
@@ -114,10 +114,10 @@ def test_kvm_health_wait_retries_until_200(kvm_driver, monkeypatch):
     assert [p for p, _ in seen] == ["/health"] * 3
 
 
-def test_kvm_health_wait_gives_up(kvm_driver, monkeypatch):
+def test_kvm_health_wait_gives_up(kvm_driver, monkeypatch, expect_error):
     monkeypatch.setattr("models.demos.common.prefill.runners.migration_driver.time.sleep", lambda s: None)
     driver, _, server = kvm_driver([], health=[503] * 50, PREFILL_MIGRATION_KVM_HEALTH_WAIT_S="0")
-    with pytest.raises(RuntimeError, match="/health not 200"):
+    with expect_error(RuntimeError, "/health not 200"):
         driver._wait_kvm_healthy()
     server.shutdown()
 

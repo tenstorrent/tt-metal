@@ -51,7 +51,7 @@ def test_a_differing_or_missing_chunk_fails(tmp_path, dst):
     assert _compare(tmp_path, src, dst) == 1
 
 
-def test_two_captures_of_one_chunk_that_disagree_are_an_error(tmp_path):
+def test_two_captures_of_one_chunk_that_disagree_are_an_error(tmp_path, expect_error):
     src = [{"00/3/0": "CORRUPT"}, {"00/3/0": "a"}]
-    with pytest.raises(SystemExit, match="00/3/0"):
+    with expect_error(SystemExit, "00/3/0"):
         _compare(tmp_path, src, [{"00/3/0": "a"}])
