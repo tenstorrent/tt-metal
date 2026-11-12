@@ -4,6 +4,7 @@
 
 
 import os
+import re
 import shutil
 from hashlib import sha256
 from pathlib import Path
@@ -871,6 +872,26 @@ class StimuliConfig:
         )
 
     def collect_results(self, location="0,0"):
+        # LLK_DUMP_RESULT_DIR: the result bytes as the packer wrote them, one file per test id, for a bit-exact comparison of two builds
+        if os.environ.get("LLK_DUMP_RESULT_DIR"):
+            test_id = os.environ.get("PYTEST_CURRENT_TEST", "test").rsplit(" (", 1)[0]
+            name = (
+                re.sub(r"[^A-Za-z0-9_.-]+", "_", test_id)[:120]
+                + "_"
+                + sha256(test_id.encode()).hexdigest()[:12]
+            )
+            with open(
+                os.path.join(os.environ["LLK_DUMP_RESULT_DIR"], name + ".bin"), "wb"
+            ) as f:
+                f.write(
+                    self._collect_raw(
+                        "Res",
+                        self.buf_res_addr,
+                        self.stimuli_res_format,
+                        self.tile_count_res,
+                        location,
+                    )
+                )
         return self._collect_operand_tiles(
             "Res",
             self.buf_res_addr,

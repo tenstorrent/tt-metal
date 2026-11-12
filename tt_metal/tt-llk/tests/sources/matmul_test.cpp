@@ -414,7 +414,7 @@ constexpr bool matmul_half_end_fold_k = false;
 #ifdef MATMUL_PRODUCTION
 // the compute API's fidelity for the CB formats of a call that names none (matmul_fe_phase_format), the test's CBs being in0, in1
 // and the output; run-time formats keep the request
-#if !defined(RUNTIME_FORMATS)
+#if !defined(RUNTIME_FORMATS) && !defined(MATMUL_PROD_NO_ELIDE)
 constexpr bool matmul_prod_no_32bit_cb = !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_A_IN)) &&
                                          !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_B_IN)) &&
                                          !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));

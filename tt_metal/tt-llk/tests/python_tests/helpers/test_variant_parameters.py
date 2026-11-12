@@ -228,12 +228,19 @@ class MATMUL_PRODUCTION(TemplateParameter):
 
     def __init__(self, prod_dir: int = 0):
         self.prod_dir = prod_dir
+        # LLK_MATMUL_PROD_NO_ELIDE=1: the requested fidelity, for a bit-exact comparison against the phase elision
+        self.no_elide = os.environ.get("LLK_MATMUL_PROD_NO_ELIDE") == "1"
 
     def __repr__(self) -> str:
-        return f"MATMUL_PRODUCTION({self.prod_dir})"
+        return (
+            f"MATMUL_PRODUCTION({self.prod_dir}{', no_elide' if self.no_elide else ''})"
+        )
 
     def convert_to_cpp(self) -> str:
-        return f"#define MATMUL_PRODUCTION\nconstexpr std::uint32_t MATMUL_PROD_DIR = {self.prod_dir};"
+        return (
+            f"#define MATMUL_PRODUCTION\nconstexpr std::uint32_t MATMUL_PROD_DIR = {self.prod_dir};"
+            + ("\n#define MATMUL_PROD_NO_ELIDE" if self.no_elide else "")
+        )
 
     @staticmethod
     def production_dir(
