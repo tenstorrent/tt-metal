@@ -113,7 +113,7 @@ NpHaloScatterSetup setup_interior_scatter(
         return setup;
     }
 
-    Buffer* padded_buf = tensor_args.padded_output.value().buffer();
+    const auto* padded_buf = &tensor_args.padded_output.value().mesh_buffer();
     const uint32_t Hd_i = geom.input_halo_dim_size;      // interior H (input is unpadded in repack mode)
     const uint32_t Wd_i = geom.num_sticks_per_halo_dim;  // interior W
     const uint32_t Hp_i = Hd_i + 2 * op.np_padding_h;
@@ -349,6 +349,7 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
         // num_buffers per channel: 4 (np_num_buffers) is the measured 2x4 sweet spot (+~3pp). The mux's map goes in
         // program-local L1 (placed below, once the mux cores are known); its addresses are offsets until then.
         auto mux_cfg = tt::tt_fabric::FabricMuxConfig(
+            *mesh_device,
             /*num_full_size_channels=*/static_cast<uint8_t>(num_w_workers),
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/np_num_buffers,
@@ -447,7 +448,8 @@ NpHaloWSetup setup_w_fabric(Program& program, const NpHaloWPlan& p) {
                     const auto src_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                     const auto dst_id =
                         mesh_device->get_fabric_node_id(w_dir ? w_backward_coord.value() : w_forward_coord.value());
-                    auto mux_rt = mux_cfg.get_fabric_mux_run_time_args(src_id, dst_id, w_link, program, {mux_lc});
+                    auto mux_rt =
+                        mux_cfg.get_fabric_mux_run_time_args(*mesh_device, src_id, dst_id, w_link, program, {mux_lc});
                     SetRuntimeArgs(program, mux_kernel_id, {mux_lc}, mux_rt);
                 }
                 // Termination master = worker 0 of this (link,dir) group.
@@ -1264,7 +1266,13 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         const size_t mux_buf_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
         // The mux's map goes in program-local L1 (placed below, once the mux cores are known).
         auto hmux_cfg = tt::tt_fabric::FabricMuxConfig(
-            static_cast<uint8_t>(num_h_workers), 0, np_num_buffers, 0, mux_buf_size, /*base_l1_address=*/0);
+            *mesh_device,
+            static_cast<uint8_t>(num_h_workers),
+            0,
+            np_num_buffers,
+            0,
+            mux_buf_size,
+            /*base_l1_address=*/0);
 
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/";
         std::set<CoreRange> hw_crs, hm_crs;
@@ -1363,7 +1371,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     const auto src_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                     const auto dst_id =
                         mesh_device->get_fabric_node_id(dir ? backward_coord.value() : forward_coord.value());
-                    auto mux_rt = hmux_cfg.get_fabric_mux_run_time_args(src_id, dst_id, link, program, {mux_lc});
+                    auto mux_rt =
+                        hmux_cfg.get_fabric_mux_run_time_args(*mesh_device, src_id, dst_id, link, program, {mux_lc});
                     SetRuntimeArgs(program, hmux_kernel_id, {mux_lc}, mux_rt);
                 }
                 CoreCoord term_master_vc =
@@ -1531,8 +1540,8 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
     const NpHaloParams& op,
     const NpHaloInputs& tensor_args,
     Tensor& tensor_return_value) {
-    const uint32_t input_addr = tensor_args.input_tensor.buffer()->address();
-    const uint32_t halo_buffer_addr = tensor_args.halo_buffer.buffer()->address();
+    const uint32_t input_addr = tensor_args.input_tensor.mesh_buffer().address();
+    const uint32_t halo_buffer_addr = tensor_args.halo_buffer.mesh_buffer().address();
     (void)tensor_return_value;  // output IS the halo_buffer
     const uint32_t h_sem_addr = op.h_neighbor_semaphore.address();
     const uint32_t barrier_sem_addr = op.barrier_semaphore.address();
@@ -1589,7 +1598,7 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
 
         // --- Padded-output fused interior-copy scatter kernel: refresh per-core [input, compact, padded]. ---
         if (shared_vars.np_artifacts.has_scatter && tensor_args.padded_output.has_value()) {
-            const uint32_t padded_addr = tensor_args.padded_output.value().buffer()->address();
+            const uint32_t padded_addr = tensor_args.padded_output.value().mesh_buffer().address();
             auto& sc_args_by_core = GetRuntimeArgs(program, shared_vars.np_artifacts.scatter_kernel_id);
             for (const auto& cr : shared_vars.np_artifacts.scatter_core_range.ranges()) {
                 for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
