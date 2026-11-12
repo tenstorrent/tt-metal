@@ -199,6 +199,80 @@ class MATMUL_REUSE_DIR(TemplateParameter):
         return [MATMUL_REUSE_DIR(d)] if d else []
 
 
+@dataclass(init=False, repr=False, eq=False)
+class MATMUL_PRODUCTION(TemplateParameter):
+    """matmul_test as a ttnn kernel's plain matmul_block_init / matmul_block compiles today (LLK_MATMUL_PRODUCTION=1): no unpack or math
+    opt-in of the harness, and the reuse direction the compute API resolves without formats or block keys (matmul_api_reuse_dir): 0, but
+    at LoFi with full sync mode 3, which folds to matmul_reuse_dir of in0, in1 and the block where those are constants (bmm's CBs and
+    subblock). Not a dataclass field: it adds no report column; the repr holds the direction for the variant hash.
+    """
+
+    # the templates whose defines pick unpack or math forms other than a plain matmul_block's (matmul_test.cpp also ignores them)
+    OPT_INS = frozenset(
+        (
+            "MATMUL_REUSE_DIR",
+            "MATMUL_PHASE_ELIDE",
+            "MATMUL_FORM_KEYS",
+            "MATMUL_TRUE_MAIN",
+            "MATMUL_FORCE_FORM",
+            "MATMUL_ROW_MOP",
+            "MATMUL_ROW_END_FOLD",
+            "MATMUL_K_LOOP",
+            "MATMUL_STREAM_NARROW",
+            "MATMUL_STREAM_Z",
+            "MATMUL_UNPACK_TTSYNC",
+            "MATMUL_UNPACK_TTSYNC_EXCL",
+            "MATMUL_PROD_KEYS",
+        )
+    )
+
+    def __init__(self, prod_dir: int = 0):
+        self.prod_dir = prod_dir
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PRODUCTION({self.prod_dir})"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_PRODUCTION\nconstexpr std::uint32_t MATMUL_PROD_DIR = {self.prod_dir};"
+
+    @staticmethod
+    def production_dir(
+        formats, math_fidelity, dest_sync, ct_dim, rt_dim, throttle=0
+    ) -> int:
+        """matmul_api_reuse_dir of a plain call: 0 at half sync (an Invalid output counts as Float32) and off LoFi; at LoFi full sync
+        mode 3 folds to matmul_reuse_dir (no two-row scheme), which is 0 unless in0 and in1 pair a 32-bit and a fast format.
+        """
+        if dest_sync != DestSync.Full:
+            return 0
+        return matmul_reuse_dir_for(
+            formats, math_fidelity, ct_dim, rt_dim, dest_sync, True, throttle
+        )
+
+    @staticmethod
+    def apply(templates: list, runtimes: list, formats) -> list:
+        """templates without the opt-ins, plus MATMUL_PRODUCTION with the direction of the block (CRK_TILE_DIMM)."""
+        by_name = {type(p).__name__: p for p in list(templates) + list(runtimes)}
+        dims = by_name["CRK_TILE_DIMM"]
+        d = MATMUL_PRODUCTION.production_dir(
+            formats,
+            by_name["MATH_FIDELITY"].math_fidelity,
+            by_name["DEST_SYNC"].dest_sync if "DEST_SYNC" in by_name else DestSync.Half,
+            dims.c_dimm,
+            dims.r_dimm,
+            (
+                by_name["THROTTLE_LEVEL"].throttle_level
+                if "THROTTLE_LEVEL" in by_name
+                else 0
+            ),
+        )
+        return [
+            p
+            for p in templates
+            if type(p).__name__ not in MATMUL_PRODUCTION.OPT_INS
+            and type(p).__name__ != "MATMUL_PRODUCTION"
+        ] + [MATMUL_PRODUCTION(d)]
+
+
 @dataclass
 class MATMUL_FUNC_BLOCKS(TemplateParameter):
     """Blackhole matmul functional run of several output blocks (LOOP_FACTOR of them) on the real buffers, each block packed to the next result tiles."""
