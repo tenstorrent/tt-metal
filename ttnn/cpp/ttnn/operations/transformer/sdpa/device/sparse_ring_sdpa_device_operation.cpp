@@ -418,7 +418,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         sparse_ring_fast_pbias(),
         sparse_ring_kv_pages_request(),
         sparse_ring_member_rescale(),
-        sparse_ring_dyn_extra_pass());
+        sparse_ring_dyn_extra_pass(),
+        sparse_ring_multipass_pairs());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(

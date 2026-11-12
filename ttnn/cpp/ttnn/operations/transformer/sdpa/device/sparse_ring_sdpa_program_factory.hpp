@@ -66,6 +66,15 @@ inline uint32_t sparse_ring_dyn_extra_pass() {
     return (s != nullptr && std::atoi(s) > 0) ? 1u : 0u;
 }
 
+// TT_SPARSE_RING_MULTIPASS_PAIRS=1: keep pair steps (two K/V pieces per compute step) when the plan needs several Q
+// passes. The compute kernel otherwise takes single steps there, because the pair path's text (~1.5 KB per TRISC) does
+// not fit the kernel config buffer next to the multi-pass reader; with this switch the reader is built at -Os (about
+// 3 KB smaller) to make room. One-pass plans are unchanged. Default off.
+inline uint32_t sparse_ring_multipass_pairs() {
+    const char* s = std::getenv("TT_SPARSE_RING_MULTIPASS_PAIRS");
+    return (s != nullptr && std::atoi(s) > 0) ? 1u : 0u;
+}
+
 inline uint32_t sparse_ring_dyn_split() {
     const char* s = std::getenv("TT_SPARSE_RING_DYN_SPLIT");
     if (s == nullptr) {

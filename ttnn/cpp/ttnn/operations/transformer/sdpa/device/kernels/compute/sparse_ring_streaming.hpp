@@ -1052,12 +1052,18 @@ void sdpa_ring_resident(
 
     constexpr uint32_t kGroupCap = resident_slots < 4 ? resident_slots : 4;
     constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
-    // Pair steps (two K/V pieces per step) only with one Q pass. With several passes the kernel takes single steps:
-    // the pair path costs ~1.4-1.5 KB of text on every TRISC, and the dense-prefix 10 s geometry (2 passes) would not
-    // fit the kernel config buffer with it. The QK scratch keeps the host's CB size (kCbPieces): every step reserves,
-    // pushes and pops exactly kQkCap tiles, which must equal the CB's fifo size.
+    // Pair steps (two K/V pieces per step) only with one Q pass, unless SPARSE_MULTIPASS_PAIRS
+    // (TT_SPARSE_RING_MULTIPASS_PAIRS, whose host side builds the reader at -Os to make room). With several passes the
+    // kernel otherwise takes single steps: the pair path costs ~1.4-1.5 KB of text on every TRISC, and the dense-prefix
+    // 10 s geometry (2 passes) would not fit the kernel config buffer with it. The QK scratch keeps the host's CB size
+    // (kCbPieces): every step reserves, pushes and pops exactly kQkCap tiles, which must equal the CB's fifo size.
+#if defined(SPARSE_MULTIPASS_PAIRS)
+    constexpr bool kMultipassPairs = true;
+#else
+    constexpr bool kMultipassPairs = false;
+#endif
     constexpr uint32_t kCbPieces = pair_steps ? 2 : 1;
-    constexpr uint32_t kStepPieces = (pair_steps && num_q_passes == 1) ? 2 : 1;
+    constexpr uint32_t kStepPieces = (pair_steps && (num_q_passes == 1 || kMultipassPairs)) ? 2 : 1;
     constexpr uint32_t kRunStride = kBlocksPerPiece * kStepPieces;
     static_assert(kRunStride <= 255, "run tables are byte-indexed");
     static_assert(!pair_steps || kv_cb_pages >= 2, "a pair needs two K/V entries in the CB");

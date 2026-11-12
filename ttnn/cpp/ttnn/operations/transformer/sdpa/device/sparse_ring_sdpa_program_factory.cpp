@@ -1136,6 +1136,15 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
     }
     const uint32_t num_q_passes = passes_for(fit_slots);
+    // TT_SPARSE_RING_MULTIPASS_PAIRS: pair steps with several passes too (compute define); the reader goes to -Os below.
+    const bool multipass_pairs = pair_steps && num_q_passes > 1 && sparse_ring_multipass_pairs() > 0;
+    if (multipass_pairs) {
+        defines["SPARSE_MULTIPASS_PAIRS"] = "1";
+        log_info(
+            tt::LogOp,
+            "SparseRingSDPA: pair steps kept with {} Q passes (TT_SPARSE_RING_MULTIPASS_PAIRS), reader built at -Os",
+            num_q_passes);
+    }
     const uint32_t min_q_per_working_core = q_split.empty() ? std::max(1u, all_heads_num_q_chunks / num_cores)
                                                             : *std::min_element(q_split.begin(), q_split.end());
     TT_FATAL(
@@ -1495,6 +1504,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
+    if (multipass_pairs) {
+        reader_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
+    }
 
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source =
