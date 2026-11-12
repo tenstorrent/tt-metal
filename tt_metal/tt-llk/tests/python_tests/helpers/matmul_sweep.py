@@ -120,7 +120,7 @@ def matmul_pack_form(
     throttle: int = 0,
     l1_acc: bool = False,
 ) -> int:
-    """Output pack form of the Blackhole matmul tests: llk_matmul_block_pack's rule plus rt*ct < 2 and, at half sync, Float32 input from 3 tiles:
+    """Output pack form of the Blackhole matmul tests: the block pack at full sync and at half sync LoFi with one K tile, plus rt*ct < 2 and, at half sync, Float32 input from 3 tiles:
     0 per tile, 1 one block run, 2 the closed block (block-float outputs and small tiles).
     """
     small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32

@@ -357,10 +357,6 @@ inline void pack_ch1_w_stride_set(const std::uint32_t tile_stride)
     __builtin_memcpy(pack_state + 2, &stride, sizeof(stride));
 }
 
-// W offset block packs are the default; LLK_PACK_W_OFFSET_OFF takes llk_pack_block back to programming the output on every call.
-#if !defined(LLK_PACK_W_OFFSET) && !defined(LLK_PACK_W_OFFSET_OFF)
-#define LLK_PACK_W_OFFSET
-#endif
 // The context of the masks llk_pack_block applies, one halfword of its own, so a kernel that stores no context folds the select away:
 //   byte 0 the math context: 1 matmul, 0 other (llk_pack_math_context)   byte 1 a pack-thread SFPU init ran (1, sticky; llk_pack_sfpu_context)
 [[maybe_unused]] alignas(2) static std::uint8_t pack_ctx[2] = {0, 0};
@@ -380,8 +376,7 @@ inline std::uint32_t llk_pack_context()
     return (half & 0xff) == 0 ? 0 : 1 + ((half >> 8) != 0);
 }
 
-#ifdef LLK_PACK_W_OFFSET
-// W offset block packs (llk_pack_block under LLK_PACK_W_OFFSET): the output buffer base and tile stride last programmed, and the tile the next sequential block starts at.
+// W offset block packs of llk_pack_block: the output buffer base and tile stride last programmed, and the tile the next sequential block starts at.
 // Anything that writes L1_Dest_addr or the channel-1 W stride makes the state stale (LLK_PACK_W_INVALIDATE), the next block call programs the base again.
 [[maybe_unused]] static bool pack_w_valid               = false;
 [[maybe_unused]] static std::uint32_t pack_w_page       = 0;
@@ -389,9 +384,6 @@ inline std::uint32_t llk_pack_context()
 [[maybe_unused]] static std::uint32_t pack_w_tiles      = 0;
 // An init forgets the last output instead of invalidating the base: the first block after it packs as before, which programs the destination and invalidates the base, and a pack init before every block never programs the W stride.
 #define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
-#else
-#define LLK_PACK_W_INVALIDATE() ((void)0)
-#endif
 // A fast untilize left open is a last output of its own: every set_packer_strides forgets it, and only llk_pack_block reads it.
 #define LLK_PACK_FAST_UNTILIZE_MARK_OPEN() (pack_state[0] = LLK_PACK_STATE_FU_OPEN)
 #define LLK_PACK_FAST_UNTILIZE_OPEN() (pack_state[0] == LLK_PACK_STATE_FU_OPEN)

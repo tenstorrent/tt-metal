@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackRowsGolden, get_golden_generator
 from helpers.llk_params import (
@@ -48,7 +49,9 @@ dimension_combinations = [
         same=True,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    num_rows_to_pack=[1, 16, 50, 51, 64],
+    # 51: the Blackhole row pack reads four rows per PACR, so its last PACR takes three.
+    num_rows_to_pack=[1, 16, 50, 64]
+    + ([51] if get_chip_architecture() == ChipArchitecture.BLACKHOLE else []),
     dimensions=dimension_combinations,
 )
 def test_pack_rows(

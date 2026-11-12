@@ -47,10 +47,6 @@ inline void _llk_packer_set_math_semaphore_()
     t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
 }
 
-#ifndef LLK_PACK_SECTION_WORDS
-#define LLK_PACK_SECTION_WORDS 0
-#endif
-
 // One SyncHalf release with the half known at compile time: the ZEROACC and WRCFG words are fixed, so the RISC computes none.
 template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_nops>
 inline void _llk_pack_dest_half_done_()
@@ -88,7 +84,7 @@ inline void _llk_pack_dest_half_done_()
 // Wait for all writes to complete in L1 (header + data)
 // Tell math it can write again
 // Clear dest only when clear_dest is true
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true, std::uint32_t words = LLK_PACK_SECTION_WORDS>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true, std::uint32_t words = 0>
 inline void _llk_pack_dest_section_done_()
 {
     constexpr bool offset_nops = (words & 1) == 0;

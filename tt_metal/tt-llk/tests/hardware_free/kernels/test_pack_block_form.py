@@ -13,10 +13,27 @@ family. Behind matmul math the cells the matmul sweeps read slower are forbidden
 import pathlib
 import re
 
-API = pathlib.Path(__file__).resolve().parents[4] / "hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h"
+API = (
+    pathlib.Path(__file__).resolve().parents[4]
+    / "hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h"
+)
 ALT = pathlib.Path(__file__).resolve().parents[2] / "sources/pack_block_alt_test.cpp"
-CLASSES = ("s16x16", "s16x32", "s8x32", "s4x32", "s1x32", "bfp8", "bfp4", "bfpa", "wide", "narrow", "f16b", "f32")
+CLASSES = (
+    "s16x16",
+    "s16x32",
+    "s8x32",
+    "s4x32",
+    "s1x32",
+    "bfp8",
+    "bfp4",
+    "bfpa",
+    "wide",
+    "narrow",
+    "f16b",
+    "f32",
+)
 
+# fmt: off
 INIT_FORM = {
     "s16x16": ["TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"],
     "s16x32": ["TTBBBBBBBBBBBBBB", "TTBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB", "TBBBBBBBBBBBBBBB"],
@@ -114,6 +131,7 @@ MM_TAIL_NO_W = [[[[18446744073709551615, 18446744073709551615, 18446744073709551
 # Cells decided finer than the mask groups (llk_pack_form_cells): family mask bits 0-2 (datacopy, 32 bit input to SrcA, 32 bit input to DEST), fidelity 3-6
 # (LoFi, HiFi2, HiFi3, HiFi4), K 7-12 (not given, 1, 2, 4, 8, other), context 13-15, state 16-17, row 18-21, column 22-23, n - 1 24-27, form 28-29; the last match wins.
 FORM_CELLS = [117448953, 29630714, 117711097, 117973129, 118235385, 118497529, 56369289, 333193468, 366747900, 52961521, 53223561, 16851193, 21045497, 17113337, 21307647, 17375481, 21569787, 17637625, 21831935, 298655882, 17899769, 22094079, 298918082, 14754044, 10821881, 11084017, 53027057, 11346169, 15540478, 15581436, 53289097, 16916729, 21111035, 50471161, 54665467, 306340881, 310518009, 323100924, 17178873, 21373179, 42344633, 50733305, 54927611, 298214922, 306585852, 310780097, 386277569, 17441017, 21635323, 34218177, 38412481, 42606729, 50995449, 55189755, 306866194, 17703161, 21897467, 51257593, 55451899, 290350114, 307128338, 323887356, 323907138, 353247425, 370024641, 17965305, 22159611, 51519737, 55714043, 324149500, 55976177, 52043913, 56238217, 299507964, 307896564, 324673788, 52306057, 291381500, 299770108, 308158602, 23732362, 53092601, 57286905, 53354633, 292430002]
+# fmt: on
 FIDELITY_BIT = {"LoFi": 1, "HiFi2": 2, "HiFi3": 4, "HiFi4": 8}
 FORM_NAMES = {"T": "per_tile", "B": "block", "W": "w_offset"}
 STATE_INDEX = {"init": 0, "reconf": 1, "next": 2}
@@ -141,20 +159,44 @@ def output_class(dst_format, num_faces=4, face_r_dim=16):
     return "wide" if dst_format in WIDE else "narrow"
 
 
-def pack_block_form(ntiles, dst_format, state, fp32_dest=False, full_sync=False, hifi=False, num_faces=4, face_r_dim=16, matmul_kt=0, src32=False, after_matmul=True, u2d=True, pack_sfpu=False, fidelity=None):
+def pack_block_form(
+    ntiles,
+    dst_format,
+    state,
+    fp32_dest=False,
+    full_sync=False,
+    hifi=False,
+    num_faces=4,
+    face_r_dim=16,
+    matmul_kt=0,
+    src32=False,
+    after_matmul=True,
+    u2d=True,
+    pack_sfpu=False,
+    fidelity=None,
+):
     """Form of one pack_block<ntiles> call (pack_block with the count as a function argument packs per tile, as main); state is init (first block after a pack init or another output), reconf (first block after a packer reconfigure) or next (the block continues the output).
     src32: a Float32, Int32 or UInt32 CB sits in the kernel's CB list (the output's own CB counts, for its unpack source format is its format).
     u2d: a CB of the kernel unpacks to DEST (LLK_UNPACK_TO_DEST_ANY); the form tables of the 32 bit input family need it, the masks do not.
     after_matmul: the math context byte of pack_ctx is matmul (the last FPU op init on the pack thread was a matmul init); without it and without the K the masks of the other contexts apply (groups 4, 5).
     pack_sfpu: a pack-thread SFPU init ran (context 2); a variable block behind matmul math takes these forms too.
-    fidelity: LoFi, HiFi2, HiFi3 or HiFi4 (default HiFi4 with hifi, else LoFi); hifi follows it when given."""
+    fidelity: LoFi, HiFi2, HiFi3 or HiFi4 (default HiFi4 with hifi, else LoFi); hifi follows it when given.
+    """
     if fidelity is not None:
         hifi = fidelity != "LoFi"
     fidelity = fidelity or ("HiFi4" if hifi else "LoFi")
     if not fp32_dest and dst_format in ("Int8", "UInt8"):
         return FORM_NAMES["T"]
-    family = 1 if (fp32_dest and (src32 or dst_format in ("Float32", "Int32", "UInt32"))) else 0
-    table = {"init": (INIT_FORM_DC, INIT_FORM), "reconf": (RECONF_FORM_DC, RECONF_FORM), "next": (NEXT_FORM_DC, NEXT_FORM)}[state][family if u2d else 0]
+    family = (
+        1
+        if (fp32_dest and (src32 or dst_format in ("Float32", "Int32", "UInt32")))
+        else 0
+    )
+    table = {
+        "init": (INIT_FORM_DC, INIT_FORM),
+        "reconf": (RECONF_FORM_DC, RECONF_FORM),
+        "next": (NEXT_FORM_DC, NEXT_FORM),
+    }[state][family if u2d else 0]
     column = (2 if full_sync else 0) + (1 if fp32_dest else 0)
     cls = output_class(dst_format, num_faces, face_r_dim)
     row = CLASSES.index(cls)
@@ -168,82 +210,140 @@ def pack_block_form(ntiles, dst_format, state, fp32_dest=False, full_sync=False,
     keep_w = ~MM_DROP_NO_W[family][group == 3][at][row] if drops else -1
     keep_b = ~MM_DROP_NO_BLOCK[family][group == 3][at][row] if drops else -1
     tail_w = MM_TAIL_NO_W[family][group][at][row] if (after_matmul and pack_sfpu) else 0
-    tail_b = MM_TAIL_NO_BLOCK[family][group][at][row] if (after_matmul and pack_sfpu) else 0
-    if form == "W" and (((MM_NO_W[family][mask_group][at][row] & keep_w) | tail_w) >> bit) & 1:
+    tail_b = (
+        MM_TAIL_NO_BLOCK[family][group][at][row] if (after_matmul and pack_sfpu) else 0
+    )
+    if (
+        form == "W"
+        and (((MM_NO_W[family][mask_group][at][row] & keep_w) | tail_w) >> bit) & 1
+    ):
         form = "B"
-    if form == "B" and (((MM_NO_BLOCK[family][mask_group][at][row] & keep_b) | tail_b) >> bit) & 1:
+    if (
+        form == "B"
+        and (((MM_NO_BLOCK[family][mask_group][at][row] & keep_b) | tail_b) >> bit) & 1
+    ):
         form = "T"
-    if matmul_kt != 0 and state == "next" and form != "W" and ((MM_TAKE_W[family][group - 1][row] & ~tail_w) >> bit) & 1:
+    if (
+        matmul_kt != 0
+        and state == "next"
+        and form != "W"
+        and ((MM_TAKE_W[family][group - 1][row] & ~tail_w) >> bit) & 1
+    ):
         form = "W"
-    if matmul_kt != 0 and state == "next" and form == "T" and ((MM_TAKE_B[family][group - 1][row] & ~tail_b) >> bit) & 1:
+    if (
+        matmul_kt != 0
+        and state == "next"
+        and form == "T"
+        and ((MM_TAKE_B[family][group - 1][row] & ~tail_b) >> bit) & 1
+    ):
         form = "B"
     fam_bit = 1 if family == 0 else (4 if u2d else 2)
     k_bit = {0: 1, 1: 2, 2: 4, 4: 8, 8: 16}.get(matmul_kt, 32)
     ctx = (2 if pack_sfpu else 1) if after_matmul else 0
     cell = (at << 16) | (row << 18) | (column << 22) | (count << 24)
     for e in FORM_CELLS:
-        if e & fam_bit and (e >> 3) & FIDELITY_BIT[fidelity] and (e >> 7) & k_bit and (e >> 13) & (1 << ctx) and (e & 0x0FFF0000) == cell:
+        if (
+            e & fam_bit
+            and (e >> 3) & FIDELITY_BIT[fidelity]
+            and (e >> 7) & k_bit
+            and (e >> 13) & (1 << ctx)
+            and (e & 0x0FFF0000) == cell
+        ):
             form = "TBW"[(e >> 28) & 3]
     return FORM_NAMES[form]
 
 
 def test_unpack_to_srca_takes_datacopy_tables():
     """A 32 bit CB without unpack to DEST (Float32 to SrcA) takes the datacopy rows: the Float32 input sweep to SrcA reads every block form faster than per tile."""
-    cells = [(n, state, fmt) for n in range(1, 9) for state in ("init", "reconf", "next") for fmt in ("Float32", "Float16", "Bfp8_b")]
-    assert any(pack_block_form(n, fmt, state, fp32_dest=True, src32=True, u2d=True) == "per_tile" and pack_block_form(n, fmt, state, fp32_dest=True, src32=True, u2d=False) != "per_tile" for n, state, fmt in cells)
+    cells = [
+        (n, state, fmt)
+        for n in range(1, 9)
+        for state in ("init", "reconf", "next")
+        for fmt in ("Float32", "Float16", "Bfp8_b")
+    ]
+    assert any(
+        pack_block_form(n, fmt, state, fp32_dest=True, src32=True, u2d=True)
+        == "per_tile"
+        and pack_block_form(n, fmt, state, fp32_dest=True, src32=True, u2d=False)
+        != "per_tile"
+        for n, state, fmt in cells
+    )
 
 
 def test_mirror_cells():
-    assert pack_block_form(1, 'Float16_b', 'init') == 'per_tile'
-    assert pack_block_form(2, 'Float16_b', 'init') == 'block'
-    assert pack_block_form(2, 'Float16_b', 'next') == 'block'
-    assert pack_block_form(4, 'Float16_b', 'next', fp32_dest=True) == 'block'
-    assert pack_block_form(2, 'Bfp8_b', 'reconf') == 'per_tile'
-    assert pack_block_form(3, 'Bfp8_b', 'init') == 'block'
-    assert pack_block_form(8, 'Bfp8_b', 'next') == 'per_tile'
-    assert pack_block_form(12, 'Bfp8_b', 'next', full_sync=True) == 'w_offset'
-    assert pack_block_form(16, 'Bfp8_b', 'init', full_sync=True) == 'block'
-    assert pack_block_form(12, 'Float32', 'next', full_sync=True) == 'w_offset'
-    assert pack_block_form(16, 'Float16_b', 'reconf', full_sync=True) == 'block'
-    assert pack_block_form(4, 'Int8', 'init') == 'per_tile'
-    assert pack_block_form(4, 'Int8', 'init', fp32_dest=True) == 'block'
-    assert pack_block_form(3, 'UInt8', 'next') == 'per_tile'
-    assert pack_block_form(16, 'Fp8_e4m3', 'next', full_sync=True) == 'w_offset'
-    assert pack_block_form(3, 'Tf32', 'next') == 'block'
-    assert pack_block_form(4, 'Bfp8_b', 'next', matmul_kt=4) == 'per_tile'
-    assert pack_block_form(4, 'Bfp8_b', 'next', matmul_kt=1) == 'block'
-    assert pack_block_form(4, 'Bfp8_b', 'next', hifi=True) == 'per_tile'
-    assert pack_block_form(4, 'Bfp8_b', 'next') == 'per_tile'
-    assert pack_block_form(3, 'Float16_b', 'init', num_faces=2, face_r_dim=16) == 'block'
-    assert pack_block_form(5, 'Float16_b', 'next', num_faces=2, face_r_dim=8) == 'w_offset'
-    assert pack_block_form(3, 'Bfp8_b', 'next', fp32_dest=True) == 'block'
-    assert pack_block_form(4, 'Bfp8_b', 'next', fp32_dest=True) == 'per_tile'
-    assert pack_block_form(3, 'Bfp8_b', 'next', fp32_dest=True, src32=True) == 'per_tile'
-    assert pack_block_form(4, 'Bfp8_b', 'next', fp32_dest=True, src32=True) == 'per_tile'
-    assert pack_block_form(4, 'Bfp8_b', 'next', after_matmul=False) == 'per_tile'
-    assert pack_block_form(3, 'Float16_b', 'next', hifi=True, after_matmul=False) == 'per_tile'
-    assert pack_block_form(5, 'Float16_b', 'next', hifi=True, matmul_kt=0) == 'block'
-    assert pack_block_form(6, 'Bfp8_b', 'next', hifi=True, matmul_kt=0) == 'per_tile'
-    assert pack_block_form(5, 'Float16_b', 'next', hifi=True, matmul_kt=1) == 'block'
-    assert pack_block_form(6, 'Bfp8_b', 'next', hifi=True, matmul_kt=1) == 'per_tile'
-    assert pack_block_form(5, 'Float16_b', 'next', hifi=True, matmul_kt=4) == 'block'
-    assert pack_block_form(6, 'Bfp8_b', 'next', hifi=True, matmul_kt=4) == 'per_tile'
+    assert pack_block_form(1, "Float16_b", "init") == "per_tile"
+    assert pack_block_form(2, "Float16_b", "init") == "block"
+    assert pack_block_form(2, "Float16_b", "next") == "block"
+    assert pack_block_form(4, "Float16_b", "next", fp32_dest=True) == "block"
+    assert pack_block_form(2, "Bfp8_b", "reconf") == "per_tile"
+    assert pack_block_form(3, "Bfp8_b", "init") == "block"
+    assert pack_block_form(8, "Bfp8_b", "next") == "per_tile"
+    assert pack_block_form(12, "Bfp8_b", "next", full_sync=True) == "w_offset"
+    assert pack_block_form(16, "Bfp8_b", "init", full_sync=True) == "block"
+    assert pack_block_form(12, "Float32", "next", full_sync=True) == "w_offset"
+    assert pack_block_form(16, "Float16_b", "reconf", full_sync=True) == "block"
+    assert pack_block_form(4, "Int8", "init") == "per_tile"
+    assert pack_block_form(4, "Int8", "init", fp32_dest=True) == "block"
+    assert pack_block_form(3, "UInt8", "next") == "per_tile"
+    assert pack_block_form(16, "Fp8_e4m3", "next", full_sync=True) == "w_offset"
+    assert pack_block_form(3, "Tf32", "next") == "block"
+    assert pack_block_form(4, "Bfp8_b", "next", matmul_kt=4) == "per_tile"
+    assert pack_block_form(4, "Bfp8_b", "next", matmul_kt=1) == "block"
+    assert pack_block_form(4, "Bfp8_b", "next", hifi=True) == "per_tile"
+    assert pack_block_form(4, "Bfp8_b", "next") == "per_tile"
+    assert (
+        pack_block_form(3, "Float16_b", "init", num_faces=2, face_r_dim=16) == "block"
+    )
+    assert (
+        pack_block_form(5, "Float16_b", "next", num_faces=2, face_r_dim=8) == "w_offset"
+    )
+    assert pack_block_form(3, "Bfp8_b", "next", fp32_dest=True) == "block"
+    assert pack_block_form(4, "Bfp8_b", "next", fp32_dest=True) == "per_tile"
+    assert (
+        pack_block_form(3, "Bfp8_b", "next", fp32_dest=True, src32=True) == "per_tile"
+    )
+    assert (
+        pack_block_form(4, "Bfp8_b", "next", fp32_dest=True, src32=True) == "per_tile"
+    )
+    assert pack_block_form(4, "Bfp8_b", "next", after_matmul=False) == "per_tile"
+    assert (
+        pack_block_form(3, "Float16_b", "next", hifi=True, after_matmul=False)
+        == "per_tile"
+    )
+    assert pack_block_form(5, "Float16_b", "next", hifi=True, matmul_kt=0) == "block"
+    assert pack_block_form(6, "Bfp8_b", "next", hifi=True, matmul_kt=0) == "per_tile"
+    assert pack_block_form(5, "Float16_b", "next", hifi=True, matmul_kt=1) == "block"
+    assert pack_block_form(6, "Bfp8_b", "next", hifi=True, matmul_kt=1) == "per_tile"
+    assert pack_block_form(5, "Float16_b", "next", hifi=True, matmul_kt=4) == "block"
+    assert pack_block_form(6, "Bfp8_b", "next", hifi=True, matmul_kt=4) == "per_tile"
 
 
 def _table(src, name):
-    m = re.search(rf"constexpr char {name}\[12\]\[4\]\[17\] = \{{(.*?)\n\}};", src, re.S)
+    m = re.search(
+        rf"constexpr char {name}\[12\]\[4\]\[17\] = \{{(.*?)\n\}};", src, re.S
+    )
     assert m, name
     rows = re.findall(r"\{((?:\"[TBW]{16}\",? ?){4})\},\s*//\s*(.*)", m.group(1))
-    return {CLASSES[i]: re.findall(r"\"([TBW]{16})\"", r) for i, (r, _) in enumerate(rows)}
+    return {
+        CLASSES[i]: re.findall(r"\"([TBW]{16})\"", r) for i, (r, _) in enumerate(rows)
+    }
 
 
 def _masks(src, name):
-    m = re.search(rf"constexpr std::uint64_t {name}((?:\[\d+\])+) = \{{(.*?)\n\}};", src, re.S)
+    m = re.search(
+        rf"constexpr std::uint64_t {name}((?:\[\d+\])+) = \{{(.*?)\n\}};", src, re.S
+    )
     assert m, name
     dims = [int(d) for d in re.findall(r"\d+", m.group(1))]
-    flat = [[int(x, 16) if x.startswith("0x") else int(x) for x in re.findall(r"0x[0-9A-F]{16}|\b0\b", g)] for g in re.findall(r"\{([^{}]*)\}", m.group(2))]
+    flat = [
+        [
+            int(x, 16) if x.startswith("0x") else int(x)
+            for x in re.findall(r"0x[0-9A-F]{16}|\b0\b", g)
+        ]
+        for g in re.findall(r"\{([^{}]*)\}", m.group(2))
+    ]
     for d in reversed(dims[1:-1]):
-        flat = [flat[i:i + d] for i in range(0, len(flat), d)]
+        flat = [flat[i : i + d] for i in range(0, len(flat), d)]
     return flat
 
 
@@ -263,15 +363,28 @@ def test_header_tables_match_mirror():
     assert _masks(src, "llk_pack_mm_tail_no_w") == MM_TAIL_NO_W
     assert _masks(src, "llk_pack_mm_take_w") == MM_TAKE_W
     assert _masks(src, "llk_pack_mm_take_b") == MM_TAKE_B
-    m = re.search(r"constexpr std::uint32_t llk_pack_form_cells\[\] = \{(.*?)\};", src, re.S)
-    assert m and [int(x, 16) if x.startswith("0x") else int(x) for x in re.findall(r"0x[0-9A-F]+|\b0\b", m.group(1))] == FORM_CELLS
-    assert FORM_CELLS == [0] or FORM_CELLS == sorted(FORM_CELLS, key=lambda e: (((e >> 16) & 3) * 12 + ((e >> 18) & 15)))
+    m = re.search(
+        r"constexpr std::uint32_t llk_pack_form_cells\[\] = \{(.*?)\};", src, re.S
+    )
+    assert (
+        m
+        and [
+            int(x, 16) if x.startswith("0x") else int(x)
+            for x in re.findall(r"0x[0-9A-F]+|\b0\b", m.group(1))
+        ]
+        == FORM_CELLS
+    )
+    assert FORM_CELLS == [0] or FORM_CELLS == sorted(
+        FORM_CELLS, key=lambda e: (((e >> 16) & 3) * 12 + ((e >> 18) & 15))
+    )
 
 
 def _api_functions(root):
     """(file, name, body) of every function defined in the compute API headers, comments stripped."""
     for path in sorted(root.rglob("*.h")):
-        s = re.sub(r"/\*.*?\*/", "", re.sub(r"//[^\n]*", "", path.read_text()), flags=re.S)
+        s = re.sub(
+            r"/\*.*?\*/", "", re.sub(r"//[^\n]*", "", path.read_text()), flags=re.S
+        )
         for m in re.finditer(r"(?:ALWI|inline)\s+[\w:<>,\s*&]*?\b(\w+)\s*\(", s):
             i, depth = m.end(), 1
             while i < len(s) and depth:
@@ -286,15 +399,21 @@ def _api_functions(root):
                 if depth == 0:
                     break
                 k += 1
-            yield path.relative_to(root), m.group(1), s[j:k + 1]
+            yield path.relative_to(root), m.group(1), s[j : k + 1]
 
 
 def test_fpu_op_inits_set_the_pack_math_context():
     """llk_pack_block takes the matmul masks while the last FPU op init was a matmul init: every API function that runs an FPU math init says which."""
-    fpu = re.compile(r"\b_?llk_math_(?!eltwise_unary_sfpu|eltwise_binary_sfpu|eltwise_ternary_sfpu|sfpu|welfords_sfpu|two_pass_sfpu|triangle_solve_sfpu|ema_sfpu|pack_sync|hash_cb)\w*init\w*")
-    custom_mm = re.compile(r"custom_mm|compressed_mm|matmul_block_math_dynamic_throttle")
+    fpu = re.compile(
+        r"\b_?llk_math_(?!eltwise_unary_sfpu|eltwise_binary_sfpu|eltwise_ternary_sfpu|sfpu|welfords_sfpu|two_pass_sfpu|triangle_solve_sfpu|ema_sfpu|pack_sync|hash_cb)\w*init\w*"
+    )
+    custom_mm = re.compile(
+        r"custom_mm|compressed_mm|matmul_block_math_dynamic_throttle"
+    )
     missing = []
-    for path, name, body in _api_functions(API.parent.parent.parent.parent.parent / "inc/api/compute"):
+    for path, name, body in _api_functions(
+        API.parent.parent.parent.parent.parent / "inc/api/compute"
+    ):
         inits = fpu.findall(body)
         if not inits or "uninit" in name or custom_mm.search(name):
             continue
@@ -306,56 +425,165 @@ def test_fpu_op_inits_set_the_pack_math_context():
 
 def test_pack_thread_sfpu_inits_set_the_pack_sfpu_context():
     """A pack-thread SFPU init marks the pack state (context 2 behind matmul math): every API init that runs an SFPU init on the pack thread."""
-    sfpu_on_pack = re.compile(r"PACK\s*\(\(?\s*(?:SFPU_\w*INIT|llk_math_eltwise_unary_sfpu_init)")
-    missing = [f"{path}:{name}" for path, name, body in _api_functions(API.parent.parent.parent.parent.parent / "inc/api/compute")
-               if "init" in name and sfpu_on_pack.search(body) and "PACK_SFPU_CONTEXT();" not in body]
+    sfpu_on_pack = re.compile(
+        r"PACK\s*\(\(?\s*(?:SFPU_\w*INIT|llk_math_eltwise_unary_sfpu_init)"
+    )
+    missing = [
+        f"{path}:{name}"
+        for path, name, body in _api_functions(
+            API.parent.parent.parent.parent.parent / "inc/api/compute"
+        )
+        if "init" in name
+        and sfpu_on_pack.search(body)
+        and "PACK_SFPU_CONTEXT();" not in body
+    ]
     assert not missing, missing
+
 
 def test_header_logic_matches_mirror():
     src = " ".join(API.read_text().split())
-    assert "const std::uint32_t column = (DST_SYNC_MODE == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);" in src
+    assert (
+        "const std::uint32_t column = (DST_SYNC_MODE == DstSync::SyncFull ? 2 : 0) + (is_fp32_dest_acc_en ? 1 : 0);"
+        in src
+    )
     assert "const std::uint32_t count = (ntiles < 16 ? ntiles : 16) - 1;" in src
     assert "if (forms == 1) {" in src
-    assert "if (!is_fp32_dest_acc_en && llk_pack_dst_is_int8(output_id)) { return 'T'; }" in src
+    assert (
+        "if (!is_fp32_dest_acc_en && llk_pack_dst_is_int8(output_id)) { return 'T'; }"
+        in src
+    )
     assert "const std::uint32_t bit = column * 16 + count;" in src
-    assert "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;" in src
-    assert "inline constexpr bool llk_pack_src32_family = is_fp32_dest_acc_en && (llk_pack_src32_mask(0) != 0 || llk_pack_src32_mask(32) != 0);" in src
-    assert "constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));" in src
-    assert "constexpr std::uint32_t group_other = MATH_FIDELITY != MathFidelity::LoFi ? 5 : 4; const std::uint32_t mask_group = (matmul_kt != 0 || ctx != 0) ? group : group_other;" in src
-    assert "const std::uint32_t state, const std::uint32_t ctx = llk_pack_context()) {" in src
-    assert "PACK_MATH_CONTEXT(true);" in (API.parent.parent.parent.parent.parent / "inc/api/compute/matmul.h").read_text()
-    assert "const std::uint64_t tail_w = ctx == 2 ? llk_pack_mm_tail_no_w[family][group][state][row] : 0; const std::uint64_t tail_b = ctx == 2 ? llk_pack_mm_tail_no_block[family][group][state][row] : 0;" in src
-    assert "const std::uint64_t keep_w = ctx != 0 && (group == 0 || group == 3) ? ~llk_pack_mm_drop_no_w[family][drop_group][state][row] : ~0ULL;" in src
-    assert "if (out == 'W' && ((((llk_pack_mm_no_w[family][mask_group][state][row] & keep_w) | tail_w) >> bit) & 1) != 0) { out = 'B'; } if (out == 'B' && ((((llk_pack_mm_no_block[family][mask_group][state][row] & keep_b) | tail_b) >> bit) & 1) != 0) { out = 'T'; }" in src
-    assert "if (state == 2 && out != 'W' && (((llk_pack_mm_take_w[family][group - 1][row] & ~tail_w) >> bit) & 1) != 0) { out = 'W'; }" in src
-    assert "if (state == 2 && out == 'T' && (((llk_pack_mm_take_b[family][group - 1][row] & ~tail_b) >> bit) & 1) != 0) { out = 'B'; }" in src
-    assert "if (pack_tile_num_faces[i] != 4 || rows != FACE_R_DIM) { if (rows == FACE_R_DIM) { return pack_tile_num_faces[i] == 1 ? 0 : 1; } return rows >= 8 ? 2 : (rows >= 4 ? 3 : 4); }" in src
-    assert "if (fmt == static_cast<std::uint32_t>(DataFormat::Float16_b)) { return 10; } if (fmt == static_cast<std::uint32_t>(DataFormat::Float32)) { return 11; } return datum_size_in_bytes(fmt) == 4 ? 8 : 9;" in src
+    assert (
+        "constexpr std::uint32_t family = llk_pack_src32_family<is_fp32_dest_acc_en> ? 1 : 0;"
+        in src
+    )
+    assert (
+        "inline constexpr bool llk_pack_src32_family = is_fp32_dest_acc_en && (llk_pack_src32_mask(0) != 0 || llk_pack_src32_mask(32) != 0);"
+        in src
+    )
+    assert (
+        "constexpr std::uint32_t group = MATH_FIDELITY != MathFidelity::LoFi ? 3 : (matmul_kt == 0 ? 0 : (matmul_kt == 1 ? 1 : 2));"
+        in src
+    )
+    assert (
+        "constexpr std::uint32_t group_other = MATH_FIDELITY != MathFidelity::LoFi ? 5 : 4; const std::uint32_t mask_group = (matmul_kt != 0 || ctx != 0) ? group : group_other;"
+        in src
+    )
+    assert (
+        "const std::uint32_t state, const std::uint32_t ctx = llk_pack_context()) {"
+        in src
+    )
+    assert (
+        "PACK_MATH_CONTEXT(true);"
+        in (
+            API.parent.parent.parent.parent.parent / "inc/api/compute/matmul.h"
+        ).read_text()
+    )
+    assert (
+        "const std::uint64_t tail_w = ctx == 2 ? llk_pack_mm_tail_no_w[family][group][state][row] : 0; const std::uint64_t tail_b = ctx == 2 ? llk_pack_mm_tail_no_block[family][group][state][row] : 0;"
+        in src
+    )
+    assert (
+        "const std::uint64_t keep_w = ctx != 0 && (group == 0 || group == 3) ? ~llk_pack_mm_drop_no_w[family][drop_group][state][row] : ~0ULL;"
+        in src
+    )
+    assert (
+        "if (out == 'W' && ((((llk_pack_mm_no_w[family][mask_group][state][row] & keep_w) | tail_w) >> bit) & 1) != 0) { out = 'B'; } if (out == 'B' && ((((llk_pack_mm_no_block[family][mask_group][state][row] & keep_b) | tail_b) >> bit) & 1) != 0) { out = 'T'; }"
+        in src
+    )
+    assert (
+        "if (state == 2 && out != 'W' && (((llk_pack_mm_take_w[family][group - 1][row] & ~tail_w) >> bit) & 1) != 0) { out = 'W'; }"
+        in src
+    )
+    assert (
+        "if (state == 2 && out == 'T' && (((llk_pack_mm_take_b[family][group - 1][row] & ~tail_b) >> bit) & 1) != 0) { out = 'B'; }"
+        in src
+    )
+    assert (
+        "if (pack_tile_num_faces[i] != 4 || rows != FACE_R_DIM) { if (rows == FACE_R_DIM) { return pack_tile_num_faces[i] == 1 ? 0 : 1; } return rows >= 8 ? 2 : (rows >= 4 ? 3 : 4); }"
+        in src
+    )
+    assert (
+        "if (fmt == static_cast<std::uint32_t>(DataFormat::Float16_b)) { return 10; } if (fmt == static_cast<std::uint32_t>(DataFormat::Float32)) { return 11; } return datum_size_in_bytes(fmt) == 4 ? 8 : 9;"
+        in src
+    )
     assert "return llk_pack_class_tab.row[output_id];" in src
-    assert "const bool first_block = (state & ~static_cast<std::uint32_t>(LLK_PACK_STATE_W)) != output_id + 1u; const bool reconfigured = (state >> 8) != 0;" in src
-    assert "(first_block ? (reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0)) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));" in src
-    assert "llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc), llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_reconf_form, llk_pack_reconf_form_dc), llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_next_form, llk_pack_next_form_dc)};" in src
-    assert "llk_pack_block_form_of<is_fp32_dest_acc_en, matmul_kt>(row, n, tables[state], state, ctx0 + ctx * step);" in src
-    assert "return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;" in src
-    assert "#if defined(LLK_UNPACK_TO_DEST_ANY) inline constexpr bool llk_pack_unpack_to_dest = LLK_UNPACK_TO_DEST_ANY != 0; #else inline constexpr bool llk_pack_unpack_to_dest = true; #endif" in src
-    assert "constexpr std::uint32_t fam_bit = family == 0 ? 1 : (llk_pack_unpack_to_dest ? 4 : 2);" in src
-    assert "constexpr std::uint32_t fid_bit = MATH_FIDELITY == MathFidelity::LoFi ? 1 : (MATH_FIDELITY == MathFidelity::HiFi2 ? 2 : (MATH_FIDELITY == MathFidelity::HiFi3 ? 4 : 8));" in src
-    assert "constexpr std::uint32_t k_bit = matmul_kt == 0 ? 1 : (matmul_kt == 1 ? 2 : (matmul_kt == 2 ? 4 : (matmul_kt == 4 ? 8 : (matmul_kt == 8 ? 16 : 32))));" in src
-    assert "const std::uint32_t cell = (state << 16) | (row << 18) | (column << 22) | (count << 24); for (std::uint32_t i = llk_pack_form_cells_at.at[state * 12 + row]; i < llk_pack_form_cells_at.at[state * 12 + row + 1]; i++) { const std::uint32_t e = llk_pack_form_cells[i]; if ((e & fam_bit) != 0 && ((e >> 3) & fid_bit) != 0 && ((e >> 7) & k_bit) != 0 && ((e >> 13) & (1u << ctx)) != 0 && (e & 0x0FFF0000u) == cell) { out = \"TBW\"[(e >> 28) & 3]; } }" in src
-    assert "closed_pays" not in src and "closed_loses" not in src and "LLK_PACK_BLOCK_MIN_TILES" not in src
+    assert (
+        "const bool first_block = (state & ~static_cast<std::uint32_t>(LLK_PACK_STATE_W)) != output_id + 1u; const bool reconfigured = (state >> 8) != 0;"
+        in src
+    )
+    assert (
+        "(first_block ? (reconfigured ? llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 1) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 0)) : llk_pack_block_form<is_fp32_dest_acc_en, matmul_kt>(output_id, ntiles, 2));"
+        in src
+    )
+    assert (
+        "llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_init_form, llk_pack_init_form_dc), llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_reconf_form, llk_pack_reconf_form_dc), llk_pack_form_table<is_fp32_dest_acc_en>(llk_pack_next_form, llk_pack_next_form_dc)};"
+        in src
+    )
+    assert (
+        "llk_pack_block_form_of<is_fp32_dest_acc_en, matmul_kt>(row, n, tables[state], state, ctx0 + ctx * step);"
+        in src
+    )
+    assert (
+        "return llk_pack_src32_family<is_fp32_dest_acc_en> && llk_pack_unpack_to_dest ? u : dc;"
+        in src
+    )
+    assert (
+        "#if defined(LLK_UNPACK_TO_DEST_ANY) inline constexpr bool llk_pack_unpack_to_dest = LLK_UNPACK_TO_DEST_ANY != 0; #else inline constexpr bool llk_pack_unpack_to_dest = true; #endif"
+        in src
+    )
+    assert (
+        "constexpr std::uint32_t fam_bit = family == 0 ? 1 : (llk_pack_unpack_to_dest ? 4 : 2);"
+        in src
+    )
+    assert (
+        "constexpr std::uint32_t fid_bit = MATH_FIDELITY == MathFidelity::LoFi ? 1 : (MATH_FIDELITY == MathFidelity::HiFi2 ? 2 : (MATH_FIDELITY == MathFidelity::HiFi3 ? 4 : 8));"
+        in src
+    )
+    assert (
+        "constexpr std::uint32_t k_bit = matmul_kt == 0 ? 1 : (matmul_kt == 1 ? 2 : (matmul_kt == 2 ? 4 : (matmul_kt == 4 ? 8 : (matmul_kt == 8 ? 16 : 32))));"
+        in src
+    )
+    assert (
+        'const std::uint32_t cell = (state << 16) | (row << 18) | (column << 22) | (count << 24); for (std::uint32_t i = llk_pack_form_cells_at.at[state * 12 + row]; i < llk_pack_form_cells_at.at[state * 12 + row + 1]; i++) { const std::uint32_t e = llk_pack_form_cells[i]; if ((e & fam_bit) != 0 && ((e >> 3) & fid_bit) != 0 && ((e >> 7) & k_bit) != 0 && ((e >> 13) & (1u << ctx)) != 0 && (e & 0x0FFF0000u) == cell) { out = "TBW"[(e >> 28) & 3]; } }'
+        in src
+    )
+    assert (
+        "closed_pays" not in src
+        and "closed_loses" not in src
+        and "LLK_PACK_BLOCK_MIN_TILES" not in src
+    )
 
 
 def _alt_letter(family, cls, col, count):
     fmt = {"bfp8": "Bfp8_b", "f32": "Float32", "f16b": "Float16_b"}[cls]
-    form = pack_block_form(count + 1, fmt, "reconf", fp32_dest=col % 2 == 1, full_sync=col >= 2, src32=bool(family), u2d=False, after_matmul=False)
+    form = pack_block_form(
+        count + 1,
+        fmt,
+        "reconf",
+        fp32_dest=col % 2 == 1,
+        full_sync=col >= 2,
+        src32=bool(family),
+        u2d=False,
+        after_matmul=False,
+    )
     return {"per_tile": "T", "block": "B", "w_offset": "W"}[form]
 
 
 def test_alt_kernel_mirrors_reconf_rows():
     """pack_block_alt_test.cpp holds the reconfigure forms of its three formats (Bfp8_b, Float32, Float16_b) as llk_pack_block takes them in a LoFi kernel without a matmul init or an unpack to DEST, with and without a 32 bit CB."""
     src = ALT.read_text()
-    m = re.search(r"constexpr char alt_reconf_form\[2\]\[3\]\[4\]\[17\] = \{(.*?)\n\};", src, re.S)
+    m = re.search(
+        r"constexpr char alt_reconf_form\[2\]\[3\]\[4\]\[17\] = \{(.*?)\n\};", src, re.S
+    )
     assert m
-    rows = [re.findall(r"\"([TBW]{16})\"", r) for r in re.findall(r"\{((?:\"[TBW]{16}\",? ?){4})\}", m.group(1))]
-    expect = [["".join(_alt_letter(f, c, col, n) for n in range(16)) for col in range(4)] for f in (0, 1) for c in ("bfp8", "f32", "f16b")]
+    rows = [
+        re.findall(r"\"([TBW]{16})\"", r)
+        for r in re.findall(r"\{((?:\"[TBW]{16}\",? ?){4})\}", m.group(1))
+    ]
+    expect = [
+        ["".join(_alt_letter(f, c, col, n) for n in range(16)) for col in range(4)]
+        for f in (0, 1)
+        for c in ("bfp8", "f32", "f16b")
+    ]
     assert rows == expect
