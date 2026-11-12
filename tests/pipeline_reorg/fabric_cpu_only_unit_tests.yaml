@@ -173,3 +173,14 @@
   budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-teardown-sanity-ttmetal
+  name: teardown sanity — DistributedContext (CPU) (#56902)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity-ttmetal
+  skus:
+    cpu_medium:
+      timeout: 35
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song

@@ -15,6 +15,7 @@
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
 #       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-fsd-reliability, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-ring-stress, bh-heterogeneous, pipeline-placement, bh-misc,
 #       teardown-sanity-mpi
+#       teardown-sanity-ttmetal
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
 #     Runs all groups in parallel via self-invocation. Each group's output is
@@ -311,7 +312,7 @@ done
 
 CURRENT_GROUP="$GROUP"
 
-VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc teardown-sanity-mpi"
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-6u bh-single-galaxy bh-dual-galaxy bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc teardown-sanity-mpi teardown-sanity-ttmetal"
 if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
 fi
@@ -324,7 +325,7 @@ if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
     unit phys-grouping control-plane t3k wh-galaxy
     bh-6u bh-single-galaxy bh-dual-galaxy
     bh-subtorus bh-subtorus-sc16 bh-subtorus-sc20 bh-fsd-reliability bh-sp4-glx bh-blitz-decode bh-pod-pipeline bh-ring-stress bh-heterogeneous pipeline-placement bh-misc
-    teardown-sanity-mpi )
+    teardown-sanity-mpi teardown-sanity-ttmetal )
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
   pids=()
@@ -1198,5 +1199,14 @@ TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/tt_metal/distribut
 run_test python3 -m pytest tests/ttnn/distributed/test_ttrun.py::TestJobOwnership -v -p no:cacheprovider -p no:benchmark
 
 fi # teardown-sanity-mpi
+
+######################################
+# Teardown sanity, tt-metal DistributedContext (#56902): the distributed context, control plane, collectives
+######################################
+if run_group "teardown-sanity-ttmetal"; then
+
+TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_sanity/test_teardown_sanity.py -v -p no:cacheprovider -p no:benchmark
+
+fi # teardown-sanity-ttmetal
 
 print_failure_summary
