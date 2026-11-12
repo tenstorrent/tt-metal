@@ -19,6 +19,7 @@ import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
+from models.demos.blackhole.qwen36.tt.spec_argmax_fused import ROWS, FusedShardArgmax
 from models.tt_transformers.tt.common import Mode
 
 
@@ -47,8 +48,13 @@ def draft_argmax(mtp, logits):
     QWEN36_DRAFT_SHARDED_ARGMAX (resolved once in Qwen36MTP.__init__) selects the sharded form, in
     which ``logits`` is THIS device's [1,1,B,vocab/tp] fp32 shard and the vocab all-gather never
     happened; off, ``logits`` is the gathered full-vocab row and this is exactly argmax_last.
+    The sharded form takes the fused per-shard argmax (tt/spec_argmax_fused.py: the same ids in two kernels and one
+    all-gather) for every shard it supports, and _argmax_sharded otherwise.
     """
     if mtp._sharded_argmax:
+        fused = getattr(mtp, "_fused_argmax", None)
+        if fused is not None and fused.supports(logits) is None:
+            return fused(logits, ROWS)
         return mtp._argmax_sharded(logits)  # per-shard argmax + device-only winner pick
     return argmax_last(logits)  # full-vocab gathered row: untilize + argmax
 
@@ -156,6 +162,7 @@ class Qwen36MTP:
         # whenever this resolves to False. The attributes are always defined so draft_argmax can
         # test `mtp._sharded_argmax` without a getattr dance.
         self._sharded_argmax = False
+        self._fused_argmax = None  # FusedShardArgmax over the drafter's logit shards (set by _init_sharded_argmax)
         self._shard_off = None  # [1,1,B,_LANES] int32, per device: d * vocab_shard in every lane
         self._sel_lane = None  # [1,1,B,_LANES*num_devices] int32 replicated: lane j holds j
         self._fp32_cfg = None
@@ -232,6 +239,7 @@ class Qwen36MTP:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
         self._sharded_argmax = True
+        self._fused_argmax = FusedShardArgmax(self.mesh_device, vocab, nd)
         logger.info(
             f"MTP drafter: per-shard argmax enabled (B={B}, vocab {vocab} = {nd} x {shard}, "
             f"maxval grid {self._maxval_r}x{self._maxval_c})"
