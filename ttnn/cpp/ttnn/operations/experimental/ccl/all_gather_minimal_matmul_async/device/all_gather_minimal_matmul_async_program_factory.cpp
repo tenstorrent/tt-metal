@@ -23,6 +23,9 @@
 #include <vector>
 
 namespace {
+// The in1 injector reads a column chunk under one NoC transaction id; keep a chunk's reads within the
+// (NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2 outstanding reads per id that the NoC API allows.
+constexpr uint32_t kMaxReadsPerTransactionId = 128;
 
 // Push order of desc.kernels. The FSDP mux kernel, when present, is last so these stay fixed.
 constexpr uint32_t kIn0SenderKernelIdx = 0;
@@ -812,6 +815,22 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         // in0 blocks multicast along each row, in1 blocks down each column (see the end of the factory).
         defines["AGMM_GATHER_SENDERS"] = "1";
     }
+    // in1 in column chunks: the injector multicasts each K block chunk by chunk (one piecewise pipe round) and the
+    // compute starts on the first chunk while the rest is in flight. For one full N block per core (the chunk-major
+    // layout assumes it). A chunk is the widest whole number of subblocks that divides the block in at least two
+    // chunks and whose reads fit one transaction id: each chunk costs a multicast and a flag, so a few wide chunks beat
+    // many narrow ones.
+    uint32_t in1_chunk_w = 0;
+    if (gather_senders && N_blocks_per_core == 1 && N_tiles_per_core == N_block_tiles) {
+        for (uint32_t w = subblock_w; 2 * w <= N_block_tiles; w += subblock_w) {
+            if (N_block_tiles % w == 0 && w * K_block_tiles <= kMaxReadsPerTransactionId) {
+                in1_chunk_w = w;
+            }
+        }
+    }
+    if (in1_chunk_w) {
+        defines["AGMM_IN1_CHUNK_W"] = std::to_string(in1_chunk_w);
+    }
     if (fabric_2d) {
         defines["FABRIC_2D"] = "1";
         TT_FATAL(
@@ -835,7 +854,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_fabric_defines["USE_MUX"] = "1";
     }
     auto in1_defines = defines;
-    log_debug(tt::LogOp, "all_gather_minimal_matmul_async mode: gather_senders={}", gather_senders);
+    log_debug(
+        tt::LogOp,
+        "all_gather_minimal_matmul_async mode: gather_senders={} in1_chunk_w={}",
+        gather_senders,
+        in1_chunk_w);
     if (persistent_weight_buffer.has_value()) {
         in1_defines["FSDP_FUSED"] = "1";
         in1_defines["IS_IN1"] = "1";

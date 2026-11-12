@@ -343,7 +343,9 @@ void add_bias_and_addcmul_block(
 }
 
 // One K block of an output block (adapted from compute_common.hpp): each subblock runs the block's inner dimension in
-// one matmul_block_k call and packs into its slot of out_cb (packer L1 accumulation across K blocks).
+// one matmul_block_k call and packs into its slot of out_cb (packer L1 accumulation across K blocks). With in1 column
+// chunks (AGMM_IN1_CHUNK_W) the first row waits for each chunk and the subblocks go chunk-major, so a chunk serves
+// every row before the next one is needed.
 void matmul_blocks(
     CircularBuffer& in0_cb,
     CircularBuffer& in1_cb,
@@ -354,31 +356,52 @@ void matmul_blocks(
     const uint32_t K_block_tiles,
     const uint32_t subblock_h,
     const uint32_t subblock_w) {
-    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
-        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
-            tile_regs_acquire();
-            matmul_block_k<row_mop>(
-                in0_cb.get_cb_id(),
-                in1_cb.get_cb_id(),
-                M_start * K_block_tiles /*in0_index*/,
-                N_start /*in1_index*/,
-                0 /*dst_index*/,
-                false /*transpose*/,
-                subblock_w,
-                subblock_h,
-                K_block_tiles /*kt_dim*/,
-                K_block_tiles /*k_steps*/,
-                full_N_block_tiles /*in1 K-row stride*/);
-            tile_regs_commit();
-            tile_regs_wait();
-            uint32_t dst = 0;
-            for (uint32_t h = 0; h < subblock_h; h++) {
-                for (uint32_t w = 0; w < subblock_w; w++) {
-                    pack_tile<true>(dst++, out_cb.get_cb_id(), (M_start + h) * full_N_block_tiles + N_start + w);
-                }
-            }
-            tile_regs_release();
+    const uint32_t num_m = (M_block_tiles + subblock_h - 1) / subblock_h;
+    const uint32_t num_n = (N_block_tiles + subblock_w - 1) / subblock_w;
+    for (uint32_t step = 0; step < num_m * num_n; step++) {
+#ifdef AGMM_IN1_CHUNK_W
+        const uint32_t m_i = step % num_m;
+        const uint32_t n_i = step / num_m;
+#else
+        const uint32_t m_i = step / num_n;
+        const uint32_t n_i = step % num_n;
+#endif
+        const uint32_t M_start = m_i * subblock_h;
+        const uint32_t N_start = n_i * subblock_w;
+#ifdef AGMM_IN1_CHUNK_W
+        const uint32_t in1_chunk_tiles = AGMM_IN1_CHUNK_W * K_block_tiles;
+        const uint32_t in1_chunk = N_start / AGMM_IN1_CHUNK_W;
+        if (M_start == 0 && N_start % AGMM_IN1_CHUNK_W == 0) {
+            in1_cb.wait_front((in1_chunk + 1) * in1_chunk_tiles);
         }
+        const uint32_t in1_index = in1_chunk * in1_chunk_tiles + (N_start % AGMM_IN1_CHUNK_W);
+        constexpr uint32_t in1_k_stride = AGMM_IN1_CHUNK_W;
+#else
+        const uint32_t in1_index = N_start;
+        const uint32_t in1_k_stride = full_N_block_tiles;
+#endif
+        tile_regs_acquire();
+        matmul_block_k<row_mop>(
+            in0_cb.get_cb_id(),
+            in1_cb.get_cb_id(),
+            M_start * K_block_tiles /*in0_index*/,
+            in1_index,
+            0 /*dst_index*/,
+            false /*transpose*/,
+            subblock_w,
+            subblock_h,
+            K_block_tiles /*kt_dim*/,
+            K_block_tiles /*k_steps*/,
+            in1_k_stride);
+        tile_regs_commit();
+        tile_regs_wait();
+        uint32_t dst = 0;
+        for (uint32_t h = 0; h < subblock_h; h++) {
+            for (uint32_t w = 0; w < subblock_w; w++) {
+                pack_tile<true>(dst++, out_cb.get_cb_id(), (M_start + h) * full_N_block_tiles + N_start + w);
+            }
+        }
+        tile_regs_release();
     }
 }
 
@@ -472,7 +495,9 @@ void kernel_main() {
             intermediate_cb.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 in0_cb.wait_front(in0_block_num_tiles);
+#ifndef AGMM_IN1_CHUNK_W  // chunked: matmul_blocks waits for each chunk
                 in1_cb.wait_front(in1_block_num_tiles);
+#endif
 
                 matmul_blocks(
                     in0_cb,
