@@ -345,6 +345,9 @@ def run_bert_question_and_answering_inference(
         f"inference time for {SINGLE_RUN} run(s) of model with batch size {batch} and using cache: {measurements[f'inference_for_{SINGLE_RUN}_run_batch_{batch}_without_cache']} s"
     )
     logger.info(f"inference throughput: {measurements['inference_throughput'] } inputs/s")
+    from models.demos.utils.common_demo_utils import report_vision_fps
+
+    report_vision_fps("bert-large", measurements["inference_throughput"], batch)
     logger.info(f"post processing time: {measurements['post_processing']} s")
 
     del tt_out

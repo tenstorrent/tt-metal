@@ -71,9 +71,10 @@ void bind_rgb_to_yuv(nb::module_& mod) {
            RGBRange input_range,
            YUVRange output_range,
            const std::optional<prim::YUVCoefficients>& coefficients,
-           const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+           const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+           bool wide_rows) {
             return ttnn::experimental::rgb_to_yuv(
-                input, format, color_space, input_range, output_range, coefficients, memory_config);
+                input, format, color_space, input_range, output_range, coefficients, memory_config, wide_rows);
         },
         "input"_a,
         nb::kw_only(),
@@ -83,11 +84,14 @@ void bind_rgb_to_yuv(nb::module_& mod) {
         "output_range"_a = YUVRange::Limited,
         "coefficients"_a = nb::none(),
         "memory_config"_a = nb::none(),
+        "wide_rows"_a = false,
         R"doc(
 Convert a CHWT bfloat16 tensor (C=3, RGB) to YUV 4:2:0 uint8.
 
 Returns a tuple of three row-major uint8 tensors:
-  (Y, U, V)  with shapes (1,H,W,T), (1,H/2,W/2,T), (1,H/2,W/2,T).
+  (Y, U, V)  with shapes (1,H,W,T), (1,H/2,W/2,T), (1,H/2,W/2,T);
+  with wide_rows=True the same bytes as (1,H,W*T), (1,H/2,W/2*T), (1,H/2,W/2*T)
+  (one DRAM page per row instead of per stick; T must be <= 32).
 
 Args:
     input: CHWT bfloat16 tensor on device, C=3.  Must be interleaved.

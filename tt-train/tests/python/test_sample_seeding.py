@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import math
 import os
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import pytest
@@ -73,102 +73,23 @@ TEMPERATURE = 1.0
 _DEFAULT_MESH = "1,2"
 
 
-# --- MGD selection (mirrors test_fsdp.py): only fill in a bundled descriptor
-#     when TT_MESH_GRAPH_DESC_PATH is UNSET, so a user-provided value always
-#     wins (e.g. the galaxy descriptor set in the launch script). ---
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_DIR = os.path.join(_REPO_ROOT, "configs", "mgd")
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", (1, 2)): os.path.join(_MGD_DIR, "bh_galaxy_1_2_line_line.textproto"),
-    ("blackhole", (2, 2)): os.path.join(_MGD_DIR, "bh_galaxy_2_2_line_line.textproto"),
-    ("wormhole_b0", (1, 2)): os.path.join(_MGD_DIR, "n300_1_2_line_line.textproto"),
-}
-
-
-def _detect_arch() -> Optional[str]:
-    """Return "blackhole"/"wormhole_b0" for the host (no device open needed), else None."""
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
-
-def _ensure_mgd_path(shape: Tuple[int, ...]) -> Optional[str]:
-    """Point TT_MESH_GRAPH_DESC_PATH at a bundled descriptor IFF it is unset.
-
-    Returns the previous env value so the caller can restore it. Respects any
-    user-provided value (never overrides it) and leaves the env alone when no
-    bundled descriptor matches the host arch + shape.
-    """
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    arch = _detect_arch()
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, tuple(shape))) if arch else None
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
-def _close_device_quietly() -> None:
-    try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so teardown never masks a real failure."""
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _mesh_shape_from_env() -> Tuple[int, ...]:
     raw = os.environ.get("SAMPLE_SEEDING_MESH", _DEFAULT_MESH)
     return tuple(int(x) for x in raw.replace(" ", "").split(","))
 
 
 @pytest.fixture(scope="module")
-def seeding_mesh():
+def seeding_mesh(fresh_device_mesh):
     """Open ONE mesh (shape from ``SAMPLE_SEEDING_MESH``) for all seeding scenarios.
 
-    Skips the whole module if the host has too few devices or the mesh can't be
-    opened. Closes the device and restores the MGD env var on teardown.
+    Skips the whole module if the host has too few devices for the shape. A host
+    that has enough but still can't open the mesh fails instead. Closes the device
+    and restores the MGD env var on teardown.
     """
     shape = _mesh_shape_from_env()
-    required = math.prod(shape)
-    num_devices = ttnn.get_num_devices()
-    if num_devices < required:
-        pytest.skip(f"mesh {shape} needs {required} devices, have {num_devices}")
-
-    previous_mgd = _ensure_mgd_path(shape)
-    _close_device_quietly()
-    try:
-        ttml.open_device_mesh(shape)
-    except BaseException as e:  # noqa: BLE001 - mesh unopenable on this topology
-        _restore_mgd_path(previous_mgd)
-        pytest.skip(f"could not open mesh {shape}: {e}")
-
-    ttml.autograd.AutoContext.get_instance().set_seed(SEED)
-    yield shape
-
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
+    with fresh_device_mesh(shape, what="sample-seeding tests"):
+        ttml.autograd.AutoContext.get_instance().set_seed(SEED)
+        yield shape
 
 
 # --- Seeding scenarios. `seed_axes` is evaluated against the opened shape; a

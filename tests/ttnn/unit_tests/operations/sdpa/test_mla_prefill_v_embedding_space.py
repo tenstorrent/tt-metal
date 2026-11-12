@@ -161,21 +161,12 @@ def run_flash_mla_prefill_impl(
 @pytest.mark.parametrize(
     "batch, seq_len_q, seq_len_kv, nh, nkv, kv_lora_rank, d_rope, v_head_dim, q_chunk_first, v_chunk_first, q_chunk_second, v_chunk_second",
     [
-        # cases from deepseek
-        # TP=8, SP=1, seq_len = 1k
-        (1, 1024, 1024, 16, 16, 512, 64, 128, 32, 32, 32, 32),
-        # TP=8, SP=1, seq_len = 4k
-        (1, 4096, 4096, 16, 16, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=1, seq_len = 1k
-        (1, 1024, 1024, 32, 32, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=1, seq_len = 4k
-        (1, 4096, 4096, 32, 32, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=32, seq_len = 16k
-        (1, 512, 16384, 32, 32, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=32, seq_len = 32k
-        (1, 1024, 32768, 32, 32, 512, 64, 128, 32, 32, 32, 32),
-        # TP=4, SP=32, seq_len = 128k
-        (1, 4096, 131072, 32, 32, 512, 64, 128, 128, 256, 128, 512),
+        # Small cases; the full DeepSeek TP/SP shapes run in
+        # tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+        # causal (seq_len_q == seq_len_kv)
+        (1, 256, 256, 16, 16, 512, 64, 128, 32, 32, 32, 32),
+        # non-causal (seq_len_q != seq_len_kv), Blackhole uses the larger chunk sizes
+        (1, 128, 1024, 32, 32, 512, 64, 128, 128, 256, 128, 512),
     ],
 )
 @pytest.mark.parametrize(

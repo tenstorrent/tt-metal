@@ -590,7 +590,8 @@ def test_distributed_dit_layernorm_program_cache(
 
 @pytest.mark.parametrize(
     "inp_shape",
-    [(1, 1, 32, 128), (1, 1, 32, 1024)],
+    # W=160 (Wt=5): Wt % block_size == 1 (block_size 4 with fp32 dest), so the last tile starts a block.
+    [(1, 1, 32, 128), (1, 1, 32, 1024), (1, 1, 32, 160)],
 )
 @pytest.mark.parametrize(
     "inp_dtype, stats_dtype",

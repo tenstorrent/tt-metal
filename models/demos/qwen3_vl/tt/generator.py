@@ -104,6 +104,18 @@ class Generator(WarmupForwardMixin):
         # convert to torch tensor
         self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
 
+    def remap_rope_deltas(self, slot_remap):
+        """Move persistent per-slot RoPE state after vLLM condenses a batch."""
+        rope_setup = self.model.rope_setup
+        batch_size = rope_setup.batch_size
+        indices = torch.as_tensor(slot_remap, dtype=torch.long).reshape(-1)
+        if indices.numel() < batch_size:
+            raise ValueError(f"slot_remap has {indices.numel()} entries, expected at least {batch_size}")
+        indices = indices[:batch_size]
+        if torch.any(indices < 0) or torch.any(indices >= batch_size):
+            raise ValueError(f"slot_remap entries must be in [0, {batch_size})")
+        rope_setup.rope_deltas = rope_setup.rope_deltas.index_select(0, indices).clone()
+
     def decode_forward(
         self,
         tokens,
@@ -113,7 +125,12 @@ class Generator(WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
-        **kwargs,
+        slot_remap=None,
+        *,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
     ):
         return self._ttt_generator.decode_forward(
             tokens=tokens,
@@ -123,7 +140,11 @@ class Generator(WarmupForwardMixin):
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
-            **kwargs,
+            slot_remap=slot_remap,
+            reload_inputs=reload_inputs,
+            reload_page_table=reload_page_table,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
         )
 
     def prefill_forward_single_user_text(

@@ -12,6 +12,7 @@
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 #include "dev_mem_map.h"  // MEM_L1_UNCACHED_BASE
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     DataflowBuffer dfb(dfb::in);
@@ -32,7 +33,8 @@ void kernel_main() {
             // UNCACHED L1 alias on Quasar DM (dataflow_buffer.h), which would bypass the cache entirely and
             // make every round pass without exercising the invalidate, so normalize back to the cacheable
             // address here (tolerating the alias being absent, since it is temporary API behaviour).
-            const uint32_t rd_ptr = static_cast<uint32_t>(lk.get_ptr().get_address());
+            // Raw address: needed to strip the uncached alias below.
+            const uint32_t rd_ptr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(lk.get_ptr()));
             const uint32_t cached_rd_ptr = rd_ptr >= MEM_L1_UNCACHED_BASE ? rd_ptr - MEM_L1_UNCACHED_BASE : rd_ptr;
             result_uncached[r] = *(const volatile uint32_t*)(uintptr_t)cached_rd_ptr;  // this round's value
         }

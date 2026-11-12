@@ -8,6 +8,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     const uint32_t writer_noc_x = get_arg(args::writer_noc_x);
@@ -34,7 +35,8 @@ void kernel_main() {
 
         // Publish the locked entry address to the writer (stage in local L1, then NOC it across).
         volatile tt_l1_ptr uint32_t* staged = (volatile tt_l1_ptr uint32_t*)(uintptr_t)local_scratch;
-        *staged = static_cast<uint32_t>(lock.get_ptr().get_address());
+        // Raw address: the writer core targets this entry by its L1 address.
+        *staged = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(lock.get_ptr()));
         CoreLocalMem<uint32_t> addr_src(local_scratch);
         noc.async_write(
             addr_src,

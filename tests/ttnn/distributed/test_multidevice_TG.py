@@ -19,7 +19,7 @@ from ttnn import (
     ConcatMesh2dToTensor,
     MeshToTensor,
 )
-from models.common.utility_functions import nearest_32
+from tt_py_test_utils_common.utility_functions import nearest_32
 
 
 @pytest.mark.skip("1D device mesh not supported")

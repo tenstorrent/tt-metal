@@ -16,20 +16,23 @@ Owner:
 
 
 import os
+import re
 from dataclasses import dataclass
 from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
     KernelCallstackWithMessage,
     format_callstack_with_message,
+    serialize_variables,
     run as get_callstack_provider,
     CallstackProvider,
 )
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from run_checks import run as get_run_checks
-from ttexalens.coordinate import OnChipCoordinate
+from rich.markup import escape
+from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
-from ttexalens.elf import CallstackEntryVariable
+from ttexalens.elf import CallstackEntry, CallstackEntryVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
@@ -152,30 +155,30 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
         return "?"
 
 
-def serialize_variables(variables: list[CallstackEntryVariable], assert_code: str) -> str:
-    result = ""
-    for var in variables:
-        var_name = var.name or "?"
-        var_value = var.value if var.value is not None else "?"
-        if var_name in assert_code:
-            serialized = f"- [info]{var_name}[/] = [command]{var_value}[/]\n"
-        else:
-            serialized = f"- {var_name} = {var_value}\n"
-        result += serialized
-    return result
+ASSERT_TRAP_FUNCTIONS = {"lightweight_assert_trap", "assert_and_hang"}
+
+
+def _is_assert_trap_frame(frame: CallstackEntry) -> bool:
+    return frame.function_name in ASSERT_TRAP_FUNCTIONS
+
+
+def _find_assert_frame(callstack: list[CallstackEntry]) -> CallstackEntry:
+    # The trap, when there is one, is the top frame and the ASSERT is the frame right below it.
+    if len(callstack) > 1 and _is_assert_trap_frame(callstack[0]):
+        return callstack[1]
+    return callstack[0]
 
 
 def dump_lightweight_asserts(
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_debug: RiscDebug,
     dispatcher_data: DispatcherData,
     callstack_provider: CallstackProvider,
 ) -> LightweightAssertInfo | None:
+    risc_name = risc_debug.risc_location.risc_name
+    location = risc_debug.risc_location.location
     try:
         if not dispatcher_data.risc_enabled(risc_name):
             return None
-
-        risc_debug = location.device.get_block(location).get_risc_debug(risc_name)
 
         # We don't care about cores that are in reset
         if risc_debug.is_in_reset():
@@ -189,7 +192,7 @@ def dump_lightweight_asserts(
         pc = risc_debug.get_pc()
         code_private_memory = risc_debug.get_code_private_memory()
         if code_private_memory is not None and code_private_memory.contains_private_address(pc):
-            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
+            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(risc_debug.risc_location)
             if dispatcher_core_data.kernel_path is None:
                 return None
             elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path]
@@ -218,38 +221,39 @@ def dump_lightweight_asserts(
             return None
 
         callstack_data = callstack_provider.get_cached_callstacks(
-            location, risc_name, rewind_pc_for_ebreak, use_full_callstack=True
+            risc_debug, rewind_pc_for_ebreak, use_full_callstack=True
         )
         arguments_and_locals = None
         assert_code = "?"
         if callstack_data.kernel_callstack_with_message.callstack:
-            fi = callstack_data.kernel_callstack_with_message.callstack[0].file_info
+            assert_frame = _find_assert_frame(callstack_data.kernel_callstack_with_message.callstack)
+            fi = assert_frame.file_info
             assert_code = extract_assert_code(
                 fi.file if fi is not None else None,
                 fi.line if fi is not None else None,
                 fi.column if fi is not None else None,
             )
             arguments_and_locals = ""
-            top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
-            if len(top_frame.template_parameters) > 0:
+            if len(assert_frame.template_parameters) > 0:
                 arguments_and_locals += "\nTemplate parameters:\n"
-                arguments_and_locals += serialize_variables(top_frame.template_parameters, assert_code)
-                for var in top_frame.template_parameters:
-                    if var.name is not None:
-                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(top_frame.arguments) > 0:
+                arguments_and_locals += serialize_variables(assert_frame.template_parameters, assert_code)
+            if len(assert_frame.arguments) > 0:
                 arguments_and_locals += "\nRuntime arguments:\n"
-                arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)
-                for var in top_frame.arguments:
-                    if var.name is not None:
-                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(top_frame.locals) > 0:
+                arguments_and_locals += serialize_variables(assert_frame.arguments, assert_code)
+            if len(assert_frame.locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
-                arguments_and_locals += serialize_variables(top_frame.locals, assert_code)
-                for var in top_frame.locals:
-                    if var.name is not None:
-                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if arguments_and_locals and " = ?" in arguments_and_locals:
+                arguments_and_locals += serialize_variables(assert_frame.locals, assert_code)
+            names = {
+                var.name
+                for var in (*assert_frame.template_parameters, *assert_frame.arguments, *assert_frame.locals)
+                if var.name
+            }
+            assert_code = re.sub(
+                r"(?<!\\)\b\w+",  # whole words that don't start with a backslash
+                lambda word: f"[info]{word.group()}[/]" if word.group() in names else word.group(),
+                escape(assert_code),  # so brackets in the source (buf[i]) are not read as Rich tags
+            )
+            if arguments_and_locals:
 
                 def _any_value_missing(vs: list[CallstackEntryVariable]) -> bool:
                     return any(v.value is None for v in vs)
@@ -257,9 +261,9 @@ def dump_lightweight_asserts(
                 if any(
                     _any_value_missing(vs)
                     for vs in (
-                        top_frame.template_parameters,
-                        top_frame.arguments,
-                        top_frame.locals,
+                        assert_frame.template_parameters,
+                        assert_frame.arguments,
+                        assert_frame.locals,
                     )
                 ):
                     arguments_and_locals += (
@@ -294,9 +298,8 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
 
     callstacks_data = run_checks.run_per_core_check(
-        lambda location, risc_name: dump_lightweight_asserts(
-            location,
-            risc_name,
+        lambda risc_debug: dump_lightweight_asserts(
+            risc_debug,
             dispatcher_data,
             callstack_provider,
         ),

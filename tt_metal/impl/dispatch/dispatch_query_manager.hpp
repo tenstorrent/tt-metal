@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -13,7 +14,7 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 
@@ -41,6 +42,9 @@ public:
     bool dispatch_s_enabled() const;
     bool distributed_dispatcher() const;
     NOC go_signal_noc() const;
+    // Quasar FDS query. When enabled, workers receive the go signal and signal completion over FDS
+    // instead of over the NOC.
+    bool fds_signalling_enabled() const;
     // General Dispatch related queries - configs and core placement
     const std::vector<CoreCoord>& get_logical_dispatch_cores(uint32_t device_id) const;
     const std::vector<CoreCoord>& get_logical_dispatch_cores_on_user_chips() const;
@@ -56,6 +60,7 @@ private:
     dispatch_core_manager& core_manager_;
     bool dispatch_s_enabled_ = false;
     bool distributed_dispatcher_ = false;
+    bool fds_signalling_enabled_ = false;
     NOC go_signal_noc_ = NOC::NOC_0;
     CommandQueueDispatchLayout cq_dispatch_layout_;
     CoreType resolved_dispatch_core_type_ = CoreType::WORKER;
@@ -68,6 +73,8 @@ private:
     // Make this mutable, since this is JIT populated
     // through a const instance when queried
     mutable std::vector<tt_cxy_pair> dispatch_cores_;
+    // Set once dispatch_cores_ is populated; later queries read it without taking the mutex.
+    mutable std::atomic<bool> dispatch_cores_ready_{false};
     mutable std::mutex modifier_mutex;
 };
 

@@ -88,6 +88,16 @@ def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torc
     return affine_a.float(), affine_b.float()
 
 
+def pack_summary(affine_a: torch.Tensor, affine_b: torch.Tensor) -> torch.Tensor:
+    """Rows of [A | B], the layout of one summary slot."""
+    return torch.cat([affine_a, affine_b], dim=-1)
+
+
+def unpack_summary(packed: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    key_dim = packed.shape[-2]
+    return packed[..., :key_dim], packed[..., key_dim:]
+
+
 def segmented_summary_oracle(
     host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
 ) -> tuple[torch.Tensor, ...]:
@@ -119,13 +129,19 @@ def segmented_summary_oracle(
 
 
 def assert_summary_reconstructs_state(
-    protocol: Sequence[torch.Tensor], affine_a: torch.Tensor, affine_b: torch.Tensor
+    protocol: Sequence[torch.Tensor], affine_a: torch.Tensor, affine_b: torch.Tensor, *, nrmse_threshold: float
 ) -> None:
     batch_heads, key_dim, value_dim = affine_a.shape
     state = initial_state(batch_heads, key_dim, value_dim, seed=3141)
     expected = _scan_state(protocol, state)
     reconstructed = torch.matmul(affine_a.float(), state) + affine_b.float()
-    assert_accurate(expected, reconstructed, name="semantic affine reconstruction", pcc_threshold=0.9999)
+    assert_accurate(
+        expected,
+        reconstructed,
+        name="semantic affine reconstruction",
+        pcc_threshold=0.9999,
+        nrmse_threshold=nrmse_threshold,
+    )
 
 
 def to_device(
@@ -172,21 +188,22 @@ def run_summary(
     groups_per_head: int = 1,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
-) -> list[ttnn.Tensor]:
+    tail: bool = False,
+    init: bool = True,
+) -> ttnn.Tensor:
+    """Run the summary; return its packed [S, N, K, K+V] output."""
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        outputs = ttnn.experimental.kda.summarize_chunk_recurrence(
+        summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
             *protocol,
             actual_start=actual_start,
             groups_per_head=groups_per_head,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
+            tail=tail,
+            init=init,
         )
-
-    assert len(outputs) == 4
-    assert all(t.dtype == ttnn.bfloat16 for t in outputs)
-    for tensor in outputs[2:]:
-        ttnn.deallocate(tensor)
-    return outputs[:2]
+    assert summaries.dtype == ttnn.bfloat16
+    return summaries
 
 
 def assert_runtime_contract(
@@ -198,6 +215,7 @@ def assert_runtime_contract(
     names: Sequence[str],
     dtypes: Sequence[ttnn.DataType],
     shapes: Sequence[tuple[int, ...]],
+    nrmse_threshold: float,
     pcc_threshold: float = 0.999,
     expected_memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> list[ttnn.Tensor]:
@@ -224,7 +242,9 @@ def assert_runtime_contract(
 
     for name, golden, first_tt, traced_tt in zip(names, expected, first, traced, strict=True):
         actual = ttnn.to_torch(first_tt)
-        assert_accurate(golden.float(), actual.float(), name=name, pcc_threshold=pcc_threshold)
+        assert_accurate(
+            golden.float(), actual.float(), name=name, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse_threshold
+        )
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
     for index, (snapshot, tensor) in enumerate(zip(snapshots, inputs, strict=True)):
         assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"input {index} immutability")
@@ -238,6 +258,7 @@ def assert_outputs_accurate(
     *,
     names: Sequence[str],
     context: str,
+    nrmse_threshold: float,
     pcc_threshold: float = 0.999,
     linf_threshold: float | None = None,
 ) -> None:
@@ -247,6 +268,7 @@ def assert_outputs_accurate(
             ttnn.to_torch(actual_tt).float(),
             name=f"{context} {name}",
             pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse_threshold,
             linf_threshold=linf_threshold,
         )
 
@@ -260,16 +282,16 @@ def one_core_height_sharded(shape: tuple[int, int]) -> ttnn.MemoryConfig:
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def group_summary_height_sharded(device: ttnn.Device, batch_heads: int, dim: int) -> ttnn.MemoryConfig:
-    cores = ttnn.num_cores_to_corerangeset(
-        batch_heads,
-        device.compute_with_storage_grid_size(),
-        row_wise=True,
-    )
-    return ttnn.create_sharded_memory_config(
-        (batch_heads, dim, dim),
-        core_grid=cores,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
+def group_summary_nd_sharded(
+    device: ttnn.Device, slots: int, transforms: int, key_dim: int, value_dim: int
+) -> ttnn.MemoryConfig:
+    """L1 ND shards of one transform's [slots, 1, K, K+V] summary rows, one per core in row-major order."""
+    cores = ttnn.num_cores_to_corerangeset(transforms, device.compute_with_storage_grid_size(), row_wise=True)
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[slots, 1, key_dim, key_dim + value_dim],
+            grid=cores,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
     )

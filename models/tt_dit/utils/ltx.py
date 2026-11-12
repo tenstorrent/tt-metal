@@ -328,7 +328,19 @@ def decode_category_rows(root, *, min_frac: float = 0.01):
 
 
 def print_ltx_timing_table(
-    pipeline, *, label, num_frames, height, width, mesh_shape, sp_axis, tp_axis, topology, output_path, prompt
+    pipeline,
+    *,
+    label,
+    num_frames,
+    height,
+    width,
+    mesh_shape,
+    sp_axis,
+    tp_axis,
+    topology,
+    output_path,
+    prompt,
+    report_model=None,
 ):
     """Per-stage wall-clock table for one gen.
 
@@ -340,6 +352,10 @@ def print_ltx_timing_table(
     timings = getattr(pipeline, "last_timings", None)
     if not timings:
         return
+    if report_model:
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate(report_model, sum(secs for _, secs in timings), num_frames, batch_size=1)
 
     from . import timing_tree
 

@@ -582,8 +582,8 @@ nb::class_<CoreCoord>(mod, "CoreCoord")
 namespace PYBIND11_NAMESPACE {
 namespace detail {
 template <typename T, size_t PREALLOCATED_SIZE>
-struct type_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>>
-    : list_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>, T> {};
+struct type_caster<ttsl::SmallVector<T, PREALLOCATED_SIZE>>
+    : list_caster<ttsl::SmallVector<T, PREALLOCATED_SIZE>, T> {};
 }  // namespace detail
 }  // namespace PYBIND11_NAMESPACE
 ```
@@ -599,8 +599,8 @@ NAMESPACE_BEGIN(NB_NAMESPACE)
 NAMESPACE_BEGIN(detail)
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct type_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>>
-    : list_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>, T> {};
+struct type_caster<ttsl::SmallVector<T, PREALLOCATED_SIZE>>
+    : list_caster<ttsl::SmallVector<T, PREALLOCATED_SIZE>, T> {};
 
 NAMESPACE_END(detail)
 NAMESPACE_END(NB_NAMESPACE)
@@ -922,7 +922,7 @@ Nanobind code is migrating toward `nb::ndarray<nb::array_api>` (i.e., an *array-
 
 ```cpp
 py::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
-py::implicitly_convertible<ttnn::SmallVector<uint32_t>, ttnn::Shape>();
+py::implicitly_convertible<ttsl::SmallVector<uint32_t>, ttnn::Shape>();
 ```
 
 ### Nanobind

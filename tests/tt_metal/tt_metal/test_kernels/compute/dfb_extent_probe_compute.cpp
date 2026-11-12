@@ -6,6 +6,8 @@
 // advances tc_idx with wait_front + copy_tile + pop_front between snapshots (minimal
 // credits). When the producer rotates (push_back between TC snapshots), consumers
 // paired with producer TC0 must drain one credit each or finish() hangs in AAW.
+// Each tile goes through the full DEST handshake (acquire, copy, commit, wait, release) even
+// though nothing is packed; releasing without commit and wait hangs the pack pipeline.
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -59,6 +61,8 @@ void kernel_main() {
                 dfb.wait_front(1);
                 copy_tile(dfb.get_id(), 0, 0);
                 dfb.pop_front(1);
+                tile_regs_commit();
+                tile_regs_wait();
                 tile_regs_release();
             }
         }
@@ -71,6 +75,8 @@ void kernel_main() {
         dfb.wait_front(1);
         copy_tile(dfb.get_id(), 0, 0);
         dfb.pop_front(1);
+        tile_regs_commit();
+        tile_regs_wait();
         tile_regs_release();
     }
 
@@ -80,6 +86,8 @@ void kernel_main() {
             dfb.wait_front(1);
             copy_tile(dfb.get_id(), 0, 0);
             dfb.pop_front(1);
+            tile_regs_commit();
+            tile_regs_wait();
             tile_regs_release();
         }
     }

@@ -39,6 +39,15 @@ class Sfpu:
     granularity = InvocationGranularity.NONE
     input_count = 1
 
+    @staticmethod
+    def _vector_mode(operation: "L1Operation") -> str:
+        num_faces = operation.tile_shape.total_num_faces()
+        if num_faces == 1:
+            return "ckernel::VectorMode::None"
+        if num_faces == 2:
+            return "ckernel::VectorMode::R"
+        return "ckernel::VectorMode::RC"
+
     def init(
         self,
         operation: "L1Operation",

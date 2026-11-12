@@ -1,0 +1,13 @@
+{
+    "repo": "tenstorrent/tt-metal",
+    "watermark": "2026-09-26T00:31:34Z",
+    "tree_commit": null,
+    "written": "2026-09-28T22:42:21Z",
+    "counts": {
+        "issues": 19792,
+        "prs": 33116,
+        "dump_files": 384,
+        "deep_read": 1311,
+        "held_out": 110
+    }
+}

@@ -55,9 +55,6 @@ void kernel_main() {
     // Max write size after doublings; used as template parameter to enable fast path.
     constexpr uint32_t max_write_size = original_page_size_bytes << num_doublings;
 
-    uint32_t input_buffer = dfb0.get_base_address();
-    uint32_t alignment_buffer = dfb1.get_base_address();
-
     constexpr uint64_t r_mask_to_use = decltype(s)::is_dram ? MASK_64 : MASK_16;
     constexpr uint64_t r_offset_to_use = decltype(s)::is_dram ? OFFSET_64 : OFFSET_16;
     constexpr uint32_t r_alignment_requirement = decltype(s)::is_dram ? 64 : 16;
@@ -65,8 +62,8 @@ void kernel_main() {
     constexpr uint64_t w_mask_to_use = MASK_16;
     constexpr uint64_t w_offset_to_use = OFFSET_16;
 
-    alignment_buffer = align_address<w_alignment_requirement>(alignment_buffer, w_mask_to_use);
-    input_buffer = align_address<r_alignment_requirement>(input_buffer, r_mask_to_use);
+    const uint32_t alignment_buffer = align_address<w_alignment_requirement>(dfb1.local_mem(), w_mask_to_use);
+    const uint32_t input_buffer = align_address<r_alignment_requirement>(dfb0.local_mem(), r_mask_to_use);
 
     uint32_t cur_page_size = original_page_size_bytes;
     for (uint32_t i = page_start; i < page_end; i++) {

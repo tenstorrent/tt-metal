@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -16,7 +17,8 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 
 #include <tt_stl/optional_reference.hpp>
-#include <tt_stl/span.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {
 class MemoryConfig;

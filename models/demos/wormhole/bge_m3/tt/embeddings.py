@@ -6,8 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 import ttnn
+from models.common.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.lightweightmodule import LightweightModule
-from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 
 
 @dataclass

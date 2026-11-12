@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -19,6 +20,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -27,15 +29,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const Operand& buffer_A         = params.buffer_A;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
 #endif
 
     {
-        ZONE_SCOPED("INIT")
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        START_PERF_MEASURE("INIT")
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -47,8 +51,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        if constexpr (unpack_to_dest)
+        {
+            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
+            // bank offset reset to 0 keeps every section at DEST tile 0.
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        }
+        else
+        {
+            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        }
 
         // Program dest-dvalid CFG after HW configure so wait masks are the last
         // writes before TILE_LOOP. UNPACK is only a dest client on UNP_DEST.
@@ -74,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
@@ -88,7 +101,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                if constexpr (unpack_to_dest)
+                {
+                    _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
+                }
+                else
+                {
+                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                }
                 if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -126,32 +146,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
     const std::uint32_t num_faces       = params.num_faces;
     const std::uint32_t DST_INDEX       = params.DST_INDEX;
+    const Operand& buffer_B             = params.buffer_B;
 #endif
 
     const DataFormat src_format     = static_cast<DataFormat>(formats.math);
     const DataFormat sfpu_in_format = static_cast<DataFormat>(formats.sfpu_src);
 
     {
-        ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
-        }
-        else
-        {
-            const bool int8_math_into_int32_dest =
-                is_fp32_dest_acc_en && (src_format == DataFormat::Int8 || src_format == DataFormat::UInt8) && sfpu_in_format == DataFormat::Int32;
-            if (int8_math_into_int32_dest)
-            {
-                // ALU_ACC_CTRL_INT8_math_enabled is only for Int8/UInt8 math
-                // accumulating into the Int32 Dest through the ELWADD datacopy.
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(src_format, src_format);
-            }
-            else
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
-            }
-        }
+        START_PERF_MEASURE("INIT")
+
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
         if constexpr (!unpack_to_dest)
         {
@@ -190,7 +194,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             if constexpr (!unpack_to_dest)
@@ -215,14 +219,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    test_utils::call_unary_sfpu_operation_quasar<
-                        SFPU_UNARY_OPERATION,
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        APPROX_MODE,
-                        SFPU_ITERATIONS,
-                        TYPECAST_IN_FORMAT,
-                        TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
+                    if constexpr (SFPU_UNARY_OPERATION == SfpuType::reshuffle_rows)
+                    {
+                        // (input, accumulator) tile pairs; the kernel skips a 16-byte header before the mask.
+                        if (i % 2 == 0)
+                        {
+                            test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(
+                                DST_INDEX + i /*dst_index*/,
+                                sfpu_in_format,
+                                true /*first*/,
+                                5.0f /*fill_const_value*/,
+                                buffer_B[0] - RESHUFFLE_MASK_HEADER_BYTES /*idx_addr*/);
+                        }
+                    }
+                    else
+                    {
+                        test_utils::call_unary_sfpu_operation_quasar<
+                            SFPU_UNARY_OPERATION,
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            APPROX_MODE,
+                            SFPU_ITERATIONS,
+                            TYPECAST_IN_FORMAT,
+                            TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
+                    }
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
@@ -254,19 +274,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t DST_INDEX   = params.DST_INDEX;
-    const Operand& buffer_Res       = params.buffer_Res;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t DST_INDEX       = params.DST_INDEX;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
 #endif
 
     {
-        ZONE_SCOPED("INIT")
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        START_PERF_MEASURE("INIT")
+        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
 
         // Program dest-dvalid CFG after HW configure so wait masks are the last
         // writes before TILE_LOOP.
@@ -291,7 +313,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)

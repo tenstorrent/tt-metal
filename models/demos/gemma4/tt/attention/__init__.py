@@ -176,6 +176,7 @@ class Gemma4Attention:
                 max_batch_size=max_batch_size,
                 max_seq_len=max_seq_len,
                 tensor_cache_path=tensor_cache_path,
+                mesh_config=mesh_config,
             )
         else:
             self.kv_cache = None
@@ -272,9 +273,12 @@ class Gemma4Attention:
         valid_seq_len=None,
         sequential_kv_write=False,
         rope_presliced=False,
+        rope_prepared=None,
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        mm_attn_mask=None,
+        traced_short_bucket=False,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -346,6 +350,7 @@ class Gemma4Attention:
                 position_idx_cache=position_idx_cache,
                 sequential_kv_write=sequential_kv_write,
                 rope_presliced=rope_presliced,
+                rope_prepared=rope_prepared,
             )
         else:
             # Sliding-window layers under generator-level chunked prefill carry a
@@ -396,6 +401,8 @@ class Gemma4Attention:
                 chunk_page_table=chunk_page_table,
                 sliding_tail_in=self._get_sliding_tail(_req_key),
                 sliding_tail_end=tail_ends.get(_req_key),
+                mm_attn_mask=mm_attn_mask,
+                traced_short_bucket=traced_short_bucket,
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk under this request's key.

@@ -19,7 +19,7 @@ Changes may propagate upward; Layer 2 is almost always the first place to check.
 
 **Path:** `tt_metal/hw/ckernels/{arch}/metal/llk_api/`
 
-Per-architecture wrappers (top-level files + SFPU wrappers in `llk_sfpu/` per arch). These `#include` LLK headers directly and expose the non-underscored API functions.
+Per-architecture wrappers (top-level files), plus the SFPU kernels in `llk_sfpu/` per arch. The wrappers `#include` LLK headers directly and expose the non-underscored API functions.
 
 Example: `llk_math_binary_api.h` includes `llk_math_eltwise_binary.h` from tt-llk, wraps `_llk_math_eltwise_binary_init_<>()` into `llk_math_eltwise_binary_init<>()`.
 
@@ -82,9 +82,10 @@ Grep for "{function_name}" in tests/tt_metal/tt_metal/test_kernels/compute/ (*.c
 
 | Layer | File to Create | Template |
 |-------|---------------|----------|
-| 1 | `tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_new_op.h` | Existing SFPU op in same arch |
-| 2 | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_new_op.h` | Existing wrapper in `llk_sfpu/` |
+| 2 | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_new_op.h` | Existing SFPU op in `llk_sfpu/` (same arch) |
 | 3 | `tt_metal/hw/inc/api/compute/eltwise_unary/new_op.h` | Existing op in `eltwise_unary/` |
+
+The SFPU kernel itself goes in `llk_sfpu/`, not in tt-llk. On Wormhole and Blackhole, `tt_llk_{arch}/common/inc/sfpu/` is for shared SFPU helpers such as `ckernel_sfpu_converter.h` and `ckernel_sfpu_load_config.h`, which an `llk_sfpu/` header includes as `"sfpu/<name>.h"`: tt-metal's JIT build does not search `common/inc/sfpu/`, so a bare name fails there. `tests/hardware_free/kernels/test_sfpu_header_location.py` enforces both.
 
 The Compute API in Layer 3 calls the SFPU functor directly via the `SFPU_UNARY_CALL` / `SFPU_UNARY_INIT*` macros (declared in `llk_math_eltwise_unary_sfpu_macros.h`), so no per-op `llk_math_eltwise_unary_sfpu_<op>.h` wrapper is required in Layer 2 for the standard pattern.
 
@@ -135,7 +136,7 @@ Follow `.claude/references/tensor-shape.md` (Claude skill `tensor-shape` / Curso
 | CKernels wrappers (WH) | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/` |
 | CKernels wrappers (BH) | `tt_metal/hw/ckernels/blackhole/metal/llk_api/` |
 | CKernels wrappers (QSR) | `tt_metal/hw/ckernels/quasar/metal/llk_api/` |
-| SFPU wrappers (per arch) | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/` |
+| SFPU kernels (per arch) | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/` |
 | Compute API | `tt_metal/hw/inc/api/compute/` |
 | Unary ops (Compute API) | `tt_metal/hw/inc/api/compute/eltwise_unary/` |
 | Metal LLK integration tests | `tests/tt_metal/tt_metal/llk/` |

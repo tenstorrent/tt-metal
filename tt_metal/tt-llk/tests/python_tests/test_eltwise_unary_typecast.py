@@ -10,6 +10,9 @@ int<->int and all block-float (Bfp8_b / Bfp4_b) conversions. Same-dtype pairs
 and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 """
 
+import math
+import struct
+
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
@@ -19,36 +22,40 @@ from helpers.format_config import (
     DataFormat,
     InputOutputFormat,
 )
-from helpers.golden_generators import (
-    TILE_DIMENSIONS,
-    TypecastGolden,
-    get_golden_generator,
-)
+from helpers.golden_generators import TypecastGolden, get_golden_generator
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
+    FastMode,
     MathOperation,
-    format_dict,
+    PerfRunType,
+    StableSort,
+    Transpose,
 )
-from helpers.param_config import (
-    get_num_blocks_and_num_tiles_in_block,
-    parametrize,
-)
+from helpers.param_config import parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    FAST_MODE,
+    ITERATIONS,
+    LOOP_FACTOR,
     MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
+    NUM_FACES,
+    STABLE_SORT,
     TILE_COUNT,
     TYPECAST_FORMATS,
-    DestSync,
-    generate_input_dim,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
 )
-from helpers.utils import passed_test
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
+from helpers.utils import passed_test, result_tensor
 
 # The full ttnn typecast dtype set (analysis doc section 5).
 _TYPECAST_FORMATS = [
@@ -67,8 +74,6 @@ _EXCLUDED_PAIRS = {
     (DataFormat.Int32, DataFormat.UInt32),
     (DataFormat.UInt32, DataFormat.Int32),
 }
-
-_BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
 
 # Formats the current architecture's data-format enum actually supports. Used to
 # drop unsupported pairs at collection time so we never generate tests we would
@@ -90,10 +95,6 @@ TYPECAST_PAIRS = [
     and in_fmt in _ARCH_SUPPORTED_FORMATS
     and out_fmt in _ARCH_SUPPORTED_FORMATS
 ]
-
-
-def _is_block_float(fmt: DataFormat) -> bool:
-    return fmt in _BLOCK_FLOAT_FORMATS
 
 
 def _whole_number_float_spec(high: int) -> StimuliSpec:
@@ -168,8 +169,8 @@ def test_eltwise_unary_typecast(
     #  * float / block-float input: whole numbers so int conversions are exact and
     #    bf16 is lossless; small range when a block-float is involved so the
     #    shared-exponent quantization is (near-)exact per 16-elem block.
-    bfp_involved = _is_block_float(formats.input_format) or _is_block_float(
-        formats.output_format
+    bfp_involved = (
+        formats.input_format.is_block_float() or formats.output_format.is_block_float()
     )
     if formats.input_format.is_integer():
         spec_A = (
@@ -190,7 +191,8 @@ def test_eltwise_unary_typecast(
     ],
     dest_acc=_production_dest_acc,
     approx_mode=[ApproximationMode.No],
-    input_dimensions=[[32, 32], [32, 256]],
+    # Six tiles exercises the final partial Dest block when fp32 Dest holds four.
+    input_dimensions=[[32, 32], [32, 192], [32, 256]],
 )
 def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     formats: InputOutputFormat,
@@ -227,31 +229,368 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     )
 
 
-def _run_typecast(
+_UINT16_MAX = (1 << 16) - 1
+_UINT32_MAX = (1 << 32) - 1
+
+
+def _uint_to_uint16_saturation_boundaries(input_format: DataFormat) -> list[int]:
+    """Inputs on both sides of the UInt16 saturation edge, plus bit-31-set values."""
+    if input_format == DataFormat.UInt8:
+        return list(range(256))
+    boundaries = [
+        0,
+        1,
+        _UINT16_MAX - 1,
+        _UINT16_MAX,
+        _UINT16_MAX + 1,
+        _UINT16_MAX + 2,
+        1 << 17,
+        (1 << 31) - 1,
+        1 << 31,
+        (1 << 31) + 1,
+        _UINT32_MAX - 1,
+        _UINT32_MAX,
+    ]
+    for bit in range(15, 32):
+        boundaries.extend(((1 << bit) - 1, 1 << bit, (1 << bit) + 1))
+    return boundaries
+
+
+@parametrize(
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format in (DataFormat.UInt32, DataFormat.UInt8)
+        and pair.output_format == DataFormat.UInt16
+    ],
+    dest_acc=_production_dest_acc,
+)
+def test_eltwise_unary_typecast_uint_to_uint16_saturation(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
-    approx_mode: ApproximationMode,
-    input_dimensions: list[int],
-    spec_A: StimuliSpec,
-    *,
-    max_ulp: int | None = None,
 ):
+    # The functional matrix feeds uniform(0, 255), so it never reaches the
+    # saturating lanes; pin x >= 2^16 and bit-31-set inputs to min(x, 65535).
+    input_dimensions = [32, 32]
+    boundaries = _uint_to_uint16_saturation_boundaries(formats.input_format)
+
+    def distribution(size, dtype, generator):
+        # Called once per face. Boundaries take the even lanes; every odd lane
+        # stays below 65535 so no packed 32-bit word of the UInt16 result reads
+        # 0xFFFFFFFF (which BH NOC treats as a readback timeout). UInt8 inputs
+        # cannot saturate, so all 256 of them fill the face directly.
+        if formats.input_format == DataFormat.UInt8:
+            return torch.tensor(boundaries, dtype=torch.int64)[:size].to(dtype)
+        values = torch.randint(
+            0, 1 << 32, (size,), dtype=torch.int64, generator=generator
+        )
+        values[1::2] = torch.randint(
+            0, _UINT16_MAX, (size // 2,), dtype=torch.int64, generator=generator
+        )
+        assert 2 * len(boundaries) <= size
+        values[: 2 * len(boundaries) : 2] = torch.tensor(boundaries, dtype=torch.int64)
+        return values.to(dtype)
+
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        spec_A=spec_A,
-        spec_B=spec_A,
+        spec_A=StimuliSpec(distribution=distribution, seed=62824),
+        spec_B=StimuliSpec(distribution=distribution, seed=62824),
+    )
+    src_values = [int(v) & _UINT32_MAX for v in src_A.flatten().tolist()]
+    golden = [min(v, _UINT16_MAX) for v in src_values]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        tile_cnt_A,
+        tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
+    )
+    result = [int(v) & _UINT16_MAX for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
+    assert set(boundaries) <= set(src_values), "boundary inputs missing from stimuli"
+
+    mismatches = [(x, g, r) for x, g, r in zip(src_values, golden, result) if g != r]
+    assert not mismatches, (
+        f"{len(mismatches)} {formats.input_format.name}->UInt16 mismatches; first "
+        f"(input, expected, got): {[(hex(x), g, r) for x, g, r in mismatches[:16]]}"
     )
 
-    generate_golden = get_golden_generator(TypecastGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.input_format,
-        formats.output_format,
-        input_dimensions,
+
+# The uint8 wrap and uint16 saturation edges the 0..255 sweep above never reaches. Odd lanes stay in
+# 0..127 so no readback word is all-ones, which is what the Blackhole NOC returns on a timeout.
+_INT_EDGE_PAIRS = [
+    InputOutputFormat(DataFormat.Int32, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt32, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt16, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt32, DataFormat.UInt16),
+]
+_INT_EDGE_VALUES = {
+    DataFormat.Int32: (
+        [0, 1, -1, -2, 127, -127, 128, -128, -129, 255, -255, 256, -256, -257, 1000, -1000,
+         65535, -65535, 65536, -65536, 2**31 - 1, -(2**31) + 1, -(2**31)],
+        -(2**31),
+        2**31,
+    ),
+    DataFormat.UInt32: (
+        [0, 1, 127, 128, 255, 256, 257, 65534, 65535, 65536, 65537, 2**24, 2**31 - 1, 2**31,
+         2**31 + 65535, 2**32 - 2, 2**32 - 1],
+        0,
+        2**32,
+    ),
+    DataFormat.UInt16: (
+        [0, 1, 127, 128, 255, 256, 257, 32767, 32768, 65534, 65535],
+        0,
+        2**16,
+    ),
+}  # fmt: skip
+
+
+def _int_edge_spec(in_fmt: DataFormat) -> StimuliSpec:
+    edges, low, high = _INT_EDGE_VALUES[in_fmt]
+
+    def distribution(size, dtype, generator):
+        values = torch.randint(
+            low, high, (size,), dtype=torch.int64, generator=generator
+        )
+        values[0 : 2 * len(edges) : 2] = torch.tensor(edges, dtype=torch.int64)
+        values[1::2] &= 0x7F
+        return values.to(dtype)
+
+    return StimuliSpec(distribution=distribution, seed=0)
+
+
+@parametrize(
+    formats=_INT_EDGE_PAIRS,
+    dest_acc=_production_dest_acc,
+)
+def test_eltwise_unary_typecast_int_edges(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+):
+    _run_typecast(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        [32, 32],
+        _int_edge_spec(formats.input_format),
+        twos_complement=formats.input_format == DataFormat.Int32,
     )
+
+
+_FP32_EXP_BIAS = 127
+_FP32_MANTISSA_BITS = 23
+_FP32_SIGN_BIT = 1 << 31
+_UINT32_WRAP = 1 << 32
+
+
+def _fp32_bits(unbiased_exp: int, mantissa: int) -> int:
+    """Positive fp32 bit pattern for 1.mantissa * 2^unbiased_exp."""
+    return ((unbiased_exp + _FP32_EXP_BIAS) << _FP32_MANTISSA_BITS) | mantissa
+
+
+def _fp32_unbiased_exp(bits: int) -> int:
+    return ((bits >> _FP32_MANTISSA_BITS) & 0xFF) - _FP32_EXP_BIAS
+
+
+def _fp32_to_uint8_wrap(bits: int) -> int:
+    """Exact uint8 wrap of an fp32 bit pattern: trunc toward zero, low byte.
+
+    Python ints keep every binade exact (the shared golden goes through int64,
+    which overflows from 2^63 up); inf/NaN produce 0, as the kernel does.
+    """
+    value = struct.unpack("<f", struct.pack("<I", bits))[0]
+    if not math.isfinite(value):
+        return 0
+    return math.trunc(value) % 256
+
+
+def _fp32_to_uint8_wide_exponent_bits() -> list[int]:
+    """fp32 bit patterns covering every binade at or above 2^24 with nonzero low
+    mantissa bits, both signs, plus the issue's two named inputs and small values."""
+    patterns = [
+        _fp32_bits(
+            55, 0x000001
+        ),  # 2^55 + 2^32 (shift amount 32 wraps to 0 -> low byte 1)
+        _fp32_bits(60, 0x000001),  # 2^60 + 2^37
+    ]
+    mantissas = (0x000001, 0x0000FF, 0x00007F, 0x123457, 0x5A5A5B, 0x7FFFFF)
+    for unbiased_exp in range(24, 128):
+        for mantissa in mantissas:
+            patterns.append(_fp32_bits(unbiased_exp, mantissa))
+    patterns += [0x7F800000, 0x7FC00000]  # +inf, NaN
+    # Small whole and fractional values keep the in-range path pinned too.
+    for unbiased_exp in range(-2, 24):
+        for mantissa in (0x000000, 0x400001, 0x7FFFFF):
+            patterns.append(_fp32_bits(unbiased_exp, mantissa))
+    patterns += [p | _FP32_SIGN_BIT for p in patterns]
+    return patterns
+
+
+def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
+    # SFPSHFT uses (amount & 31); without a bound on the large side, exponents
+    # 55..62, 87..94 and 119..126 shift the mantissa back into the low byte.
+    # Every finite |x| >= 2^31 is a multiple of 256, so the wrapped result must be 0.
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt8)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 64]
+    patterns = _fp32_to_uint8_wide_exponent_bits()
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    # The stimuli generator calls a custom distribution once per face, so place
+    # the bit patterns over the whole operand afterwards.
+    assert len(patterns) <= src_A.numel()
+    bits = patterns + [0] * (src_A.numel() - len(patterns))
+    src_A = (
+        torch.tensor(
+            [b - _UINT32_WRAP if b & _FP32_SIGN_BIT else b for b in bits],
+            dtype=torch.int32,
+        )
+        .view(torch.float32)
+        .to(src_A.dtype)
+    )
+    src_bits = [
+        b & 0xFFFFFFFF for b in src_A.to(torch.float32).view(torch.int32).tolist()
+    ]
+    golden = [_fp32_to_uint8_wrap(b) for b in src_bits]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        tile_cnt_A,
+        tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
+    )
+    result = [int(v) & 0xFF for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
+
+    mismatches = [(b, g, r) for b, g, r in zip(src_bits, golden, result) if g != r]
+    failing_exponents = sorted({_fp32_unbiased_exp(b) for b, _, _ in mismatches})
+    assert not mismatches, (
+        f"{len(mismatches)} fp32->uint8 mismatches at unbiased exponents "
+        f"{failing_exponents}; first (input bits, expected, got): "
+        f"{[(hex(b), g, r) for b, g, r in mismatches[:16]]}"
+    )
+
+
+# 32 tiles per run (the largest operand other LLK tests use); full-range UInt16 takes two.
+_UINT_TO_UINT8_DIMENSIONS = [128, 256]
+_UINT_TO_UINT8_CHUNK = _UINT_TO_UINT8_DIMENSIONS[0] * _UINT_TO_UINT8_DIMENSIONS[1]
+
+
+def _uint_to_uint8_wide_range_values(input_format: DataFormat, chunk: int) -> list[int]:
+    """Inputs that set the bits above bit 7, which the kernel must drop.
+
+    UInt16 is swept exhaustively (``chunk`` selects the half). Int32/UInt32 get
+    every 2^k - 1, 2^k, 2^k + 1, the 256-wrap points, the top of the range and a
+    random fill. Int32 stays non-negative: Wormhole Dest holds Int32 as
+    sign-magnitude, so a negative input reads back as |x| & 0xFF there.
+    """
+    if input_format == DataFormat.UInt16:
+        start = chunk * _UINT_TO_UINT8_CHUNK
+        return list(range(start, start + _UINT_TO_UINT8_CHUNK))
+
+    top = 2**32 if input_format == DataFormat.UInt32 else 2**31
+    values = [0, 1, 254, 255, 256, 257, 511, 512, 0xFF00, 0xFFFF, 0x10000, 0x100FF]
+    for k in range(1, 32):
+        values += [v for v in ((1 << k) - 1, 1 << k, (1 << k) + 1) if v < top]
+    values += list(range(top - 256, top))
+    generator = torch.Generator().manual_seed(62765)
+    fill = _UINT_TO_UINT8_CHUNK - len(values)
+    values += torch.randint(
+        0, top, (fill,), dtype=torch.int64, generator=generator
+    ).tolist()
+    return values
+
+
+@parametrize(
+    formats=[
+        InputOutputFormat(in_fmt, DataFormat.UInt8)
+        for in_fmt in (DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
+        if in_fmt in _ARCH_SUPPORTED_FORMATS
+    ],
+    chunk=lambda formats: [0, 1] if formats.input_format == DataFormat.UInt16 else [0],
+)
+def test_eltwise_unary_typecast_uint_to_uint8_wide_range(
+    formats: InputOutputFormat, chunk: int
+):
+    # The kernel keeps only the low byte. The default stimuli (0..255) cannot tell
+    # x & 0xFF from x, (x + 256) & 0xFF or (x & 0xFFFF) & 0xFF, so drive the
+    # bits above bit 7 here.
+    dest_acc = _production_dest_acc(formats)[0]
+    input_dimensions = _UINT_TO_UINT8_DIMENSIONS
+    values = _uint_to_uint8_wide_range_values(formats.input_format, chunk)
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    # A custom distribution is called once per face, so overwrite the operand.
+    assert len(values) == src_A.numel()
+    src_A = torch.tensor(values, dtype=torch.int64).to(src_A.dtype)
+    golden = [v & 0xFF for v in values]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        tile_cnt_A,
+        tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
+    )
+    result = [int(v) & 0xFF for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
+
+    mismatches = [(v, g, r) for v, g, r in zip(values, golden, result) if g != r]
+    assert not mismatches, (
+        f"{len(mismatches)} {formats.input_format.name}->UInt8 mismatches; first "
+        f"(input, expected, got): {[(hex(v), g, r) for v, g, r in mismatches[:16]]}"
+    )
+
+
+def _build_typecast_config(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+    tile_cnt_A: int,
+    tile_cnt_B: int,
+    *,
+    src_A: torch.Tensor | None = None,
+    src_B: torch.Tensor | None = None,
+    twos_complement: bool = False,
+    is_perf: bool = False,
+    run_types: list[PerfRunType] | None = None,
+    loop_factor: int = 1,
+    iterations: int = 8,
+) -> TestConfig:
+    """Build the shared config; run_types applies only when is_perf is true."""
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
 
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
@@ -265,33 +604,38 @@ def _run_typecast(
         formats
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
+    _, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
     )
 
-    configuration = TestConfig(
-        "sources/eltwise_unary_typecast_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
-            # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
-            # (input, output) pair that selects the concrete typecast kernel.
-            MATH_OP(mathop=MathOperation.Typecast),
-            TYPECAST_FORMATS(formats.input_format, formats.output_format),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
+    templates = [
+        APPROX_MODE(approx_mode),
+        # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
+        # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
+        # (input, output) pair that selects the concrete typecast kernel.
+        MATH_OP(mathop=MathOperation.Typecast),
+        TYPECAST_FORMATS(formats.input_format, formats.output_format),
+        ITERATIONS(iterations),
+        FAST_MODE(FastMode.No),
+        STABLE_SORT(StableSort.No),
+    ]
+    runtimes = [
+        TILE_COUNT(tile_cnt_A),
+        LOOP_FACTOR(loop_factor),
+        NUM_FACES(num_faces=faces_to_generate),
+        UNPACK_TRANS_FACES(Transpose.No),
+        UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+    ]
+
+    test_config_kwargs = {
+        "test_name": "sources/eltwise_unary_typecast_test.cpp",
+        "formats": formats,
+        "templates": templates,
+        "runtimes": runtimes,
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -300,9 +644,16 @@ def _run_typecast(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
 
     # pack_src fix for the SFPU typecast.
@@ -321,20 +672,57 @@ def _run_typecast(
     if dest_acc == DestAccumulation.No:
         pack_src = (
             DataFormat.Float16_b
-            if _is_block_float(formats.output_format)
+            if formats.output_format.is_block_float()
             else formats.output_format
         )
         for fmt_config in configuration.formats_config:
             fmt_config.pack_src = pack_src
 
+    return configuration
+
+
+def _run_typecast(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+    spec_A: StimuliSpec,
+    *,
+    max_ulp: int | None = None,
+    twos_complement: bool = False,
+):
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec_A,
+        spec_B=spec_A,
+    )
+
+    generate_golden = get_golden_generator(TypecastGolden)
+    golden_tensor = generate_golden(
+        src_A,
+        formats.input_format,
+        formats.output_format,
+        input_dimensions,
+    )
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        tile_cnt_A,
+        tile_cnt_B,
+        src_A=src_A,
+        src_B=src_B,
+        twos_complement=twos_complement,
+    )
+
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp

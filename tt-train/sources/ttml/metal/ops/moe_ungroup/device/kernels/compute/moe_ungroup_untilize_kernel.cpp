@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
 
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
@@ -11,6 +10,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
+#include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 

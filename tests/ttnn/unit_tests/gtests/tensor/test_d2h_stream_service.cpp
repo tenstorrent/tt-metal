@@ -25,6 +25,7 @@
 #include <ttnn/distributed/distributed_configs.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -94,7 +95,7 @@ void write_worker_metadata(
     const std::vector<uint8_t>& metadata) {
     const uint32_t worker_metadata_addr = static_cast<uint32_t>(service.get_worker_metadata_addr());
     for (const auto& coord : service.get_backing_tensor().tensor_topology().mesh_coords()) {
-        auto* device = mesh_device->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh_device, coord);
         for (uint32_t y = worker_cores.start_coord.y; y <= worker_cores.end_coord.y; ++y) {
             for (uint32_t x = worker_cores.start_coord.x; x <= worker_cores.end_coord.x; ++x) {
                 tt::tt_metal::detail::WriteToDeviceL1(
@@ -136,7 +137,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_worker_workload(
 
     tt::tt_metal::distributed::MeshWorkload workloads;
     for (const auto& coord : coords) {
-        auto* device = mesh_device->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh_device, coord);
         const tt::tt_metal::CoreCoord service_logical = service.get_service_core(coord);
         const tt::tt_metal::CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
         const uint32_t write_ack_counter_addr = static_cast<uint32_t>(service.get_write_ack_counter_addr(coord));
@@ -483,10 +484,10 @@ void run_d2h_metadata_only_case(
 
 // Drives `num_records` metadata-only sends with NO synchronize between them and asserts
 // the LayerAckService reader thread pushed exactly one completion per record into the
-// router-owned LayerCompletionQueue ring, each with a globally-dense seq (0,1,2,...) — then
+// router-owned LayerCompletionQueue ring, labelled with dense layers (0,1,2,...) — then
 // that stop() joins the reader promptly even though no final record arrives to unblock it
 // (bounded teardown). The full round-trip: device op -> D2H socket -> read_metadata() ->
-// derive seq -> ring push -> this test (standing in for the router) pops + verifies.
+// label -> ring push -> this test (standing in for the router) pops + verifies.
 void run_layer_ack_service_case(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::CoreRange& worker_cores,  // single core -> num_workers == 1
@@ -506,20 +507,17 @@ void run_layer_ack_service_case(
 
     // Unique shm name per invocation: the owner (create) uses O_CREAT|O_EXCL and throws on a
     // stale segment, so a fixed name would collide across the sweep's cases and reruns.
-    static std::atomic<uint32_t> seq{0};
-    const std::string shm = "/tt_test_layer_ack_" + std::to_string(::getpid()) + "_" + std::to_string(seq.fetch_add(1));
+    static std::atomic<uint32_t> case_no{0};
+    const std::string shm =
+        "/tt_test_layer_ack_" + std::to_string(::getpid()) + "_" + std::to_string(case_no.fetch_add(1));
 
     // This test stands in for the LayerCompletionRouter: it OWNS the ring (create) and pops
     // completions off it. LayerAckService connects to the same ring by name in start(), so the
     // ring must exist first (mirrors the router-before-service construction ordering).
-    auto ring = tt::tt_metal::internal::LayerCompletionQueue::create(shm);
+    auto ring = tt::tt_metal::internal::LayerCompletionQueue::create(shm, num_records);
 
-    // seq-derivation inputs: treat this rank as owning all `num_records` layers of a single
-    // chunk (first_layer_idx=0, local_layers=num_layers=num_records), so the k-th record maps
-    // to chunk=0, layer=k, seq=k — a dense 0,1,2,... sequence this test verifies exactly.
-    const uint32_t source_rank = 0;
-    tt::tt_metal::LayerAckService layer_ack(
-        service, shm, source_rank, /*num_layers=*/num_records, /*first_layer_idx=*/0, /*local_layers=*/num_records);
+    // One chunk, this rank owning all `num_records` layers: the k-th record is labelled layer k.
+    tt::tt_metal::LayerAckService layer_ack(service, shm, /*first_record=*/0, /*record_count=*/num_records);
     layer_ack.start();
 
     // Record: [1,1,1,n] uint32 replicated DRAM. Content is irrelevant to the ack count
@@ -543,27 +541,28 @@ void run_layer_ack_service_case(
     // Ensure every device op has executed and pushed its record to the socket.
     tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 
-    // The reader pushes asynchronously; poll the ring until we pop all records (bounded, so a
+    // The reader pushes asynchronously; poll the ring until every record is out (bounded, so a
     // stuck reader fails the test instead of hanging it). Records arrive in FIFO order from the
-    // single producer, so collect the seqs and verify they are exactly 0,1,...,N-1.
-    std::vector<uint64_t> seqs;
+    // single producer, so the layers are exactly 0,1,...,N-1.
+    std::vector<uint32_t> layers;
     tt::tt_metal::internal::LayerCompletionMessage msg{};
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (seqs.size() < num_records && std::chrono::steady_clock::now() < deadline) {
+    while (layers.size() < num_records && std::chrono::steady_clock::now() < deadline) {
         if (ring->try_pop(msg)) {
-            EXPECT_EQ(msg.source_rank, source_rank);
-            EXPECT_EQ(msg.request_id, 0u) << "all records here belong to chunk 0";
-            EXPECT_EQ(msg.layer_idx, msg.seq) << "single-chunk, first_layer_idx=0: global layer == seq";
-            EXPECT_EQ(msg.reserved, 0u) << "real completions must not set the sentinel field";
-            seqs.push_back(msg.seq);
+            EXPECT_EQ(msg.layer_end, msg.layer_start + 1) << "the D2H transport emits one layer per record";
+            EXPECT_EQ(msg.slot_id, 0u);
+            EXPECT_EQ(msg.pos_start, 0u);
+            EXPECT_EQ(msg.pos_end, 0u);
+            EXPECT_EQ(msg.flags, 0u) << "real completions must not set the sentinel field";
+            layers.push_back(msg.layer_start);
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
-    ASSERT_EQ(seqs.size(), static_cast<size_t>(num_records))
+    ASSERT_EQ(layers.size(), static_cast<size_t>(num_records))
         << "LayerAckService must push exactly one completion per record";
     for (uint32_t i = 0; i < num_records; ++i) {
-        EXPECT_EQ(seqs[i], static_cast<uint64_t>(i)) << "seq must be globally dense (0..N-1) in FIFO order";
+        EXPECT_EQ(layers[i], i) << "layers must be dense (0..N-1) in FIFO order";
     }
 
     // Let any stray extra push (there should be none) settle, then confirm the ring is empty.
@@ -941,8 +940,8 @@ TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp_Sizes) {
     }
 }
 
-// LayerAckService in isolation: N metadata sends -> exactly N acks on the counter
-// channel, across a range of N, and stop() joins the reader without hanging even though
+// LayerAckService in isolation: N metadata sends -> exactly N completions on the ring,
+// across a range of N, and stop() joins the reader without hanging even though
 // no final record unblocks it. Validates the full device-op -> read_metadata -> inject
 // round-trip before it is wired into the model.
 TEST_F(D2HStreamServiceTest, LayerAckService_CountsAndCleanStop) {

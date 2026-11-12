@@ -25,7 +25,7 @@ std::vector<std::string> get_chip_physical_locations();
 
 #define ROUND_UP(x, a) ((((x) + (a) - 1) / (a)) * (a))
 
-#define ALIGNMENT 64  // TODO
+constexpr uint32_t DEFAULT_L1_ALIGNMENT = 64;  // TODO
 
 static inline struct l1_allocator new_tensix_allocator() {
     using namespace tt::tt_metal;
@@ -58,7 +58,7 @@ static inline struct l1_allocator new_erisc_allocator() {
 }
 
 [[maybe_unused]]
-static inline uint32_t l1_alloc(struct l1_allocator* alloc, uint32_t size, uint32_t alignment = ALIGNMENT) {
+static inline uint32_t l1_alloc(struct l1_allocator* alloc, uint32_t size, uint32_t alignment = DEFAULT_L1_ALIGNMENT) {
     uint32_t start = ROUND_UP(alloc->start, alignment);
 
     TT_FATAL(start + size <= alloc->end, "Couldn't allocate in L1");

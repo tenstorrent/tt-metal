@@ -1,0 +1,37 @@
+---
+# misc-include-cleaner for the tt_metal public headers (tt_metal/api), and only
+# for them. Passed with --config-file by
+# .github/scripts/utils/run_api_header_include_cleaner.py, which runs clang-tidy
+# with each header as the main file (the check only reports on the main file).
+# The repository's .clang-tidy keeps misc-include-cleaner disabled; this file
+# does not inherit it, so the job reports include hygiene and nothing else (the
+# regular clang-tidy scan already covers the other checks).
+#
+# Pragmas the check honours in the analyzed header and in what it includes:
+#   // IWYU pragma: keep            on an #include: never reported as unused
+#   // IWYU pragma: export          on an #include: symbols from that header count
+#                                   as provided by the including header
+#   // IWYU pragma: private, include <public.hpp>
+#                                   in a header: asked-for spelling is <public.hpp>
+#   // IWYU pragma: begin_keep / end_keep, begin_exports / end_exports
+#   // NOLINT(misc-include-cleaner) on a line: suppress that one diagnostic
+# tt_metal/api has none of these today. A header without an include guard or
+# `#pragma once` (fmt/core.h is one) counts as not self-contained and is never
+# reported unused.
+#
+# Known limits (measured on tt_metal/api, clang-tidy 20.1.8): no forward
+# declarations are suggested, and a forward declaration visible anywhere
+# satisfies a use, even one that needs the complete type, so an include can be
+# reported unused when only a forward declaration remains.
+Checks: '-*,misc-include-cleaner'
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+SystemHeaders: false
+CheckOptions:
+  # clang-tidy 20 has only these two options; UnusedIncludes / MissingIncludes
+  # (report one kind only) arrive in clang-tidy 21.
+  #
+  # IgnoreHeaders: semicolon-separated regexes matched as a suffix of a header's
+  # path; matching headers are neither asked for nor reported unused.
+  misc-include-cleaner.IgnoreHeaders: ''
+  misc-include-cleaner.DeduplicateFindings: true

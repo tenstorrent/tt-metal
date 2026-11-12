@@ -108,8 +108,8 @@
       timeout: 660   # 19 batches, computed 622
     bh_p150b_civ2_viommu:
       timeout: 640   # 18 batches, computed 600
-    bh_p300_viommu:
-      timeout: 720   # 20 batches, computed 681
+    # bh_p300_viommu:
+    #   timeout: 720   # 20 batches, computed 681
   owner_id: U08T3JQEB36 # stevendae
   team: ttnn
   budget_type: sweep

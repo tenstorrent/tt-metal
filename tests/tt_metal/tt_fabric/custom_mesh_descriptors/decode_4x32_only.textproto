@@ -1,0 +1,23 @@
+# Decode-only half of the disaggregated-prefill heterogeneous placement test.
+# One isolated 4x32 (128 ASIC) decode torus (32x4 RING/RING), no FABRIC link to the prefill ring.
+# Paired with prefill_64x_4x2_ring_only.textproto via a subcontext mapping so the 65 meshes are still
+# co-placed in one master solve. mesh_id is local to this MGD (merge remaps local->global).
+
+mesh_descriptors {
+  name: "Decode4x32"
+  arch: BLACKHOLE
+  device_topology { dims: [ 32, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 4, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "Decode4x32" mesh_id: 0 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

@@ -14,6 +14,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 #include "quasar_fds_interrupt.h"
 
@@ -29,7 +30,7 @@ constexpr uint32_t kNumSlots = 5;
 // does. Nothing it needs lives in static storage: its counter and its flag are status slots.
 constexpr uint32_t kL1Address = get_named_compile_time_arg_val("l1_address");
 constexpr uint32_t kGroupId = get_named_compile_time_arg_val("group_id");
-constexpr uint32_t kWorkerMask = get_named_compile_time_arg_val("worker_mask");
+constexpr uint32_t kWorkerMask = overlay::fds_signalling::all_worker_lanes_mask;
 // The count the interrupt is meant to mark. Every worker in the epoch belongs to this group, so
 // the host sets it to the worker count; the two are named separately because the ready wait counts
 // workers whatever their group, exactly as in quasar_dispatch_engine_signal.cpp.
@@ -69,6 +70,7 @@ void kernel_main() {
     // A captured done survives its sender and its program, so shed the previous epoch before an
     // enable bit can turn that stale count into this epoch's interrupt.
     fds_epoch::clear_dispatch_inputs(kWorkerMask);
+    fds_kernel::refresh_dispatch_group_status(kGroupId);
     overlay::FdsDispatch::fds_read_group_count(kGroupId);
     overlay::FdsDispatch::fds_config_groupid(kGroupId, kWorkerMask, kDoneThreshold);
 
@@ -85,7 +87,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kGroupId);
+    overlay::FdsDispatch::fds_go(kGroupId);
 
     uint32_t result = kComplete;
     if (!fds_interrupt::wait_for_interrupt_count(status, 1, kPollIterations)) {

@@ -17,7 +17,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc, nearest_32
 from models.demos.gpt_oss.tt.model import create_rope_setup
 from models.tt_transformers.tt.common import rope_scaling_model_factory
-from models.tt_transformers.tt.rope import rotary_embedding_factory
+from models.tt_transformers.tt.rope import RotarySetup, rotary_embedding_factory
 
 from ..test_factory import parametrize_mesh_with_fabric
 
@@ -2189,3 +2189,30 @@ def test_single_layer_with_yarn(mesh_device, device_params, reset_seeds, use_yar
     finally:
         # Restore original config
         hf_config.rope_scaling = original_rope_scaling
+
+
+@parametrize_mesh_with_fabric([(1, 1)])
+def test_transformation_matrices_are_context_independent(mesh_device):
+    # Decoder component tests use these matrices but build position cos/sin separately.
+    setups = [
+        RotarySetup(
+            device=mesh_device,
+            batch_size=1,
+            head_dim=64,
+            max_seq_len=context,
+            rope_theta=150000.0,
+            datatype=ttnn.bfloat16,
+        )
+        for context in (1, 128)
+    ]
+    small, full = [setup.get_both_trans_mats() for setup in setups]
+    for mode in ("decode", "prefill"):
+        left, right = small[mode], full[mode]
+        assert left.shape == right.shape
+        assert left.padded_shape == right.padded_shape
+        assert left.dtype == right.dtype
+        assert left.layout == right.layout
+        assert left.memory_config() == right.memory_config()
+        left_host = ttnn.to_torch(ttnn.get_device_tensors(left)[0])
+        right_host = ttnn.to_torch(ttnn.get_device_tensors(right)[0])
+        torch.testing.assert_close(left_host, right_host, rtol=0, atol=0)

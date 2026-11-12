@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -28,8 +29,10 @@ namespace tt::tt_metal::experimental {
 // The template argument is the element type the kernel views the region as.
 //
 // KERNEL BINDING: By default, a scratchpad instance is private to a single kernel
-//   instance. It is legal for more than one KernelSpec to bind to the same
-//   ScratchpadSpec only if they occupy disjoint node sets.
+//   instance. More than one KernelSpec may bind the same ScratchpadSpec when their
+//   node sets are disjoint. Setting advanced_options.allow_instance_multi_binding
+//   also permits overlapping node sets. On Gen2 (Quasar), all kernels sharing a node's
+//   scratchpad must be DM kernels; Gen1 (WH/BH) also permits compute kernels to share.
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
 //   execution lifetime, alongside DFBs (and from the same region of L1).
@@ -40,8 +43,7 @@ namespace tt::tt_metal::experimental {
 //
 // PLACEMENT: Derived from its bound kernel(s)'s WorkUnitSpec membership, like DFB.
 //   Node-local resources (scratchpad, DFB) derive their node set from their
-//   kernel bindings; cross-node resources (semaphore, cross-node DFB) must specify
-//   their node set explicitly.
+//   kernel bindings; semaphores must specify their node set explicitly.
 //
 // CAUTION: Scratchpad is a raw memory with no synchronization semantics.
 //   Be cautious when using it in compute kernels, as the Unpack/Math/Pack pipeline
@@ -69,18 +71,19 @@ struct ScratchpadSpec {
     // Low-Level Kernel (LLK) device APIs (compute primitives).
     // (These only need to be considered for scratchpads that are bound to a compute kernel.)
 
-    // These fields are identical as those in the DataflowBufferSpec.
+    // These fields are identical to those in the DataflowBufferSpec.
 
     // The data format is required if LLK metadata will be extracted from the device code
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 
-    // Optional; if unspecified, the default tile format (32x32) is assumed.
-    //
-    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces", and the compute
-    // engine derives the face layout from this field. If an entry holds shorter, more numerous faces
-    // than the default layout for its tile shape, say so with the `Tile(tile_shape, face_shape)`
-    // constructor -- the compute engine then reads exactly that much data.
+    // The tile format is optional; if unspecified, the default tile format (32x32) is assumed.
+    // Tile format includes the tile's "face" layout (sub-block arrangement within the tile).
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
+
+    ////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    ////////////////////////////////////
+    ScratchpadAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental

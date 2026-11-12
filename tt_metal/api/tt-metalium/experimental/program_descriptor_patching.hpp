@@ -37,6 +37,8 @@
  *   tt::tt_metal::apply_resolved_bindings(program, resolved, current);
  */
 
+#include <cstddef>
+#include <string_view>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 

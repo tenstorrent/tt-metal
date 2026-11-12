@@ -116,7 +116,12 @@ void kernel_main() {
 
     uint32_t w_index;
 
-#define NOC_MINIMUM_READ_SIZE (32)
+// A DRAM read must start at the same offset within a read granule in DRAM and in L1. The granule is 32 B
+// on Wormhole and 64 B on Blackhole. On Quasar, the granule is 1 B, but DRAM_ALIGNMENT is 64 B.  A 1 B
+// read would copy only part of a 4 B index. A 64 B read holds the whole index.
+#define DRAM_READ_GRANULE (DRAM_ALIGNMENT)
+// The output is built in 32 B units of num_elements_per_alignment elements.
+#define ALIGNMENT_UNIT_SIZE (32)
 #define INDEX_SIZE (4)
 
     Noc noc;
@@ -158,6 +163,7 @@ void kernel_main() {
                 if (index_is_defined[dim]) {
                     uint32_t index_l1_addr = 0;
 
+#ifdef TILIZE_INDEX
                     uint32_t index_noc_id;
                     if (dim == 4) {
                         index_noc_id = index_index / TILE_WIDTH;
@@ -165,7 +171,6 @@ void kernel_main() {
                         index_noc_id = index_index / TILE_HEIGHT;
                     }
 
-#ifdef TILIZE_INDEX
 #ifdef HAS_INDEX0
                     if (dim == 0) {
                         dfb_in1_obj.reserve_back(1);
@@ -245,8 +250,8 @@ void kernel_main() {
                     }
 #endif
 #ifdef ROW_MAJOR_INDEX
-                    uint32_t noc_offset = (static_cast<uint32_t>((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) *
-                                          NOC_MINIMUM_READ_SIZE;
+                    uint32_t noc_offset =
+                        (static_cast<uint32_t>((index_index * INDEX_SIZE) / DRAM_READ_GRANULE)) * DRAM_READ_GRANULE;
 #ifdef HAS_INDEX0
                     if (dim == 0) {
                         dfb_in1_obj.reserve_back(1);
@@ -254,7 +259,7 @@ void kernel_main() {
                         noc.async_read(
                             index0,
                             dfb_in1_obj,
-                            NOC_MINIMUM_READ_SIZE,
+                            DRAM_READ_GRANULE,
                             {.page_id = 0, .offset_bytes = noc_offset},
                             {.offset_bytes = 0});
                     }
@@ -266,7 +271,7 @@ void kernel_main() {
                         noc.async_read(
                             index1,
                             dfb_in2_obj,
-                            NOC_MINIMUM_READ_SIZE,
+                            DRAM_READ_GRANULE,
                             {.page_id = 0, .offset_bytes = noc_offset},
                             {.offset_bytes = 0});
                     }
@@ -278,7 +283,7 @@ void kernel_main() {
                         noc.async_read(
                             index2,
                             dfb_in3_obj,
-                            NOC_MINIMUM_READ_SIZE,
+                            DRAM_READ_GRANULE,
                             {.page_id = 0, .offset_bytes = noc_offset},
                             {.offset_bytes = 0});
                     }
@@ -290,7 +295,7 @@ void kernel_main() {
                         noc.async_read(
                             index3,
                             dfb_in4_obj,
-                            NOC_MINIMUM_READ_SIZE,
+                            DRAM_READ_GRANULE,
                             {.page_id = 0, .offset_bytes = noc_offset},
                             {.offset_bytes = 0});
                     }
@@ -302,7 +307,7 @@ void kernel_main() {
                         noc.async_read(
                             index4,
                             dfb_in5_obj,
-                            NOC_MINIMUM_READ_SIZE,
+                            DRAM_READ_GRANULE,
                             {.page_id = 0, .offset_bytes = noc_offset},
                             {.offset_bytes = 0});
                     }
@@ -361,25 +366,29 @@ void kernel_main() {
                 get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
             if (num_elements_per_alignment == 8) {
-                noc_offset += ((w_index / 8) % 2) * NOC_MINIMUM_READ_SIZE;
+                noc_offset += ((w_index / 8) % 2) * ALIGNMENT_UNIT_SIZE;
             }
 
+            // in0 starts on a granule, but the 32 B unit can start inside one.
+            // Read the whole granule that holds the unit. The unit then sits offset_in_granule bytes into in0.
+            const uint32_t offset_in_granule = noc_offset % DRAM_READ_GRANULE;
             noc.async_read(
                 s0,
                 dfb_in0_obj,
-                NOC_MINIMUM_READ_SIZE,
-                {.page_id = noc_id, .offset_bytes = noc_offset},
+                DRAM_READ_GRANULE,
+                {.page_id = noc_id, .offset_bytes = noc_offset - offset_in_granule},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
 
+            const uint32_t element_pos = offset_in_granule / element_size + w_index % num_elements_per_alignment;
             if (element_size == 4) {
                 volatile tt_l1_ptr uint32_t* index_l1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
-                index_l1_ptr[0] = index_l1_ptr[w_index % num_elements_per_alignment];
+                index_l1_ptr[0] = index_l1_ptr[element_pos];
             } else if (element_size == 2) {
                 volatile tt_l1_ptr uint16_t* index_l1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
-                index_l1_ptr[0] = index_l1_ptr[w_index % num_elements_per_alignment];
+                index_l1_ptr[0] = index_l1_ptr[element_pos];
             }
 
             dfb_in0_obj.push_back(1);

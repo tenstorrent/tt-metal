@@ -39,6 +39,7 @@ std::tuple<Tensor, Tensor, Tensor> rgb_to_yuv(
     const Tensor& input,
     const ttnn::experimental::prim::YUVCoefficients& coefficients,
     ttnn::experimental::prim::YUVFormat format = ttnn::experimental::prim::YUVFormat::YUV420Planar,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    bool wide_rows = false);
 
 }  // namespace ttnn::prim

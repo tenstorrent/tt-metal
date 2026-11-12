@@ -24,6 +24,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
+#include "dispatch/dispatch_query_manager.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
@@ -72,14 +73,22 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
+    const bool fds_signalling_enabled =
+        MetalContext::instance(extract_context_id(device_)).get_dispatch_query_manager().fds_signalling_enabled();
     std::vector<uint32_t> workers_per_sub_device;
     workers_per_sub_device.reserve(num_sub_devices);
     for (uint8_t i = 0; i < num_sub_devices; ++i) {
         const auto sub_device_id = SubDeviceId{i};
         const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
-        workers_per_sub_device.push_back(
-            sub_device.impl()->cores(HalProgrammableCoreType::TENSIX).num_cores() +
-            sub_device.impl()->cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores());
+        const uint32_t active_ethernet_core_count =
+            sub_device.impl()->cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores();
+        if (fds_signalling_enabled) {
+            TT_FATAL(
+                active_ethernet_core_count == 0,
+                "FDS worker signalling does not support ACTIVE_ETH cores in sub-device {}",
+                i);
+        }
+        workers_per_sub_device.push_back(sub_device.impl()->cores(HalProgrammableCoreType::TENSIX).num_cores());
     }
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
@@ -94,7 +103,6 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
             mesh_device->impl().mesh_command_queue_base(cq_id).reset_worker_state(
                 /*reset_launch_msg_state=*/cq_id + 1 == num_hw_cqs,
                 num_sub_devices,
-                sub_device_manager->noc_mcast_unicast_data(),
                 sub_device_manager->get_core_go_message_mapping(),
                 ttsl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()));
         }
@@ -157,6 +165,14 @@ SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() cons
 SubDeviceManager* SubDeviceManagerTracker::find_sub_device_manager(SubDeviceManagerId sub_device_manager_id) const {
     auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
     return sub_device_manager == sub_device_managers_.end() ? nullptr : sub_device_manager->second.get();
+}
+
+std::size_t SubDeviceManagerTracker::num_traces() const {
+    std::size_t count = 0;
+    for (const auto& entry : sub_device_managers_) {
+        count += entry.second->num_traces();
+    }
+    return count;
 }
 
 DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {

@@ -192,7 +192,9 @@ def check_spec(spec, where):
 
 
 def main():
-    files = sorted(HERE.glob("test_*.py"))
+    # Generated files only: the hand-written *_small_grid.py companions build CASES with
+    # small_grid.py helpers, which are not literals.
+    files = sorted(path for path in HERE.glob("test_*.py") if not path.name.endswith("_small_grid.py"))
     if not files:
         print(f"no test_*.py in {HERE} — run generate_from_graph_capture.py first")
         return 1

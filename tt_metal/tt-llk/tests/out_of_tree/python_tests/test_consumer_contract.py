@@ -513,6 +513,10 @@ def test_out_of_tree_driver_compiles():
     Under ``--compile-producer`` the harness compiles and then skips, which is
     what makes this runnable in CI with no silicon attached.
     """
+    if not (Path(__file__).resolve().parents[4] / "hw" / "inc").is_dir():
+        pytest.skip(
+            "tt-metal hw/inc is absent; the driver includes ckernel.h from that tree"
+        )
     configuration = _compilable_variant()
 
     # The compile is the assertion, so this calls ``prepare()`` rather than

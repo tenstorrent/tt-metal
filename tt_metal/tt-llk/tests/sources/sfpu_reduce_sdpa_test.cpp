@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
-            PackMode::Default>(4 /* num_faces */, formats.math);
+            PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
@@ -86,9 +86,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "ckernel_sfpu_reduce_custom.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
+#include "llk_sfpu/ckernel_sfpu_reduce_custom.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)

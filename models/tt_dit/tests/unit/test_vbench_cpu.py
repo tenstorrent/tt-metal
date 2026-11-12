@@ -52,7 +52,11 @@ def test_appearance_uses_original_and_only_temporal_metrics_use_resized_copy(mon
     monkeypatch.setattr(vbench_cpu, "score_vbench", score)
     monkeypatch.setattr(vbench_cpu, "temporal_video", reduced)
     monkeypatch.setattr(vbench_cpu, "dynamic_degree", lambda path: 1.0 if path == "temporal.mp4" else -1)
-    result = vbench_cpu.score_clip_ci("original.mp4", prompt="test")
+    result = vbench_cpu.score_clip_ci(
+        "original.mp4",
+        prompt="test",
+        dimensions=[*vbench_cpu.APPEARANCE_METRICS, "motion_smoothness", "dynamic_degree"],
+    )
     assert calls == [("original.mp4", vbench_cpu.APPEARANCE_METRICS), ("temporal.mp4", ["motion_smoothness"])]
     assert len(result) == 5 and result["dynamic_degree"] == 1.0
 

@@ -35,7 +35,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "Operands to update_cache need to be on device!");
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(
-        input_tensor.buffer() != nullptr && cache_tensor.buffer() != nullptr,
+        input_tensor.is_allocated() && cache_tensor.is_allocated(),
         "Operands to update_cache need to be allocated in buffers on device!");
 
     // Layout and data type validation
@@ -185,6 +185,12 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 "cache_position_modulo/block_size ({}) must be <= max_num_blocks ({})",
                 bounded_blocks_per_seq,
                 cache_tensor.padded_shape()[0]);
+            TT_FATAL(
+                modulo <= effective_block_size * page_table_val.padded_shape()[1],
+                "cache_position_modulo ({}) must fit in max_num_blocks_per_seq ({}) * block_size ({})",
+                modulo,
+                page_table_val.padded_shape()[1],
+                effective_block_size);
         } else {
             TT_FATAL(
                 page_table_val.padded_shape()[1] <= cache_tensor.padded_shape()[0],

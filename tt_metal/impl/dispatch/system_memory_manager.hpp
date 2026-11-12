@@ -6,8 +6,8 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/io_window/io_window.hpp>     // for tt::umd::IoWindow
-#include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
+#include <tt-umd/io_window/io_window.hpp>     // for tt::umd::IoWindow
+#include <tt-umd/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -135,6 +135,8 @@ private:
     std::vector<std::unique_ptr<tt::umd::IoWindow>> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
+    // Phase bit value for the current lap of each fetch queue, used when the prefetcher polls it through its cache.
+    std::vector<uint32_t> prefetch_q_phases;
 
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;

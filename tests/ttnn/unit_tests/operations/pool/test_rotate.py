@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -327,6 +327,41 @@ def test_height_sharded_memory(device, interpolation_mode):
     assert comparison_passed, f"{interpolation_mode} height sharded memory test failed"
 
 
+@skip_for_blackhole("Incorrect result on BH: https://github.com/tenstorrent/tt-metal/issues/36263")
+@pytest.mark.parametrize(
+    "interpolation_mode, input_shape, num_cores, shard_height",
+    [
+        ("nearest", (1, 7, 7, 64), 7, 8),
+        ("nearest", (1, 100, 1, 32), 4, 32),
+        ("bilinear", (1, 10, 10, 64), 2, 64),
+    ],
+)
+@pytest.mark.parametrize("angle", [0.0, 45.0])
+def test_uneven_height_sharded_memory(device, interpolation_mode, input_shape, num_cores, shard_height, angle):
+    """The last shard is only partly backed by real sticks; padding sticks must not be read or written."""
+    torch.manual_seed(0)
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+        (shard_height, input_shape[3]),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rotate)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, interpolation_mode=interpolation_mode)
+
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input_sharded = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+    ttnn_output = ttnn.rotate(ttnn_input_sharded, angle=angle, interpolation_mode=interpolation_mode)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
+    comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
+    assert comparison_passed, f"{interpolation_mode} uneven height sharded test failed"
+
+
 # ============================================================================
 # Data Type Tests
 # ============================================================================
@@ -545,6 +580,23 @@ def test_multichannel_consistency(device, input_shape, angle, interpolation_mode
         max_diff = (channel_0 - channel_1).abs().max().item()
         logger.info(f"Bilinear multi-channel consistency (angle={angle}°): max_diff={max_diff:.6f}")
         assert max_diff < 1e-5, f"Bilinear channels rotated differently: {max_diff}"
+
+
+@pytest.mark.parametrize("input_buffer, output_buffer", [("DRAM", "L1"), ("L1", "DRAM")])
+@pytest.mark.parametrize("input_shape", [(1, 64, 64, 24), (2, 32, 32, 40)])
+def test_nearest_rotate_across_buffer_types(device, input_shape, input_buffer, output_buffer):
+    # Regression: across DRAM and L1 the reader and writer strode the CB by different stick sizes.
+    memory_config = {"DRAM": ttnn.DRAM_MEMORY_CONFIG, "L1": ttnn.L1_MEMORY_CONFIG}
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config[input_buffer]
+    )
+
+    ttnn_output = ttnn.rotate(
+        ttnn_input, angle=0.0, interpolation_mode="nearest", memory_config=memory_config[output_buffer]
+    )
+
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch_input)
 
 
 if __name__ == "__main__":

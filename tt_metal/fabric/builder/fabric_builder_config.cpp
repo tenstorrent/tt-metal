@@ -45,13 +45,20 @@ uint32_t get_downstream_edm_count(bool is_2D_routing) {
     return is_2D_routing ? builder_config::max_downstream_edms : builder_config::num_downstream_edms_1d;
 }
 
-uint32_t get_vc0_downstream_edm_count(bool is_2D_routing) {
-    return is_2D_routing ? builder_config::num_downstream_edms_2d_vc0 : builder_config::num_downstream_edms_vc0;
+uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled) {
+    if (!is_2D_routing) {
+        return builder_config::num_downstream_edms_vc0;
+    }
+    return express_routing_enabled ? builder_config::num_downstream_edms_2d_vc0_express
+                                   : builder_config::num_downstream_edms_2d_vc0;
 }
 
-uint32_t get_vc1_downstream_edm_count(bool is_2D_routing) {
+uint32_t get_vc1_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled) {
     TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
-    return builder_config::num_downstream_edms_2d_vc1;
+    // Under express routing, a landed VC1 carrier can feed N/S/Z/E/W, requiring four downstream
+    // EDMs. Non-express fabrics retain the three-direction XY-intermesh shape.
+    return express_routing_enabled ? builder_config::num_downstream_edms_2d_vc1_wide
+                                   : builder_config::num_downstream_edms_2d_vc1;
 }
 
 }  // namespace tt::tt_fabric::builder_config

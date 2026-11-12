@@ -4,30 +4,26 @@
 
 #pragma once
 
+#include <optional>
+
 #include "slice_write_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
-struct SliceWriteRMInterleavedSharedVariables {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = 0;
-    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
-    uint32_t max_read_size = 0;
-};
-
 struct SliceWriteRMInterleavedProgramFactory {
-    using shared_variables_t = SliceWriteRMInterleavedSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value);
 
+    // compute_program_hash keys this factory on the last-dim start only, so the outer-dim start offsets
+    // baked into the writer's runtime args have to be recomputed on every cache hit.
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        tt::tt_metal::Program& program,
         const SliceWriteParams& operation_attributes,
         const SliceWriteInputs& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

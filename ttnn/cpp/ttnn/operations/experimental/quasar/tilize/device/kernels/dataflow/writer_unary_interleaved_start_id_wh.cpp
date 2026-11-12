@@ -19,12 +19,12 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = DataflowBuffer(dfb::out).get_entry_size();
 
     const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
     DataflowBuffer cb(dfb::out);
+    const uint32_t tile_bytes = cb.get_entry_size();
 
 #ifdef BACKWARDS
     for (uint32_t dim = 0; dim > -third_dim; dim--) {

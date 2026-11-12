@@ -118,7 +118,7 @@ class _LogStartPlugin:
             label += f"  {dim}({', '.join(params)}){reset}"
 
         width = shutil.get_terminal_size()[0]
-        print(f"\n\n{'━' * width}\n{label}\n")  # noqa: T201
+        print(f"\n\n{'━' * width}\n{label}\n", flush=True)  # noqa: T201
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:

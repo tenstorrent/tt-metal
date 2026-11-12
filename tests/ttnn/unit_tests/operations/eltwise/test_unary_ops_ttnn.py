@@ -49,7 +49,6 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, pcc",
     [
-        (torch.float32, ttnn.float32, 0.999),
         (torch.bfloat16, ttnn.bfloat8_b, 0.99),
     ],
 )
@@ -134,7 +133,7 @@ def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.int32])
 def test_unary_neg_ttnn(input_shapes, device, ttnn_dtype):
     in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, -100, 100, device, ttnn_dtype=ttnn_dtype)
 
@@ -442,9 +441,9 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
-        (torch.float32, ttnn.float32),
         # bfloat16 is exhaustively covered (all bf16 bit patterns, all scalars in this
-        # list) by test_fill_op in test_unary_category4_bfloat16.py.
+        # list) by test_fill_op in test_unary_category4_bfloat16.py, and float32 by
+        # test_fill in test_unary_category4_float32.py.
         (torch.int32, ttnn.int32),
         (torch.uint32, ttnn.uint32),
     ],
@@ -452,9 +451,7 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
 def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    if torch_dtype.is_floating_point:
-        torch_input_tensor_a = torch.empty((h, w), dtype=torch_dtype).uniform_(-100, 100)
-    elif torch_dtype == torch.uint32:
+    if torch_dtype == torch.uint32:
         torch_input_tensor_a = torch.randint(low=0, high=100, size=(h, w), dtype=torch_dtype)
     else:
         torch_input_tensor_a = torch.randint(low=-100, high=100, size=(h, w), dtype=torch_dtype)

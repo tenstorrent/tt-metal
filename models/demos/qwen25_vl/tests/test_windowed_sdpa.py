@@ -7,7 +7,6 @@ This demonstrates how cu_window_seqlens can be used to create block-diagonal
 attention patterns without explicitly passing an attention mask.
 """
 
-import os
 import time
 from contextlib import contextmanager
 from functools import lru_cache
@@ -17,6 +16,7 @@ import torch
 
 import ttnn
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.qwen25_vl.tt.model_config import qwen25_vl_mesh_shape
 
 
 @contextmanager
@@ -36,11 +36,7 @@ def timer(description="Operation"):
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [qwen25_vl_mesh_shape()],
     indirect=True,
 )
 @pytest.mark.parametrize(

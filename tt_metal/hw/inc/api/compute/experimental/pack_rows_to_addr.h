@@ -8,6 +8,9 @@
 #pragma once
 
 #include "api/compute/common.h"
+#if defined(TRISC_PACK) && !defined(ARCH_QUASAR)
+#include "llk_pack_rows_api.h"
+#endif
 
 namespace ckernel {
 

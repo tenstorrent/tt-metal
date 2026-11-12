@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Construction-equivalence test for ``LMHead.update`` (real weights, HF auth).
+"""Construction-equivalence test for ``LMHead.update`` (real weights).
 
 Round-trip: generate -> snapshot dram_sharded chunks to a torch ``(V, H)``
 tensor -> overwrite with a constant (must change output) -> restore via update

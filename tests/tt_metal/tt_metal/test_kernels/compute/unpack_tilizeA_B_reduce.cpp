@@ -43,5 +43,7 @@ void kernel_main() {
         dfb_in.pop_front(per_core_block_tile_cnt);
     }
 
+    // Release the scaler, so its producer's DataflowBuffer can drain when it goes out of scope (Quasar).
+    dfb_in_scaler.pop_front(1);
     reduce_uninit();
 }

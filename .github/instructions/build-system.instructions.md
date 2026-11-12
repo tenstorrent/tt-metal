@@ -97,7 +97,7 @@ Device kernel sources (compiled at runtime via JIT) must be packaged into the `.
 3. Install the file set to `${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/...` with component `ttnn-runtime`
 
 ```cmake
-file(GLOB_RECURSE kernels device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*.cpp device/kernels/*.h device/kernels/*.hpp)
 
 target_sources(my_target
     PUBLIC

@@ -14,11 +14,16 @@
 
       texts
         tokenize             -> input_ids, attention_mask
-        the backbone         -> (B, 1, S, H)
-        mean_pool            -> (B, 1, 1, H)   padding excluded
-        matryoshka_truncate  -> (B, 1, 1, dim) optional
-        l2_normalize         -> (B, 1, 1, dim) unit norm
-        to_torch             -> (B, dim)
+        embed(), for each length-sorted chunk cut to its longest text:
+          the backbone          -> (b, 1, s, H)
+          mean_pool             -> (b, 1, 1, H)   fp32, padding excluded
+          matryoshka_truncate   -> (b, 1, 1, dim) optional
+          l2_normalize          -> (b, 1, 1, dim) unit norm
+        to_torch, input order   -> (B, dim)
+
+Large inputs run in chunks of whole sequences (tt/chunking.py): the backbone splits a batch past
+tt_config.max_chunk_tokens computed tokens into contiguous chunks and joins their outputs, and embed()
+sorts the texts by length so that each chunk also drops the padding its longest text did not need.
 
 The split is the reference's: the model is the backbone and nothing else, and the pooling stages
 are called directly by the one driver rather than wrapped in a method of their own. Anyone
@@ -27,8 +32,9 @@ reference.postprocessing.
 
 This is the host boundary. Every module below it takes and returns device tensors; this class
 takes torch token ids, because that is what a tokenizer produces and what the reference's own
-entry point takes, and because the rotary tables and the attention mask are host builds that
-depend on S, which varies per call.
+entry point takes, and because the attention mask is a host build that depends on S, which varies
+per call. The rotary tables depend on S too, but are kept on the model (RotaryTables) rather than
+rebuilt per call.
 
 encode() mirrors reference/embedding.py and reuses reference/preprocessing.py verbatim for the
 prefixes and tokenization: that stage is pure host text handling with no device equivalent, and
@@ -52,15 +58,18 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
     tokenize,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
+from models.experimental.nomic_embed_text_v2_moe.tt.chunking import plan_chunks, plan_sorted_chunks
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    LayerNormParameters,
+    RotaryTables,
+    activation_memory_config,
     additive_attention_mask,
     pooling_mask,
     prepare_token_ids,
-    rotary_tables,
-    to_device,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.embeddings import TtNomicBertEmbeddings
 from models.experimental.nomic_embed_text_v2_moe.tt.encoder import TtNomicBertEncoder
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 
 
 class TtNomicBertModel(LightweightModule):
@@ -84,12 +93,14 @@ class TtNomicBertModel(LightweightModule):
             device, config, tt_config, state_dict, f"{state_dict_prefix}embeddings."
         )
         self.encoder = TtNomicBertEncoder(device, config, tt_config, state_dict, f"{state_dict_prefix}encoder.")
-        self.emb_ln_weight = to_device(
-            state_dict[f"{state_dict_prefix}emb_ln.weight"], device, dtype=tt_config.weight_dtype
+        self.emb_ln = LayerNormParameters(
+            state_dict[f"{state_dict_prefix}emb_ln.weight"],
+            state_dict[f"{state_dict_prefix}emb_ln.bias"],
+            device,
+            tt_config.weight_dtype,
         )
-        self.emb_ln_bias = to_device(
-            state_dict[f"{state_dict_prefix}emb_ln.bias"], device, dtype=tt_config.weight_dtype
-        )
+        # The activation dtype, so lowering tt_config.activation_dtype moves the tables with it.
+        self.rotary_tables = RotaryTables(device, config, dtype=tt_config.activation_dtype)
 
     def forward(
         self,
@@ -97,14 +108,19 @@ class TtNomicBertModel(LightweightModule):
         attention_mask: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Embed the tokens and run the encoder stack.
+        """Embed the tokens and run the encoder stack, in chunks of whole sequences when the batch is large.
+
+        Past tt_config.max_chunk_tokens computed tokens the batch runs as contiguous chunks
+        (tt.chunking.plan_chunks), each through the whole backbone, and their outputs are joined in DRAM.
+        Each sequence's output is what the backbone computes for it in its own chunk.
 
         Args:
             input_ids: (B, S) int64 token ids, from reference.preprocessing.tokenize.
             attention_mask: (B, S) int64, 1 for real tokens and 0 for padding. None means no
-                masking, which is equivalent to all-ones and cheaper: an all-ones mask is a
-                proven no-op (test_an_all_ones_mask_is_a_no_op) and materialising it would cost
-                a (B, 1, S, S) tensor, 1 MB at B=2 S=512.
+                masking. An all-ones mask is treated the same way: it is a proven no-op
+                (test_an_all_ones_mask_is_a_no_op), while materialising it would cost a
+                (B, 1, S, S) tensor read by every head of every SDPA call, which doubled SDPA's
+                time at 8x512. SDPA masks the tile padding of S on its own.
             token_type_ids: Accepted for parity with the reference. type_vocab_size is 1, so 0 is
                 the only legal value and the embeddings module has already folded that row into
                 the word table.
@@ -122,23 +138,46 @@ class TtNomicBertModel(LightweightModule):
                 "zeros; the token-type row is folded into the word embedding table at load"
             )
 
+        batch, seqlen = input_ids.shape
+        outputs = []
+        for chunk in plan_chunks(batch, seqlen, self.tt_config.max_chunk_tokens):
+            rows = slice(chunk.start, chunk.start + chunk.count)
+            outputs.append(self.backbone(input_ids[rows], None if attention_mask is None else attention_mask[rows]))
+        if len(outputs) == 1:
+            return outputs[0]
+        out = ttnn.concat(outputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for piece in outputs:
+            ttnn.deallocate(piece)
+        return out
+
+    def backbone(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> ttnn.Tensor:
+        """One pass of the backbone over the whole of input_ids, (B, S) -> (B, 1, S, H); see forward."""
         seqlen = input_ids.shape[-1]
         hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
+        weight, bias = self.emb_ln.for_input(hidden)
         normalized = ttnn.layer_norm(
             hidden,
-            weight=self.emb_ln_weight,
-            bias=self.emb_ln_bias,
+            weight=weight,
+            bias=bias,
             epsilon=self.config.layer_norm_epsilon,
-            compute_kernel_config=self.tt_config.compute_kernel_config,
+            memory_config=activation_memory_config(hidden.shape),
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
         ttnn.deallocate(hidden)
 
-        # dtype is passed explicitly rather than left to each helper's default, so lowering
-        # tt_config.activation_dtype moves the mask and the rotary tables with it. A mismatch here
-        # surfaces inside SDPA, which rejects a mask whose dtype differs from q/k/v.
-        dtype = self.tt_config.activation_dtype
-        mask = None if attention_mask is None else additive_attention_mask(attention_mask, self.device, dtype=dtype)
-        out = self.encoder(normalized, rotary_tables(self.device, self.config, seqlen, dtype=dtype), mask)
+        # dtype is passed explicitly rather than left to the helper's default, so lowering
+        # tt_config.activation_dtype moves the mask's fill value with it.
+        mask = None
+        if attention_mask is not None and not bool(attention_mask.all()):
+            mask = additive_attention_mask(
+                attention_mask,
+                self.device,
+                dtype=self.tt_config.activation_dtype,
+                mask_dtype=self.tt_config.attention_mask_dtype,
+            )
+        rot_mats = self.rotary_tables(seqlen)
+        out = self.encoder(normalized, rot_mats, mask)
+        self.rotary_tables.release(rot_mats)
         ttnn.deallocate(normalized)
         return out
 
@@ -153,9 +192,10 @@ def encode(
 ) -> torch.Tensor:
     """Turn text into normalized embeddings on device, the counterpart of reference.embedding.encode.
 
-    Row i is the embedding of texts[i] and is independent of the other rows: padding is masked
-    out at pooling, so a short text gets the same vector whether encoded alone or in a ragged
-    batch. The dot product of two rows is their cosine similarity.
+    Row i is the embedding of texts[i]: padding is masked out at pooling, so a short text gets
+    the same vector, to within 1e-2 in cosine, whether encoded alone or in a ragged batch. It is
+    not bit-identical, since the matmul blockings are chosen from the batch's shape. The dot
+    product of two rows is their cosine similarity.
 
     Args:
         model: A constructed TtNomicBertModel.
@@ -171,23 +211,63 @@ def encode(
         torch.Tensor: (B, matryoshka_dim or 768) fp32, unit norm, back on the host.
     """
     encoded = tokenize(tokenizer, apply_prompt(texts, prompt_prefix), max_length=max_length)
-    attention_mask = encoded["attention_mask"]
-    kernel_config = model.tt_config.compute_kernel_config
+    return embed(model, encoded["input_ids"], encoded["attention_mask"], matryoshka_dim)
 
-    hidden = model(encoded["input_ids"], attention_mask)
 
-    # Pooling needs a mask even where the backbone did not: padded positions must not enter the
-    # mean, because the <pad> embedding is trained and non-zero, so counting it would make one
-    # text's embedding depend on how long its batch-mates are.
-    pooled = pooling.mean_pool(
-        hidden,
-        pooling_mask(attention_mask, model.device, dtype=model.tt_config.activation_dtype),
-        compute_kernel_config=kernel_config,
-    )
-    ttnn.deallocate(hidden)
+def embed(
+    model: TtNomicBertModel,
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    matryoshka_dim: Optional[int] = None,
+) -> torch.Tensor:
+    """Token ids to normalized embeddings, in length-sorted chunks each cut to its longest sequence.
 
-    embeddings = pooling.l2_normalize(
-        pooling.matryoshka_truncate(pooled, matryoshka_dim), compute_kernel_config=kernel_config
-    )
+    The sequences are sorted longest first and split into chunks of at most tt_config.max_chunk_tokens
+    computed tokens (tt.chunking.plan_sorted_chunks). Each chunk runs at its own longest sequence's length,
+    so a short text no longer computes the padding its batch's longest text set, and each is pooled and
+    normalized on its own; the rows come back in input order. All chunks are queued before the first is
+    read back.
 
-    return ttnn.to_torch(embeddings).float().reshape(len(texts), -1)
+    Args:
+        model: A constructed TtNomicBertModel.
+        input_ids: (B, S) int64 token ids, right-padded as reference.preprocessing.tokenize returns them;
+            with any other padding every chunk keeps the full S.
+        attention_mask: (B, S) int64, 1 for real tokens and 0 for padding; None for no padding.
+        matryoshka_dim: Target embedding width, at most 768, or None for the full 768.
+
+    Returns:
+        torch.Tensor: (B, matryoshka_dim or 768) fp32, unit norm.
+    """
+    batch, seqlen = input_ids.shape
+    if attention_mask is None:
+        attention_mask = torch.ones((batch, seqlen), dtype=torch.long)
+    kernel_config = model.tt_config.compute_kernel_config(OpGroup.REDUCE)
+    lengths = attention_mask.sum(dim=-1).long()
+    # Cutting a chunk to its longest sequence assumes right padding; any other mask keeps the full width.
+    if not torch.equal(attention_mask.bool(), torch.arange(seqlen) < lengths[:, None]):
+        lengths = torch.full_like(lengths, seqlen)
+    order = torch.argsort(lengths, descending=True, stable=True)
+    chunks = plan_sorted_chunks(lengths[order].tolist(), model.tt_config.max_chunk_tokens)
+    pieces = []
+    for chunk in chunks:
+        rows = order[chunk.start : chunk.start + chunk.count]
+        # At least one token a row: a fully padded row pools to zeros either way.
+        width = max(chunk.seqlen, 1)
+        chunk_mask = attention_mask[rows, :width]
+        hidden = model(input_ids[rows, :width], chunk_mask)
+        # Pooling needs a mask even where the backbone did not: padded positions must not enter the
+        # mean, because the <pad> embedding is trained and non-zero, so counting it would make one
+        # text's embedding depend on how long its batch-mates are.
+        pooled = pooling.mean_pool(hidden, pooling_mask(chunk_mask, model.device), compute_kernel_config=kernel_config)
+        ttnn.deallocate(hidden)
+        pieces.append(
+            pooling.l2_normalize(
+                pooling.matryoshka_truncate(pooled, matryoshka_dim), compute_kernel_config=kernel_config
+            )
+        )
+        ttnn.deallocate(pooled)
+    out = torch.empty((batch, pieces[0].shape[-1]), dtype=torch.float32)
+    for chunk, piece in zip(chunks, pieces):
+        out[order[chunk.start : chunk.start + chunk.count]] = ttnn.to_torch(piece).float().reshape(chunk.count, -1)
+        ttnn.deallocate(piece)
+    return out

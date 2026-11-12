@@ -12,6 +12,8 @@ void kernel_main() {
     constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
     // src_cb_id / out_cb_id are DFB bindings (dfb::src0 / dfb::src1); they flow into the
     // compute-kernel-lib helper via DFBBindingToken's implicit (constexpr) uint32_t conversion.
+    DataflowBuffer src0(dfb::src0);
+    DataflowBuffer src1(dfb::src1);
     compute_kernel_hw_startup(dfb::src0, dfb::src1);
     compute_kernel_lib::untilize<
         per_core_block_tile_cnt,
@@ -19,5 +21,6 @@ void kernel_main() {
         dfb::src1,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_block_cnt);
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+        src0, src1, per_core_block_cnt);
 }

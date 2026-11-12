@@ -48,6 +48,11 @@ from ttnn.distributed.ttrun import (
 PREFIX = "[tt-sweep]"
 # Sleep between every failed command and the next recover / tt-run retry.
 RETRY_DELAY_S = 5
+# The remote processes a recover leaves behind when it is killed (the cluster-validation ranks). A recover
+# attempt is capped by the same --per-solution-timeout as the workload: recover.sh's cross-host port-down
+# step (run_cluster_validation) has no timeout of its own and has been seen spinning for 20-64 minutes in
+# eth_mailbox_ready / "Waiting for all messages to be processed" while the other ranks sit in the MPI barrier.
+RECOVER_REAP_PATTERN = "run_cluster_validation"
 DEFAULT_RETRIES = 3
 # Consumer poll cadence: how often to re-read the streaming solutions_index.yaml for newly generated
 # solutions while the producer is still running, and the heartbeat cadence while waiting on it.
@@ -272,6 +277,9 @@ class SolutionProducer:
     def __init__(self, proc: Optional[subprocess.Popen]):
         self.proc = proc
         self.pgid: Optional[int] = None
+        # True once stop() killed a live producer. The driver does this itself (settle_for_recover, early
+        # stop), so the resulting non-zero exit code is not a crash and must not fail the sweep.
+        self.stopped_by_driver = False
         if proc is not None:
             try:
                 self.pgid = os.getpgid(proc.pid)
@@ -300,6 +308,7 @@ class SolutionProducer:
         """SIGKILL the producer's whole process group (its mpirun + prted tree)."""
         if self.proc is None or self.proc.poll() is not None:
             return
+        self.stopped_by_driver = True
         if self.pgid:
             try:
                 os.killpg(self.pgid, signal.SIGKILL)
@@ -569,6 +578,7 @@ def _run_with_retries(
     producer: Optional["SolutionProducer"] = None,
     log: Optional["SweepLog"] = None,
     indent: str = "    ",
+    recover_timeout: Optional[int] = None,
 ) -> _RetryResult:
     """Run ``cmd`` up to ``retries`` times, recovering only after a failure.
 
@@ -576,6 +586,9 @@ def _run_with_retries(
     * Fail/timeout: sleep ``RETRY_DELAY_S``, run ``recover_cmd`` (itself retried),
       sleep again, then retry ``cmd``. If ``recover_cmd`` is omitted, just sleep
       and retry ``cmd`` (used for recover itself).
+    * A recover attempt that runs past ``recover_timeout`` seconds is killed like a timed-out
+      workload (local process group + the cluster-validation ranks on ``host_set``) and the recover
+      is retried; only when every recover attempt fails/times out is it ``recover_exhausted``.
     * Fail/timeout is returned only if every attempt fails. Recover exhausting
       its retries sets ``recover_exhausted`` and stops immediately.
 
@@ -627,12 +640,14 @@ def _run_with_retries(
                 ["/bin/bash", "-c", recover_cmd],
                 cwd=cwd,
                 log_path=log_path,
-                timeout=None,
+                timeout=recover_timeout,
                 retries=retries,
                 recover_cmd=None,
                 label="recover",
                 append_log=True,
                 cmd_display=recover_cmd,
+                host_set=host_set,
+                reap_pattern=RECOVER_REAP_PATTERN,
                 log=log,
                 indent=indent + "  ",
             )
@@ -676,11 +691,13 @@ class TtRunExecutor:
         log: "SweepLog",
         reap_pattern: Optional[str] = None,
         producer: Optional[SolutionProducer] = None,
+        recover_timeout: Optional[int] = None,
     ):
         self.cwd = cwd
         self.retries = retries
         self.log = log
         self.reap_pattern = reap_pattern
+        self.recover_timeout = recover_timeout  # cap on one recover attempt; killed + retried past it
         self.producer = producer  # set after the producer is started; drives producer-aware reap/recover
 
     def reap(self, pgid: Optional[int], host_set: Optional[str]) -> None:
@@ -721,6 +738,7 @@ class TtRunExecutor:
             producer=self.producer,
             log=self.log,
             indent=indent,
+            recover_timeout=self.recover_timeout,
         )
 
 
@@ -799,6 +817,7 @@ def _write_sweep_report(
     stopped_early: bool,
     sweep_report: Optional[Path],
     dry_run: bool,
+    producer_stopped: bool = False,
 ) -> Tuple[Path, int, int, int]:
     """Build, optionally write, and print ``sweep_report.yaml``.
 
@@ -827,6 +846,9 @@ def _write_sweep_report(
             "failed": failed,  # workload non-zero exit
             "timed_out": timed_out,  # killed by --per-solution-timeout
             "stopped_early": stopped_early,  # true => --sweep-timeout budget stopped the sweep before all were run
+            # true => the driver killed a still-enumerating producer before a cluster recover; the swept
+            # verdicts stand, the enumeration may be incomplete (index truncated=true).
+            "producer_stopped_by_driver": producer_stopped,
         },
         "results": results,
     }
@@ -1167,7 +1189,11 @@ class SolutionConsumer:
 @click.option("--select", type=str, default=None, help="EXTRA: only sweep these solution ids (comma-separated).")
 @click.option("--limit", type=int, default=None, help="EXTRA: sweep at most the first N solutions (index order).")
 @click.option(
-    "--per-solution-timeout", type=int, default=None, help="EXTRA: kill a launch after N seconds (=> timeout)."
+    "--per-solution-timeout",
+    type=int,
+    default=None,
+    help="EXTRA: kill a launch after N seconds (=> timeout). The same cap applies to each --recover-command "
+    "attempt, which is then killed and retried.",
 )
 @click.option(
     "--sweep-timeout",
@@ -1340,7 +1366,16 @@ def main(
     # process-management config (cwd/retries/reap-pattern) and, once set, the producer.
     log = SweepLog()
     log.combo_start(sol_dir, recover_command, retries)
-    executor = TtRunExecutor(cwd=_repo_root(), retries=retries, log=log, reap_pattern=_reap_pattern_for(program))
+    # A recover attempt gets the same cap as a workload launch: past --per-solution-timeout it is killed
+    # (local process group + the cluster-validation ranks on the hosts) and retried like a failed tt-run.
+    recover_timeout_s = per_solution_timeout if per_solution_timeout and per_solution_timeout > 0 else None
+    executor = TtRunExecutor(
+        cwd=_repo_root(),
+        retries=retries,
+        log=log,
+        reap_pattern=_reap_pattern_for(program),
+        recover_timeout=recover_timeout_s,
+    )
 
     # PROACTIVE reset BEFORE the producer starts and BEFORE any tt-run: reap leftover ranks on every host
     # (they hold CHIP_IN_USE PCIe locks), then run the recover command once so both the producer's device
@@ -1349,12 +1384,19 @@ def main(
         executor.reap(None, ",".join(parsed_hosts) if parsed_hosts else None)
         if recover_command and recover_command != "true":
             log.initial_reset()
-            reset = executor.run(
+            # The initial reset is itself a recover: same per-attempt cap, same kill-and-retry on a wedge.
+            reset = _run_with_retries(
                 ["/bin/bash", "-c", recover_command],
+                cwd=_repo_root(),
                 log_path=logs_root / "_initial_recover.log",
-                timeout=None,
+                timeout=recover_timeout_s,
+                retries=retries,
+                recover_cmd=None,
                 label="recover",
                 cmd_display=recover_command,
+                host_set=",".join(parsed_hosts) if parsed_hosts else None,
+                reap_pattern=RECOVER_REAP_PATTERN,
+                log=log,
             )
             # Don't sweep on hardware we've already classified as unrecoverable: if the initial reset failed
             # every retry, abort before starting the producer / any tt-run.
@@ -1383,6 +1425,7 @@ def main(
     results = consumer.consume()
 
     # Stop the producer if it is still running (early stop via --limit / --stop-on-failure / --sweep-timeout).
+    producer_stopped = False
     if producer is not None:
         producer_rc = producer.returncode()
         if producer.alive():
@@ -1393,6 +1436,16 @@ def main(
             # enumeration itself completed, so the (kill-induced) exit code is not a crash. A
             # 0-solution enumeration still fails below via the "No solutions were swept" guard.
             pass
+        elif producer.stopped_by_driver:
+            # WE stopped it (settle_for_recover: it was still enumerating when a failed tt-run needed a
+            # cluster recover). Its exit code is our SIGKILL, not a crash. Everything it streamed before
+            # the stop was swept and those verdicts stand; only the enumeration may be incomplete, which
+            # the index's truncated=true (streaming) flag already records. Keep the results and the report.
+            producer_stopped = True
+            log.line(
+                f"■ WARNING: solution generation was stopped by the driver before a cluster recover (it was still "
+                f"enumerating); {len(results)} swept solution(s) kept, enumeration may be incomplete."
+            )
         elif producer_rc not in (None, 0):
             # Producer exited non-zero on its OWN (a crash -- us stopping it leaves it alive, handled above).
             # Generation is therefore incomplete, so this is an error even if some solutions were already
@@ -1417,6 +1470,7 @@ def main(
         program=program,
         recover_command=recover_command,
         stopped_early=consumer.stopped_early,
+        producer_stopped=producer_stopped,
         sweep_report=sweep_report,
         dry_run=dry_run,
     )

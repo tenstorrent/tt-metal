@@ -73,7 +73,7 @@ ApplyTwiddlesDeviceOperation::tensor_return_value_t ApplyTwiddlesDeviceOperation
     return {make_like(args.input_real), make_like(args.input_real)};
 }
 
-tt::stl::hash::hash_t ApplyTwiddlesDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ApplyTwiddlesDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     return tt::tt_metal::operation::hash_operation<ApplyTwiddlesDeviceOperation>(
         attrs.N1, attrs.N2, args.input_real.dtype(), args.input_real.memory_config(), args.input_real.padded_shape());

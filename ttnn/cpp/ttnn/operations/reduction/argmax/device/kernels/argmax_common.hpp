@@ -45,8 +45,10 @@ auto get_tt_l1_ptr_based_on_data_format(const uint32_t addr) {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     } else if constexpr (data_format == DataFormat::Int32) {
         return reinterpret_cast<volatile tt_l1_ptr int32_t*>(addr);
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
     } else if constexpr (data_format == DataFormat::UInt32) {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+#endif
     } else {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)
@@ -85,8 +87,10 @@ auto get_default_value() {
         return uint32_t{NEG_INF_FLOAT32};
     } else if constexpr (data_format == DataFormat::Int32) {
         return int32_t{NEG_INF_INT32};
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
     } else if constexpr (data_format == DataFormat::UInt32) {
         return uint32_t{MIN_UINT32};
+#endif
     } else {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)
@@ -214,8 +218,10 @@ void compare_values(
         update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
     } else if constexpr (data_format == DataFormat::Int32) {
         update_max_if_greater(max_val, max_idx, val, index, int32_greater);
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
     } else if constexpr (data_format == DataFormat::UInt32) {
         update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
+#endif
     } else {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)

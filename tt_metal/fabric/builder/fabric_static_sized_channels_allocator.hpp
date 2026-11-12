@@ -75,6 +75,19 @@ public:
     size_t get_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const;
 
     /**
+     * Get the number of slots for a receiver channel on the far end of the link.
+     *
+     * This, not the local count, is what a sender's flow control gates on: bubble flow control
+     * requires the immediate downstream receiver to hold at least two slots. The two counts are
+     * tracked separately, so the distinction matters.
+     *
+     * @param vc_id Virtual Channel ID (0 or 1)
+     * @param channel_id Channel ID within the VC
+     * @return Number of slots on the remote receiver
+     */
+    size_t get_remote_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const;
+
+    /**
      * Get the base address for a specific receiver channel in a VC.
      * @param vc_id Virtual Channel ID (0 or 1)
      * @param channel_id Channel ID within the VC
@@ -92,6 +105,9 @@ public:
             vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
         return num_used_receiver_channels_per_vc[vc_id];
     }
+
+    // One past the last byte of the local channel buffers.
+    size_t get_channel_buffers_end_address() const { return channel_buffers_end_address; }
 
     // Legacy getters (assume VC0 for backward compatibility)
     size_t get_sender_channel_number_of_slots(size_t channel_id) const {
@@ -153,6 +169,8 @@ private:
     size_t available_channel_buffering_space = 0;
     size_t max_l1_loading_size = 0;
     size_t buffer_region_start = 0;
+    // One past the last byte of the last channel buffer.
+    size_t channel_buffers_end_address = 0;
 
     // Tensix configuration channel counts
     static constexpr size_t num_sender_channels_with_tensix_config =

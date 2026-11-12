@@ -99,7 +99,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     using namespace tt::constants;
     const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
-    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.input.is_allocated(), "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(
         tensor_args.input.layout() == Layout::TILE || tensor_args.input.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",
@@ -134,13 +134,33 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             args.slice_end[i]);
     }
     if (tensor_args.preallocated_output.has_value()) {
-        const auto output_shape_required = compute_output_specs(args, tensor_args).logical_shape();
+        const auto spec_required = compute_output_specs(args, tensor_args);
         const auto& out_tensor = tensor_args.preallocated_output.value();
+        // Padded, not logical: quasar::slice pads the tile-path ends up to a tile boundary before
+        // calling here and views the result back down afterwards, so the caller's tensor legitimately
+        // carries a smaller logical shape than the spec. That licence is tile-only; see below.
         TT_FATAL(
-            out_tensor.padded_shape() == output_shape_required,
-            "The preallocated output tensor needs a shape of {}, however it is {}",
-            output_shape_required,
+            out_tensor.padded_shape() == spec_required.padded_shape(),
+            "The preallocated output tensor needs a padded shape of {}, however it is {}",
+            spec_required.padded_shape(),
             out_tensor.padded_shape());
+        // Row-major ends are passed through unpadded, and a sharded output's alignment is its shard
+        // width, so padded equality does not imply logical equality. SliceRmShardedProgramFactory sizes
+        // each row's copy from output.logical_shape()[-1].
+        if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+            TT_FATAL(
+                out_tensor.logical_shape() == spec_required.logical_shape(),
+                "The preallocated output tensor needs a logical shape of {}, however it is {}",
+                spec_required.logical_shape(),
+                out_tensor.logical_shape());
+        }
+        // create_output_tensors hands the program the caller's tensor verbatim, so the destination's
+        // dtype, page_config, memory_config and alignment must be what the factories were built against.
+        TT_FATAL(
+            out_tensor.tensor_spec().tensor_layout() == spec_required.tensor_layout(),
+            "The preallocated output tensor needs a layout of {}, however it is {}",
+            spec_required.tensor_layout(),
+            out_tensor.tensor_spec().tensor_layout());
     }
     auto output_tensor_shape = compute_output_specs(args, tensor_args).logical_shape();
     if (has_step) {  // if all ones modify before passing in to function
@@ -316,7 +336,8 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grids,
         factory.index(),
-        tensor_args.start_tensor.has_value());
+        tensor_args.start_tensor.has_value(),
+        tensor_args.end_tensor.has_value());
 
     const auto& input = tensor_args.input;
     hash = ttsl::hash::hash_objects(
@@ -338,6 +359,20 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
             st.layout(),
             st.dtype(),
             st.memory_config());
+    }
+
+    // SliceTileTensorArgsProgramFactory gives the end tensor its own TensorAccessorArgs in the reader's
+    // compile-time args, so its memory config picks the bank table and cannot be refreshed on a hit.
+    if (tensor_args.end_tensor.has_value()) {
+        const auto& et = tensor_args.end_tensor.value();
+        hash = ttsl::hash::hash_objects(
+            hash,
+            et.logical_shape().rank(),
+            et.logical_shape(),
+            et.padded_shape(),
+            et.layout(),
+            et.dtype(),
+            et.memory_config());
     }
 
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);

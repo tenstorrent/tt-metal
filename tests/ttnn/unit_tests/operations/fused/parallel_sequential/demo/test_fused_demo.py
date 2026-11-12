@@ -38,7 +38,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 import ttnn
-from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
+from tt_py_test_utils_common.utility_functions import is_watcher_enabled, skip_with_llk_assert
 from models.experimental.ops.descriptors.fusion import clear_build_cache
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
@@ -2208,7 +2208,7 @@ void kernel_main() {
     con = _build_globalcb_consumer_op(tt_output_recv, receiver_range, gcb, num_tiles)
 
     p = Parallel(Sequential(oa, ob), con)
-    cold = _time_cold(p.run, device)
+    p.run()
 
     [result_b_t, result_recv_t] = p.run(results=[ob, con])
     result_recv = ttnn.to_torch(result_recv_t)

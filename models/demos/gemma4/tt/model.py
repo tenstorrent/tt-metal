@@ -16,6 +16,7 @@ Compatible with tt_transformers Generator interface.
 """
 
 import os
+import time
 
 import torch
 from loguru import logger
@@ -23,8 +24,12 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
+from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4.tt.mesh_orientation import decode_flag, set_decode_fusion_profile
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -93,6 +98,11 @@ def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
     in0_block_w = 32
     while in0_block_w > 1 and k_tiles % in0_block_w != 0:
         in0_block_w //= 2
+    # GEMMA4_LM_HEAD_IN0_BLOCK_W: K-block override for the sweep (must divide the K tiles; 31B 168 tiles -> 8 by the
+    # power-of-two rule above, 12 / 14 / 21 / 24 / 28 are the other candidates).
+    env_block = int(os.environ.get("GEMMA4_LM_HEAD_IN0_BLOCK_W", "0"))
+    if env_block > 0 and k_tiles % env_block == 0:
+        in0_block_w = env_block
 
     out_subblock_w = min(per_core_n, 4)
     while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
@@ -219,6 +229,45 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared
             )
 
 
+def lane_page_table_device_rows(host_rows: int, lanes: int, lane_slots: int) -> int:
+    """Rows a host per-layer page table occupies per mesh column once lane-sharded.
+
+    Mirrors ``Gemma4Model._page_table_host_layout``: a single-row table lands on its
+    owner lane (one row per column), a ``lanes``-row table is the lane-parallel prefill
+    layout (one row per column), anything else pads to the ``lanes * lane_slots`` frame
+    (``lane_slots`` rows per column). The persistent-buffer grow check compares against
+    this; mapping the lane-parallel layout to the frame reallocated the buffers and
+    dropped the decode traces after every lane-router prefill.
+    """
+    full = lanes * lane_slots
+    if host_rows == 1 or (host_rows == lanes and lanes != full):
+        return 1
+    return lane_slots
+
+
+class _LaneSamplingGenerator(SamplingGenerator):
+    """The lane engine's on-device sampler. ``apply_prefill_state`` receives the lane engine's GLOBAL slot
+    (``lane * lane_slots + row``: the shared prefill loop passes ``user_id % max_batch_size`` with the lanes'
+    folded batch, e.g. 128). The seed state spans that whole batch (32 rows x the lane groups) and keeps the
+    global slot; the per-row host lists of the sampling params and the log-probs mode (``TTSampling.reset_params``
+    -> ``set_log_probs_mode``) span one group's rows and take the row within the lane (the prefill params are
+    broadcast to every row of the batch, so the row's value is the request's). Without the remap a request on
+    lanes 1-3 raised IndexError in ``set_log_probs_mode`` (2026-10-25, the first prefill with device sampling on
+    the lane engine)."""
+
+    def apply_prefill_state(self, *, sampling_params, prompt_tokens, empty_slots, replicate_seeds=True):
+        group = int(self.tt_sampling.max_batch_size)
+        rows = [int(slot) % group for slot in empty_slots]
+        self.reset_sampling_params(sampling_params, empty_slots=rows)
+        seed = getattr(sampling_params, "seed", None)
+        assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
+        self.seed_manager.reset_seed(seed, empty_slots)
+        self.seed_manager.get_new_values(empty_slots, replicate_seeds=replicate_seeds)
+        if prompt_tokens is not None:
+            self.reset_prompt_tokens(prompt_tokens)
+        self.reset_output_state()
+
+
 class Gemma4Model:
     # Generator-interface flag. PLI models (E2B/E4B) recompute host per-layer
     # inputs from the token every step, so their decode-trace input buffers
@@ -228,6 +277,9 @@ class Gemma4Model:
     # the previous token ("TheThe user user...").
     # Overridden in ``__init__`` from ``hidden_size_per_layer_input``.
     _tt_vllm_always_refresh_decode_trace_inputs = True
+    # PLI is the safe class-level default. ``__init__`` enables feedback only
+    # for variants whose token input has the rank-4 sampling output layout.
+    _tt_supports_decode_token_feedback = False
     # Sampling writes a tile-aligned [1,1,1,32] token vector; decode embeds only
     # the active batch. Non-PLI prepare_decode pads tokens to this width so the
     # sampled ids can be written straight back into the trace input buffer.
@@ -265,6 +317,10 @@ class Gemma4Model:
         transformation_mats=None,
     ):
         self.mesh_device = mesh_device
+        # The 4-chip Blackhole MoE build runs the fused decode step by default (tt/mesh_orientation.py, every
+        # GEMMA4_* flag still an override); recorded before the layers are built since the weight loaders and
+        # the norm modules read the switches at construction.
+        set_decode_fusion_profile(tuple(mesh_device.shape), blackhole=is_blackhole(), moe=hf_config.enable_moe_block)
         # Keep prompt-dependent slice bounds in persistent buffers. Literal
         # offsets compile a new program after prefill traces are already live.
         self._tail_slice_start = ttnn.from_torch(
@@ -279,6 +335,10 @@ class Gemma4Model:
         )
         self.hf_config = hf_config
         self.mesh_config = mesh_config
+        # Lanes fold every lane's users into one batch; users_row_sharded makes the shared prefill
+        # loop forward the real slot as global_user_id instead of rewriting user_id to 0.
+        if mesh_config is not None and getattr(mesh_config, "lane_sharded", False):
+            self.users_row_sharded = True
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
         self.final_logit_softcapping = hf_config.final_logit_softcapping
@@ -296,6 +356,7 @@ class Gemma4Model:
             "yes",
         )
         self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
+        self._tt_supports_decode_token_feedback = not self._tt_vllm_always_refresh_decode_trace_inputs
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
@@ -423,6 +484,17 @@ class Gemma4Model:
         # ``ttnn_prefill_forward`` and bypass this stash.
         self._prefill_input_ids_torch = None
         self._prefill_embeds_torch = None
+        # Multimodal prefill (vLLM bridge): the host-merged text + soft-token embeddings
+        # of the user being prefilled, as ``(embeds [N, hidden] bf16, base_offset)`` with
+        # row ``i`` = prompt position ``base_offset + i``. ``prepare_inputs_prefill`` feeds
+        # them in place of ``embed_tokens`` so the text prefill's page-table, per-layer
+        # table, chunk and APC handling is reused unchanged. Installed per call by
+        # ``Gemma4Generator._prefill_single_user_with_embeds``.
+        self._g4_mm_prefill_embeds = None
+        # Host block ids ([prompt_len], -1 = text) of the prompt behind the embeds override; turns into
+        # the absolute (start, end) vision spans of the prompt being prefilled, installed by the generator
+        # for the call; the layers get their image-span attention masks from them (GEMMA4_MM_BIDIR_MASK, on).
+        self._g4_mm_prefill_blocks = None
 
         # Stash for the per-layer-input (PLI) device tensor produced in
         # ``prepare_decode_inputs_host``. ``Generator``'s decode path
@@ -539,10 +611,12 @@ class Gemma4Model:
                 kv_cache = init_kv_cache(
                     mesh_device=mesh_device,
                     config=attn_cfg,
+                    mesh_config=mesh_config,
                     max_batch_size=max_local_batch_size,
                     max_seq_len=max_seq_len,
                     paged_attention_config=paged_attention_config,
-                    cache_dtype=ttnn.bfloat16,
+                    # GEMMA4_KV_BFP8=1: bfp8_b paged KV halves pool DRAM and decode KV-read bytes; off by default.
+                    cache_dtype=(ttnn.bfloat8_b if gemma4_kv_bfp8_enabled() else ttnn.bfloat16),
                     max_num_blocks_override=max_num_blocks_override,
                 )
                 layer.self_attn.kv_cache = kv_cache
@@ -587,7 +661,17 @@ class Gemma4Model:
         # meshes where each row samples users independently (e.g. Galaxy 4x8).
         #
         # tt_transformers' Generator reads this attribute via _get_sampling_contract.
-        self.sampling_dp = mesh_device.shape[0] if is_mesh else 1
+        _fractured = bool(mesh_config is not None and getattr(mesh_config, "weight_fracture", False))
+        # Fractured: mesh rows are the vocab/TP axis, not sampling groups, unless lanes make each
+        # lane column its own sampling group.
+        _lanes_on = bool(mesh_config is not None and getattr(mesh_config, "lane_sharded", False))
+        if _fractured:
+            self.sampling_dp = mesh_config.lanes if _lanes_on else 1
+        else:
+            # The non-TP axis counts the sampling groups (the rows under the default column TP; the columns
+            # when GEMMA4_TP_AXIS=0 puts the TP group on the rows, e.g. the 4-chip line as MeshShape(4, 1)).
+            _dp_axis = 1 - int(getattr(mesh_config, "tp_axis", 1)) if mesh_config is not None else 0
+            self.sampling_dp = mesh_device.shape[_dp_axis] if is_mesh else 1
 
         # dFlash residual-tap capture (armed by dflash_capture_taps; consumed by
         # the dFlash drafter — see tt/dflash_drafter.py).
@@ -600,7 +684,7 @@ class Gemma4Model:
         if is_mesh and tp > 1:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
             if per_device_padded <= 64 * 1024:
-                sampling_args = self._make_sampling_args(hf_config, mesh_device, tp)
+                sampling_args = self._make_sampling_args(hf_config, mesh_device, tp, mesh_config)
                 # Match sampling all-gather topology to Gemma4 CCLManager (Ring on
                 # BH≥8, Linear elsewhere / GEMMA4_CCL_TOPOLOGY). Without this,
                 # TTSampling defaults to Linear while model collectives use Ring.
@@ -621,12 +705,18 @@ class Gemma4Model:
                         "topology": ccl_manager.topology,
                     }
                 sampling_tt_ccl = TT_CCL(mesh_device)
-                self.sampling = SamplingGenerator(
+                # the lane engine's prefill slots are global (lane * lane_slots + row): see _LaneSamplingGenerator
+                self.sampling = (_LaneSamplingGenerator if _lanes_on else SamplingGenerator)(
                     args=sampling_args,
                     mesh_device=mesh_device,
                     tt_ccl=sampling_tt_ccl,
                 )
                 _apply_gemma4_single_untilize_override(self.sampling.tt_sampling)
+                if bool(self.mesh_config is not None and getattr(self.mesh_config, "weight_fracture", False)):
+                    # Penalty and top-k programs are not fracture-aware (per-chip vocab sharding breaks
+                    # their eltwise shapes); skipping them makes the sampler reject such requests.
+                    self.sampling.tt_sampling._allow_penalties_sampling = False
+                    self.sampling.tt_sampling._allow_topk_sampling = False
                 topo = getattr(self.sampling.tt_sampling, "ag_topology", None)
                 topo_name = "Ring" if topo == ttnn.Topology.Ring else "Linear"
                 logger.info(
@@ -686,8 +776,23 @@ class Gemma4Model:
         )
         ttnn.copy_host_to_device_tensor(host, self.prefill_valid_len_dev)
 
+    @property
+    def _lane_sharded(self):
+        return bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+
+    @property
+    def _lane_slots(self):
+        return int(getattr(self, "lane_slots", 0) or 32)
+
+    def lane_device_indices(self):
+        """Row-major device index of each lane's first chip (lanes run along ``sp_axis``)."""
+        rows, cols = (int(x) for x in self.mesh_config.mesh_shape)
+        if self.mesh_config.sp_axis == 1:
+            return list(range(cols))
+        return [r * cols for r in range(rows)]
+
     @staticmethod
-    def _make_sampling_args(hf_config, mesh_device, tp):
+    def _make_sampling_args(hf_config, mesh_device, tp, mesh_config=None):
         """Create minimal args object for SamplingGenerator/TTSampling."""
 
         class _Args:
@@ -698,12 +803,23 @@ class Gemma4Model:
         per_device_vocab = _compute_per_device_vocab(args.vocab_size, tp)
         args.padded_vocab_size = per_device_vocab * tp
         args.cluster_shape = tuple(mesh_device.shape)
-        args.sampling_all_gather_axis = 1  # gather across TP (column) axis
-        args.sampling_dp = mesh_device.shape[0]
+        if mesh_config is not None and getattr(mesh_config, "weight_fracture", False):
+            # One-instance fracture: vocab/TP on the tp axis; one pooled sampler
+            # unless lanes make each lane column its own sampling group.
+            args.sampling_all_gather_axis = mesh_config.tp_axis
+            args.sampling_dp = mesh_config.lanes if getattr(mesh_config, "lane_sharded", False) else 1
+        else:
+            # gather across the TP axis (the columns unless GEMMA4_TP_AXIS=0); the other axis is the DP axis
+            _tp_axis = int(getattr(mesh_config, "tp_axis", 1)) if mesh_config is not None else 1
+            args.sampling_all_gather_axis = _tp_axis
+            args.sampling_dp = mesh_device.shape[1 - _tp_axis]
+            args.is_galaxy = mesh_device.shape[1 - _tp_axis] > 1
         args.num_devices = mesh_device.get_num_devices()
-        args.is_galaxy = mesh_device.shape[0] > 1
         args.model_config = {}
         args.use_topk_logprobs = False
+        # vLLM path: same-seed requests must reproduce identically (n>1 children already
+        # arrive with distinct seeds), so keep SeedManager salting off, as llama3_70b_galaxy does.
+        args.salt_duplicate_seeds = False
         return args
 
     def _compute_per_layer_inputs(self, input_ids_torch, embeds_torch):
@@ -864,6 +980,7 @@ class Gemma4Model:
         chunk_page_table=None,
         valid_seq_lens=None,
         keep_sharded_for_sampling=False,
+        mm_attn_masks=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -906,6 +1023,15 @@ class Gemma4Model:
         seq_len = hidden_states.shape[2]
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
         caches = kv_caches or self.tt_kv_cache
+        # The traced short single-user bucket under bounded sliding (generator_trace.short_prefill_stash_skipped):
+        # the attention zeroes the ring before its capped fill and records no cross-chunk sliding-tail stash;
+        # every eager prefill keeps the stash.
+        traced_short_bucket = (not is_decode) and short_prefill_stash_skipped(
+            seq_len,
+            batch_size,
+            bounded=bool(getattr(self, "bounded_sliding_kv_cache", False)),
+            trace_mode=bool(getattr(self, "_prefill_trace_mode", False)),
+        )
 
         # Real (unpadded) prefill length for KV fill cap. Scalar from
         # ``get_last_token`` (B=1 / uniform), or per-slot list for batched
@@ -947,6 +1073,12 @@ class Gemma4Model:
 
         is_mesh = hasattr(self.mesh_device, "shape")
 
+        # Decode never has a single active lane: the EP experts' single-lane prefill fast path must
+        # not see a stale owner from the last prefill (the vLLM decode path does not pass through
+        # prepare_inputs_decode, and the fast path's all-reduce is not capturable in a decode trace).
+        if is_decode and self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            self.mesh_config._g4_single_lane_prefill_owner = None
+
         # Determine which layers are KV sources (their K/V will be shared)
         kv_source_indices = set(self.kv_shared_layer_map.values()) if not is_decode else set()
         # Store K/V from source layers for sharing during prefill
@@ -968,12 +1100,17 @@ class Gemma4Model:
                 cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
                 sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
                 decode_rope_presliced[lt] = (cos_pos, sin_pos)
+        # Per-step, per-layer-type scratch for the batch>1 RoPE: the transposed/sliced cos/sin and their
+        # head-repeated forms are built by the first layer of a type and reused by the rest (6 ops/layer
+        # fewer); freed with the presliced tensors after the loop.
+        decode_rope_prepared = {lt: {} for lt in decode_rope_presliced}
 
         # copy-mode dFlash taps index buffers per forward
         self._dflash_tap_idx = 0
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
             rope_presliced = False
+            layer_rope_prepared = None
             if rope_mats is not None:
                 if isinstance(rope_mats, dict):
                     # Dict mapping layer_type -> (cos, sin) — pre-sliced for trace decode
@@ -984,6 +1121,7 @@ class Gemma4Model:
             elif is_decode and decode_rope_presliced:
                 # Decode: use the per-layer-type cos/sin gathered once before the loop.
                 layer_rope = decode_rope_presliced[self.hf_config.layer_types[i]]
+                layer_rope_prepared = decode_rope_prepared[self.hf_config.layer_types[i]]
                 rope_presliced = True
             elif is_decode:
                 # Decode fallback: return 2D caches for on-device embedding lookup
@@ -1078,9 +1216,12 @@ class Gemma4Model:
                 valid_seq_len=prefill_valid_len,
                 sequential_kv_write=sequential_kv_write,
                 rope_presliced=rope_presliced,
+                rope_prepared=layer_rope_prepared,
                 packed=layer_packed,
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
+                mm_attn_mask=mm_attn_masks,
+                traced_short_bucket=traced_short_bucket,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1116,6 +1257,10 @@ class Gemma4Model:
         for cos_pos, sin_pos in decode_rope_presliced.values():
             cos_pos.deallocate(True)
             sin_pos.deallocate(True)
+        for prepared in decode_rope_prepared.values():
+            for pair in prepared.values():
+                for t in pair:
+                    t.deallocate(True)
 
         # Deallocate any stored shared K/V tensors
         for kv_pair in shared_kv_store.values():
@@ -1265,9 +1410,12 @@ class Gemma4Model:
 
         if self.final_logit_softcapping and self.final_logit_softcapping > 0:
             cap = self.final_logit_softcapping
-            logits = ttnn.mul(logits, 1.0 / cap)
-            logits = ttnn.tanh(logits)
-            logits = ttnn.mul(logits, cap)
+            if decode_flag("GEMMA4_SOFTCAP_FUSED") == "1":
+                logits = ttnn.softcap(logits, cap)  # cap * tanh(logits / cap) as one program
+            else:
+                logits = ttnn.mul(logits, 1.0 / cap)
+                logits = ttnn.tanh(logits)
+                logits = ttnn.mul(logits, cap)
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
 
@@ -1552,20 +1700,69 @@ class Gemma4Model:
             return ttnn.ReplicateTensorToMesh(self.mesh_device)
         return None
 
-    def _page_table_torch_to_ttnn(self, page_table_torch):
+    def _lane_scratch_block_for(self, layer_idx):
+        """Block that non-owner lanes write a single-user prefill through.
+
+        Full layers use null block 0; bounded sliding layers use their reserved block, since block 0 is live.
+        """
+        if layer_idx is None:
+            return 0
+        cfg = getattr(getattr(self.layers[layer_idx], "self_attn", None), "config", None)
+        if cfg is None or not getattr(cfg, "cache_position_modulo", None):
+            return 0
+        return int(getattr(self, "_lane_scratch_block", 0) or 0)
+
+    def _page_table_host_layout(self, page_table_torch, target_w=None, layer_idx=None):
+        """Host layout and mesh mapper for a per-layer page table.
+
+        Lanes shard dim 0 over the lane axis (otherwise replicate): full tables pad to the global frame,
+        a single-row prefill table lands on its owner lane with scratch rows elsewhere.
+        """
+        pt = page_table_torch if page_table_torch.dim() > 1 else page_table_torch.unsqueeze(0)
+        pt = pt.to(dtype=torch.int32)
+        if target_w is not None and int(pt.shape[-1]) != int(target_w):
+            w = int(target_w)
+            out = torch.zeros((int(pt.shape[0]), w), dtype=torch.int32)
+            out[:, : min(w, int(pt.shape[-1]))] = pt[:, : min(w, int(pt.shape[-1]))]
+            pt = out
+        lane_sharded = self._lane_sharded
+        if not lane_sharded:
+            return pt, self._replicate_to_mesh_mapper()
+        lanes = self.mesh_config.lanes
+        slots = self._lane_slots
+        full = lanes * slots
+        rows = int(pt.shape[0])
+        if rows == 1:
+            owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % lanes
+            host = torch.full((lanes, int(pt.shape[-1])), self._lane_scratch_block_for(layer_idx), dtype=torch.int32)
+            host[owner] = pt[0]
+        elif rows == lanes and lanes != full:
+            # Lane-parallel prefill: one row per lane, shard as-is (each
+            # column sees its own [1, w] single-user table).
+            host = pt
+        else:
+            host = pt
+            if rows < full:
+                host = torch.cat([pt, torch.zeros((full - rows, int(pt.shape[-1])), dtype=torch.int32)], dim=0)
+            elif rows > full:
+                host = pt[:full]
+        return host, self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
+
+    def _page_table_torch_to_ttnn(self, page_table_torch, layer_idx=None):
         """Build a page-table device tensor from a torch tensor.
 
         Prefill is usually batch=1; decode warmup/runtime pass the full
         ``max_batch_size`` rows. Preserve the host batch dim so
-        ``paged_update_cache`` sees ``page_table.shape[0] == input.shape[1]``.
+        ``paged_update_cache`` sees ``page_table.shape[0] == input.shape[1]``
+        (per COLUMN under lanes — see ``_page_table_host_layout``).
         """
-        pt = page_table_torch if page_table_torch.dim() > 1 else page_table_torch.unsqueeze(0)
+        host, mapper = self._page_table_host_layout(page_table_torch, layer_idx=layer_idx)
         return ttnn.from_torch(
-            pt,
+            host,
             device=self.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._replicate_to_mesh_mapper(),
+            mesh_mapper=mapper,
         )
 
     @staticmethod
@@ -1620,23 +1817,50 @@ class Gemma4Model:
                     dev_w = int(persistent[i].shape[-1])
                 except (TypeError, IndexError, AttributeError):
                     continue
+                if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+                    # Device shapes are per column under lanes (see _page_table_host_layout).
+                    host_b = lane_page_table_device_rows(host_b, self.mesh_config.lanes, self._lane_slots)
                 if host_b > dev_b or host_w > dev_w:
                     needs_grow = True
                     break
         if needs_alloc or needs_grow:
-            if needs_grow:
-                # Growing after decode-trace capture would leave execute_trace
-                # reading stale addresses; force a recapture on the next decode.
+            # An allocation event for the decode-trace guard's ``alloc`` arming mode (read and cleared by the
+            # generator after the prefill call).
+            self._g4_persistent_alloc_event = "grown" if needs_grow else f"allocated for batch key {batch_key}"
+            if needs_grow or by_batch:
+                # Growing after decode-trace capture would leave execute_trace reading stale
+                # addresses, and a batch key first seen after the capture (a lane group, a wider
+                # merged prefill) allocates where the replays scribble -- either way the next
+                # decode re-captures, whatever the trace guard's budget. The process's first key
+                # is the warmup's own and needs nothing.
                 self._invalidate_decode_traces_after_page_table_realloc = True
+                self._g4_page_table_realloc_reason = (
+                    "grow" if needs_grow else f"new batch key {batch_key} (keys {sorted(by_batch)})"
+                )
             persistent = []
-            for pt in page_tables_per_layer:
+            # Layers handed the same host table (one per kv-cache group) share one
+            # device buffer: an update then costs one H2D per group, not per layer.
+            # Lane-sharded layouts depend on the layer, so they keep per-layer buffers.
+            # Opt-in (GEMMA4_SHARE_PAGE_TABLES=1): warmup broadcasts one legacy table to
+            # every layer, so the first real per-group tables diverge and the rebuild
+            # lands under live decode traces (garbage on 12B/31B QB2, 2026-10-05).
+            share = not (self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
+            share = share and getattr(self, "mesh_config_share_page_tables", True)
+            share = share and os.environ.get("GEMMA4_SHARE_PAGE_TABLES", "0") == "1"
+            by_host_id: dict = {}
+            for i, pt in enumerate(page_tables_per_layer):
                 if pt is None:
                     persistent.append(None)
                     continue
                 if isinstance(pt, ttnn.Tensor):
                     persistent.append(pt)
                     continue
-                persistent.append(self._page_table_torch_to_ttnn(pt))
+                shared = by_host_id.get(id(pt)) if share else None
+                if shared is None:
+                    shared = self._page_table_torch_to_ttnn(pt, layer_idx=i)
+                    if share:
+                        by_host_id[id(pt)] = shared
+                persistent.append(shared)
             by_batch[batch_key] = persistent
         self._persistent_per_layer_page_tables = persistent
         return persistent
@@ -1655,7 +1879,7 @@ class Gemma4Model:
         out[:host_b, :host_w] = pt_host.to(dtype=torch.int32)
         return out
 
-    def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
+    def update_persistent_per_layer_page_tables(self, page_tables_per_layer, force: bool = False):
         """Update the content of persistent per-layer page-table device
         tensors in place.
 
@@ -1668,7 +1892,9 @@ class Gemma4Model:
         host table to the captured device shape so we never reallocate and
         orphan decode-trace addresses. Skip the H2D when the host table is
         unchanged from the last update for this batch key (decode steps
-        within a KV block).
+        within a KV block). ``force`` uploads regardless: a prefill always
+        re-uploads, so a device table a trace replay may have overwritten is
+        never trusted on the host's say-so.
         """
         if page_tables_per_layer is None:
             return
@@ -1685,6 +1911,18 @@ class Gemma4Model:
         # (padded) host tensor once and fan out to every persistent buffer.
         host_cache = {}
         new_last = [None] * len(page_tables_per_layer)
+        # Device buffers shared by several layers are written once per update;
+        # a second layer with different content means the sharing no longer
+        # holds, so the batch key's buffers are rebuilt unshared.
+        written: dict = {}
+        # The layers of one kv-cache group are handed the same host tensor: pad it,
+        # compare it with the last upload and snapshot it once per distinct
+        # (table, device shape), not once per layer (the lane-sharded layout is
+        # per layer and keeps the per-layer work).
+        lane_layout = self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False)
+        padded_cache: dict = {}
+        equal_cache: dict = {}
+        clone_cache: dict = {}
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
@@ -1695,18 +1933,53 @@ class Gemma4Model:
             except (TypeError, IndexError, AttributeError):
                 target_b = int(pt_host.shape[0])
                 target_w = int(pt_host.shape[-1])
-            pt_padded = self._pad_page_table_host_to_shape(pt_host, target_b, target_w)
-            if (
-                last_hosts is not None
-                and i < len(last_hosts)
-                and last_hosts[i] is not None
-                and torch.equal(last_hosts[i], pt_padded)
-            ):
-                new_last[i] = last_hosts[i]
-                continue
-            new_last[i] = pt_padded.detach().clone() if pt_padded is not None else None
-            # Cache key includes target shape so B=1 and B=32 pads don't collide.
+            lane_pt_mapper = None
             key = (id(pt), target_b, target_w)
+            if lane_layout:
+                # Rebuild the sharded host layout (owner stack / frame pad) so
+                # the H2D copy matches the lane-sharded persistent tensor.
+                pt_padded, lane_pt_mapper = self._page_table_host_layout(pt_host, target_w, layer_idx=i)
+            else:
+                pt_padded = padded_cache.get(key)
+                if pt_padded is None:
+                    pt_padded = self._pad_page_table_host_to_shape(pt_host, target_b, target_w)
+                    padded_cache[key] = pt_padded
+            if not force and last_hosts is not None and i < len(last_hosts) and last_hosts[i] is not None:
+                eq_key = (key, id(last_hosts[i])) if not lane_layout else None
+                unchanged = equal_cache.get(eq_key) if eq_key is not None else None
+                if unchanged is None:
+                    unchanged = torch.equal(last_hosts[i], pt_padded)
+                    if eq_key is not None:
+                        equal_cache[eq_key] = unchanged
+                if unchanged:
+                    new_last[i] = last_hosts[i]
+                    continue
+            if pt_padded is None:
+                new_last[i] = None
+            elif lane_layout:
+                new_last[i] = pt_padded.detach().clone()
+            else:
+                snapshot = clone_cache.get(key)
+                if snapshot is None:
+                    snapshot = clone_cache[key] = pt_padded.detach().clone()
+                new_last[i] = snapshot
+            prev = written.get(id(persistent[i]))
+            if prev is not None:
+                if torch.equal(prev, pt_padded):
+                    continue
+                logger.warning(
+                    "Gemma4: per-layer page tables no longer share content across layers "
+                    "sharing a device buffer (layer {}); rebuilding the buffers unshared",
+                    i,
+                )
+                by_batch = getattr(self, "_persistent_pt_by_batch", {})
+                by_batch.pop(batch_key, None)
+                last_by_batch.pop(batch_key, None)
+                self._invalidate_decode_traces_after_page_table_realloc = True
+                self.mesh_config_share_page_tables = False
+                return self.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
+            written[id(persistent[i])] = pt_padded
+            # Cache key includes target shape so B=1 and B=32 pads don't collide.
             host_pt = host_cache.get(key)
             if host_pt is None:
                 host_pt = ttnn.from_torch(
@@ -1714,7 +1987,7 @@ class Gemma4Model:
                     device=None,
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=self._replicate_to_mesh_mapper(),
+                    mesh_mapper=lane_pt_mapper if lane_pt_mapper is not None else self._replicate_to_mesh_mapper(),
                 )
                 host_cache[key] = host_pt
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
@@ -1733,6 +2006,7 @@ class Gemma4Model:
         batch_size=1,
         user_id=0,
         batched_prefill=False,
+        lane_parallel=False,
         **kwargs,
     ):
         """Build prefill device inputs and cache the host-side state needed
@@ -1753,13 +2027,45 @@ class Gemma4Model:
         """
         import torch.nn.functional as F
 
-        del start_pos, last_token_idx, global_user_id, user_id, batched_prefill, kwargs
+        prefill_start = int(start_pos or 0)
+        del start_pos, last_token_idx, batched_prefill, kwargs
+        # Single-user lane prefill (one page-table row: the owner lane holds the real rows, the other
+        # lanes compute on scratch): tell the EP experts which lane's rows are real so they skip the
+        # other lanes' padding (see Gemma4Experts.__call__). Lane-parallel prefill keeps every lane.
+        # Eager prefill only: a captured prefill trace would bake one lane's row slice, and the owner
+        # lane changes per request (served text prefill replays the trace for whichever lane the
+        # request landed on). Lane-parallel prefill keeps every lane.
+        if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            self.mesh_config._g4_single_lane_prefill_owner = (
+                None
+                if (lane_parallel or trace_enabled)
+                else int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
+            )
 
         device = None if trace_enabled else self.mesh_device
         mesh_mapper = self._replicate_to_mesh_mapper()
+        tok_mapper = mesh_mapper
 
         tokens_torch = tokens.to(torch.long)
-        if batch_size > 1:
+        if lane_parallel:
+            # Lane-parallel prefill: row i of ``tokens`` is lane i's user; sharding rows over the lane
+            # axis lets each column prefill its own user with batch_size=1 semantics; nothing downstream changes.
+            # ``batch_size=k`` > 1: row i is lane i's k users as one stream of k * seq tokens, the batched
+            # prefill form per column (its [k, blocks] page table rows, per-user valid lengths, deferred lm_head).
+            assert getattr(self.mesh_config, "lane_sharded", False), "lane_parallel requires GEMMA4_GALAXY_LANES"
+            assert batch_size >= 1, "lane_parallel runs one user or a batched stream per column"
+            # ``trace_enabled``: the traced lane frame (generator._g4_capture_lane_prefill_trace) takes the host-staged
+            # token ids and page table this returns as its persistent trace inputs; the trace embeds the tokens.
+            if self.hidden_size_per_layer_input:
+                raise NotImplementedError("lane_parallel prefill does not support PLI models")
+            lanes = self.mesh_config.lanes
+            assert (
+                tokens_torch.dim() == 2 and tokens_torch.shape[0] == lanes and tokens_torch.shape[-1] % batch_size == 0
+            ), f"lane_parallel tokens must be [lanes={lanes}, k * seq] (k={batch_size}), got {tuple(tokens_torch.shape)}"
+            per_user_seq_len = tokens_torch.shape[-1] // batch_size
+            tokens_for_embed = tokens_torch
+            tok_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
+        elif batch_size > 1:
             assert tokens_torch.dim() == 2, "batched prefill tokens must be [batch, seq_len]"
             per_user_seq_len = tokens_torch.shape[-1]
             tokens_for_embed = tokens_torch.reshape(1, 1, 1, -1)
@@ -1774,8 +2080,37 @@ class Gemma4Model:
             device=device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=tok_mapper,
         )
+
+        # Lane-sharded prefill: every column runs the same prefill, but only the owner lane may write
+        # real KV, so the page table is stacked per lane (owner rows real, scratch elsewhere) and lane-sharded.
+        lane_sharded = self._lane_sharded
+
+        def _lane_stack(table):
+            lanes = self.mesh_config.lanes
+            gid = global_user_id if global_user_id is not None else user_id
+            # Matches the decode reshape [global] -> [lanes, local]: global slot s lives on lane
+            # s // lane_slots at per-lane row s % lane_slots.
+            slots = self._lane_slots
+            owner = 0 if gid is None else (int(gid) // slots) % lanes
+            stacked = torch.zeros((lanes,) + tuple(table.shape), dtype=table.dtype)
+            stacked[owner] = table
+            # Flatten to [lanes*rows, blocks] so dim-0 sharding hands each column a 2-D [rows, blocks]
+            # table; a 3-D per-column view makes paged_fill read shape[1]=1 as "one block per seq".
+            return stacked.reshape(-1, stacked.shape[-1])
+
+        def _lane_table(table):
+            # Lane-parallel callers pass pre-stacked [lanes, rows, blocks] tables;
+            # flatten them the same way _lane_stack flattens an owner-stacked one.
+            if lane_parallel:
+                return table.reshape(-1, table.shape[-1])
+            return _lane_stack(table)
+
+        pt_mapper = mesh_mapper
+        if lane_sharded and page_table is not None:
+            page_table = _lane_table(page_table)
+            pt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
 
         tt_page_table = None
         if page_table is not None:
@@ -1784,17 +2119,21 @@ class Gemma4Model:
                 device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mesh_mapper,
+                mesh_mapper=pt_mapper,
             )
 
         tt_chunk_page_table = None
         if chunk_page_table is not None:
+            cpt_mapper = mesh_mapper
+            if lane_sharded:
+                chunk_page_table = _lane_table(chunk_page_table)
+                cpt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
                 device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mesh_mapper,
+                mesh_mapper=cpt_mapper,
             )
 
         # Device scalar for traced multi-chunk / APC: refresh absolute start via
@@ -1827,6 +2166,13 @@ class Gemma4Model:
         if trace_enabled:
             return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
+        mm_override = getattr(self, "_g4_mm_prefill_embeds", None)
+        if mm_override is not None:
+            tt_embeds = self._mm_prefill_embeds_to_device(
+                mm_override, prefill_start, per_user_seq_len, batch_size=batch_size, lane_parallel=lane_parallel
+            )
+            return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
+
         tt_embeds = self.embed_tokens(tt_tokens)
         if batch_size > 1:
             if len(tt_embeds.shape) == 3:
@@ -1836,6 +2182,37 @@ class Gemma4Model:
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
         return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
+
+    def _mm_prefill_embeds_to_device(self, override, prefill_start, seq_len, *, batch_size=1, lane_parallel=False):
+        """Device prefill input from the installed multimodal embeddings.
+
+        Rows ``[prefill_start - base, +seq_len)`` of the merged prompt: ``prefill_start``
+        is this chunk's absolute start (``start_pos`` of ``prepare_inputs_prefill``) and
+        ``base`` the cached prefix the generator sliced off, so the two line up for the
+        single-chunk, multi-chunk and APC-continuation prefills alike. Rows past the
+        prompt are zero (they mirror the token path's pad ids and are never read back).
+        """
+        if batch_size != 1 or lane_parallel:
+            raise NotImplementedError("multimodal prefill runs one user at a time (no batched / lane-parallel prefill)")
+        embeds, base = override
+        rel = int(prefill_start) - int(base)
+        total = int(embeds.shape[0])
+        if rel < 0 or rel > total:
+            raise ValueError(
+                f"multimodal prefill chunk start {prefill_start} lies outside the merged embeddings "
+                f"(base={base}, rows={total})"
+            )
+        rows = embeds[rel : rel + seq_len]
+        if int(rows.shape[0]) < seq_len:
+            pad = torch.zeros(seq_len - int(rows.shape[0]), int(embeds.shape[1]), dtype=embeds.dtype)
+            rows = torch.cat([rows, pad], dim=0)
+        return ttnn.from_torch(
+            rows.to(torch.bfloat16).reshape(1, 1, seq_len, self.hidden_size).contiguous(),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
@@ -1920,35 +2297,103 @@ class Gemma4Model:
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
         page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
-        return self(
-            hidden_states=x,
-            position_idx=None,
-            page_table=page_table,
-            kv_caches=kv_cache,
-            is_decode=False,
-            input_ids_torch=input_ids_torch,
-            embeds_torch=embeds_torch,
-            pli_device_tensors=pli_device_tensors,
-            get_last_token=get_last_token,
-            page_tables_per_layer=page_tables_per_layer,
-            batch_size=batch_size,
-            user_id=user_id,
-            chunk_start_idx=chunk_start_idx,
-            chunk_page_table=chunk_page_table,
-            valid_seq_lens=valid_seq_lens,
+        mm_attn_masks = self._g4_mm_prefill_vision(x, chunk_start_idx)
+        try:
+            return self(
+                hidden_states=x,
+                position_idx=None,
+                page_table=page_table,
+                kv_caches=kv_cache,
+                is_decode=False,
+                input_ids_torch=input_ids_torch,
+                embeds_torch=embeds_torch,
+                pli_device_tensors=pli_device_tensors,
+                get_last_token=get_last_token,
+                page_tables_per_layer=page_tables_per_layer,
+                batch_size=batch_size,
+                user_id=user_id,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
+                valid_seq_lens=valid_seq_lens,
+                mm_attn_masks=mm_attn_masks,
+            )
+        finally:
+            # Masks are per-prefill device tensors: a persistent cache kept buffers alive across the
+            # decode trace replays, whose baked-in addresses then overlapped them (served 26B on the
+            # lane engine decoded garbage after the first multimodal request).
+            if mm_attn_masks is not None:
+                mm_attn_masks.deallocate()
+
+    def _g4_mm_prefill_vision(self, x, chunk_start_idx):
+        """The vision spans this chunk's attention must keep bidirectional, or None (plain causal).
+
+        ``_g4_mm_prefill_blocks`` holds the prompt's absolute vision spans for the call (set by the
+        generator for every multimodal prefill: whole prompt, cached-prefix continuation or generator
+        chunk). The layers ask the returned ``MMPrefillVision`` for the mask of the square they attend in
+        memory, or for the rows the paged full-attention path recomputes against the KV cache; None when
+        no span touches this chunk ``[chunk_start_idx, +seq_len)``. Traced prefills carry no spans.
+        """
+        spans = getattr(self, "_g4_mm_prefill_blocks", None)
+        if not spans or isinstance(chunk_start_idx, ttnn.Tensor):
+            return None
+        from models.demos.gemma4.tt.common import gemma4_env_flag
+
+        # Default on: without it the 12B describes a different image (A/B on a (1,8) column: a
+        # hallucinated "person's face" vs the real subject); GEMMA4_MM_BIDIR_MASK=0 restores causal.
+        if not gemma4_env_flag("GEMMA4_MM_BIDIR_MASK", default="1"):
+            return None
+        from models.demos.gemma4.tt.attention.mm_prefill_vision import MMPrefillVision
+
+        vision = MMPrefillVision(
+            spans, 0 if chunk_start_idx is None else int(chunk_start_idx), int(x.shape[-2]), self.mesh_device
         )
+        return vision if vision.in_chunk() else None
+
+    def _g4_pf_add(self, key: str, seconds: float) -> None:
+        """Accumulate a prefill phase's host wall (ms) for the vLLM bridge's ``[gemma4-vllm-perf]`` line."""
+        d = self.__dict__.get("_g4_pf_ms")
+        if d is None:
+            d = self._g4_pf_ms = {}
+        d[key] = d.get(key, 0.0) + seconds * 1000.0
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """Read prefill logits to host and slice to the last token's vocab row.
 
         Under TP, Gemma4 all-gathers logits inside the model so a single
-        device tensor already holds the full vocab.
+        device tensor already holds the full vocab. Under lanes only the owner lane's
+        column prefilled against the real page tables, so read that lane's chip: the
+        mixin's ``_append_lane_prefill_result`` queues that one shard while the user's
+        owner lane is current (a one-shard host tensor here IS the owner's tile; the
+        ``_g4_active_owner_lane`` fallback below names the last prefilled user's lane,
+        wrong for the earlier users of a serial batch). A one-row host tensor is the
+        last token's row already (``_append_prefill_result`` sliced it on one device
+        before the readback).
         """
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-        else:
-            torch_output = ttnn.to_torch(tt_out)
-        return torch_output[..., last_token_idx, : self.vocab_size]
+        t0 = time.perf_counter()
+        try:
+            if int(tt_out.shape[-2]) == 1:
+                try:
+                    first = ttnn.get_device_tensors(tt_out)[0]
+                except Exception:  # noqa: BLE001 - a single-shard host tensor
+                    first = tt_out
+                return ttnn.to_torch(first)[..., 0, : self.vocab_size]
+            if self._lane_sharded:
+                try:
+                    shards = ttnn.get_device_tensors(tt_out)
+                except Exception:  # noqa: BLE001 - a single-shard host tensor
+                    shards = [tt_out]
+                if len(shards) == 1:
+                    torch_output = ttnn.to_torch(shards[0])
+                else:
+                    owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
+                    torch_output = ttnn.to_torch(shards[self.lane_device_indices()[owner]])
+            elif self.mesh_config is not None and self.mesh_config.tp > 1:
+                torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            else:
+                torch_output = ttnn.to_torch(tt_out)
+            return torch_output[..., last_token_idx, : self.vocab_size]
+        finally:
+            self._g4_pf_add("readback", time.perf_counter() - t0)
 
     def _g4_retire_scavenge(self):
         """Free device tensors this model handed to the shared consumption.
@@ -1981,6 +2426,14 @@ class Gemma4Model:
         lst.append(t)
 
     def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
+        """Deferred lm_head for traced prefill (timed; see :meth:`_process_logits_after_prefill_trace`)."""
+        t0 = time.perf_counter()
+        try:
+            return self._process_logits_after_prefill_trace(hidden_states, last_token_idx)
+        finally:
+            self._g4_pf_add("lm_head", time.perf_counter() - t0)
+
+    def _process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
         """Deferred lm_head for traced prefill.
 
         The trace returns post-norm hidden states ``[1,1,seq,hidden]`` when
@@ -2156,6 +2609,34 @@ class Gemma4Model:
         pos_flat = current_pos.reshape(-1)
         batch = tok_flat.shape[0]
 
+        # Lane-sharded decode: callers pass the global lane-major batch (lanes x lane_slots, pad rows at
+        # pos -1); each control tensor shards its batch dim over the lane axis, so nothing downstream changes.
+        lane_sharded = self._lane_sharded
+        if lane_sharded:
+            lanes = self.mesh_config.lanes
+            lane_slots = self._lane_slots
+            full = lanes * lane_slots
+            if batch > full:
+                raise ValueError(f"lane-sharded decode batch {batch} exceeds the slot space {full}")
+            if batch < full:
+                # Pad to the lane-major frame with vLLM-style dead rows; covers B<full callers such as
+                # the decode warmup's small buckets.
+                pad = full - batch
+                tok_flat = torch.cat([tok_flat, torch.zeros(pad, dtype=tok_flat.dtype)])
+                pos_flat = torch.cat([pos_flat, torch.full((pad,), -1, dtype=pos_flat.dtype)])
+                if page_table is not None:
+                    page_table = torch.cat(
+                        [page_table, torch.zeros(pad, page_table.shape[-1], dtype=page_table.dtype)], dim=0
+                    )
+                batch = full
+            if self.hidden_size_per_layer_input and self.per_layer_input_weights:
+                raise NotImplementedError("lane-sharded decode with per-layer inputs (E2B/E4B) is not supported")
+            lane_map = lambda d: self.mesh_config.lane_shard_mapper(self.mesh_device, d)  # noqa: E731
+            batch_local = lane_slots
+        else:
+            lanes = 1
+            batch_local = batch
+
         # Stage token IDs (not embeddings): embed_tokens runs on device in
         # ttnn_decode_forward. Non-PLI models pad to sampling width [1,1,1,32] so
         # ``ttnn.sampling(output_tensor=...)`` can write the next token into this
@@ -2165,20 +2646,32 @@ class Gemma4Model:
         # C++ to_dtype path is skipped. An int32->uint32 conversion would instead query
         # tile metadata on a row-major host buffer and emit the #18536 warning.
         tok_i64 = tok_flat.to(torch.int64)
+        tok_mapper = replicate
         if self._tt_vllm_always_refresh_decode_trace_inputs:
             tok_host = tok_i64.reshape(1, batch)
+            if lane_sharded:
+                tok_mapper = lane_map(1)
         else:
             pad_w = self._DECODE_TOKEN_FEEDBACK_WIDTH
-            if batch > pad_w:
-                raise ValueError(f"Decode batch {batch} exceeds token feedback width {pad_w}")
-            if batch < pad_w:
-                tok_i64 = F.pad(tok_i64, (0, pad_w - batch), "constant", 0)
-            tok_host = tok_i64.reshape(1, 1, 1, pad_w)
+            if batch_local > pad_w:
+                raise ValueError(f"Decode batch {batch_local} exceeds token feedback width {pad_w}")
+            if lane_sharded:
+                # Pad each lane's row up to the feedback width (local batches
+                # below 32 exist when lane_slots < 32, e.g. per-rung builds).
+                tok_lanes = tok_i64.reshape(lanes, batch_local)
+                if batch_local < pad_w:
+                    tok_lanes = F.pad(tok_lanes, (0, pad_w - batch_local), "constant", 0)
+                tok_host = tok_lanes.reshape(1, 1, lanes, pad_w)
+                tok_mapper = lane_map(2)
+            else:
+                if batch < pad_w:
+                    tok_i64 = F.pad(tok_i64, (0, pad_w - batch), "constant", 0)
+                tok_host = tok_i64.reshape(1, 1, 1, pad_w)
         tokens_tt = ttnn.from_torch(
             tok_host,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
-            mesh_mapper=replicate,
+            mesh_mapper=tok_mapper,
         )
 
         # Position: [1, 32] uint32 padded — per-user positions in the first
@@ -2196,18 +2689,31 @@ class Gemma4Model:
         pos_rope[pos_rope < 0] = 0
         pos_rope = pos_rope.reshape(1, batch)
         pos_padded = F.pad(pos_rope, (0, 32 - batch), "constant", 0) if batch < 32 else pos_rope
-        pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
+        pos_tt = ttnn.from_torch(
+            pos_padded,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=lane_map(1) if lane_sharded else replicate,
+        )
 
         # int32 positions [batch] for KV cache update + SDPA (per user).
         pos_int32_tt = ttnn.from_torch(
-            pos_i64.to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate
+            pos_i64.to(torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=lane_map(0) if lane_sharded else replicate,
         )
 
         # Page table [batch, max_blocks] — one row per user.
         page_table_tt = None
         if page_table is not None:
             pt = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
-            page_table_tt = ttnn.from_torch(pt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate)
+            page_table_tt = ttnn.from_torch(
+                pt,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.int32,
+                mesh_mapper=lane_map(0) if lane_sharded else replicate,
+            )
 
         # PLI (E2B/E4B per-layer inputs). 31B has none. Batched PLI would need
         # per-user stacking + model-side per-user slicing — not yet wired up.
@@ -2227,6 +2733,8 @@ class Gemma4Model:
         """Wrapper: prepare_decode_inputs_host + copy to device."""
         from models.tt_transformers.tt.common import copy_host_to_device
 
+        if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            self.mesh_config._g4_single_lane_prefill_owner = None  # decode: every lane's rows are real
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         self.bind_decode_trace_inputs(device_inputs)
@@ -2364,18 +2872,44 @@ class Gemma4Model:
         inside the model forward, so a single device tensor contains the
         full vocab.
         """
-        if is_tokens or is_log_probs:
-            if self.mesh_config is not None and self.mesh_config.tp > 1:
-                torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-            else:
-                torch_out = ttnn.to_torch(tt_out)
-            return torch_out.reshape(-1)[:B]
+        lane_sharded = self._lane_sharded
 
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
+        def _lane_shards():
+            # Under lanes ``B`` is the global slot space; each lane's first chip
+            # holds that lane's rows and they are reassembled in lane order.
+            shards = ttnn.get_device_tensors(tt_out)
+            return [ttnn.to_torch(shards[d]) for d in self.lane_device_indices()]
+
+        if is_tokens or is_log_probs:
+            if lane_sharded:
+                # Each column's sample row is padded to the feedback width; keep only its lane_slots real
+                # entries so the concat does not hand later lanes the first lane's padding.
+                _ls = self._lane_slots
+                torch_out = torch.cat([t.reshape(-1)[:_ls] for t in _lane_shards()], dim=0)
+            elif self.mesh_config is not None and self.mesh_config.tp > 1:
+                torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)
+            else:
+                torch_out = ttnn.to_torch(tt_out).reshape(-1)
+            return torch_out[:B]
+
+        if lane_sharded:
+            _ls = self._lane_slots
+            torch_out = torch.cat([t[:, :, :_ls, :] for t in _lane_shards()], dim=2)
+        elif self.mesh_config is not None and self.mesh_config.tp > 1:
             torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
             torch_out = ttnn.to_torch(tt_out)
-        return torch_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        return _decode_logits_rows(torch_out[:, :, :B, : self.vocab_size], B, S)
+
+
+def _decode_logits_rows(logits, B, S=1):
+    """``[1, 1, rows, vocab]`` host logits as ``[B, S, vocab]``.
+
+    Pads when nearest-bucket decode ran fewer rows than ``B``; ``view`` would fold the vocab axis into rows."""
+    rows = int(logits.shape[-2])
+    if rows < B:
+        logits = torch.nn.functional.pad(logits, (0, 0, 0, B - rows))
+    return logits.reshape(B, S, -1)
 
 
 def _apply_gemma4_single_untilize_override(tt_sampling) -> None:

@@ -303,7 +303,13 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                                 .to_device(device);
 
     const uint32_t mapping_page_size = mapping_tensor.logical_shape()[-1];
-    const auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
+    // Quasar has no UInt32 device format (tt::is_data_format_supported rejects it in ValidateProgramSpec),
+    // so describe the raw 32-bit mapping words as RawUInt32 there. The metadata is inert for this DFB:
+    // it is a DM-only FIFO (neither kernel consults the format; entry_size is the page size, not
+    // tile_size(format)), and RawUInt32 has the same datum/tile size. WH/BH keep the dtype-derived format.
+    const auto mapping_dataformat = device->arch() == tt::ARCH::QUASAR
+                                        ? tt::DataFormat::RawUInt32
+                                        : tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
     const uint32_t mapping_page_size_bytes = mapping_page_size * mapping_tensor.element_size();
 
     // Op-owned tensor: move the owning MeshTensor out of the built Tensor into the artifact so its

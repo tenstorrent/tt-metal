@@ -95,8 +95,8 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         single_partial_output_fits_in_face ? std::optional{TileDescriptor{1, tt::constants::FACE_WIDTH, false}}
                                            : std::nullopt;
 
-    const uint32_t grid_stick_size =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
+    // Sharded grid rows are stored at the buffer's aligned page size, so stride by the aligned stick size too.
+    const uint32_t grid_stick_size = get_aligned_stick_size(grid_shape, grid_tensor);
     const uint32_t grid_cb_index = cb_idx++;
     const uint32_t grid_cb_num_pages = is_sharded ? grid_nsticks_per_core : 1;
     desc.cbs.push_back(CBDescriptor{
@@ -217,8 +217,6 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
 
     // Prepare stick size arguments with proper names
     const uint32_t input_stick_size = get_aligned_stick_size(input_shape, input_tensor);
-    const uint32_t grid_stick_size_arg =
-        is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
 
     // Reader compile-time arguments - shared arguments first, then specific ones
     std::vector<uint32_t> reader_compile_time_args = {
@@ -226,7 +224,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         grid_cb_index,                                 // ct_arg[1]: grid_cb_index
         scalar_cb_index_0,                             // ct_arg[2]: scalar_cb_index_0
         input_stick_size,                              // ct_arg[3]: input_stick_size
-        grid_stick_size_arg,                           // ct_arg[4]: grid_stick_size
+        grid_stick_size,                               // ct_arg[4]: grid_stick_size
         input_batch,                                   // ct_arg[5]: input_batch
         input_height,                                  // ct_arg[6]: input_height
         input_width,                                   // ct_arg[7]: input_width

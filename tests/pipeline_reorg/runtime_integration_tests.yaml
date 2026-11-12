@@ -54,6 +54,16 @@
   team: runtime
   budget_type: integration
 
+# --- Galaxy: trace replay where device ranges have unequal trace lengths (#60817) ---
+- name: galaxy_trace_exec_buf_end
+  cmd: pytest tests/ttnn/distributed/test_trace_exec_buf_end_race.py
+  skus:
+    bh_galaxy:
+      timeout: 2
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+  budget_type: integration
+
 # =============================================================================
 # FD Python API Tests (eager ops + sweep)
 # =============================================================================

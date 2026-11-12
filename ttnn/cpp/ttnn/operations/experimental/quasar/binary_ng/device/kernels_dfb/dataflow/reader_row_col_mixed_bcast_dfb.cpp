@@ -149,7 +149,7 @@ void kernel_main() {
                             noc.async_read(
                                 src, dfb_in0, src_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
                             noc.async_read_barrier();
-                            FILL_TILE_WITH_FIRST_COLUMN(static_cast<uint32_t>(lock.get_ptr().get_address()));
+                            FILL_TILE_WITH_FIRST_COLUMN(lock.get_ptr());
                         }
 #endif
                         dfb_in0.push_back(onetile);
@@ -161,7 +161,7 @@ void kernel_main() {
                             noc.async_read(
                                 src_b, dfb_in1, src_tile_bytes_b, {.page_id = tile_offset_b + th}, {.offset_bytes = 0});
                             noc.async_read_barrier();
-                            FILL_TILE_WITH_FIRST_COLUMN_B(static_cast<uint32_t>(lock.get_ptr().get_address()));
+                            FILL_TILE_WITH_FIRST_COLUMN_B(lock.get_ptr());
                         }
 #endif
                         dfb_in1.push_back(onetile);

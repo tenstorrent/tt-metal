@@ -5,9 +5,11 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
+#include <unordered_map>
 
 #include "core/distributed/ccl_resources.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -119,6 +121,11 @@ public:
 
     [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
 
+    // A device tensor an op needs on every call but never changes (e.g. a constant index), made on first use with
+    // `make` and kept until close_device, so forwards do no host writes for it.
+    [[nodiscard]] const ttnn::Tensor& get_device_constant(
+        const std::string& key, const std::function<ttnn::Tensor()>& make);
+
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
@@ -143,6 +150,7 @@ private:
     std::unique_ptr<core::TTProfiler> m_profiler;
 
     std::unique_ptr<core::distributed::CCLResources> m_ccl_resources;
+    std::unordered_map<std::string, ttnn::Tensor> m_device_constants;
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 

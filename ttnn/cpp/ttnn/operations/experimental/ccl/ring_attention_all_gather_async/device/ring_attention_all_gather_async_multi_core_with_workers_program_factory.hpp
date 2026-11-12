@@ -7,6 +7,7 @@
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <cstdint>
@@ -20,14 +21,60 @@ namespace ttnn::experimental::prim {
 // lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
 namespace ring_attention_all_gather_async_dynamic {
 inline constexpr uint32_t kReaderForwardKernelIdx = 0;
-inline constexpr uint32_t kWriterForwardKernelIdx = 1;
-inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
-inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
 inline constexpr uint32_t kReaderSemaphoreArg = 2;
 inline constexpr uint32_t kWriterSemaphoreArg = 4;
 inline constexpr uint32_t kForwardSemaphoreIdx = 1;
 inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+// Sliding-window halo kernels carry semaphores[2] in reader arg 0 and writer arg 2.
+inline constexpr uint32_t kHaloReaderSemaphoreArg = 0;
+inline constexpr uint32_t kHaloWriterSemaphoreArg = 2;
+inline constexpr uint32_t kHaloSemaphoreIdx = 2;
+
+// One GlobalSemaphore address baked into a kernel's runtime args, with the cores that run that kernel.
+// The cores are recorded once at create time, so a cache hit writes only them.
+struct SemaphoreArgSlot {
+    uint32_t kernel_idx = 0;
+    uint32_t arg_idx = 0;
+    uint32_t semaphore_idx = 0;
+    std::vector<CoreCoord> cores;
+};
+
+// Cache-hit state of one program: its semaphore slots and the addresses they hold now. The caller's
+// semaphores are not in the program hash (a CCLManager pool hands out a different slot per call).
+struct SemaphoreArgPatch {
+    std::vector<SemaphoreArgSlot> slots;
+    std::vector<uint32_t> addresses;
+};
+
+// Records the cores of kernel_idx that have runtime args; each must reach arg_idx.
+void record_semaphore_arg_slot(
+    SemaphoreArgPatch& patch,
+    tt::tt_metal::Program& program,
+    uint32_t kernel_idx,
+    uint32_t arg_idx,
+    uint32_t semaphore_idx);
+
+// Records the out_ready slots of the four all-gather worker kernels starting at first_kernel_idx.
+void record_all_gather_semaphore_arg_slots(
+    SemaphoreArgPatch& patch, tt::tt_metal::Program& program, uint32_t first_kernel_idx);
+
+std::vector<uint32_t> semaphore_addresses(const std::vector<GlobalSemaphore>& semaphores);
+
+// Writes the current semaphore addresses into the recorded slots. Returns at once when they are unchanged.
+void apply_semaphore_arg_patch(
+    SemaphoreArgPatch& patch, tt::tt_metal::Program& program, const std::vector<GlobalSemaphore>& semaphores);
 }  // namespace ring_attention_all_gather_async_dynamic
+
+namespace detail {
+
+struct RingAttentionAllGatherAsyncDescriptorAdapterOperation {
+    using operation_attributes_t = RingAttentionAllGatherAsyncParams;
+    using tensor_args_t = RingAttentionAllGatherAsyncInputs;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+};
+
+}  // namespace detail
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
     using operation_attributes_t = RingAttentionAllGatherAsyncParams;
@@ -41,14 +88,34 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
+
+// Wraps the descriptor adapter to re-apply the out_ready semaphore addresses on cache hits through
+// the worker cores recorded at create time.
+struct RingAttentionAllGatherAsyncMeshWorkloadFactory {
+    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+        detail::RingAttentionAllGatherAsyncDescriptorAdapterOperation>::
+        DescriptorMeshWorkloadAdapter<RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory>;
+    struct shared_variables_t {
+        typename descriptor_adapter_t::shared_variables_t descriptor;
+        ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
+    };
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const RingAttentionAllGatherAsyncParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const RingAttentionAllGatherAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        cached_mesh_workload_t& cached_workload,
+        const RingAttentionAllGatherAsyncParams& operation_attributes,
+        const RingAttentionAllGatherAsyncInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 };
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingAttentionAllGatherAsyncMeshWorkloadFactory>);
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
@@ -65,25 +132,30 @@ struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
     uint32_t send_to_next_count_Ht;
     uint32_t send_second_start_Ht = 0;
-    // A linear topology has no physical wrap link, so a hop whose destination wraps
-    // the ring travels backward, unicast_hops devices, instead.
+    // A linear topology has no physical wrap link, so a hop whose destination wraps the ring travels
+    // backward instead. distance is the fabric hop count to the (nearest) receiver.
     bool send_backward = false;
-    uint32_t unicast_hops = 1;
+    uint32_t distance = 1;
     // Which cyclic predecessor this exchange ships from: 1 = the immediate neighbour. A halo wider than
-    // one Q slab is covered by several exchanges, each shipping one slab tail (tail_tile_rows) into its
-    // own block of the compact buffer, starting at tile row dest_row_base.
+    // one Q slab is covered by several exchanges, each shipping one slab tail (tail_tile_rows) per Q
+    // segment into its own block of the compact buffer, starting at tile row dest_row_base (first
+    // segment) or second_dest_row_base (second).
     uint32_t hop = 1;
     uint32_t tail_tile_rows = 0;  // 0 = halo_tile_rows (one-hop halo)
     uint32_t dest_row_base = 0;
+    uint32_t second_dest_row_base = 0;
+    // Non-empty for a line multicast over hops [hop, hop + hop_origin_rows.size()): the source tile row
+    // each hop ships.
+    std::vector<uint32_t> hop_origin_rows;
     // Fabric link index this exchange starts from. A one-hop halo spreads over every link; with
     // more hops, each hop uses one link and hops beyond the link count time-share (see below).
     uint32_t link_base = 0;
-    // All hops of one halo deliver their ready-increment to ONE rendezvous worker core (hop 1's),
-    // and only hop 1 waits and signals the SDPA: one incrementer per semaphore, since concurrent
-    // Semaphore::up from two cores can lose an update. A one-hop halo expects one arrival.
+    // Every exchange delivers its per-link ready-increment to the hop-1 exchange's workers
+    // (rendezvous_noc[link]), and only that exchange waits and signals the SDPA: one signaller per
+    // semaphore, since concurrent Semaphore::up from two cores can lose an update. Each collecting worker
+    // expects one arrival per remote predecessor. Empty rendezvous_noc: each worker's own core.
     uint32_t arrivals_expected = 1;
-    uint32_t rendezvous_noc_x = 0;
-    uint32_t rendezvous_noc_y = 0;
+    std::vector<CoreCoord> rendezvous_noc;
     // A halo with more hops than fabric links time-shares a link. An ERISC exposes one worker
     // sender channel per direction, and concurrent workers on it stall each other, but SEQUENTIAL
     // reuse is the fabric's own protocol: close() persists the producer cursor and the next open()
@@ -95,10 +167,9 @@ struct RingAttentionNeighborHaloConfig {
     uint32_t successor_noc_x = 0;
     uint32_t successor_noc_y = 0;
 
-    // hop 1 is the exchange that waits for every hop's arrival and signals the SDPA.
+    bool multicast() const { return !hop_origin_rows.empty(); }
     bool collects_arrivals() const { return hop == 1; }
-    // A one-hop halo increments its own worker core, so it needs no rendezvous.
-    bool has_rendezvous() const { return arrivals_expected > 1; }
+    bool has_rendezvous() const { return !rendezvous_noc.empty(); }
     uint32_t tail_rows() const { return tail_tile_rows != 0 ? tail_tile_rows : halo_tile_rows; }
 
     // Metadata supplies the source tails and cache slot during trace replay.
@@ -145,11 +216,15 @@ constexpr uint32_t kNeighborReaderSecondOriginFieldOffset = 6;
 constexpr uint32_t kNeighborReaderHaloPagesFieldOffset = 7;
 
 constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 4;
-constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 7;
 constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
-// First destination page this hop writes in the compact buffer (see sliding_window_work_plan.hpp).
+// First destination page this hop writes in the compact buffer (see sliding_window_work_plan.hpp), followed
+// by the second tail's first page and the pages per tail.
 constexpr uint32_t kNeighborWriterOutputOriginPageFieldOffset = 4;
+// Multicast exchanges append [hop count, one source tile row per hop] after the tensor descriptors, then
+// (reader only) one tile width per input.
+constexpr uint32_t kNeighborMulticastBlockOriginsOffset = 1;
 
 constexpr uint32_t kRingDirectionCount = 2;
 

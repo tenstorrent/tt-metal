@@ -24,8 +24,9 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher pause feature.
@@ -160,7 +161,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 }
 
 void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Metal 2.0 does not yet support ETH KernelSpecs";
     }
@@ -174,7 +175,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp";
     uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     std::vector<uint32_t> args = {clk_mhz * 500000};  // .5 seconds
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     auto create_eth_kernels = [&](bool is_active) {
         std::set<CoreRange> eth_core_ranges;
@@ -234,6 +235,9 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherPause) {
 }
 
 TEST_F(MeshWatcherFixture, EthernetTestWatcherPause) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunEthTest, mesh_device);
     }

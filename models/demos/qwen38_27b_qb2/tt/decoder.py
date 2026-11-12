@@ -19,6 +19,11 @@ from dataclasses import dataclass
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen38_27b_qb2.tt.cache_initialization import (
+    allocate_cache_zero,
+    device_zero_eligible,
+    require_cache_initialization_ready,
+)
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
@@ -84,6 +89,9 @@ class DecoderState:
 class Qwen38Decoder(LightweightModule):
     PAGE_SIZE = 32
     CHUNK_SIZE = DEFAULT_POLICY["chunk_size"]
+
+    def __init__(self):
+        self._cache_initialization_pending = None
 
     @classmethod
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, replicated_mesh=False):
@@ -244,7 +252,14 @@ class Qwen38Decoder(LightweightModule):
     def allocate_state(self, *, batch_size, num_pages=None):
         """Setup only. Page ownership and page-table construction belong to caller."""
 
+        require_cache_initialization_ready(self)
+        device_zero = self.policy.get("device_zero_cache", True)
+        if type(device_zero) is not bool:
+            raise ValueError("device_zero_cache must be a boolean")
+
         def zeros(shape, dtype, layout=ttnn.TILE_LAYOUT):
+            if device_zero and device_zero_eligible(shape, dtype, layout, self.device):
+                return allocate_cache_zero(self, shape, dtype=dtype)
             return ttnn.zeros(
                 shape, dtype=dtype, layout=layout, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )

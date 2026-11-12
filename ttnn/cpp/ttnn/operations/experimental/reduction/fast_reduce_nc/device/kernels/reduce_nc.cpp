@@ -4,29 +4,27 @@
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t input_granularity = get_compile_time_arg_val(2);
+    constexpr auto num_output_tiles = get_arg(args::num_output_tiles);
+    constexpr auto num_input_tiles = get_arg(args::num_input_tiles);
+    constexpr auto input_granularity = get_arg(args::input_granularity);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_in1_obj(cb_in1);
-    CircularBuffer cb_out0_obj(cb_out0);
+    DataflowBuffer cb_in0_obj(dfb::in0);
+    DataflowBuffer cb_in1_obj(dfb::in1);
+    DataflowBuffer cb_out0_obj(dfb::out0);
 
     constexpr uint32_t num_input_tiles_iter = num_input_tiles / input_granularity;
 
-    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
+    compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out0);
     cb_in1_obj.wait_front(onetile);
 
     // For each assigned output tile, process the input tiles in a doubly nested
@@ -34,21 +32,21 @@ void kernel_main() {
     // input_granularity. The outer loop executes num_input_tiles / input_granularity
     // times.
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        add_init(cb_in0, cb_in1, true);
-        reconfig_data_format(cb_in0, cb_in1);
+        add_init(dfb::in0, dfb::in1, true);
+        reconfig_data_format(dfb::in0, dfb::in1);
         tile_regs_acquire();
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
             cb_in0_obj.wait_front(input_granularity);
             for (uint32_t k = 0; k < input_granularity; k++) {
-                add_tiles(cb_in0, cb_in1, k, first_tile, dst0);
+                add_tiles(dfb::in0, dfb::in1, k, first_tile, dst0);
             }
             cb_in0_obj.pop_front(input_granularity);
         }
         tile_regs_commit();
         cb_out0_obj.reserve_back(onetile);
-        pack_reconfig_data_format(cb_out0);
+        pack_reconfig_data_format(dfb::out0);
         tile_regs_wait();
-        pack_tile(dst0, cb_out0);
+        pack_tile(dst0, dfb::out0);
         tile_regs_release();
         cb_out0_obj.push_back(onetile);
     }

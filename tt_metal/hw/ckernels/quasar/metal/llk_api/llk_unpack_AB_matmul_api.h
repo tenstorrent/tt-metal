@@ -12,6 +12,12 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
+// Column-strided in1 streaming is not implemented on Quasar; stride 1 is the default contiguous step.
+inline void llk_unpack_AB_matmul_set_in1_column_stride(
+    [[maybe_unused]] const std::uint32_t in1_cb_id, [[maybe_unused]] const std::uint32_t stride_tiles) {
+    LLK_ASSERT(stride_tiles == 1, "Matmul in1 column stride is not supported on Quasar");
+}
+
 /**
 * @brief Initialize unpacker for matrix multiply
 
@@ -53,17 +59,10 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         !TRANSPOSE_EN || static_cast<DataFormat>(get_operand_src_format(operandB_id)) != DataFormat::MxFp4,
         "matmul SrcA transpose is not supported for 2x-format inputs");
 
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandA_id);
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandB_id);
+    const std::uint8_t bfd_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandA_id);
+    const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandB_id);
 
-    _llk_unpack_matmul_init_<TRANSPOSE_EN>(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-        ct_dim,
-        rt_dim,
-        kt_dim,
-        src_b_shape,
-        src_a_shape);
+    _llk_unpack_matmul_init_<TRANSPOSE_EN>(bfd_a, bfd_b, ct_dim, rt_dim, kt_dim, src_b_shape, src_a_shape);
 
     // MxFp4 operands feeding matmul are ALWAYS unpacked as the 2x-packed src-register format
     // (MxFp4_2x_B) on Quasar. The generated unpack_dst_format[] table keeps the op-agnostic MX
@@ -190,9 +189,9 @@ inline void llk_unpack_AB_matmul(
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
     const std::uint32_t l1_tile_idx_0 =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + tile_index_a;
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a;
     const std::uint32_t l1_tile_idx_1 =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
 
     WAYPOINT("UPMW");
     _llk_unpack_matmul_(ct_dim, rt_dim, kt_dim, l1_tile_idx_0, l1_tile_idx_1, src_b_shape, src_a_shape);

@@ -8,70 +8,18 @@
 #include <cmath>
 #include <enchantum/enchantum.hpp>
 #include <optional>
-#include <string_view>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <vector>
 
 #include "gumbel_sample_program_factory.hpp"
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::gumbel_sample::device {
 
 namespace {
-
-// Op-local stand-ins for the shared validation helpers PR #56523 adds in
-// metal/common/tensor_validation.hpp, with the same names and call shapes. Once that PR lands,
-// delete this block and include that header instead; no call site changes.
-struct DeviceTensorRequirements {
-    std::vector<tt::tt_metal::DataType> dtypes = {tt::tt_metal::DataType::BFLOAT16};
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
-    std::optional<tt::tt_metal::TensorMemoryLayout> memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
-};
-
-void check_device_tensor(
-    const ttnn::Tensor& tensor, std::string_view op, std::string_view name, const DeviceTensorRequirements& req = {}) {
-    TT_FATAL(
-        tensor.storage_type() == ttnn::StorageType::DEVICE,
-        "{}: {} must be on Device. Storage type: {}",
-        op,
-        name,
-        enchantum::to_string(tensor.storage_type()));
-    TT_FATAL(tensor.buffer() != nullptr, "{}: {} buffer is null", op, name);
-    TT_FATAL(
-        tensor.layout() == req.layout,
-        "{}: {} requires {} layout. Got: {}",
-        op,
-        name,
-        enchantum::to_string(req.layout),
-        enchantum::to_string(tensor.layout()));
-    TT_FATAL(
-        std::find(req.dtypes.begin(), req.dtypes.end(), tensor.dtype()) != req.dtypes.end(),
-        "{}: {} has unsupported dtype {}",
-        op,
-        name,
-        enchantum::to_string(tensor.dtype()));
-    if (req.memory_layout.has_value()) {
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == *req.memory_layout,
-            "{}: {} requires {} memory layout. Got: {}",
-            op,
-            name,
-            enchantum::to_string(*req.memory_layout),
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    }
-}
-
-void check_same_device(
-    const ttnn::Tensor& tensor,
-    const ttnn::Tensor& reference,
-    std::string_view op,
-    std::string_view name,
-    std::string_view reference_name) {
-    TT_FATAL(
-        tensor.device() == reference.device(), "{}: {} must be on the same device as {}", op, name, reference_name);
-}
 
 // The shape this op WILL write, derived from the logits alone (the writer derives its output pages
 // from the logits geometry, never from the output tensor). Matches ttnn::argmax(dim=3, keepdim):

@@ -21,6 +21,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace ttnn::operations::sliding_window;
 

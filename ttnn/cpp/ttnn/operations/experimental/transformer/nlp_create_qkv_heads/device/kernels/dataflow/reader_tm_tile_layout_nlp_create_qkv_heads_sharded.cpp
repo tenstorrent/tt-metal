@@ -9,6 +9,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "internal/tensor/transfer_noc_addr.h"
 
 void kernel_main() {
     Noc noc;
@@ -20,7 +21,8 @@ void kernel_main() {
     uint32_t start_q_x = get_arg(args::start_q_x);
     uint32_t start_q_y = get_arg(args::start_q_y);
     // Bare Q shard base (the same L1 address on every source core); the head start is added below.
-    uint32_t q_base_addr = TensorAccessor(tensor::input_q).get_bank_base_address();
+    // Raw: same L1 address on the source cores (no handle form yet).
+    uint32_t q_base_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::input_q));
     uint32_t q_offset = get_arg(args::q_offset);
 
     uint32_t num_x = get_arg(args::num_x);
@@ -86,7 +88,8 @@ void kernel_main() {
         uint32_t start_kv_x = get_arg(args::start_kv_x);
         uint32_t start_kv_y = get_arg(args::start_kv_y);
 #ifdef READ_FROM_INPUT_TENSOR_KV
-        uint32_t kv_buffer_addr = TensorAccessor(tensor::input_kv).get_bank_base_address();  // bare KV shard base
+        // Bare KV shard base. Raw: same L1 address on the source cores (no handle form yet).
+        uint32_t kv_buffer_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::input_kv));
 #else
         uint32_t kv_buffer_addr = q_base_addr;  // fused QKV: the K/V sections live in the Q shard
 #endif

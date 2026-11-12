@@ -5,13 +5,12 @@ import inspect
 import math
 from dataclasses import dataclass
 from itertools import product
-from typing import Iterator, List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple, Union
 
 import pytest
 from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .constraints import (
     _quasar_effective_sfpu_format,
     _quasar_fpu_source_format,
@@ -20,7 +19,7 @@ from .constraints import (
     is_valid_quasar_packer_conversion,
     is_valid_quasar_unpack_to_dest,
 )
-from .data_format_inference import is_format_combination_outlier
+from .data_format_inference import _dest_acc_flag, effective_dest_acc
 from .format_config import (
     DataFormat,
     FormatConfig,
@@ -61,6 +60,18 @@ DEST_SYNC_TILE_LIMITS = {
     DestSync.Half: 8,
     DestSync.Full: 16,
 }
+
+
+def max_dest_tiles(
+    dest_acc: Union[bool, DestAccumulation], dest_sync: DestSync = DestSync.Half
+) -> int:
+    """Tiles one Dest section holds: DEST_SYNC_TILE_LIMITS[dest_sync], halved at a 32-bit Dest."""
+    return DEST_SYNC_TILE_LIMITS[dest_sync] // (2 if _dest_acc_flag(dest_acc) else 1)
+
+
+def quasar_dest_sync_modes(*, is_perf: bool = False) -> List[DestSync]:
+    """Dest sync modes a Quasar test sweeps: Half only for perf runs, else Half and Full."""
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def format_combination_sweep(
@@ -451,8 +462,7 @@ def quasar_mx_smoke(
     product because those two suites are already the bulk of the Quasar compile.
 
     Every other test keeps exactly one pair, so the MX-conditional plumbing it does
-    own stays covered: format-inference bypass, the ImpliedMathFormat.Yes requirement,
-    MX stimulus clamping and the sub-byte L1 tile-size constraints.
+    own stays covered: MX stimulus clamping and the sub-byte L1 tile-size constraints.
 
     MxFp4_2x_A / MxFp4_2x_B are not covered by this rule. They are real SrcA/SrcB
     register formats that change the math format and the per-tile MVMUL sequence, so
@@ -761,6 +771,31 @@ def generate_quasar_sfpu_format_variants(
     return _deduplicate_quasar_sfpu_operation_variants(variants)
 
 
+def unique_quasar_sfpu_formats(
+    variants: List[QuasarSfpuVariant],
+) -> List[InputOutputFormat]:
+    """Return each external input/output format pair once, preserving order."""
+    formats = []
+    seen = set()
+    for variant in variants:
+        key = (variant.formats.input_format, variant.formats.output_format)
+        if key not in seen:
+            seen.add(key)
+            formats.append(variant.formats)
+    return formats
+
+
+def quasar_sfpu_dest_acc_modes(
+    variants: List[QuasarSfpuVariant], formats: InputOutputFormat
+) -> List[DestAccumulation]:
+    """Return the Dest modes retained by a deduplicated variant list for *formats*."""
+    dest_acc_modes = []
+    for variant in variants:
+        if variant.formats == formats and variant.dest_acc not in dest_acc_modes:
+            dest_acc_modes.append(variant.dest_acc)
+    return dest_acc_modes
+
+
 def generate_quasar_srcs_format_dest_acc_combinations(
     formats_list: List[InputOutputFormat],
 ) -> List[Tuple[InputOutputFormat, DestAccumulation]]:
@@ -828,9 +863,7 @@ def calculate_edgecase_dest_indices(
 
 
 def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) -> int:
-    capacity_divisor = 2 if dest_acc else 1
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
-    return max(max_tiles - result_tiles, 0)
+    return max(max_dest_tiles(dest_acc, dest_sync) - result_tiles, 0)
 
 
 def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shape=None):
@@ -850,8 +883,7 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
         List of input dimensions
     """
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
 
     if tile_shape is None:
         tile_shape = construct_tile_shape()
@@ -888,8 +920,7 @@ def generate_reduced_input_dimensions(
     # wrap back to the first bank is covered and not just the initial switch.
     num_dest_sections = 3
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
 
     if tile_shape is None:
         tile_shape = construct_tile_shape()
@@ -987,8 +1018,7 @@ def generate_perf_input_dimensions(
     if tile_shape is None:
         tile_shape = construct_tile_shape()
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
     tile_rows = tile_shape.total_row_dim()
     tile_cols = tile_shape.total_col_dim()
 
@@ -1052,23 +1082,14 @@ def get_num_blocks_and_num_tiles_in_block(
     num_rows_tensor, num_cols_tensor = input_dimensions
     num_rows_tile, num_cols_tile = tile_dimensions
 
-    is_outlier = (
-        is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-        and get_chip_architecture() != ChipArchitecture.QUASAR
-    )
+    # The Dest the kernel will actually run with: TestConfig promotes an outlier
+    # combination to a 32-bit Dest, which halves the tile capacity just as a requested
+    # dest_acc=Yes does.
+    dest_acc = effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
 
-    capacity_divisor = (
-        2
-        if (
-            dest_acc == DestAccumulation.Yes
-            or formats.input_format.is_32_bit()
-            or is_outlier
-        )
-        else 1
+    max_tiles_in_dest = max_dest_tiles(
+        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit(), dest_sync
     )
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
     # Here we make an assumption that dense tiling is used,
     # meaning that the input matrix is fully covered by tiles without any padding or partial tiles.

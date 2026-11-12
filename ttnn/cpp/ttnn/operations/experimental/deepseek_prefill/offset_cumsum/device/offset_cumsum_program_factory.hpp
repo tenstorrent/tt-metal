@@ -15,7 +15,7 @@
 namespace ttnn::experimental::prim {
 
 struct OffsetCumsumProgramFactory {
-    using tensor_return_value_t = std::array<Tensor, 3>;
+    using tensor_return_value_t = std::array<Tensor, 4>;
 
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const OffsetCumsumParams& operation_attributes,

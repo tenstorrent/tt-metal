@@ -1,0 +1,6 @@
+# TT replay dependencies. Install after building TTNN from this checkout.
+# Allow the repository CI Torch version; do not downgrade it to the CUDA oracle's.
+torch>=2.10
+numpy>=1.26,<2
+loguru>=0.6,<1  # CI pins loguru==0.6.0; do not upgrade it
+safetensors>=0.4,<1

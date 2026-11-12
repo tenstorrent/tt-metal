@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import ttnn
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
@@ -112,6 +113,51 @@ def create_recip_tensor(device, w, use_welford):
     return ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 
+@run_for_wormhole_b0_or_blackhole()
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("provide_reciprocal", [False, True])
+def test_layer_norm_compact_optional_reciprocal_tensor(device, dtype, provide_reciprocal):
+    torch.manual_seed(17)
+    h, w = 32, 64
+    torch_input = torch.randn((h, w), dtype=dtype)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    output = ttnn.layer_norm(
+        input_tensor,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        compute_kernel_config=config,
+        recip_tensor=create_recip_tensor(device, w, provide_reciprocal),
+    )
+    reference = torch.nn.functional.layer_norm(torch_input.to(torch.float64), [w])
+    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+
+
+@run_for_wormhole_b0_or_blackhole()
+def test_layer_norm_streaming_welford_requires_reciprocal_tensor(device, expect_error):
+    torch.manual_seed(17)
+    h, w = 32, 64
+    input_tensor = ttnn.from_torch(torch.randn((h, w), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch.randn((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch.randn((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    # FP32 residual with tiled affine parameters selects the large kernel,
+    # irrespective of whether the small row would otherwise fit in L1.
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+
+    with expect_error(RuntimeError, "Reciprocal tensor not provided for Welford layernorm"):
+        ttnn.layer_norm(
+            input_tensor,
+            residual_input_tensor=input_tensor,
+            weight=weight,
+            bias=bias,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            compute_kernel_config=config,
+        )
+
+
 @pytest.mark.merge_gate
 @pytest.mark.parametrize("h", [32, 42])
 @pytest.mark.parametrize("w", [24, 64])
@@ -131,6 +177,138 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
+
+
+@pytest.mark.parametrize("w", [20, 24, 33, 40, 46, 70, 100])
+@pytest.mark.parametrize("pad_value", [float("inf"), float("-inf"), float("nan")], ids=["inf", "neg_inf", "nan"])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_layer_norm_welford_nonfinite_tile_padding(device, w, pad_value, dtype):
+    # Tile padding can hold inf or NaN, e.g. after ttnn.log of zero padding. Welford must still ignore it.
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((64, w), dtype=dtype)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, pad_value)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+    recip_tensor = create_recip_tensor(device, w, True)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=True)
+
+
+@pytest.mark.parametrize("w", [20, 24])
+def test_layer_norm_welford_fp32_single_tile_after_nan_op(device, w):
+    # With one tile per row no input lands in the mean's DEST tile, so it must not keep what an earlier op left there.
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((2, 1, 64, w), dtype=torch.float32)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    nan_tensor = ttnn.from_torch(
+        torch.full((2048, 1024), float("nan")), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    ttnn.deallocate(ttnn.add(nan_tensor, nan_tensor))
+    ttnn.deallocate(ttnn.exp(nan_tensor))
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=True)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
+def test_layer_norm_welford_off_default_tile(device, tile_shape, expect_error):
+    """LayerNorm rejects tile shapes unsupported by its CB and LLK layout."""
+    torch.manual_seed(23)
+    rows, width = 32, 64
+    torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "LayerNorm TILE input requires tile shape 32x32"):
+        ttnn.layer_norm(
+            input_tensor,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        )
+
+
+def test_layer_norm_welford_rejects_row_major_input(device, expect_error):
+    """Reject unsupported input layout before the SFPU kernel can wait on an unproduced tile CB."""
+    width = 32
+    input_tensor = ttnn.from_torch(
+        torch.randn((32, width), dtype=torch.float32),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "use_welford=True requires TILE input"):
+        ttnn.layer_norm(
+            input_tensor,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        )
+
+
+def test_layer_norm_rejects_mismatched_residual_tile(device, expect_error):
+    rows, width = 32, 64
+    torch_input = torch.randn((rows, width), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+    )
+    residual_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((16, 32)),
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "Input and residual tile shapes must match"):
+        ttnn.layer_norm(
+            input_tensor,
+            residual_input_tensor=residual_tensor,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        )
+
+
+@pytest.mark.parametrize("parameter_name", ["weight", "bias"])
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16)])
+def test_layer_norm_rejects_mismatched_parameter_tile(device, parameter_name, tile_shape, expect_error):
+    rows, width = 32, 64
+    input_tensor = ttnn.from_torch(
+        torch.randn((rows, width), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+    )
+    parameter = ttnn.from_torch(
+        torch.randn((width,), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+
+    validator_name = "gamma" if parameter_name == "weight" else "beta"
+    with expect_error(RuntimeError, f"Input and {validator_name} tile shapes must match"):
+        ttnn.layer_norm(
+            input_tensor,
+            **{parameter_name: parameter},
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        )
 
 
 @pytest.mark.merge_gate
@@ -195,7 +373,7 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
 
 
 @pytest.mark.parametrize("h", [24, 32, 2048])
-@pytest.mark.parametrize("w", [42, 64, 127, 519, 4096])
+@pytest.mark.parametrize("w", [42, 64, 127, 487, 519, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
@@ -378,6 +556,56 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
+# Rows too wide for L1 with gamma and beta select the large-tensor kernel, which streams each row in blocks and
+# switches the packer between several output buffers. Issue #62517: on Quasar this hung with fp32_dest_acc_en.
+@pytest.mark.parametrize("h", [4096])
+@pytest.mark.parametrize("w", [8192, 16384])
+def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
+    torch.manual_seed(0)
+    dtype = torch.bfloat16
+
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_weight = torch.rand((w,), dtype=dtype)
+    torch_bias = torch.rand((w,), dtype=dtype)
+
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=False)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+    output_tensor = ttnn.layer_norm(
+        input_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # Packing into the wrong buffer left the output all zeros.
+    assert torch.isfinite(output_tensor).all()
+    assert output_tensor.count_nonzero() > 0
+
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        try:
+            assert_output_accuracy(torch_output_tensor, output_tensor)
+        except AssertionError:
+            pytest.xfail("Quasar REDUCE_ROW truncates the fp32 running sum on every tile (#60931)")
+    else:
+        assert_output_accuracy(torch_output_tensor, output_tensor)
+
+
 @pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])
 @pytest.mark.parametrize("legacy_reduction", [True, False])
 def test_large_layer_norm_with_legacy_reduction(device, h, w, legacy_reduction):
@@ -494,6 +722,61 @@ def test_l1_interleaved(device, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
+@run_for_blackhole("Blackhole selects the tile backend for parameter-free BFP8 LayerNorm")
+def test_layer_norm_tile_backend_does_not_require_reciprocal(device):
+    torch.manual_seed(20260824)
+    torch_input = torch.rand((32, 4096), dtype=torch.float32)
+    reference = torch.nn.functional.layer_norm(torch_input, normalized_shape=[4096])
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.layer_norm(
+        input_tensor,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+    )
+
+    assert_output_accuracy(reference, ttnn.to_torch(output))
+
+
+@run_for_wormhole_b0_or_blackhole()
+def test_layer_norm_bfp8_residual_affine_two_pass(device):
+    torch.manual_seed(20260824)
+    shape = (128, 2880)
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_residual = torch.rand(shape, dtype=torch.float32)
+    torch_weight = torch.rand((shape[-1],), dtype=torch.float32)
+    torch_bias = torch.rand((shape[-1],), dtype=torch.float32)
+    reference = torch.nn.functional.layer_norm(
+        torch_input + torch_residual,
+        normalized_shape=[shape[-1]],
+        weight=torch_weight,
+        bias=torch_bias,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_tensor = ttnn.from_torch(torch_residual, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    reciprocal = create_recip_tensor(device, shape[-1], use_welford=True)
+
+    output = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=reciprocal,
+    )
+
+    assert_numeric_metrics(
+        reference,
+        ttnn.to_torch(output),
+        pcc_threshold=0.9999,
+        rtol=0.01,
+        atol=0.07,
+        frobenius_threshold=0.015,
+    )
+
+
 @pytest.mark.parametrize("dim_a", [24, 2048, 3072, 4096])
 @pytest.mark.parametrize("dim_b", [32, 2048, 3072, 4096])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -568,6 +851,29 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     assert_output_accuracy(golden_output, output_ttnn)
 
 
+def test_layer_norm_welford_large_path_partial_last_tile(device):
+    """A full-sized final tile block can still have a partial logical population."""
+    h, w = 32, 487
+    torch_input = torch.zeros((h, w), dtype=torch.float32)
+    torch_input[:, :439] = 1.0
+    torch_residual = torch.zeros_like(torch_input)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
+    residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_tensor = ttnn.fill_implicit_tile_padding(residual_tensor, PAD_VALUE)
+
+    output = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_tensor,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=create_recip_tensor(device, w, use_welford=True),
+    )
+    reference = torch.nn.functional.layer_norm(torch_input + torch_residual, normalized_shape=[w])
+
+    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+
+
 def test_layer_norm_inputs_requires_input_tensor(expect_error):
     """``LayerNormInputs()`` without an input tensor must raise."""
 
@@ -630,3 +936,51 @@ def test_norm_row_major_weight_partial_tile_padding(device, h, w, op_name):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_output_accuracy(torch_output_tensor, output_tensor)
+
+
+# ROW_MAJOR input wider than the L1-fit threshold (bf16 W >= 2592, fp32 W >= 1952) takes the large-tensor path,
+# whose compute kernel tilizes the input itself. Pass 0 used to wait on the tilized buffer directly and hung the
+# device (#58696). With a residual (which layer_norm requires in TILE layout), the input and residual blocks must
+# also be read interleaved.
+@pytest.mark.parametrize("h, w", [(32, 2592), (64, 4096)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("with_residual", [False, True], ids=["no_residual", "residual"])
+def test_large_layer_norm_row_major_input(device, h, w, dtype, with_residual):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_residual = torch.rand((h, w), dtype=dtype) if with_residual else None
+    reference_input = torch_input_tensor + torch_residual if with_residual else torch_input_tensor
+    torch_output_tensor = torch.nn.functional.layer_norm(reference_input, normalized_shape=[w])
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    residual_input_tensor = (
+        ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device) if with_residual else None
+    )
+    output_tensor = ttnn.layer_norm(input_tensor, residual_input_tensor=residual_input_tensor)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_output_accuracy(torch_output_tensor, output_tensor)
+
+
+# The large-tensor reader reads gamma/beta as tiles: ROW_MAJOR input works with TILE gamma/beta, and ROW_MAJOR
+# gamma/beta are rejected on this path instead of being misread.
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_large_layer_norm_row_major_input_affine(device, dtype, expect_error):
+    h, w = 64, 4096
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_weight = torch.rand((w,), dtype=dtype)
+    torch_bias = torch.rand((w,), dtype=dtype)
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight.reshape(1, w), layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias.reshape(1, w), layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.layer_norm(input_tensor, weight=weight, bias=bias)))
+    assert_output_accuracy(torch_output_tensor, output_tensor)
+
+    weight_rm = ttnn.from_torch(torch_weight.reshape(w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    bias_rm = ttnn.from_torch(torch_bias.reshape(w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support row-major gamma/beta"):
+        ttnn.layer_norm(input_tensor, weight=weight_rm, bias=bias_rm)

@@ -26,7 +26,8 @@ points. Per cell the script measures:
 The cached prefix is prefilled once per row (per user slot); each cell then appends only its new
 chunks at that offset, so the prefix stays intact and every cell sees exactly `cached` tokens.
 Each row gets its own runner launch with the KV capacity fitted to `cached + MAX_NEW` (51200): the
-dense layers gather the whole cache shard per chunk, so an over-sized cache would skew the numbers.
+MSA index_k gather moves close to the whole slot capacity per chunk on a 1D fabric, so an over-sized cache
+would skew the numbers.
 Idle TTFT is wall-clock between the producer (on rank 0's host) and the last rank (another host),
 so the hosts must be NTP-synced; `h2d_ms` in the JSONL (push -> rank 0 compute start, same host) is
 the skew-free part. TTFT under load is the closed-loop TTFT of `USERS` zero-think-time users (the

@@ -74,7 +74,7 @@ class ModelArgs:
     index_head_dim: int = 128
     index_topk: int = 2048
     # Indexer RoPE convention: DeepSeek-V3.2 = non-interleaved (rotate_half);
-    # GLM-5.1 = interleaved. (MLA RoPE is always interleaved.)
+    # GLM-5.3 = interleaved. (MLA RoPE is always interleaved.)
     index_rope_interleave: bool = False
 
     @property

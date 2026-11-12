@@ -71,18 +71,13 @@ struct ChipUnicastFields1D {
 };
 
 struct ChipUnicastFields2D {
-    ChipUnicastFields2D(uint16_t src_device_id, uint16_t dst_device_id, uint16_t dst_mesh_id, uint16_t ew_dim) :
-        src_device_id(src_device_id), dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id), ew_dim(ew_dim) {}
+    ChipUnicastFields2D(uint16_t dst_device_id, uint16_t dst_mesh_id) :
+        dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id) {}
 
-    std::vector<uint32_t> get_args() const {
-        std::vector<uint32_t> args = {src_device_id, dst_device_id, dst_mesh_id, ew_dim};
-        return args;
-    }
+    std::vector<uint32_t> get_args() const { return {dst_device_id, dst_mesh_id}; }
 
-    uint16_t src_device_id;
     uint16_t dst_device_id;
     uint16_t dst_mesh_id;
-    uint16_t ew_dim;
 };
 
 struct ChipMulticastFields1D {
@@ -188,28 +183,38 @@ struct NocUnicastWriteAtomicIncFields {
         const auto atomic_inc_args = atomic_inc_fields.get_args<IS_SOURCE>();
         args.insert(args.end(), write_args.begin(), write_args.end());
         args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+        if constexpr (IS_SOURCE) {
+            args.push_back(flush ? 1u : 0u);
+        }
         return args;
     }
 
     NocUnicastWriteFields write_fields;
     NocUnicastAtomicIncFields atomic_inc_fields;
+    bool flush = false;  // Flush the write before the increment (sender only)
 };
 
 struct NocUnicastScatterWriteFields {
-    static constexpr uint32_t MAX_CHUNKS = 2;
-    static constexpr uint32_t DEFAULT_CHUNK_COUNT = MAX_CHUNKS;
-
+    // `chunk_sizes` are in payload order. The chunks are placed in the slot at `target_address` in reverse order
+    // (chunk 0 last), so a chunk written to another chunk's address, or the whole payload written to the first
+    // address, fails validation.
     NocUnicastScatterWriteFields(
         uint32_t payload_size_bytes,
-        const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
-        const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
-        std::optional<uint32_t> dst_noc_encoding = std::nullopt,
-        uint32_t chunk_count = DEFAULT_CHUNK_COUNT) :
-        payload_size_bytes(payload_size_bytes),
-        dst_addresses(dst_addresses),
-        chunk_sizes(chunk_sizes),
-        dst_noc_encoding(dst_noc_encoding),
-        chunk_count(chunk_count) {}
+        uint32_t target_address,
+        const std::vector<uint32_t>& chunk_sizes,
+        std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
+        payload_size_bytes(payload_size_bytes), chunk_sizes(chunk_sizes), dst_noc_encoding(dst_noc_encoding) {
+        TT_FATAL(
+            chunk_sizes.size() >= NOC_SCATTER_WRITE_MIN_CHUNKS && chunk_sizes.size() <= NOC_SCATTER_WRITE_MAX_CHUNKS,
+            "Unsupported scatter write chunk count {}",
+            chunk_sizes.size());
+        uint32_t chunk_address = target_address + payload_size_bytes;
+        for (const uint32_t chunk_size : chunk_sizes) {
+            chunk_address -= chunk_size;
+            dst_addresses.push_back(chunk_address);
+        }
+        TT_FATAL(chunk_address == target_address, "Scatter chunk sizes must add up to the payload size");
+    }
 
     template <bool IS_SOURCE>
     std::vector<uint32_t> get_args() const {
@@ -220,6 +225,7 @@ struct NocUnicastScatterWriteFields {
             }
         }
 
+        const auto chunk_count = static_cast<uint32_t>(chunk_sizes.size());
         std::vector<uint32_t> args;
         args.push_back(payload_size_bytes);
         args.push_back(chunk_count);
@@ -229,19 +235,30 @@ struct NocUnicastScatterWriteFields {
         if (dst_noc_encoding.has_value()) {
             args.push_back(dst_noc_encoding.value());
         }
-        // Add chunk sizes (only MAX_CHUNKS-1 since last is implicit)
+        // Chunk sizes (all but the last, which is implicit)
         for (uint32_t i = 0; i < (chunk_count - 1); i++) {
-            args.push_back(static_cast<uint32_t>(chunk_sizes[i]));
+            args.push_back(chunk_sizes[i]);
+        }
+
+        // Optional trailing semaphore increment (ntype option atomic_inc)
+        args.push_back(atomic_inc_fields.has_value() ? 1u : 0u);
+        if (atomic_inc_fields.has_value()) {
+            const auto atomic_inc_args = atomic_inc_fields->get_args<IS_SOURCE>();
+            args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+            if constexpr (IS_SOURCE) {
+                args.push_back(atomic_inc_flush ? 1u : 0u);
+            }
         }
 
         return args;
     }
 
     uint32_t payload_size_bytes;
-    std::array<uint32_t, MAX_CHUNKS> dst_addresses;
-    std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
+    std::vector<uint32_t> chunk_sizes;
+    std::vector<uint32_t> dst_addresses;
     std::optional<uint32_t> dst_noc_encoding;
-    uint32_t chunk_count;
+    std::optional<NocUnicastAtomicIncFields> atomic_inc_fields;
+    bool atomic_inc_flush = false;  // Flush the scatter writes before the increment (sender only)
 };
 
 // create memory maps
@@ -251,12 +268,13 @@ struct NocUnicastScatterWriteFields {
 struct TrafficParameters {
     // from TrafficPatternConfig
     ChipSendType chip_send_type;
-    NocSendType noc_send_type;
+    NocSendTypeSpec noc_send_type;
     size_t payload_size_bytes;
     size_t num_packets;
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
     bool enable_flow_control = false;
+    std::vector<uint32_t> scatter_chunk_sizes;  // NOC_UNICAST_SCATTER_WRITE: size of each write chunk
 
     // Global context
     uint32_t seed;
@@ -365,11 +383,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         if (this->parameters.chip_send_type == ChipSendType::CHIP_UNICAST) {
             TT_FATAL(this->dst_node_ids.size() == 1, "2D unicast should have exactly one destination node.");
             const auto& dst_node_id = this->dst_node_ids[0];
-            const auto& mesh_shape = this->parameters.mesh_shape;
-            // TODO: move this out of here
-            const uint32_t EW_DIM = 1;
-            const auto unicast_fields = ChipUnicastFields2D(
-                this->src_node_id.chip_id, dst_node_id.chip_id, *dst_node_id.mesh_id, mesh_shape[EW_DIM]);
+            const auto unicast_fields = ChipUnicastFields2D(dst_node_id.chip_id, *dst_node_id.mesh_id);
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
@@ -413,10 +427,10 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
 
     // push noc send type
     if (!is_sync_config) {
-        args.push_back(this->parameters.noc_send_type);
+        args.push_back(this->parameters.noc_send_type.type);
     }
 
-    switch (this->parameters.noc_send_type) {
+    switch (this->parameters.noc_send_type.type) {
         case NocSendType::NOC_UNICAST_WRITE: {
             const auto unicast_write_fields = NocUnicastWriteFields(
                 this->parameters.payload_size_bytes, this->target_address, this->dst_noc_encoding);
@@ -440,27 +454,26 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
-            const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+            auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+            fused_fields.flush = this->parameters.noc_send_type.options_or_default<FusedAtomicIncOptions>().flush;
             const auto fused_args = fused_fields.get_args<true>();
             args.insert(args.end(), fused_args.begin(), fused_args.end());
         } break;
         case NocSendType::NOC_UNICAST_SCATTER_WRITE: {
-            // For scatter write, we need to split the payload into chunks
-            const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
-            const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
-
-            std::array<uint32_t, max_chunks> dst_addresses{};
-            for (uint32_t i = 0; i < max_chunks; i++) {
-                dst_addresses[i] = static_cast<uint32_t>(this->target_address + (i * chunk_size));
+            const auto options = this->parameters.noc_send_type.options_or_default<ScatterWriteOptions>();
+            auto scatter_write_fields = NocUnicastScatterWriteFields(
+                this->parameters.payload_size_bytes,
+                this->target_address,
+                this->parameters.scatter_chunk_sizes,
+                this->dst_noc_encoding);
+            if (options.atomic_inc) {
+                scatter_write_fields.atomic_inc_flush = options.flush;
+                scatter_write_fields.atomic_inc_fields =
+                    NocUnicastAtomicIncFields(this->atomic_inc_address.value(), this->dst_noc_encoding);
+                if (this->parameters.atomic_inc_val.has_value()) {
+                    scatter_write_fields.atomic_inc_fields->set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+                }
             }
-
-            std::array<uint16_t, max_chunks - 1> chunk_sizes{};
-            for (uint32_t i = 0; i < max_chunks - 1; i++) {
-                chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
-            }
-
-            const auto scatter_write_fields = NocUnicastScatterWriteFields(
-                this->parameters.payload_size_bytes, dst_addresses, chunk_sizes, this->dst_noc_encoding);
             const auto scatter_write_args = scatter_write_fields.get_args<true>();
             args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
         } break;
@@ -494,9 +507,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 
     // push noc send type
-    args.push_back(this->parameters.noc_send_type);
+    args.push_back(this->parameters.noc_send_type.type);
 
-    switch (this->parameters.noc_send_type) {
+    switch (this->parameters.noc_send_type.type) {
         case NocSendType::NOC_UNICAST_WRITE: {
             const auto unicast_write_fields =
                 NocUnicastWriteFields(this->parameters.payload_size_bytes, this->target_address);
@@ -525,22 +538,14 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             break;
         }
         case NocSendType::NOC_UNICAST_SCATTER_WRITE: {
-            // For scatter write, we need to split the payload into chunks
-            const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
-            const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
-
-            std::array<uint32_t, max_chunks> dst_addresses{};
-            for (uint32_t i = 0; i < max_chunks; i++) {
-                dst_addresses[i] = static_cast<uint32_t>(this->target_address + (i * chunk_size));
+            auto scatter_write_fields = NocUnicastScatterWriteFields(
+                this->parameters.payload_size_bytes, this->target_address, this->parameters.scatter_chunk_sizes);
+            if (this->parameters.noc_send_type.options_or_default<ScatterWriteOptions>().atomic_inc) {
+                scatter_write_fields.atomic_inc_fields = NocUnicastAtomicIncFields(this->atomic_inc_address.value());
+                if (this->parameters.atomic_inc_val.has_value()) {
+                    scatter_write_fields.atomic_inc_fields->set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+                }
             }
-
-            std::array<uint16_t, max_chunks - 1> chunk_sizes{};
-            for (uint32_t i = 0; i < max_chunks - 1; i++) {
-                chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
-            }
-
-            const auto scatter_write_fields =
-                NocUnicastScatterWriteFields(this->parameters.payload_size_bytes, dst_addresses, chunk_sizes);
             const auto scatter_write_args = scatter_write_fields.get_args<false>();
             args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
             break;
@@ -556,16 +561,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             receiver_credit_info.has_value(), "Receiver credit info must be provided when flow control is enabled");
         // Add chip-level unicast routing info based on fabric type
         if (parameters.is_2D_routing_enabled) {
-            const auto& receiver_node = receiver_credit_info->receiver_node_id;
             const auto& sender_node = receiver_credit_info->sender_node_id;
-            const auto& mesh_shape = parameters.mesh_shape;
-            const uint32_t EW_DIM = 1;
-
-            const auto unicast_fields = ChipUnicastFields2D(
-                receiver_node.chip_id,  // src = receiver's chip (credit packet source)
-                sender_node.chip_id,    // dst = sender's chip (credit packet destination)
-                *sender_node.mesh_id,
-                mesh_shape[EW_DIM]);
+            const auto unicast_fields =
+                ChipUnicastFields2D(sender_node.chip_id, *sender_node.mesh_id);  // Credit destination is the sender.
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else {

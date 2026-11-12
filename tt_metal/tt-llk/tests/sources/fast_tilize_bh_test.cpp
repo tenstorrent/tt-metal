@@ -215,7 +215,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Tilize>(
-                4 /* num_faces */, formats.math);
+                ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
         }
         {
             START_PERF_MEASURE("TILE_LOOP")
@@ -223,7 +223,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en>(
-                    0 /* dst_index */, formats.math, formats.math, 4 /* num_faces */);
+                    0 /* dst_index */, formats.math, formats.math, ckernel::DEFAULT_TENSOR_SHAPE);
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }

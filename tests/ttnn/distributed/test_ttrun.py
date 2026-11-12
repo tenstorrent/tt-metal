@@ -449,6 +449,26 @@ class TestEnvironmentVariables:
         assert env["TEST_VAR"] == "value0"  # From env_overrides
         assert env["GLOBAL_VAR"] == "global_value"  # From global_env
 
+    def test_cluster_id_comes_from_rank_binding_env_override(self, sample_rank_binding_yaml, monkeypatch):
+        """Phase 2 stamps TT_METAL_CLUSTER_ID from the binding env override and drops a parent export."""
+        monkeypatch.setenv("TT_METAL_CLUSTER_ID", "from-the-parent")
+        config = parse_binding_config(sample_rank_binding_yaml)
+        binding = config.rank_bindings[0]
+        binding.env_overrides["TT_METAL_CLUSTER_ID"] = "bh-glx-110-c01u02"
+
+        env = get_rank_environment(binding, config)
+
+        assert env["TT_METAL_CLUSTER_ID"] == "bh-glx-110-c01u02"
+
+    def test_cluster_id_not_taken_from_parent_without_override(self, sample_rank_binding_yaml, monkeypatch):
+        """Without a rank-binding override, a parent TT_METAL_CLUSTER_ID is not forwarded."""
+        monkeypatch.setenv("TT_METAL_CLUSTER_ID", "from-the-parent")
+        config = parse_binding_config(sample_rank_binding_yaml)
+
+        env = get_rank_environment(config.rank_bindings[0], config)
+
+        assert "TT_METAL_CLUSTER_ID" not in env
+
     def test_get_rank_environment_fsd(self, sample_rank_binding_yaml, temp_dir):
         """FSD path on the config is exported to every rank via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH."""
         config = parse_binding_config(sample_rank_binding_yaml)

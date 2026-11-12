@@ -10,7 +10,9 @@
 #include "ttnn/device_operation.hpp"
 #include "create_qkv_heads_from_separate_tensors_device_operation_types.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
+
+#include <variant>
 
 namespace ttnn::experimental::prim {
 
@@ -20,13 +22,16 @@ struct CreateQKVHeadsSeparateTensorsDeviceOperation {
     using spec_return_value_t = CreateQKVHeadsFromSeparateTensorsResultSpec;
     using tensor_return_value_t = CreateQKVHeadsFromSeparateTensorsResult;
 
-    // The op emits no runtime args: all five tensors are sharded and reached through
-    // globally-allocated circular buffers, so the CB `.buffer` bindings are the whole
-    // per-dispatch state and the framework re-pegs them on a cache hit. No override needed.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+    struct CreateQKVHeadsSeparateTensorsProgramFactory {
+        // The op emits no runtime args: all five tensors are sharded and reached through
+        // dataflow buffers borrowed from their shards, so the tensor bindings are the whole
+        // per-dispatch state and the framework refreshes them on a cache hit. No override needed.
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+    using program_factory_t = std::variant<CreateQKVHeadsSeparateTensorsProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

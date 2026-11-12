@@ -10,12 +10,12 @@ set -euo pipefail
 
 # uv version to install
 # Update this version when upgrading uv across all Dockerfiles
-UV_VERSION="0.9.26"
+UV_VERSION="0.13.4"
 
 # SHA256 hash of the install script for UV_VERSION (for security verification)
 # To update: curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sha256sum
 # IMPORTANT: Update this hash whenever UV_VERSION changes!
-UV_INSTALLER_SHA256="09ace6a888bd5941b5d44f1177a9a8a6145552ec8aa81c51b1b57ff73e6b9e18"
+UV_INSTALLER_SHA256="1f5390d273b0158bd5eaa3527ae049f3667baa881abb1e7c883dd637d84432f9"
 
 # Installation mode: "system" or "user"
 # - system: Install at system level, fail if not possible

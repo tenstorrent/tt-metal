@@ -6,7 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_fill.h"
+#include "ckernel_sfpu_fill.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
@@ -50,7 +50,7 @@ ALWI void fill_tile(uint32_t idst, float param0) {
 template <DataFormat DATA_FORMAT>
 ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
     static_assert(
-        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
+        DATA_FORMAT == DataFormat::Int32 || is_uint32_format(DATA_FORMAT) || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for fill_tile_int. Supported: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;

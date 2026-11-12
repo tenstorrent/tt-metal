@@ -176,6 +176,7 @@ class ParallelFeedForward(Module):
             parallel_config=parallel_config,
             default_block_size=default_block_size,
             force_transpose=force_transpose,
+            use_persistent_buffer=use_persistent_buffer,
         )
         return self.ff2(
             ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
@@ -192,6 +193,7 @@ class ParallelFeedForward(Module):
         default_block_size=None,
         core_grid=None,
         force_transpose: bool = True,
+        use_persistent_buffer: bool = True,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -208,6 +210,7 @@ class ParallelFeedForward(Module):
             default_block_size=default_block_size,
             core_grid=core_grid,
             force_transpose=force_transpose,
+            use_persistent_buffer=use_persistent_buffer,
         )
         return self.ff2.forward_fused_addcmul(
             ff1_out,
@@ -215,6 +218,7 @@ class ParallelFeedForward(Module):
             addcmul_b,
             scalar=scalar,
             compute_kernel_config=compute_kernel_config,
+            use_persistent_buffer=use_persistent_buffer,
         )
 
 

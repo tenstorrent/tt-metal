@@ -7,6 +7,7 @@
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -372,21 +373,21 @@ static void run_sequential_4_dfbs_2_0(
 }
 
 // multi-core tests
-TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_1Sx1S_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_1Sx1S) {
     run_single_dfb_multicore_2_0(
         this->device(), 1, 1, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::STRIDED, GetParam());
 }
-TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_2Sx2S_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_2Sx2S) {
     run_single_dfb_multicore_2_0(
         this->device(), 2, 2, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::STRIDED, GetParam());
 }
-TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_1Sx4A_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_1Sx4A) {
     run_single_dfb_multicore_2_0(
         this->device(), 1, 4, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::ALL, GetParam());
 }
 
 // concurrent / sequential multi-DFB tests
-TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest3xDFB_1Sx1S_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest3xDFB_1Sx1S) {
     run_concurrent_dfbs_program_2_0(
         this->device(),
         /*num_dfbs=*/3,
@@ -395,7 +396,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest3xDFB_1Sx1S_2_0) {
         GetParam());
 }
 
-TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_3Sx3S_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_3Sx3S) {
     // 4 DFBs × 3P+3C STRIDED — stresses TC allocator across 6 DM threads.
     std::array<M2SeqDFBSpec, 4> dfbs{
         M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
@@ -405,7 +406,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_3Sx3S_2_0) {
     run_sequential_4_dfbs_2_0(this->device(), dfbs, /*num_producers=*/3, /*num_consumers=*/3, GetParam());
 }
 
-TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_Mixed_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_Mixed) {
     // 2× STRIDED + 2× ALL — exercises mixed plain/remapper TCs in one program.
     if (GetParam()) {
         // Legacy parity: DM→DM ALL with implicit sync deadlocks (no DM↔DM remapper).
@@ -419,7 +420,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_Mixed_2_0) {
     run_sequential_4_dfbs_2_0(this->device(), dfbs, /*num_producers=*/3, /*num_consumers=*/3, GetParam());
 }
 
-TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
+TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
@@ -545,7 +546,8 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     // kernel is TRISC-only and can't carry tensor bindings.
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     std::vector<std::vector<uint32_t>> inputs(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {

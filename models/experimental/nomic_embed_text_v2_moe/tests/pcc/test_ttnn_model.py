@@ -43,6 +43,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.common import pooling_mask
 from models.experimental.nomic_embed_text_v2_moe.tt.model import TtNomicBertModel, encode
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
@@ -86,6 +87,10 @@ COSINE_TOLERANCE = 0.01
 # tokenized sequence.
 MODEL_SHAPES = [(1, 128), (2, 512), (2, 37)]
 
+# MODEL_SHAPES plus 8x512, one routed window with the router's selection in L1 beside the whole
+# chain.
+LAST_HIDDEN_SHAPES = [*MODEL_SHAPES, (8, 512)]
+
 # Deliberately multilingual, and deliberately containing one cross-lingual near-duplicate:
 # entries 2 and 4 are the same statement in English and French, which this model embeds 0.0013
 # apart. See test_top1_retrieval_agrees_with_the_reference on why that is kept rather than removed.
@@ -119,15 +124,13 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     """Backbone then pooling, for the tests driven by token ids rather than text.
 
     encode() takes text, so it cannot express a controlled shape or a chosen padding pattern.
-    These three calls are the same stages encode() makes, in the same order, which is also how a
-    reference user reaches them: directly, not through a wrapper on the model.
+    These three calls are the stages embed() runs on each chunk, here on the whole batch at its full
+    S, which is also how a reference user reaches them: directly, not through a wrapper on the model.
     """
-    kernel_config = tt_model.tt_config.compute_kernel_config
+    kernel_config = tt_model.tt_config.compute_kernel_config(OpGroup.REDUCE)
     hidden = tt_model(input_ids, attention_mask)
     pooled = pooling.mean_pool(
-        hidden,
-        pooling_mask(attention_mask, tt_model.device, dtype=tt_model.tt_config.activation_dtype),
-        compute_kernel_config=kernel_config,
+        hidden, pooling_mask(attention_mask, tt_model.device), compute_kernel_config=kernel_config
     )
     ttnn.deallocate(hidden)
     return pooling.l2_normalize(
@@ -135,7 +138,7 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     )
 
 
-@pytest.mark.parametrize("batch, seqlen", MODEL_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", LAST_HIDDEN_SHAPES)
 def test_last_hidden_state(config, reference_model, tt_model, batch, seqlen):
     """The backbone, token ids in and one vector per token out, against the reference model."""
     input_ids, attention_mask = random_input_ids(batch, seqlen, config)
@@ -149,19 +152,25 @@ def test_last_hidden_state(config, reference_model, tt_model, batch, seqlen):
     assert_with_pcc(ref, got, MODEL_PCC)
 
 
-# B*S past one output tile row per core hangs ttnn's broadcast-batch matmul unless the expert
-# bank splits the token axis; see tt/experts.py. 3584 is the smallest crossing shape, 4096 the
-# one the hang was reported at. Kept out of MODEL_SHAPES, which several tests multiply over.
-CHUNKING_SHAPES = [(7, 512), (8, 512)]
+def test_a_small_input_still_returns_dram(config, tt_model):
+    """At 4 tile rows every block passes its output to the next in L1 (activation_memory_config),
+    but the model's output outlives the forward, and in L1 it would sit under ops that plan L1 as
+    free."""
+    out = tt_model(*random_input_ids(1, 128, config))
+    assert out.memory_config().buffer_type == ttnn.BufferType.DRAM
 
 
-@pytest.mark.parametrize("batch, seqlen", CHUNKING_SHAPES)
-def test_a_batch_that_chunks_the_expert_token_axis(config, reference_model, tt_model, batch, seqlen):
-    """Shapes past the expert bank's pass limit, which used to hang rather than fail.
+# B*S past 4096 tokens, where the router's intermediates move from L1 to DRAM (tt/router.py). Kept
+# out of MODEL_SHAPES, which several tests multiply over.
+PAST_4096_SHAPES = [(9, 512), (6, 704)]
 
-    Same gates as the single-pass shapes, since the split is arithmetically a no-op;
-    test_chunking_the_token_axis_does_not_change_the_answer holds it bit-exact at module level.
-    This one exists for the shape, so a regression in the pass limit is caught end to end.
+
+@pytest.mark.parametrize("batch, seqlen", PAST_4096_SHAPES)
+def test_a_batch_past_4096_tokens(config, reference_model, tt_model, batch, seqlen):
+    """Shapes past 4096 tokens, with the same gates as the smaller ones.
+
+    The dense experts once split these into passes of at most 4096 tokens, which hung rather than
+    failed; the routed experts run each as one window.
     """
     input_ids, attention_mask = random_input_ids(batch, seqlen, config, seed=0)
 
@@ -379,10 +388,11 @@ def test_token_type_ids_must_be_zero(config, tt_model, expect_error):
 
 @pytest.mark.parametrize("batch, seqlen", MODEL_SHAPES)
 def test_no_mask_matches_an_all_ones_mask(config, tt_model, batch, seqlen):
-    """forward(attention_mask=None) skips building a (B, 1, S, S) mask, so it must be equivalent.
+    """forward skips building a (B, 1, S, S) mask when there is none or it keeps every token.
 
-    The saving is real, 1 MB at B=2 S=512 plus the SDPA work, and the equivalence is what
-    test_an_all_ones_mask_is_a_no_op established at module level. This holds the model to it.
+    The saving is real: a mask doubled SDPA's time at 8x512, read by every head of every call.
+    The equivalence is what test_an_all_ones_mask_is_a_no_op established at module level. This
+    holds the model to it.
     """
     input_ids, _ = random_input_ids(batch, seqlen, config)
 

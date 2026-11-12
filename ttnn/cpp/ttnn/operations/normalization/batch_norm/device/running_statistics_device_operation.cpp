@@ -23,7 +23,7 @@ inline void check_tensor_stat(const Tensor& tensor, std::string_view name, std::
         tensor.storage_type() == StorageType::DEVICE,
         "Operands to batch_norm need to be on device! Got: {}",
         tensor.storage_type());
-    TT_FATAL(tensor.buffer() != nullptr, "Operands to batch_norm need to be allocated in buffers on device!");
+    TT_FATAL(tensor.is_allocated(), "Operands to batch_norm need to be allocated in buffers on device!");
     TT_FATAL(tensor.logical_shape().rank() == 4, "batch_norm supports tensors of rank 4");
     TT_FATAL(tensor.logical_shape()[1] == input_c_dim, "{}[1] must be the same as input's channel size.", name);
 }

@@ -6,9 +6,11 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn/services/d2h_socket_service.hpp"
 #include "ttnn/services/layer_ack_service.hpp"
@@ -21,45 +23,41 @@ void py_module_types(nb::module_& mod) {
 
     nb::class_<LayerAckService>(mod, "LayerAckService")
         .def(
-            nb::init<D2HStreamService&, const std::string&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
+            "__init__",
+            [](LayerAckService* self,
+               D2HStreamService& d2h_service,
+               const std::string& ring_shm_name,
+               uint32_t first_record,
+               uint32_t record_count,
+               uint32_t connect_timeout_ms,
+               const nb::sequence& layer_ids_seq) {
+                std::vector<uint32_t> layer_ids;
+                layer_ids.reserve(nb::len(layer_ids_seq));
+                for (nb::handle h : layer_ids_seq) {
+                    layer_ids.push_back(nb::cast<uint32_t>(h));
+                }
+                new (self) LayerAckService(
+                    d2h_service, ring_shm_name, first_record, record_count, connect_timeout_ms, std::move(layer_ids));
+            },
             nb::arg("d2h_service"),
             nb::arg("ring_shm_name"),
-            nb::arg("source_rank"),
-            nb::arg("num_layers"),
-            nb::arg("first_layer_idx"),
-            nb::arg("local_layers"),
+            nb::arg("first_record"),
+            nb::arg("record_count"),
             nb::arg("connect_timeout_ms") = 30'000u,
-            // LayerAckService holds a bare reference to d2h_service and must not
-            // outlive it. Tie its Python lifetime to this object so it can't be
-            // GC'd while the reader thread is still dereferencing it. The ring is
-            // connected by name (start()), so no C++ queue object crosses to Python.
+            nb::arg("layer_ids") = nb::list(),
+            // The reader thread holds a bare reference to d2h_service: tie its Python lifetime to this object.
             nb::keep_alive<1, 2>(),
             R"doc(
-                Bridge a metadata-only D2HStreamService to the pipelined-prefill
-                layer-completion ring (LayerCompletionQueue).
-
-                Runs an internal reader thread (see start()) that drains
-                d2h_service.read_metadata() — one record per completed layer —
-                and, for each record, derives a globally-dense ordering key and
-                pushes one completion message into the router-owned ring. Pure
-                producer: it never touches the scheduler counter channel (the
-                LayerCompletionRouter owns aggregation + injection). Does NOT own
-                d2h_service, which must outlive this service.
+                Bridge a metadata-only D2HStreamService to the host-local layer-completion ring.
 
                 Args:
-                    d2h_service (D2HStreamService): A service constructed in
-                        metadata-only mode (global_spec=None,
-                        metadata_size_bytes > 0).
-                    ring_shm_name (str): Name of the router-owned LayerCompletionQueue
-                        ring to connect to (leading '/', no other slashes). The
-                        LayerCompletionRouter must be constructed first.
-                    source_rank (int): This host's world rank (stamped on each message).
-                    num_layers (int): Global total layer count — the seq stride.
-                    first_layer_idx (int): This rank's slice offset into the global
-                        layer range (from compute_layer_split).
-                    local_layers (int): Layers this rank owns; must equal the number
-                        of D2H records this rank emits per chunk.
-                    connect_timeout_ms (int): Max time start() polls for the ring.
+                    d2h_service: the ack records' D2H service; this object must not outlive it.
+                    ring_shm_name (str): router-owned ring to connect to (leading '/', no other '/').
+                    first_record (int): index of this rank's first record in a chunk's record sequence.
+                    record_count (int): ack records this rank emits per chunk.
+                    connect_timeout_ms (int): how long start() polls for the ring.
+                    layer_ids (list[int]): global layer of each local record, in emission
+                        order; empty for a dense model (record index == layer).
             )doc")
         .def(
             "start",
@@ -71,13 +69,14 @@ void py_module_types(nb::module_& mod) {
         .def(
             "stop",
             &LayerAckService::stop,
-            R"doc(
-                Signal the reader thread to exit and join it. Idempotent.
-
-                The reader polls has_data() before each read, so it never parks
-                inside a blocking read; stop() joins the thread promptly even when
-                no further record arrives. The destructor also calls stop().
-            )doc");
+            nb::call_guard<nb::gil_scoped_release>(),
+            "Stop and join the reader thread, then raise a stored failure once. Idempotent; call before the "
+            "router stops.")
+        .def(
+            "check",
+            &LayerAckService::check,
+            nb::call_guard<nb::gil_scoped_release>(),
+            "Raise a stored failure (lost D2H record, reader-thread error) without stopping.");
 }
 
 }  // namespace ttnn::layer_ack_service

@@ -18,7 +18,6 @@ Tensor group_norm(
     const std::optional<Tensor>& input_mask = std::nullopt,
     const std::optional<Tensor>& weight = std::nullopt,
     const std::optional<Tensor>& bias = std::nullopt,
-    const std::optional<Tensor>& reciprocals = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> dtype = std::nullopt,
     std::optional<CoreGrid> core_grid = std::nullopt,

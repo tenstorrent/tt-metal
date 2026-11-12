@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
-from triage_hw_utils import read_tag
+from triage_hw_utils import read_tag, device_has_firmware
 
 from run_checks import run as get_run_checks
 
@@ -40,7 +40,9 @@ class DeviceTelemetryRow:
     uptime: str = triage_field("ARC Uptime")
 
 
-def get_device_telemetry(device: Device) -> DeviceTelemetryRow:
+def get_device_telemetry(device: Device) -> DeviceTelemetryRow | None:
+    if not device_has_firmware(device):
+        return None
     device_id = device.id
     return DeviceTelemetryRow(
         aiclk=read_tag(device_id, "AICLK"),

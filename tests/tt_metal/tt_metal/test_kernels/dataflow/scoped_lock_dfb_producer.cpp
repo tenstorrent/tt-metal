@@ -8,6 +8,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     const uint32_t src_buffer_addr = get_arg(args::src_buffer_addr);
@@ -48,12 +49,14 @@ void kernel_main() {
     } else if (write_after_unlock) {
         {
             auto lock = dfb.scoped_write_lock();
-            ring_base = static_cast<uint32_t>(lock.get_ptr().get_address());
+            // Raw address: ring_base outlives the lock and is published to the host.
+            ring_base = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(lock.get_ptr()));
         }
         do_write();  // lock released before the write -> also WRITE_TO_UNLOCKED_DFB
     } else {
         auto lock = dfb.scoped_write_lock();
-        ring_base = static_cast<uint32_t>(lock.get_ptr().get_address());
+        // Raw address: ring_base is also published to the host.
+        ring_base = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(lock.get_ptr()));
         do_write();  // held lock covers only its entry: offset 0 -> no issue, in-region ->
                      // WRITE_TO_UNLOCKED_DFB, past -> no issue
     }

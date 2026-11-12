@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Runtime aligned padding with changing ownership, empty ranks, and one capture."""
+"""Runtime padding with changing ownership, empty ranks, unaligned ends, and one capture."""
 
 import pytest
 import torch
@@ -9,6 +9,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
+from models.demos.deepseek_v3_d_p.tests.kda.utils import LayerNrmseThresholds
 from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_matches_reference as _assert_matches_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import build_layer as _build_layer
 from models.demos.deepseek_v3_d_p.tests.kda.utils import mla_row_permutation as _mla_row_permutation
@@ -114,6 +115,16 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
     cases = [(0, sequence), (32, 32), (96, 96), (32, 128), (32, 224)]
     if p > 1:
         cases += [(32, 256), (local_rows + 96, sequence - 64), (96, sequence - 32)]
+    # Unaligned ends: a partial last chunk, one row short of capacity, and on SP
+    # an end in the separated tail and just past a device boundary.
+    cases += [(0, 33), (96, 95), (0, sequence - 1)]
+    if p > 1:
+        cases += [(32, sequence - 29), (0, local_rows + 3)]
+    # Fewer than three valid rows in the end segment need predecessor history:
+    # a whole interval, a segment after a device boundary, and a separated tail.
+    cases += [(0, 1), (32, 2), (96, 3)]
+    if p > 1:
+        cases += [(0, local_rows + 1), (32, local_rows - 30), (32, sequence - 31), (96, sequence - 94)]
     cases += [(2 * sequence + 32, sequence), (0, 32), (0, sequence)]
     try:
         for start, length in cases:
@@ -124,15 +135,17 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
                 ttnn.copy(source, destination)
                 ttnn.deallocate(source)
             previous = None
-            for zero_tail in (False, True, True):
+            # Real rows, zeros, and NaN poison in the padded rows must give
+            # identical results; the repeated poison also checks replay.
+            for fill in (None, 0.0, float("nan"), float("nan")):
                 payload = hidden.clone()
-                if zero_tail:
-                    payload[:, length:] = 0
+                if fill is not None:
+                    payload[:, length:] = fill
                 source = _to_sp_input(payload[:, permutation], mesh_device, sp_axis)
                 ttnn.copy(source, hidden_tt)
                 ttnn.deallocate(source)
                 ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
-                if p == 1:
+                if length in trimmed_carries:
                     for padded, trimmed in zip(
                         snapshots((state.recurrent, state.convolution)),
                         trimmed_carries[length],
@@ -161,6 +174,7 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
                     # the inherited peak-error gate without padding. These
                     # cases require exact unpadded carries plus CPU PCC/RMSE.
                     state_linf_threshold=None if p == 1 or length == sequence else 0.60,
+                    nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.004),
                 )
                 physical = reconstruct_sp_tp_tensor(output, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
                 valid_output = physical[:, torch.argsort(permutation)][:, :length].clone()

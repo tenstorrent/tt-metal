@@ -8,11 +8,11 @@ import math
 
 import ttnn
 
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 

@@ -32,6 +32,8 @@ from safetensors import safe_open
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict, resolve_model_root
+from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
+from models.demos.deepseek_v3_d_p.tt.kda.weights import PROJECTION_ARTIFACTS as KDA_PROJECTION_ARTIFACTS
 
 # What each TT module reads out of a layer's state dict. Kept here rather than inline so the map
 # from checkpoint name to TT name is in one place and can be read against the modules.
@@ -205,13 +207,11 @@ def load_routed_expert_weights(checkpoint_dir: Path, layer_idx: int, num_experts
 
 _CACHE_ENV = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
 
-# Alongside the other prefill caches on the models share, next to `glm53_ttnn_cache` and the GLM and
-# DeepSeek caches. `/mnt/models` itself is group-writable only by local-syseng, so this sits in
-# `deepseek-prefill-cache/`, which is where the golden traces and the other models' TTNN caches
-# already live. This is a DEFAULT rather than a requirement: the point of a cache is that every run
-# benefits without anyone remembering an environment variable, and
-# `$TT_KIMI_K3_PREFILL_TTNN_CACHE` still relocates it (or disables it, if set empty).
-_DEFAULT_CACHE = Path("/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache")
+# On the Weka scratch share, under the vendor prefix like every other model cache there and
+# alongside Kimi-K2.7's `Kimi-K2_7-Code-Cache/`. This is a DEFAULT rather than a requirement: the
+# point of a cache is that every run benefits without anyone remembering an environment variable,
+# and `$TT_KIMI_K3_PREFILL_TTNN_CACHE` still relocates it (or disables it, if set empty).
+_DEFAULT_CACHE = Path("/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill")
 
 
 def _checkpoint_identity(checkpoint_dir: Path) -> str:
@@ -255,8 +255,33 @@ def _marker(root: Path, layer_idx: int) -> Path:
     return root / f".layer_{layer_idx}.complete"
 
 
-def layer_is_cached(root: Path | None, layer_idx: int) -> bool:
+def _marker_exists(root: Path | None, layer_idx: int) -> bool:
     return root is not None and _marker(root, layer_idx).is_file()
+
+
+def _kda_projections_cached(root: Path, layer_idx: int) -> bool:
+    """Whether every KDA projection tensorbin of this layer is stored at `KIMI_K3_PROJECTION_DTYPE`."""
+    return all(
+        any(root.glob(f"layer_{layer_idx}.kda.{name}.*_dtype_{KIMI_K3_PROJECTION_DTYPE.name}_*.tensorbin"))
+        for name in KDA_PROJECTION_ARTIFACTS
+    )
+
+
+def layer_is_stale(root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config) -> bool:
+    """A marked KDA layer whose projections are not all at `KIMI_K3_PROJECTION_DTYPE`.
+
+    Its marker predates the projections leaving bfloat16, or a rebuild of them was interrupted. Every
+    other tensorbin of the layer is still good, so only the KDA projections need rebuilding.
+    """
+    return (
+        _marker_exists(root, layer_idx)
+        and layer_idx not in model_cfg.mla_layer_ids()
+        and not _kda_projections_cached(root, layer_idx)
+    )
+
+
+def layer_is_cached(root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config) -> bool:
+    return _marker_exists(root, layer_idx) and not layer_is_stale(root, layer_idx, model_cfg)
 
 
 def mark_layer_cached(root: Path | None, layer_idx: int) -> None:
@@ -279,9 +304,14 @@ def load_layer_state_dict_cached(
     `state_dict.get(...)`, and each falls back to its tensorbins when the entry is missing and a
     `weight_cache_path` is set. Nothing in the stack needed changing for this.
     """
-    if layer_is_cached(root, layer_idx):
+    if layer_is_cached(root, layer_idx, model_cfg):
         logger.info(f"layer {layer_idx}: cache hit, not opening the checkpoint")
         return {}
+    if layer_is_stale(root, layer_idx, model_cfg):
+        # Rebuild only the KDA projections, from this layer's attention weights; every other
+        # component still loads from its tensorbins.
+        logger.info(f"layer {layer_idx}: cache hit, rebuilding its KDA projections")
+        return {"kda_weights": load_kda_layer_state_dict(Path(checkpoint_dir), layer_idx, kimi_k3_kda_config())}
     state_dict = load_layer_state_dict(checkpoint_dir, layer_idx, model_cfg=model_cfg)
     if layer_idx >= model_cfg.NUM_DENSE_LAYERS:
         experts = num_routed_experts if num_routed_experts is not None else model_cfg.NUM_ROUTED_EXPERTS

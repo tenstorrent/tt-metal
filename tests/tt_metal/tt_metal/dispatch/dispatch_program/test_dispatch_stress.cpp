@@ -34,7 +34,7 @@ using namespace tt;
 
 void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
-    Program program = Program();
+    Program program = CreateProgram(*mesh_device);
     CoreRange core_range({0, 0}, {5, 5});
 
     auto l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);

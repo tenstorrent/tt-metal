@@ -7,7 +7,7 @@ import math
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 

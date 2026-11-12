@@ -60,8 +60,9 @@ void kernel_main() {
     local_experts_dfb.wait_front(1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_experts_dfb.get_read_ptr());
 
-    for (uint32_t bs = start_idx, reduce_idx = reduce_start_idx, reduction_count = 0; bs < end_idx;
-         ++bs, ++reduction_count) {
+    // reduction_count is advanced only inside the body (see the group-boundary check below) so that the
+    // reset and the increment cannot both apply to the same iteration.
+    for (uint32_t bs = start_idx, reduce_idx = reduce_start_idx, reduction_count = 0; bs < end_idx; ++bs) {
         metadata_dfb.wait_front(1);
         const uint32_t metadata_l1_addr = metadata_dfb.get_write_ptr();
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
@@ -104,7 +105,7 @@ void kernel_main() {
             found = false;
         }
 
-        if (reduction_count == reduction_size - 1) {
+        if (++reduction_count == reduction_size) {
             CoreLocalMem<uint32_t> red_src(reduced_l1_addr);
             noc.async_write(
                 red_src,

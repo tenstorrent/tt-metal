@@ -57,7 +57,7 @@ struct PertinentFields {
 // Both functions below must consume every member; if one gains a term the other does not, they
 // disagree silently and the whole point of deriving the set once is lost. Nothing in the language
 // enforces that, so this fires on the edit that always accompanies a new term. It is a prompt, not
-// a proof -- also extend the flag-combination sweep in test_tensor_spec_relaxations.cpp, which is
+// a proof -- also extend the flag-combination sweep in the tensor_spec_relaxations unit tests, which is
 // what actually detects a disagreement.
 static_assert(
     sizeof(PertinentFields) == 5,

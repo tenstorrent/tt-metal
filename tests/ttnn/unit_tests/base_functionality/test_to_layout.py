@@ -4,7 +4,7 @@
 
 from loguru import logger
 import pytest
-from models.common.utility_functions import nearest_32
+from tt_py_test_utils_common.utility_functions import nearest_32
 
 import torch
 
@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import (
     check_with_pcc_without_tensor_printout,
 )
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
-from models.common.utility_functions import torch_random, run_for_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random, run_for_blackhole
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
@@ -457,6 +457,14 @@ def test_int_untilize(device, batch_size, sentence_size):
     output_torch = ttnn.to_torch(output_tt)
 
     assert_equal(torch_input_tensor, output_torch)
+
+
+def test_to_layout_host_same_layout_with_memory_config():
+    torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+    host_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    output = ttnn.to_layout(host_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert_equal(torch_input, ttnn.to_torch(output))
 
 
 @pytest.mark.parametrize("shape", [(32, 32), (64, 128), (9, 256)])

@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 
 import ttnn
 
-from models.common.utility_functions import tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import tt2torch_tensor
 
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_numeric_metrics, check_with_pcc
@@ -247,3 +249,120 @@ def test_pre_all_gather_wide_row_fp32_dest_acc_fits_l1(device, width, is_rmsnorm
     expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
     passing, pcc = check_with_pcc(expected, got, 0.99)
     assert passing, f"sum(x^2) mismatch at width {width}: {pcc}"
+
+
+# The interleaved pre-all-gather path used to drop memory_config, so an L1 request came back in DRAM.
+@pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+def test_pre_all_gather_interleaved_honors_memory_config(device, is_rmsnorm):
+    torch.manual_seed(0)
+    inp = torch.randn((1, 1, 32, 1024), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    op = ttnn.rms_norm_pre_all_gather if is_rmsnorm else ttnn.layer_norm_pre_all_gather
+    tt_stats = op(tt_inp, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert tt_stats.memory_config() == ttnn.L1_MEMORY_CONFIG
+    got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
+    expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
+    torch.testing.assert_close(got, expected, rtol=5e-2, atol=0)
+
+
+# The 2D pre-all-gather grid used to bound its X extent by grid.y. Column dispatch makes the grid taller
+# than wide, so num_tile_rows == grid.y used to place cores past the last column.
+@pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="The 2D pre-all-gather merge uses multicast semaphore atomics, which the simulator does not implement",
+)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_rms_norm_pre_all_gather_2d_grid_taller_than_wide(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.y <= grid.x:
+        pytest.skip(f"needs a compute grid taller than wide, got {grid.x}x{grid.y}")
+    torch.manual_seed(0)
+    inp = torch.randn((1, 1, grid.y * 32, 2048), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_inp, dtype=ttnn.bfloat16, use_2d_core_grid=True)
+
+    got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
+    expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
+    torch.testing.assert_close(got, expected, rtol=5e-2, atol=0)
+
+
+def _run_rms_norm_post_all_gather_2d(device, num_tile_rows):
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    width = 2048
+    inp = torch.randn((1, 1, num_tile_rows * 32, width), dtype=torch.bfloat16)
+    gamma = torch.randn((width,), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_gamma = ttnn.from_torch(
+        gamma.reshape(1, 1, -1, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_inp, dtype=ttnn.bfloat16)
+    tt_out = ttnn.rms_norm_post_all_gather(tt_inp, tt_stats, epsilon=epsilon, weight=tt_gamma, use_2d_core_grid=True)
+
+    expected = reference_layernorm(inp.to(torch.float32), gamma.to(torch.float32), None, epsilon, is_rmsnorm=True)
+    passing, pcc = check_with_pcc(expected, ttnn.to_torch(tt_out).to(torch.float32), 0.999)
+    assert passing, pcc
+
+
+# The 2D post-all-gather layout offset each core by one tile row per grid column and wrote its rows as one
+# contiguous run, so any core holding more than one tile row read and wrote the wrong tiles.
+def test_rms_norm_post_all_gather_2d_grid_multiple_rows_per_core(device):
+    _run_rms_norm_post_all_gather_2d(device, 2 * device.compute_with_storage_grid_size().x)
+
+
+# Only RMSNorm exposes use_2d_core_grid. With a grid taller than wide, num_tile_rows == grid.y used to place
+# cores past the last column.
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_rms_norm_post_all_gather_2d_grid_taller_than_wide(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.y <= grid.x:
+        pytest.skip(f"needs a compute grid taller than wide, got {grid.x}x{grid.y}")
+    _run_rms_norm_post_all_gather_2d(device, grid.y)
+
+
+@pytest.mark.parametrize("use_weight", [False, True], ids=["bias_only", "weight_and_bias"])
+@pytest.mark.parametrize(("height", "width"), [(128, 2048), (37, 72)], ids=["h128_w2048", "h37_w72"])
+def test_rms_norm_post_all_gather_applies_bias(device, height, width, use_weight):
+    torch.manual_seed(0)
+    epsilon = 1e-5
+    inp = torch.randn((1, 1, height, width), dtype=torch.bfloat16)
+    gamma = (torch.rand(width) + 0.5).to(torch.bfloat16)
+    beta = (torch.randn(width) + 2.0).to(torch.bfloat16)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_beta = ttnn.from_torch(beta.reshape(1, 1, 1, width), layout=ttnn.TILE_LAYOUT, device=device)
+    tt_gamma = ttnn.from_torch(gamma.reshape(1, 1, 1, width), layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+    tt_out = ttnn.rms_norm_post_all_gather(
+        tt_inp,
+        tt_stats,
+        epsilon=epsilon,
+        weight=tt_gamma if use_weight else None,
+        bias=tt_beta,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    gamma_ref = gamma.to(torch.float32) if use_weight else None
+    expected = reference_layernorm(inp.to(torch.float32), gamma_ref, None, epsilon, is_rmsnorm=True) + beta.to(
+        torch.float32
+    )
+    got = ttnn.to_torch(tt_out).to(torch.float32)
+    passing, pcc = check_with_pcc(expected, got, 0.999)
+    assert passing, pcc
+    torch.testing.assert_close(got, expected, rtol=0.02, atol=0.05)

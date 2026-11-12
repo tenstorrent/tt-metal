@@ -9,7 +9,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
@@ -228,6 +228,17 @@ def run_reduce_scatter_test(
                 memory_config=output_mem_config,
                 topology=topology,
                 use_noc1_only=use_noc1_only,
+            )
+            # Output TensorTopology: the input is ShardTensor2dMesh dims=(0, 1); the reduce_scatter sums along the
+            # columns and leaves each device its `dim` slice, so the label is Shard(0) on the rows and Shard(dim) on
+            # the columns -- the layout ConcatMesh2dToTensor dims=(0, 1) below composes.
+            assert [repr(p) for p in tt_out_tensor.tensor_topology().placements()] == [
+                "PlacementShard(0)",
+                f"PlacementShard({dim})",
+            ]
+            assert tuple(int(d) for d in tt_out_tensor.tensor_topology().distribution_shape()) == (
+                num_devices_fracture,
+                num_devices_scatter,
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)

@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -90,6 +91,13 @@ struct DeviceStorage {
     // but with a different set of coords.
     // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
     DeviceStorage(const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords);
+
+    // The storage of the one shard at `coord`, sharing the underlying device memory and labelled as the one-device
+    // tensor it is ({1},[Replicate] over `coord`); the MeshTensor's topology describes the whole tensor and is left
+    // to the storages that cover it.
+    // Throws if `coord` is out of bounds for the mesh_buffer_ device shape.
+    static DeviceStorage single_shard(
+        const DeviceStorage& other, const tt::tt_metal::distributed::MeshCoordinate& coord);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Device Memory getters
@@ -185,7 +193,7 @@ struct DeviceStorage {
     // Returns the tensor spec associated with the MeshTensor.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
     const tt::tt_metal::TensorSpec& get_tensor_spec() const;
-    // Returns the tensor topology associated with the MeshTensor.
+    // Returns the tensor topology: the storage's own for a single_shard() storage, otherwise the MeshTensor's.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
     const tt::tt_metal::TensorTopology& get_tensor_topology() const;
 
@@ -208,6 +216,15 @@ private:
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
     // coords_ only make sense when the DeviceStorage is allocated.
     std::vector<tt::tt_metal::distributed::MeshCoordinate> coords_;
+    // The storage's own tensor topology, set by single_shard(); otherwise the MeshTensor's topology applies.
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology_;
+
+    // Replaces the tensor topology that get_tensor_topology() returns: the storage's own when it has one (the
+    // MeshTensor's is untouched), otherwise the MeshTensor's, which every storage sharing it then sees. Reached
+    // through Tensor::update_tensor_topology only.
+    // Throws if the DeviceStorage is deallocated.
+    friend class TensorAttributes;
+    void update_tensor_topology(tt::tt_metal::TensorTopology tensor_topology);
 
     // Experimental features for viewing an existing DeviceStorage
     const std::shared_ptr<MeshTensorHolder>& get_root_mesh_tensor() const;

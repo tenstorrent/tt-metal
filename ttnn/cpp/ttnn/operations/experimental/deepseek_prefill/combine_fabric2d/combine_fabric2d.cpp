@@ -18,6 +18,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t cluster_axis,
     uint32_t num_links,
+    uint32_t fwd_reduction,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config) {
     return ttnn::prim::combine_fabric2d(
@@ -32,6 +33,7 @@ ttnn::Tensor combine_fabric2d(
         seq_len_per_chip,
         cluster_axis,
         num_links,
+        fwd_reduction,
         topology,
         memory_config);
 }

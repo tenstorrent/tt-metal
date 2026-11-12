@@ -12,9 +12,9 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
     pytorch_ops,
     tt_lib_ops,
 )
-from models.common.utility_functions import is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, is_blackhole
 from loguru import logger
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import torch2tt_tensor, tt2torch_tensor
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 

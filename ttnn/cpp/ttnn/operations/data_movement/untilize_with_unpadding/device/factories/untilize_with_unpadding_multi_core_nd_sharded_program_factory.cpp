@@ -50,7 +50,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     const auto& input_mesh_tensor = input.mesh_tensor();
     const auto& output_mesh_tensor = output.mesh_tensor();
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = input.padded_shape()[-1];
     uint32_t output_tensor_width = output.padded_shape()[-1];
@@ -227,9 +227,6 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     // Compute kernel
     // Note: This condition is always true for sharded input
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
-    if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 || input.dtype() == DataType::FLOAT32) {
-        compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     bool has_compute = !compute_core_range.ranges().empty();
     KernelSpec compute{
         .unique_id = ND_COMPUTE,

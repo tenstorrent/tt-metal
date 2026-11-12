@@ -24,7 +24,7 @@
 #include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
@@ -39,7 +39,9 @@ AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     tracking_enabled_(trace_allocation_tracking_enabled()),
     traceback_capture_enabled_(tracking_enabled_ && trace_allocation_diagnostics_enabled()),
     skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {
-    if (traceback_capture_enabled_) {
+    // Aggregate allocation queries need every tracking-enabled allocator, even
+    // when traceback diagnostics are disabled.
+    if (tracking_enabled_) {
         register_traceback_allocator(this);
     }
 }
@@ -426,6 +428,18 @@ size_t AllocatorImpl::get_num_allocated_buffers() const {
     return allocated_buffers_.size();
 }
 
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_dram_allocations() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_allocated_ranges();
+}
+
+bool AllocatorImpl::is_buffer_allocated_at(size_t unique_id, DeviceAddr address) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::any_of(allocated_buffers_.begin(), allocated_buffers_.end(), [&](const Buffer* buffer) {
+        return buffer->unique_id() == unique_id && buffer->address() == address;
+    });
+}
+
 uint32_t AllocatorImpl::get_num_banks(const BufferType& buffer_type) const {
     // Don't lock mutex_ because the number of banks is a constant and does not change.
     switch (buffer_type) {
@@ -452,6 +466,18 @@ DeviceAddr AllocatorImpl::get_bank_size(const BufferType& buffer_type) const {
         }
     }
     return 0;
+}
+
+// Reject reserved, misaligned and out-of-range SRAM before constructing addressed buffers.
+void AllocatorImpl::validate_l1_range(DeviceAddr address, DeviceAddr size, BufferType buffer_type) const {
+    TT_FATAL(
+        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
+        "SRAM range validation requires an L1 buffer type");
+    const DeviceAddr base =
+        buffer_type == BufferType::L1 ? config_->l1_unreserved_base : config_->worker_l1_size - config_->l1_small_size;
+    const DeviceAddr end = base + get_bank_size(buffer_type);
+    TT_FATAL(address % config_->l1_alignment == 0, "SRAM address must be aligned");
+    TT_FATAL(address >= base && address <= end && size <= end - address, "SRAM range is outside allocatable L1");
 }
 
 uint32_t AllocatorImpl::get_dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -666,7 +692,7 @@ void AllocatorConfig::reset() {
 }
 
 AllocatorImpl::~AllocatorImpl() {
-    if (traceback_capture_enabled_) {
+    if (tracking_enabled_) {
         unregister_traceback_allocator(this);
     }
     this->clear_trace_allocation_state();
@@ -678,10 +704,13 @@ AllocatorImpl::~AllocatorImpl() {
         submap.clear();
     }
 
-    dram_manager_->clear();
-    l1_manager_->clear();
-    l1_small_manager_->clear();
-    trace_buffer_manager_->clear();
+    // A derived constructor may throw before the bank managers exist.
+    for (BankManager* manager :
+         {dram_manager_.get(), l1_manager_.get(), l1_small_manager_.get(), trace_buffer_manager_.get()}) {
+        if (manager != nullptr) {
+            manager->clear();
+        }
+    }
     allocated_buffers_.clear();
 }
 

@@ -13,10 +13,10 @@ from pydantic import BaseModel
 
 from models.common.llama_models import sample_top_p
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
-from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role
-from models.tt_transformers.tt.generator import create_submeshes
+from models.ttt_compat.tt.common import ImageMedia, InterleavedTextMedia, Role
+from models.ttt_compat.tt.generator import create_submeshes
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -31,8 +31,8 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import hf_multimodal_encode
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.ttt_compat.tt.common import hf_multimodal_encode
+from models.ttt_compat.tt.model_config import DecodersPrecision
 
 
 class UserMessage(BaseModel):
@@ -122,15 +122,18 @@ def create_multimodal_model(
             checkpoint = tt_model_args.load_state_dict()
             loaded_real_weights = bool(checkpoint) and not tt_model_args.dummy_weights
 
-    model = TtGemmaModel(
-        mesh_device=mesh_device,
-        state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(cache_dtype),
-        dtype=cache_dtype,
-        args=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
-        paged_attention_config=paged_attention_config,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(checkpoint, "is_placeholder", False)):
+        model = TtGemmaModel(
+            mesh_device=mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(cache_dtype),
+            dtype=cache_dtype,
+            args=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+            paged_attention_config=paged_attention_config,
+        )
 
     if loaded_real_weights and num_layers is None:
         mark_weight_cache_complete(cache_dir, checkpoint, is_host_weight=is_gemma3_host_weight, **cache_identity)
@@ -375,6 +378,7 @@ def test_multimodal_demo_text(
     sampler = None if can_sample_on_device else get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
+    _decode_time_s = 0.0
 
     prompt_encoder = hf_multimodal_encode
 
@@ -451,6 +455,10 @@ def test_multimodal_demo_text(
                             position_id,
                             enable_trace=enable_trace,
                             sampling_params=device_sampling_params,
+                            reload_inputs=gen_idx == 0 or not enable_trace,
+                            reload_page_table=False,
+                            reload_sampling_params=True,
+                            reset_sampling_state=gen_idx == 0,
                         )
                         next_tokens = tok.long().reshape(-1)[:max_batch_size]
                     else:
@@ -458,6 +466,10 @@ def test_multimodal_demo_text(
                             next_token_tensor,
                             position_id,
                             enable_trace=enable_trace,
+                            reload_inputs=True,
+                            reload_page_table=False,
+                            reload_sampling_params=False,
+                            reset_sampling_state=False,
                         )
                         next_tokens, next_texts = sampler(logits)
                     # Update next token
@@ -470,6 +482,9 @@ def test_multimodal_demo_text(
                 _num_decode_tokens += (
                     gen_idx * max_batch_size
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
+                # decode_times[0] holds the decode compile pass, the sampling pre-compile and the trace
+                # capture; time only the tokens that are counted.
+                _decode_time_s += sum(decode_times[1:])
 
             next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
 
@@ -498,9 +513,10 @@ def test_multimodal_demo_text(
 
     # Calculate measurements
     total_inference_prefill_time = profiler.get_duration_sum("inference_prefill")
-    total_inference_decode_time = profiler.get_duration_sum("inference_decode", start_iteration=0)
+    total_inference_decode_time = _decode_time_s
     avg_ttft = total_inference_prefill_time / num_batches  # One first token per batch
     avg_prefill_t_s = _num_prefill_tokens / total_inference_prefill_time
+    assert _num_decode_tokens > 0, "No decode step was timed: every batch stopped on its first token"
     avg_decode_t_s = _num_decode_tokens / total_inference_decode_time
     avg_decode_t_s_u = _num_decode_tokens / total_inference_decode_time / max_batch_size
 

@@ -19,9 +19,13 @@ void kernel_main() {
     using D = ckl::Dst;
 
     DataflowBuffer dfb_output_grad_obj(dfb::output_grad);
+    DataflowBuffer dfb_tmp_weight_obj(dfb::tmp_weight);
+    DataflowBuffer dfb_input_grad_obj(dfb::input_grad);
 #ifdef DIVISOR
     // These buffers are bound only for the divisor variant; keep their names out of the other variant.
     DataflowBuffer dfb_tmp1_obj(dfb::tmp1);
+    DataflowBuffer dfb_divisor_obj(dfb::divisor);
+    DataflowBuffer dfb_tmp2_obj(dfb::tmp2);
 
     compute_kernel_hw_startup(dfb::divisor, dfb::tmp1);
     ckl::unary<
@@ -29,7 +33,7 @@ void kernel_main() {
         ckl::input(dfb::divisor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckernel::moreh_data_format_reconfig),
         ckl::output(
             dfb::tmp1, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckernel::moreh_data_format_reconfig)>(
-        ckl::IterationShape::one_tile());
+        ckl::IterationShape::one_tile(), dfb_divisor_obj, dfb_tmp1_obj);
 
     dfb_tmp1_obj.wait_front(1);
     dfb_output_grad_obj.wait_front(1);
@@ -49,13 +53,11 @@ void kernel_main() {
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Scalar,
-                    ckernel::moreh_data_format_reconfig)>{},
+                    ckernel::moreh_data_format_reconfig)>{dfb_tmp_weight_obj, dfb_output_grad_obj},
             ckl::Negative<D::D0>{},
             ckl::PackTile<ckl::output(
-                dfb::tmp2,
-                ckl::ReservePolicy::PerTile,
-                ckl::PushPolicy::PerTile,
-                ckernel::moreh_data_format_reconfig)>{});
+                dfb::tmp2, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckernel::moreh_data_format_reconfig)>{
+                dfb_tmp2_obj});
         ckl::mul<
             ckl::input(
                 dfb::tmp2, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckernel::moreh_data_format_reconfig),
@@ -70,7 +72,8 @@ void kernel_main() {
                 dfb::input_grad,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckernel::moreh_data_format_reconfig)>(ckl::IterationShape::one_tile());
+                ckernel::moreh_data_format_reconfig)>(
+            ckl::IterationShape::one_tile(), dfb_tmp2_obj, dfb_tmp1_obj, dfb_input_grad_obj);
     }
     dfb_output_grad_obj.pop_front(1);
     dfb_tmp1_obj.pop_front(1);
@@ -94,13 +97,13 @@ void kernel_main() {
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Scalar,
-                    ckernel::moreh_data_format_reconfig)>{},
+                    ckernel::moreh_data_format_reconfig)>{dfb_tmp_weight_obj, dfb_output_grad_obj},
             ckl::Negative<D::D0>{},
             ckl::PackTile<ckl::output(
                 dfb::input_grad,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckernel::moreh_data_format_reconfig)>{});
+                ckernel::moreh_data_format_reconfig)>{dfb_input_grad_obj});
     }
     dfb_output_grad_obj.pop_front(1);
 #endif

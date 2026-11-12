@@ -98,10 +98,6 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarMailboxMinimal) {
 // A DM core is not a TRISC, so it "impersonates" writer T3 (per the Quasar HW addressing model);
 // each receiving thread drains its queue with ckernel::mailbox_read(IsolateSfpuThreadId) and records
 // what arrived into its own L1 result slot. The host verifies all three values round-tripped.
-//
-// The DM kernel brackets the mailbox stores with sentinel writes to the cluster-control scratch
-// register SCRATCH_16 (0x03000080): 0x00AAAAAA before, 0x0BBBBBBB after -- waveform markers for
-// localizing a hang/fault of the mailbox MMIO accesses on Zebu.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarDmToTriscMailbox) {
     constexpr CoreCoord WORKER_CORE = {0, 0};
     // One value per receiving TRISC thread, handed to the DM writer kernel as compile-time args.

@@ -23,7 +23,6 @@
 namespace ttnn::experimental::prim {
 
 struct SliceReshardAsyncParams {
-    std::vector<IDevice*> devices;
     uint32_t dim;
     uint32_t output_dim_offset;
     uint32_t output_dim_shape;
@@ -37,7 +36,6 @@ struct SliceReshardAsyncParams {
 
     // Constructor required because GlobalSemaphore is not default constructible
     SliceReshardAsyncParams(
-        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t output_dim_offset,
         uint32_t output_dim_shape,
@@ -48,7 +46,6 @@ struct SliceReshardAsyncParams {
         MemoryConfig output_mem_config,
         ttnn::ccl::Topology topology,
         uint32_t ring_size) :
-        devices(std::move(devices)),
         dim(dim),
         output_dim_offset(output_dim_offset),
         output_dim_shape(output_dim_shape),

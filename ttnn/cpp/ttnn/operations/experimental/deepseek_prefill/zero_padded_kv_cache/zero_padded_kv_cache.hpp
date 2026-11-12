@@ -38,7 +38,8 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t valid_global,
     uint32_t chunk_size_global,
     uint32_t cluster_axis,
-    uint32_t pad_align = 128);
+    uint32_t pad_align = 128,
+    std::optional<uint32_t> tp_axis = std::nullopt);
 
 // (2) Tensor form (traceable): the reader/writer read slot_idx and valid_global (= actual_end)
 //     on-device, each from its own 1-element uint32 DRAM tensor (replicated across the mesh). These are
@@ -53,7 +54,8 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t num_layers,
     uint32_t chunk_size_global,
     uint32_t cluster_axis,
-    uint32_t pad_align = 128);
+    uint32_t pad_align = 128,
+    std::optional<uint32_t> tp_axis = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache
 

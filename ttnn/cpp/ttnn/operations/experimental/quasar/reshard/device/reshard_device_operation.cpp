@@ -9,7 +9,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <enchantum/enchantum.hpp>
@@ -123,7 +123,7 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return {false, "Operands to shard need to be on device!"};
     }
-    if (input_tensor.buffer() == nullptr) {
+    if (!input_tensor.is_allocated()) {
         return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
     if (!input_tensor.is_sharded()) {

@@ -8,15 +8,19 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::prim {
 
-namespace {
-bool can_use_sharded_optimized_factory(
+bool can_use_tilize_with_val_padding_sharded_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    // Its CBs alias the input and output shards, so both must be in L1.
+    if (!input_tensor.memory_config().is_l1() || !operation_attributes.output_mem_config.is_l1()) {
+        return false;
+    }
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED) {
         return false;
     }
@@ -38,12 +42,10 @@ bool can_use_sharded_optimized_factory(
     return !operation_attributes.sub_core_grids.has_value();
 }
 
-}  // namespace
-
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+        if (can_use_tilize_with_val_padding_sharded_factory(operation_attributes, input_tensor)) {
             return TilizeWithValPaddingMultiCoreShardedFactory{};
         }
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
@@ -68,6 +70,23 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
 
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
+    // The default factory tilizes a whole row per block, which the Quasar unpacker cannot complete on
+    // RTL past QUASAR_MAX_TILIZE_BLOCK_TILES; the block-interleaved factory bounds the block width
+    // instead, whenever the grid admits such a split.
+    if (device->arch() == tt::ARCH::QUASAR &&
+        num_tiles_per_row > operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES) {
+        const uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
+                                          (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        if (ttnn::try_compute_ncores_wh_sb(
+                grid_area,
+                num_blocks_block,
+                num_tiles_per_row,
+                num_tiles_per_col,
+                operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES)
+                .has_value()) {
+            return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+        }
+    }
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
@@ -86,7 +105,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or
@@ -179,7 +198,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+    if (can_use_tilize_with_val_padding_sharded_factory(operation_attributes, input_tensor)) {
         // This case only applies when we expect the optimized sharded path to be taken. This bit forces the output
         // tensor to be width-sharded.
         log_warning(

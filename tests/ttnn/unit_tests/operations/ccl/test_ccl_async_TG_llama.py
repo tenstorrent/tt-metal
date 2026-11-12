@@ -12,7 +12,7 @@ from conftest import is_6u
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 
@@ -33,7 +33,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_llama_all_gather_matmul import (
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 NUM_ITERATIONS = 75

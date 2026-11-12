@@ -26,6 +26,10 @@
     wh_n150_civ2:
       timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    PYTEST_MARKERS: "not perf and not nightly and not accuracy and not quasar"
+    BIT_EXACT_RUNS: "500"
 
 - name: llk_bit_exact_blackhole group 1/2
   split_group: 1
@@ -45,6 +49,10 @@
     bh_p150b_civ2:
       timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    PYTEST_MARKERS: "not perf and not nightly and not accuracy and not quasar"
+    BIT_EXACT_RUNS: "500"
 
 - name: llk_bit_exact_blackhole group 2/2
   split_group: 2
@@ -64,3 +72,7 @@
     bh_p150b_civ2:
       timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
+  workdir: tt_metal/tt-llk
+  env:
+    PYTEST_MARKERS: "not perf and not nightly and not accuracy and not quasar"
+    BIT_EXACT_RUNS: "500"

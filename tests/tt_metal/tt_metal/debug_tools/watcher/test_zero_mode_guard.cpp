@@ -12,8 +12,8 @@
 // tests/tt_metal/tt_metal/api/test_zero_memory_api.cpp, plus the MeshWatcherFixture exception-poll
 // pattern from tests/tt_metal/tt_metal/debug_tools/watcher/test_assert.cpp. A DFB needs its producer
 // and consumer on different RISCs, so the violation lives in the producer and a small consumer
-// drains the DFB; on the violation path only the producer hangs (it signals dispatch-done first so
-// Finish() returns) and the consumer early-returns.
+// drains the DFB; on the violation path the producer pushes the entry so the consumer drains, then
+// marks itself done and hangs.
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -131,10 +131,9 @@ void RunZeroModeTest(MeshWatcherFixture* fixture, const std::shared_ptr<distribu
         << "Safe run (barrier present) unexpectedly tripped the watcher: "
         << MetalContext::instance().watcher_server()->exception_message();
 
-    // 2) Violation run: NoC write with no intervening barrier -> watcher assert (the producer signals
-    // dispatch-done before hanging, so RunProgram's Finish() returns).
+    // 2) Violation run: NoC write with no intervening barrier -> watcher assert.
     set_args(program, /*should_trip=*/1);
-    fixture->RunProgram(mesh_device, workload);
+    fixture->RunProgramExpectingWatcherError(mesh_device, workload);
 
     std::string exception;
     constexpr auto timeout = std::chrono::milliseconds(5000);

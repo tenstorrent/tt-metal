@@ -7,7 +7,7 @@
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 
 def setup_sub_device(device, local_l1_size=3200):

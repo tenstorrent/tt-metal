@@ -72,12 +72,26 @@ jobs:
                 || './tests/pipeline_reorg/ttnn_validation_merge_gate_tests.yaml') }}
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
             tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
           sparse-checkout-cone-mode: true
 
       - name: Install dependencies
@@ -86,7 +100,7 @@ jobs:
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: "${{ env.TESTS_YAML_PATH }}"
           enabled-skus: "${{ inputs.enabled-skus }}"
@@ -129,11 +143,12 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Checkout actions
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: |
             .github/actions/download-artifact-with-retry
+            .github/actions/upload-artifact-with-job-uuid
             .github/scripts/ccache_log_filter.sh
           sparse-checkout-cone-mode: false
 
@@ -284,7 +299,7 @@ jobs:
           fi
 
       - name: Checkout repository for Codecov mapping
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         if: ${{ inputs.upload-coverage }}
         with:
@@ -323,7 +338,8 @@ jobs:
           include_passed: false
           fail_on_failure: false
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      # Carries no script, so nothing here needs pinning to main.
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:

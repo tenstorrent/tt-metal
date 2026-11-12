@@ -16,15 +16,18 @@
 #include "common/executor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
 
 DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape& shape) {
+    // The global and local shapes are the same, so this host owns every shard and the buffer has no
+    // distributed context. A null context means single-host (see host_ccl::all_gather).
     return DistributedHostBuffer::create(
         shape,
         shape,
         distributed::MeshCoordinate::zero_coordinate(shape.dims()),
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_host_local_context());
+        /*context=*/nullptr);
 }
 
 DistributedHostBuffer DistributedHostBuffer::create(
@@ -58,7 +61,7 @@ DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshDevic
         tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(mesh_device_view.mesh_id());
 
     int shard_index = 0;
-    for (auto maybe_device : mesh_device_view) {
+    for (auto maybe_device : mesh_device_view.impl()) {
         maybe_device.if_local([&](const auto&) {
             shards[shard_index] = distributed::MaybeRemote<Shard>::local(Shard{.is_populated = false});
         });

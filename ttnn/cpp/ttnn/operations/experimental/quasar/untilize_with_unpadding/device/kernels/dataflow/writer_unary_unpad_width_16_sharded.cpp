@@ -98,6 +98,4 @@ void kernel_main() {
     }
     noc.async_read_barrier();
     cb_untilize_out.pop_front(remaining_tiles);
-
-    cb_out.push_back(num_unpadded_output_rows);
 }

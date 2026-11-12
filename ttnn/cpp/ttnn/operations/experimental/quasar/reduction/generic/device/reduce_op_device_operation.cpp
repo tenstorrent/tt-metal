@@ -34,7 +34,7 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
-    TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.is_allocated(), "Operands to reduce need to be allocated in buffers on device!");
     // MIN reduce is lowered to math_op=MAX + negate=true, whose fused compute kernels rely on the
     // negative_tile LLK. That LLK is an unported empty stub on Quasar, so reject negate on ALL paths
     // before any factory is selected.
@@ -144,8 +144,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             tile_width);
     }
 
-    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
+    if (operation_attributes.output_mem_config.is_sharded()) {
         const auto out_spec = compute_output_specs(operation_attributes, tensor_args);
+        TT_FATAL(
+            out_spec.memory_config().nd_shard_spec().has_value(),
+            "Sharded reduce output spec must have an nd_shard_spec (output memory layout {})",
+            operation_attributes.output_mem_config.memory_layout());
         const auto& output_nd_shard_spec = *out_spec.memory_config().nd_shard_spec();
         const auto& output_shard_grid = output_nd_shard_spec.grid;
         const uint32_t output_tile_height = out_spec.tile().get_height();

@@ -92,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
 
     const std::uint32_t tile_cnt   = params.TILE_CNT;
-    const std::uint32_t chunk_size = CHUNK_SIZE;
+    const std::uint32_t chunk_size = params.CHUNK_SIZE;
 
     // Chunked stream: for each chunk, unpack its tiles into SrcA/SrcB, then switch to
     // the reduce phase so MATH can reuse DEST as source operands for the chunk reduce.
@@ -121,8 +121,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_fill.h"
 
 // Scaler multiplier applied to the reduction (matches the Compute API default).
 static constexpr float REDUCE_SCALER = 1.0f;
@@ -133,7 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const std::uint32_t tile_cnt            = params.TILE_CNT;
-    const std::uint32_t chunk_size          = CHUNK_SIZE;
+    const std::uint32_t chunk_size          = params.CHUNK_SIZE;
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),

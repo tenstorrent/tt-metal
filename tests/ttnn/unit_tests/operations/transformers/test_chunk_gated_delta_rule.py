@@ -17,11 +17,13 @@ rounding. What bounds the gap is that the op's inputs are bf16 -- the reference 
 bf16-rounded values, upcast, so this measures the op's arithmetic and not input quantization.
 """
 
+import os
+
 import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_rule_ops import (
     l2_norm,
     recurrent_gated_delta_rule,
@@ -29,7 +31,18 @@ from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_r
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 CHUNK = 32  # the phased op's supported chunk size (Ct=1); 64 splits the WY matrix (see fused_chunk.py)
-REPEATS = 8  # extra multicast runs per shape, to give a non-deterministic race a chance to show
+
+# The simulator runs are much slower than silicon (roughly x100),
+# so the long cases run on hardware only.
+_SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
+_hw_only = pytest.mark.skipif(_SIM, reason="hardware test only: too slow on the simulator for the coverage it adds")
+# The chunk-64 phased prep program (Ct=2) exceeds the kernel-config buffer when the watcher is compiled in: its three
+# compute binaries alone are 62 KB of the 69 KB there. The production chunk size is 32.
+_no_watcher = pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_WATCHER")),
+    reason="chunk-64 prep binaries exceed the kernel-config buffer under the watcher",
+)
+REPEATS = 0 if _SIM else 8  # extra multicast runs per shape, to give a non-deterministic race a chance to show
 
 # Measured:
 PCC_O = 0.99999
@@ -58,9 +71,10 @@ PCC_STATE = 0.99999
 # Tensor parallelism (TP) distributes both head sets, so (Hk/TP, HV/TP) and the GQA group
 # drive the shape of the kernel inputs.
 # Hk = 16 caps TP at 16 for every model in the family.
-# BH = batch * HV/TP determines the amount of work per core in the scan part. In consequence,
-# the test skips a shape whose BH exceeds the grid. On an 11x10 Blackhole chip that is for
-# the hv128_tp1 case only (128 heads > 110 cores).
+# BH = batch * HV/TP determines the amount of work per core in the scan part. The phased scan
+# takes one core per head, so above the grid (hv128_tp1's 128 heads, or batch 16 at TP-4, on an
+# 11x10 Blackhole chip) the op runs the shape as fused head waves; the test skips a shape only
+# when no fused geometry exists for it either (the op's wave plan is empty).
 # Note that hv128_tp1 is a rather unrealistic deployment (2.4T model with TP1).
 # --------------------------------------------------------------------------------------------
 _QWEN_GDN_HK = 16  # linear_num_key_heads, invariant across the family
@@ -73,6 +87,8 @@ _REGIME_SHAPES = [
     pytest.param(1, 16, 48, 128, 128, id="single_dev"),  # Qwen3.6-27B single-device shape (GQA group 3)
     pytest.param(1, 12, 12, 128, 128, id="no_gqa"),  # no GQA: group 1, so the head-map is the identity
     pytest.param(2, 4, 12, 128, 128, id="batch2"),  # batch > 1: BH = 24 independent scans
+    pytest.param(8, 4, 12, 128, 128, id="batch8", marks=_hw_only),  # BH = 96: more heads than one program holds
+    pytest.param(16, 4, 12, 128, 128, id="batch16", marks=_hw_only),  # BH = 192: more heads than the grid has cores
     pytest.param(1, 4, 12, 128, 64, id="v64"),  # Small V: V=64
     pytest.param(1, 4, 12, 128, 32, id="v32"),  # Small V: V=32
 ]
@@ -189,6 +205,69 @@ def test_gated_delta_attn_seq_golden_matches_documented_scan():
     torch.testing.assert_close(actual_state, expected_state)
 
 
+def _gated_delta_attn_seq_inputs(batch_heads, num_chunks, with_initial_state, seed):
+    """Inputs for gated_delta_attn_seq at the only size it accepts (C = Dk = Dv = 128)."""
+    gen = torch.Generator().manual_seed(seed)
+    C = Dk = Dv = 128
+
+    def r(*shape):
+        return torch.randn(*shape, generator=gen) * 0.1
+
+    # Well-conditioned unit-lower-triangular L, and the inverse of each of its 32x32 diagonal blocks.
+    L_unit = (
+        torch.eye(C).expand(batch_heads, num_chunks, C, C)
+        + torch.tril(r(batch_heads, num_chunks, C, C), diagonal=-1) * 0.1
+    )
+    L_inv = torch.cat([torch.linalg.inv(L_unit[..., i : i + 32, i : i + 32]) for i in range(0, C, 32)], dim=-2)
+    inputs = dict(
+        L_unit=L_unit,
+        v_beta_sc=r(batch_heads, num_chunks, C, Dv),
+        k_bd_sc=r(batch_heads, num_chunks, C, Dk),
+        intra_attn=torch.tril(r(batch_heads, num_chunks, C, C)),
+        q_decay=r(batch_heads, num_chunks, C, Dk),
+        k_decay_t=r(batch_heads, num_chunks, Dk, C),
+        dl_exp=torch.rand(batch_heads, num_chunks, 1, 1, generator=gen) * 0.5 + 0.5,
+        L_inv=L_inv,
+    )
+    initial_state = r(batch_heads, Dk, Dv) if with_initial_state else None
+    return inputs, initial_state
+
+
+@pytest.mark.parametrize(
+    "num_chunks", [1, 2, pytest.param(3, marks=_hw_only), pytest.param(4, marks=_hw_only)], ids=lambda n: f"NC{n}"
+)
+@pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
+def test_gated_delta_attn_seq_vs_golden(device, num_chunks, with_initial_state):
+    """Device gated_delta_attn_seq vs its golden.
+
+    The reader seeds the starting state (loaded, or zero-filled when there is none) into its own CB,
+    which compute reads on chunk 0; on later chunks compute reads the state it carried over itself.
+    NC = 1 covers the seed alone; NC >= 2 covers the hand-off from the seed to the carried state.
+    The op runs twice with fresh inputs, so the second run hits the program cache.
+    """
+    batch_heads = 3
+    golden = ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq)
+
+    def dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for run in range(2):
+        inputs, initial_state = _gated_delta_attn_seq_inputs(
+            batch_heads, num_chunks, with_initial_state, seed=100 * num_chunks + 10 * with_initial_state + run
+        )
+        out_tt, state_tt = ttnn.transformer.gated_delta_attn_seq(
+            **{name: dev(t) for name, t in inputs.items()},
+            initial_state=dev(initial_state) if initial_state is not None else None,
+        )
+        out_ref, state_ref = golden(**inputs, initial_state=initial_state)
+
+        ok_o, pcc_o = check_with_pcc(out_ref, ttnn.to_torch(out_tt), 0.999)
+        ok_s, pcc_s = check_with_pcc(state_ref, ttnn.to_torch(state_tt), 0.999)
+        print(f"\nrun {run}: PCC output={pcc_o} final_state={pcc_s}")
+        assert ok_o, f"run {run}: output vs golden: {pcc_o}"
+        assert ok_s, f"run {run}: final_state vs golden: {pcc_s}"
+
+
 def _const_tiles(device, chunk_size=CHUNK):
     """The op's constant tiles (mirrors qwen36 fused_chunk.build_fused_const_tiles).
 
@@ -213,13 +292,39 @@ def _const_tiles(device, chunk_size=CHUNK):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="phased chunk_gated_delta_rule is Blackhole-only")
-@pytest.mark.parametrize("batch, num_k_heads, num_v_heads, key_dim, val_dim", _REGIME_SHAPES + _QWEN_FAMILY_SHAPES)
-@pytest.mark.parametrize("seq_len", [CHUNK, 128, 256], ids=lambda v: f"T{v}")
+@pytest.mark.parametrize("batch, num_k_heads, num_v_heads, key_dim, val_dim", _REGIME_SHAPES)
+@pytest.mark.parametrize("seq_len", [CHUNK, 128, pytest.param(256, marks=_hw_only)], ids=lambda v: f"T{v}")
 @pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
 def test_chunk_vs_recurrent_reference(
     device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
 ):
-    """Chunk-parallel device op vs the token-by-token torch recurrence."""
+    """Chunk-parallel device op vs the token-by-token torch recurrence, over the op's internal branches."""
+    _check_vs_recurrent_reference(
+        device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="phased chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize("batch, num_k_heads, num_v_heads, key_dim, val_dim", _QWEN_FAMILY_SHAPES)
+@pytest.mark.parametrize(
+    "seq_len",
+    [CHUNK, pytest.param(128, marks=_hw_only), pytest.param(256, marks=_hw_only)],
+    ids=lambda v: f"T{v}",
+)
+@pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
+def test_chunk_vs_recurrent_reference_qwen_family(
+    device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+):
+    """The same gate over every Qwen per-chip head geometry; the multi-chunk cases are covered above
+    for every branch, so the simulator runs the family at one chunk."""
+    _check_vs_recurrent_reference(
+        device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+    )
+
+
+def _check_vs_recurrent_reference(
+    device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+):
     torch.manual_seed(20260910)
     B, T, Dk, Dv = batch, seq_len, key_dim, val_dim
     G = num_v_heads // num_k_heads
@@ -228,8 +333,15 @@ def test_chunk_vs_recurrent_reference(
     ), f"num_v_heads ({num_v_heads}) must be a multiple of num_k_heads ({num_k_heads}) for the GQA head-map"
 
     grid = device.compute_with_storage_grid_size()
-    if B * num_v_heads > grid.x * grid.y:
-        pytest.skip(f"BH={B * num_v_heads} exceeds the {grid.x}x{grid.y} grid (scan needs a core per head)")
+    BH = B * num_v_heads
+    if BH > grid.x * grid.y:
+        # Above the grid the phased scan cannot run (one core per head) and the op dispatches the fused head
+        # waves instead; the shape is out of reach only when no fused geometry fits it at all.
+        from ttnn._ttnn.operations import transformer as _t
+
+        waves = _t.chunk_gdn_fused_wave_plan(grid.x, grid.y, BH, -(-T // CHUNK), Dv // 32)[0]
+        if not waves:
+            pytest.skip(f"BH={BH} exceeds the {grid.x}x{grid.y} grid and no fused geometry fits it (no wave plan)")
 
     # Inputs in the op's numeric regime: q/k L2-normalized upstream (the GDN layer normalizes over
     # the head dim), beta in (0,1) from a sigmoid, g <= 0 from -softplus.
@@ -300,9 +412,9 @@ def test_chunk_vs_recurrent_reference(
 # relative floor (chunk-parallel vs serial fp32 association), so corruption below it is invisible
 # there at any tolerance; this comparison's floor is exactly zero.
 #
-# `use_mcast` is a hashed attribute of ChunkGdnScanParams, so the two calls compile two distinct
-# cached scan programs. The program-cache assertion below checks that, which is what keeps the A/B
-# non-vacuous: were the argument no longer threaded or hashed, both runs would share one program.
+# ChunkGdnPhasedProgramConfig.use_mcast lands as a hashed attribute, so the two calls compile two
+# distinct cached scan programs. The program-cache assertion below checks that, which is what keeps
+# the A/B comparison meaningful.
 # --------------------------------------------------------------------------------------------
 
 
@@ -334,7 +446,7 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
         tril=tril,
         ones=ones,
         masks=masks,
-        use_mcast=use_mcast,
+        program_config=ttnn.ChunkGdnPhasedProgramConfig(use_mcast=use_mcast),
     )
     o_t = ttnn.to_torch(o)
     fs_t = ttnn.to_torch(fs)
@@ -353,10 +465,14 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
     "batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, chunk, want_mcast",
     [
         (1, 4, 12, 128, 128, 256, 32, True),  # TP-4 per-device shape: BH=12 -> NV=4, fan-out 3
-        (1, 16, 48, 128, 128, 256, 32, True),  # single-device Qwen3.6 shape: BH=48 -> NV=2, fan-out 1
-        (2, 16, 48, 128, 128, 256, 32, False),  # batched prefill: BH=96 -> NV=1, degenerates to plain reader
+        (1, 16, 48, 128, 128, 128, 32, True),  # single-device Qwen3.6 shape: BH=48 -> NV=2, fan-out 1
+        pytest.param(
+            2, 16, 48, 128, 128, 256, 32, False, marks=_hw_only
+        ),  # batched prefill: BH=96 -> NV=1, plain reader
         (1, 4, 12, 64, 128, 256, 32, True),  # K != V: kd/q_decay/k_dec_t shrink, v_beta does not
-        (1, 4, 12, 128, 128, 256, 64, True),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
+        pytest.param(
+            1, 4, 12, 128, 128, 256, 64, True, marks=_no_watcher
+        ),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
         (1, 4, 12, 128, 128, 32, 32, True),  # T == chunk_size -> NC==1: single-chunk handshake
         (1, 4, 12, 128, 64, 256, 32, True),  # small V: Ct*Vt < 3, the prep mask-slot capacity regime
     ],
@@ -373,7 +489,6 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
 @pytest.mark.parametrize("with_initial_state", [False, True])
 def test_scan_mcast_bit_exact(
     device,
-    monkeypatch,
     batch,
     num_k_heads,
     num_v_heads,
@@ -394,13 +509,6 @@ def test_scan_mcast_bit_exact(
     nv = _scan_nv(device, BH, Dv // 32)
     if want_mcast and nv == 1:
         pytest.skip(f"grid {grid.x}x{grid.y} gives NV=1 for BH={BH}: multicast path not exercised")
-
-    # Neutralize ambient GDN debug/profiling knobs that would bypass or fork the scan path.
-    monkeypatch.setenv("QWEN_GDN_PHASED", "1")
-    monkeypatch.delenv("QWEN_GDN_SCAN_SERIAL", raising=False)
-    # QWEN_GDN_DUMP is read once via a function-local static; delenv helps only if the op has not
-    # run yet in this process — kept for hygiene.
-    monkeypatch.delenv("QWEN_GDN_DUMP", raising=False)
 
     # Realistic-shaped inputs; bit-exactness holds for any values, but keep them in the op's
     # numeric regime (L2-normalized q/k upstream, beta in (0,1), g <= 0).
@@ -452,3 +560,170 @@ def test_scan_mcast_bit_exact(
         o_rep, fs_rep = _run_op(device, tensors, const_tiles, s0, chunk, use_mcast=True)
         assert torch.equal(o_on, o_rep), f"multicast o not reproducible on repeat {rep + 1}: race"
         assert torch.equal(fs_on, fs_rep), f"multicast final_state not reproducible on repeat {rep + 1}: race"
+
+
+# The kernels run one arithmetic (HiFi4, fp32 destination accumulation, no approx) on every path;
+# compute_kernel_config may spell it out but may not change it. Knobs these kernels do not use
+# (packer_l1_acc) are accepted and ignored.
+_UNSUPPORTED_COMPUTE_CONFIGS = {
+    "HiFi2": dict(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, math_approx_mode=False),
+    "fp16-dest": dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False, math_approx_mode=False),
+    "approx": dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=True),
+}
+
+
+def _small_inputs(device):
+    torch.manual_seed(20260925)
+    B, T, Hk, Hv, D = 1, CHUNK, 2, 4, 128
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    q = dev(l2_norm(torch.randn(B, T, Hk, D), dim=-1).to(torch.bfloat16), ttnn.bfloat16)
+    k = dev(l2_norm(torch.randn(B, T, Hk, D), dim=-1).to(torch.bfloat16), ttnn.bfloat16)
+    v = dev(torch.randn(B, T, Hv, D).to(torch.bfloat16), ttnn.bfloat16)
+    g = dev(-torch.nn.functional.softplus(torch.randn(B, T, Hv)) * 0.5, ttnn.float32)
+    beta = dev(torch.sigmoid(torch.randn(B, T, Hv)), ttnn.float32)
+    return (q, k, v, g, beta), _const_tiles(device)
+
+
+def _run_with_compute_config(device, tensors, const_tiles, program_config, compute_kernel_config):
+    q, k, v, g, beta = tensors
+    eye, tril, ones, masks = const_tiles
+    o, fs = ttnn.transformer.chunk_gated_delta_rule(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        output_final_state=True,
+        chunk_size=CHUNK,
+        eye=eye,
+        tril=tril,
+        ones=ones,
+        masks=masks,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    o_t, fs_t = ttnn.to_torch(o), ttnn.to_torch(fs)
+    ttnn.deallocate(o)
+    ttnn.deallocate(fs)
+    return o_t, fs_t
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize(
+    "make_program_config",
+    [ttnn.ChunkGdnMonoProgramConfig, ttnn.ChunkGdnPhasedProgramConfig, ttnn.ChunkGdnFusedProgramConfig],
+    ids=["mono", "phased", "fused"],
+)
+def test_compute_kernel_config_contract(device, expect_error, make_program_config):
+    """An explicit config equal to the supported arithmetic (plus an unused knob) is bit-identical to
+    passing none; any other fidelity / accumulation / approx setting is rejected on every path."""
+    tensors, const_tiles = _small_inputs(device)
+    pc = make_program_config()
+    o_ref, fs_ref = _run_with_compute_config(device, tensors, const_tiles, pc, None)
+
+    explicit = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False, packer_l1_acc=True
+    )
+    o, fs = _run_with_compute_config(device, tensors, const_tiles, pc, explicit)
+    assert torch.equal(o, o_ref) and torch.equal(fs, fs_ref), "spelling out the default arithmetic changed the result"
+
+    for name, kwargs in _UNSUPPORTED_COMPUTE_CONFIGS.items():
+        with expect_error(RuntimeError, "HiFi4 with fp32 destination accumulation"):
+            _run_with_compute_config(device, tensors, const_tiles, pc, ttnn.WormholeComputeKernelConfig(**kwargs))
+            pytest.fail(f"{name} was accepted; the op must reject arithmetic other than the one it was validated at")
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize("chunk_size", [48, 96, 128])
+def test_chunk_size_contract(device, expect_error, chunk_size):
+    """The kernels are validated at one and two tile rows per chunk; any other chunk_size, a multiple of
+    32 or not, is rejected."""
+    (q, k, v, g, beta), (eye, tril, ones, masks) = _small_inputs(device)
+    with expect_error(RuntimeError, "chunk_size must be 32 or 64"):
+        ttnn.transformer.chunk_gated_delta_rule(
+            q, k, v, g, beta, chunk_size=chunk_size, eye=eye, tril=tril, ones=ones, masks=masks
+        )
+        pytest.fail(f"chunk_size {chunk_size} was accepted; the op supports 32 and 64 only")
+
+
+# --------------------------------------------------------------------------------------------
+# State-decay precision gate.
+#
+# The regime tests above draw g from -softplus(randn)/2 and compare against a float32 recurrence,
+# so per-chunk decay factors are ~1e-5 and the carried state is almost entirely the latest chunk's
+# update: an error in the decay path (S <- dl*S + k_dec_t @ v_new) is invisible there. This test
+# uses g = -0.02*|N(0,1)| (dl ~ 0.6 per 32-token chunk, so every chunk's state survives for many
+# chunks) and a float64 token-by-token reference, and bounds the rms error of the final state.
+# Calibrated on QB2 (p300) at this shape/seed: 4.5e-4 with the scan's o and state updates folded
+# into DST accumulation (the shipped form); the earlier kernel that packed and re-read both partial
+# sums measured 5.05e-4. The bound has ~10 % headroom over the shipped form.
+# --------------------------------------------------------------------------------------------
+
+
+def _fp64_token_recurrence(q, k, v, beta, g, s0, scale):
+    """Token-by-token gated delta rule in float64 (the same semantics as recurrent_gated_delta_rule,
+    which computes in float32); q/k/v/beta/g are [B, T, H, ...] head-expanded, s0 is [B, H, K, V]."""
+    q, k, v = (t.double().transpose(1, 2) for t in (q, k, v))  # [B, H, T, D]
+    beta, g = beta.double().transpose(1, 2), g.double().transpose(1, 2)  # [B, H, T]
+    h = s0.double().clone()
+    o = torch.zeros(*v.shape, dtype=torch.float64)
+    for i in range(q.shape[2]):
+        h = h * g[:, :, i].exp()[..., None, None]
+        b_v = v[:, :, i] - (h * k[:, :, i][..., None]).sum(-2)
+        b_v = b_v * beta[:, :, i][..., None]
+        h = h + k[:, :, i].unsqueeze(-1) * b_v.unsqueeze(-2)
+        o[:, :, i] = ((q[:, :, i] * scale)[..., None] * h).sum(-2)
+    return o.transpose(1, 2), h
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+def test_state_decay_vs_fp64_reference(device):
+    torch.manual_seed(20260925)
+    B, T, Hk, Hv, Dk, Dv = 1, 2048, 4, 12, 128, 128  # the 27B TP-4 slice: BH=12, G=3, NC=64
+    G = Hv // Hk
+    grid = device.compute_with_storage_grid_size()
+    if B * Hv > grid.x * grid.y:
+        pytest.skip(f"BH={B * Hv} exceeds the {grid.x}x{grid.y} grid")
+
+    q = l2_norm(torch.randn(B, T, Hk, Dk), dim=-1).to(torch.bfloat16)
+    k = l2_norm(torch.randn(B, T, Hk, Dk), dim=-1).to(torch.bfloat16)
+    v = (0.5 * torch.randn(B, T, Hv, Dv)).to(torch.bfloat16)
+    beta = torch.sigmoid(torch.randn(B, T, Hv))
+    g = -0.02 * torch.randn(B, T, Hv).abs()
+    s0 = 0.05 * torch.randn(B, Hv, Dk, Dv)
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    eye, tril, ones, masks = _const_tiles(device)
+    o_tt, fs_tt = ttnn.transformer.chunk_gated_delta_rule(
+        dev(q, ttnn.bfloat16),
+        dev(k, ttnn.bfloat16),
+        dev(v, ttnn.bfloat16),
+        dev(g, ttnn.float32),
+        dev(beta, ttnn.float32),
+        initial_state=dev(s0, ttnn.float32),
+        output_final_state=True,
+        chunk_size=CHUNK,
+        eye=eye,
+        tril=tril,
+        ones=ones,
+        masks=masks,
+    )
+    o_dev = ttnn.to_torch(o_tt).double().reshape(B, T, Hv, Dv)
+    fs_dev = ttnn.to_torch(fs_tt).double().reshape(B, Hv, Dk, Dv)
+
+    q_ref = q.float().repeat_interleave(G, dim=2)
+    k_ref = k.float().repeat_interleave(G, dim=2)
+    o_ref, fs_ref = _fp64_token_recurrence(q_ref, k_ref, v.float(), beta, g, s0, scale=Dk**-0.5)
+
+    ok_o, pcc_o = check_with_pcc(o_ref.float(), o_dev.float(), 0.9999)
+    ok_s, pcc_s = check_with_pcc(fs_ref.float(), fs_dev.float(), PCC_STATE)
+    rms = (fs_dev - fs_ref).pow(2).mean().sqrt().item()
+    print(f"\nPCC o={pcc_o} final_state={pcc_s}; final-state rms error vs fp64 = {rms:.3e}")
+    assert ok_o, f"o vs fp64 recurrence: {pcc_o}"
+    assert ok_s, f"final_state vs fp64 recurrence: {pcc_s}"
+    assert rms <= 5.0e-4, f"final-state rms error {rms:.3e} > 5.0e-4 (shipped kernel: 4.5e-4)"

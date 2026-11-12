@@ -61,12 +61,18 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
+    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
+    # region on both traffic shapes, at -3.7% balanced and +4.7% hot_expert.
+    DISPATCH_FWD_VC_PAGES = 64
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
     # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M
     # chunk while the fused op's rises with the count. The composite takes 192 by 8.5% and never
     # gives the band back. Measured under SituGlu, the activation these experts actually run.
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
@@ -148,6 +154,12 @@ class KimiK3Config:
         wants: ``[3, 7, 11, ..., 87, 91, 92]``.
         """
         return sorted(layer - 1 for layer in cls.FULL_ATTN_LAYERS_1BASED)
+
+    @classmethod
+    def kda_layer_ids(cls) -> list[int]:
+        """0-indexed model-layer indices of the KDA (linear-attention) layers: every layer that is not MLA."""
+        mla = set(cls.mla_layer_ids())
+        return [layer for layer in range(cls.NUM_LAYERS) if layer not in mla]
 
     @classmethod
     def mla_kv_slot(cls, layer_idx: int) -> int:

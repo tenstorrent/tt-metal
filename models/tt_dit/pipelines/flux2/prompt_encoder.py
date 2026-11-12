@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 
 from ...encoders.mistral3.model_mistral3 import Mistral3Encoder
-from ...encoders.transformer import RopeConfig
+from ...encoders.transformer import WEIGHT_CACHE_DTYPE, RopeConfig, TransformerEncoderConfig
 from ...layers.module import Module
 from ...utils import cache, tensor
 from .system_messages import SYSTEM_MESSAGE, SYSTEM_MESSAGE_UPSAMPLING_T2I
@@ -53,17 +53,19 @@ class PromptEncoder:
         self._checkpoint_name = checkpoint_name
 
         self._encoder = Mistral3Encoder(
-            vocab_size=131072,
-            head_size=128,
-            embed_size=5120,
-            ff_size=32768,
-            num_layers=40,
-            num_heads=32,
-            num_kv_heads=8,
-            norm_eps=1e-05,
-            attn_qkv_bias=False,
-            attn_out_bias=False,
-            rope_config=RopeConfig(theta=1000000000),
+            TransformerEncoderConfig(
+                vocab_size=131072,
+                head_size=128,
+                embed_size=5120,
+                ff_size=32768,
+                num_layers=40,
+                num_heads=32,
+                num_kv_heads=8,
+                norm_eps=1e-05,
+                attn_qkv_bias=False,
+                attn_out_bias=False,
+                rope_config=RopeConfig(theta=1000000000),
+            ),
             device=device,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
@@ -83,7 +85,7 @@ class PromptEncoder:
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
             mesh_device=self._device,
-            dtype="bf16",
+            dtype=WEIGHT_CACHE_DTYPE,
             get_torch_state_dict=get_torch_state_dict,
         )
 
@@ -222,19 +224,14 @@ def _upsample_prompts(
     if isinstance(encoder, Module):
         assert device is not None
 
-        tt_tokens = tensor.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tt_mask = tensor.from_torch(mask, device=device)
-
-        tt_output = encoder.generate(
-            tt_tokens,
-            mask=tt_mask,
+        output_tokens = encoder.generate(
+            tokens,
+            mask=mask,
             eos_tokens=tokenizer.eos_token_id,
             max_length=max_length,
             temperature=temperature,
             traced=traced,
-        )
-
-        output_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_output.tokens)[0])
+        ).tokens
     else:
         tokens = tokens.to(device=encoder.device)
 

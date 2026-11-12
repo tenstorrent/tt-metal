@@ -53,7 +53,10 @@ inline void calculate_sfpu_isclose(
         sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
         sfpi::vInt a_abs_bits = a_bits & sfpi::vConstIntPrgm0;
         sfpi::vInt b_abs_bits = b_bits & sfpi::vConstIntPrgm0;
-        sfpi::vFloat b_abs = sfpi::abs(b);
+        // |b| for the tolerance is the same sign-cleared pattern, so reuse it rather than
+        // spend an SFPABS. The two differ only for b = -NaN (SFPABS keeps the sign), a lane
+        // the special-value fix-up below overwrites whatever the tolerance compare returned.
+        sfpi::vFloat b_abs = sfpi::as<sfpi::vFloat>(b_abs_bits);
 
         // abs(a - b) via sign-bit clear.
         sfpi::vFloat abs_diff = sfpi::abs(a - b);

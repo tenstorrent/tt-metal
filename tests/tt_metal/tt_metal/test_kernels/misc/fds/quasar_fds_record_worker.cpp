@@ -12,6 +12,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 using fds_auto_pacing::kTokenArmed;
@@ -23,7 +24,7 @@ constexpr uint32_t kTimeoutBurst = 0x5A5A0050;
 
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
-    constexpr uint32_t dispatch_mask = get_named_compile_time_arg_val("dispatch_mask");
+    constexpr uint32_t dispatch_mask = overlay::fds_signalling::dispatch_lane_mask;
     constexpr uint32_t burst_length = get_named_compile_time_arg_val("burst_length");
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");
     constexpr uint32_t num_slots = kSlotFirstValue + burst_length;
@@ -36,7 +37,7 @@ void kernel_main() {
     }
 
     overlay::FdsNeo::fds_clear_de_status(go_inst);
-    overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenArmed);
+    overlay::FdsNeo::fds_done(kTokenArmed);
 
     // Every burst value is distinct, so a new capture is simply a new register value. Zero is
     // skipped because the mode switch to auto dispatch may put an idle zero on the wire, and the
@@ -57,6 +58,6 @@ void kernel_main() {
     fds_kernel::finish(status, l1_address, num_slots, (recorded == burst_length) ? kComplete : kTimeoutBurst);
 
     if (recorded == burst_length) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenRecorded);
+        overlay::FdsNeo::fds_done(kTokenRecorded);
     }
 }

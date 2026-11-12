@@ -16,6 +16,7 @@ void kernel_main() {
     const uint32_t value_addr = get_arg_val<uint32_t>(runtime_args_counter++);          // value buffer address
     const uint32_t mask_addr = get_arg_val<uint32_t>(runtime_args_counter++);           // mask buffer address
     const uint32_t intermediates_addr = get_arg_val<uint32_t>(runtime_args_counter++);  // intermediates buffer address
+    const uint32_t gate_addr = get_arg_val<uint32_t>(runtime_args_counter++);  // gate buffer address (0 if unused)
     const uint32_t num_rows_to_process =
         get_arg_val<uint32_t>(runtime_args_counter++);                         // rows to process in this kernel
     const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);  // starting row for this core
@@ -30,6 +31,9 @@ void kernel_main() {
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
 #endif
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;
+#ifdef HAS_GATE
+    constexpr uint32_t cb_gate = tt::CBIndex::c_15;
+#endif
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // Q/K width in tiles
@@ -46,6 +50,9 @@ void kernel_main() {
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
     constexpr auto intermediates_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+#ifdef HAS_GATE
+    constexpr auto gate_args = TensorAccessorArgs<intermediates_args.next_compile_time_args_offset()>();
+#endif
 
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
 
@@ -59,6 +66,9 @@ void kernel_main() {
 
     const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
     const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
+#ifdef HAS_GATE
+    const auto gate_addr_generator = TensorAccessor(gate_args, gate_addr, tile_bytes);
+#endif
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
     const uint32_t num_of_interm_tiles = 1U;
@@ -73,6 +83,11 @@ void kernel_main() {
 
         const uint32_t q_start_idx = global_row_idx * qWt;
         read_tiles_by_row(cb_query, query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
+
+#ifdef HAS_GATE
+        // Gate row has the same (B, H, S, vE) layout as grad_output, so it shares vo_start_idx
+        read_tiles_by_row(cb_gate, gate_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+#endif
 
         const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
         const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
@@ -125,6 +140,11 @@ void kernel_main() {
         // Read query row (Q/K-dim width)
         const uint32_t q_start_idx = global_row_idx * qWt;
         read_tiles_by_row(cb_query, query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
+
+#ifdef HAS_GATE
+        // Read gate row (V-dim width)
+        read_tiles_by_row(cb_gate, gate_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+#endif
 
         const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;  // which head of Q we are processing right now
 

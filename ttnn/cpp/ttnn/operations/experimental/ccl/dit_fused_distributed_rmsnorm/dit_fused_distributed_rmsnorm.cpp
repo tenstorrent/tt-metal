@@ -19,7 +19,7 @@ namespace {
 // the fabric all-gather, weight/bias, RoPE and output plumbing are identical.
 ttnn::Tensor dit_fused_distributed_norm_impl(
     const ttnn::Tensor& input_tensor,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const ttnn::ccl::Topology topology,
@@ -39,7 +39,8 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const DitFusedNormType norm_type,
     const std::optional<const ttnn::Tensor>& reciprocals,
-    const bool preserve_rope_rounding) {
+    const bool preserve_rope_rounding,
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map = std::nullopt) {
     return ttnn::prim::dit_fused_distributed_rmsnorm(
         input_tensor,
         cluster_axis,
@@ -62,12 +63,13 @@ ttnn::Tensor dit_fused_distributed_norm_impl(
         compute_kernel_config,
         norm_type,
         reciprocals,
-        preserve_rope_rounding);
+        preserve_rope_rounding,
+        affine_tile_row_map);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
     const ttnn::Tensor& input_tensor,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_heads_per_device,
     const bool per_head_norm,
@@ -79,8 +81,7 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
     [[maybe_unused]] const std::optional<const ttnn::Tensor>& rope_cos,
     [[maybe_unused]] const std::optional<const ttnn::Tensor>& rope_sin,
     const DitFusedNormType norm_type) {
-    const auto& mesh_view = mesh_device.get_view();
-    const std::size_t ring_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const uint32_t ring_size = ttnn::experimental::prim::dit_fused_norm_ring_size(mesh_device, cluster_axis);
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     // fp32_dest_acc=true to MATCH the op's default — the chunk clamp's streaming
@@ -94,9 +95,9 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
         per_head_norm,
         /*dtype=*/std::nullopt,
         input_tensor.memory_config(),
-        cluster_axis,
+        cluster_axis.value_or(0),
         num_links,
-        static_cast<uint32_t>(ring_size),
+        ring_size,
         ttnn::ccl::Topology::Ring,
         /*multi_device_global_semaphore=*/{},
         /*sub_device_id=*/std::nullopt,
@@ -118,7 +119,7 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
 
 ttnn::Tensor dit_fused_distributed_rmsnorm(
     const ttnn::Tensor& input_tensor,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const ttnn::ccl::Topology topology,
@@ -136,7 +137,8 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
     const std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    const bool preserve_rope_rounding) {
+    const bool preserve_rope_rounding,
+    const std::optional<const ttnn::Tensor>& affine_tile_row_map) {
     return dit_fused_distributed_norm_impl(
         input_tensor,
         cluster_axis,
@@ -159,12 +161,13 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
         compute_kernel_config,
         DitFusedNormType::RMS,
         /*reciprocals=*/std::nullopt,
-        preserve_rope_rounding);
+        preserve_rope_rounding,
+        affine_tile_row_map);
 }
 
 ttnn::Tensor dit_fused_distributed_layernorm(
     const ttnn::Tensor& input_tensor,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const ttnn::ccl::Topology topology,
@@ -209,7 +212,7 @@ ttnn::Tensor dit_fused_distributed_layernorm(
 
 std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_heads_per_device,
     const bool per_head_norm,
@@ -234,7 +237,7 @@ std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
 
 std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_heads_per_device,
     const uint32_t num_links,

@@ -13,10 +13,10 @@
 template <typename addr_gen_t>
 FORCE_INLINE void write_to_dram(
     uint32_t cb, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
-    ReadCBGuard read_guard{cb, num_tiles};
+    const ReadCBGuard read_guard{cb, num_tiles};
 
-    Noc noc;
-    DataflowBuffer cb_obj(cb);
+    const Noc noc;
+    const DataflowBuffer cb_obj(static_cast<uint16_t>(cb));
     noc.async_write(
         cb_obj,
         addr_gtor,
@@ -29,10 +29,10 @@ FORCE_INLINE void write_to_dram(
 template <typename addr_gen_type>
 FORCE_INLINE void load_from_dram(
     uint32_t cb, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
-    WriteCBGuard write_guard{cb, num_tiles};
+    const WriteCBGuard write_guard{cb, num_tiles};
 
-    Noc noc;
-    DataflowBuffer cb_obj(cb);
+    const Noc noc;
+    const DataflowBuffer cb_obj(static_cast<uint16_t>(cb));
     noc.async_read(
         addr_gtor,
         cb_obj,
@@ -59,14 +59,14 @@ struct IntImgCTAs {
 
 FORCE_INLINE constexpr IntImgCTAs get_ctas() {
     return IntImgCTAs{
-        get_arg(args::tile_height),
-        get_arg(args::tile_width),
-        get_arg(args::block_depth),
-        get_arg(args::num_channels),
-        get_arg(args::input_height),
-        get_arg(args::input_depth),
-        get_arg(args::num_batches),
-        get_arg(args::cores_x),
-        get_arg(args::cores_y),
+        .tile_height = get_arg(args::tile_height),
+        .tile_width = get_arg(args::tile_width),
+        .block_depth = get_arg(args::block_depth),
+        .num_channels = get_arg(args::num_channels),
+        .input_height = get_arg(args::input_height),
+        .input_depth = get_arg(args::input_depth),
+        .num_batches = get_arg(args::num_batches),
+        .cores_x = get_arg(args::cores_x),
+        .cores_y = get_arg(args::cores_y),
     };
 }

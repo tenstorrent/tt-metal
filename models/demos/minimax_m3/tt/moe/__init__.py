@@ -7,4 +7,5 @@ The deployment routed-expert path. Import the pieces directly from their submodu
 - ``tt_minimax_moe.TtMiniMaxMoE`` — the EP MoE block (DeepSeek dispatch/combine + the fused
   ``unified_routed_expert_ffn`` kernel with M3's clamped swigluoai activation).
 - ``activation.apply_swiglu`` — the clamped gpt-oss SwiGLU (used by the dense MLP).
+- ``shared_overlap.SharedExpertOverlap`` — the dispatch / shared-expert sub-device split.
 """

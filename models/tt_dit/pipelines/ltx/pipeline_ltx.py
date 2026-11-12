@@ -48,13 +48,13 @@ from ...utils import cache as cache_module
 from ...utils import walltime
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
-from ...utils.host_affinity import pin_one_thread_per_core
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.memory_log import log_dram
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.tracing import StateTensor, set_kernel_prewarm_capturing
 from ...utils.video import Audio
 
@@ -296,10 +296,6 @@ class LTXPipeline:
         audio_traced: bool | None = None,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
-        # Host affinity, explicit (not an import side effect): in a process re-execed by
-        # ``reexec_pinned_before_torch`` this only caps torch's pool to the narrowed mask; otherwise it narrows
-        # the threads still carrying the full mask. tt-metal's own single-CPU placements are left alone.
-        pin_one_thread_per_core("LTX pipeline")
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
@@ -1458,6 +1454,7 @@ class LTXPipeline:
         tensor = tensor.unsqueeze(2)  # (1, 3, 1, H, W)
         return tensor / 127.5 - 1.0
 
+    @cap_torch_threads_to_half_the_cpus()
     def decode_latents(
         self,
         latent: torch.Tensor,
@@ -2086,6 +2083,7 @@ class LTXPipeline:
             return self.tt_mel_decoder.forward_traced(audio_spatial)
         return self.tt_mel_decoder(audio_spatial)
 
+    @cap_torch_threads_to_half_the_cpus()
     def decode_audio(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         """Decode an audio latent ``(1, audio_N, 128)`` to a waveform, fully on device.
 

@@ -45,7 +45,7 @@ void kernel_main() {
     // Private node-local L1 scratch page (raw memory, no producer/consumer credit semantics). Replaces the
     // legacy cb_id_working single-kernel scratch CB (which would be a Gen2 self-loop).
     Scratchpad<uint8_t> working(scratch::working);
-    const uint32_t working_write_addr = working.get_base_address();
+    const auto working_mem = working.local_mem();
 
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
@@ -72,15 +72,16 @@ void kernel_main() {
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
             }
             // TODO (maybe) pre calculate size and offsets in bytes on host
-            const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
+            const auto output_mem = working_mem + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
             const uint32_t input_addr = input_base_addr + map_ptr[seg_idx].input_page_offset * element_sz_bytes;
             const uint32_t szbytes = map_ptr[seg_idx].num_elements * element_sz_bytes;
-            tt_memmove<false, true, false, Tile_size_bytes>(noc, output_addr, input_addr, szbytes);
+            tt_memmove<false, true, false, Tile_size_bytes>(
+                noc, output_mem, CoreLocalMem<uint8_t>(input_addr), szbytes);
         }
         noc.async_write_barrier();
 
         const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
-        enhanced_noc_async_write<Tile_size_bytes, true>(noc, working_write_addr, output_noc_addr, Tile_size_bytes);
+        enhanced_noc_async_write<Tile_size_bytes, true>(noc, working_mem, output_noc_addr, Tile_size_bytes);
         noc.async_write_barrier();
 
         mapping_cb.pop_front(1);

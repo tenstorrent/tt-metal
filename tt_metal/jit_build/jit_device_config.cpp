@@ -6,6 +6,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
@@ -19,14 +20,16 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -47,6 +50,29 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
+    // Quasar with an ATT map: whether the address generator's interleaved recipe (bank b's selector = bank 0's + b)
+    // holds for this device's L1 banks; see quasar_att::worker_banks_form_selector_run.
+    bool l1_banks_form_selector_run = true;
+    if (cluster.arch() == tt::ARCH::QUASAR) {
+        const auto map_name = env.get_rtoptions().get_noc_att_map();
+        const quasar_att::MapInfo* map_info = map_name.has_value() ? quasar_att::find_map(*map_name) : nullptr;
+        if (map_info != nullptr) {
+            // The allocator numbers L1 banks row-major over the logical worker grid (l1_banking_allocator.cpp).
+            std::vector<CoreCoord> logical_cores =
+                get_logical_compute_cores(env, device_id, num_hw_cqs, dispatch_core_config);
+            std::sort(logical_cores.begin(), logical_cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+                return a.y != b.y ? a.y < b.y : a.x < b.x;
+            });
+            std::vector<CoreCoord> bank_cores;
+            bank_cores.reserve(logical_cores.size());
+            for (const CoreCoord& core : logical_cores) {
+                bank_cores.push_back(
+                    cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, CoreType::WORKER));
+            }
+            l1_banks_form_selector_run = quasar_att::worker_banks_form_selector_run(map_info->map, bank_cores);
+        }
+    }
+
     return {
         .hal = &hal,
         .arch = cluster.arch(),
@@ -56,12 +82,14 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
         .harvesting_mask = cluster.get_harvesting_mask(device_id),
         .dispatch_core_type = dispatch_core_config.get_dispatch_core_type(),
         .resolved_dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config),
+        .fds_signalling = ctx.get_dispatch_query_manager().fds_signalling_enabled(),
         .dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis(),
         .coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled(),
         .dispatch_message_addr = ctx.dispatch_mem_map().get_dispatch_message_addr_start(),
         .max_dfbs = hal.get_num_dataflow_buffers(),
         .num_hw_cqs = num_hw_cqs,
         .routing_fw_enabled = cluster.is_base_routing_fw_enabled(),
+        .l1_banks_form_selector_run = l1_banks_form_selector_run,
         .profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes(ctx.rtoptions())};
 }
 
@@ -210,6 +238,8 @@ void enumerate_jit_device_configs(
                             .harvesting_mask = 0,
                             .dispatch_core_type = dispatch_core_type,
                             .resolved_dispatch_core_type = resolve_dispatch_core_type(arch, dispatch_core_type),
+                            // FDS is Quasar-only, and this enumerator does not support Quasar
+                            .fds_signalling = false,
                             .dispatch_core_axis = dispatch_core_axis,
                             .coordinate_virtualization_enabled = true,
                             .dispatch_message_addr = dispatch_message_addr(hal, dispatch_core_type),

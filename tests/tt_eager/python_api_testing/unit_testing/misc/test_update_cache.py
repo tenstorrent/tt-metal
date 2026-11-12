@@ -276,6 +276,42 @@ def test_update_cache_decode_program_cache_hits(in_sharded, input_dtype, device)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.parametrize("cache_idx", [0, 127])
+def test_update_cache_decode_fp32_dest_acc_multiple_heads_per_core(cache_idx, device):
+    """bfloat16 cache and input with fp32_dest_acc_en, two heads on one core.
+
+    The intermediate buffers are Float32 and the tensors are bfloat16, so the kernel must set the
+    unpack and pack formats again for every head, not only the first.
+    """
+    head_dim = 64
+    max_seq_len = 2048
+    num_users = 32
+    num_heads = 2
+
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.randn(cache_shape).bfloat16().float()
+    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    x = torch.randn([num_users, num_heads, 1, head_dim]).bfloat16().float()
+    xt = ttnn.Tensor(x.permute(2, 1, 0, 3), ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid, [xt.volume() // xt.padded_shape[-1], xt.padded_shape[-1]], ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    xt = xt.to(device, input_mem_config)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=True)
+    cachett = ttnn.update_cache(cachett, xt, cache_idx, compute_kernel_config=compute_kernel_config)
+    cache[:, :, cache_idx : cache_idx + 1, :] = x
+
+    tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    eq, output = comp_equal(cache, tt_got_back)
+    logger.info(output)
+    assert eq, output
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("in_sharded", [False, True])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 def test_fill_cache_program_cache_hits(in_sharded, input_dtype, device):
@@ -569,3 +605,113 @@ class TestUpdateCacheWithKVPE:
 
         logger.info(output)
         assert eq, output
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.parametrize("num_users", [3, 31, 32, 33, 34, 40, 63, 64])
+@pytest.mark.parametrize("num_heads", [1, 2])
+@pytest.mark.parametrize("cache_idx", [0, 5])
+def test_update_cache_decode_non_tile_batch(num_users, num_heads, cache_idx, device):
+    """The final input tile contains padding, which must not overwrite real users."""
+    head_dim, max_seq_len = 64, 64
+    cache = torch.full((num_users, num_heads, max_seq_len, head_dim), -1.0, dtype=torch.bfloat16)
+    values = torch.arange(1, num_users + 1, dtype=torch.bfloat16)
+    update = values.view(1, 1, num_users, 1).expand(1, num_heads, num_users, head_dim).contiguous()
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.from_torch(update, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.update_cache(cache_tt, update_tt, cache_idx)
+
+    expected = cache.clone()
+    expected[:, :, cache_idx, :] = update[0].permute(1, 0, 2)
+    assert torch.equal(ttnn.to_torch(cache_tt), expected)
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.parametrize("num_users", [33, 34, 97, 98])
+def test_update_cache_decode_non_tile_batch_sharded(num_users, device):
+    """Sharded odd/even tail tiles must agree across cores and on program-cache hits."""
+    num_heads, head_dim, max_seq_len = 2, 64, 64
+    cache = torch.full((num_users, num_heads, max_seq_len, head_dim), -1.0, dtype=torch.bfloat16)
+    values = torch.arange(1, num_users + 1, dtype=torch.bfloat16)
+    update = values.view(1, 1, num_users, 1).expand(1, num_heads, num_users, head_dim).contiguous()
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.Tensor(update, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+    num_cores = 4
+    grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), True)
+    shard_height = update_tt.padded_shape[-2] * num_heads // num_cores
+    shard_spec = ttnn.ShardSpec(grid, [shard_height, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    update_tt = update_tt.to(device, memory_config)
+
+    expected = cache.clone()
+    entries_before = device.num_program_cache_entries()
+    for cache_idx in (0, 5):
+        ttnn.update_cache(cache_tt, update_tt, cache_idx)
+        expected[:, :, cache_idx, :] = update[0].permute(1, 0, 2)
+        assert torch.equal(ttnn.to_torch(cache_tt), expected)
+    assert device.num_program_cache_entries() - entries_before == 1
+
+
+@pytest.mark.parametrize("num_heads", [8, 24, 64])
+@pytest.mark.parametrize("cache_len,update_idx", [(512, 0), (1024, 0), (1024, 128)])
+def test_fill_cache_crosses_head_boundary(num_heads, cache_len, update_idx, device):
+    """Interleaved prefill must jump to the next cache head across core ranges."""
+    seq_len, head_dim = 512, 64
+    cache = torch.full((1, num_heads, cache_len, head_dim), -1.0, dtype=torch.bfloat16)
+    heads = torch.arange(num_heads, dtype=torch.float32).view(1, num_heads, 1, 1)
+    tiles = torch.arange(seq_len // 32, dtype=torch.float32).repeat_interleave(32).view(1, 1, seq_len, 1)
+    update = (heads * 16 + tiles + 1).expand(1, num_heads, seq_len, head_dim).to(torch.bfloat16).contiguous()
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.from_torch(update, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.fill_cache(cache_tt, update_tt, 0, update_idx=update_idx)
+
+    expected = cache.clone()
+    expected[:, :, update_idx : update_idx + seq_len, :] = update
+    assert torch.equal(ttnn.to_torch(cache_tt), expected)
+
+
+def test_fill_cache_cross_head_program_cache_hits(device):
+    """A cached multi-head program must refresh the destination start page."""
+    num_heads, seq_len, cache_len, head_dim = 8, 512, 1024, 64
+    cache = torch.full((1, num_heads, cache_len, head_dim), -1.0, dtype=torch.bfloat16)
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = cache.clone()
+    entries_before = device.num_program_cache_entries()
+
+    for update_idx, value in ((0, 2.0), (512, 3.0)):
+        update = torch.full((1, num_heads, seq_len, head_dim), value, dtype=torch.bfloat16)
+        update_tt = ttnn.from_torch(update, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.fill_cache(cache_tt, update_tt, 0, update_idx=update_idx)
+        expected[:, :, update_idx : update_idx + seq_len, :] = update
+        assert torch.equal(ttnn.to_torch(cache_tt), expected)
+    assert device.num_program_cache_entries() - entries_before == 1
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+@pytest.mark.parametrize("head_dim", [64, 256])
+def test_update_cache_preserves_fp32_neighbors(fp32_dest_acc_en, head_dim, device):
+    """Updating one row must preserve every other row's full FP32 mantissa."""
+    batch, heads, seq_len, cache_idx = 2, 1, 64, 5
+    exponent = torch.arange(batch * heads * seq_len * head_dim) % 23 + 1
+    cache = (1.0 + torch.pow(2.0, -exponent.double())).float().reshape(batch, heads, seq_len, head_dim)
+    update = torch.full((1, heads, 32, head_dim), 3.0)
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.from_torch(update, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {}
+    if fp32_dest_acc_en:
+        config_cls = (
+            ttnn.types.BlackholeComputeKernelConfig
+            if ttnn.get_arch_name() == "blackhole"
+            else ttnn.WormholeComputeKernelConfig
+        )
+        kwargs["compute_kernel_config"] = config_cls(fp32_dest_acc_en=True)
+
+    expected = cache.clone()
+    entries_before = device.num_program_cache_entries()
+    for index in (cache_idx, cache_idx + 32):
+        ttnn.update_cache(cache_tt, update_tt, index, **kwargs)
+        expected[:, :, index, :] = 3.0
+        assert torch.equal(ttnn.to_torch(cache_tt), expected)
+    assert device.num_program_cache_entries() - entries_before == 1

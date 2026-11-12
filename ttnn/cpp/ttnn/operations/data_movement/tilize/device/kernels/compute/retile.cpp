@@ -21,7 +21,8 @@
 namespace {
 
 // PACK owns the valid write pointer, so the zero fill runs inside a PACK block.
-ALWI void fill_zeros_pages(DataflowBuffer& dfb, uint32_t num_pages, uint32_t page_size) {
+template <typename DFB>
+ALWI void fill_zeros_pages(DFB& dfb, uint32_t num_pages, uint32_t page_size) {
     dfb.reserve_back(num_pages);
     PACK({
         const uint32_t dst_addr = dfb.get_write_ptr() << cb_addr_shift;

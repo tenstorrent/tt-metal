@@ -27,8 +27,9 @@ namespace ckernel::sfpu
  * The split kicks in only once the number of coefficients reaches SplitThreshold, because for short
  * chains the extra x^2 / combine overhead outweighs the shorter dependency chain.
  *
- * Kept in sync with the Blackhole evaluator (tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_polyval.h)
- * so kernels ported between the two architectures evaluate their polynomials identically.
+ * Blackhole/Wormhole (hw/ckernels/<arch>/metal/llk_api/llk_sfpu/ckernel_sfpu_polyval.h) use plain
+ * Horner only; the even/odd split is Quasar-only for now. Use NoSplit to reproduce their results
+ * bit-for-bit.
  *
  * @note Horner's method is used for numerical stability and O(N) complexity.
  * @note For N == 0, returns U{0}. For N == 1, returns the constant term.
@@ -46,6 +47,9 @@ struct PolynomialEvaluator
     // plain Horner. 6 is the crossover where the split's critical path (ceil(N/2)-1 chain + x^2 + combine)
     // first becomes strictly shorter than Horner's N-1 serial multiply-adds.
     static constexpr int DefaultSplitThreshold = 6;
+
+    // SplitThreshold that keeps every call on plain Horner, the Blackhole evaluator's only scheme.
+    static constexpr int NoSplit = 1 << 30;
 
 private:
     // Holds the two independent partial results of the even/odd split. The even and odd accumulators

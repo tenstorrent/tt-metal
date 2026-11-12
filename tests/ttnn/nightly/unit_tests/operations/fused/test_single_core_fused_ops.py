@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 
-from models.common.utility_functions import torch2tt_tensor
+from tt_py_test_utils_common.utility_functions import torch2tt_tensor
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_softmax_in_place, ttnn_layer_norm
 

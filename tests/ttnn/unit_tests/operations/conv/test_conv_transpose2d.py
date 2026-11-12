@@ -6,7 +6,7 @@ from loguru import logger
 
 import torch
 import pytest
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )

@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <span>
 #include <string>
@@ -39,6 +41,16 @@ struct KvCacheLocation {
 };
 static_assert(sizeof(KvCacheLocation) == 16, "KvCacheLocation must be 16 bytes for cache-line packing");
 
+// What kind of cached tensor a config's chunks belong to. Each value maps 1:1 onto a TemporalPolicy
+// alternative (how the tensor's sequence coordinate is interpreted). Only the types the chunk map
+// can currently address are listed; new values are added as their TemporalPolicy gains support.
+// Values must match KvChunkTensorType in kv_chunk_address_table.proto.
+enum class KvChunkTensorType : uint8_t {
+    Kv = 0,        // temporal::Dense — full KV / MLA latent over [0, prefix_len)
+    Snapshot = 1,  // temporal::None  — fixed-size state keyed by the prefix_len it was snapshotted at
+                   //                   (no sequence axis; SSM / KDA state)
+};
+
 // Configuration for constructing a KvChunkAddressTable.
 struct KvChunkAddressTableConfig {
     uint32_t num_layers = 0;
@@ -46,6 +58,7 @@ struct KvChunkAddressTableConfig {
     uint32_t num_slots = 0;
     uint32_t chunk_n_tokens = 32;       // tokens per chunk (KV atomic block granularity)
     uint32_t chunk_size_bytes = 19584;  // physical size of one chunk in bytes (18 x 1088 bfp8 tiles)
+    KvChunkTensorType tensor_type = KvChunkTensorType::Kv;
 };
 
 // How a config's chunk map is represented in memory (and on the wire; values must match
@@ -130,10 +143,11 @@ public:
     // iterates sorted), and each config's name is its key. Requires at least one config.
     explicit KvChunkAddressTable(const std::map<std::string, KvChunkAddressTableConfig>& configs);
 
-    // Import/serializer path: like the named-configs constructor, but each config starts in its
-    // declared representation. STRIDED_ROWS configs get an empty StridedRowMap (rows sized to
-    // num_slots x num_layers, all step=0, filled by install_strided_map()) — importing a
-    // runs-only table never materializes the unrolled grid that compression exists to avoid.
+    // Import/serializer and builder path: like the named-configs constructor, but each config starts
+    // in its declared representation. STRIDED_ROWS configs get an empty StridedRowMap (rows sized to
+    // num_slots x num_layers, all step=0, filled by install_strided_map() at import or by
+    // set_strided_row() when building) — neither path materializes the unrolled grid that
+    // compression exists to avoid. A STRIDED_ROWS config left with no rows exports as UNROLLED.
     struct NamedConfigInit {
         KvChunkAddressTableConfig config;
         ChunkCompression compression = ChunkCompression::kUnrolled;
@@ -159,13 +173,29 @@ public:
     // Set the location for a specific (layer, position, slot, config).
     // `position` is in tokens and must be chunk-aligned (multiple of the config's chunk_n_tokens).
     // `config` is addressed by id (default 0) or by name.
-    // Only valid on UNROLLED configs — compressed maps are built at import; to produce one
-    // from an unrolled table use install_strided_map() (the serializer does this).
+    // Only valid on UNROLLED configs — a STRIDED_ROWS config is authored per row with
+    // set_strided_row(), or filled at import / by install_strided_map() (the serializer does this).
     void set(uint32_t layer, uint32_t position, uint32_t slot, KvCacheLocation location, uint32_t config_id = 0);
     void set(uint32_t layer, uint32_t position, uint32_t slot, KvCacheLocation location, const std::string& config);
 
     // Replace a config's map with a compressed representation (import path).
     void install_strided_map(uint32_t config_id, StridedRowMap map);
+
+    // Author one (slot, layer) row of a STRIDED_ROWS config in place: chunk c resolves to
+    // bases[c % step] + (c / step) * strides[c % step] on device_group_indices[c % step].
+    // The builder-side counterpart of install_strided_map(): a periodic layout is authored
+    // per row without ever materializing the unrolled grid. Calling it again replaces the row.
+    // Rejects size_bytes == 0 and residues whose last address would wrap; the stride of a residue
+    // holding a single chunk is stored as 0 (as the serializer's run detection does). The exported
+    // runs follow the caller's step: pass the layout's minimal period for byte-identical exports.
+    void set_strided_row(
+        uint32_t layer,
+        uint32_t slot,
+        uint32_t size_bytes,
+        std::vector<uint64_t> bases,
+        std::vector<int64_t> strides,
+        std::vector<DeviceGroupIndex> device_group_indices,
+        uint32_t config_id = 0);
 
     // Register a mapping from FabricNodeId to its host name.
     void set_fabric_node_host(const tt::tt_fabric::FabricNodeId& node_id, const std::string& host_name);

@@ -17,7 +17,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::llrt {
 class RunTimeOptions;
@@ -35,12 +35,17 @@ using vector_cache_aligned = std::vector<T, ttsl::aligned_allocator<T, CACHE_LIN
 
 class JitBuildSettings;
 
+// Root of the tt-metal cache: TT_METAL_CACHE as captured by `rtoptions` if set, else
+// ~/.cache/tt-metal-cache/, else /tmp/tt-metal-cache/.
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions);
+
 struct JitBuiltStateConfig {
     HalProgrammableCoreType core_type{};
     HalProcessorClassType processor_class{};
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
+    bool fds_signalling = false;
     // Set `is_cooperative` when Metal FW/Kernel code is loaded on risc with some base FW running.
     // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
     // eriscs)
@@ -131,12 +136,11 @@ protected:
     std::string extra_link_objs_;
     std::string weakened_firmware_name_;
 
-    // True for the TENSIX compute pack state (TRISC2) — the only state where the per-kernel
-    // RVV opt-in (JitBuildSettings::get_trisc2_rvv_enabled) may apply.
-    bool is_compute_pack_{};
+    // True for every TENSIX compute (TRISC) state; the replay opt-out applies to all three.
+    bool is_compute_{};
     // HAL-provided compile flags enabling RVV codegen on this state; empty when the arch or
     // processor does not support it. Appended to a kernel's recipe cflags only when that
-    // kernel opted in, so default builds are unchanged.
+    // kernel opted in (JitBuildSettings::get_rvv_enabled), so default builds are unchanged.
     std::string rvv_cflags_;
 
     // Default compiler optimization setting
@@ -225,6 +229,10 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events);
 // Returns immediately if hash was already built.
 // If build_fn throws, subsequent callers will retry.
 void jit_build_once(size_t hash, const std::function<void()>& build_fn);
+
+// Like jit_build_once(), but returns false instead of occupying the caller while
+// another thread builds the same hash.
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();

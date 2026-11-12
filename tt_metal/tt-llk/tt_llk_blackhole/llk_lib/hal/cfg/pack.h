@@ -131,7 +131,7 @@ public:
 
     constexpr PackerAddrCtrlEntry operator[](std::uint32_t reg) const
     {
-        return reg == 0 ? make<0>() : reg == 1 ? make<1>() : detail::invalid_index<PackerAddrCtrlEntry>();
+        return reg == 0 ? make<0 /*RegIndex*/>() : reg == 1 ? make<1 /*RegIndex*/>() : detail::invalid_index<PackerAddrCtrlEntry>();
     }
 
     template <typename Function>
@@ -172,7 +172,7 @@ public:
 
     constexpr const Field& operator[](std::uint32_t reg) const
     {
-        return reg == 0 ? get<0>() : reg == 1 ? get<1>() : detail::invalid_index<const Field&>();
+        return reg == 0 ? get<0 /*RegIndex*/>() : reg == 1 ? get<1 /*RegIndex*/>() : detail::invalid_index<const Field&>();
     }
 
     template <typename Function>
@@ -277,19 +277,19 @@ public:
     constexpr const Field& operator[](detail::CompileTimeIndex<SetIndex>) const
     {
         static_assert(SetIndex < detail::TileSetMappingEntryCount, "tile row-set set index out of range");
-        return mapping_index == 0   ? Fields<0, SetIndex>::Value
-               : mapping_index == 1 ? Fields<1, SetIndex>::Value
-               : mapping_index == 2 ? Fields<2, SetIndex>::Value
-               : mapping_index == 3 ? Fields<3, SetIndex>::Value
+        return mapping_index == 0   ? Fields<0 /*MappingIndex*/, SetIndex>::Value
+               : mapping_index == 1 ? Fields<1 /*MappingIndex*/, SetIndex>::Value
+               : mapping_index == 2 ? Fields<2 /*MappingIndex*/, SetIndex>::Value
+               : mapping_index == 3 ? Fields<3 /*MappingIndex*/, SetIndex>::Value
                                     : detail::invalid_index<const Field&>();
     }
 
     constexpr const Field& operator[](std::uint32_t set_index) const
     {
-        return mapping_index == 0   ? select<0>(set_index)
-               : mapping_index == 1 ? select<1>(set_index)
-               : mapping_index == 2 ? select<2>(set_index)
-               : mapping_index == 3 ? select<3>(set_index)
+        return mapping_index == 0   ? select<0 /*MappingIndex*/>(set_index)
+               : mapping_index == 1 ? select<1 /*MappingIndex*/>(set_index)
+               : mapping_index == 2 ? select<2 /*MappingIndex*/>(set_index)
+               : mapping_index == 3 ? select<3 /*MappingIndex*/>(set_index)
                                     : detail::invalid_index<const Field&>();
     }
 
@@ -446,19 +446,19 @@ public:
     constexpr const Field& operator[](detail::CompileTimeIndex<SetIndex>) const
     {
         static_assert(SetIndex < detail::TileSetMappingEntryCount, "tile face-set set index out of range");
-        return mapping_index == 0   ? Fields<0, SetIndex>::Value
-               : mapping_index == 1 ? Fields<1, SetIndex>::Value
-               : mapping_index == 2 ? Fields<2, SetIndex>::Value
-               : mapping_index == 3 ? Fields<3, SetIndex>::Value
+        return mapping_index == 0   ? Fields<0 /*MappingIndex*/, SetIndex>::Value
+               : mapping_index == 1 ? Fields<1 /*MappingIndex*/, SetIndex>::Value
+               : mapping_index == 2 ? Fields<2 /*MappingIndex*/, SetIndex>::Value
+               : mapping_index == 3 ? Fields<3 /*MappingIndex*/, SetIndex>::Value
                                     : detail::invalid_index<const Field&>();
     }
 
     constexpr const Field& operator[](std::uint32_t set_index) const
     {
-        return mapping_index == 0   ? select<0>(set_index)
-               : mapping_index == 1 ? select<1>(set_index)
-               : mapping_index == 2 ? select<2>(set_index)
-               : mapping_index == 3 ? select<3>(set_index)
+        return mapping_index == 0   ? select<0 /*MappingIndex*/>(set_index)
+               : mapping_index == 1 ? select<1 /*MappingIndex*/>(set_index)
+               : mapping_index == 2 ? select<2 /*MappingIndex*/>(set_index)
+               : mapping_index == 3 ? select<3 /*MappingIndex*/>(set_index)
                                     : detail::invalid_index<const Field&>();
     }
 

@@ -43,7 +43,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
     create_fabric_router_config,

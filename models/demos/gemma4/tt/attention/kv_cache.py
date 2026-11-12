@@ -11,6 +11,7 @@ Follows gpt-oss kv_cache.py pattern.
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.ccl import mesh_tp
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # Hot cache blocks held in staging per decode slot for the loop-free packed KV
@@ -18,6 +19,17 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 # so each slot reserves 2 staging blocks (cur_pos block + spill). Must match the
 # spec-decode driver's staging bookkeeping (see tt/spec_decode.py).
 PV_HOT_BLOCKS = 2
+
+
+def local_kv_tp(mesh_device, mesh_config=None) -> int:
+    """TP width that splits a layer's KV heads over the chips: the attention's own group (``mesh_config.tp``, which
+    runs over the rows on the fractured lane engine), else the plain TP axis of the mesh shape (the columns unless
+    GEMMA4_TP_AXIS=0). The cache must hold exactly the heads the attention writes: deriving the width from the mesh
+    shape alone gave the (2,4) lane engine 8 // 4 = 2 sliding heads per chip against the attention's 8 // 2 = 4, so
+    the paged ops addressed the buffer at half the declared block size and a 128-token prefill overran its page-table
+    columns ("Input seq_len (128) must fit in max_num_blocks_per_seq (2) * block_size (32)")."""
+    tp = int(getattr(mesh_config, "tp", 0) or 0)
+    return tp if tp > 0 else mesh_tp(mesh_device)
 
 
 def init_kv_cache(
@@ -29,6 +41,7 @@ def init_kv_cache(
     cache_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
     max_num_blocks_override=None,
+    mesh_config=None,
 ):
     """
     Initialize KV cache for a single attention layer.
@@ -44,6 +57,8 @@ def init_kv_cache(
         paged_attention_config: Optional paged attention config
         cache_dtype: Cache tensor dtype
         tensor_cache_path: Optional cache file path
+        mesh_config: The model's mesh config; its ``tp`` is the attention's TP group (over the rows on the
+            fractured lane engine). Without it the plain TP axis of the mesh shape is used.
         max_num_blocks_override: When set (only meaningful in paged mode), size the
             physical block pool to this value instead of paged_attention_config.max_num_blocks.
             vLLM's hybrid kv_cache_groups uses this for SlidingWindowSpec layers: the
@@ -53,9 +68,8 @@ def init_kv_cache(
     Returns:
         [k_cache, v_cache] list of TT tensors
     """
-    # Determine TP from mesh shape (column axis)
     is_mesh = hasattr(mesh_device, "shape")
-    tp = mesh_device.shape[1] if is_mesh else 1
+    tp = local_kv_tp(mesh_device, mesh_config)
 
     # When KV heads < TP, each device gets 1 KV head (GQA-assigned, not all heads)
     num_local_kv_heads = 1 if config.num_key_value_heads < tp else config.num_key_value_heads // tp
@@ -111,6 +125,7 @@ def init_kv_staging(
     block_size,
     blk=PV_HOT_BLOCKS,
     cache_dtype=ttnn.bfloat16,
+    mesh_config=None,
 ):
     """Per-layer staging buffers for the loop-free packed-verify KV write.
 
@@ -128,7 +143,7 @@ def init_kv_staging(
     Returns ``[k_staging, v_staging]``.
     """
     is_mesh = hasattr(mesh_device, "shape")
-    tp = mesh_device.shape[1] if is_mesh else 1
+    tp = local_kv_tp(mesh_device, mesh_config)
     num_local_kv_heads = 1 if config.num_key_value_heads < tp else config.num_key_value_heads // tp
     stage_shape = [1, num_local_kv_heads, max_batch_size * blk * block_size, config.head_dim]
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None

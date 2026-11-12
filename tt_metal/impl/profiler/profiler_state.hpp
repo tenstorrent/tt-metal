@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "impl/context/context_types.hpp"
-
 namespace tt::tt_metal {
 
-// Get global device profiling state for the given context.
-bool getDeviceProfilerState(ContextId context_id = DEFAULT_CONTEXT_ID);
+class MetalEnvImpl;
 
-// Get if the device debug dump is enabled
-bool getDeviceDebugDumpEnabled(ContextId context_id = DEFAULT_CONTEXT_ID);
+// Get whether device profiling is active for the given env. It is never active on a mock or emulated cluster.
+bool getDeviceProfilerState(MetalEnvImpl& env);
+
+// Get if the device debug dump is enabled for the given env.
+bool getDeviceDebugDumpEnabled(MetalEnvImpl& env);
 
 }  // namespace tt::tt_metal

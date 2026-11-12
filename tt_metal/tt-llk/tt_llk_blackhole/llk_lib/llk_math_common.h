@@ -39,6 +39,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
 
     // Establish the no-override baseline for the SrcA/SrcB ALU format-select fields (ADDR32=0),
     // consumed by the FPU (SrcA) and SFPU (SrcB) on this thread: clear SrcA_val/override and
@@ -112,6 +113,30 @@ inline void _llk_math_dest_section_done_()
         math_sync_tile_dst_index = 0;
         dest_section_flip();
     }
+}
+
+/**
+ * @brief Clear the acquired DST section from MATH instead of clearing it on PACK release.
+ *
+ * Call immediately after acquiring the section, before any DST writes, and use PACK release without clearing throughout the kernel.
+ * DST writes must stay between acquire and commit; commit drains them before the next acquisition.
+ * Unpack-to-DST must wait for MATH's ready signal; there must be no independent DST writer.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_math_clear_dest_section_()
+{
+    // Startup or the preceding commit has already drained this thread's DST writes.
+    if constexpr (Dst == DstSync::SyncFull)
+    {
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+    }
+    else
+    {
+        static_assert(Dst == DstSync::SyncHalf);
+        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+    }
+    // Do not let SFPU writes or an unpack-to-DST ready signal overtake the clear.
+    TTI_STALLWAIT(p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::MATH);
 }
 
 /**

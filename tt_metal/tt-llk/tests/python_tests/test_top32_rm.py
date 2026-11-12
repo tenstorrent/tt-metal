@@ -70,6 +70,7 @@ Not covered here, deliberately
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -141,8 +142,7 @@ def _pad_to_tile(flat):
 )
 def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     is_32bit = formats.input_format.is_32_bit()
-    if is_32bit and dest_acc == DestAccumulation.No:
-        pytest.skip("32-bit datums need fp32 Dest")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if is_32bit and row_elements % ELEMENTS_PER_CHUNK != 0:
         pytest.skip(
             "a partially-filled chunk is broken on the 32-bit branch -- pinned by "

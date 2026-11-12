@@ -22,8 +22,9 @@ from .parquet import convert_csvs_to_parquet
 
 _VALID_ARCHES = ("wormhole", "blackhole", "quasar")
 # Lowercase, as the warehouse's RUNS.PIPELINE stores them. "baseline" is the
-# pinned run that the nightly gates read.
-_VALID_PIPELINES = ("pr", "nightly", "baseline")
+# pinned run that the nightly gates read; "merge_baseline" is a merge-queue head,
+# which the merge gate measures and the next queue entry reads.
+_VALID_PIPELINES = ("pr", "nightly", "baseline", "merge_baseline")
 
 
 def _run_csvs(csv_dir):
@@ -100,6 +101,8 @@ def publish(csv_dir, out_path, arch, *, strict=False):
     # column downstream). The docstring promises to log it, so log it.
     for test, cols in sorted(diagnostics.get("coerced_values", {}).items()):
         print(f"  warning: {test} coerced value(s) to NULL (type mismatch): {cols}")
+    for test, cols in sorted(diagnostics.get("renamed_columns", {}).items()):
+        print(f"  note: {test} renamed legacy columns: {cols}")
     return diagnostics
 
 

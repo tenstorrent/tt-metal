@@ -5,14 +5,14 @@
 """GLM-5.3 MTP module CPU reference.
 
 The fused input projection is the only new math here; the decoder layer it feeds is
-``reference.glm_5_1.block`` unchanged. Concat order is embedding first, then hidden state.
+``reference.glm_5_3.block`` unchanged. Concat order is embedding first, then hidden state.
 """
 
 from __future__ import annotations
 
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.glm_5_1.block import glm_decoder_layer_reference, rms_norm
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference, rms_norm
 
 
 def fused_mtp_reference(

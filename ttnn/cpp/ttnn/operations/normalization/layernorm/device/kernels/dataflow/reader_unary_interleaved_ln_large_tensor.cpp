@@ -100,6 +100,9 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.
+    // Kernel-scope object: on Quasar a DataflowBuffer drains when it goes out of scope, and compute
+    // pops the scaler only at the end of the kernel, so a helper-owned one would deadlock here.
+    DataflowBuffer dfb_scaler(dfb::scaler);
     {
         constexpr uint32_t partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
 
@@ -107,14 +110,14 @@ void kernel_main() {
             dfb::scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_scaler);
 
         if constexpr (partial_last_tile_cols > 0) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 dfb::scaler,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_scaler, partial_last_tile_cols);
         }
     }
     const uint32_t eps = get_arg(args::eps);
@@ -124,9 +127,32 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t curr_tile_row = start_tile_row + ncht;
 
+#if defined(TILIZE_IN) && defined(FUSE_PRE_ADD)
+        // ROW_MAJOR input + residual: dfb_in_rm holds only two blocks and compute consumes the input and
+        // the residual block by block, so both must be pushed interleaved per block (passes 0 and 1).
+        const uint32_t rm_abs_row_base = curr_tile_row * TILE_H;
+        const uint32_t rm_num_valid_rows =
+            rm_abs_row_base >= H_logical
+                ? 0
+                : (H_logical - rm_abs_row_base < TILE_H ? H_logical - rm_abs_row_base : TILE_H);
+#endif
 #ifndef RMSNORM
         // Pass 0: Data for calculating E[X]
-#ifdef TILIZE_IN
+#if defined(TILIZE_IN) && defined(FUSE_PRE_ADD)
+        for (auto block : generic::blocks(Wt, block_size)) {
+            layernorm_dataflow_utils::read_row_major_block_to_dfb<decltype(src_a), decltype(block), TILE_W, TILE_H>(
+                noc,
+                dfb_in_rm,
+                src_a,
+                curr_tile_row,
+                rm_num_valid_rows,
+                TILE_W * elem_size_bytes,
+                rm_row_stride_bytes,
+                block);
+            layernorm_dataflow_utils::read_block_to_dfb(
+                noc, dfb_in1, src_b, src1_tile_bytes, (curr_tile_row * Wt) + block.start(), block);
+        }
+#elif defined(TILIZE_IN)
         layernorm_dataflow_utils::push_row_major_blocks_to_dfb<decltype(src_a), TILE_W, TILE_H>(
             noc, dfb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 #else
@@ -135,7 +161,7 @@ void kernel_main() {
                 noc, dfb_in0, src_a, src0_page_bytes, (curr_tile_row * Wt) + block.start(), block);
         }
 #endif
-#ifdef FUSE_PRE_ADD
+#if defined(FUSE_PRE_ADD) && !defined(TILIZE_IN)
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_dfb(
                 noc, dfb_in1, src_b, src1_tile_bytes, (curr_tile_row * Wt) + block.start(), block);
@@ -144,20 +170,27 @@ void kernel_main() {
 #endif
 
 // Pass 1: Data for calculating variance.
-// RM path: push all in_rm first, then all in1 (separate) — the tilize step in
-//   compute provides enough pipeline slack.
+// RM path with residual: in_rm and in1 are interleaved per block (see above); dfb_in_rm only holds two blocks.
 // TILE path: in0 and in1 MUST be interleaved per block to avoid deadlock.
 //   dfb_in0 holds only 2*block_size tiles; filling all in0 before any in1 stalls
 //   once the buffer is full while compute waits for in1 — circular wait.
-#ifdef TILIZE_IN
-        layernorm_dataflow_utils::push_row_major_blocks_to_dfb<decltype(src_a), TILE_W, TILE_H>(
-            noc, dfb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
-#ifdef FUSE_PRE_ADD
+#if defined(TILIZE_IN) && defined(FUSE_PRE_ADD)
         for (auto block : generic::blocks(Wt, block_size)) {
+            layernorm_dataflow_utils::read_row_major_block_to_dfb<decltype(src_a), decltype(block), TILE_W, TILE_H>(
+                noc,
+                dfb_in_rm,
+                src_a,
+                curr_tile_row,
+                rm_num_valid_rows,
+                TILE_W * elem_size_bytes,
+                rm_row_stride_bytes,
+                block);
             layernorm_dataflow_utils::read_block_to_dfb(
                 noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
         }
-#endif
+#elif defined(TILIZE_IN)
+        layernorm_dataflow_utils::push_row_major_blocks_to_dfb<decltype(src_a), TILE_W, TILE_H>(
+            noc, dfb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 #else  // TILE path: interleaved per block
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_dfb(

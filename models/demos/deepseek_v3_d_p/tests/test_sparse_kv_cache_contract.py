@@ -156,7 +156,6 @@ def test_scaled_fp8_packed_host_codec_preserves_mixed_fields():
 def test_scaled_fp8_packing_preserves_logical_kvpe_debug_intermediate(monkeypatch):
     latent = SimpleNamespace(shape=(1, 1, 32, PRODUCTION_GEOMETRY.latent_dim))
     rope = SimpleNamespace(shape=(1, 1, 32, PRODUCTION_GEOMETRY.rope_dim))
-    latent_rm = object()
     rope_rm = object()
     latent_fp8 = object()
     scales = object()
@@ -167,10 +166,11 @@ def test_scaled_fp8_packing_preserves_logical_kvpe_debug_intermediate(monkeypatc
 
     def to_layout(tensor, layout):
         assert layout == ttnn.ROW_MAJOR_LAYOUT
-        return latent_rm if tensor is latent else rope_rm
+        assert tensor is rope
+        return rope_rm
 
     def cast_to_fp8(tensor, *, round_scale_to_power_of_two):
-        assert tensor is latent_rm
+        assert tensor is latent
         assert round_scale_to_power_of_two
         return latent_fp8, scales
 
@@ -206,6 +206,8 @@ def test_scaled_fp8_packing_preserves_logical_kvpe_debug_intermediate(monkeypatc
     assert intermediates["tt_kvpe_rope"] == ("clone", rope_rm)
     assert intermediates["tt_kvpe_packed"] == ("clone", packed)
     assert reconstructed_latent in deallocated
+    assert latent not in deallocated
+    assert rope not in deallocated
 
 
 @pytest.mark.parametrize(

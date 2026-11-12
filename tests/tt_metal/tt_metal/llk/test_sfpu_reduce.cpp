@@ -31,7 +31,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "llk_device_fixture.hpp"
@@ -340,8 +340,12 @@ void run_single_core_sfpu_reduce(
     const std::uint32_t cols = config.block_ct_dim * kTileWidth;
     const std::uint32_t rows = config.num_blocks * config.block_rt_dim * kTileHeight;
 
+    // The direct reader/writer kernels address a single DRAM bank (bank_id 0) and walk it a tile at a
+    // time. Use page_size = whole buffer so the allocator places each buffer in one bank; with one page
+    // per tile the pages interleave across the banks, and every tile past the first that lands in
+    // another bank is read from (and written to) the wrong place.
     distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+        .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM};
 
     auto src_dram_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = buffer_size}, dram_config, mesh_device.get());
@@ -442,10 +446,9 @@ void run_single_core_sfpu_reduce(
 
     distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, input_tilized, /*blocking=*/true);
 
-    const auto src_page_stride =
-        static_cast<std::uint32_t>(src_dram_buffer->get_reference_buffer()->aligned_page_size());
-    const auto dst_page_stride =
-        static_cast<std::uint32_t>(dst_dram_buffer->get_reference_buffer()->aligned_page_size());
+    // Advance the DRAM pointer by the native tile size, matching the host-side vector layout
+    const std::uint32_t src_page_stride = single_tile_size;
+    const std::uint32_t dst_page_stride = single_tile_size;
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -509,7 +512,8 @@ using namespace unit_tests::compute::sfpu_reduce;
 
 // Column reduce: every pool. Width is swept two ways: num_blocks streams tiles through Dest one at
 // a time, and block_ct_dim = 2 holds a two-tile block in Dest and reduces each tile in place.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceColumn) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceColumn) {
     for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float16, tt::DataFormat::Float32}) {
         for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
             for (std::uint32_t num_blocks : {1u, 4u}) {
@@ -544,7 +548,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceColumn) {
 
 // Row reduce: SUM, MAX and MIN. sfpu_reduce's static_assert rejects AVG on REDUCE_ROW for every
 // format.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceRow) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceRow) {
     struct BlockShape {
         std::uint32_t ct;
         std::uint32_t rt;
@@ -566,7 +571,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceRow) {
     }
 }
 
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceInt32) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceInt32) {
     for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
         for (std::uint32_t num_blocks : {1u, 4u}) {
             run_single_core_sfpu_reduce(
@@ -594,7 +600,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceInt32) {
 }
 
 // A 16-bit format staged in a 32-bit Dest
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceWideDest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceWideDest) {
     for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
         run_single_core_sfpu_reduce(
             this->devices_.at(0),

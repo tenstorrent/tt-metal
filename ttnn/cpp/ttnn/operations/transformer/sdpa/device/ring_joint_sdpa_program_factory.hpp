@@ -44,7 +44,12 @@ struct RingJointSDPAProgramFactory {
 struct RingJointSDPAMeshWorkloadFactory {
     using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
         detail::RingJointSDPADescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<RingJointSDPAProgramFactory>;
-    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
+    // The adapter's state plus the semaphore slots recorded at create time (see apply_semaphore_arg_patch).
+    struct shared_variables_t {
+        typename descriptor_adapter_t::shared_variables_t descriptor;
+        ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
+    };
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
         const RingJointSDPAParams& args,

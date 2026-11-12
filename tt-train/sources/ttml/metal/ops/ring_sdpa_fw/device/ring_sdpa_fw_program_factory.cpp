@@ -67,7 +67,8 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
             .value = value,
             .mask = std::nullopt,  // No explicit mask - use mask_type
             .preallocated_intermediate = intermediates,
-            .preallocated_output = output};
+            .preallocated_output = output,
+            .gate = std::nullopt};
 
         sdpa_fw::device::tensor_return_value_t sdpa_return_value{output, intermediates};
 
@@ -132,6 +133,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
 
         // Create SDPA attributes and tensor args
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;
+        std::optional<ttnn::Tensor> gate_opt = std::nullopt;
         sdpa_fw::operation_attributes_t sdpa_attrs{
             .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
@@ -141,7 +143,8 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
             .value = value,
             .mask = mask_opt,
             .preallocated_intermediate = intermediates,
-            .preallocated_output = output};
+            .preallocated_output = output,
+            .gate = gate_opt};
 
         sdpa_fw::tensor_return_value_t sdpa_return_value{output, intermediates};
 

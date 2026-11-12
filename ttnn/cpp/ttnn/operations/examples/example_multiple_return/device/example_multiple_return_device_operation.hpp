@@ -5,8 +5,9 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
@@ -65,14 +66,16 @@ struct ExampleMultipleReturnDeviceOperation {
     // i.e. if spec_return_value_t is a std::vector<std::optional<tt::tt_metal::TensorSpec>> then tensor_return_value_t
     // should be std::vector<std::optional<Tensor>>
 
-    // Describe the program declaratively. A single-descriptor operation with no per-dispatch state
-    // beyond buffer addresses puts create_descriptor straight on the operation struct: no factory
-    // wrapper, no program_factory_t, no shared_variables_t. Buffer addresses are declared as
-    // bindings (see emplace_runtime_args in the .cpp) and the framework patches them on cache hits.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+    // Describe the program declaratively. The operation has no per-dispatch state beyond its tensor
+    // bindings, so the factory returns a ProgramSpec whose tensor parameters the framework refreshes
+    // on cache hits; no override_runtime_arguments and no shared_variables_t are needed.
+    struct ExampleMultipleReturnProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+    using program_factory_t = std::variant<ExampleMultipleReturnProgramFactory>;
 
     // Mandatory methods
 

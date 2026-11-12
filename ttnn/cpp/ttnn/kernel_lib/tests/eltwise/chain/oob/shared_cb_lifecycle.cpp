@@ -17,6 +17,9 @@ void kernel_main() {
     constexpr bool owner_first = get_compile_time_arg_val(1) != 0;
     constexpr uint32_t window_mode = get_compile_time_arg_val(2);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
@@ -27,8 +30,16 @@ void kernel_main() {
         CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, InputTileMapping::Scalar), Dst::D1>;
 
     if constexpr (owner_first) {
-        eltwise_chain(IterationShape::tiles(total_tiles), WindowOwner{}, PeerPopper{}, PackTile<output(cb_out)>{});
+        eltwise_chain(
+            IterationShape::tiles(total_tiles),
+            WindowOwner{cb_in_obj},
+            PeerPopper{cb_in_obj},
+            PackTile<output(cb_out)>{cb_out_obj});
     } else {
-        eltwise_chain(IterationShape::tiles(total_tiles), PeerPopper{}, WindowOwner{}, PackTile<output(cb_out)>{});
+        eltwise_chain(
+            IterationShape::tiles(total_tiles),
+            PeerPopper{cb_in_obj},
+            WindowOwner{cb_in_obj},
+            PackTile<output(cb_out)>{cb_out_obj});
     }
 }

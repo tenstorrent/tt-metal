@@ -56,6 +56,7 @@ ALWI void process_tile(
 
         // Fill scalar and copy tensor based on variant
         fill_tile_init();
+        reconfig_data_format_srca(predicate_dfb.get_id(), tensor_dfb.get_id());
         copy_init(tensor_dfb.get_id());
 
         // TTS: scalar=false (reg 2), tensor=true (reg 1)
@@ -83,6 +84,7 @@ ALWI void process_tile(
             // Copy false tensor to reg 2
             copy_tile(tensor_dfb.get_id(), 0, 2);
         }
+        reconfig_data_format_srca(tensor_dfb.get_id(), predicate_dfb.get_id());
 
         // Perform the ternary operation
         TERNARY_SFPU_OP_INIT();

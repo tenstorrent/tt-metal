@@ -55,6 +55,9 @@ static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
 // The one writer. Out-of-line so the STALLWAIT + RMW exist in a single copy (code size — a matmul
 // kernel otherwise overflows its slot).
+// Keep the STALLWAIT on Wormhole: an FPU instruction reads the live flag while it waits to enter the FPU
+// (e.g. for its Src operands), so a write must not land until MATH has drained. (Blackhole latches the
+// flag per instruction at issue and needs no stall.)
 inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
@@ -339,6 +342,21 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
 
     return ((input_df == to_underlying(DataFormat::Int32)) || (input_df == to_underlying(DataFormat::Float32))) &&
            ((output_df == to_underlying(DataFormat::Int32)) || (output_df == to_underlying(DataFormat::Float32)));
+}
+
+// Pack the SrcA/SrcB ALU formats into their fields of the ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 config word. The two fields
+// are DATA_FORMAT_BIT_COUNT (4) bits wide and adjacent, so each value is masked before the shift, as the unpacker does:
+// shifting a raw UInt8 (30) / UInt32 (24) in would land SrcA's bit 4 on SrcB's LSB. Writers that program both fields go
+// through this helper; writers that program one field mask it with masked_data_format() before the single-field RMW.
+inline constexpr std::uint32_t alu_src_format_cfg(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
+{
+    // masked_data_format() only keeps SrcA's spill out of SrcB if each field is exactly DATA_FORMAT_BIT_COUNT wide and
+    // both live in the one word this helper packs.
+    static_assert((ALU_FORMAT_SPEC_REG0_SrcA_MASK >> ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) == DATA_FORMAT_CONFIG_MASK);
+    static_assert((ALU_FORMAT_SPEC_REG1_SrcB_MASK >> ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) == DATA_FORMAT_CONFIG_MASK);
+    static_assert(ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 == ALU_FORMAT_SPEC_REG1_SrcB_ADDR32);
+    return (masked_data_format(srca_data_format) << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) |
+           (masked_data_format(srcb_data_format) << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT);
 }
 
 inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)

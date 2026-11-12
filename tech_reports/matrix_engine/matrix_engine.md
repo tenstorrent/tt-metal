@@ -51,7 +51,7 @@ HiFi4 -> 0.032 TFLOPS
 
 ```
 struct WormholeComputeKernelConfig {
-    MathFidelity math_fidelity = MathFidelity::LoFi;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
     bool math_approx_mode = true;
     bool fp32_dest_acc_en = false;
     bool packer_l1_acc = false;

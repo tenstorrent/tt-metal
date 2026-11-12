@@ -14,20 +14,20 @@ Use when: a test fails intermittently (bad output / NaN / hang), static race aud
 Two failure modes are detected and reported separately: **data mismatch** (wrong/NaN output vs golden) and **hang** (device timeout/wedge).
 
 ## LLK first step — run `focus.sh` with defaults
-For a failure reproducible by one **tt-llk Python test case**, use the committed `tests/python_tests/ttnop/focus.sh` before editing kernels or writing a custom sweep. It compiles the case, finds safe detour sites in the thread ELFs, runs a clean baseline, injects delays directly into L1, restores each instruction, and writes `reports/focus/{report.md,failures.jsonl}`.
+For a failure reproducible by one **tt-llk Python test case**, use the committed `tests/python_tests/ttnop/scripts/focus.sh` before editing kernels or writing a custom sweep. It compiles the case, finds safe detour sites in the thread ELFs, runs a clean baseline, injects delays directly into L1, restores each instruction, and writes `reports/focus/{report.md,failures.jsonl}`.
 
 1. Identify and quote one complete pytest node ID, including parameters.
 2. Set only `CHIP_ARCH` and slow dispatch. Do not narrow sites, fillers, delays, repeats, or device jobs on the initial run:
    ```bash
    cd tt_metal/tt-llk/tests/python_tests/ttnop
    CHIP_ARCH=<wormhole|blackhole> TT_METAL_SLOW_DISPATCH_MODE=1 \
-     ./focus.sh '<file.py::test_name[parameters]>'
+     ./scripts/focus.sh '<file.py::test_name[parameters]>'
    ```
 3. Keep the initial defaults: `sync` sites; `unpack,math` threads; automatic fillers; delays `1-100`; 10 repeats; drift checking; 8 device workers.
 4. If the report or bug evidence specifically places the issue in pack, make the initial run pack-only:
    ```bash
    CHIP_ARCH=<wormhole|blackhole> TT_METAL_SLOW_DISPATCH_MODE=1 \
-     ./focus.sh --threads pack '<node-id>'
+     ./scripts/focus.sh --threads pack '<node-id>'
    ```
 5. Read the terminal result, `report.md`, and `failures.jsonl`. Record the strongest finding's thread, site, filler, delay band, failure rate, failure type, and resolved source chain. Use the exact reproduction
 command emitted by the report before changing code.

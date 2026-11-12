@@ -21,9 +21,9 @@ namespace {
 
 ttnn::Tensor padded_slice_wrapper(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& begins,
-    const ttnn::SmallVector<int>& ends,
-    const std::optional<ttnn::SmallVector<int>>& step,
+    const ttsl::SmallVector<int>& begins,
+    const ttsl::SmallVector<int>& ends,
+    const std::optional<ttsl::SmallVector<int>>& step,
     const MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
     const std::optional<float>& pad_value) {
@@ -31,7 +31,7 @@ ttnn::Tensor padded_slice_wrapper(
         input_tensor,
         begins,
         ends,
-        step.value_or(ttnn::SmallVector<int>(ends.size(), 1)),
+        step.value_or(ttsl::SmallVector<int>(ends.size(), 1)),
         memory_config,
         output_tensor,
         pad_value);

@@ -63,8 +63,9 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-static void add_block_bcast_rows_inplace(
-    uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols, bool first_call) {
+namespace {
+
+void add_block_bcast_rows_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols, bool first_call) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
@@ -73,11 +74,10 @@ static void add_block_bcast_rows_inplace(
     DataflowBuffer in1_dfb_obj(static_cast<uint16_t>(in1_dfb));
 
     const uint32_t num_tiles = rows * cols;
+    reconfig_data_format(in0_dfb, in1_dfb);
     if (first_call) {
-        compute_kernel_hw_startup(in0_dfb, in1_dfb, in0_dfb);
         bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_dfb, in1_dfb);
     } else {
-        reconfig_data_format(in0_dfb, in1_dfb);
         add_bcast_rows_init(in0_dfb, in1_dfb);
     }
     in0_dfb_obj.wait_front(static_cast<uint16_t>(num_tiles));
@@ -101,7 +101,7 @@ static void add_block_bcast_rows_inplace(
     }
     in1_dfb_obj.pop_front(static_cast<uint16_t>(cols));
 }
-static void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
+void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
@@ -128,7 +128,7 @@ static void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_t
         in0_dfb_obj.push_back(1);
     }
 }
-static void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols) {
+void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -160,7 +160,7 @@ static void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uin
     in1_dfb_obj.pop_front(static_cast<uint16_t>(rows));
 }
 
-static void eqz_block_inplace(uint32_t in0_dfb, uint32_t num_tiles) {
+void eqz_block_inplace(uint32_t in0_dfb, uint32_t num_tiles) {
     // Precondition: in0_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
 
@@ -188,7 +188,7 @@ static void eqz_block_inplace(uint32_t in0_dfb, uint32_t num_tiles) {
     }
 }
 
-static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
+void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     DataflowBuffer in_dfb_obj(static_cast<uint16_t>(in_dfb));
@@ -214,6 +214,8 @@ static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     }
 }
 
+}  // namespace
+
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in_dfb, uint32_t scale_dfb, uint32_t out_dfb>
 void reduce_c(uint32_t rows, uint32_t cols) {
     // Precondition: in_cb has rows*cols produced. in_cb has tiles in row-major order
@@ -231,8 +233,6 @@ void reduce_c(uint32_t rows, uint32_t cols) {
         out_dfb,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
         compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
-
-    UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
 template <
@@ -487,4 +487,17 @@ void kernel_main() {
 
     // final sum
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scale, dfb::out>(Ht, Kt);
+
+    // Buffers this kernel waited and left unpopped, popped here so they are left balanced. All
+    // three are produced and consumed entirely within this kernel: sub_exp_block_bcast_cols_inplace
+    // waits Ht tiles of dfb::cur_max, mul_block_inplace waits Ht * Kt tiles of dfb::output_ind, and
+    // reduce_c waits Ht * Kt tiles of dfb::values.
+    DataflowBuffer(dfb::cur_max).pop_front(Ht);
+    DataflowBuffer(dfb::output_ind).pop_front(Ht * Kt);
+    DataflowBuffer(dfb::values).pop_front(Ht * Kt);
+
+    // dfb::scale is pushed once by the writer and waited inside compute_kernel_lib::reduce, which
+    // leaves it unpopped so one pushed tile serves every reduce call. Pop it here so dfb::scale is
+    // left balanced.
+    DataflowBuffer(dfb::scale).pop_front(1);
 }

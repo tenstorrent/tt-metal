@@ -26,9 +26,9 @@ enum class SemScope : uint8_t {
     EXTERNAL = 2,
     // Blackhole compute scope: the Tensix hardware (Sync Unit) semaphore, so concurrent UNPACK
     // and PACK writers cannot lose an update. Produced by ResolveSemaphoreScope() for a Blackhole
-    // semaphore bound only by compute kernels (semaphore_scope.hpp). Keep this enum numerically in
-    // step with the device-side SemScope in api/dataflow/semaphore_binding_token.h -- the two are
-    // unlinked mirrors.
+    // semaphore bound only by compute kernels (metal2_host_api/program_spec/construction/resource/
+    // semaphore.cpp). Keep this enum numerically in step with the device-side SemScope in
+    // api/dataflow/semaphore_binding_token.h -- the two are unlinked mirrors.
     COMPUTE_ATOMIC = 3,
 };
 
@@ -64,23 +64,6 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
     os << "}  // namespace sem\n";
 }
 
-// Emits the list of cached semaphores this kernel binds: each one's id and how many harts on
-// this core use it.
-inline void emit_cached_semaphore_list(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
-    os << "namespace sem_internal {\n";
-    os << "constexpr ::sem_internal::CachedSemaphore kCachedSemaphores[] = {";
-    const char* sep = "";
-    for (const auto& entry : entries) {
-        if (entry.scope != SemScope::DM_LOCAL_CACHED) {
-            continue;
-        }
-        os << sep << "{" << entry.id << "u, " << entry.total_binder_harts << "u}";
-        sep = ", ";
-    }
-    os << "};\n";
-    os << "}  // namespace sem_internal\n";
-}
-
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
 // The CRTA buffer is laid out as four back-to-back sections:
@@ -109,6 +92,18 @@ struct KernelCrtaLayout {
     // Start offset of section 4 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
+    uint32_t vararg_section_offset = 0;
+};
+
+// Metal 2.0: layout of each node's runtime-args (RTA) buffer, the per-node counterpart of KernelCrtaLayout:
+//   [ user-named RTAs | per-node TensorBinding section | vararg RTAs ]
+// Section 2 holds one base-address word per per-node tensor binding.
+struct KernelRtaLayout {
+    // Section 1 size, in words. Equals the number of user-named RTAs.
+    uint32_t num_named_words = 0;
+    // Section 2 size, in words. Equals the number of per-node tensor bindings.
+    uint32_t binding_section_words = 0;
+    // Start offset of section 3 (varargs), in words.
     uint32_t vararg_section_offset = 0;
 };
 
@@ -153,10 +148,13 @@ public:
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
     virtual std::string_view get_linker_opt_level() const = 0;
-    // Returns true when this kernel opted into RISC-V Vector (Zve32f) code generation for its
-    // TRISC2 (pack) compile (ComputeConfig::enable_trisc2_rvv). Default off: the build recipe
-    // is byte-identical to a build without this knob.
-    virtual bool get_trisc2_rvv_enabled() const { return false; }
+    // Returns true when this kernel opted into RISC-V Vector code generation. Which compute
+    // processor gets the vector flags is decided by the HAL (rvv_compile_flags), not the kernel.
+    // Default off: the build recipe is byte-identical to a build without this knob.
+    virtual bool get_rvv_enabled() const { return false; }
+    // Returns true when this compute kernel opted out of the SFPI compiler's replay optimization for its TRISC
+    // compiles (internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE). Default off: the build recipe is unchanged.
+    virtual bool get_sfpu_replay_optimization_disabled() const { return false; }
 
     // Called to process the user defines
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
@@ -177,7 +175,9 @@ public:
                                                              uint16_t logical_dfb_id,
                                                              bool is_relay,
                                                              uint8_t prefetcher_pipe_id,
-                                                             const std::optional<LLKMetadata>&)>&) const {}
+                                                             const std::optional<LLKMetadata>&,
+                                                             uint8_t pap,
+                                                             uint8_t cap)>&) const {}
     virtual void process_semaphore_binding_handles(
         std::function<
             // NOLINTNEXTLINE(performance-unnecessary-value-param)
@@ -188,8 +188,9 @@ public:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
     //  - cta_offset: starting word index of this binding's CTA payload in the kernel's
     //    positional compile-time-args buffer
-    //  - addr_crta_offset: byte offset of the implicit base-address CRTA within the kernel's
-    //    common-runtime-args section
+    //  - is_per_node: the base address lives in each node's runtime args instead of the CRTAs
+    //  - addr_offset: byte offset of the implicit base-address slot: within the kernel's
+    //    common-runtime-args section, or within each node's runtime-args section if is_per_node
     //  - num_runtime_field_crta_words: number of CRTA words that immediately follow the address
     //    slot for runtime accessor fields (currently: shape, for sharded TensorParameters with
     //    dynamic_tensor_shape=true). The binding occupies (1 + num_runtime_field_crta_words)
@@ -199,7 +200,8 @@ public:
     virtual void process_tensor_binding_handles(const std::function<void(
                                                     const std::string& accessor_name,
                                                     uint32_t cta_offset,
-                                                    uint32_t addr_crta_offset,
+                                                    bool is_per_node,
+                                                    uint32_t addr_offset,
                                                     uint32_t num_runtime_field_crta_words,
                                                     const LLKMetadata&)>&) const {}
 
@@ -246,6 +248,9 @@ public:
     // Default is the all-zero layout (no named CRTAs, no bindings, varargs start at offset 0),
     // which matches the legacy-kernel case where the buffer has only varargs.
     virtual KernelCrtaLayout get_crta_layout() const { return {}; }
+
+    // Metal 2.0: per-node RTA buffer layout, precomputed at spec resolution time.
+    virtual KernelRtaLayout get_rta_layout() const { return {}; }
 
     // Metal 2.0: length of the CTA-vararg prefix in positional compile_time_args.
     // Default 0 for non–Metal 2.0 kernels.

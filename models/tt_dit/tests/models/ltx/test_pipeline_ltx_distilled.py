@@ -24,6 +24,8 @@ from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import (
     pixel_to_latent_frame,
 )
 from models.tt_dit.tests.models.ltx.tools.ltx_eval import write_sidecar
+from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
+from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
@@ -34,6 +36,7 @@ from models.tt_dit.utils.ltx import (
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import line_params, ring_params, ring_params_8k
 from models.tt_dit.utils.vbench import assert_vbench_quality
+from models.tt_dit.utils.test import skip_if_unsupported_num_links
 
 
 def _apply_local_iter_env() -> None:
@@ -85,6 +88,20 @@ line_trace_params = {**line_params, "trace_region_size": _LTX_TRACE_REGION, "l1_
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
 # (no checkpoint present). Runs the same prompt as the girl audio fixture (DEFAULT_LTX_PROMPT — the
 # "young woman with a guitar sings Doo-be-doo" clip the audio tests use), so e2e and audio stay aligned.
+FAST_T2V_TIMING_LIMITS = {
+    ((4, 8), 1088, 1920, 153): {
+        "Encoder": (0.23, 0.94),
+        "Stage 1 denoise": (1.46, 2.76),
+        "Latent upsample": (0.05, 0.22),
+        "Stage 2 denoise": (1.81, 3.39),
+        "VAE decode": (0.62, 1.22),
+        "Audio decode": (0.25, 0.47),
+        "Total": (4.54, 8.57),
+    },
+}
+
+
+# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
 @pytest.mark.skipif(
     not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
@@ -264,6 +281,7 @@ def test_pipeline_distilled(
             topology=topology,
             output_path=output_filename,
             prompt=prompt,
+            report_model="ltx-2.3-fast-i2v" if image_path else "ltx-2.3-fast-t2v",
         )
 
     # Output resolutions the served pipeline supports (its quality/resolution dropdown), each
@@ -318,7 +336,7 @@ def test_pipeline_distilled(
     if run_clip:
         __import__("decord")
 
-    def check_output_with_vbench(prompt, number, seed=None):
+    def check_output_with_vbench(prompt, number, seed, num_seeds=1):
         if not run_vbench:
             logger.info("RUN_VBENCH=0, skipping VBench quality gate")
             return
@@ -426,6 +444,21 @@ def test_pipeline_distilled(
             f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
         )
 
+    def check_steady_state_timing(timings):
+        # Rank 0 generates, so only it has timings; I2V and uncalibrated configs are not gated.
+        limits = None if image_path else FAST_T2V_TIMING_LIMITS.get((mesh_shape, height, width, num_frames))
+        if not timings or limits is None:
+            logger.info("No steady-state timing limits for this config; skipping the timing check")
+            return
+        measured = dict(timings)
+        measured["Total"] = sum(measured.values())
+        failures = [
+            f"{stage} = {measured.get(stage, float('nan')):.2f}s outside [{lower}, {upper}]s"
+            for stage, (lower, upper) in limits.items()
+            if not lower <= measured.get(stage, float("nan")) <= upper
+        ]
+        assert not failures, "Steady-state timing out of range:\n" + "\n".join(failures)
+
     if no_prompt:
         seed = int(os.environ.get("SEED", "10"))
         run(prompt=prompt, number=0, seed=seed)
@@ -483,7 +516,7 @@ def test_pipeline_distilled(
                 del os.environ["LTX_DUMP_FRAMES"]
         else:
             check_output_with_clip(prompt, 0)
-            check_output_with_vbench(prompt, 0)
+            check_output_with_vbench(prompt, 0, seed)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -493,7 +526,7 @@ def test_pipeline_distilled(
                 break
             run(prompt=prompt, number=i, seed=i)
             check_output_with_clip(prompt, i)
-            check_output_with_vbench(prompt, i)
+            check_output_with_vbench(prompt, i, i)
 
     if traced:
         pipeline.release_traces()

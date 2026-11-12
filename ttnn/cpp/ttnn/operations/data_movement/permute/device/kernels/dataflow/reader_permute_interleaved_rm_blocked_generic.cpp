@@ -61,6 +61,10 @@ void kernel_main() {
     idxs[N - 1] = 0;
     uint32_t non_x_rows = num_rows / X;
 
+    // One DataflowBuffer for the whole kernel: on Quasar a DataflowBuffer drains when it goes out of scope (#60848),
+    // so a per-block one would wait after every push for the compute to pop that block (no double buffering).
+    DataflowBuffer dfb(dfb::cb_in);
+
     for (uint32_t block = start_block; block < end_block; ++block) {
         // Decompose block into w_block, x_block, and xw_block indices
         uint32_t rem = block;
@@ -105,7 +109,6 @@ void kernel_main() {
         }
 
         // Reserve space in the circular buffer for the X-block length
-        DataflowBuffer dfb(dfb::cb_in);
         dfb.reserve_back(x_block_size);
         uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 

@@ -77,24 +77,23 @@ def _run_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
 
     ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
-    ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=dim, scalar=scalar, correction=correction))
+    correction_kwargs = {"correction": correction} if op in ("var", "std") else {}
+    ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=dim, scalar=scalar, **correction_kwargs))
 
     # torch.max/min don't accept a tuple for dim; use amax/amin which do.
     torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
     torch_op = getattr(torch, torch_op_name)
-    # PyTorch supports the correction argument only for var and std.
-    # ttnn supports it for all, but it is ignored for all except var and std.
+    # Both PyTorch and ttnn support the correction argument only for var and std.
     if op in ("var", "std"):
         torch_result = torch_op(scalar * torch_input, dim=dim, correction=correction)
     else:
         torch_result = torch_op(scalar * torch_input, dim=dim)
 
     if dtype == torch.float32 and op in ("var", "std"):
-        # var/std always run the Welford single-pass path unscaled and apply the scalar
-        # afterwards (var(s*x) = s^2 var(x), std(s*x) = |s| std(x)), so the reduction stays
-        # at full FP32 precision (eps = 2^-23 ~= 1.19e-7) and avoids the FPU scale-mul.
-        # Welford has relative error bounded by O(sqrt(N) * eps); for N up to 177408 this is
-        # ~5e-5. rtol = 1e-4 covers this with margin, and atol = 1e-4 handles the
+        # FP32 var/std use shifted two-pass SFPU statistics without pre-scaling the input. The scalar
+        # is applied afterwards (var(s*x) = s^2 var(x), std(s*x) = |s| std(x)), preserving the full
+        # FP32 input and accumulation precision while avoiding the FPU scale-multiply. For the largest
+        # case here, rtol = 1e-4 covers accumulated rounding with margin and atol = 1e-4 handles the
         # small-magnitude regime.
         rtol = 1e-4
         atol = 1e-4

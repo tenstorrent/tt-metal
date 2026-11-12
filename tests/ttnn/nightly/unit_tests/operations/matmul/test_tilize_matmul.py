@@ -7,7 +7,7 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul
 from loguru import logger
 
-from models.common.utility_functions import untilize, tilize_to_list, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import untilize, tilize_to_list, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 import torch
 

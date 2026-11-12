@@ -1,4 +1,4 @@
-name: "TTNOP Injector"
+name: "LLK TTNOP Injector"
 
 on:
   workflow_dispatch:
@@ -26,6 +26,7 @@ on:
 
 permissions:
   actions: read
+  checks: write
   contents: read
   packages: write
 

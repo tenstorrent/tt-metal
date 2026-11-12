@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
-// #include "tools/profiler/kernel_profiler.hpp"
+// #include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     std::uint32_t buffer_dst_addr = get_arg_val<uint32_t>(0);

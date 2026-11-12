@@ -20,7 +20,6 @@ bfloat16 to exercise the op cleanly. Reference: torch a + b.  PCC 0.999.
 
 import pytest
 
-import ttnn
 from models.experimental.ops.quasar.tests.yolo_ops import op_utils as U
 
 
@@ -43,7 +42,7 @@ def test_add_dist2bbox(ttnn_mesh_device, reset_seeds, shape):
     a = U.to_tt(a_torch, mesh)
     b = U.to_tt(b_torch, mesh)
 
-    out = ttnn.add(a, b)
+    out = U.op("add")(a, b)
 
     ref = a_torch.float() + b_torch.float()
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
@@ -67,7 +66,7 @@ def test_add_dist2bbox_l1(ttnn_mesh_device, reset_seeds, shape):
     a = U.to_tile_l1(a_torch, mesh)
     b = U.to_tile_l1(b_torch, mesh)
 
-    out = ttnn.add(a, b)
+    out = U.op("add")(a, b)
 
     ref = a_torch.float() + b_torch.float()
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
@@ -103,7 +102,7 @@ def test_add_residual_sharded(ttnn_mesh_device, reset_seeds, hw):
     a = U.to_tt(a_torch, mesh, memory_config=memcfg)  # TILE (default) — model's conv-output layout
     b = U.to_tt(b_torch, mesh, memory_config=memcfg)
 
-    out = ttnn.add(a, b)
+    out = U.op("add")(a, b)
 
     ref = a_torch.float() + b_torch.float()
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)
@@ -125,7 +124,7 @@ def test_add_residual(ttnn_mesh_device, reset_seeds, hw):
     a = U.to_tt(a_torch, mesh)
     b = U.to_tt(b_torch, mesh)
 
-    out = ttnn.add(a, b)
+    out = U.op("add")(a, b)
 
     ref = a_torch.float() + b_torch.float()
     U.assert_pcc(ref, out, pcc=0.999, mesh_device=mesh)

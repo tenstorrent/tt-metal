@@ -7,45 +7,39 @@ from pathlib import Path
 
 import pandas as pd
 from loguru import logger
+from tt_llk_perf.headers import bank_tables
+from tt_llk_perf.metrics import quasar_l1_client_label
+from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .device_io import read_words_from_device
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
 
+_IS_QUASAR = get_chip_architecture() == ChipArchitecture.QUASAR
+
+# Order matches llk::perf::Bank (perf_counters/types.h) and the config-word bank field. Quasar has
+# no L1 counter bank, so slot 3 carries the l1_client event CSR there (counter_sel = subport*8 + event).
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
     1: "FPU",
     2: "TDMA_UNPACK",
-    3: "L1",
+    3: "L1_CLIENT" if _IS_QUASAR else "L1",
     4: "TDMA_PACK",
 }
 
-
-# --- Counter id -> name tables, parsed live from the canonical metal hw_counters.h ---
-
-_ARRAY_TO_BANK = {
-    "instrn_counters": "INSTRN_THREAD",
-    "fpu_counters": "FPU",
-    "unpack_counters": "TDMA_UNPACK",
-    "pack_counters": "TDMA_PACK",
-}
-_ARCH_DIR = {
-    ChipArchitecture.WORMHOLE: "wormhole",
-    ChipArchitecture.BLACKHOLE: "blackhole",
+_TABLE_BANK_TO_HARNESS = {
+    "INSTRN": "INSTRN_THREAD",
+    "FPU": "FPU",
+    "TDMA_UNPACK": "TDMA_UNPACK",
+    "TDMA_PACK": "TDMA_PACK",
+    "L1": "L1",
 }
 
-
-def _metal_root() -> Path:
-    """Walk up from this file until the metal hw_counters.h tree is found."""
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "tt_metal/hw/inc/internal/tt-1xx").is_dir():
-            return parent
-    raise RuntimeError(
-        "Could not locate tt_metal/hw/inc/internal/tt-1xx above this file"
-    )
-
+# parents[2] is tests/: the device-side header whose layout this module mirrors.
+LLK_COUNTERS_HEADER = (
+    Path(__file__).resolve().parents[2] / "helpers" / "include" / "counters.h"
+)
 
 _C_LITERAL = r"0[xX][0-9a-fA-F]+|\d+"
 
@@ -64,10 +58,17 @@ def _parse_perf_cfg(text: str) -> dict:
     return cfg
 
 
+def _parse_uint(text: str, name: str) -> int:
+    """One `constexpr std::uint32_t <name> = <literal>;` from counters.h."""
+    m = re.search(rf"{name}\s*=\s*({_C_LITERAL})[uUlL]*\s*;", text)
+    if m is None:
+        raise RuntimeError(f"{name} not found in counters.h")
+    return int(m.group(1), 0)
+
+
 # Config word layout, parsed from the device-side header so the two cannot drift apart.
-_PERF_CFG = _parse_perf_cfg(
-    (_metal_root() / "tt_metal/tt-llk/tests/helpers/include/counters.h").read_text()
-)
+_HEADER_TEXT = LLK_COUNTERS_HEADER.read_text()
+_PERF_CFG = _parse_perf_cfg(_HEADER_TEXT)
 PERF_CFG_VALID_BIT = _PERF_CFG["VALID_BIT"]
 PERF_CFG_L1_MUX_SHIFT = _PERF_CFG["L1_MUX_SHIFT"]
 PERF_CFG_L1_MUX_MASK = _PERF_CFG["L1_MUX_MASK"]
@@ -76,56 +77,14 @@ PERF_CFG_COUNTER_MASK = _PERF_CFG["COUNTER_MASK"]
 PERF_CFG_BANK_MASK = _PERF_CFG["BANK_MASK"]
 
 
-def _parse_hw_counters(text: str) -> dict:
-    """Parse one hw_counters.h into {bank: {id: name}}; L1 is keyed by (id, mux)."""
-    banks = {bank: {} for bank in COUNTER_BANK_NAMES.values()}
-
-    decls = list(re.finditer(r"(\w+_counters)\s*=", text))
-    for i, decl in enumerate(decls):
-        name = decl.group(1)
-        start = decl.end()
-        end = decls[i + 1].start() if i + 1 < len(decls) else len(text)
-        chunk = text[start:end]
-        term = chunk.find("};")
-        if term != -1:
-            chunk = chunk[:term]
-
-        pairs = [
-            (cname, int(cid))
-            for cname, cid in re.findall(r"PerfCounterType::(\w+)\s*,\s*(\d+)", chunk)
-        ]
-        if not pairs:
-            continue
-
-        if name.startswith("l1_"):
-            mux = int(name.split("_")[1])
-            for cname, cid in pairs:
-                banks["L1"][(cid, mux)] = cname
-        elif name in _ARRAY_TO_BANK:
-            bank = _ARRAY_TO_BANK[name]
-            for cname, cid in pairs:
-                banks[bank][cid] = cname
-
-    return banks
-
-
-def _load_counter_names(arch: ChipArchitecture) -> dict:
-    arch_dir = _ARCH_DIR.get(arch)
-    if arch_dir is None:  # Quasar / unsupported: no hw_counters.h yet.
-        return {bank: {} for bank in COUNTER_BANK_NAMES.values()}
-    header = _metal_root() / f"tt_metal/hw/inc/internal/tt-1xx/{arch_dir}/hw_counters.h"
-    banks = _parse_hw_counters(header.read_text())
-    # Silently, every column becomes UNKNOWN and metrics.py turns the misses into a page of zeros.
-    missing = [
-        b
-        for b in ("INSTRN_THREAD", "FPU", "TDMA_UNPACK", "TDMA_PACK", "L1")
-        if not banks.get(b)
-    ]
-    if missing:
-        raise RuntimeError(
-            f"Could not parse counter names from {header}: empty banks {missing}. "
-            "The pair syntax in hw_counters.h probably changed; update _parse_hw_counters."
-        )
+def _load_counter_names(arch) -> dict:
+    """{bank: {select: name}} from the tt-llk tables; L1 is keyed by (select, mux), empty on Quasar."""
+    banks = {bank: {} for bank in _TABLE_BANK_TO_HARNESS.values()}
+    for table_bank, entries in bank_tables(arch).items():
+        bank = _TABLE_BANK_TO_HARNESS[table_bank]
+        for entry in entries:
+            key = (entry.select, entry.l1_mux) if bank == "L1" else entry.select
+            banks[bank][key] = entry.name
     return banks
 
 
@@ -151,51 +110,70 @@ def _zone_sync_ctrl_addr(zone: int) -> int:
 
 
 # Lightweight sync: SYNC_ZONE_COMPLETE marker (matches counters.h)
-_SYNC_ZONE_COMPLETE = 0xFF
+_SYNC_ZONE_COMPLETE = _parse_uint(_HEADER_TEXT, "SYNC_ZONE_COMPLETE")
+# The device stores this when the counter select never took effect; the count is unknown, not zero.
+_COUNTER_SELECT_MISSED = _parse_uint(_HEADER_TEXT, "COUNTER_SELECT_MISSED")
 
 
-def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
+class CounterReadoutMissing(RuntimeError):
+    """A zone the launch counted has no complete readout from that launch."""
+
+
+def _read_zone_counters(
+    location: str, zone: int, zone_name: str, token: int | None = None
+) -> list[dict]:
     """
     Read performance counter results for a single zone from L1.
 
-    Returns list of result dicts, or empty list if zone was not used.
+    Returns list of result dicts, or empty list if zone was not used. With a token the launch counted the zone, so a
+    missing or incomplete readout raises CounterReadoutMissing: the window would otherwise reach the report blank.
     """
+
+    def missing(reason: str) -> list[dict]:
+        if token is not None:
+            raise CounterReadoutMissing(
+                f"Zone {zone_name}: {reason}, but the launch counted it (token {token})"
+            )
+        return []
+
     sync_addr = _zone_sync_ctrl_addr(zone)
     sync_ctrl = read_words_from_device(location=location, addr=sync_addr, word_count=1)
     if not sync_ctrl:
-        return []
+        return missing("the sync word read failed")
 
     sync_word = sync_ctrl[0]
     logger.debug(
         f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
     )
 
-    # Zone was never used (BRISC clears sync to 0 before each run)
+    if token is not None and sync_word >> TestConfig._LAUNCH_TOKEN_SHIFT != token:
+        return missing(f"sync word 0x{sync_word:08x} is not this launch's readout")
+
+    # Zone was never used
     if sync_word == 0:
         logger.debug(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
         return []
 
-    # Lightweight stop writes only SYNC_ZONE_COMPLETE (0xFF); the high bytes are
-    # unused under the current protocol. Any other low-byte value signals
-    # corrupted or partially-written sync state.
+    # The readout writes SYNC_ZONE_COMPLETE (0xFF) and its launch's token above it.
+    # Any other low-byte value signals corrupted or partially-written sync state.
     if (sync_word & 0xFF) != _SYNC_ZONE_COMPLETE:
         logger.warning(
             f"Zone {zone}: unexpected sync word 0x{sync_word:08x} "
             f"(expected SYNC_ZONE_COMPLETE=0xFF in low byte)"
         )
-        return []
+        return missing(f"sync word 0x{sync_word:08x} is incomplete")
 
-    # Shared config (same for all zones) — read once metadata layout.
+    # Shared config (same for all zones): read the metadata layout once.
     config_addr = _zone_config_addr(zone)
     metadata = read_words_from_device(
         location=location, addr=config_addr, word_count=COUNTER_SLOT_COUNT
     )
     if not metadata:
-        return []
+        return missing("the config read failed")
 
     valid_count = sum(1 for m in metadata if (m & PERF_CFG_VALID_BIT) != 0)
     if valid_count == 0:
-        return []
+        return missing("the readout stored no counter config")
 
     # Per-zone data: 5 bank-cycle words (one OUT_L per bank) + N counter counts.
     data_addr = _zone_data_addr(zone)
@@ -204,10 +182,10 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         location=location, addr=data_addr, word_count=bank_cycles_words + valid_count
     )
     if len(data) < bank_cycles_words + valid_count:
-        return []
+        return missing("the data read was short")
 
     # Bank cycles are the first 5 words: indexed by bank_id (0..4).
-    # Order matches counter_bank enum (see counters.h): INSTRN, FPU, TDMA_UNPACK, L1, TDMA_PACK
+    # Order matches llk::perf::Bank: INSTRN, FPU, TDMA_UNPACK, L1, TDMA_PACK
     bank_cycles = data[:bank_cycles_words]
     counter_counts = data[bank_cycles_words:]
 
@@ -218,33 +196,20 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         if (config_word & PERF_CFG_VALID_BIT) == 0:
             continue
 
-        bank_id = config_word & PERF_CFG_BANK_MASK
-        counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
-        l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
-
-        bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
-
-        if bank_name == "L1" and l1_mux != TestConfig.PERF_L1_MUX_GROUP:
-            # The group is baked into brisc.elf and nothing keys a rebuild on it, so a stale ELF
-            # would otherwise return a self-consistently mislabelled dataset.
-            raise RuntimeError(
-                f"L1 counters were captured with mux group {l1_mux}, but "
-                f"LLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} was requested. The ELF predates "
-                "the change; recompile the producer (the group is a compile-time constant)."
-            )
-
-        if bank_name == "L1":
-            counter_name = COUNTER_NAMES["L1"].get(
-                (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
-            )
-        else:
-            counter_name = COUNTER_NAMES.get(bank_name, {}).get(
-                counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
-            )
+        bank_id, bank_name, counter_id, counter_name, l1_mux = decode_config_word(
+            config_word
+        )
 
         cycles = bank_cycles[bank_id] if bank_id < bank_cycles_words else 0
         count = counter_counts[count_idx]
         count_idx += 1
+
+        if count == _COUNTER_SELECT_MISSED:
+            logger.warning(
+                f"Zone {zone_name}: {bank_name}.{counter_name} (sel {counter_id}) missed its select "
+                "readback; reporting it as missing"
+            )
+            count = float("nan")
 
         results.append(
             {
@@ -254,22 +219,64 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
                 "counter_id": counter_id,
                 "cycles": cycles,
                 "count": count,
-                "l1_mux": l1_mux if bank_name == "L1" else None,
+                "l1_mux": l1_mux,
             }
         )
 
     return results
 
 
-def read_counters(location: str = "0,0") -> pd.DataFrame:
+def decode_config_word(config_word: int) -> tuple:
+    """(bank_id, bank_name, counter_id, counter_name, l1_mux) for one valid config word."""
+    bank_id = config_word & PERF_CFG_BANK_MASK
+    counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
+    l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
+
+    bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
+
+    if bank_name == "L1" and l1_mux != TestConfig.PERF_L1_MUX_GROUP:
+        # The group is baked into brisc.elf and nothing keys a rebuild on it, so a stale ELF
+        # would otherwise return a self-consistently mislabelled dataset.
+        raise RuntimeError(
+            f"L1 counters were captured with mux group {l1_mux}, but "
+            f"LLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} was requested. The ELF predates "
+            "the change; recompile the producer (the group is a compile-time constant)."
+        )
+
+    if bank_name == "L1":
+        counter_name = COUNTER_NAMES["L1"].get(
+            (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
+        )
+    elif bank_name == "L1_CLIENT":
+        counter_name = quasar_l1_client_label(counter_id)
+    else:
+        counter_name = COUNTER_NAMES.get(bank_name, {}).get(
+            counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
+        )
+
+    return (
+        bank_id,
+        bank_name,
+        counter_id,
+        counter_name,
+        l1_mux if bank_name == "L1" else None,
+    )
+
+
+def read_counters(
+    location: str = "0,0", zones: int | None = None, token: int | None = None
+) -> pd.DataFrame:
     """
     Read performance counter results from all zones.
 
-    Iterates zones 0..MAX_ZONES-1; zones with sync_word=0 (never used) are
+    Iterates zones 0..MAX_ZONES-1; without a token, zones with sync_word=0 (never used) are
     skipped silently. MAX_ZONES is set by counters.h (currently 8).
 
     Args:
         location: Tensix core coordinates (e.g., "0,0").
+        zones: the zones the launch counted (a bit per zone id), None for all.
+        token: the launch's readout token (counters.h launch_word), None to skip the check. With it, a zone in
+            `zones` without this launch's complete readout raises CounterReadoutMissing.
 
     Returns:
         DataFrame with columns:
@@ -278,8 +285,28 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
     all_results = []
 
     for zone_idx in range(TestConfig.PERF_COUNTERS_MAX_ZONES):
+        if zones is not None and not zones >> zone_idx & 1:
+            continue
         zone_name = f"ZONE_{zone_idx}"
-        zone_results = _read_zone_counters(location, zone_idx, zone_name)
+        zone_results = _read_zone_counters(location, zone_idx, zone_name, token)
         all_results.extend(zone_results)
 
     return pd.DataFrame(all_results)
+
+
+# Quasar has no BRISC: the host programs the bank registers (counters.h configure_hardware) through NEO0's register window
+# before a counting launch, so no TRISC runs counter code before the windows. Offsets: perf_counters/registers.h.
+_QUASAR_NEO0_WINDOW = 0x01800000
+_QUASAR_BANK_REGS = {0: (0x0, 0x4), 1: (0x18, 0x1C), 2: (0xC, 0x10), 4: (0x8C, 0x90)}
+_REF_PERIOD_MAX = 0xFFFFFFFF
+
+
+def configure_quasar_counters(location: str) -> None:
+    """Before a counting Quasar launch: each bank's reference period and continuous mode. Nothing starts here and the
+    l1_client stays off: the zone arms route, enable and start them.
+    """
+    for ref_period, mode in _QUASAR_BANK_REGS.values():
+        for offset, value in ((ref_period, _REF_PERIOD_MAX), (mode, 0)):
+            write_words_to_device(
+                location, _QUASAR_NEO0_WINDOW + offset, [value], safe_mode=False
+            )

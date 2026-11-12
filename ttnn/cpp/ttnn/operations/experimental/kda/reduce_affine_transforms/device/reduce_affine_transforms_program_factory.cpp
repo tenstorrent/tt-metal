@@ -26,11 +26,10 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const ReduceAffineTransformsInputs& in,
     std::vector<ttnn::Tensor>& outputs,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    const auto& a = in.a.mesh_tensor();
-    const auto& b = in.b.mesh_tensor();
+    const auto& summaries = in.summaries.mesh_tensor();
     const auto& output_a = outputs[0].mesh_tensor();
     const auto& output_b = outputs[1].mesh_tensor();
-    const auto& device = a.device();
+    const auto& device = summaries.device();
 
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt = attrs.value_dim / tt::constants::TILE_WIDTH;
@@ -60,8 +59,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
     const tt::tt_metal::experimental::SemaphoreSpecName release_semaphore_name{"release"};
 
-    const tt::tt_metal::experimental::TensorParamName a_tensor_name{"a"};
-    const tt::tt_metal::experimental::TensorParamName b_tensor_name{"b"};
+    const tt::tt_metal::experimental::TensorParamName summaries_tensor_name{"summaries"};
     const tt::tt_metal::experimental::TensorParamName output_a_tensor_name{"output_a"};
     const tt::tt_metal::experimental::TensorParamName output_b_tensor_name{"output_b"};
 
@@ -73,7 +71,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
             .data_format_metadata = format,
         };
     };
-    const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.a.dtype());
+    const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.summaries.dtype());
     constexpr auto internal_format = tt::DataFormat::Float32;
     // Per-core DFB storage is 6*Kt^2 + 7*Kt*Vt tiles. Production uses K=V=128 (Kt=Vt=4); supporting larger shapes
     // may require a separately designed chunked protocol rather than silently assuming this footprint fits every
@@ -130,8 +128,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
             },
         .tensor_bindings =
             {
-                tt::tt_metal::experimental::TensorBinding{a_tensor_name, "a"},
-                tt::tt_metal::experimental::TensorBinding{b_tensor_name, "b"},
+                tt::tt_metal::experimental::TensorBinding{summaries_tensor_name, "summaries"},
                 tt::tt_metal::experimental::TensorBinding{output_a_tensor_name, "output_a"},
                 tt::tt_metal::experimental::TensorBinding{output_b_tensor_name, "output_b"},
             },
@@ -219,8 +216,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
             },
         .tensor_parameters =
             {
-                tt::tt_metal::experimental::TensorParameter{.unique_id = a_tensor_name, .spec = a.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = b_tensor_name, .spec = b.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{
+                    .unique_id = summaries_tensor_name, .spec = summaries.tensor_spec()},
                 tt::tt_metal::experimental::TensorParameter{
                     .unique_id = output_a_tensor_name, .spec = output_a.tensor_spec()},
                 tt::tt_metal::experimental::TensorParameter{
@@ -239,8 +236,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     tt::tt_metal::experimental::ProgramRunArgs run_args;
     run_args.kernel_run_args = {std::move(dataflow_run), std::move(compute_run)};
     run_args.tensor_args = {
-        {a_tensor_name, a},
-        {b_tensor_name, b},
+        {summaries_tensor_name, summaries},
         {output_a_tensor_name, output_a},
         {output_b_tensor_name, output_b},
     };

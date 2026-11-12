@@ -44,10 +44,15 @@ class OptimalDramWorkers : public ::testing::TestWithParam<DispatchCoreAxis> {};
 //
 // Blackhole rejects ROW dispatch (the Device guard emits
 // "ROW dispatch core axis is not supported for blackhole arch"), so we omit ROW on BH.
+// Quasar core descriptors only define a row axis.
 std::vector<DispatchCoreAxis> supported_dispatch_axes() {
+    const char* arch_env = std::getenv("ARCH_NAME");
+    const std::string arch = arch_env == nullptr ? "" : arch_env;
+    if (arch == "quasar") {
+        return {DispatchCoreAxis::ROW};
+    }
     std::vector<DispatchCoreAxis> axes = {DispatchCoreAxis::COL};
-    const char* arch = std::getenv("ARCH_NAME");
-    if (arch == nullptr || std::string(arch) != "blackhole") {
+    if (arch != "blackhole") {
         axes.push_back(DispatchCoreAxis::ROW);
     }
     return axes;

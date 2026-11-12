@@ -29,6 +29,7 @@ from ...utils import timing_tree, walltime
 from ...utils.ltx_euler import EulerTail
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.tracing import StateTensor, Tracer, traced_function
 from ...utils.video import YuvVideoExport, export_video_audio, export_video_audio_yuv
 from ...utils.watchdog import run_with_stall_watchdog
@@ -546,6 +547,7 @@ class LTXDistilledPipeline(LTXPipeline):
             denoise_mask=torch.ones(B, video_N_real, 1), clean_latent=None, pin_rows=None, video_N_real_ext=video_N_real
         )
 
+    @cap_torch_threads_to_half_the_cpus()
     def warmup_buffers(
         self,
         *,
@@ -2246,6 +2248,7 @@ class LTXDistilledPipeline(LTXPipeline):
             if s["nonfinite"]:
                 logger.warning(f"{label}/{name}: {s['nonfinite']} non-finite elements in post-denoise latent")
 
+    @cap_torch_threads_to_half_the_cpus()
     def generate(
         self,
         prompt: str,

@@ -201,3 +201,18 @@ def test_llama4_scale_is_inert_below_original_max_position(config):
 
     beyond = get_llama_4_attn_scale(torch.tensor([[orig_max]]), beta, orig_max)
     assert beyond.item() == pytest.approx(1 + beta * math.log(2.0))
+
+
+def test_chunked_sdpa_matmul_runs_at_lofi():
+    """Mistral's chunked ring SDPA matmuls are configured at LoFi, which is where the prefill speedup comes from.
+
+    Host-only pin on the config field ttMLA reads (``mla_chunked_sdpa_matmul_fidelity``; absent on every
+    other model, which keeps the op's default fidelity). The accuracy side is gated on device, and was
+    measured when LoFi went in:
+      * test_mla.py::test_mla_chunked_prefill[mistral4-cpu], output PCC vs the torch MLA, floor 0.995:
+        plain-5k 0.9983, deep-50k+5k 0.99942 (0.99944 with the field removed, so LoFi costs ~2e-5 here).
+      * test_prefill_transformer_chunked.py padded full55k traced, KV-cache PCC floor 0.96: min 0.9632
+        before, 0.9620 after, and the drop does not grow with depth.
+    If this field is dropped or loosened, those runs still pass; only this test and the perf gates notice.
+    """
+    assert mistral4_hf_config().mla_chunked_sdpa_matmul_fidelity == "LoFi"

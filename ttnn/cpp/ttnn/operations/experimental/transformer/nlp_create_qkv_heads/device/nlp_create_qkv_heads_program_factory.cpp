@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "nlp_create_qkv_heads_device_operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -36,15 +37,21 @@ struct InterleavedWorkSplit {
 };
 
 InterleavedWorkSplit build_interleaved_work_split(
-    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& input_tensor,
+    bool input_tensor_kv_present) {
     const auto& input_shape = input_tensor.padded_shape();
     const CoreCoord grid = input_tensor.device()->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid.y;
     const uint32_t sequence_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
-    // Split heads only when the Q-only sequence split would leave cores idle.
-    const bool head_parallel = operation_attributes.num_kv_heads == 0 && operation_attributes.num_q_heads > 1 &&
-                               !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y;
-    const uint32_t num_blocks = sequence_blocks * (head_parallel ? operation_attributes.num_q_heads : 1);
+    // Split heads only when the sequence split would leave cores idle. A block is then one (batch, head, row) of
+    // one output: Q heads first, then K, then V.
+    const bool q_only = operation_attributes.num_kv_heads == 0;
+    const uint32_t head_slots = operation_attributes.num_q_heads + 2 * operation_attributes.num_kv_heads;
+    const bool head_parallel =
+        head_slots > 1 && !operation_attributes.transpose_k_heads && sequence_blocks < grid.x * grid.y &&
+        (q_only || (!input_tensor_kv_present && !operation_attributes.q_head_split.has_value()));
+    const uint32_t num_blocks = sequence_blocks * (head_parallel ? head_slots : 1);
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_blocks);
 
@@ -146,13 +153,21 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     // shared for K, V
     uint32_t q_out_h_tiles = input_shape[2] / TILE_HEIGHT;
     uint32_t q_out_w_tiles = head_dim / TILE_WIDTH;  // tiles along head_dim
+    // Tiles the reader and writer move per NoC barrier; the transposed-K path feeds compute one tile at a time.
+    uint32_t tile_batch = 8;
+    while (q_out_w_tiles % tile_batch != 0) {
+        tile_batch /= 2;
+    }
+    if (operation_attributes.transpose_k_heads) {
+        tile_batch = 1;
+    }
     uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;
     uint32_t q_out_CHtWt = num_q_heads * q_out_HtWt;
     uint32_t kv_out_CHtWt = num_kv_heads * q_out_HtWt;
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
     uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
 
-    const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
+    const auto split = build_interleaved_work_split(operation_attributes, input_tensor, read_from_input_tensor_kv);
     const auto& core_group_1 = split.core_group_1;
     const auto& core_group_2 = split.core_group_2;
     const uint32_t num_blocks_per_core_group_1 = split.num_blocks_per_core_group_1;
@@ -165,9 +180,9 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     ttnn::Tensor& k = std::get<1>(output);
     ttnn::Tensor& v = std::get<2>(output);
 
-    TT_ASSERT(q.buffer() != nullptr, "Output q buffer should be allocated on device!");
-    TT_ASSERT(k.buffer() != nullptr, "Output k buffer should be allocated on device!");
-    TT_ASSERT(v.buffer() != nullptr, "Output v buffer should be allocated on device!");
+    TT_ASSERT(q.is_allocated(), "Output q buffer should be allocated on device!");
+    TT_ASSERT(k.is_allocated(), "Output k buffer should be allocated on device!");
+    TT_ASSERT(v.is_allocated(), "Output v buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -226,6 +241,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
                 {"head_parallel", static_cast<uint32_t>(split.head_parallel)},
                 {"head_tiles", q_out_w_tiles},
                 {"seq_tiles", q_out_h_tiles},
+                {"tile_batch", tile_batch},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "in0_tensor_tile_id", "in1_tensor_tile_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -271,6 +287,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
                 // Non-zero only for the Q head split: output 0 takes the first split_width tiles of every
                 // head row and output 1 (bound as K) the rest.
                 {"split_width", static_cast<uint32_t>(operation_attributes.q_head_split.value_or(0) / TILE_WIDTH)},
+                {"tile_batch", tile_batch},
             },
         .runtime_arg_schema =
             {.runtime_arg_names =
@@ -285,11 +302,9 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     }
 
     // Dataflow buffers
-    // Four-tile capacity: quadruple buffering for the one-tile paths, one batched head transfer otherwise.
-    uint32_t dfb_num_tiles = 4;
+    // Two batches, so the reader fills one while the writer drains the other.
+    uint32_t dfb_num_tiles = std::max<uint32_t>(4, 2 * tile_batch);
 
-    // TODO: Investigate perf allocating full in0_w_tiles with double buffer
-    // uint32_t qv_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes
     uint32_t qv_num_tiles = dfb_num_tiles;
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{

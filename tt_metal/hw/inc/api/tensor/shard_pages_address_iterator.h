@@ -15,7 +15,7 @@ namespace tensor_accessor {
  * The iterator is initialized with a shard_id and a start_page_offset.
  * It can be incremented by one page at a time, or by a given number of pages.
  * It can be compared to another iterator to check if they are equal.
- * It can be dereferenced to get the current Page
+ * It can be dereferenced to get the current ShardPage (a Page that also knows its shard and index within it)
  * It can be indexed to get the n-th page.
  */
 template <typename Accessor>
@@ -24,10 +24,10 @@ public:
     using ArrayU32 = std::array<uint32_t, Accessor::DSpec::rank_ct>;
     using PageMapping = typename Accessor::PageMapping;
 
-    using value_type = Page;
+    using value_type = ShardPage<Accessor>;
     using difference_type = std::ptrdiff_t;
-    using reference = const Page&;
-    using pointer = const Page*;
+    using reference = const ShardPage<Accessor>&;
+    using pointer = const ShardPage<Accessor>*;
 
     // Constructor that initializes the iterator at a starting position
     ShardPagesAddressIterator(
@@ -56,12 +56,16 @@ public:
         }
 
         // Calculate NOC address for the final position
-        const auto bank_shard = accessor.shard_to_bank(shard_id);
-        PageMapping current_page_mapping{
-            .bank_id = bank_shard.bank_id,
-            .bank_page_offset =
-                (bank_shard.shard_in_bank * accessor.dspec().shard_volume()) + current_page_id_in_shard};
-        current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
+        if constexpr (kLazy) {
+            current_noc_addr = detail::kLazyNocAddr;
+        } else {
+            const auto bank_shard = accessor.shard_to_bank(shard_id);
+            PageMapping current_page_mapping{
+                .bank_id = bank_shard.bank_id,
+                .bank_page_offset =
+                    (bank_shard.shard_in_bank * accessor.dspec().shard_volume()) + current_page_id_in_shard};
+            current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
+        }
         ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         update_current_page();
     }
@@ -85,7 +89,9 @@ public:
         }
 
         do {
-            current_noc_addr += accessor.get_aligned_page_size();
+            if constexpr (!kLazy) {
+                current_noc_addr += accessor.get_aligned_page_size();
+            }
             current_page_id_in_shard++;
             if (current_page_id_in_shard >= end_page_id_in_shard) {
                 current_page_id_in_shard = end_page_id_in_shard;
@@ -109,7 +115,9 @@ public:
         }
 
         do {
-            current_noc_addr += steps * accessor.get_aligned_page_size();
+            if constexpr (!kLazy) {
+                current_noc_addr += steps * accessor.get_aligned_page_size();
+            }
             current_page_id_in_shard += steps;
             if (current_page_id_in_shard >= end_page_id_in_shard) {
                 current_page_id_in_shard = end_page_id_in_shard;
@@ -126,7 +134,7 @@ public:
         return tmp;
     }
 
-    const Page& operator[](difference_type n) const {
+    reference operator[](difference_type n) const {
         auto temp = *this;
         temp += n;
         return *temp;
@@ -152,6 +160,9 @@ public:
     bool operator>=(const ShardPagesAddressIterator& other) const { return !(*this < other); }
 
 private:
+    // The address generator serves this accessor's transfers: skip the software address (detail::lazy_page_addr_v).
+    static constexpr bool kLazy = detail::lazy_page_addr_v<Accessor>;
+
     const Accessor& accessor;
     uint32_t current_page_id_in_shard = 0;
     uint32_t end_page_id_in_shard = 0;
@@ -163,11 +174,12 @@ private:
     ArrayU32 global_page_coord = {};
     ArrayU32 shard_coord = {};
 
-    mutable Page current_page{0, 0};
+    mutable ShardPage<Accessor> current_page{0, 0, nullptr, 0, 0};
 
     void update_current_page() {
         if (current_page_id_in_shard < end_page_id_in_shard) {
-            current_page = Page(current_noc_addr, page_id());
+            current_page = ShardPage<Accessor>(
+                current_noc_addr, page_id(), &accessor, current_shard_id, current_page_id_in_shard, noc);
         }
     }
 

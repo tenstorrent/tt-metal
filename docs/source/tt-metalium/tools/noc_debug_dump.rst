@@ -14,7 +14,7 @@ The host can collect NOC traces from the device to identify potential kernel pro
 
 Each NOC transaction is instrumented to record metadata such as type, src/dst, NOC counters, and size. These packets are collected by the host and bucketed into events per core and RISC processor. As the host collects the trace, it compares it to previous traces as well as traces on other cores on the same device.
 
-When the program finishes, the device closes, or ``tt::tt_metal::detail::ReadDeviceProfilerResults`` is manually called, the host will analyze the trace and print out any issues found grouped by core.
+When the program finishes, the device closes, or ``tt::tt_metal::ReadMeshDeviceProfilerResults`` is manually called, the host will analyze the trace and print out any issues found grouped by core.
 
 
 Enabling

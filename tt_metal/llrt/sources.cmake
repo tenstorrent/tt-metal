@@ -1,5 +1,6 @@
 set(LLRT_SRC
     llrt.cpp
+    binary_metadata.cpp
     core_descriptor.cpp
     dispatch_engine_cores.cpp
     firmware_capability.cpp

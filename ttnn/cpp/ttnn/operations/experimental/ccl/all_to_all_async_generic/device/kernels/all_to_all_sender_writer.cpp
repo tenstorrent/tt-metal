@@ -14,6 +14,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "ckernel.h"
+#include "all_to_all_tilize_common.hpp"
+#include <algorithm>
 #include <cstdint>
 
 using address_t = uint32_t;
@@ -642,7 +644,18 @@ void kernel_main() {
                 continue;
             }
 
-            cb0.wait_front(1);
+            // CB pages of the packet starting at block `from`: one, or with TILIZE_INPUT one per tile, where a range's
+            // last packet holds the tiles left (such ranges have stride 1).
+            auto packet_cb_pages = [&](uint32_t from) {
+#ifdef TILIZE_INPUT
+                return std::min<uint32_t>(max_pages_per_packet, block_end_id - from);
+#else
+                return 1u;
+#endif
+            };
+            [[maybe_unused]] const uint32_t range_start = block_idx;
+            uint32_t cb_pages = packet_cb_pages(block_idx);
+            cb0.wait_front(cb_pages);
             size_t l1_read_addr = cb0.get_read_ptr();
             uint32_t pages_in_cb = 0;
             uint32_t current_package_payload = 0;
@@ -689,14 +702,23 @@ void kernel_main() {
                 const bool schedule_complete = block_idx >= block_end_id;
                 if (pages_in_cb == max_pages_per_packet || schedule_complete) {
                     flush_packet(schedule_complete && signal_completion);
-                    cb0.pop_front(1);
+                    cb0.pop_front(cb_pages);
                     pages_in_cb = 0;
                     if (!schedule_complete) {
-                        cb0.wait_front(1);
+                        cb_pages = packet_cb_pages(block_idx);
+                        cb0.wait_front(cb_pages);
                         l1_read_addr = cb0.get_read_ptr();
                     }
                 }
             }
+#ifdef TILIZE_INPUT
+            // Drop the empty pages the tilize kernel pads this range with (all_to_all_tilize_common.hpp).
+            const uint32_t pad_tiles = range_pad_tiles(block_end_id - range_start, RANGE_ALIGN_TILES);
+            if (pad_tiles > 0) {
+                cb0.wait_front(pad_tiles);
+                cb0.pop_front(pad_tiles);
+            }
+#endif
         }
     }
 

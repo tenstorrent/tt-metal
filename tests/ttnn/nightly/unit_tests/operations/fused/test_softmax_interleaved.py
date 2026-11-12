@@ -14,7 +14,7 @@ from tt_lib.utils import (
     tilize_to_list,
     untilize,
 )
-from models.common.utility_functions import print_diff_argmax
+from tt_py_test_utils_common.utility_functions import print_diff_argmax
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_softmax,

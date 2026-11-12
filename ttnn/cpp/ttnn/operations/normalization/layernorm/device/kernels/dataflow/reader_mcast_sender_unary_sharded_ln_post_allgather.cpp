@@ -28,7 +28,7 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_end_y = get_arg(args::mcast_dest_noc_end_y);
 
     Noc noc;
-    Semaphore reduce_sender_sem(sem::reduce_sender);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
     // [E[x], E[x^2]] local to sender
     DataflowBuffer dfb_stats_reduced_obj(dfb::stats_reduced);
     // [E[x], E[X^2]] global to all cores
@@ -50,8 +50,8 @@ void kernel_main() {
         noc.async_write_barrier();
     };
 
-    const auto& global_reduce_sender = [&](DataflowBuffer& dfb_ex_obj,
-                                           DataflowBuffer& dfb_ex_global_obj_inner) __attribute__((always_inline)) {
+    const auto& global_reduce_sender = [&](auto& dfb_ex_obj,
+                                           auto& dfb_ex_global_obj_inner) __attribute__((always_inline)) {
         const uint32_t l1_read_addr_ex_global = dfb_ex_global_obj_inner.get_read_ptr();
         noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
             dfb_ex_obj,

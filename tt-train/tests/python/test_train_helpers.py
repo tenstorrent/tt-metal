@@ -30,7 +30,8 @@ for _name in ("train", "callbacks"):
 from callbacks import EpochCallback  # noqa: E402
 from train import (  # noqa: E402
     TrainingConfig,
-    build_lr_schedule,
+    build_lr_lambda,
+    resolve_data_parallel_axes,
     resolve_effective_max_steps,
     resolve_warmup_steps,
 )
@@ -68,15 +69,14 @@ def test_negative_warmup_steps_clamps_to_zero():
     assert resolve_warmup_steps(_config(warmup_steps=-5), 1000) == 0
 
 
-# ── build_lr_schedule ─────────────────────────────────────────────────────────
+# ── build_lr_lambda ───────────────────────────────────────────────────────────
 
 _PEAK_LR = 1.0
 
 
 def _schedule(total_steps: int = 1000, **training_config):
     training_config.setdefault("scheduler_type", "warmup_linear")
-    optimizer = types.SimpleNamespace(get_lr=lambda: _PEAK_LR)
-    return build_lr_schedule(_config(**training_config), optimizer, total_steps)
+    return build_lr_lambda(_config(**training_config), total_steps)
 
 
 def test_warmup_ramps_to_peak_over_the_warmup_window():
@@ -166,3 +166,26 @@ def test_multiple_epochs_in_one_step_are_all_reported(capsys):
     callback = EpochCallback(steps_per_epoch=0.5)
     _run_steps(callback, [1])
     assert capsys.readouterr().out.splitlines() == ["Epoch 1 completed", "Epoch 2 completed"]
+
+
+# ── resolve_data_parallel_axes ────────────────────────────────────────────────
+
+
+def _mesh(**axes):
+    return types.SimpleNamespace(has_axis=lambda a: a in axes, axis_size=lambda a: axes[a])
+
+
+@pytest.mark.parametrize(
+    ("axes", "expected_axes", "expected_size"),
+    [
+        ({}, [], 1),
+        ({"dp": 8}, ["dp"], 8),
+        ({"fsdp": 8}, ["fsdp"], 8),
+        ({"dp": 2, "fsdp": 4}, ["dp", "fsdp"], 8),
+        ({"fsdp": 4, "tp": 2}, ["fsdp"], 4),
+        ({"dp": 1, "fsdp": 8}, ["fsdp"], 8),
+    ],
+    ids=["single_device", "ddp", "fsdp", "hsdp", "fsdp_tp", "size_one_dp"],
+)
+def test_data_parallel_size_counts_only_batch_sharding_axes(axes, expected_axes, expected_size):
+    assert resolve_data_parallel_axes(_mesh(**axes)) == (expected_axes, expected_size)

@@ -211,6 +211,8 @@ class DistributedRMSNorm(Module):
         dynamic_bias=None,
         per_head_norm=False,
         preserve_rope_rounding=False,
+        dynamic_weight_includes_static=False,
+        dynamic_tile_row_map=None,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
@@ -229,12 +231,16 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         # Effective affine weight: the static per-channel weight, optionally modulated by a
-        # per-sample dynamic weight (e.g. an adaLN (1 + scale) factor). Folding it in here
+        # per-sample dynamic weight (e.g. an adaLN (1 + scale) factor), unless the caller already
+        # folded the static weight into it (`dynamic_weight_includes_static`). Folding it in here
         # applies the modulation inside the fused op (fp32 internals) and removes the separate
         # elementwise scale op the caller would otherwise need. RMSNorm has no bias term.
         weight = self.weight.data if self.weight is not None else None
         if dynamic_weight is not None:
-            weight = dynamic_weight if weight is None else ttnn.multiply(weight, dynamic_weight)
+            if weight is None or dynamic_weight_includes_static:
+                weight = dynamic_weight
+            else:
+                weight = ttnn.multiply(weight, dynamic_weight)
         weight_key = tuple(weight.shape) if weight is not None else None
 
         # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
@@ -245,6 +251,8 @@ class DistributedRMSNorm(Module):
         if dynamic_bias is not None and weight is None:
             msg = "dynamic_bias requires a weight: pass dynamic_weight or build the norm with affine=True"
             raise ValueError(msg)
+
+        extra = {} if dynamic_tile_row_map is None else {"affine_tile_row_map": dynamic_tile_row_map}
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
@@ -289,6 +297,7 @@ class DistributedRMSNorm(Module):
             rope_sin=rope_sin,
             dtype=dtype,
             **({"preserve_rope_rounding": True} if preserve_rope_rounding else {}),
+            **extra,
         )
 
 

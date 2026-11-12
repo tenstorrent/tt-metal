@@ -33,6 +33,7 @@ void MorehGroupNormOperation::validate_tensors(
     check_tensor(beta, "moreh_group_norm", "beta");
 
     // input (N, C, H, W)
+    TT_FATAL(num_groups > 0, "num_groups must be greater than 0.");
     auto C = input.padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // output (N, C, H, W)
@@ -93,7 +94,7 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
         result.push_back(tensor_args.mean->tensor_spec());
     } else if (operation_attributes.are_required_outputs[1]) {
         result.push_back(tt::tt_metal::TensorSpec(
-            mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
+            mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.mean_memory_config)));
     } else {
         result.push_back(std::nullopt);
     }
@@ -103,7 +104,7 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
         result.push_back(tensor_args.rstd->tensor_spec());
     } else if (operation_attributes.are_required_outputs[2]) {
         result.push_back(tt::tt_metal::TensorSpec(
-            mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
+            mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.rstd_memory_config)));
     } else {
         result.push_back(std::nullopt);
     }

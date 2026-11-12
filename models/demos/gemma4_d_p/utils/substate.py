@@ -16,6 +16,12 @@ if TYPE_CHECKING:
     import torch
 
 
+class _PlaceholderSubstate(dict):
+    """A substate of a warm-cache placeholder state_dict (see models/common/weight_cache.py)."""
+
+    is_placeholder = True
+
+
 def substate(state: dict[str, torch.Tensor], key: str) -> dict[str, torch.Tensor]:
     """
     Extract a sub-dictionary from a state dict based on a key prefix.
@@ -30,4 +36,5 @@ def substate(state: dict[str, torch.Tensor], key: str) -> dict[str, torch.Tensor
     prefix = f"{key}."
     prefix_len = len(prefix)
 
-    return {k[prefix_len:]: v for k, v in state.items() if k.startswith(prefix)}
+    sub = {k[prefix_len:]: v for k, v in state.items() if k.startswith(prefix)}
+    return _PlaceholderSubstate(sub) if getattr(state, "is_placeholder", False) else sub

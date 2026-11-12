@@ -77,13 +77,6 @@ void kernel_main() {
             scratch_offsets[i] = i * scratch_page_size;
         }
 
-        // Local NoC coordinates for the scratch->dest reads.
-        UnicastEndpoint self_ep;
-        const uint32_t my_noc_x = my_x[noc.get_noc_id()];
-        const uint32_t my_noc_y = my_y[noc.get_noc_id()];
-        // Base L1 address of the scratch buffer
-        const uint32_t scratch_l1_base = scratch_pad.get_base_address();
-
         uint32_t dest_off = 0;        // running offset into dfb_in
         uint32_t rows_issued = 0;     // Number of src->scratch transfers started
         uint32_t rows_completed = 0;  // Number of scratch->dest transfers completed
@@ -117,12 +110,10 @@ void kernel_main() {
                 if (slot_states[slot] == SlotState::SCRATCH_READY) {
                     // Start scratch->dest transfer: local L1 loopback read tagged with the same trid.
                     noc.async_read<NocOptions::TXN_ID>(
-                        self_ep,
+                        scratch_pad,
                         dfb_in,
                         block_width_bytes,
-                        {.noc_x = my_noc_x,
-                         .noc_y = my_noc_y,
-                         .addr = scratch_l1_base + scratch_offsets[slot] + aligned_offset},
+                        {.offset_bytes = scratch_offsets[slot] + aligned_offset},
                         {.offset_bytes = dest_offsets[slot]},
                         NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
 

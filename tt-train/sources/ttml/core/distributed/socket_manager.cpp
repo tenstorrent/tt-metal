@@ -5,6 +5,7 @@
 #include "socket_manager.hpp"
 
 #include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 
 namespace {
 
@@ -58,6 +59,16 @@ ttnn::Tensor SocketManager::recv(ttnn::Tensor tensor, std::shared_ptr<Distribute
     auto socket = get_socket(rank, distributed_ctx);
     socket->recv(tensor);
     return tensor;
+}
+
+void SocketManager::recv_value(
+    ttml::autograd::Tensor& tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank) {
+    if (tensor.get_value(ttml::autograd::PreferredPrecision::NATIVE).dtype() == ttnn::DataType::BFLOAT16) {
+        auto value = tensor.get_value_for_update();
+        (void)recv(value.tensor(), std::move(distributed_ctx), rank);
+    } else {
+        tensor.assign(recv(ttnn::empty_like(tensor.get_value()), std::move(distributed_ctx), rank));
+    }
 }
 
 ISocket* SocketManager::get_socket(Rank rank, std::shared_ptr<DistributedContext> distributed_ctx) {

@@ -24,4 +24,17 @@ Tensor generic_op(
 // Convenience entry point for single ProgramDescriptor (SPMD mode)
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
+namespace experimental {
+
+// Compiles and finalizes the program that generic_op would enqueue, without enqueueing it. Throws if the program does
+// not compile or does not fit the kernel-configuration buffer. The prepared workload is inserted into the program
+// cache, so the next generic_op with the same tensors and descriptor is a cache hit.
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
+
+}  // namespace experimental
+
 }  // namespace ttnn

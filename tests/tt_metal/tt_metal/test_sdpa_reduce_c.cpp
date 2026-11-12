@@ -183,7 +183,7 @@ static bool test_sdpa_reduce_c(
 
     tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     CoreCoord core = {0, 0};
 

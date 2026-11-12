@@ -10,7 +10,8 @@
 // what a freshly constructed tensor would hold.
 //
 // Plus dedicated tests for the special dtypes whose to_layout behavior is not a generic conversion:
-// BFLOAT8_B / BFLOAT4_B are no-ops, and FP8_E4M3 is ROW_MAJOR-only (throws when asked to tilize).
+// BFLOAT8_B / BFLOAT4_B are no-ops, FP8_E4M3 is ROW_MAJOR-only (throws when asked to tilize), and the MX
+// formats are TILE-only (throw when asked to row-major-ize).
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -31,6 +32,8 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
+
+#include "common_tensor_test_utils.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -261,6 +264,37 @@ TEST(HostTensorToLayout, Fp8E4m3CannotConvertToTile) {
 
     EXPECT_ANY_THROW(std::ignore = to_layout(source, Layout::TILE));
 }
+
+// MX formats are TILE-only. Unlike BFP (see G2), asking for ROW_MAJOR is a hard error, and asking for TILE
+// returns the packed tiles unchanged.
+class HostTensorToLayoutMx : public ::testing::TestWithParam<DataType> {};
+
+TEST_P(HostTensorToLayoutMx, ToRowMajorThrows) {
+    const Shape shape{32, 32};
+    const auto data = make_ramp<float>(shape.volume());
+    const auto source = HostTensor::from_vector<float>(data, make_spec(shape, GetParam(), Layout::TILE));
+
+    EXPECT_ANY_THROW(std::ignore = to_layout(source, Layout::ROW_MAJOR));
+}
+
+TEST_P(HostTensorToLayoutMx, ToTileIsNoOp) {
+    const Shape shape{32, 32};
+    const auto data = make_ramp<float>(shape.volume());
+    const auto source = HostTensor::from_vector<float>(data, make_spec(shape, GetParam(), Layout::TILE));
+
+    const auto result = to_layout(source, Layout::TILE);
+
+    EXPECT_EQ(result.tensor_spec(), source.tensor_spec());
+    EXPECT_THAT(
+        host_buffer::get_as<uint32_t>(result),
+        ::testing::Pointwise(::testing::Eq(), host_buffer::get_as<uint32_t>(source)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    HostTensorToLayout,
+    HostTensorToLayoutMx,
+    ::testing::ValuesIn(::test_utils::kMxDataTypes),
+    ::test_utils::dtype_param_name);
 
 }  // namespace
 }  // namespace tt::tt_metal

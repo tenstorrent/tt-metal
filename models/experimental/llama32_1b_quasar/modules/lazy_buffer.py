@@ -15,7 +15,7 @@ Design principles:
 - Explicit parameters over hidden closures (IDE-friendly)
 - Duck typing for source tensors (no torch import)
 
-See also: LazyWeight in models/common/modules/lazy_weight.py
+See also: LazyWeight in models/common/lazy_weight.py
 """
 
 from dataclasses import dataclass, field, replace
@@ -45,7 +45,7 @@ class LazyBuffer:
     and no disk caching. If a buffer becomes read-only in a future refactor, it can be
     promoted to a LazyWeight with caching enabled.
 
-    See also: LazyWeight in models/common/modules/lazy_weight.py
+    See also: LazyWeight in models/common/lazy_weight.py
 
     Example usage:
         # Fully specified at construction

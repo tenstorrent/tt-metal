@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """File one RELEASE Jira ticket per failed job of a Package and release run.
 
-Reads the run and its jobs from the GitHub API, drops the failures that carry
+Reads the run and its failed jobs from the GitHub API, drops the failures that carry
 no test result (a runner that never started; the nothing-to-release precheck on
 main), and files -- or de-duplicates onto -- one ticket per remaining job. Each
 ticket names the job, its owner from tests/pipeline_reorg, and the root cause
@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "..", "scripts")))
@@ -57,17 +58,36 @@ def slug(text):
 
 
 def _gh(args):
-    return subprocess.run(["gh", "api", *args], capture_output=True, text=True, check=True).stdout
+    """stdout of `gh api <args>`. Exits with gh's own message: the HTTP status is only on stderr.
+
+    A GitHub 5xx is retried: the Actions API is slow rather than broken for a run of this size.
+    """
+    for delay in (5, 10, 20, None):  # seconds before the next try; None: last try
+        proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True)
+        if proc.returncode == 0:
+            return proc.stdout
+        err = " ".join(proc.stderr.split())
+        if delay is None or not re.search(r"\(HTTP 5\d\d\)", err):
+            sys.exit(f"error: gh api {' '.join(args)}: {err}")
+        print(f"::warning::{err}; retrying in {delay}s")
+        time.sleep(delay)
 
 
 def fetch_run(repo, run_id):
     return json.loads(_gh([f"repos/{repo}/actions/runs/{run_id}"]))
 
 
-def fetch_jobs(repo, run_id):
-    """Every job of the run, as dicts with name / conclusion / html_url / steps."""
-    out = _gh(["--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100", "--jq", ".jobs[]"])
-    return [json.loads(line) for line in out.splitlines() if line.strip()]
+def fetch_failed_jobs(repo, run):
+    """The run's failed jobs (latest attempt), with their steps.
+
+    Found through the check-runs API, which answers in a second for any run
+    size, then read one by one: the Actions jobs listing times out server-side
+    (HTTP 502) on a release run, and only the per-job endpoint carries the steps.
+    """
+    failed = '.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .id'
+    suite = f"repos/{repo}/check-suites/{run['check_suite_id']}/check-runs?per_page=100"
+    ids = _gh(["--paginate", suite, "--jq", failed]).split()
+    return [json.loads(_gh([f"repos/{repo}/actions/jobs/{job_id}"])) for job_id in ids]
 
 
 def _runner_never_started(job):
@@ -187,7 +207,14 @@ def main():
         print(f"::notice::run {run_id} is on '{branch}', not a release ref; nothing to file.")
         return
 
-    failed, dropped = select_failed(fetch_jobs(repo, run_id), branch)
+    # The auto-retry re-runs the failed jobs within seconds of a failure, so
+    # the run is usually mid re-run by now. What still fails after the last
+    # attempt reaches the board; the rest was flaky.
+    if run["status"] != "completed":
+        print(f"::notice::run {run_id} is already on attempt {run['run_attempt']}; its last attempt files.")
+        return
+
+    failed, dropped = select_failed(fetch_failed_jobs(repo, run), branch)
     if not failed:
         if dropped:
             print(f"::notice::all {dropped} failed job(s) had no test result; nothing to file.")

@@ -12,6 +12,7 @@
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::operations::experimental::quasar::matmul::utilities {
 
@@ -336,11 +337,11 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
     if (!view.contains(coord) || !view.is_local(coord)) {
         return device;
     }
-    return a.device()->get_device(coord);
+    return tt::tt_metal::internal::get_device(*a.device(), coord);
 }
 
 void get_max_page_size_and_num_pages(
-    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     uint32_t num_tiles,
     uint32_t tile_size,
     uint32_t& page_size,
@@ -379,15 +380,15 @@ void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<t
 }
 
 void get_optimal_dram_bank_to_reader_assignment(
-    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
+    tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc) {
     all_worker_cores_ordered = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
-    std::set<CoreRange> all_cores_set;
+    std::set<tt::tt_metal::CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
-        all_cores_set.insert(CoreRange(worker_core));
+        all_cores_set.insert(tt::tt_metal::CoreRange(worker_core));
     }
-    all_worker_cores = CoreRangeSet(all_cores_set);
+    all_worker_cores = tt::tt_metal::CoreRangeSet(all_cores_set);
 }
 }  // namespace ttnn::prim::qsr::dram_sharded_helpers

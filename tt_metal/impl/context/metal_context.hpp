@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/indestructible.hpp>
+#include <atomic>
 #include <optional>
 #include <vector>
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
@@ -12,7 +13,7 @@
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/common_values.hpp"
@@ -82,17 +83,14 @@ public:
     // IDs are recycled after instances are destroyed.
     ContextId get_context_id() const { return context_id_; }
 
-    [[deprecated("Use MetalEnv instead")]] Cluster& get_cluster();
-    [[deprecated("Use MetalEnv instead")]] llrt::RunTimeOptions& rtoptions();
-    [[deprecated("Use MetalEnv instead")]] const Cluster& get_cluster() const;
-    [[deprecated("Use MetalEnv instead")]] const llrt::RunTimeOptions& rtoptions() const;
-    [[deprecated("Use MetalEnv instead")]] const Hal& hal() const;
+    Cluster& get_cluster();
+    llrt::RunTimeOptions& rtoptions();
+    const Cluster& get_cluster() const;
+    const llrt::RunTimeOptions& rtoptions() const;
+    const Hal& hal() const;
 
     // Returns the MetalEnv instance assigned to this context.
-    [[deprecated(
-        "Use MetalEnv directly instead. This is a temporary workaround until all code is migrated to use "
-        "MetalEnv.")]] tt::tt_metal::MetalEnv&
-    get_env();
+    tt::tt_metal::MetalEnv& get_env();
 
     dispatch_core_manager& get_dispatch_core_manager();
 
@@ -208,7 +206,6 @@ public:
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
     const tt_fabric::FabricRouterConfig& get_fabric_router_config() const;
 
-    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
     tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
@@ -225,6 +222,11 @@ public:
 
     // Hang detection
     void on_dispatch_timeout_detected();
+
+    // Set when a Tensix BRISC is found with a halt record. Until the next init, halt checks throw at once and device
+    // close skips dispatch teardown.
+    bool l1_ecc_halt_detected() const { return l1_ecc_halt_detected_.load(std::memory_order_acquire); }
+    void set_l1_ecc_halt_detected(bool detected) { l1_ecc_halt_detected_.store(detected, std::memory_order_release); }
 
 private:
     friend class ttsl::Indestructible<MetalContext>;
@@ -266,6 +268,8 @@ private:
     // Mutex to protect timeout detection for thread-safe access
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
+
+    std::atomic<bool> l1_ecc_halt_detected_{false};
 
     // The MetalEnv is normally owned by the user
     // For the legacy code, we will initialize it in the MetalContext constructor and own the env

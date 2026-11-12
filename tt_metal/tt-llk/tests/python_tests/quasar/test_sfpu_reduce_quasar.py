@@ -4,6 +4,7 @@
 import pytest
 import torch
 from helpers.constraints import is_valid_quasar_unpack_to_dest
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -13,7 +14,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     DestAccumulation,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     ReducePool,
@@ -21,13 +21,12 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.logger import logger
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, runtime
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -37,7 +36,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 MAX_TILES_16_BIT = 8
 MAX_TILES_32_BIT = 4
@@ -55,7 +54,6 @@ REDUCE_FORMATS = [
     for fmt in (
         DataFormat.Float32,
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Int32,
     )
 ]
@@ -66,26 +64,6 @@ _FLOAT_FORMAT_EPS = {
     DataFormat.Float16: 2.0**-11,
     DataFormat.Float32: 2.0**-24,
 }
-
-
-def get_implied_math_formats(
-    formats: InputOutputFormat,
-    dimension_combinations: list[int],
-    input_bounds: tuple[int, int],
-    reduced_extent: int,
-) -> list[ImpliedMathFormat]:
-    """Implied math format only changes the unpack-to-dest configuration, never the SFPU
-    instruction stream. Both values run on one representative variant per pool/format/axis - the
-    single full tile over the mixed range; everything else pins Yes, the perf setting.
-    """
-    representative = (
-        dimension_combinations == [TILE_DIM, TILE_DIM]
-        and reduced_extent == TILE_DIM
-        and input_bounds[0] < 0 < input_bounds[1]
-    )
-    if representative:
-        return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.Yes]
 
 
 def get_max_tiles(formats: InputOutputFormat) -> int:
@@ -246,7 +224,6 @@ def _reduce_test_config_kwargs(
     src_B,
     dest_acc,
     loop_factor=1,
-    implied_math_format=ImpliedMathFormat.No,
 ):
     """Kernel configuration shared by the sweep and the Int32 range-end guard."""
     return {
@@ -255,7 +232,6 @@ def _reduce_test_config_kwargs(
         "templates": [
             MATH_OP(mathop=mathop, pool_type=reduce_pool),
             generate_input_dim(input_dimensions, input_dimensions),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             # SFPU-only op: operands reach Dest through unpack-to-dest, with no FPU
             # datacopy staging them via SrcA.
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
@@ -283,7 +259,6 @@ def _reduce_test_config_kwargs(
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": True,
-        "disable_format_inference": True,
         "compile_time_formats": True,
     }
 
@@ -293,10 +268,9 @@ def _reduce_test_config_kwargs(
     reduce_pool=REDUCE_POOLS,
     formats=REDUCE_FORMATS,
     mathop=get_supported_reduce_axes,
-    input_bounds=get_format_input_bounds,
+    input_bounds=runtime(get_format_input_bounds),
     dimension_combinations=get_dimension_combinations,
-    reduced_extent=get_reduce_extents,
-    implied_math_format=get_implied_math_formats,
+    reduced_extent=runtime(get_reduce_extents),
 )
 def test_sfpu_reduce_quasar(
     formats,
@@ -305,7 +279,6 @@ def test_sfpu_reduce_quasar(
     input_bounds,
     dimension_combinations,
     reduced_extent,
-    implied_math_format,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -325,11 +298,7 @@ def test_sfpu_reduce_quasar(
     # and a 16-bit format a 16-bit one - one legal value per format. Nothing is lost by a narrow
     # Dest: the SFPU still folds in fp32 lanes and stores once per output element, so it only
     # rounds what the packer would have rounded anyway.
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
     # Checked against the harness's own rule, so a format whose legal width does not follow from
     # is_32_bit() fails here rather than on device.
     assert is_valid_quasar_unpack_to_dest(
@@ -407,7 +376,6 @@ def test_sfpu_reduce_quasar(
             src_B,
             dest_acc,
             loop_factor,
-            implied_math_format,
         ),
     )
 
@@ -417,7 +385,7 @@ def test_sfpu_reduce_quasar(
 
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     if mathop == MathOperation.ReduceColumn:
@@ -507,7 +475,7 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range):
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     if mathop == MathOperation.ReduceColumn:
@@ -520,13 +488,9 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range):
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
 @pytest.mark.parametrize("reduce_pool", [ReducePool.Max, ReducePool.Min])
-@pytest.mark.parametrize(
-    "injected_value", [INT32_MIN, INT32_MAX], ids=["INT32_MIN", "INT32_MAX"]
-)
-@pytest.mark.parametrize(
-    "base_range",
-    [(-1000, 1000), (-1000, -1), (1, 1000)],
-    ids=["mixed", "all_negative", "all_positive"],
+@parametrize(
+    injected_value=runtime([INT32_MIN, INT32_MAX]),
+    base_range=runtime([(-1000, 1000), (-1000, -1), (1, 1000)]),
 )
 def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     """Guard for the Int32 range ends of a MAX/MIN reduce, pinning the comparator's domain.

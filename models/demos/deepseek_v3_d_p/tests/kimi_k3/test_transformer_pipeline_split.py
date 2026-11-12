@@ -35,6 +35,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
@@ -126,6 +127,10 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
     ), f"rank 0 sends {rank0.outbound_planes} planes, rank 1 expects {rank1.inbound_planes}"
     assert rank1.inbound_planes == 1 + BOUNDARY // KimiK3Config.ATTN_RES_BLOCK_SIZE
 
+    slabs = {
+        name: attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
+        for name, model in (("rank0", rank0), ("rank1", rank1))
+    }
     # A KV cache per rank: `schedule.kv_slot` is rank-local, so rank 1's MLA layers (15, 19, 23)
     # occupy slots 0..2 of its own cache, not slots 3..5 of a shared one.
     caches = {}
@@ -172,9 +177,9 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
         ), f"rank 0 handed off {packed.shape[1]} planes, declared {rank0.outbound_planes}"
         rank1.forward(packed, kvpe_cache=caches["rank1"], layer_tap=tap_for(BOUNDARY))
     finally:
-        for model in (rank0, rank1):
-            if model.kda_states is not None:
-                model.kda_states.deallocate()
+        for states in slabs.values():
+            if states is not None:
+                states.deallocate()
 
     # KV first: it is the one oracle a residual-shaped self-consistency cannot fake. Rank 1's slabs
     # are written from reads that exist only if the inherited sealed set arrived.

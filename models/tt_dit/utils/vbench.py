@@ -57,11 +57,13 @@ def score_vbench(
 
     import torch
 
+    from .torch_threads import cap_torch_threads_to_half_the_cpus
+
     torch.serialization.add_safe_globals([typing.OrderedDict])
 
     dimension_list = dimensions
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory() as tmp_dir, cap_torch_threads_to_half_the_cpus():
         name = "eval"
         prompt_list = vbench_prompt_list(video_path, prompt)
 

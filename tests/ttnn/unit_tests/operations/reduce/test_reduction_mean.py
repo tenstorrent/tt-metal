@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
@@ -103,6 +103,20 @@ def test_mean_scaling_factor(device, shape, dim, scalar, dtype):
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
+def test_mean_hw_bf16(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no SFPU reduce. Tracked in https://github.com/tenstorrent/tt-metal/issues/54145")
+    torch_input = torch.full((1, 1, 32, 64), 1024.0, dtype=torch.bfloat16)
+    torch_input[0, 0, 16:] = -1024.0
+    torch_input[0, 0, 16:, 0] = -1020.0
+    torch_output = torch.mean(torch_input.double(), dim=[2, 3], keepdim=True).to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.mean(input_tensor, dim=[2, 3], keepdim=True)
+
+    assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
+
+
 @pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block", "height"])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
@@ -191,3 +205,50 @@ def test_mean_fp32_fast_and_approximate_mode_no_dim(device, input_shape, fast_an
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
     else:
         assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
+
+
+def test_mean_multi_axis_bf16(device):
+    torch_input = torch.full((1, 2, 32, 64), 1024.0, dtype=torch.bfloat16)
+    torch_input[0, 1] = -1024.0
+    torch_input[0, 1, :, 0] = -1020.0
+    torch_output = torch.mean(torch_input.double(), dim=[1, 3], keepdim=True).to(torch.bfloat16)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, fp32_dest_acc_en=True
+    )
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.mean(input_tensor, dim=[1, 3], keepdim=True, compute_kernel_config=compute_kernel_config)
+
+    assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
+
+
+@pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
+@pytest.mark.parametrize(
+    "shape, layout",
+    [
+        ((1, 2, 32, 64), ttnn.TILE_LAYOUT),
+        ((1, 2, 32, 64), ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 2, 32, 2048), ttnn.TILE_LAYOUT),
+        pytest.param(
+            (1, 2, 32, 2048),
+            ttnn.ROW_MAJOR_LAYOUT,
+            marks=pytest.mark.xfail(
+                reason=(
+                    "https://github.com/tenstorrent/tt-metal/issues/62259: "
+                    "fp32-Dest row reduce leaks column 16 into the chunk accumulator"
+                ),
+                strict=True,
+            ),
+        ),
+    ],
+)
+def test_mean_full_tensor_bf16(device, dim, shape, layout):
+    torch_input = torch.full(shape, 1024.0, dtype=torch.bfloat16)
+    torch_input[0, 1] = -1024.0
+    torch_input[0, 1, :, 0] = -1020.0
+    torch_output = torch.mean(torch_input.double()).to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
+    output_tensor = ttnn.mean(input_tensor, dim=dim)
+
+    assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())

@@ -4,13 +4,13 @@
 import pytest
 
 import ttnn
-from models.common.modules.tt_ccl import default_topology
 from models.common.tests.conftest import (
     _allowed_req_shapes_for_system,
     _default_fabric_config,
     _is_physical_p150x4_cluster,
     _pick_parent_shape_for_submesh,
 )
+from models.common.tt_ccl import default_topology
 
 
 @pytest.mark.parametrize(

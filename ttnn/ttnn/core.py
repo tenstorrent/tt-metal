@@ -372,6 +372,14 @@ def ttnn_dtype_to_torch_dtype(dtype):
         ttnn.bfloat16: torch.bfloat16,
         ttnn.bfloat8_b: torch.float32,
         ttnn.bfloat4_b: torch.float32,
+        ttnn.mxfp8_e4m3: torch.float32,
+        ttnn.mxfp8_e5m2: torch.float32,
+        ttnn.mxfp6_e2m3: torch.float32,
+        ttnn.mxfp6_e3m2: torch.float32,
+        ttnn.mxfp4: torch.float32,
+        ttnn.mxint8: torch.float32,
+        ttnn.mxint4: torch.float32,
+        ttnn.mxint2: torch.float32,
     }[dtype]
 
 

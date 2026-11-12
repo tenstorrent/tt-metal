@@ -11,9 +11,9 @@ non-degenerate gradient update.
 
 Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
-  * Skip the HuggingFace weight download by monkey-patching
-    ``snapshot_download`` and ``load_from_safetensors`` in
-    ``utils.llama_completer`` to no-ops; the model keeps its random init.
+  * Skip the HuggingFace weight download: ``snapshot_download`` is patched to
+    return a directory holding only the tiny model's ``config.json``, and
+    ``load_from_safetensors`` to do nothing, so the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -32,6 +32,7 @@ which is a gated HuggingFace repo. To run this in CI without an
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -44,7 +45,7 @@ from datasets import Dataset
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
-
+from ttml.trainers.grpo_trainer import save_checkpoint
 
 # The ``LlamaGRPOCompleter`` reference implementation lives under the
 # examples tree, not under ``ttml`` proper. Surface its package on the
@@ -60,32 +61,17 @@ if _EXAMPLES_DIR not in sys.path:
 
 from grpo.utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
 
-
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 
 
+# The completer reads the architecture from the checkpoint's config.json; these only set the run.
 TINY_TRANSFORMER_CONFIG = TransformerConfig(
     {
         "transformer_config": {
             "model_type": "llama",
-            "num_heads": 2,
-            "num_groups": 1,
-            "embedding_dim": 64,
-            "intermediate_dim": 128,
             "dropout_prob": 0.0,
-            "num_blocks": 1,
-            "weight_tying": "enabled",
-            # Overwritten by ``len(tokenizer)`` inside the completer ctor.
-            "vocab_size": 32000,
             "max_sequence_length": 128,
             "runner_type": "memory_efficient",
-            "theta": 500000.0,
-            "rope_scaling": {
-                "scaling_factor": 32.0,
-                "high_freq_factor": 4.0,
-                "low_freq_factor": 1.0,
-                "original_context_length": 8192,
-            },
         }
     }
 )
@@ -94,26 +80,33 @@ LLAMA_1B_TRANSFORMER_CONFIG = TransformerConfig(
     {
         "transformer_config": {
             "model_type": "llama",
-            "num_heads": 32,
-            "num_groups": 8,
-            "embedding_dim": 2048,
-            "intermediate_dim": 8192,
             "dropout_prob": 0.0,
-            "num_blocks": 16,
-            "weight_tying": "enabled",
-            "vocab_size": 32000,
             "max_sequence_length": 1024,
             "runner_type": "memory_efficient",
-            "theta": 500000.0,
-            "rope_scaling": {
-                "scaling_factor": 32.0,
-                "high_freq_factor": 4.0,
-                "low_freq_factor": 1.0,
-                "original_context_length": 8192,
-            },
         }
     }
 )
+
+# Llama-3.2-1B shrunk to one narrow layer.
+TINY_HF_CONFIG = {
+    "model_type": "llama",
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 1,
+    "num_attention_heads": 2,
+    "num_key_value_heads": 1,
+    "vocab_size": 128256,
+    "rms_norm_eps": 1e-05,
+    "tie_word_embeddings": True,
+    "rope_theta": 500000.0,
+    "rope_scaling": {
+        "rope_type": "llama3",
+        "factor": 32.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+    },
+}
 
 DEVICE_CONFIG = DeviceConfig(
     {
@@ -178,13 +171,97 @@ class _RecordingCallback(TrainerCallback):
         self.final_step_time_s = trainer.metrics.get("step_time_s")
 
 
-@pytest.fixture
-def patch_llama_weight_loading(monkeypatch):
-    """Skip the HF download / safetensors load so the tiny model keeps random init."""
+def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> None:
+    """Point the completer at *checkpoint_dir*, holding only the tiny model's ``config.json``, and skip the
+    weight load so the model keeps its random init."""
     from grpo.utils import llama_completer
 
-    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
+    (checkpoint_dir / "config.json").write_text(json.dumps({**TINY_HF_CONFIG, **config_overrides}))
+    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: str(checkpoint_dir))
     monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
+
+
+@pytest.fixture
+def patch_llama_weight_loading(monkeypatch, tmp_path_factory):
+    """Skip the HF download / safetensors load so the tiny model keeps random init."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path_factory.mktemp("tiny_llama"))
+
+
+def _tiny_completer(max_tokens_to_complete: int = 4, model_source: str = HF_MODEL_ID) -> LlamaGRPOCompleter:
+    return LlamaGRPOCompleter(
+        ctx=LlamaCompletionCtx(max_tokens_to_complete=max_tokens_to_complete, temperature=1.0),
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=model_source,
+    )
+
+
+@pytest.mark.requires_device
+def test_rejects_a_tokenizer_larger_than_the_checkpoint_vocab(monkeypatch, tmp_path, expect_error):
+    """A token id past the checkpoint's vocab has no embedding row, so the completer refuses it up front."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128000)  # the tokenizer has 128256 tokens
+    with expect_error(ValueError, "the tokenizer has 128256 tokens but the checkpoint embeds 128000"):
+        _tiny_completer()
+
+
+@pytest.mark.requires_device
+def test_never_samples_a_checkpoint_row_past_the_tokenizer(monkeypatch, tmp_path):
+    """Rows past the tokenizer decode to nothing, so the logits mask covers them up to the logits' width: the
+    checkpoint's vocab, since the model slices off its tile padding. Here every such row outscores the real
+    ones, so one left unmasked gets sampled."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128256 + 8, tie_word_embeddings=False)
+    completer = _tiny_completer(max_tokens_to_complete=8)
+    model, num_tokens = completer.model, len(completer.tokenizer)
+    assert model.config.vocab_size > num_tokens, "premise: the checkpoint has rows past the tokenizer"
+
+    lm_head = np.zeros((model.padded_vocab_size, model.config.hidden_size), np.float32)
+    lm_head[num_tokens:] = np.random.default_rng(0).normal(0.0, 4.0, lm_head[num_tokens:].shape)
+    ttml.autograd.assign_numpy(model.fc.weight.tensor, lm_head)
+
+    completions = completer.generate([[1, 2, 3, 4]] * 4)
+
+    assert all(token < num_tokens for completion in completions for token in completion), completions
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def _save_trainer_checkpoint(completer, output_dir) -> str:
+    """Save *completer*'s model as the trainer does, with distinct values in every parameter so a fresh
+    init can't pass for a resumed one. The tiny model has no HF repo, so its config.json is written here."""
+    rng = np.random.default_rng(0)
+    for param in completer.model.parameters().values():
+        ttml.autograd.assign_numpy(param, rng.standard_normal(param.shape()).astype(np.float32))
+    save_checkpoint(completer.model, step=1, output_dir=str(output_dir), tokenizer=completer.tokenizer)
+    checkpoint_dir = output_dir / "checkpoints" / "grpo_step_1"
+    (checkpoint_dir / "config.json").write_text(json.dumps(TINY_HF_CONFIG))
+    return str(checkpoint_dir)
+
+
+@pytest.mark.requires_device
+def test_resumes_from_a_trainer_checkpoint(patch_llama_weight_loading, tmp_path):
+    saved = _tiny_completer()
+    checkpoint_dir = _save_trainer_checkpoint(saved, tmp_path)
+    expected = {name: param.to_numpy(ttnn.DataType.FLOAT32) for name, param in saved.model.parameters().items()}
+
+    resumed = _tiny_completer(model_source=checkpoint_dir)
+
+    for name, param in resumed.model.parameters().items():
+        assert np.array_equal(param.to_numpy(ttnn.DataType.FLOAT32), expected[name]), f"{name} was not resumed"
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+@pytest.mark.requires_device
+def test_rejects_a_trainer_checkpoint_missing_a_parameter(patch_llama_weight_loading, tmp_path, expect_error):
+    """A checkpoint saved under older parameter names must not resume with those weights at init."""
+    from safetensors.numpy import load_file, save_file
+
+    checkpoint_dir = _save_trainer_checkpoint(_tiny_completer(), tmp_path)
+    weights_path = os.path.join(checkpoint_dir, "model.safetensors")
+    weights = load_file(weights_path)
+    del weights["Llama/blocks/0/attention/qkv_linear/weight"]
+    save_file(weights, weights_path)
+
+    with expect_error(RuntimeError, "lacks 1 of the model's"):
+        _tiny_completer(model_source=checkpoint_dir)
 
 
 @pytest.mark.requires_device
@@ -226,7 +303,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
         temperature=1.0,
         max_completion_length=4,
         num_generations=2,
-        warmup_steps=0,
+        warmup_steps=2,  # the single step trains at half the configured LR
     )
 
     tokenizer = completer.tokenizer
@@ -293,6 +370,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
 
     metrics = recorder.last_step_metrics
     assert metrics is not None
+    assert metrics["lr"] == pytest.approx(optimizer_dict["lr"] * 0.5), "first of 2 warmup steps trains at half the LR"
     for key in ("reward_mean", "reward_std", "mean_completion_len", "generation_time_s"):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
@@ -365,5 +443,8 @@ def test_capitals_one_by_one_equals_single_batch():
     assert batched_outputs == single_outputs, (
         "Mismatch between one-by-one and batched outputs.\n" f"single={single_outputs}\n" f"batch={batched_outputs}"
     )
+    # Agreeing outputs also pass on a wrong but deterministic load; the right answers don't.
+    for capital, completion in zip(["Paris", "Lisbon", "London", "Prague"], single_outputs):
+        assert capital in completion, f"expected {capital!r} in {completion!r}"
 
     ttml.autograd.AutoContext.get_instance().reset_graph()

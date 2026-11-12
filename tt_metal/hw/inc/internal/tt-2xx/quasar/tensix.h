@@ -13,7 +13,7 @@
 #include <limits>
 #include <type_traits>
 
-#include "cfg_defines.h"
+#include <cfg_defines.h>
 // #include "tt_t6_global_reg_map.h" // non existent in HW repo
 // #include "tt_t6_global_map.h"
 #include "t6_debug_map.h"

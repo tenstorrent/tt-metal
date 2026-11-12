@@ -14,7 +14,7 @@ namespace ttnn::prim {
 
 static void validate_tensor(const Tensor& t, const std::string& name) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} must be on device", name);
-    TT_FATAL(t.buffer() != nullptr, "{} must be allocated", name);
+    TT_FATAL(t.is_allocated(), "{} must be allocated", name);
     TT_FATAL(t.buffer()->buffer_type() == BufferType::DRAM, "{} must be in DRAM", name);
     TT_FATAL(t.layout() == Layout::TILE, "{} must be tiled", name);
     TT_FATAL(t.dtype() == DataType::FLOAT32, "{} must be float32, got {}", name, t.dtype());

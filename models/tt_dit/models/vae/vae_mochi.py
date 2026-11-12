@@ -10,7 +10,7 @@ import torch
 from diffusers.models import AutoencoderKLMochi
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 from ...layers.conv3d import ContextParallelConv3d
 from ...layers.module import Module, ModuleList, Parameter
@@ -70,6 +70,13 @@ class Conv1x1(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        # Workaround for #58653: on Wormhole N300-class chips the fused-bias matmul with fp32 destination
+        # accumulation intermittently stalls one in1-multicast receiver when it runs on the full 8x8 grid
+        # (63 receivers); it never does on 7 columns, and the output is identical. Drop one column until the
+        # kernel is fixed.
+        self.core_grid = mesh_device.core_grid
+        if is_wormhole_b0() and self.core_grid.x == 8 and self.core_grid.y == 8:
+            self.core_grid = ttnn.CoreGrid(y=8, x=7)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.get("weight")
@@ -111,7 +118,7 @@ class Conv1x1(Module):
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.mesh_device.core_grid,
+            core_grid=self.core_grid,
         )
         ttnn.deallocate(x_tile_NTHWC)
 

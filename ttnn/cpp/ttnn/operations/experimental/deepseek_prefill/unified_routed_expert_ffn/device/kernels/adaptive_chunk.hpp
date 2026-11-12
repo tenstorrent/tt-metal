@@ -14,9 +14,10 @@
 // host from an `expected_tokens` argument now happens at runtime, so no caller
 // has to know the token count in advance.
 //
-// CBs are sized on the host to the compile-time MAX shape (per_core_M = 8,
-// chunk_M_tiles = 64; a big-model L1 guard may lower the max, passed in as
-// `max_chunk`). The picker never returns more than `max_chunk`, so the runtime
+// CBs are sized on the host to the MAX chunk, passed in as `max_chunk`
+// (= per_core_M_max * kGridY: the factory requests per_core_M 4, widens it to 8
+// only where the avoided weight traffic pays for it, and its L1 guard may lower
+// it). The picker never returns more than `max_chunk`, so the runtime
 // per_core_M always fits the allocated CBs; a smaller pick simply uses fewer of
 // the reserved tiles and shrinks every M-dimension loop.
 //
@@ -35,8 +36,8 @@ constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGrid
 // count (each chunk re-reads the full gate/up/down weights, the DRAM bottleneck)
 // AND minimizes phantom M-work (the tail covers only the leftover rows), so
 // per_core_M adapts to the actual token count per chunk with essentially no
-// wasted rows — e.g. 160 tiles -> 64 + 64 + 32 (per_core_M 8,8,4), 3 chunks,
-// zero phantom.
+// wasted rows — e.g. with max_chunk 64, 160 tiles -> 64 + 64 + 32
+// (per_core_M 8,8,4), 3 chunks, zero phantom.
 //
 // CRITICAL — per_core_M BOUNDS WORK, IT DOES NOT SIZE CB BLOCKS.
 //

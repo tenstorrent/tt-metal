@@ -37,7 +37,7 @@ from helpers.test_variant_parameters import (
     SDPA_FW_OP,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TILE_DIMENSIONS = [TILE_DIM, TILE_DIM]
 
@@ -199,7 +199,7 @@ def test_sfpu_sdpa_fw(variant, precision):
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, TILE_DIMENSIONS)
 
     unexpected = _footprint_violations(src_A.view(TILE_DIM, TILE_DIM), res_tensor)

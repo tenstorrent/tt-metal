@@ -53,7 +53,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from tracy.common import PROFILER_DEVICE_SIDE_LOG, PROFILER_LOGS_DIR, rm
 from tracy.device_post_proc_config import default_setup
 from tracy.process_device_log import import_log_run_stats

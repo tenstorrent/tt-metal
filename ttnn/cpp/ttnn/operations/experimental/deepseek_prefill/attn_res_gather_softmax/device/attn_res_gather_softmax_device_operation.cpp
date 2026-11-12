@@ -10,7 +10,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/device.hpp"
@@ -123,7 +122,7 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
     // The compute config defaults to HiFi4 with fp32 dest accumulation, which is only
     // correct on Blackhole; elsewhere the op compiles, runs, and returns silently wrong
     // values.
-    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    const tt::ARCH arch = partial.device()->arch();
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "AttnResGatherSoftmax is only supported on Blackhole, got {}", arch);
 
     operations::check_tensor(partial, "AttnResGatherSoftmax", "partial", {DataType::BFLOAT16});

@@ -10,6 +10,11 @@ from ttexalens.device import Device
 from ttexalens.hardware.risc_debug import RiscLocation
 
 
+def is_affected_by_cont_bug(device: Device) -> bool:
+    """Whether continuing a core that was halted and read from breaks it on this device."""
+    return bool(device.is_wormhole() or device.is_blackhole())
+
+
 class TriageSession:
     """Singleton that holds all mutable state accumulated during a triage run."""
 
@@ -27,9 +32,9 @@ class TriageSession:
         with self._lock:
             return device in self._broken_devices
 
-    def add_broken_core(self, location: OnChipCoordinate, risc_name: str) -> None:
+    def add_broken_core(self, risc_location: RiscLocation) -> None:
         with self._lock:
-            self._broken_cores.add(RiscLocation(location, None, risc_name))
+            self._broken_cores.add(risc_location)
 
     def get_device_broken_cores(self, device: Device) -> set[RiscLocation]:
         with self._lock:
@@ -39,13 +44,13 @@ class TriageSession:
         with self._lock:
             return {rl for rl in self._broken_cores if rl.location == location}
 
-    def is_halted_core(self, location: OnChipCoordinate, risc_name: str) -> bool:
+    def is_halted_core(self, risc_location: RiscLocation) -> bool:
         with self._lock:
-            return RiscLocation(location, None, risc_name) in self._halted_cores
+            return risc_location in self._halted_cores
 
-    def add_halted_core(self, location: OnChipCoordinate, risc_name: str) -> None:
+    def add_halted_core(self, risc_location: RiscLocation) -> None:
         with self._lock:
-            self._halted_cores.add(RiscLocation(location, None, risc_name))
+            self._halted_cores.add(risc_location)
 
     @property
     def halted_cores(self) -> set[RiscLocation]:

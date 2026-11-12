@@ -108,19 +108,17 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 
 - Unstable indices are a valid per-row permutation: gathering the input by
   the returned indices reproduces the sorted values, and no index repeats or
-  leaves the logical range. Known exception: on the MultiCore DRAM factory,
-  wide `float32` descending sorts can still emit padding indices past the
-  logical row (issue #53326). The CrossCore factory runs the
-  index-aware comparator for **both** stabilities (issue #54043: the raw
-  positional tie decision was not consistent between the two cores sharing a
-  spanning tile pair, so ties could duplicate indices) — its unstable output
-  is therefore exactly the torch-stable permutation. The single-core and
-  MultiCore-DRAM factories decide ties within one instruction stream and
-  never had the hazard.
-- One observable side effect on the CrossCore path: `float32` values are
-  canonicalized `-0.0` → `+0.0` on entry (the comparator's 32-bit-DEST tie
-  sweep, previously applied only under `stable=True`). Numerically equal;
-  bit-exact consumers of signed zeros (`copysign`, `1/x`) see `+0.0`.
+  leaves the logical range. Known exception: on the Single Row Single Core
+  strategy (padded width <= 2048), inputs containing the padding value
+  (`-inf` / `+inf`, or `0` / `65535` for `uint16`) can still emit padding
+  indices past the logical row. The Cross Core Data Exchange strategy runs the
+  index-aware comparator for **both** stabilities — its unstable output
+  is therefore exactly the torch-stable permutation. The Single Row Multi
+  Core strategy runs it whenever the sort dimension is padded.
+- One observable side effect on the Cross Core Data Exchange strategy and on
+  padded Single Row Multi Core sorts: `float32` values are canonicalized
+  `-0.0` → `+0.0` on entry. Numerically equal; bit-exact consumers of signed
+  zeros (`copysign`, `1/x`) see `+0.0`.
 
 ## Tensor Transformations
 
