@@ -27,6 +27,12 @@ Usage:
     # Standalone script
     python models/tt_dit/utils/sweep_mm_block_sizes.py \\
         --device-config bh_4x8_sp1_tp0 --shape 9472,3456,5120
+
+    # Precision / dtype mode (any of the above; defaults = HiFi2, bf16 in0 / in1, half-sync DEST),
+    # e.g. a LoFi model with block-float operands and 8-tile fp32 subblocks on the all-gather matmul:
+    MM_SWEEP_MATH_FIDELITY=lofi MM_SWEEP_IN0_DTYPE=bf8 MM_SWEEP_IN1_DTYPE=bf8 MM_SWEEP_DST_FULL_SYNC=1 \\
+        pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep -k "..." -x -s
+    The mode is a column of the results CSV (sweep_mode).
 """
 
 import argparse
@@ -172,6 +178,24 @@ SHAPES = [
     # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
     (4736, 3584, 5376, 12, 7, False, "mmrs"),
     (4736, 3584, 5376, 12, 8, False, "mmrs"),
+    # The DiT block as it runs today on the 12x10 Blackhole grid, at the 5 s (4736) and 10 s (9184)
+    # per-device Ms: to_qkv / ff1 on the NON-transposed AGMM worker grid (11x10, the op's in0 muxes in the
+    # free column; the model pins transpose_core_grid=False for both), ff2 and the row-parallel to_out
+    # (K = 7168 / tp = 1792) as fused MM+RS+addcmul on each candidate matmul grid. Sweep them with the
+    # model's precision / dtype mode (see MM_SWEEP_* below).
+    (4736, 5376, 5376, 11, 10, True, "qkv_nt"),
+    (9184, 5376, 5376, 11, 10, True, "qkv_nt"),
+    (4736, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
+    (9184, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
+    (9184, 3584, 5376, 12, 7, False, "mmrs"),
+    (9184, 3584, 5376, 12, 8, False, "mmrs"),
+    (9184, 3584, 5376, 12, 9, False, "mmrs"),
+    (4736, 1792, 5376, 12, 7, False, "mmrs"),
+    (4736, 1792, 5376, 12, 8, False, "mmrs"),
+    (4736, 1792, 5376, 12, 9, False, "mmrs"),
+    (9184, 1792, 5376, 12, 7, False, "mmrs"),
+    (9184, 1792, 5376, 12, 8, False, "mmrs"),
+    (9184, 1792, 5376, 12, 9, False, "mmrs"),
     (4736, 3584, 5376, 12, 9, False, "mmrs"),
     # -----------------------------------------------------------------------
     # MiniMax-H3 on WH Galaxy (device config wh_4x8_ring), TP=4 / SP=8.
@@ -554,6 +578,17 @@ USE_CASE_CONFIGS = {
     "ff1_swiglu": {
         "fuse_swiglu": True,
     },
+    # The same two all-gather matmuls on the non-transposed worker grid (transpose_core_grid=False, as the
+    # DiT block's pins run them): M parallelizes over grid_y, N over grid_x, the in0 senders group along y.
+    "qkv_nt": {
+        "chunks": 3,
+        "math_approx_mode": True,
+        "transpose_core_grid": False,
+    },
+    "ff1_swiglu_nt": {
+        "fuse_swiglu": True,
+        "transpose_core_grid": False,
+    },
 }
 
 # Whether the sweep uses fp32 dest accumulator. With fp32 dest, the DEST tile
@@ -562,6 +597,54 @@ USE_CASE_CONFIGS = {
 # over 4x1 / 1x4 (better tile reuse in the math LLK). So when fp32 dest is on
 # the subblock sweep is skipped entirely and 2x2 is picked (when divisible).
 FP32_DEST_ACC_EN = True
+
+# Precision / dtype mode of the sweep. Read from the environment so the orchestrator's worker subprocess sees
+# the same values; `main()` also takes them as flags. The defaults reproduce the original sweep exactly
+# (HiFi2, bfloat16 in0 and in1, half-sync DEST), so existing tables stay comparable.
+#   MM_SWEEP_MATH_FIDELITY  lofi | hifi2 | hifi3 | hifi4      (default hifi2)
+#   MM_SWEEP_IN0_DTYPE      bf16 | bf8   activation operand  (default bf16)
+#   MM_SWEEP_IN1_DTYPE      bf16 | bf8   weight operand      (default bf16)
+#   MM_SWEEP_DST_FULL_SYNC  0 | 1        dst_full_sync_en    (default 0)
+# Bias, addcmul operands and the output stay bfloat16 (a model that feeds a block-float activation pins its
+# output back to bfloat16). dst_full_sync_en doubles the DEST tiles a subblock may use (8 with fp32 dest) at
+# the cost of math / pack overlap. Only the all-gather matmul's program factory forwards it to its compute
+# kernel; minimal_matmul's (plain, split and MM+RS) does not, while its validation already sizes the
+# subblock limit from it, so the sweep refuses it there instead of timing a misconfigured kernel.
+_FIDELITIES = {
+    "lofi": ttnn.MathFidelity.LoFi,
+    "hifi2": ttnn.MathFidelity.HiFi2,
+    "hifi3": ttnn.MathFidelity.HiFi3,
+    "hifi4": ttnn.MathFidelity.HiFi4,
+}
+_DTYPES = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}
+# KB per 32x32 tile of each operand dtype: bfloat8_b is 1024 mantissa bytes + 64 shared-exponent bytes.
+_TILE_KB = {ttnn.bfloat16: 2.0, ttnn.bfloat8_b: 1088 / 1024}
+
+
+def _env_choice(name, choices, default):
+    value = os.environ.get(name, default).strip().lower()
+    if value not in choices:
+        raise ValueError(f"{name}={value!r}: expected one of {sorted(choices)}")
+    return value
+
+
+MATH_FIDELITY_NAME = _env_choice("MM_SWEEP_MATH_FIDELITY", _FIDELITIES, "hifi2")
+IN0_DTYPE_NAME = _env_choice("MM_SWEEP_IN0_DTYPE", _DTYPES, "bf16")
+IN1_DTYPE_NAME = _env_choice("MM_SWEEP_IN1_DTYPE", _DTYPES, "bf16")
+DST_FULL_SYNC = _env_choice("MM_SWEEP_DST_FULL_SYNC", {"0", "1"}, "0") == "1"
+MATH_FIDELITY = _FIDELITIES[MATH_FIDELITY_NAME]
+IN0_DTYPE = _DTYPES[IN0_DTYPE_NAME]
+IN1_DTYPE = _DTYPES[IN1_DTYPE_NAME]
+# DEST tiles per subblock: 16 bf16 tiles in all, halved by fp32 dest and again by half-sync.
+MAX_DEST_VOLUME = (16 if DST_FULL_SYNC else 8) // (2 if FP32_DEST_ACC_EN else 1)
+# The output dtype is passed only in a non-default mode, so a default sweep makes exactly the original calls.
+_OUT_DTYPE_KW = {} if IN0_DTYPE == ttnn.bfloat16 and IN1_DTYPE == ttnn.bfloat16 else {"dtype": ttnn.bfloat16}
+
+
+def sweep_mode_tag():
+    """Short label of the precision / dtype mode, for logs and the CSV."""
+    return f"{MATH_FIDELITY_NAME}_in0-{IN0_DTYPE_NAME}_in1-{IN1_DTYPE_NAME}_sync-{'full' if DST_FULL_SYNC else 'half'}"
+
 
 # Block-size candidate methodology:
 # - M/N block:  even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX]  union  divisors of
@@ -613,6 +696,7 @@ CSV_COLUMNS = [
     "subblock_w",
     "device_kernel_duration_ns",
     "status",
+    "sweep_mode",
 ]
 
 
@@ -675,6 +759,15 @@ def get_per_core_dims(shape, cluster_size):
         # per device in K_block-sized chunks, same rule as the agmm path.
         return -(-M_tiles // cgy), K_tiles // cluster_size, N_per_core
 
+    if USE_CASE_CONFIGS.get(use_case, {}).get("transpose_core_grid", True) is False:
+        # Non-transposed worker grid: in0 (M) parallelizes across grid_y, in1 (N) across grid_x.
+        M_per_core = -(-M_tiles // cgy)
+        N_per_core = -(-N_tiles // cgx)
+        if USE_CASE_CONFIGS[use_case].get("fuse_swiglu", False):
+            # Whole gate/up tile pairs per core, as in the sagmm branch above.
+            N_per_core = 2 * (-(-(N_tiles // 2) // cgx))
+        K_per_device = K_tiles // cluster_size if is_agmm else K_tiles
+        return M_per_core, K_per_device, N_per_core
     M_per_core = -(-M_tiles // cgx)  # ceiling
     N_per_core = -(-N_tiles // cgy)
     K_per_device = K_tiles // cluster_size if is_agmm else K_tiles
@@ -696,10 +789,12 @@ def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain", op_kind="mm"):
     """
     bf16_kb = 2  # KB per bf16 tile (32x32x2 bytes)
     f32_kb = 4  # KB per f32 tile (32x32x4 bytes)
+    in0_kb = _TILE_KB[IN0_DTYPE]  # MM_SWEEP_IN0_DTYPE (bf16 by default)
+    in1_kb = _TILE_KB[IN1_DTYPE]  # MM_SWEEP_IN1_DTYPE (bf16 by default)
 
     kb = (
-        2 * m_blk * k_blk * bf16_kb  # c_0: in0
-        + 2 * k_blk * n_blk * bf16_kb  # c_1: in1
+        2 * m_blk * k_blk * in0_kb  # c_0: in0
+        + 2 * k_blk * n_blk * in1_kb  # c_1: in1
         + 2 * m_blk * n_blk * bf16_kb  # c_2: out
         + m_blk * n_blk * f32_kb  # c_3: intermediate (f32 accumulator)
         + n_blk * bf16_kb  # c_4: bias
@@ -713,17 +808,25 @@ def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain", op_kind="mm"):
     if op_kind == "sagmm":
         # c_7 (in1_scratch): one K_block x N_block, so the in1 injector can read the
         # weight once and re-present it to compute across M blocks.
-        kb += k_blk * n_blk * bf16_kb
+        kb += k_blk * n_blk * in1_kb
 
     return kb
 
 
-def pick_subblock(m_block, n_block, max_dest_volume=4):
+def pick_subblock(m_block, n_block, max_dest_volume=None):
     """Pick best valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume.
 
     For fp32 dest, (2, 2) is strictly preferred among same-product candidates
-    (better math LLK tile reuse than 4x1 / 1x4), so check it first.
+    (better math LLK tile reuse than 4x1 / 1x4), so check it first. With MM_SWEEP_DST_FULL_SYNC=1 the
+    DEST holds 8 fp32 tiles: (2, 4), then (4, 2), are tried before (2, 2).
     """
+    if max_dest_volume is None:
+        max_dest_volume = MAX_DEST_VOLUME
+    if FP32_DEST_ACC_EN and max_dest_volume >= 8 and m_block % 2 == 0:
+        if n_block % 4 == 0:
+            return (2, 4)
+        if m_block % 4 == 0 and n_block % 2 == 0:
+            return (4, 2)
     if FP32_DEST_ACC_EN and m_block % 2 == 0 and n_block % 2 == 0 and 4 <= max_dest_volume:
         return (2, 2)
     best = (1, 1)
@@ -749,8 +852,10 @@ def get_divisors(k_tiles):
     return get_k_block_candidates(k_tiles)
 
 
-def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
+def generate_subblock_combos(m_block, n_block, max_dest_volume=None):
     """Return list of valid (sb_h, sb_w) pairs for given block sizes."""
+    if max_dest_volume is None:
+        max_dest_volume = MAX_DEST_VOLUME
     combos = []
     for h in range(1, min(m_block, max_dest_volume) + 1):
         if m_block % h != 0:
@@ -939,12 +1044,22 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split
     based on use_case.
     """
+    if DST_FULL_SYNC and (not is_agmm or op_kind == "sagmm" or uc_cfg.get("is_mmrs", False)):
+        raise ValueError(
+            "MM_SWEEP_DST_FULL_SYNC=1 is only meaningful for the all-gather matmul: minimal_matmul's program "
+            "factories do not pass dst_full_sync_en to the compute kernel"
+        )
+    # Operand dtypes of the sweep mode (MM_SWEEP_IN0_DTYPE / MM_SWEEP_IN1_DTYPE); `dtype` keeps bias / addcmul.
+    in0_dtype, in1_dtype = IN0_DTYPE, IN1_DTYPE
+    if op_kind == "sagmm" and _OUT_DTYPE_KW:
+        raise ValueError("the fabric-bound AGMM takes no output dtype: sweep it with bf16 in0 / in1 only")
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=MATH_FIDELITY,
         math_approx_mode=uc_cfg.get("math_approx_mode", False),
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
+        dst_full_sync_en=DST_FULL_SYNC,
     )
 
     fused_activation = uc_cfg.get("fused_activation", None)
@@ -976,10 +1091,10 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             raise ValueError(msg)
 
         tt_input = ttnn.from_torch(
-            torch.randn((1, 1, M, K), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+            torch.randn((1, 1, M, K), dtype=torch.float32), dtype=in0_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
         )
         tt_weight = ttnn.from_torch(
-            torch.randn((K, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+            torch.randn((K, N), dtype=torch.float32), dtype=in1_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
         )
         tt_bias = ttnn.from_torch(
             torch.randn((1, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
@@ -1059,6 +1174,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 mm_window_blocks=window,
                 mm_progress_counters=mm_progress_counters,
                 mm_credit_counters=mm_credit_counters if window is not None else None,
+                **_OUT_DTYPE_KW,
             )
             if sync:
                 ttnn.synchronize_device(mesh_device)
@@ -1080,7 +1196,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             torch.randn((1, 1, M, K), dtype=torch.float32),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
+            dtype=in0_dtype,
             memory_config=dram,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
         )
@@ -1090,7 +1206,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             torch.randn((1, 1, K, N), dtype=torch.float32),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
+            dtype=in1_dtype,
             memory_config=dram,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
@@ -1098,7 +1214,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             torch.zeros((1, 1, M, K), dtype=torch.float32),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
+            dtype=in0_dtype,
             memory_config=dram,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
@@ -1149,14 +1265,14 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
 
         tt_input = ttnn.from_torch(
             torch.randn((full_M, K), dtype=torch.float32),
-            dtype=dtype,
+            dtype=in0_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[sp_axis, tp_axis]),
         )
         tt_weight = ttnn.from_torch(
             torch.randn((K, N), dtype=torch.float32),
-            dtype=dtype,
+            dtype=in1_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
         )
@@ -1179,7 +1295,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         persistent_output_buffer = ttnn.from_torch(
             torch.empty((M, K), dtype=torch.float32),
             layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
+            dtype=in0_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=mesh_device,
         )
@@ -1204,6 +1320,17 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
             )
 
+        # Orientation: the original sweep runs the op's own (transposed) choice with the config's workers per
+        # link; a use_case with transpose_core_grid=False pins the non-transposed grid and, like the model's
+        # agmm_pins, ceil(grid_y / num_links) in0 senders per link.
+        if uc_cfg.get("transpose_core_grid", True) is False:
+            agmm_orientation_kw = {
+                "transpose_core_grid": False,
+                "num_workers_per_link": -(-core_grid.y // cfg["num_links"]),
+            }
+        else:
+            agmm_orientation_kw = {"num_workers_per_link": cfg["num_workers_per_link"]}
+
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
             ttnn.experimental.all_gather_minimal_matmul_async(
                 tt_input,
@@ -1219,13 +1346,14 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 cluster_axis=cfg["cluster_axis"],
                 barrier_semaphore=None,
                 force_transpose=True,
-                num_workers_per_link=cfg["num_workers_per_link"],
+                **agmm_orientation_kw,
                 num_buffers_per_channel=24 if is_blackhole() else 48,
                 scalar=scalar,
                 addcmul_input_tensor1=addcmul_tensor1,
                 addcmul_input_tensor2=addcmul_tensor2,
                 chunks=chunks,
                 fuse_swiglu=fuse_swiglu,
+                **_OUT_DTYPE_KW,
             )
             if sync:
                 ttnn.synchronize_device(mesh_device)
@@ -1236,14 +1364,14 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     use_matmul_split = uc_cfg.get("use_matmul_split", False)
     tt_input = ttnn.from_torch(
         torch.randn((M, K), dtype=torch.float32),
-        dtype=dtype,
+        dtype=in0_dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_weight = ttnn.from_torch(
         torch.randn((K, N), dtype=torch.float32),
-        dtype=dtype,
+        dtype=in1_dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -1269,6 +1397,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 compute_kernel_config=compute_config,
                 config=cfg_obj,
                 fuse_swiglu=fuse_swiglu,
+                **_OUT_DTYPE_KW,
             )
         else:
             ttnn.experimental.minimal_matmul(
@@ -1279,6 +1408,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 fused_activation=fused_activation,
                 compute_kernel_config=compute_config,
                 fuse_swiglu=fuse_swiglu,
+                **_OUT_DTYPE_KW,
             )
         if sync:
             ttnn.synchronize_device(mesh_device)
@@ -1413,7 +1543,7 @@ def test_mm_sweep_worker(device_config, shape):
     shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
 
     # Header: clean, one-time print of candidate lists + post-L1 combo total
-    print(f"\n=== {shape_id} on {device_config} ===", flush=True)
+    print(f"\n=== {shape_id} on {device_config} ({sweep_mode_tag()}) ===", flush=True)
     print(f"  per_core: M={M_per_core}  K_per_device={K_per_device}  N={N_per_core}", flush=True)
     print(f"  M_blocks ({len(m_cands)}): {m_cands}", flush=True)
     print(f"  K_blocks ({len(k_cands)}): {k_cands}", flush=True)
@@ -1556,6 +1686,7 @@ def test_mm_sweep(device_config, shape):
                 sb_w,
                 f"{duration_ns:.0f}",
                 status,
+                sweep_mode_tag(),
             ],
         )
 
@@ -1713,6 +1844,7 @@ def main():
                     sb_w,
                     f"{duration_ns:.0f}",
                     status,
+                    sweep_mode_tag(),
                 ],
             )
 
