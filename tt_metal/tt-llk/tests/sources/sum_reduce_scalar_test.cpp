@@ -140,8 +140,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
 
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
-
     // compute_kernel_hw_startup
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -151,17 +149,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_once_();
 
     // Poison op (see the file header).
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE.total_num_faces(), formats.math);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, formats.math);
     _llk_math_wait_for_dest_available_<DST_SYNC>();
     for (std::uint32_t i = 0; i < POISON_TILES; ++i)
     {
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math, DEFAULT_TENSOR_SHAPE.total_num_faces());
+            i, formats.math, formats.math, DEFAULT_TENSOR_SHAPE);
     }
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // sum_reduce_scalar_init -> copy_init: datacopy A2D.
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(num_faces, formats.math);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
@@ -170,7 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         LLK_ASSERT((i < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Copy tile index exceeds maximum destination tiles");
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math, num_faces);
+            i, formats.math, formats.math, tensor_shape);
     }
 
     // Step 3 - initialize the reduce phase (addr mods + counter reset).

@@ -5,11 +5,12 @@
 """BEVFormer's configuration, shared by the PyTorch reference and the TTNN port.
 
 The architecture follows upstream's ``projects/configs/bevformer/bevformer_{tiny,small,base}.py``
-(fundamentalvision/BEVFormer): the reference modules take these values as their defaults. The TTNN section holds the port's precision
-and memory choices, which the reference does not see.
+(fundamentalvision/BEVFormer): the reference modules take these values as their defaults. The TTNN
+section holds the port's precision and memory choices, which the reference does not see.
 
-The ``BEVFORMER_VARIANT`` environment variable picks the variant, ``base`` by default, when this
-module is first imported; the values the variants do not share follow from it.
+The validated JSON files in ``config/`` define the supported architectures. ``BEVFORMER_VARIANT``
+picks a bundled config, ``base`` by default, when this compatibility module is first imported.
+The demo can activate a local or remote normalized config before importing this module.
 
 Sections:
 - Variant
@@ -24,9 +25,10 @@ Sections:
 """
 
 import math
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from models.experimental.bevformer.config.loader import load_builtin_config, selected_config
 
 if TYPE_CHECKING:
     import ttnn
@@ -34,83 +36,22 @@ if TYPE_CHECKING:
 # --- Variant ------------------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class Variant:
-    """What one of upstream's BEVFormer configurations sets apart from the others."""
-
-    # RandomScaleImageMultiViewImage's scale of the CAMERA_IMAGE_SIZE camera images.
-    image_scale: float
-    # img_norm_cfg, per channel in the order the backbone reads them: RGB for tiny, BGR for small
-    # and base.
-    image_mean: tuple
-    image_std: tuple
-    resnet_depth: int
-    # Where a bottleneck puts its stride: on the 3x3 conv ("pytorch") or on the first 1x1 ("caffe").
-    resnet_style: str
-    # DCNv2 in layer3 and layer4.
-    with_dcn: bool
-    # The ResNet layers that feed the FPN, from 0 (layer1).
-    out_indices: tuple
-    # The FPN's levels: one per out_indices entry, then extra stride-2 convs on the last.
-    num_levels: int
-    bev_size: int
-    encoder_num_layers: int
-
-
-_CAFFE_IMAGE_NORM = dict(image_mean=(103.530, 116.280, 123.675), image_std=(1.0, 1.0, 1.0))
-VARIANTS = {
-    # ResNet50 without DCN; C5 alone feeds a single-level FPN.
-    "tiny": Variant(
-        image_scale=0.5,
-        image_mean=(123.675, 116.28, 103.53),
-        image_std=(58.395, 57.12, 57.375),
-        resnet_depth=50,
-        resnet_style="pytorch",
-        with_dcn=False,
-        out_indices=(3,),
-        num_levels=1,
-        bev_size=50,
-        encoder_num_layers=3,
-    ),
-    # base's backbone, but C5 alone feeds a single-level FPN.
-    "small": Variant(
-        image_scale=0.8,
-        **_CAFFE_IMAGE_NORM,
-        resnet_depth=101,
-        resnet_style="caffe",
-        with_dcn=True,
-        out_indices=(3,),
-        num_levels=1,
-        bev_size=150,
-        encoder_num_layers=3,
-    ),
-    "base": Variant(
-        image_scale=1.0,
-        **_CAFFE_IMAGE_NORM,
-        resnet_depth=101,
-        resnet_style="caffe",
-        with_dcn=True,
-        out_indices=(1, 2, 3),
-        num_levels=4,
-        bev_size=200,
-        encoder_num_layers=6,
-    ),
-}
-VARIANT = os.environ.get("BEVFORMER_VARIANT", "base")
-if VARIANT not in VARIANTS:
-    raise ValueError(f"BEVFORMER_VARIANT is {VARIANT!r}, expected one of {sorted(VARIANTS)}")
-_VARIANT = VARIANTS[VARIANT]
+VARIANTS = {name: load_builtin_config(name) for name in ("tiny", "small", "base")}
+_VARIANT = selected_config()
+VARIANT = _VARIANT.variant
+MODEL_CONFIG = _VARIANT
 
 # --- Cameras and images -------------------------------------------------------------------------
 
-NUM_CAMS = 6
+CAMERA_ORDER = _VARIANT.camera_order
+NUM_CAMS = _VARIANT.num_cameras
 # nuScenes' camera images, (width, height), the size their intrinsics are calibrated at.
-CAMERA_IMAGE_SIZE = (1600, 900)
+CAMERA_IMAGE_SIZE = _VARIANT.camera_image_size
 # The camera images as the variant scales them, (width, height): CAMERA_IMAGE_SIZE for base.
 RAW_IMAGE_SIZE = tuple(round(size * _VARIANT.image_scale) for size in CAMERA_IMAGE_SIZE)
 # Upstream's PadMultiViewImage pads the images at the bottom and right to a multiple of this, and
 # the images' img_shape reports the padded size.
-IMAGE_SIZE_DIVISOR = 32
+IMAGE_SIZE_DIVISOR = _VARIANT.image_size_divisor
 
 
 def padded_image_size(width, height):
@@ -124,6 +65,7 @@ IMAGE_WIDTH, IMAGE_HEIGHT = padded_image_size(*RAW_IMAGE_SIZE)
 # and base's std of 1 leaves them in pixel units.
 IMAGE_MEAN = _VARIANT.image_mean
 IMAGE_STD = _VARIANT.image_std
+IMAGE_COLOR_ORDER = _VARIANT.color_order
 
 # --- Backbone and FPN ---------------------------------------------------------------------------
 
@@ -181,18 +123,18 @@ SPATIAL_SHAPES = fpn_spatial_shapes(IMAGE_HEIGHT, IMAGE_WIDTH, FPN_KWARGS["num_o
 
 BEV_H = _VARIANT.bev_size
 BEV_W = _VARIANT.bev_size
-EMBED_DIMS = 256
+EMBED_DIMS = _VARIANT.embed_dims
 # Shared by the encoder's and the decoder's attentions and FFNs.
-NUM_HEADS = 8
-FEEDFORWARD_CHANNELS = 512
+NUM_HEADS = _VARIANT.num_heads
+FEEDFORWARD_CHANNELS = _VARIANT.feedforward_channels
 NUM_LEVELS = _VARIANT.num_levels
 # (x_min, y_min, z_min, x_max, y_max, z_max) in metres: nuScenes' range, which the BEV grid, the
 # encoder's pillars and the head's box centers share.
-PC_RANGE = (-51.2, -51.2, -5.0, 51.2, 51.2, 3.0)
-CAN_BUS_DIMS = 18
+PC_RANGE = _VARIANT.point_cloud_range
+CAN_BUS_DIMS = _VARIANT.can_bus_dims
 # Cell the previous BEV rotates about, (x, y): upstream's default for every grid, tiny's 50x50
 # included, where it lies outside the grid; it is not derived from the grid size.
-ROTATE_CENTER = (100, 100)
+ROTATE_CENTER = _VARIANT.rotate_center
 
 # --- Encoder ------------------------------------------------------------------------------------
 
@@ -200,25 +142,26 @@ ROTATE_CENTER = (100, 100)
 # previous BEV.
 ENCODER_NUM_LAYERS = _VARIANT.encoder_num_layers
 # The SCA's sampling points per head and level, split over the pillar's heights.
-SCA_NUM_POINTS = 8
-NUM_POINTS_IN_PILLAR = 4
-TSA_NUM_POINTS = 4
+SCA_NUM_POINTS = _VARIANT.spatial_num_points
+NUM_POINTS_IN_PILLAR = _VARIANT.num_points_in_pillar
+TSA_NUM_POINTS = _VARIANT.temporal_num_points
 
 # --- Decoder and head ---------------------------------------------------------------------------
 
-DECODER_NUM_LAYERS = 6
-DECODER_NUM_POINTS = 4
-NUM_QUERY = 900
-NUM_CLASSES = 10
+DECODER_NUM_LAYERS = _VARIANT.decoder_num_layers
+DECODER_NUM_POINTS = _VARIANT.decoder_num_points
+NUM_QUERY = _VARIANT.num_query
+NUM_CLASSES = len(_VARIANT.class_names)
 # inverse_sigmoid's clamp, which the decoder's refinement of its reference points goes through.
 INVERSE_SIGMOID_EPS = 1e-5
 
 # --- Box code and coder -------------------------------------------------------------------------
 
-# The box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs. In the box codes, the
-# reg branches' raw output, cx, cy and cz are logit offsets, which the decoder adds to its reference
-# points' logits; in the box predictions, the head's output, they are the refined centers in metres.
-# The other channels are the same in both.
+# The reference's box code: (cx, cy, w, l, cz, h, sin, cos, vx, vy), the sizes as logs, which the
+# CODE_* slices index. In the box codes, the reg branches' raw output, cx, cy and cz are logit
+# offsets, which the decoder adds to its reference points' logits; in the box predictions, the
+# head's output, they are the refined centers in metres. The other channels are the same in both.
+# The TTNN head's device tensors hold the channels in CENTERS_FIRST order instead (see CODE_ORDER).
 CODE_SIZE = 10
 CODE_XY = slice(0, 2)
 CODE_WL = slice(2, 4)
@@ -237,23 +180,10 @@ CENTERS_FIRST = CODE_CENTERS + [channel for channel in range(CODE_SIZE) if chann
 CENTERS_FIRST_CENTERS = slice(0, len(CODE_CENTERS))
 
 
-def _box_pred_pieces():
-    """The TTNN head's box predictions, in box code order, as one concat of slices of its refined
-    centers ``"centers"`` (x, y, z) and its centers-first codes ``"codes"``."""
-    pieces = []
-    for channel in range(CODE_SIZE):
-        if channel in CODE_CENTERS:
-            source, index = "centers", CODE_CENTERS.index(channel)
-        else:
-            source, index = "codes", CENTERS_FIRST.index(channel)
-        if pieces and pieces[-1][0] == source and pieces[-1][1].stop == index:
-            pieces[-1] = (source, slice(pieces[-1][1].start, index + 1))
-        else:
-            pieces.append((source, slice(index, index + 1)))
-    return tuple(pieces)
-
-
-BOX_PRED_PIECES = _box_pred_pieces()
+# The TTNN head's box predictions stay in CENTERS_FIRST order, the refined centers in metres in
+# its first channels, which needs no slicing on device; CODE_ORDER takes them to the box code
+# order on the host (tt_head.box_preds_to_torch).
+CODE_ORDER = [CENTERS_FIRST.index(channel) for channel in range(CODE_SIZE)]
 
 # The coder's decoded box: (cx, cy, cz, w, l, h, yaw, vx, vy), cz at the box's gravity center.
 BOX_CENTER = slice(0, 3)
@@ -263,9 +193,9 @@ BOX_H = slice(5, 6)
 BOX_YAW = slice(6, 7)
 BOX_VELOCITY = slice(7, 9)
 # Box centers outside this range are dropped by the coder.
-POST_CENTER_RANGE = (-61.2, -61.2, -10.0, 61.2, 61.2, 10.0)
+POST_CENTER_RANGE = _VARIANT.post_center_range
 # Boxes the coder keeps per sample, by score.
-MAX_NUM = 300
+MAX_NUM = _VARIANT.max_detections
 
 # --- Deformable attention -----------------------------------------------------------------------
 
@@ -311,10 +241,10 @@ _TTNN_DTYPES = {
 # The head's box predictions: their centers are the decoder's refined reference points.
 _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 
-# Bisection steps of the coder's exact top-k (TTNMSFreeCoder.topk), which narrow the k-th logit's
-# bracket around the bfloat16 pivot, 2^-5 of the pivot wide, down to one float32 value; 19
-# suffice, the rest is margin.
-CODER_BISECTION_STEPS = 22
+# Rounds of the coder's exact top-k search (TTNMSFreeCoder.topk), each of which splits the k-th
+# logit's bracket around the bfloat16 pivot, 2^-5 of the pivot wide, into 32, a tile row of
+# thresholds: four take it down to one float32 value, the fifth is margin.
+CODER_SEARCH_ROUNDS = 5
 
 
 # The backbone and FPN. Their choices below are sized for base's 6 cameras at 1600x928; small and
@@ -323,16 +253,17 @@ CODER_BISECTION_STEPS = 22
 # backbone output.
 
 # Layers whose convs accumulate in an fp32 destination register (layer3 and layer4; a DCN conv2
-# always does): with bfloat16 accumulation, activations with outlier channels lose precision
-# through base's 26 blocks there until C5 falls below PCC 0.99. The tests' dummy weights have no
-# such channels and do not show it.
+# accumulates each pass, at most 256 channels of one kernel position, in fp32 and sums the passes
+# in bfloat16 whatever this says): with bfloat16 accumulation, activations with outlier channels
+# lose precision through base's 26 blocks there until C5 falls below PCC 0.99. The tests' dummy
+# weights have no such channels and do not show it.
 FP32_ACC_STAGES = (2, 3)
 
-# Layers whose activations are kept in DRAM: all four. layer1, layer2 and layer4 do not fit in
-# L1 for base: layer1 and layer2 work on 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), and layer4's
-# 2048-channel 1x1 convs overflow L1 when sharded. layer3 would fit at bfloat16 accumulation,
-# but with FP32_ACC_STAGES' fp32 accumulation its L1-sharded convs fail to allocate (their
-# circular buffers clash with L1 buffers).
+# Layers whose whole-batch blocks keep their activations in DRAM, and whose 1x1 convs take Linear
+# weights: all four. On the whole batch none fits L1 for base: layer1 and layer2 work on
+# 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), layer4's 2048-channel 1x1 convs overflow L1
+# when sharded, and layer3's L1-sharded convs fail to allocate with FP32_ACC_STAGES' fp32
+# accumulation. CAMERA_GROUPS' layers keep a group's activations in L1 instead.
 DRAM_ACTIVATION_STAGES = tuple(sorted({0, 1, 3} | set(FP32_ACC_STAGES)))
 
 # The FPN levels C3 and C4 feed, which only base has: ResNet layers 1 and 2.
@@ -343,25 +274,47 @@ _C3_C4_LEVELS = tuple(level for level, layer in enumerate(_VARIANT.out_indices) 
 # fits.
 DRAM_ACTIVATION_LEVELS = _C3_C4_LEVELS
 
-# Width slices for the spatial convs of the DRAM layers and levels, lowered per conv to what
-# its output width allows. The tightest is the strided 1x1 downsample that opens layer2: its
-# 6 x 232 x 400 x 256 input is in DRAM, and each slice is read into L1 as bfloat16
-# ROW_MAJOR for the halo, 3.25 MB per L1 bank in total against 576 KB free, so it needs at
-# least 6 slices. 8 leaves margin over that. TTConv2D lowers the count per conv to its
-# output width in tiles, as a width slice is whole tiles wide: 7 for this conv's 200-wide output.
+# The most width slices for the spatial convs of the DRAM layers and levels without a count of
+# their own below. TTConv2D lowers it per conv to its output width in tiles, as a width slice is
+# whole tiles wide; every such conv here is narrower than 8 tiles, so it runs one slice per tile.
 DRAM_CONV_SLICES = 8
 
-# Layers whose downsample and non-DCN conv2s are block sharded (layer3, layer4) and FPN levels
-# whose output conv is (C3, C4). Height sharded, each core of tiny's layer4 conv2 would hold its
-# whole 512-channel 3x3 weight, more than L1.
-BLOCK_SHARDED_STAGES = (2, 3)
-BLOCK_SHARDED_LEVELS = _C3_C4_LEVELS
+# Layers run on a group of cameras at a time with every activation in L1, by layer (0 is layer1): the
+# whole batch does not fit L1, so its blocks would move each tensor through DRAM, several times
+# over; a group's do fit. One camera for layer1 and layer2; three for layer3, whose DCN runs slower
+# per camera on fewer, or one camera when three do not divide the rig. A first block whose conv1
+# carries the stride runs on the whole batch (TTResLayer) when its group input would not fit, as
+# base's layer3's does. layer4 runs whole: for base and small its DCN alone takes about 1.1 MB of L1
+# per core, which leaves no room for a group's activations. A listed layer is also in
+# DRAM_ACTIVATION_STAGES, whose weights it takes.
+CAMERA_GROUPS = {0: 1, 1: 1, 2: 3 if NUM_CAMS % 3 == 0 else 1}
 
-# conv2d's act_block_h overrides: the stem conv's, the non-DCN 3x3 conv2's of the bottlenecks and
-# the block-sharded FPN output convs'. None of these, nor the sharding above, is tuned for 928x1600.
-STEM_ACT_BLOCK_H = 64
+# Layers whose non-DCN conv2s are block sharded (layer3, layer4): height sharded, each core of
+# tiny's layer4 conv2 would hold its whole 512-channel 3x3 weight, more than L1.
+BLOCK_SHARDED_STAGES = (2, 3)
+
+# Width slices for the DRAM levels' 3x3 output convs, by level, in place of DRAM_CONV_SLICES: height
+# sharded, C3 takes 4 slices and C4 fits L1 whole, so it runs on conv2d's L1 path (TTConv2D).
+FPN_OUTPUT_CONV_DRAM_CONV_SLICES = dict(zip(_C3_C4_LEVELS, (4, 1)))
+
+# Layers whose DCNs take their input height-sharded rather than interleaved in L1: most bilinear
+# corners then lie in the core's own shard or a neighbour's. Sharding pays where each core owns many
+# blocks of a single channel pass, as in layer3; layer4's few blocks per core and two channel passes
+# do not amortize it.
+DCN_SHARDED_INPUT_STAGES = (2,)
+
+# Height slices for the stem conv on base's 6 x 928 x 1600 images in DRAM, and for the max pool on
+# its output when layer1 runs on the whole batch: the fewest that fit L1. Height slices run faster
+# than width slices on both, and they leave room for STEM_ACT_BLOCK_H.
+STEM_CONV_HEIGHT_SLICES = 4
+STEM_MAXPOOL_HEIGHT_SLICES = 6
+
+# conv2d's act_block_h overrides: the stem conv's, the whole-batch non-DCN 3x3 conv2's of the
+# bottlenecks and the DRAM levels' FPN output convs'. The FPN's larger blocks overflow L1 at these
+# slice counts.
+STEM_ACT_BLOCK_H = 128
 CONV2_ACT_BLOCK_H = 32
-FPN_BLOCK_SHARDED_ACT_BLOCK_H = 128
+FPN_OUTPUT_CONV_ACT_BLOCK_H = 32
 
 
 def tt_resnet_kwargs():
@@ -371,9 +324,13 @@ def tt_resnet_kwargs():
     return dict(
         dram_activation_stages=DRAM_ACTIVATION_STAGES,
         dram_conv_slices=DRAM_CONV_SLICES,
+        camera_groups=CAMERA_GROUPS,
         block_sharded_stages=BLOCK_SHARDED_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
+        dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
         stem_act_block_h=STEM_ACT_BLOCK_H,
+        stem_conv_height_slices=STEM_CONV_HEIGHT_SLICES,
+        stem_maxpool_height_slices=STEM_MAXPOOL_HEIGHT_SLICES,
         conv2_act_block_h=CONV2_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
@@ -385,8 +342,8 @@ def tt_fpn_kwargs():
     return dict(
         dram_activation_levels=DRAM_ACTIVATION_LEVELS,
         dram_conv_slices=DRAM_CONV_SLICES,
-        block_sharded_levels=BLOCK_SHARDED_LEVELS,
-        block_sharded_act_block_h=FPN_BLOCK_SHARDED_ACT_BLOCK_H,
+        output_conv_dram_conv_slices=FPN_OUTPUT_CONV_DRAM_CONV_SLICES,
+        output_conv_act_block_h=FPN_OUTPUT_CONV_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
 

@@ -18,6 +18,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -74,6 +75,7 @@ def run_mla_inference(
     is_chunked=False,
     active_seq_len=None,
     actual_start=None,
+    layer_idx=0,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -89,6 +91,7 @@ def run_mla_inference(
         is_balanced: Whether to use balanced chunk ordering
         topology: Topology (Linear or Ring)
         tt_kvpe_cache: Initialized KVPE cache on device
+        layer_idx: model layer to build (a GLM-5.3 shared layer reuses injected indices).
         is_chunked / active_seq_len / actual_start: prefill mode, passed straight to ttMLA and
             forward(). No chunk loop here -- one forward over the whole sequence -- so only two
             triples fit: single-shot (False/None/None) or one chunk (True/seq_len/0). Sparse must chunk.
@@ -113,7 +116,7 @@ def run_mla_inference(
         config,
         weights,
         mesh_device,
-        layer_idx=0,
+        layer_idx=layer_idx,
         seq_len=seq_len,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
@@ -178,6 +181,8 @@ def run_mla_inference(
     )
     # GLM-5.3 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
     # feed a prior layer's to skip the indexer. Defaults leave the forward unchanged.
+    if inject_indices is not None:
+        assert tuple(inject_indices.shape) == mla_tt.indexer_indices_shape(), "injected indices' shape"
     mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
@@ -523,7 +528,7 @@ DETERMINISM_REPS = 3
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 10_319_000
+K3_CHUNKED_RT_PERF_NS = 9_996_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
@@ -1498,7 +1503,10 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
             "within_band": lower <= total_ns <= upper,
         },
     )
-    assert lower <= total_ns <= upper, (
-        f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
-        f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+    assert_perf_gate(
+        lower <= total_ns <= upper,
+        (
+            f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+            f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+        ),
     )

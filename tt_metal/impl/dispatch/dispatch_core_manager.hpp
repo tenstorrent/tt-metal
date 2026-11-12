@@ -4,17 +4,14 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <functional>
+#include <cstdint>
 #include <list>
 #include <optional>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include "llrt/core_descriptor.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
