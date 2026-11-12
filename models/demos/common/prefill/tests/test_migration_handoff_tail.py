@@ -10,7 +10,6 @@ leaves the next prompt token(s) for decode: ``prefill_len`` < ``prompt_len`` wit
 
 import json
 
-
 from models.demos.common.prefill.runners.migration_driver import MigrationDriver
 
 POOL = list(range(1000, 1100))
