@@ -14,6 +14,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -245,6 +246,14 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
             "C_in_block ({}) must be a multiple of {}",
             args.config.C_in_block,
             l1_alignment);
+        // Prepared weights pack C_in blocks back to back, while the kernels step through them in whole tiles.
+        const uint32_t kernel_volume = args.kernel_size[0] * args.kernel_size[1] * args.kernel_size[2];
+        TT_FATAL(
+            C_in == args.config.C_in_block || (kernel_volume * args.config.C_in_block) % tt::constants::TILE_WIDTH == 0,
+            "kernel volume ({}) * C_in_block ({}) must be a multiple of {} when C_in is split into multiple blocks",
+            kernel_volume,
+            args.config.C_in_block,
+            tt::constants::TILE_WIDTH);
     }
 
     // Verify number of C_in_blocks is <= the number of cores
@@ -354,7 +363,7 @@ tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));
 }
 

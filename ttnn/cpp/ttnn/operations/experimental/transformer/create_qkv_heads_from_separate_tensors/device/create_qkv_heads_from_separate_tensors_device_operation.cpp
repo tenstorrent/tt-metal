@@ -124,7 +124,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_mis
         (q_input_shape[3]) /
         (num_w_cores * TILE_WIDTH);  // number of tiles in width dimension  - multiple tiles per head, multiple heads
                                      // per group, multiple tensors in group, multiple groups per cores
-    uint32_t q_shard_ht = ((q_input_shape[0] * q_input_shape[2]) / (num_w_cores * TILE_HEIGHT));
+    uint32_t q_shard_ht = ((q_input_shape[0] * q_input_shape[2]) / (num_h_cores * TILE_HEIGHT));
     uint32_t k_shard_wt = (kv_input_shape[3] / (2 * num_w_cores * TILE_WIDTH));
     uint32_t k_shard_ht = ((kv_input_shape[0] * kv_input_shape[2]) / (num_h_cores * TILE_HEIGHT));
 

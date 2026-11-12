@@ -147,12 +147,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in1 = dfb::cb_in1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in1 CB pages are sized to match (see the program factory). The NOC reads the
-    // unpadded tile of data into each padded slot and tiles are laid out / multicast at the padded
-    // stride. No-op when already aligned. The sharded path keeps the natural (unpadded) stride.
-    constexpr uint32_t in1_aligned_tile_size_bytes =
-        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Interleaved tiles are laid out in L1 at their DRAM page stride rounded up to the NOC DRAM read alignment,
+    // the entry size the program factory set (get_interleaved_tile_stride): 576 B for a 544 B bfp8 32x16 tile on
+    // Blackhole, the tile size itself on Wormhole and on Quasar (whose NOC reads at any offset and whose unpacker
+    // walks the ring at the format's own stride, e.g. 1056 B for an 8-bit MX tile).
+    constexpr uint32_t in1_aligned_tile_size_bytes = (in1_single_tile_size_bytes + NOC_DRAM_READ_ALIGNMENT_BYTES - 1) /
+                                                     NOC_DRAM_READ_ALIGNMENT_BYTES * NOC_DRAM_READ_ALIGNMENT_BYTES;
 #if !defined(IN1_SHARDED)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else

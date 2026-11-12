@@ -153,6 +153,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         kv_only: bool = False,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         """
         Build TTNN cache for this block (norms + MLA + FFN/MoE) without device copy.
@@ -181,6 +182,8 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # Build MLA cache
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole()
         ttMLA.build_ttnn_cache(
             state_dict=state_dict.get("mla_weights", {}),
             cache_path=cache_path,
@@ -191,6 +194,7 @@ class TtPrefillBlock(LightweightModule):
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             kv_only=kv_only,
+            use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
         if kv_only:
@@ -278,6 +282,7 @@ class TtPrefillBlock(LightweightModule):
         layer_num: Optional[int] = None,
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
+        next_kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         tp_shard_kv: Optional[bool] = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
@@ -378,10 +383,12 @@ class TtPrefillBlock(LightweightModule):
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
+            next_kv_only=next_kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
             tp_shard_kv=tp_shard_kv,
+            use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
         if kv_only:
@@ -522,8 +529,8 @@ class TtPrefillBlock(LightweightModule):
             overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
             # Likewise only configs that opt in (Kimi K2.7, GLM 5.3) run dispatch_fabric2d / combine_fabric2d.
             moe_transport=moe_transport_arg(model_cfg),
-            combine_fwd_reduction=getattr(model_cfg, "COMBINE_FWD_REDUCTION", None),
-            dispatch_fwd_vc_pages=getattr(model_cfg, "DISPATCH_FWD_VC_PAGES", None),
+            dispatch_fwd_vc_pages=model_cfg.MOE_FWD_VC_PAGES,
+            combine_fwd_vc_pages=model_cfg.MOE_FWD_VC_PAGES,
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
@@ -729,7 +736,7 @@ class TtPrefillBlock(LightweightModule):
                 return None, kv_cache, None
             return None, kv_cache
 
-        x = ttnn.add(x, mla_out)
+        x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mla_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
@@ -744,6 +751,7 @@ class TtPrefillBlock(LightweightModule):
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
+        fold_residual = self.is_moe and not return_intermediates
         if self.is_moe:
             ffn_out = self._moe_path(
                 ffn_norm_out,
@@ -753,13 +761,18 @@ class TtPrefillBlock(LightweightModule):
                 actual_start=actual_start,
                 metadata=metadata,
                 cache_user_id=cache_user_id,
+                residual=x if fold_residual else None,
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
         ttnn.deallocate(ffn_norm_out)
-        x = ttnn.add(x, ffn_out)
-        ttnn.deallocate(ffn_out)
+        if fold_residual:
+            ttnn.deallocate(x)
+            x = ffn_out
+        else:
+            x = ttnn.add(x, ffn_out)
+            ttnn.deallocate(ffn_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_ffn = time.perf_counter()
@@ -792,6 +805,7 @@ class TtPrefillBlock(LightweightModule):
         actual_start: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
+        residual: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D TILE → MoE → 3D TILE → 4D TILE.
 
@@ -808,6 +822,7 @@ class TtPrefillBlock(LightweightModule):
             metadata=metadata,
             # Only consumed by the env-gated routing dump, which names its files by KV slot.
             cache_user_id=cache_user_id,
+            residual=None if residual is None else ttnn.squeeze(residual, dim=0),
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
