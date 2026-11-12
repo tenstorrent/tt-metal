@@ -91,6 +91,8 @@ private:
         dev_msgs::go_msg_t::ConstView go_msg,
         std::optional<CoreCoord> end_core = std::nullopt);
     void initialize_and_launch_firmware(tt::ChipId device_id);
+    // An emulated device has no firmware to load or start; this writes the L1 state firmware launch leaves.
+    void initialize_emulated_firmware_state(tt::ChipId device_id);
     dev_msgs::core_info_msg_t populate_core_info_msg(
         tt::ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
     uint32_t get_active_erisc_launch_flag_addr();

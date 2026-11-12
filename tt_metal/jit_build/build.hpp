@@ -77,6 +77,8 @@ public:
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
+    // The "-DNAME[=VALUE] " flags every kernel build gets (debug tools, profiler, device defines).
+    const std::string& get_defines() const { return defines_; }
 
     // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
     // May differ when binaries are provided from an external source.
