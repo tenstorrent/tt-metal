@@ -113,8 +113,6 @@ def test_xrow_d2d(mesh_device):
     )
     pa = m.enable_apc_paged()
     assert pa is not None and pa.idx.xrow, "paged APC / cross-row switch off"
-    d2d_obj = pa.d2d
-    assert d2d_obj is not None, "DSV41_XROW_D2D did not build the d2d buffers (warm_xrow not run?)"
     S_pad = m.single_spad(CHUNK)
     g = torch.Generator().manual_seed(77)
     rnd = lambda n: torch.randint(1000, 100000, (n,), generator=g, dtype=torch.int64)
@@ -166,6 +164,8 @@ def test_xrow_d2d(mesh_device):
     clean()
     t_cold, l_cold, dt_cold = run(0, P, 0, "cold")
     res["cold_prefill_s"] = round(dt_cold, 2)
+    d2d_obj = pa.d2d  # (built by warm_xrow in the compile of the first prefill, before the trace captures)
+    assert d2d_obj is not None, "DSV41_XROW_D2D did not build the d2d buffers (warm_xrow not run?)"
     last_host = None
     arms = []
     for k, arm in enumerate(os.environ.get("DSV41_D2D_ARMS", "host,d2d,d2d,d2d").split(",")):
