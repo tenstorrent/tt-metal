@@ -1740,20 +1740,10 @@ def tilize_with_val_padding(
 @setup_host_and_device
 def untilize(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     if input_mem_config[0] is None:
-        t0 = ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype[0],
-            ttnn.TILE_LAYOUT,
-        )
+        t0 = ttnn.from_torch(x, dtype=dtype[0], layout=ttnn.TILE_LAYOUT)
     else:
-        t0 = ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype[0],
-            ttnn.TILE_LAYOUT,
-            device,
-            input_mem_config[0],
+        t0 = ttnn.from_torch(
+            x, dtype=dtype[0], layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config[0]
         )
 
     t1 = ttnn.untilize(t0, memory_config=output_mem_config)
@@ -1773,20 +1763,10 @@ def untilize_with_unpadding(
     **kwargs,
 ):
     if input_mem_config[0] is None:
-        t0 = ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype[0],
-            ttnn.TILE_LAYOUT,
-        )
+        t0 = ttnn.from_torch(x, dtype=dtype[0], layout=ttnn.TILE_LAYOUT)
     else:
-        t0 = ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype[0],
-            ttnn.TILE_LAYOUT,
-            device,
-            input_mem_config[0],
+        t0 = ttnn.from_torch(
+            x, dtype=dtype[0], layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config[0]
         )
 
     t1 = ttnn.untilize_with_unpadding(t0, output_tensor_end=output_tensor_end, memory_config=output_mem_config)
@@ -2233,12 +2213,7 @@ def tensor_unpad(
     output_tensor_end,
     **kwargs,
 ):
-    t0 = ttnn.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype[0],
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    t0 = ttnn.from_torch(x, dtype=dtype[0], layout=ttnn.ROW_MAJOR_LAYOUT)
 
     t0 = t0.to(layout[0])
 
@@ -2282,12 +2257,7 @@ def unpad_from_tile(
     output_tensor_shape,
     **kwargs,
 ):
-    t0 = ttnn.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        dtype[0],
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    t0 = ttnn.from_torch(x, dtype=dtype[0], layout=ttnn.ROW_MAJOR_LAYOUT)
 
     t0 = t0.to(layout[0])
 
@@ -2350,12 +2320,7 @@ def bert_large_fused_qkv_matmul(
     b_t = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     bias_t = (
-        ttnn.Tensor(
-            z.flatten().tolist(),
-            z.shape,
-            dtype[2],
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
+        ttnn.from_torch(z, dtype=dtype[2], layout=ttnn.ROW_MAJOR_LAYOUT)
         .pad([1, 1, 32, 3072], [0, 0, 0, 0], 0)
         .to(layout[2])
         .to(device, input_mem_config[2])

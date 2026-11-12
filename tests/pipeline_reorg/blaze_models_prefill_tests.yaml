@@ -321,7 +321,7 @@
     # reference case to pretrained weights when it sees that variable.
 
     k3_contracts() (
-      timeout -k 2m 10m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export LOGURU_LEVEL=INFO
         export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
@@ -336,14 +336,22 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+        python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
+          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
+        # AttnRes determinism on the full torus: each op, then a whole block of reads, many runs without a sync.
+        python3 -m pytest -vvv --tb=short \
+          tests/ttnn/unit_tests/operations/experimental/test_attn_res_determinism.py -k "torusxy-mesh-8x4"
+        python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
+          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_contract.py::test_read_repeats_exactly_without_disturbing_its_inputs
       '
     )
 
     k3_kda() (
-      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 18m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py -k "SP8xTP4 and not perf" -vvv --tb=short
         export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_kimi_k3_layer_1_real_weights_accuracy -k "SP8xTP4" -vvv --tb=short
       '
@@ -371,7 +379,7 @@
 
     echo "===== [1/4] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
     k3_contracts || exit $?
-    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + layer-1 real weights ====="
+    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
     k3_kda || exit $?
     echo "===== [3/4] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
     k3_mla || exit $?
@@ -384,9 +392,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (10 + 12 + 12 + 12),
-      # so the time budget for this bucket is unchanged by the fold.
-      timeout: 46
+      # Exactly the sum of the per-section bounds (12 + 18 + 12 + 12).
+      timeout: 54
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -405,8 +412,10 @@
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_perf.py::test_attn_res_layer_perf -k "SP8xTP4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
     '
   test_type: k3_mla_perf
   test_tags: [kimi_k3, kda, mla, k3_kda_perf]
@@ -609,6 +618,19 @@
       '
     )
 
+    glm_sparse_kv_push() (
+      export MESH_DEVICE=TG
+      # ttnn.experimental.sparse_push_plan + sparse_kv_push on the 8x4 TorusXY mesh: op checks against a host
+      # reference and determinism (repeated runs, bit-exact, compared on device), then the real GLM-5.3 1M top-k push
+      # (L14/L62) against the dense gather, with attention beside the prefix push on a sub-device.
+      timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py -vvv --tb=short &&
+        python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -vvv --tb=short &&
+        python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short
+      '
+    )
+
     glm_prefill_block() (
       export MESH_DEVICE=TG
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
@@ -645,21 +667,23 @@
       '
     )
 
-    echo "===== [1/4] (GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k ====="
+    echo "===== [1/5] (GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k ====="
     glm_dsa_mla || exit $?
-    echo "===== [2/4] (GLM-5.3-744B) prefill block accuracy 5k ====="
+    echo "===== [2/5] (GLM-5.3-744B) sparse KV push plan + push, incl. real 1M top-k ====="
+    glm_sparse_kv_push || exit $?
+    echo "===== [3/5] (GLM-5.3-744B) prefill block accuracy 5k ====="
     glm_prefill_block || exit $?
-    echo "===== [3/4] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
+    echo "===== [4/5] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
     glm_mtp || exit $?
-    echo "===== [4/4] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
+    echo "===== [5/5] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
     glm_moe || exit $?
-    echo "===== all 4 sections passed ====="
+    echo "===== all 5 sections passed ====="
   test_type: glm_components_suite
-  test_tags: [glm_5_3, mla, determinism, block, mtp, moe, dsa_mla_glm, glm_prefill_block, glm_mtp, glm_moe]
+  test_tags: [glm_5_3, mla, determinism, block, mtp, moe, dsa_mla_glm, glm_prefill_block, glm_mtp, glm_moe, sparse_kv_push]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 157
+      timeout: 177
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
@@ -1171,10 +1195,10 @@
 # ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the
-# canonical production shape (traced, 256k context, 8k chunk, 8x4 = CP8/TP4)
+# canonical production shape (traced, 256k context, service chunk size, 8x4 = CP8/TP4)
 # exercised end to end on real text. Golden GPU-trace comparisons are staged
 # separately on /mnt/models; this leg only checks the path runs.
-- name: "(Gemma4-31B-it) D_P prefill sanity 256k@8k"
+- name: "(Gemma4-31B-it) D_P prefill sanity 256k"
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
@@ -1193,7 +1217,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 18
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
@@ -1201,7 +1225,7 @@
   sp_config: sc1
 
 
-- name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k@8k"
+- name: "(Gemma4-31B-it) disaggregated prefill KV accuracy 256k"
   fabric_profile: 1d
   artifact_subdir: gemma4_mock256k
   cmd: |
@@ -1223,7 +1247,54 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 27
+      tier: 1
+      release_ready: false
+  owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+# Gemma4 continuous batching: one 4-lane traced step per chunk (2048 tokens per lane, prefixes to 8k, lane 0 the
+# deepest) against each request prefilled alone, every 2048-row block of every head in the early layers, and a slot no
+# step names left bit-identical; the lanes sliding ring SDPA against one call per request with lane 0 at the shortest
+# prefix (it alone drives the ring masks); and the packed serving path (PREFILL_FORWARD_TOKENS_BUDGET=8192: producer, batched
+# runtime, D2H layer acks, each completion checked against its chunk) against the same prompts served one chunk per
+# forward. The serving test xfails only on the unbatched run's min-head gate, as these prompts do on main; any batched,
+# ack or other golden failure fails it. Mid-chunk resume (#61878): unbatched at chunk 2048 / 4096 / 8192 and in packed
+# forwards, each against the same tokens prefilled from 0, plus a control resuming inside a slab that must fail (about 3 min).
+- name: "(Gemma4-31B-it) D_P continuous batching 4 lanes @2k"
+  fabric_profile: 1d
+  artifact_subdir: gemma4_mock256k  # the serving test's runner / producer logs and reports
+  cmd: |
+    export TT_METAL_HOME=/home/user/tt-metal
+    export PYTHONPATH="$TT_METAL_HOME"
+    export PYTHONUNBUFFERED=1
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest \
+        "models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_batched_kv_matches_unbatched[blackhole-B4-8x4]" \
+        "models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_lanes_sdpa_matches_per_request[blackhole-lane0_empty-8x4]" \
+        models/demos/gemma4_d_p/tests/test_mid_chunk_resume.py \
+        -vv --tb=short
+      # Its own process: the serving test launches a runner that opens the mesh, which the cases above keep open
+      # until their pytest exits.
+      python3 -m pytest \
+        "models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_batched_prefill_migration[mock]" \
+        -vv --tb=short
+    '
+  test_type: gemma4_d_p_batching
+  test_tags: [gemma4_d_p, batching]
+  test_group: module
+  budget_type: demo
+  skus:
+    bh_sc1:
+      timeout: 28
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
@@ -1232,7 +1303,7 @@
 
 # Prefill accuracy outside the migration path: one traced runtime prefills each GPU-trace dataset, then
 # checks every KV head and the next-token likelihoods (per context-depth bin) against the trace.
-- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy full@8k"
+- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy full"
   fabric_profile: 1d
   artifact_subdir: gemma4_d_p_prefill_accuracy
   cmd: |
@@ -2246,6 +2317,9 @@
   # 55K and 512K global rows, then the 32-rank snake ring: exact-output accuracy plus
   # perf at matched per-device and matched global volume.
   #
+  # The GLM-5.3 sparse KV push perf gate shares the fabric bring-up: plan, table gather and each push step at the
+  # 1M request with real top-k, each against a CI-derived ceiling.
+  #
   # The traced gate measures the 8-rank axis-ring shapes again through a captured ttnn trace, with the
   # cache slot and active gather extent read from metadata tensors on-device rather than from host
   # runtime arguments. Only it can catch a regression in that path -- a trace replay never re-runs the
@@ -2270,10 +2344,11 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
+      python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_glm_perf -q -s || rc=1
       exit $rc
     '
-  test_type: high_bw_all_gather_perf
-  test_tags: [ccl]
+  test_type: high_bw_all_gather_sparse_kv_push_perf
+  test_tags: [ccl, sparse_kv_push]
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
