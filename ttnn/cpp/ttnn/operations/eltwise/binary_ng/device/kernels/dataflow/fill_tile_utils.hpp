@@ -509,7 +509,7 @@ FORCE_INLINE void fill_tile_with_first_row_rm_bfloat16(uint32_t ptr_arg, uint32_
     }
 }
 
-// Helpers for 8-bit integers uint8/int8).
+// Helpers for 8-bit integers (uint8/int8).
 // Reads the very first element of the CB and fills the entire tile with that value.
 FORCE_INLINE void fill_tile_with_first_element_uint8(uint32_t l1_write_ptr) {
     auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_ptr);
@@ -549,7 +549,7 @@ FORCE_INLINE void fill_tile_with_first_column_uint8(uint32_t l1_write_ptr) {
     auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
 
     constexpr uint32_t kFaceBytes = 256;  // Total bytes per face (16x16)
-    constexpr uint32_t kFaceWords = 64;   // Total32-bit words per face
+    constexpr uint32_t kFaceWords = 64;   // Total 32-bit words per face
 
     for (uint32_t pair = 0; pair < 2; ++pair) {
         const uint32_t left = pair * 2 * kFaceBytes;

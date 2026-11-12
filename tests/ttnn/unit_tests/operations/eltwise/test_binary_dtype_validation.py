@@ -69,6 +69,8 @@ def _make_mixed_binary_tensors(device, dtype_a, dtype_b, shape=TENSOR_SHAPE):
         # arithmetic_fpu
         pytest.param(ttnn.add, ttnn.uint8, id="arithmetic_fpu_add_uint8"),
         pytest.param(ttnn.mul, ttnn.uint8, id="arithmetic_fpu_mul_uint8"),
+        pytest.param(ttnn.add, ttnn.int8, id="arithmetic_fpu_add_int8"),
+        pytest.param(ttnn.mul, ttnn.int8, id="arithmetic_fpu_mul_int8"),
         # int32_only (GCD, LCM, DIV_FLOOR, DIV_TRUNC)
         pytest.param(ttnn.gcd, ttnn.uint8, id="int32_only_gcd_uint8"),
         pytest.param(ttnn.gcd, ttnn.uint16, id="int32_only_gcd_uint16"),
