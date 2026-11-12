@@ -374,6 +374,11 @@ void init_unary_sfpu_operation_quasar()
     {
         sigmoid_appx_init();
     }
+    else if constexpr (OPERATION == SfpuType::tanh)
+    {
+        // calculate_tanh stores through the ADDR_MOD_6 tanh_init programs, as tanh_tile_init does.
+        tanh_init<APPROX, is_fp32_dest_acc_en>();
+    }
     else if constexpr (OPERATION == SfpuType::tanhshrink)
     {
         tanhshrink_init<APPROX, is_fp32_dest_acc_en>();

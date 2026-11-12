@@ -27,31 +27,44 @@ namespace ckernel::sfpu {
 // differs. Quasar's SFPLUTFP32 reads the table from the constant LRegs 9-14 and the looked-up value
 // from LReg3, where WH/BH read the table from LReg0-2/LReg4-6.
 //
-// So gelu_init loads the table with _sfpu_load_config32_ rather than sfpi: vCReg assignment reaches
-// SFPCONFIG, but the assembler rejects dests 9 and 10 ("permitted mask is 0xf9ff"), which is two of
-// the six table words. See tt-metal issue #51346.
+// So gelu_init loads the table with sfpi::lut_init (SFPCONFIG writes). The table overwrites the SFPU
+// constants 0.0/1.0/-1.0 in LReg9/10/11 and vConstFloatPrgm0 (LReg12) is a table intercept word, so
+// no sfpi code that needs them may run between the init and the loop; each op's init restores them
+// via _init_sfpu_config_reg_, so a following op is unaffected.
 //
-// The loop below is still plain sfpi. lut2_sign() wants six LReg operands because that is where WH/BH
-// keep the table, and it pins the looked-up value to LReg3, which is what this hardware wants anyway.
-// The LUT ignores those six registers here, so reading them back through l_reg[] (no instructions
-// emitted) is enough to satisfy the intrinsic. Loading the table into them, the way Blackhole's init
-// does, is what miscompares.
-//
-// Two things to avoid: vConstFloatPrgm0 for the 0.5 (that is LReg12, a table intercept word; an
-// SFPMULI immediate is free), and any sfpi code between this init and the loop, since the table
-// overwrites the SFPU constants 0.0/1.0/-1.0 in LReg9/10/11. Each op's init restores them via
-// _init_sfpu_config_reg_, so a following op is unaffected.
+// Raw TTI rather than sfpi::lut, as on Blackhole (#65331): sfpi serialised every pass as load / lut /
+// loadi 0.5 / mad / store plus a TTINCRWC (6 slots per pass of SFP_ROWS rows) with the LUT input and
+// the MAD result both on LReg3. Here the 0.5 is loaded into LReg0 once per call, the LUT result goes
+// to LReg1, and the passes pipeline: the next pass's SFPLOAD and the previous pass's SFPSTORE sit
+// between the MAD and the LUT that feeds it (4 slots per pass). The steady-state body is recorded
+// once (executing as it records) and replayed; the store walks Dest through ADDR_MOD_6 (+SFP_ROWS, programmed by
+// gelu_init<true> the way init_typecast does), so no TTINCRWC per pass. Same LUT mode bits and the
+// same x * 0.5 + lut MAD as before; only the register roles and the schedule change.
 // =============================================================================
 
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_gelu_appx() {
+    static_assert(ITERATIONS >= 2, "calculate_gelu_appx pipelines at least two passes");
+    constexpr unsigned LUT_MODE = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_UPDATE;
+    constexpr unsigned HALF_BF16 = 0x3F00;                   // SFPLOADI fp16b immediate: 0.5f
+    constexpr unsigned NEXT_PASS = ckernel::math::SFP_ROWS;  // Dest offset of the pass after the counter
+
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, HALF_BF16);
+    TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, 0 /*pass 0*/);
+    TTI_SFPLUTFP32(p_sfpu::LREG1, LUT_MODE);
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, 0 /*instr_mod1*/);
+    // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), lut pass r+1, mad pass r+1.
+    load_replay_buf<0 /*start*/, 4 /*len*/, true /*exec_while_loading*/>([] {
+        TTI_SFPLOAD(p_sfpu::LREG3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /*done*/, NEXT_PASS);
+        TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
+        TTI_SFPLUTFP32(p_sfpu::LREG1, LUT_MODE);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, 0 /*instr_mod1*/);
+    });
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat piecewise = sfpi::lut<sfpi::LutMode::Fp16x6_HWM3>(in, sfpi::LutSign::Update);
-        sfpi::dst_reg[0] = in * 0.5f + piecewise;
-        sfpi::dst_reg++;
+    for (int d = 2; d < ITERATIONS; d++) {
+        TTI_REPLAY(0 /*start*/, 4 /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*exec_while_loading*/, 0 /*load*/);
     }
+    TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /*done*/, 0);
 }
 
 // =============================================================================
@@ -170,6 +183,10 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
+        // calculate_gelu_appx stores through ADDR_MOD_6: Dest += SFP_ROWS per pass, the programming
+        // init_typecast uses.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
+
         // Segment slopes/intercepts, packed hi/lo the way SFPLUTFP32's FP16 6-entry mode 1 reads
         // them. Same values as the Blackhole table (l_reg0 = 0x37E7322B, l_reg4 = 0xB12286D8, ...).
         sfpi::lut_init(
