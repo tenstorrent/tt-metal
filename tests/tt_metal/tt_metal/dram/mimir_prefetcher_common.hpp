@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/buffers/dram_receiver_config_page.hpp"
+#include "hostdev/dram_receiver_config_page.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/program/slow_dispatch.hpp"

@@ -11,7 +11,7 @@
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/allocator/allocator.hpp"
-#include "impl/buffers/dram_receiver_config_page.hpp"
+#include "hostdev/dram_receiver_config_page.hpp"
 #include "impl/buffers/dram_sender_state_block.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"

@@ -272,8 +272,6 @@ std::pair<uint32_t, uint32_t> pick_page_size(uint32_t max_page_size, uint32_t nu
 // Detection is implicit per the design doc — see detect_layout_mode().
 using LayoutMode = TensorPrefetcherLayoutMode;
 
-static_assert(static_cast<uint32_t>(LayoutMode::ReceiverContiguous) == kCceReceiverContiguousLayoutMode);
-
 // Detection keys on how the weight was allocated, NOT the shard count: receiver-contiguous
 // weights are created with an NdShardSpec (num_shards == ring_size), K-row-major weights use a
 // legacy (WIDTH_SHARDED) shard spec. Counting shards is ambiguous when total_receivers ==

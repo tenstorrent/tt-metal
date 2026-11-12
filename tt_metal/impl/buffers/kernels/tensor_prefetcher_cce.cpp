@@ -257,8 +257,9 @@ RequestOutcome prefetch_request(
         }
         TensorPrefetcherTensorLayout layout;
         __builtin_memcpy(&layout, page_bytes + entry.layout_offset, sizeof(layout));
-        if (layout.layout_mode != tt::tt_metal::kCceReceiverContiguousLayoutMode || layout.streaming != 0 ||
-            entry.selector_mode != tt::tt_metal::TENSOR_PREFETCHER_SELECTOR_NONE || entry.num_groups != 1) {
+        if (layout.layout_mode != static_cast<uint32_t>(tt::tt_metal::TensorPrefetcherLayoutMode::ReceiverContiguous) ||
+            layout.streaming != 0 || entry.selector_mode != tt::tt_metal::TENSOR_PREFETCHER_SELECTOR_NONE ||
+            entry.num_groups != 1) {
             outcome.code = CceSenderStatusCode::BadLayout;
             break;
         }
