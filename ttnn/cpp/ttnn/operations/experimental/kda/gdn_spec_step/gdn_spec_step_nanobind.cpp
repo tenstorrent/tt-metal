@@ -51,8 +51,22 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 ``p >= P`` (P = page count of ``ring``) in ``ring_page_idx`` or in the ctrl start words addresses
                 page ``p - P`` of ``ring_pool2``, so a user's heads can be split over two buffers (for example the K
                 and V cache of a layer). A head's KV pages must lie in one pool.
-            hnew_depth (int): must be 2. max_users (int): must be 0 or B. value_blocks (int): must be 0 or 1.
-                kernel_opts (int): must be 0.
+            value_blocks (int): default 1. Split each (user, head)'s state columns over up to this many cores
+                (<= 4; the largest divisor of value_dim / 32 whose B * Nv * blocks cores fit the grid is taken). Each
+                core runs the recurrence on its column tiles; the blocks swap their pre-norm output tiles so the gated
+                RMSNorm sees the full row. Bit-identical to value_blocks=1 (outputs, states, window rows or history
+                pages).
+            kernel_opts (int): default 0. Bitmask of kernel restructurings, fast_mode=True and fp32_state=True only;
+                outputs, states and window rows or history pages stay bit-identical to kernel_opts=0. 2 = gate
+                scalars (the writer
+                computes the beta / decay gates, the compute fills its scalar tiles in DST); 8 = hoisted q scale
+                (rsqrt(q stats + eps) * scale once, not per token); 16 = q/k share (value_blocks > 1: each block
+                convolves 2*Kt/VB of the q/k chunks and the blocks swap the conv tiles over the NoC); 32 = the conv's
+                SFPU tail on the tile half holding the user's rows (conv_kernel 4); 64 = gate split (with 2 and
+                value_blocks > 1: the head's blocks split the gate math); 128 = each value block normalizes / gates
+                only its own output columns; 1024 = narrow gate reads (with 2: the gate reads fetch only the face rows
+                they use). Bits that need value_blocks > 1 have no effect without it. All bits: 1274.
+            hnew_depth (int): must be 2. max_users (int): must be 0 or B.
             conv_hist (ttnn.Tensor, optional): with ``ring_page_idx`` only, and ``conv_kernel`` 4. A BFLOAT16 TILE page
                 pool (for example the ``conv_hist`` view of a vLLM-owned cache block that gdn_decode_step reads) that
                 holds the convolution history in gdn_decode_step's packed format: 4 pages per value head, slot s >= 1 =

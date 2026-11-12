@@ -49,6 +49,8 @@ Tensor gdn_spec_step(
     tt::tt_metal::DataType output_dtype,
     bool fast_mode = false,
     bool fp32_state = false,
+    uint32_t value_blocks = 1,
+    uint32_t kernel_opts = 0,
     const std::optional<Tensor>& ring_page_idx = std::nullopt,
     const std::optional<Tensor>& ring_pool2 = std::nullopt,
     const std::optional<Tensor>& conv_hist = std::nullopt);

@@ -38,6 +38,43 @@ struct GdnSpecStepParams {
     // the state add run on the SFPU in exact fp32 (state_in / dec / hd32 / hn32 are UnpackToDest DFBs) instead of the
     // FPU, whose SrcA path truncates the fp32 state every token.
     bool fp32_state = false;
+    // value_blocks: split each (u, h)'s Dv state columns over up to this many cores. A state column's recurrence never
+    // reads another column, so each core runs the T tokens on its Vt / value_blocks column tiles with the unchanged
+    // per-tile arithmetic; the blocks of a head swap their last-token pre-norm output tiles (exact fp32 bytes over the
+    // NoC) so that each one runs the full-row gated RMSNorm. Outputs, states and window (or conv_hist history pages)
+    // are bit-identical to value_blocks = 1. The factory takes the largest divisor of Vt <= value_blocks (<= 4) whose
+    // B*Nv*blocks cores fit the grid; 0 or 1 = one core per (u, h).
+    uint32_t value_blocks = 1;
+    // kernel_opts: GdnSpecStepKernelOpt bits (fast_mode + fp32_state only). Each bit restructures the kernels and keeps
+    // outputs, states and window (or conv_hist history pages) bit-identical to 0.
+    uint32_t kernel_opts = 0;
+};
+
+// gdn_spec_step kernel_opts bits. Bits 0, 2, 8 and 9 are not assigned.
+enum GdnSpecStepKernelOpt : uint32_t {
+    // the writer computes the T beta / decay gate pairs (the reader's software-fp32 math, bit for bit) into one small
+    // entry; the compute fills its scalar tiles in DST from those bits (fill_tile_bitcast) instead of the reader
+    // filling 2*T broadcast tiles with 1024 RISC-V stores each, and the reader pushes the start state as soon as it
+    // lands
+    kGdnSpecOptGateScalars = 1u << 1,
+    // the token-independent half of the per-token q l2-norm scale, rsqrt(q stats + eps) * scale, once before the token
+    // loop; each token keeps only its row-mask multiply
+    kGdnSpecOptHoistInv = 1u << 3,
+    // value_blocks > 1: each of a head's VB blocks convolves 2*Kt/VB of the q/k chunks (instead of all 2*Kt) and the
+    // blocks swap the exact fp32 conv tiles over the NoC; each block reads, rebuilds and writes back only its own
+    // chunks (conv_hist: its own chunks' rows of the history pages)
+    kGdnSpecOptQkShare = 1u << 4,
+    // conv_kernel 4: the conv's SFPU tail (tap sum + silu) on the tile half that holds the user's rows only
+    kGdnSpecOptA3Half = 1u << 5,
+    // gate scalars with value_blocks > 1: the head's blocks split the T gate computations and swap the results
+    kGdnSpecOptGscSplit = 1u << 6,
+    // value_blocks > 1: each block normalizes / gates only its own output columns (the row statistics stay full-row)
+    kGdnSpecOptVsTail = 1u << 7,
+    // gate scalars: the writer's gate reads fetch only the face rows they use (the user's T rows of the a|b tile, tile
+    // 0's face row of dt_bias / -exp(A) holding the head) instead of whole pages that every core reads from one bank
+    kGdnSpecOptNarrowGateReads = 1u << 10,
+    kGdnSpecOptAll = kGdnSpecOptGateScalars | kGdnSpecOptHoistInv | kGdnSpecOptQkShare | kGdnSpecOptA3Half |
+                     kGdnSpecOptGscSplit | kGdnSpecOptVsTail | kGdnSpecOptNarrowGateReads,
 };
 
 struct GdnSpecStepInputs {

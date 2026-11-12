@@ -109,6 +109,18 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
     TT_FATAL(Dk > 0 && Dv > 0 && Dk % TW == 0 && Dv % TW == 0, "{}: key_dim and value_dim must be tile aligned", kOp);
     TT_FATAL(std::isfinite(a.scale) && a.l2_epsilon > 0.0f && a.norm_epsilon > 0.0f, "{}: bad scale/epsilon", kOp);
     TT_FATAL(T >= 1 && B >= 1, "{}: need T >= 1, B >= 1", kOp);
+    TT_FATAL(a.value_blocks <= 4, "{}: value_blocks must be in [0, 4] (got {})", kOp, a.value_blocks);
+    TT_FATAL(
+        (a.kernel_opts & ~static_cast<uint32_t>(kGdnSpecOptAll)) == 0,
+        "{}: unsupported kernel_opts bits {:#x} (supported mask {:#x})",
+        kOp,
+        a.kernel_opts & ~static_cast<uint32_t>(kGdnSpecOptAll),
+        static_cast<uint32_t>(kGdnSpecOptAll));
+    TT_FATAL(
+        a.kernel_opts == 0 || (a.fast_mode && a.fp32_state),
+        "{}: kernel_opts need fast_mode and fp32_state (got {:#x})",
+        kOp,
+        a.kernel_opts);
     TT_FATAL(K >= 2 && K <= 4, "{}: conv_kernel must be in [2, 4] (got {})", kOp, K);
     const uint32_t Lw = K - 1 + T;
     TT_FATAL(Lw <= tt::constants::TILE_HEIGHT, "{}: window K-1+T = {} must fit one tile (<= 32)", kOp, Lw);
@@ -280,6 +292,8 @@ Tensor gdn_spec_step(
     DataType output_dtype,
     bool fast_mode,
     bool fp32_state,
+    uint32_t value_blocks,
+    uint32_t kernel_opts,
     const std::optional<Tensor>& ring_page_idx,
     const std::optional<Tensor>& ring_pool2,
     const std::optional<Tensor>& conv_hist) {
@@ -302,6 +316,8 @@ Tensor gdn_spec_step(
             .compute_kernel_config = compute_kernel_config,
             .fast_mode = fast_mode,
             .fp32_state = fp32_state,
+            .value_blocks = value_blocks,
+            .kernel_opts = kernel_opts,
         },
         GdnSpecStepInputs{
             .qkvzab = qkvzab,

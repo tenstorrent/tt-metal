@@ -50,8 +50,6 @@ ttnn::Tensor gdn_spec_step(
         "gdn_spec_step: max_users must be 0 or B (got {}, B = {}); ring and ctrl are laid out for exactly B users",
         max_users,
         B);
-    TT_FATAL(value_blocks <= 1, "gdn_spec_step: value_blocks > 1 is not supported (got {})", value_blocks);
-    TT_FATAL(kernel_opts == 0, "gdn_spec_step: kernel_opts are not supported (got {:#x})", kernel_opts);
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const auto kernel_config = init_device_compute_kernel_config(
         qkvzab.device()->arch(),
@@ -87,6 +85,8 @@ ttnn::Tensor gdn_spec_step(
         output_dtype,
         fast_mode,
         fp32_state,
+        value_blocks,
+        kernel_opts,
         ring_page_idx,
         ring_pool2,
         conv_hist);

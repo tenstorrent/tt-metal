@@ -16,8 +16,8 @@ namespace ttnn::experimental::kda {
 // the window parity, mi and the start state per (u,h) (HOLD sentinel 0xFFFFFFFF: no state writes for that head, window
 // rows copied through). fast_mode / fp32_state select the per-token arithmetic of gdn_decode_step(fast_mode,
 // fp32_state), so a T-token call equals T chained gdn_decode_step calls at B = 1.
-// hnew_depth, max_users, value_blocks and kernel_opts accept only hnew_depth 2, max_users 0 or B, value_blocks 0 or 1
-// and kernel_opts 0.
+// value_blocks and kernel_opts select bit-identical faster programs (see GdnSpecStepParams). hnew_depth and max_users
+// accept only hnew_depth 2 and max_users 0 or B.
 ttnn::Tensor gdn_spec_step(
     const ttnn::Tensor& qkvzab,
     const std::optional<ttnn::Tensor>& win_a,
@@ -46,8 +46,8 @@ ttnn::Tensor gdn_spec_step(
     bool fast_mode = false,
     bool fp32_state = false,
     uint32_t max_users = 0,
-    uint32_t value_blocks = 1,
-    uint32_t kernel_opts = 0,
+    uint32_t value_blocks = 1,  // cores per (u, h) state (column split, bit-identical); clamped to the grid
+    uint32_t kernel_opts = 0,   // GdnSpecStepKernelOpt bits (fast_mode + fp32_state only)
     const std::optional<ttnn::Tensor>& ring_page_idx = std::nullopt,  // [>= B, T*Nv]: per-token, per-head ring pages
     const std::optional<ttnn::Tensor>& ring_pool2 = std::nullopt,     // second fp32 pool past ring's pages
     const std::optional<ttnn::Tensor>& conv_hist = std::nullopt);     // packed history pages (no window pair)
