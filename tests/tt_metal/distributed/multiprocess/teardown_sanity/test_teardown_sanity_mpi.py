@@ -33,6 +33,7 @@ from sanity_common import (
     DEADLINE_HANG,
     clean,
     ended,
+    fault_delivered,
     mpirun_path,
     nonzero,
     run_case,
@@ -130,8 +131,10 @@ def test_ttrun_ctrl_c():
         DEADLINE_HANG,
         cmd=ttrun_mpi_cmd(),
         launcher_signal=signal.SIGINT,
-        signal_after=4,
+        launcher_ready=(0, "ready"),  # the ranks are up and hanging before we interrupt, not still starting
+        signal_after=1,
     )
+    fault_delivered(r)
     ended(r)
     clean(r)
 
@@ -144,8 +147,10 @@ def test_ttrun_sigterm():
         DEADLINE_HANG,
         cmd=ttrun_mpi_cmd(),
         launcher_signal=signal.SIGTERM,
-        signal_after=4,
+        launcher_ready=(0, "ready"),
+        signal_after=1,
     )
+    fault_delivered(r)
     ended(r)
     clean(r)
 

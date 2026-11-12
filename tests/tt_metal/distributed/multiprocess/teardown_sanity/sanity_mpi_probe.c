@@ -134,6 +134,13 @@ int main(int argc, char** argv) {
             fprintf(f, "%d\n", (int)getpid());
             fclose(f);
         }
+        // readiness marker: this rank is past MPI_Init and about to hang/barrier, so the parent harness can gate a
+        // launcher signal on the ranks actually being up, instead of guessing a wall-clock delay (review #9).
+        snprintf(path, sizeof path, "%s/rank_%d.ready", piddir, g_rank);
+        FILE* rf = fopen(path, "w");
+        if (rf) {
+            fclose(rf);
+        }
     }
 
     const int is_victim = (g_rank == victim);
