@@ -16,7 +16,7 @@
 #include <common/TracyTTDeviceData.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "tools/profiler/perf_counters.hpp"
+#include "internal/profiler/perf_counters.hpp"
 
 namespace tt::tt_metal::profiler_perf_counters {
 
