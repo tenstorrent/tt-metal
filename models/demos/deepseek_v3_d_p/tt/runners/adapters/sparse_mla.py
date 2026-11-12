@@ -3,11 +3,10 @@
 
 """Sparse-attention (DSA) prefill adapters: the shared ``SparseMLAPrefillAdapter`` base and DeepSeek-V3.2-Exp.
 
-GLM-5.3 has its own serving adapter (``adapters/glm_5_3.py``);
-Kimi-K3.1 has its own (``adapters/kimi_k3_1.py``); what remains here is the test-only base +
-DeepSeek-V3.2-Exp.
+GLM-5.3 and Kimi-K3.1 have their own serving adapters (``adapters/glm_5_3.py``, ``adapters/kimi_k3_1.py``);
+what remains here is the test-only base + DeepSeek-V3.2-Exp.
 
-Both add a lightning indexer (DeepSeek Sparse Attention) on top of the MLA + MoE
+The variants here add a lightning indexer (DeepSeek Sparse Attention) on top of the MLA + MoE
 family. Two things set them apart from the dense ``DeepSeekV3Adapter`` / ``KimiK27Adapter``:
 
   * Their HF ``model_type`` (``deepseek_v32`` / ``glm_moe_dsa``) is NOT registered with

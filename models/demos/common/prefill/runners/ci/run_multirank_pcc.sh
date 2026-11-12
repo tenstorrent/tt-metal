@@ -148,49 +148,47 @@ case "${MODEL}" in
     fi
     ;;
   kimi_k3_1)
-    # Kimi-K3.1 = K3 + a DSA indexer on its 24 MLA layers. A smoke leg: K3.1 has no structured golden the
-    # producer can read back (its vLLM traces are raw streams, read by tests/sparse_mla/k31_trace.py), so the
-    # producer only drives the request and checks no KV. K3's trace supplies the prompt tokens. sc1 only:
-    # a multi-rank producer must verify (see prefill_producer), and there is nothing to verify against.
-    # PREFILL_K31_SC4_SMOKE=1 runs sc4 anyway, all 93 layers, with a single-rank producer that only feeds tokens
-    # (no read-back, no PCC gate), to check the four-stage pipeline runs before a P->D migration.
-    K31_SC4_SMOKE=0
-    if [ "${CONFIG}" = sc4 ] && [ "${PREFILL_K31_SC4_SMOKE:-0}" = 1 ]; then
-      K31_SC4_SMOKE=1
-      REQUEST_LEN="${PREFILL_SC4_REQUEST_LEN:-${GOLDEN_LEN}}"
-      # The manifest's 1,064,960 x 100 users is CI's 1M-context shape; with K3.1's indexer cache the expert weights
-      # no longer fit in DRAM (bank_manager OOM on load). 245,760 is sc1's shape, 24 layers per galaxy as here.
-      VARIANT_MAX_SEQ_LEN="${PREFILL_SC4_MAX_SEQ_LEN:-245760}"
-    fi
-    [ "${CONFIG}" = sc1 ] || [ "${K31_SC4_SMOKE}" = 1 ] || { echo "${MODEL} runs sc1 only (no K3.1 golden for a multi-rank read-back; PREFILL_K31_SC4_SMOKE=1 for a feed-only sc4 smoke)" >&2; exit 2; }
+    # Kimi-K3 with its 24 MLA layers changed to DSA: same depths, slots and gate as kimi_k3 above.
+    # The adapter's defaults already name the K3.1 weights, cache and golden, so no path is exported.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
     SC1_NUM_LAYERS=24
-    SC1_MAX_SEQ_LEN="${PREFILL_SC1_MAX_SEQ_LEN:-245760}"
-    SC1_REQUEST_LEN="${PREFILL_SC1_REQUEST_LEN:-${GOLDEN_LEN}}"
-    PRODUCER_CHECK_PCC=0
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized; \
-      ${PREFILL_TTNN_CACHE:+export PREFILL_TTNN_CACHE='${PREFILL_TTNN_CACHE}';} \
-      export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=INFO; export TT_SPARSE_MLA_OVERLAP_PROFILE=off;"
-    PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
-    PERF_BASELINES=""
-    if [ "${K31_SC4_SMOKE}" = 1 ] && [ "${PREFILL_K31_PD:-0}" = 1 ]; then
-      # P->D through tt-d-gen's KV Manager: the runners export the table (PREFILL_PD_TABLE_PATH) and each
-      # host's device map to files, and migration_driver replaces the producer: it feeds the prompt, POSTs
-      # /migrate to the prefill leader KVM, then writes the handoff and the DONE sentinel for decode.
-      : "${PREFILL_PD_TABLE_PATH:?PREFILL_K31_PD=1 needs PREFILL_PD_TABLE_PATH on shared storage}"
-      : "${PREFILL_MIGRATION_KVM_URL:?PREFILL_K31_PD=1 needs PREFILL_MIGRATION_KVM_URL}"
-      RUNNER_ENV+=" export PREFILL_MIGRATION_EXPORT_TO_FILE=1; \
-        export PREFILL_MIGRATION_DEVICE_MAP_PATH=${PREFILL_PD_DEVICE_MAP:-/tmp/prefill_device_map.txt};"
-      PRODUCER_MODULE=migration_driver
-      PRODUCER_ENV+=" export PREFILL_MIGRATION_KVM_URL='${PREFILL_MIGRATION_KVM_URL}'; \
-        export PREFILL_MIGRATION_KVM_RECEIVER='${PREFILL_MIGRATION_KVM_RECEIVER:-decode-0}'; \
-        export PREFILL_MIGRATION_PAIRS='${PREFILL_MIGRATION_PAIRS:-0:1}'; \
-        export PREFILL_MIGRATION_SRC_ENDPOINT_ID=1; export PREFILL_MIGRATION_DEST_ENDPOINT_ID=0; \
-        export MIGRATION_DONE_FILE='${MIGRATION_DONE_FILE:?}'; \
-        export PREFILL_MIGRATION_HANDOFF_PATH='${PREFILL_MIGRATION_HANDOFF_PATH:?}'; \
-        export PREFILL_VERIFY_MIGRATION=off; \
-        ${PREFILL_MIGRATION_DUMP_SRC_KV:+export PREFILL_MIGRATION_DUMP_SRC_KV='${PREFILL_MIGRATION_DUMP_SRC_KV}';}"
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
+    # TT_SPARSE_MLA_OVERLAP_PROFILE=auto fails inside trace capture; the K3.1 legs run with it off.
+    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR; export TT_SPARSE_MLA_OVERLAP_PROFILE=off;"
+    # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare, so no
+    # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
+    # gate reads one chunk's KV from the next.
+    REQUEST_LEN=$((2 * CHUNK_SIZE))
+    # PREFILL_K31_SC4_SMOKE=1: sc4, all 93 layers, with a single-rank producer that only feeds tokens (no
+    # read-back, no PCC gate), to check the four-stage pipeline runs before a P->D migration.
+    K31_SC4_SMOKE=0
+    if [ "${CONFIG}" = sc4 ] && [ "${PREFILL_K31_SC4_SMOKE:-0}" = 1 ]; then
+      K31_SC4_SMOKE=1
+      PRODUCER_CHECK_PCC=0
+      REQUEST_LEN="${PREFILL_SC4_REQUEST_LEN:-${GOLDEN_LEN}}"
+      # At the manifest's 1M-context shape the expert weights no longer fit in DRAM beside K3.1's indexer cache
+      # (bank_manager OOM on load). 245,760 is sc1's shape, 24 layers per galaxy as here.
+      VARIANT_MAX_SEQ_LEN="${PREFILL_SC4_MAX_SEQ_LEN:-245760}"
+      RUNNER_ENV="${RUNNER_ENV/LOGURU_LEVEL=ERROR/LOGURU_LEVEL=INFO}"
+      if [ "${PREFILL_K31_PD:-0}" = 1 ]; then
+        # P->D through tt-d-gen's KV Manager: the runners export the table (PREFILL_PD_TABLE_PATH) and each
+        # host's device map to files, and migration_driver replaces the producer: it feeds the prompt, POSTs
+        # /migrate to the prefill leader KVM, then writes the handoff and the DONE sentinel for decode.
+        : "${PREFILL_PD_TABLE_PATH:?PREFILL_K31_PD=1 needs PREFILL_PD_TABLE_PATH on shared storage}"
+        : "${PREFILL_MIGRATION_KVM_URL:?PREFILL_K31_PD=1 needs PREFILL_MIGRATION_KVM_URL}"
+        RUNNER_ENV+=" export PREFILL_MIGRATION_EXPORT_TO_FILE=1; \
+          export PREFILL_MIGRATION_DEVICE_MAP_PATH=${PREFILL_PD_DEVICE_MAP:-/tmp/prefill_device_map.txt};"
+        PRODUCER_MODULE=migration_driver
+        PRODUCER_ENV+=" export PREFILL_MIGRATION_KVM_URL='${PREFILL_MIGRATION_KVM_URL}'; \
+          export PREFILL_MIGRATION_KVM_RECEIVER='${PREFILL_MIGRATION_KVM_RECEIVER:-decode-0}'; \
+          export PREFILL_MIGRATION_PAIRS='${PREFILL_MIGRATION_PAIRS:-0:1}'; \
+          export PREFILL_MIGRATION_SRC_ENDPOINT_ID=1; export PREFILL_MIGRATION_DEST_ENDPOINT_ID=0; \
+          export MIGRATION_DONE_FILE='${MIGRATION_DONE_FILE:?}'; \
+          export PREFILL_MIGRATION_HANDOFF_PATH='${PREFILL_MIGRATION_HANDOFF_PATH:?}'; \
+          export PREFILL_VERIFY_MIGRATION=off; \
+          ${PREFILL_MIGRATION_DUMP_SRC_KV:+export PREFILL_MIGRATION_DUMP_SRC_KV='${PREFILL_MIGRATION_DUMP_SRC_KV}';}"
+      fi
     fi
     ;;
   mistral4)

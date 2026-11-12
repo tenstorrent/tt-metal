@@ -78,6 +78,8 @@ class ModelArgs:
     index_rope_interleave: bool = False
     # Indexer rope width. None -> qk_rope_head_dim (DS-V3.2 / GLM, 64); 0 -> NoPE indexer (Kimi-K3.1).
     index_rope_dim: Optional[int] = None
+    # Indexer k_norm (LayerNorm) epsilon: 1e-6 in DS-V3.2 / GLM; Kimi-K3.1 uses its rms_norm_eps (1e-5).
+    index_k_norm_eps: float = 1e-6
     # Kimi-K3 NoPE: q_pe / k_pe stay unrotated (still 64 wide and cached); softmax scale is plain qk_head_dim**-0.5.
     mla_use_nope: bool = False
     # Kimi-K3 output gate: sigmoid(g_proj(x)) multiplies the per-head attention output before wo.
@@ -120,16 +122,16 @@ class LayerNorm(nn.Module):
     LayerNorm matching reference implementation (model.py:LayerNorm).
 
     Note: γ (weight) is initialized to 1 and β (bias) to 0. Computation is done
-    in float32 and cast back to the input dtype, with eps=1e-6 to match the
-    reference. Used by the Indexer's ``k_norm``.
+    in float32 and cast back to the input dtype. ``eps`` is the model's
+    (``ModelArgs.index_k_norm_eps``). Used by the Indexer's ``k_norm``.
     """
 
-    def __init__(self, normalized_shape: int):
+    def __init__(self, normalized_shape: int, eps: float):
         super().__init__()
         # Initialize γ to 1, β to 0 (standard LayerNorm initialization), float32
         self.weight = nn.Parameter(torch.ones(normalized_shape, dtype=torch.float32))
         self.bias = nn.Parameter(torch.zeros(normalized_shape, dtype=torch.float32))
-        self.eps = 1e-6
+        self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.layer_norm(x.float(), (self.weight.shape[0],), self.weight, self.bias, self.eps).type_as(x)
@@ -189,7 +191,7 @@ class IndexerCPU(nn.Module):
         # Projections (bias-free, matching the reference indexer)
         self.wq_b = Linear(self.q_lora_rank, self.n_heads * self.head_dim)
         self.wk = Linear(self.dim, self.head_dim)
-        self.k_norm = LayerNorm(self.head_dim)
+        self.k_norm = LayerNorm(self.head_dim, args.index_k_norm_eps)
         self.weights_proj = Linear(self.dim, self.n_heads, dtype=torch.float32)
         self.softmax_scale = self.head_dim**-0.5
 

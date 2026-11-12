@@ -107,7 +107,7 @@ def test_adapter_hooks_name_the_four_configs():
 
 def test_registry_serves_k31_with_raw_basis_index_keys():
     from models.demos.common.prefill.adapter import get_adapter
-    from models.demos.deepseek_v3_d_p.tt.mla.indexer import index_hadamard_basis, resolve_has_indexer
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import index_keys_hadamard_rotated, resolve_has_indexer
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
     adapter = get_adapter("kimi_k3_1")
@@ -116,7 +116,7 @@ def test_registry_serves_k31_with_raw_basis_index_keys():
     config = adapter.load_hf_config()
     assert resolve_has_indexer(config)
     # K3.1's decode keeps indexer keys in the model's basis; the migrated cache must match.
-    assert not index_hadamard_basis(config)
+    assert not index_keys_hadamard_rotated(config)
 
 
 def test_kv_chunk_matches_k31_decode_page():
@@ -130,23 +130,3 @@ def test_kv_chunk_matches_k31_decode_page():
     dram_alignment = 64
     aligned_row = -(-656 // dram_alignment) * dram_alignment
     assert 32 * aligned_row == 22528  # GLM_SCALED_KV_PAGE_BYTES on the decode side
-
-
-@pytest.mark.parametrize(
-    "has_indexer, owns_mla, cache, raises",
-    [
-        (True, True, object(), False),
-        (True, True, None, True),
-        (True, False, None, False),  # a KDA-only rank (e.g. a 1-layer run of layer 0): no index cache allocated
-        (False, True, None, False),
-        (False, True, object(), True),
-    ],
-)
-def test_index_cache_required_only_on_ranks_with_mla_layers(has_indexer, owns_mla, cache, raises):
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import check_index_kv_cache
-
-    if raises:
-        with pytest.raises(ValueError):
-            check_index_kv_cache(has_indexer, owns_mla, cache)
-    else:
-        check_index_kv_cache(has_indexer, owns_mla, cache)

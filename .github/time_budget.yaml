@@ -437,7 +437,10 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 2375
+    # K3.1 mirrors K3's CI coverage (user decision 2026-11-07): 2375 -> 2576 for the K3.1 synthetic suite (+50 min),
+    # the K3.1 sparse MLA section of the K3 accuracy suite (+12 min) and the K3.1 depth L24 / L24-128k sections of
+    # the K3 transformer suite (+70 +90 min, K3's own L24 depth / chunked bounds).
+    bh_sc1: 2576
     bh_sc1_high_power: 498
     bh_sc4: 60
     wh_n150: 500

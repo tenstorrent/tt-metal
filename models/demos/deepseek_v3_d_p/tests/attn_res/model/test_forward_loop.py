@@ -196,12 +196,15 @@ SPLIT_LAYERS = SPLIT_BOUNDARY + BLOCK_SIZE
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
 @pytest.mark.timeout(1800)
 def test_split_loop_matches_reference(mesh_device, device_params):
-    """Two pipeline ranks, the second opening on what the first hands over, against the undivided oracle.
+    """Two pipeline ranks, the second opening on what the first hands over: bit-identical to the undivided walk.
 
-    The second rank opens owing the read that straddles the boundary, and takes it from the
-    batch of the block it opens, over the set with the inherited live stream sealed. That is
-    the same read the undivided walk takes before its seal, so the split must not move the
-    result.
+    The second rank opens owing the read that straddles the boundary. It batches that one site over the
+    inherited set and takes the read before it seals, exactly as the undivided walk does at that layer, so
+    the split must not move a single bit — not merely stay close to the oracle. A read scored any other
+    way (e.g. as a closed site after the seal) is the same mixture with a different reduction, and moved
+    half of this read's elements by 1-3 bf16 ulps (tt_metal_tracker-ao3i.9). No layer is tapped, so the
+    write layer `boundary - 1` defers is settled by the handoff's add on one side and inside the boundary
+    read on the other: the production path.
     """
     boundary = SPLIT_BOUNDARY
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
@@ -213,10 +216,14 @@ def test_split_loop_matches_reference(mesh_device, device_params):
     tt_out = op.to_query(q_out)
     module = lambda h: ttnn.multiply(h, MODULE_SCALE)
     stand_ins = lambda n: [_StandInBlock(module, module) for _ in range(n)]
+    embeddings = lambda: place(op, hidden_states.unsqueeze(0).unsqueeze(0))
 
-    embeddings = place(op, hidden_states.unsqueeze(0).unsqueeze(0))
+    undivided = _transformer_forward(op, embeddings(), (tt_pre, tt_post, tt_out), stand_ins(SPLIT_LAYERS))
+    whole = compose(op, undivided)
+    ttnn.deallocate(undivided)
+
     live, sealed = _transformer_forward(
-        op, embeddings, (tt_pre[:boundary], tt_post[:boundary], tt_out), stand_ins(boundary), last=False
+        op, embeddings(), (tt_pre[:boundary], tt_post[:boundary], tt_out), stand_ins(boundary), last=False
     )
     device_out = _transformer_forward(
         op,
@@ -230,7 +237,9 @@ def test_split_loop_matches_reference(mesh_device, device_params):
 
     want = _reference(num_tokens, SPLIT_LAYERS)
     pcc = assert_accurate(want, got, name=f"split at layer {boundary}", pcc_threshold=PCC_GATE)
-    logger.info(f"split at layer {boundary} of {SPLIT_LAYERS}: PCC {pcc:.7f}")
+    differ = (got != whole).sum().item()
+    logger.info(f"split at layer {boundary} of {SPLIT_LAYERS}: PCC {pcc:.7f}, {differ} elements differ from undivided")
+    assert differ == 0, f"split at layer {boundary}: {differ} of {got.numel()} elements differ from the undivided walk"
 
     for tensor in (tt_out, *tt_pre, *tt_post):
         ttnn.deallocate(tensor)

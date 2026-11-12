@@ -14,7 +14,8 @@ where only 24 of 93 layers own a slab, so this class overrides it -- along with 
 ``num_kv_cache_layers``, ``kv_slot_layer_ids``, ``layer_split_boundaries`` and
 ``pipeline_activation_planes`` -- to answer in MLA-slot space. The same override also allocates the
 KDA layers' migration state (``KimiK3KvCaches.kda_states``), which ``TtKimiK3Runtime`` exposes as
-migration stages 1 and 2 next to kvpe at 0 (issue #57403).
+migration stages 1 and 2 next to kvpe at 0 (issue #57403); on Kimi-K3.1 the DSA index cache is stage 1
+and the KDA state moves to 2 and 3.
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
 896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Every FFN site runs the
@@ -29,6 +30,7 @@ is correct but not yet tuned at their 6144 / 33792 widths. One deliberate limit 
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 from typing import Callable
 
@@ -164,27 +166,56 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
         A K3 rank can legitimately hold ZERO full-attention layers — a 1-layer bring-up run is layer
         0, which is KDA, and then there is no KV cache to allocate; the KDA state slabs still are.
+
+        The config decides what a full-attention layer stores. Kimi-K3's MLA is dense: a bf8 TILE kvpe
+        cache (its adapter declares no sparse format). Kimi-K3.1's are Gated DSA layers (the config
+        carries the indexer): sparse_sdpa reads the kvpe natively, so it is in the adapter's sparse
+        format (scaled FP8 by default), and each layer's indexer writes its keys to a second, bf8 TILE
+        ``index_head_dim``-wide cache (as GLM-5.3). Every DSA layer owns its indexer, so the index cache
+        has the kvpe cache's slabs, slot for slot, and the same SP/TP split.
         """
+        import ttnn
         from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
         from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import KimiK3KvCaches
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+            MlaKvCacheFormat,
+            init_kvpe_cache,
+            init_mla_kv_cache,
+        )
+
+        has_indexer = resolve_has_indexer(hf_config)
+        kvpe_format = MlaKvCacheFormat(
+            self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format) or MlaKvCacheFormat.BFP8_TILE
+        )
+        if has_indexer == (kvpe_format == MlaKvCacheFormat.BFP8_TILE):
+            raise ValueError(
+                f"{self.name}: a {'DSA' if has_indexer else 'dense MLA'} model cannot use a {kvpe_format} kvpe "
+                "cache; sparse_sdpa reads only sparse formats and the dense MLA path only bf8 TILE"
+            )
+        # Sparse ttMLA always writes and gathers TP-deduped kvpe and index caches; a TP-replicated allocation would
+        # be written in the deduped layout with nothing to catch it.
+        if has_indexer and not self._dense_tp_shard_kv(params):
+            raise ValueError(f"{self.name}: DSA layers need TP-deduped KV caches; set tp_shard_kv")
 
         schedule = KimiK3LayerSchedule.build(KimiK3Config, params.first_layer_idx, params.num_layers)
-        kvpe = None
+        kvpe = index = None
         if schedule.num_mla_layers > 0:
-            kvpe = allocate_mla_kvpe_cache(
+            split = dict(
                 mesh_device=mesh_device,
-                hf_config=hf_config,
-                max_seq_len=params.max_seq_len,
+                seq_len=params.max_seq_len,
                 mesh_shape=params.mesh_shape,
                 sp_axis=params.sp_axis,
-                num_layers=schedule.num_mla_layers,
+                num_kvpe_cache_layers=schedule.num_mla_layers,
                 num_users=params.num_users,
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
                 bank_aligned=True,
             )
+            kvpe = init_mla_kv_cache(cache_format=kvpe_format, hf_config=hf_config, **split)
+            if has_indexer:
+                index = init_kvpe_cache(kvpe_cache_head_dim=hf_config.index_head_dim, dtype=ttnn.bfloat8_b, **split)
 
         # The KDA carries' one store: a consolidated slab per state kind over this rank's KDA layers and
         # every slot, allocated from the config alone and handed to the model at compile(). Allocated
@@ -194,7 +225,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         if kda_layer_ids:
             geometry = kimi_k3_kda_geometry(params.mesh_shape, params.sp_axis, params.tp_axis)
             kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=kda_layer_ids, num_slots=params.num_users)
-        return KimiK3KvCaches(kvpe=kvpe, kda_states=kda_states)
+        return KimiK3KvCaches(kvpe=kvpe, index=index, kda_states=kda_states)
 
     def layer_split_boundaries(self, num_layers: int):
         """Pipeline ranks may only start on an AttnRes block boundary.
@@ -256,24 +287,35 @@ class KimiK3Adapter(MLAPrefillAdapter):
         """
         return 1 + boundary_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
 
-    # --- migration table configs: 0 = kvpe, 1 = KDA recurrent, 2 = KDA convolution ---
+    # --- migration table configs: kvpe, the DSA index cache on K3.1, then KDA recurrent and convolution ---
+    # K3: 0 kvpe / 1 recurrent / 2 convolution. K3.1: 0 kvpe / 1 index / 2 recurrent / 3 convolution.
     kda_golden_default = (
         "/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/k3_vllm_code_debug_1M_head_tail"
     )
 
+    @functools.cached_property
+    def _table_kinds(self) -> tuple[str, ...]:
+        """Table config order, as `TtKimiK3Runtime.kv_migration_stages` emits it. The index cache is there
+        exactly when the config has the DSA indexer, the same test `allocate_kv_cache` sizes it by."""
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+
+        index = ("index",) if resolve_has_indexer(self.load_hf_config()) else ()
+        return ("kvpe", *index, "kda_recurrent", "kda_convolution")
+
     def cache_kind(self, config_id: int) -> str:
         """What table config `config_id` describes; consumers must not infer this from the config count."""
-        kinds = ("kvpe", "kda_recurrent", "kda_convolution")
+        kinds = self._table_kinds
         return kinds[config_id] if 0 <= config_id < len(kinds) else "other"
 
     def cache_layer_rows(self, config_id: int, num_layers: int) -> dict[int, int]:
         """Global layer -> published table row, for the layers `num_layers` deep that own a row.
 
         Every config is published on the model's layer axis (`kv_table_layer_rows` /
-        `kda_table_layer_rows`), so the map is the identity over the layers of that config's kind.
+        `kda_table_layer_rows`), so the map is the identity over the layers of that config's kind. K3.1's
+        index cache sits on the full-attention layers, as kvpe does: every DSA layer owns its indexer.
         """
         kind = self.cache_kind(config_id)
-        if kind == "kvpe":
+        if kind in ("kvpe", "index"):
             ids = KimiK3Config.mla_layer_ids()
         elif kind in ("kda_recurrent", "kda_convolution"):
             ids = KimiK3Config.kda_layer_ids()
@@ -282,9 +324,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
         return {layer: layer for layer in ids if layer < num_layers}
 
     def cache_head_dim(self, config_id: int):
-        """Row width of a token-addressed cache; None for the KDA state, which has no token axis."""
-        if self.cache_kind(config_id) == "kvpe":
+        """Logical row width of a token-addressed cache (the chunk bytes tell its encoding); None for the KDA
+        state, which has no token axis."""
+        kind = self.cache_kind(config_id)
+        if kind == "kvpe":
             return KimiK3Config.KV_LORA_RANK + KimiK3Config.QK_ROPE_HEAD_DIM
+        if kind == "index":
+            return self.model_config.INDEX_HEAD_DIM
         return None
 
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
@@ -305,11 +351,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
         (`modeling_kimi_linear.py`) raises `ImportError` at module import without `fla-core`, which
         is not installed here — `AutoConfig(trust_remote_code=True)` therefore fails before it can
         return anything. `kimi_k3_hf_config` carries the same attributes the MLA and MoE paths read.
-        `max_seq` is a placeholder; the runner overwrites `max_seq_len` on the result.
+        `max_seq` is a placeholder; the runner overwrites `max_seq_len` on the result. Goes through
+        `config_builder`, so a variant (Kimi-K3.1) swaps the config there alone.
         """
-        from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_hf_config
-
-        return kimi_k3_hf_config()
+        return self.config_builder()
 
     def build_runtime(self, *, mesh_device, hf_config, params):
         """Construct the Kimi-K3 stack and return its runtime.

@@ -70,13 +70,6 @@ def get_fused_ring_host_timing() -> tuple[int, float]:
     return _fused_ring_host_timing["calls"], _fused_ring_host_timing["seconds"]
 
 
-def index_hadamard_basis(config) -> bool:
-    """Whether the indexer stores and scores its keys in the orthonormal Hadamard basis (GLM / DeepSeek decode
-    do; Kimi-K3.1's decode does not, ``config.index_hadamard = False``). Scores are the same either way; the
-    basis only has to match the decode side that the index cache migrates to."""
-    return bool(getattr(config, "index_hadamard", True))
-
-
 def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
     """Return the Sylvester-order orthonormal Hadamard matrix used by the decode indexer."""
     assert dim > 0 and dim & (dim - 1) == 0, f"Hadamard dimension must be a power of two, got {dim}"
@@ -87,6 +80,43 @@ def normalized_hadamard_matrix(dim: int) -> torch.Tensor:
             dim=0,
         )
     return (matrix * (dim**-0.5)).to(torch.bfloat16)
+
+
+def index_keys_hadamard_rotated(config) -> bool:
+    """Whether the DSA indexer scores q and k, and stores k in its index cache, in the orthonormal Hadamard basis.
+
+    ``config.index_hadamard``: absent -> True (DeepSeek-V3.2 / GLM: their decode stores and scores indexer keys in
+    the H basis, and prefill's persistent index cache must match it). Kimi-K3.1 sets False: its vLLM reference and
+    decode rotate neither q nor k, so its index cache holds natural-basis keys."""
+    return getattr(config, "index_hadamard", True)
+
+
+def rotate_index_keys(config, keys: torch.Tensor) -> torch.Tensor:
+    """``keys`` [..., index_head_dim] between the natural basis and the index cache's basis.
+
+    ``keys @ H`` when ``index_keys_hadamard_rotated(config)``, else ``keys``: H is symmetric and its own inverse, so
+    the same map takes a natural-basis key into the cache's basis and a cached key back out."""
+    if not index_keys_hadamard_rotated(config):
+        return keys
+    return (keys.float() @ normalized_hadamard_matrix(keys.shape[-1]).float()).to(keys.dtype)
+
+
+def score_compute_kernel_config(config, arch) -> ttnn.DeviceComputeKernelConfig | None:
+    """The indexer score matmul's compute config from ``config.index_score_math_fidelity``.
+
+    Absent -> None: the op's own default (LoFi for bf8 x bf8), which DS-V3.2 / GLM run. Kimi-K3.1 sets HiFi2
+    (tt_metal_tracker-ao3i.2.7). Only the fidelity varies: bf16 dest without L1 accumulation are the op's defaults and
+    the only modes it is validated for."""
+    fidelity = getattr(config, "index_score_math_fidelity", None)
+    if fidelity is None:
+        return None
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=getattr(ttnn.MathFidelity, fidelity),
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
 
 
 class TtIndexerBase:
@@ -364,6 +394,9 @@ class TtIndexerBase:
         if self._index_rope_dim is None:
             self._index_rope_dim = 64
         assert self._index_rope_dim in (0, 64), f"indexer rope width must be 0 (NoPE) or 64; got {self._index_rope_dim}"
+        # k_norm epsilon: absent -> 1e-6 (DS-V3.2 / GLM); Kimi-K3.1 sets its rms_norm_eps (vLLM KimiK3DSAIndexerKNorm).
+        self._index_k_norm_eps = getattr(config, "index_k_norm_eps", 1e-6)
+        self._score_compute_kernel_config = score_compute_kernel_config(config, mesh_device.arch())
         self.seq_len = seq_len
         # Keep the index tensor width fixed at the configured maximum, except on small-cache test /
         # deployment configurations where the cache itself cannot contain that many entries.  This
@@ -393,9 +426,9 @@ class TtIndexerBase:
         # modes.
         # Block-cyclic key cache (persistent [num_users*_index_cache_layers,1,S/sp,D_idx]) is NOT owned
         # here: exactly like the MLA KVPE cache, the caller allocates it and passes it into
-        # forward(index_kv_cache=...) every call; the indexer never self-allocates it. write_k applies the
-        # decode-compatible Hadamard transform and typecasts the key to the cache's dtype before the in-place
-        # write, so the caller controls the dtype.
+        # forward(index_kv_cache=...) every call; the indexer never self-allocates it. write_k puts the
+        # key in decode's basis (index_keys_hadamard_rotated) and typecasts it to the cache's dtype before the
+        # in-place write, so the caller controls the dtype.
         # GLM-5.3 cross-layer indexer reuse: the index key cache is allocated for full layers only, so this
         # layer writes/reads its compacted rank among them and the folded (user-major) slot stride is the
         # cache's full-layer count, not its layer count. _index_cache_layers is that stride.
@@ -450,25 +483,31 @@ class TtIndexerBase:
                 dtype=ttnn.bfloat16,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        # Blaze stores and scores GLM's indexer keys in the orthonormal Hadamard basis. Apply the same
-        # transform to both Q and K so standalone prefill scores are unchanged while the persistent
-        # index cache remains byte-compatible with decode after migration. Kimi-K3.1's decode keeps its
-        # keys in the model's own basis (``index_hadamard = False``), so there neither side is rotated.
-        self._index_hadamard_basis = index_hadamard_basis(self.config)
-        hadamard = normalized_hadamard_matrix(self.index_args.index_head_dim).reshape(
-            1, 1, self.index_args.index_head_dim, self.index_args.index_head_dim
-        )
-        self._index_hadamard = ttnn.from_torch(
-            hadamard,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        # NoPE: the query path is wq_b -> per-head split -> Hadamard with nothing nonlinear between, so fold the
-        # Hadamard into wq_b once here and skip the per-call matmul in score().
-        self._q_hadamard_folded = self._index_hadamard_basis and self._index_rope_dim == 0
-        if self._q_hadamard_folded:
+        # The index cache's key basis is the decode's (index_keys_hadamard_rotated): DS-V3.2 / GLM decode store
+        # and score indexer keys in the orthonormal Hadamard basis, so prefill applies the same transform to both
+        # Q and K -- scores are unchanged (H cancels in q.k) and the persistent index cache stays byte-compatible
+        # with decode after migration. Kimi-K3.1's decode and reference rotate neither: natural basis, no H.
+        self._index_hadamard = None
+        if index_keys_hadamard_rotated(config):
+            hadamard = normalized_hadamard_matrix(self.index_args.index_head_dim).reshape(
+                1, 1, self.index_args.index_head_dim, self.index_args.index_head_dim
+            )
+            self._index_hadamard = ttnn.from_torch(
+                hadamard,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            # Unrotated keys are validated for the NoPE indexer only (Kimi-K3.1), whose query needs no
+            # per-call transform after wq_b; a roped one would score a bf16 query (see score()).
+            assert self._index_rope_dim == 0, "index_hadamard=False is only supported for a NoPE indexer"
+        # The query leaves wq_b final (emitted BFP8, no per-call matmul in score()) unless a Hadamard follows
+        # the rope. NoPE: wq_b -> per-head split -> Hadamard has nothing nonlinear between, so fold the Hadamard
+        # into wq_b once here.
+        self._q_hadamard_per_call = self._index_hadamard is not None and self._index_rope_dim != 0
+        if self._index_hadamard is not None and self._index_rope_dim == 0:
             self._idx_wq_b = self._fold_q_hadamard(self._idx_wq_b)
 
     @property
@@ -733,7 +772,7 @@ class TtIndexerBase:
             k,
             weight=self._idx_knorm_w,
             bias=self._idx_knorm_b,
-            epsilon=1e-6,
+            epsilon=self._index_k_norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
         )
@@ -745,9 +784,10 @@ class TtIndexerBase:
         # compacted stride (_index_cache_layers) so it matches the cache_batch_idx computed in forward().
         cache_layer_idx = self._cache_slot(cache_layer_idx)
         k = self._bc_rope_pe(k, rope_tensors, start_pos, metadata=metadata)  # [1, 1, S/sp, D_idx] bf16
-        if self._index_hadamard_basis:
+        # Into the cache's basis (index_keys_hadamard_rotated) and dtype.
+        if self._index_hadamard is not None:
             k_hadamard_cfg = self._resolve_mm_cfg("indexer.k_hadamard", seq_len)
-            k_h = ttnn.matmul(
+            k_cache = ttnn.matmul(
                 k,
                 self._index_hadamard,
                 dtype=index_kbuf.dtype,
@@ -756,9 +796,9 @@ class TtIndexerBase:
                 **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
             )
         else:
-            k_h = ttnn.typecast(k, index_kbuf.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k_cache = ttnn.typecast(k, index_kbuf.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(k)
-        k = k_h
+        k = k_cache
         if metadata is not None:
             # Trace-safe: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device. num_layers
             # stays the compacted stride so the kernel recomposes the same (user, layer) slot as the scalar path.
@@ -871,9 +911,9 @@ class TtIndexerBase:
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
             **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
-            # Preserve the unquantized values through Hadamard, then materialize BFP8 once below. With the Hadamard
-            # folded into wq_b (NoPE), this is already the final query: emit BFP8 directly.
-            dtype=ttnn.bfloat8_b if getattr(self, "_q_hadamard_folded", False) else ttnn.bfloat16,
+            # Preserve the unquantized values through the per-call Hadamard, then materialize BFP8 once below.
+            # Without one (NoPE: folded into wq_b, or no rotation), this is already the final query: emit BFP8.
+            dtype=ttnn.bfloat16 if self._q_hadamard_per_call else ttnn.bfloat8_b,
         )  # [1,1,S/(sp*tp),H_idx*D_idx] — all heads, only this TP rank's query rows
         if qr_local is not qr:
             ttnn.deallocate(qr_local)
@@ -885,11 +925,7 @@ class TtIndexerBase:
         q_dev = self._bc_rope_pe(
             q, rope_tensors, start_pos, metadata=metadata, seq_subshard_axis=self.tp_axis if tpsp else None
         )
-        if not self._index_hadamard_basis:
-            q_h = ttnn.typecast(q_dev, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(q_dev)
-            q_dev = q_h
-        elif not getattr(self, "_q_hadamard_folded", False):
+        if self._q_hadamard_per_call:
             q_hadamard_cfg = self._resolve_mm_cfg("indexer.q_hadamard", sq_local)
             q_h = ttnn.matmul(
                 q_dev,
@@ -992,6 +1028,7 @@ class TtIndexerBase:
             block_cyclic_chunk_local=q_dev.shape[2],
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
+            compute_kernel_config=self._score_compute_kernel_config,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1

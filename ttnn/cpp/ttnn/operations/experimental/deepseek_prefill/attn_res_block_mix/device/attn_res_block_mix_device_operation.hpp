@@ -35,7 +35,6 @@ std::vector<Tensor> attn_res_block_mix(
     const Tensor& stats,
     uint32_t num_sites,
     float eps,
-    uint32_t num_closed_sites,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 

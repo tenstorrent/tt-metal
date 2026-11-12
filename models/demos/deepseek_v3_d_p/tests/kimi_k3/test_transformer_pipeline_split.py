@@ -28,6 +28,7 @@ with the handoff entirely broken.
 from pathlib import Path
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
@@ -36,6 +37,20 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import load_activation, save_activation
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
+    CACHE_LEN,
+    HF_CONFIGS,
+    build_stack,
+    cache_rows,
+    compose,
+    placements,
+    release,
+    synthetic_state_dict,
+    token_ids,
+    upload_tokens,
+    window,
+)
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
@@ -238,3 +253,114 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
         f"no recovery by layer {RECOVERY_FROM}+ (min {tail:.6f} < {RECOVERY_PCC}); the second block "
         f"is not reading the first block's sealed snapshot"
     )
+
+
+# --- Synthetic weights: split against undivided (K3 and K3.1) ---------------------------------------
+#
+# K3.1 has no golden, so its oracle is the undivided stack on the same weights, cut at the layer-12 seal.
+# The handoff goes through the file a stage-by-stage run on one galaxy saves (`stage_handoff`), so this also
+# proves that saved-intermediate path loses nothing. The split is exact: the handoff is a lossless bf16 concat/slice, and the second rank takes the read that
+# straddles the boundary the way the undivided walk takes it (an open site over the inherited set, read
+# before the seal). So every layer, the final output and every cache must be bit-identical, on both ranks.
+# Before tt_metal_tracker-ao3i.9 the owed read was a closed site after the seal -- the same mixture by a
+# different reduction -- and rank 1 came out at PCC ~0.9996 here, which a tolerance would have hidden.
+#
+# Layers 0-15: the boundary at 12 gives rank 1 one inherited sealed block, and layer 15 is its one
+# full-attention layer (slot 0 of rank 1's kvpe and index caches, slot 3 of the undivided ones).
+# K3 runs the identical path.
+SP_SHARDS = 8  # the 8x4 mesh's SP ranks; tokens are contiguous per rank
+
+
+def _worst_shard_pcc(want, got) -> float:
+    """The lowest PCC over the SP shards' token rows (8 x 640 on 8x4): a diagnostic for a failure, so a
+    fault confined to one rank's tokens shows under the aggregate."""
+    shards = zip(want.float().chunk(SP_SHARDS), got.float().chunk(SP_SHARDS))
+    return min(float(str(comp_pcc(w, g)[1]).split()[-1]) for w, g in shards)
+
+
+SYNTHETIC_LAYERS = 16
+
+
+def _run_window(mesh_device, model, state_dict, ids, handoff_dir):
+    """The undivided stack, then the two ranks: per-GLOBAL-layer outputs, final output, caches by global layer.
+    Rank 0's output reaches rank 1 through the saved handoff file, as in a stage-by-stage run."""
+
+    def run(ranks):
+        per_layer, kv, hidden = {}, {}, None
+        for first, num, is_first, is_last in ranks:
+            stack, caches = build_stack(
+                mesh_device,
+                model,
+                window(state_dict, first, num),
+                first,
+                num,
+                is_first_rank=is_first,
+                is_last_rank=is_last,
+            )
+            if not is_first:
+                planes = stack.inbound_planes
+                assert hidden.shape[1] == planes == 1 + first // KimiK3Config.ATTN_RES_BLOCK_SIZE
+                path = handoff_dir / f"handoff_{first}.bin"
+                save_activation(mesh_device, hidden, path)
+                ttnn.deallocate(hidden)
+                hidden = load_activation(mesh_device, path, planes=planes, rows=SEQ_LEN, hidden=KimiK3Config.EMB_SIZE)
+            try:
+                inputs = upload_tokens(mesh_device, ids) if is_first else hidden
+                hidden = stack.forward(
+                    inputs,
+                    kvpe_cache=caches.kvpe,
+                    index_kv_cache=caches.index,
+                    actual_start=0,
+                    actual_end=SEQ_LEN,
+                    layer_tap=lambda idx, h: per_layer.__setitem__(first + idx, compose(mesh_device, h, SEQ_LEN)),
+                )
+                ttnn.deallocate(inputs)
+                slots = {
+                    slot: stack.schedule.global_index(local)
+                    for local, slot in enumerate(stack.schedule.kv_slot_of_local)
+                    if slot is not None
+                }
+                for name, cache in (("kvpe", caches.kvpe), ("index", caches.index)):
+                    if cache is not None:
+                        natural = cache_rows(mesh_device, cache, SEQ_LEN, SEQ_LEN)
+                        kv.update({(name, layer): natural[slot] for slot, layer in slots.items()})
+            finally:
+                release(stack, caches)
+        output = compose(mesh_device, hidden, SEQ_LEN)
+        ttnn.deallocate(hidden)
+        return per_layer, output, kv
+
+    whole = run([(0, SYNTHETIC_LAYERS, True, True)])
+    split = run([(0, BOUNDARY, True, False), (BOUNDARY, SYNTHETIC_LAYERS - BOUNDARY, False, True)])
+    return whole, split
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "model, mesh_device, device_params",
+    placements(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_synthetic_split_matches_undivided(model, mesh_device, device_params, tmp_path):
+    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), 0, SYNTHETIC_LAYERS)
+    (whole_layers, whole_out, whole_kv), (split_layers, split_out, split_kv) = _run_window(
+        mesh_device, model, state_dict, token_ids(SEQ_LEN), tmp_path
+    )
+
+    failures = []
+
+    def check(what, want, got):
+        if not torch.equal(want, got):
+            failures.append(f"{what} differs (worst SP-shard pcc {_worst_shard_pcc(want, got):.6f})")
+
+    for idx in range(SYNTHETIC_LAYERS):
+        assert torch.isfinite(split_layers[idx]).all(), f"layer {idx}: non-finite split output"
+        check(f"layer {idx}", whole_layers[idx], split_layers[idx])
+    check("final output", whole_out, split_out)
+
+    assert set(split_kv) == set(whole_kv), f"split wrote {sorted(split_kv)}, undivided {sorted(whole_kv)}"
+    for (name, layer), want in sorted(whole_kv.items()):
+        assert want[:SEQ_LEN].abs().amax(dim=-1).gt(0).all(), f"{name} cache of layer {layer}: a row is unwritten"
+        check(f"{name} cache of layer {layer}", want, split_kv[(name, layer)])
+    logger.info(f"  {model} split vs undivided: {len(failures)} mismatches")
+    assert not failures, "split diverged from undivided: " + "; ".join(failures)

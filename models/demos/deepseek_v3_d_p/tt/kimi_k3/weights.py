@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict, resolve_model_root
 from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kda.weights import current_cache_globs as kda_current_cache_globs
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
 
 # What each TT module reads out of a layer's state dict. Kept here rather than inline so the map
 # from checkpoint name to TT name is in one place and can be read against the modules.
@@ -64,8 +65,10 @@ MLA_KEYS = {
     "g_proj.weight": "self_attn.g_proj.weight",
 }
 
-# Kimi-K3.1 only: the DSA indexer on each MLA layer, in TtIndexer.WEIGHT_NAMES' naming (its LayerNorm bias
-# rides as `indexer.k_norm_bias.weight`).
+# K3.1's DSA indexer, on every attention layer, under `TtIndexer.WEIGHT_NAMES`. The checkpoint stores the
+# LayerNorm key's bias as `k_norm.bias`; `TtIndexer` reads it from its own `k_norm_bias.weight` slot. The
+# checkpoint's [out, in] shapes are the host shapes `TtIndexer` transposes itself: wq_b [32*128, 1536],
+# wk [128, 7168], weights_proj [32, 7168], k_norm weight and bias [128].
 INDEXER_KEYS = {
     "indexer.wq_b.weight": "self_attn.indexer.wq_b.weight",
     "indexer.wk.weight": "self_attn.indexer.wk.weight",
@@ -101,6 +104,27 @@ ROUTED_EXPERT_KEYS = {"gate_proj": "w1", "up_proj": "w3", "down_proj": "w2"}
 
 def layer_prefix(checkpoint_dir: Path, layer_idx: int) -> str:
     return f"{resolve_model_root(Path(checkpoint_dir))}layers.{layer_idx}."
+
+
+def has_indexer(model_cfg: type) -> bool:
+    """Whether the model's attention layers carry a DSA indexer (K3.1, not K3)."""
+    return getattr(model_cfg, "INDEX_N_HEADS", None) is not None
+
+
+def load_attention_weights(
+    checkpoint_dir: Path, layer_idx: int, *, model_cfg: type = KimiK3Config, kda_checkpoint_dir: Path | None = None
+) -> dict:
+    """The layer's attention weights: `{"mla_weights": ...}` (with the indexer when the model has one) or
+    `{"kda_weights": ...}`."""
+    if layer_idx not in model_cfg.mla_layer_ids():
+        return {
+            "kda_weights": load_kda_layer_state_dict(
+                Path(kda_checkpoint_dir or checkpoint_dir), layer_idx, kimi_k3_kda_config()
+            )
+        }
+    keys = MLA_KEYS | INDEXER_KEYS if has_indexer(model_cfg) else MLA_KEYS
+    prefix = layer_prefix(Path(checkpoint_dir), layer_idx)
+    return {"mla_weights": load_tensors(checkpoint_dir, {alias: prefix + key for alias, key in keys.items()})}
 
 
 def load_tensors(checkpoint_dir: Path, names: dict[str, str]) -> dict[str, torch.Tensor]:
@@ -141,14 +165,9 @@ def load_layer_state_dict(
     """
     checkpoint_dir = Path(checkpoint_dir)
     prefix = layer_prefix(checkpoint_dir, layer_idx)
-    is_mla = layer_idx in model_cfg.mla_layer_ids()
     is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
     wanted = {alias: prefix + key for alias, key in LAYER_NORM_KEYS.items()}
-    if is_mla:
-        wanted.update({f"mla::{alias}": prefix + key for alias, key in MLA_KEYS.items()})
-        if hasattr(model_cfg, "INDEX_HEAD_DIM"):  # Kimi-K3.1
-            wanted.update({f"mla::{alias}": prefix + key for alias, key in INDEXER_KEYS.items()})
     if is_moe:
         wanted.update({f"gate::{alias}": prefix + key for alias, key in GATE_KEYS.items()})
         wanted.update({f"shared::{alias}": prefix + key for alias, key in SHARED_EXPERT_KEYS.items()})
@@ -165,12 +184,9 @@ def load_layer_state_dict(
         "attn_norm_weight": flat["attn_norm_weight"],
         "ffn_norm_weight": flat["ffn_norm_weight"],
     }
-    if is_mla:
-        state_dict["mla_weights"] = group("mla")
-    else:
-        state_dict["kda_weights"] = load_kda_layer_state_dict(
-            Path(kda_checkpoint_dir or checkpoint_dir), layer_idx, kimi_k3_kda_config()
-        )
+    state_dict.update(
+        load_attention_weights(checkpoint_dir, layer_idx, model_cfg=model_cfg, kda_checkpoint_dir=kda_checkpoint_dir)
+    )
     if is_moe:
         state_dict["gate_weights"] = group("gate")
         state_dict["shared_expert_weights"] = group("shared")
@@ -217,14 +233,6 @@ def load_routed_expert_weights(checkpoint_dir: Path, layer_idx: int, num_experts
 # marker path carries the checkpoint identity and the mesh geometry, so a different checkpoint, mesh
 # or TP axis simply misses and rebuilds instead of loading someone else's tensors.
 
-_CACHE_ENV = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
-
-# On the Weka scratch share, under the vendor prefix like every other model cache there and
-# alongside Kimi-K2.7's `Kimi-K2_7-Code-Cache/`. This is a DEFAULT rather than a requirement: the
-# point of a cache is that every run benefits without anyone remembering an environment variable,
-# and `$TT_KIMI_K3_PREFILL_TTNN_CACHE` still relocates it (or disables it, if set empty).
-_DEFAULT_CACHE = Path("/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill")
-
 
 def _checkpoint_identity(checkpoint_dir: Path) -> str:
     """A short stable id for a checkpoint, from its index rather than its 5.5 TB of tensors."""
@@ -236,21 +244,27 @@ def _checkpoint_identity(checkpoint_dir: Path) -> str:
     return digest.hexdigest()[:16]
 
 
-def cache_root(checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int) -> Path | None:
-    """Where this (checkpoint, mesh, tp_axis) keeps its tensorbins, or None if caching is off.
+def cache_root(
+    checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int, adapter: type | None = None
+) -> Path | None:
+    """Where this (model, checkpoint, mesh, tp_axis) keeps its tensorbins, or None if caching is off.
 
-    Defaults to the models share so runs pick it up with no configuration; set
-    `$TT_KIMI_K3_PREFILL_TTNN_CACHE` to relocate it, or to the empty string to disable caching. A
-    None return is always safe to pass straight through as `weight_cache_path`.
+    `adapter` names the model variant (default `KimiK3Adapter`; `KimiK31Adapter` for K3.1). Defaults to its
+    `ttnn_cache_default` on the models share so runs pick it up with no configuration; set its
+    `ttnn_cache_env` (`$TT_KIMI_K3_PREFILL_TTNN_CACHE` for K3) to relocate it, or to the empty string to
+    disable caching. A None return is always safe to pass straight through as `weight_cache_path`.
     """
-    override = os.getenv(_CACHE_ENV)
+    if adapter is None:
+        from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter as adapter
+
+    override = os.getenv(adapter.ttnn_cache_env)
     if override == "":
         return None  # explicitly empty disables caching, for a run that must build from weights
-    root = Path(override) if override else _DEFAULT_CACHE
+    root = Path(override) if override else Path(adapter.ttnn_cache_default)
     rows, columns = mesh_shape
     path = (
         root
-        / f"kimi_k3_bh_{rows * columns}dev"
+        / f"{adapter.name}_bh_{rows * columns}dev"
         / _checkpoint_identity(checkpoint_dir)
         / f"mesh{rows}x{columns}.tpaxis{tp_axis}"
     )
@@ -280,17 +294,22 @@ def _kda_cache_current(root: Path, layer_idx: int) -> bool:
     )
 
 
-def layer_is_stale(root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config) -> bool:
-    """A marked KDA layer whose KDA tensorbins are not all in the current KDA cache format.
+def _attention_cache_current(root: Path, layer_idx: int, model_cfg: type) -> bool:
+    """Whether the layer's attention tensorbins are all present in their current format: a KDA layer's in the
+    current KDA cache format, and an attention layer's indexer (dtype-pinned by `TtIndexer`) when the model has one."""
+    if layer_idx not in model_cfg.mla_layer_ids():
+        return _kda_cache_current(root, layer_idx)
+    return not has_indexer(model_cfg) or TtIndexer.check_cache_complete(root, f"layer_{layer_idx}.mla")
 
-    Its marker predates a KDA cache format change, or a rebuild was interrupted. Every other tensorbin of the layer is
-    still good, so only the KDA weights need rebuilding.
+
+def layer_is_stale(root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config) -> bool:
+    """A marked layer whose attention tensorbins are not all present in their current format.
+
+    Its marker predates a KDA cache format change, was written for an attention layer before its indexer was
+    built (it would otherwise load `torch.empty` placeholders as indexer weights), or a rebuild was interrupted.
+    Every other tensorbin of the layer is still good, so only the attention weights need rebuilding.
     """
-    return (
-        _marker_exists(root, layer_idx)
-        and layer_idx not in model_cfg.mla_layer_ids()
-        and not _kda_cache_current(root, layer_idx)
-    )
+    return _marker_exists(root, layer_idx) and not _attention_cache_current(root, layer_idx, model_cfg)
 
 
 def layer_is_cached(root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config) -> bool:
@@ -321,10 +340,9 @@ def load_layer_state_dict_cached(
         logger.info(f"layer {layer_idx}: cache hit, not opening the checkpoint")
         return {}
     if layer_is_stale(root, layer_idx, model_cfg):
-        # Rebuild only the KDA weights, from this layer's attention weights; every other
-        # component still loads from its tensorbins.
-        logger.info(f"layer {layer_idx}: cache hit, rebuilding its KDA weights")
-        return {"kda_weights": load_kda_layer_state_dict(Path(checkpoint_dir), layer_idx, kimi_k3_kda_config())}
+        # Rebuild only the attention weights; every other component still loads from its tensorbins.
+        logger.info(f"layer {layer_idx}: cache hit, rebuilding its attention weights")
+        return load_attention_weights(checkpoint_dir, layer_idx, model_cfg=model_cfg)
     state_dict = load_layer_state_dict(checkpoint_dir, layer_idx, model_cfg=model_cfg)
     if layer_idx >= model_cfg.NUM_DENSE_LAYERS:
         experts = num_routed_experts if num_routed_experts is not None else model_cfg.NUM_ROUTED_EXPERTS

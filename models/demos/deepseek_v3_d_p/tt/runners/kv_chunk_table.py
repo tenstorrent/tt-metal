@@ -71,7 +71,8 @@ def dflash_config_name(kind: str, head_idx: int) -> str:
 
 @dataclass(frozen=True)
 class KdaTableSpec:
-    """The Kimi-K3 KDA state slabs as the table sees them: configs "01" (recurrent) and "02" (convolution).
+    """The Kimi-K3 KDA state slabs as the table sees them: the recurrent and convolution configs, named after
+    the block-cyclic caches -- "01"/"02" for K3 (kvpe only), "02"/"03" for K3.1 (kvpe + DSA index).
 
     ``geometry`` fixes the segment numbering; ``recurrent`` / ``convolution`` are this rank's slabs when it
     holds any (None on a rank that builds the table for KDA layers it does not own); the two layouts are
@@ -158,8 +159,9 @@ def build_and_serialize_kv_chunk_table(
     ``kvpe_alias_rows`` (``{alias row: source row}``): config-0 rows published at another row's
     addresses, for decode MTP levels that share one KV cache. Merged (DSA) table only.
 
-    ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "01"
-    (recurrent) and "02" (convolution) after the kvpe config, on the contract's synthetic position axis
+    ``kda`` (Kimi-K3/K3.1): a :class:`KdaTableSpec` describing the KDA state slabs. It adds the recurrent and
+    convolution configs after the block-cyclic ones -- "01"/"02" after kvpe alone (K3), "02"/"03" after kvpe
+    and the DSA index cache (K3.1) -- on the contract's synthetic position axis
     (strides 96 / 64 over one window, see ``kda_position``), tagged Snapshot, and published on the
     model's layer axis via its own ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged
     path as well.
@@ -222,7 +224,6 @@ def build_and_serialize_kv_chunk_table(
         assert dflash_caches is None, "pass the drafter either as local tensors or as a staged spec, not both"
         all_caches.append(("dflash_staged", dflash_spec))
     if kda is not None:
-        # Kimi-K3.1 has both: the block-cyclic caches take "00" (kvpe) and "01" (index), the KDA slabs follow.
         all_caches.extend((kind, kda) for kind in KDA_TABLE_KINDS)
     if index_kv_cache is not None or dflash_caches is not None or dflash_spec is not None or kda is not None:
         return _build_and_serialize_merged_kv_chunk_table(
@@ -311,8 +312,9 @@ def _build_and_serialize_merged_kv_chunk_table(
     ``kvpe_alias_rows``: ``{alias row: source row}`` past config 0's rows, each published at its source's
     addresses. Config 0 widens to cover them; config 1 widens with it (one layer axis) but gets no aliases.
 
-    ``("kda_recurrent", spec)`` / ``("kda_convolution", spec)`` (Kimi-K3): a :class:`KdaTableSpec`; these
-    take the decimal names after the block-cyclic caches and are populated by
+    ``("kda_recurrent", spec)`` / ``("kda_convolution", spec)`` (Kimi-K3/K3.1): a :class:`KdaTableSpec`; these
+    take the decimal names after the block-cyclic caches (00 kvpe / 01 index / 02 recurrent / 03 convolution
+    when all are present) and are populated by
     ``populate_kv_chunk_address_table_kda`` from the layouts the spec carries.
 
     ``stage_layouts`` is one all-gathered layout per block-cyclic cache, in the same order — each config

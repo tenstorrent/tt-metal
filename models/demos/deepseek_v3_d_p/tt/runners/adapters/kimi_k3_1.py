@@ -1,64 +1,77 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Kimi-K3.1 adapter: Kimi-K3 with a DSA lightning indexer on its 24 MLA layers.
+"""Kimi-K3.1 prefill adapter: Kimi-K3 with its 24 full-attention layers turned into DSA layers.
 
-Everything K3 has carries over -- the hybrid MLA/KDA schedule, AttnRes, the KDA state slabs, the
-pipeline split rules -- so this subclasses ``KimiK3Adapter`` and changes only what the indexer changes:
+K3.1 is selected through K3's own stack (``TtKimiK3Runtime`` / ``TtKimiK3Transformer`` /
+``TtKimiK3Block``, KDA, AttnRes, latent MoE), so it subclasses ``KimiK3Adapter`` and inherits its
+runtime build, layer schedule, pipeline split points and migration-table layout; a K3 fix therefore
+reaches K3.1 too. The model difference is carried by ``KimiK31Config`` / ``kimi_k3_1_hf_config`` (the
+``index_*`` DSA fields), not by code here.
 
-  * the MLA layers read a **sparse** KV cache in GLM's scaled-FP8 format (the format K3.1's decode keeps,
-    tt-blaze ``kimi_k3/cache_migration.py``), not K3's dense bf8 one;
-  * each MLA layer also writes the indexer's **key cache** (bf8, ``INDEX_HEAD_DIM`` wide), slotted like the
-    KV cache: one slot per MLA layer of this rank. Its keys stay in the model's own basis
-    (``KimiK31Config.INDEX_HADAMARD``), as K3.1's decode stores them;
-  * the migration table gains that cache as config "01", between the KV cache and the KDA state::
+K3's block drives the DSA indexer K3.1's config makes ``ttMLA`` build (the transformer threads the
+sparse kvpe format and the index cache), and K3's shared ``allocate_kv_cache`` gives K3.1 its
+scaled-FP8 kvpe and bf8 indexer key cache.
 
-        "00"  kvpe              GLM scaled FP8, MLA layers
-        "01"  index             bf8 [32, 128] per chunk, MLA layers
-        "02"  kda_recurrent     as K3
-        "03"  kda_convolution   as K3
+What this class overrides is identity and artifacts: K3.1's weights are all retrained, so nothing
+recorded against the K3 checkpoint (TTNN cache, golden traces, DFlash drafter, MLA reference) is valid
+for it. Every DSA layer owns its indexer, so no top-k selection crosses a pipeline split and
+``passes_indexer_indices`` keeps the base default (False).
 
-    GLM's "00"/"01" stay where GLM's decode and the producer's index read-back expect them; decode pairs
-    configs by name, so K3.1's decode table must publish the same order.
+Select it with ``PREFILL_MODEL=kimi_k3_1``.
 """
 
 from __future__ import annotations
 
 from typing import Callable
 
-from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 
 
 class KimiK31Adapter(KimiK3Adapter):
-    # --- identity ---
+    # --- identity & runner defaults ---
     name = "kimi_k3_1"
     model_config = KimiK31Config
+    # Only printed by the runner: the config is hand-built (``config_builder``).
     hf_model_default = "/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized"
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill"
-    # K3's 1536 B l1_small pool (KimiK3Config.L1_SMALL_SIZE) is full once the indexer's sparse path runs: the first
-    # MLA layer's Q all-to-all then asked 16 B/bank more (sc1 smoke, job 189519). 2048 B is what GLM's sparse-MLA
-    # pipeline runs at; K3's note on the pool says 4096 B already starves MLA's static CBs, so stay well below it.
-    l1_small_size = 2048
-    # K3's DSpark drafter is keyed to K3, not K3.1.
-    supports_dflash = False
-    dflash_model_default = None
-    dflash_golden_default = None
-    # The K3.1 vLLM traces are raw chunked_group_a_v1 streams, not the structured layout the producer's
-    # read-back walks (tests/sparse_mla/k31_trace.py reads them for the per-layer tests).
-    prefill_trace_default = None
-    mla_trace_defaults = ()
+    # Miguel's 8192-token vLLM trace of K3.1 (kimi_k31_pro_10k_v2: all 93 decoder outputs, KV and indexer
+    # keys of all 24 DSA layers), rewritten into K3's per-stream layout by tests/kimi_k3/convert_golden.py.
+    # Under scratch/ because stable/, where K3's golden sits, is writable by storage-wg only. `_conv2`: converter
+    # version 2, whose decoder_output is K3's running sum (the version-1 directory holds the tracer's FFN output).
+    prefill_trace_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/golden/kimi_k31_pro_10k_v2_conv2"
+    # Explicit: __init_subclass__ fills it only when None, and K3's is already set, so it would be inherited.
+    test_prefill_trace_default = prefill_trace_default
+    # The trace holds no KDA state snapshots.
     kda_golden_default = None
+    mla_trace_defaults = ()
+
+    # Kimi-K3-DSpark was trained against K3, not K3.1.
+    supports_dflash = False
+    # The DSA layers' sparse-MLA CCLs need more than K3's L1_SMALL (see KimiK31Config.L1_SMALL_SIZE).
+    l1_small_size = KimiK31Config.L1_SMALL_SIZE
+    dflash_model_default = ""
+    dflash_golden_default = ""
 
     # --- test metadata ---
     hf_repo_id = "moonshotai/Kimi-K3.1-Pro"
     env_var = "KIMI_K31_HF_MODEL"
     mla_ref_cache_env = "KIMI_K31_MLA_REF_CACHE"
-    ttnn_cache_env = "TT_KIMI_K31_PREFILL_TTNN_CACHE"
     ref_cache_env = "TT_KIMI_K31_PREFILL_HOST_REF_CACHE"
-    # None: conftest's pretrained_mla_layer_weights fixture would resolve the whole multi-TB checkpoint.
+    ttnn_cache_env = "TT_KIMI_K31_PREFILL_TTNN_CACHE"
+    # Real-weight tests are not wired yet. None, not K3's: conftest's pretrained fixtures would otherwise
+    # read K3's repo-local checkpoint, or download the whole multi-TB K3.1 one.
+    supports_pretrained = False
     pretrained_mla_layer = None
+    default_local_path = None
+
+    @property
+    def default_sparse_kv_cache_format(self):
+        """Scaled-FP8 kvpe, as GLM-5.3: the DSA layers read it with sparse_sdpa, which cannot read bf8."""
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+        return MlaKvCacheFormat.SCALED_FP8
 
     @property
     def config_builder(self) -> Callable:
@@ -66,89 +79,7 @@ class KimiK31Adapter(KimiK3Adapter):
 
         return kimi_k3_1_hf_config
 
-    def load_hf_config(self):
-        from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
-
-        return kimi_k3_1_hf_config()
-
     @property
-    def default_sparse_kv_cache_format(self):
-        """Scaled-FP8 KV cache: GLM-5.3's, which K3.1's decode reads."""
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
-
-        return MlaKvCacheFormat.SCALED_FP8
-
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
-        """K3's caches with the KV cache made sparse and the indexer's key cache beside it.
-
-        Both MLA caches are sized to this rank's MLA layers (``KimiK3LayerSchedule.num_mla_layers``), not
-        its layer count, for the same reason as K3's (see ``KimiK3Adapter.allocate_kv_cache``): every slot
-        stride downstream is computed against that count. The indexer's slot is the same rank-local MLA slot
-        as the KV cache's, and its stride falls back to ``layer_num`` (= the MLA count) because K3.1 has no
-        ``indexer_types`` map. Both are TP-deduped like every sparse cache, on the axis the writes use.
-        """
-        import ttnn
-        from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
-        from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import KimiK3KvCaches
-        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_mla_kv_cache
-
-        schedule = KimiK3LayerSchedule.build(KimiK31Config, params.first_layer_idx, params.num_layers)
-        kvpe = index = None
-        if schedule.num_mla_layers > 0:
-            kvpe = init_mla_kv_cache(
-                cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
-                hf_config=hf_config,
-                mesh_device=mesh_device,
-                seq_len=params.max_seq_len,
-                mesh_shape=list(params.mesh_shape),
-                sp_axis=params.sp_axis,
-                num_kvpe_cache_layers=schedule.num_mla_layers,
-                num_users=params.num_users,
-                tp_axis=params.tp_axis,
-                bank_aligned=True,
-            )
-            index = init_kvpe_cache(
-                kvpe_cache_head_dim=KimiK31Config.INDEX_HEAD_DIM,
-                mesh_device=mesh_device,
-                seq_len=params.max_seq_len,
-                mesh_shape=list(params.mesh_shape),
-                sp_axis=params.sp_axis,
-                num_kvpe_cache_layers=schedule.num_mla_layers,
-                num_users=params.num_users,
-                dtype=ttnn.bfloat8_b,
-                tp_axis=params.tp_axis,
-                bank_aligned=True,
-            )
-
-        kda_states = None
-        kda_layer_ids = schedule.rank_kda_layer_ids()
-        if kda_layer_ids:
-            geometry = kimi_k3_kda_geometry(params.mesh_shape, params.sp_axis, params.tp_axis)
-            kda_states = KdaStates.allocate(mesh_device, geometry, layer_ids=kda_layer_ids, num_slots=params.num_users)
-        return KimiK3KvCaches(kvpe=kvpe, index=index, kda_states=kda_states)
-
-    # --- migration table configs: 0 = kvpe, 1 = index, 2 = KDA recurrent, 3 = KDA convolution ---
-    def cache_kind(self, config_id: int) -> str:
-        kinds = ("kvpe", "index", "kda_recurrent", "kda_convolution")
-        return kinds[config_id] if 0 <= config_id < len(kinds) else "other"
-
-    def cache_layer_rows(self, config_id: int, num_layers: int) -> dict[int, int]:
-        """Like K3's: every config sits on the model's layer axis; the index cache on the MLA layers."""
-        kind = self.cache_kind(config_id)
-        if kind in ("kvpe", "index"):
-            ids = KimiK31Config.mla_layer_ids()
-        elif kind in ("kda_recurrent", "kda_convolution"):
-            ids = KimiK31Config.kda_layer_ids()
-        else:
-            return {}
-        return {layer: layer for layer in ids if layer < num_layers}
-
-    def cache_head_dim(self, config_id: int):
-        kind = self.cache_kind(config_id)
-        if kind == "kvpe":
-            return KimiK31Config.KV_LORA_RANK + KimiK31Config.QK_ROPE_HEAD_DIM
-        if kind == "index":
-            return KimiK31Config.INDEX_HEAD_DIM
+    def reference_attention_cls(self):
+        """None: K3's MLA reference has no indexer, and K3.1 is scored against vLLM traces, not a CPU reference."""
         return None
