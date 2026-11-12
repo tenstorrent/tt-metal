@@ -9,6 +9,7 @@
 namespace ckernel {
 
 namespace sfpu {
+void heaviside_init();
 void softcap_init();
 }  // namespace sfpu
 
@@ -17,7 +18,10 @@ void softcap_init();
 template <SfpuType sfpu_op>
 inline void llk_math_eltwise_unary_sfpu_init() {
     _llk_math_eltwise_sfpu_init_();
-    if constexpr (sfpu_op == SfpuType::softcap) {
+    if constexpr (sfpu_op == SfpuType::heaviside) {
+        // calculate_heaviside advances Dest through the ADDR_MOD_6 heaviside_init programs.
+        sfpu::heaviside_init();
+    } else if constexpr (sfpu_op == SfpuType::softcap) {
         sfpu::softcap_init();
     }
 }
