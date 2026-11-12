@@ -287,7 +287,10 @@ class _LazyLayers(Sequence):
         layer_idx = self._first + local_idx
         cats = self._wanted.get(layer_idx, set())
         if cats:
-            logger.info(f"Reading layer {layer_idx} from the checkpoint for categories {sorted(cats)}")
+            logger.warning(
+                f"Weight-cache rebuild: reading layer {layer_idx} ({local_idx + 1}/{self._n} on this rank) from the "
+                f"checkpoint for categories {sorted(cats)}"
+            )
         sd = _layer_state_dict(*self._args, layer_idx, cats)
         self._held = (local_idx, sd)
         return sd
