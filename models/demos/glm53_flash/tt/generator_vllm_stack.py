@@ -508,6 +508,7 @@ class GLM53StackForCausalLM:
         self.spec = SPEC if spec is None else bool(spec)
         self._greedy: dict = {}
         self._spec_n = None  # the last fused verify's accepted drafts (its proposal must continue exactly that)
+        self._no_spec: set = set()  # generator slots whose request never speculates (_spec_admit)
         self.spec_stats = dict(fused=0, fallback=0, committed=0, enters=0, proposals=0, declines=0, seeds=0)
 
     # ================================================================================= construction
@@ -747,9 +748,14 @@ class GLM53StackForCausalLM:
                 chunk[i, : lens[i]] = tokens[i, gen_starts[i] : ends[i]].to(torch.int64)
         # Stage 17: a chunk of generator slot 0 (the slot that can speculate) also fills the MTP layer's cache (the
         # TP prefill's in-trace fill, StackBackend.arm_mtp_prefill) from its history; a chunk's last row (the next
-        # chunk's first token unknown here) and the prompt's last one (the seed below) are left to the step
+        # chunk's first token unknown here) and the prompt's last one (the seed below) are left to the step. A prefix
+        # attach / snapshot of this call happens inside it, after the _spec_stop above; a request that attached or
+        # holds image rows never speculates (_spec_admit) and is not armed
+        if self.spec:
+            self._spec_admit(gslots, gen_starts, extra.get("prefix_attach", {}), plan["vision"] if plan else ())
         armed = False
-        if self.spec and 0 in gslots and callable(getattr(self.gen.backend, "arm_mtp_prefill", None)):
+        if (self.spec and 0 in gslots and 0 not in self._no_spec
+                and callable(getattr(self.gen.backend, "arm_mtp_prefill", None))):  # fmt: skip
             i0 = gslots.index(0)
             armed = bool(self.gen.backend.arm_mtp_prefill(0, tokens[i0, : ends[i0]].to(torch.int64)))
         try:
@@ -959,6 +965,9 @@ class GLM53StackForCausalLM:
     # the last fused step made; a verify of exactly those drafts runs the step (its K + 1 argmax ids: the plugin's walk
     # accepts what the device accepted); any other verify (more live rows, a truncated / foreign block) leaves the
     # speculation and answers column 0 with an ordinary decode (a one-column argmax: one token per row committed).
+    # With the prefix cache / image input (both opt-in): every prefill leaves the speculation before its prefix attach /
+    # snapshot (the generator refuses a prefill while slot 0 speculates), and a request that attached a prefix-cache
+    # entry or holds image rows never speculates (_spec_admit: its MTP cache would lack rows) -- its steps decline.
     def _spec_stop(self, kv) -> None:
         """leave the speculation (plain decode inputs restored from the device's committed state), if any"""
         if getattr(self.gen._binding(kv), "spec", None) is not None:
@@ -966,10 +975,26 @@ class GLM53StackForCausalLM:
         self._spec_n = None
 
     def _spec_lone(self, kv) -> bool:
-        """generator slot 0 holds the only live request, a greedy one, and the next step fits the context"""
+        """generator slot 0 holds the only live request, a greedy one that may speculate, and the next step fits the
+        context"""
         b = self.gen._binding(kv)
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
-        return live == [0] and bool(self._greedy.get(0, False)) and self.gen.spec_room(kv)
+        return (live == [0] and bool(self._greedy.get(0, False)) and 0 not in self._no_spec
+                and self.gen.spec_room(kv))  # fmt: skip
+
+    def _spec_admit(self, gslots, starts, attach, vision) -> None:
+        """the speculation verdict of the requests one prefill call admits or continues: a request whose MTP cache
+        would lack rows never speculates (its steps decline: plain decode) --
+          a prefix-cache attach (GLM53_STACK_PREFIX: ``prefix_attach``) -- its [0, start) came from a snapshot entry
+            and vLLM's shared blocks; the MTP cache (private to generator slot 0) never saw those positions for it;
+          an image request (``vision``: image tokens in its history, a failed one included) -- the MTP-cache fill
+            embeds token ids, so its image positions would carry the placeholder's embedding, not the feature rows;
+        a fresh text request (generator start 0) clears its slot's verdict, a continuation keeps it."""
+        for i, g in enumerate(gslots):
+            if i in attach or i in vision:
+                self._no_spec.add(int(g))
+            elif int(starts[i]) == 0:
+                self._no_spec.discard(int(g))
 
     def _spec_seed(self, kv) -> None:
         """right after a lone greedy request's prefill (its first token sampled, the head's h = the last prompt row's):
@@ -1212,6 +1237,7 @@ class GLM53StackForCausalLM:
             st = self.spec_stats
             logger.info(f"GLM53 stack spec: {st} (tau {st['committed'] / max(1, st['fused']):.2f})")
         self._greedy.pop(g, None)
+        self._no_spec.discard(g)
         self.gen.release_slot(self.kv_cache, g)
         if self.prefix is not None:  # its prefix-cache entry loses a reader
             self.prefix.release(g)

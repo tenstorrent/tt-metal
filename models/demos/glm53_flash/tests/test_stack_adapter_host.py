@@ -1961,7 +1961,7 @@ def test_spec_falls_back_to_plain_without_room():
 
 
 def test_spec_refusals():
-    """generate_batch(spec_k=...) serves one greedy prompt in slot 0 on a backend built with the same K"""
+    """generate_batch(spec_k=...) serves one greedy text prompt in slot 0 on a backend built with the same K"""
     backend, gen = _spec_gen(3)
     with expect_error(ValueError, "the backend's speculative step with K = 2"):
         gen.generate_batch([_prompt(10, 1)], 4, spec_k=2)
@@ -1969,6 +1969,9 @@ def test_spec_refusals():
         gen.generate_batch([_prompt(10, 1), _prompt(10, 2)], 4, spec_k=3)
     with expect_error(ValueError, "greedy sampling"):
         gen.generate_batch([_prompt(10, 1)], 4, spec_k=3, sampling=[SamplingParams(temperature=1.0, seed=1)])
+    img_pos = torch.arange(2, 6)
+    with expect_error(ValueError, "a text prompt"):  # (the MTP-cache prefill embeds the placeholder ids)
+        gen.generate_batch([_mm_prompt(10, 2, 6, 1)], 4, spec_k=3, mm=[(img_pos, _img_rows(img_pos))])
     plain_gen = Glm53Generator(
         _MockStackBackend(B), tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ
     )  # (no GLM53_SPEC_K build: no speculative step)
@@ -2118,3 +2121,164 @@ def test_served_spec_declines_sampled_rows():
     assert ad.spec_stats["seeds"] == 0
     do = ad.propose_draft_tokens(K, *_block({0: ([int(out[0, 0])], 60)}, K))
     assert do.num_valid.tolist() == [0, 0, 0, 0] and backend.spec.counters["enters"] == 0
+
+
+class _MockSpecPrefixBackend(_MockPrefixBackend, _MockSpecBackend):
+    """the prefix cache's device side (snapshot pool, sharded pool, page contents) + the speculative step, whose
+    committed rows also land in the slot's pages (the verify writes their latents)"""
+
+    def __init__(self, max_batch: int, K: int, good=lambda step: 0):
+        _MockSpecBackend.__init__(self, max_batch, K, good)
+        self.state_io = []
+
+    def allocate_decode_io(self, kv):
+        io = super().allocate_decode_io(kv)
+        step = self.spec.step
+
+        def paged_step(blocking: bool = False):
+            n0 = len(self.kv.state[0])
+            step(blocking)
+            self._page_write(self.kv, 0, n0, self.kv.state[0][n0:])
+
+        self.spec.step = paged_step
+        return io
+
+
+def test_served_spec_with_the_prefix_cache(monkeypatch):
+    """GLM53_STACK_PREFIX + GLM53_STACK_VLLM_SPEC: a prefix-cache attach / snapshot never meets a speculating slot 0 --
+    the generator refuses a prefill (its pool copies) and a pool restore while slot 0 speculates, and the adapter leaves
+    the speculation before every prefill, so a new request's snapshot (snapshot_after) follows spec_leave; a request
+    that ATTACHED a snapshot entry never speculates (the MTP cache never saw its [0, start)): no MTP fill, no seed, its
+    proposals decline and it decodes plainly; a fresh request in the same generator slot speculates again"""
+    monkeypatch.setattr(gvs, "PREFIX_CACHE", True)
+    monkeypatch.setenv("GLM53_SPEC_ON_SHARD", "1")  # (the prefix mock's sequence-sharded pool)
+    K = 3
+    backend = _MockSpecPrefixBackend(B, K, good=lambda step: K)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ, spec=True)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    pc, sc = ad.prefix, backend.spec.counters
+    doc = _prompt(256, 5)
+    a, b = doc + _prompt(40, 50), doc + _prompt(30, 20)
+    row_a = _blocks(0, 400)
+    # ---- A: three engine steps (snapshots at 128 / 256), the MTP fill of every chunk, the seed
+    stream = [_prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, len(a)])]
+    assert backend.state_io == [(0, 0, None, 0), (0, 128, None, 1), (0, 256, None, None)]
+    assert [s[:2] for s in backend.mtp_spans] == [(0, 127), (128, 127), (256, len(a) - 257)]
+    assert ad.spec_stats["seeds"] == 1 and ad._no_spec == set()
+    table, pos = _table([row_a], B), len(a)
+    ids = ad.decode_forward(torch.tensor([[stream[-1]], [0], [0], [0]]), torch.tensor([pos, -1, -1, -1]),
+                            page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
+    stream.append(int(ids[0, 0]))
+    pos += 1
+    do = ad.propose_draft_tokens(K, *_block({0: ([stream[-1]], pos)}, K))
+    assert do.num_valid.tolist() == [K, 0, 0, 0] and gen._binding(kv).spec is not None
+    # ---- while slot 0 speculates the generator writes no slot state: no prefill (attach / snapshot), no pool restore
+    with expect_error(RuntimeError, "prefill_forward while slot 0 speculates"):
+        gen.prefill_forward(torch.tensor([[1]]), page_table=_table([_blocks(2, 64)], 1), kv_cache=kv, prompt_lens=[1],
+                            empty_slots=[1], snapshot_after={0: 2})  # fmt: skip
+    with expect_error(RuntimeError, "restore_slot while slot 0 speculates"):
+        gen.restore_slot(kv, 0, 2)
+    ids, (committed, counts) = _verify(ad, kv, K, {0: (stream[-1], pos, [int(v) for v in do.draft_token_ids[0]])},
+                                       table)  # fmt: skip
+    assert int(counts[0]) == K + 1 and ad.spec_stats["fused"] == 1
+    new = [int(v) for v in committed[0].tolist()]
+    do = ad.propose_draft_tokens(K, *_block({0: (new, pos + 1)}, K))
+    stream += new
+    pos += len(new)
+    drafts = [int(v) for v in do.draft_token_ids[0].tolist()]
+    assert do.num_valid.tolist() == [K, 0, 0, 0]
+    # ---- C arrives while A speculates: its first chunk ends on the grid (a snapshot) -- the speculation is left first
+    leaves = sc["leaves"]
+    c = _prompt(128, 40) + _prompt(20, 3)
+    ad.prefill_forward(_history([c[:128]]), page_table=_table([_blocks(2, 128)], 1), kv_cache=kv, prompt_lens=[128],
+                       start_pos=[0], empty_slots=[1], sampling_params=None)  # fmt: skip
+    assert sc["leaves"] == leaves + 1 and gen._binding(kv).spec is None
+    assert backend.state_io[-1] == (ad._alias[1], 0, None, 2) and pc.stats["snapshots"] == 3
+    ids, (committed, counts) = _verify(ad, kv, K, {0: (stream[-1], pos, drafts)}, table)  # answered by a plain decode
+    assert tuple(ids.shape) == (B, 1) and ad.spec_stats["fallback"] == 1
+    stream.append(int(ids[0, 0]))
+    pos += 1
+    do = ad.propose_draft_tokens(K, *_block({0: ([stream[-1]], pos)}, K))
+    assert do.num_valid.tolist() == [0] * B  # C is live (mid-prefill): A is not alone
+    assert stream == [(a[-1] + 1 + i) % VOCAB for i in range(len(stream))]
+    ad.release_request(1)
+    ad.release_request(0)
+    # ---- B attaches A's snapshot at 256 in generator slot 0: never speculates (no MTP fill, no seed, declines)
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256
+    n_spans, seeds = len(backend.mtp_spans), ad.spec_stats["seeds"]
+    row_b = row_a[:4] + _blocks(1, 400)[4:]
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[2], sampling_params=_greedy(1))  # fmt: skip
+    assert ad._alias[2] == 0 and backend.state_io[-1] == (0, 256, 1, None) and ad._no_spec == {0}
+    assert len(backend.mtp_spans) == n_spans and ad.spec_stats["seeds"] == seeds
+    tb, s_b, pos_b = _table([[], [], row_b], B), [int(out[0][0, 0])], len(b)
+    for _ in range(3):
+        do = ad.propose_draft_tokens(K, *_block({2: ([s_b[-1]], pos_b)}, K))
+        assert do.num_valid.tolist() == [0] * B
+        ids = ad.decode_forward(torch.tensor([[0], [0], [s_b[-1]], [0]]), torch.tensor([-1, -1, pos_b, -1]),
+                                page_table=tb, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
+        s_b.append(int(ids[2, 0]))
+        pos_b += 1
+    assert s_b == [(b[-1] + 1 + i) % VOCAB for i in range(len(s_b))] and gen._binding(kv).spec is None
+    enters = ad.spec_stats["enters"]
+    ad.release_request(2)
+    assert ad._no_spec == set()
+    # ---- a fresh text request in generator slot 0 speculates again
+    d = _prompt(100, 9)
+    out = ad.prefill_forward(_history([d]), page_table=_table([_blocks(3, 400)], 1), kv_cache=kv, prompt_lens=[100],
+                             start_pos=[0], empty_slots=[3], sampling_params=_greedy(1))  # fmt: skip
+    assert ad._alias[3] == 0 and backend.mtp_spans[-1][:2] == (0, 99) and ad.spec_stats["seeds"] == seeds + 1
+    ids = ad.decode_forward(torch.tensor([[0], [0], [0], [int(out[0][0, 0])]]), torch.tensor([-1, -1, -1, 100]),
+                            page_table=_table([[], [], [], _blocks(3, 400)], B), kv_cache=kv,
+                            sampling_params=_greedy(B))  # fmt: skip
+    do = ad.propose_draft_tokens(K, *_block({3: ([int(ids[3, 0])], 101)}, K))
+    assert do.num_valid.tolist() == [0, 0, 0, K] and ad.spec_stats["enters"] == enters + 1
+    ad.release_request(3)
+    assert sc.get("aborts") == 1 and "ttnn" not in sys.modules
+
+
+def test_served_spec_declines_image_requests():
+    """an image request (the multimodal class) never speculates -- the MTP-cache fill embeds token ids, so its image
+    positions would carry the placeholder's embedding, not the feature rows: no MTP fill, no seed, its proposals
+    decline and it decodes plainly; a text request in the same generator slot afterwards speculates"""
+    K = 3
+    backend = _MockSpecBackend(B, K, good=lambda step: K)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=(STOP,)), max_batch=B, max_seq_len=SEQ)
+    ad = declare_multimodal_class(None)(gen, B, SEQ, spec=True)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    ad.mm_encoder = lambda items: [_img_rows(torch.arange(it.offset, it.offset + it.n_tokens)) for it in items]
+    lo, n_img = 16, 32
+    img = _mm_prompt(100, lo, lo + n_img, 9)
+    table = _table([_blocks(0, 400)], B)
+    out, _ = ad.prefill_forward(_history([img]), page_table=table[:1], kv_cache=kv, prompt_lens=[100], start_pos=[0],
+                                empty_slots=[0], sampling_params=_greedy(1), **_items(lo, n_img))  # fmt: skip
+    assert kv.state[0] == _ledger(img, lo, lo + n_img) and ad.mm_stats["rows_staged"] == n_img
+    assert ad._no_spec == {0} and backend.mtp_spans == [] and ad.spec_stats["seeds"] == 0
+    tok, pos = int(out[0, 0]), 100
+    for _ in range(3):
+        do = ad.propose_draft_tokens(K, *_block({0: ([tok], pos)}, K))
+        assert do.num_valid.tolist() == [0] * B
+        ids = ad.decode_forward(torch.tensor([[tok], [0], [0], [0]]), torch.tensor([pos, -1, -1, -1]),
+                                page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
+        assert int(ids[0, 0]) == (tok + 1) % VOCAB
+        tok, pos = int(ids[0, 0]), pos + 1
+    assert backend.spec.counters["enters"] == 0
+    ad.release_request(0)
+    # a text request on the multimodal class (pixel_values=[None]): armed, seeded, speculates
+    text = _prompt(100, 4)
+    table = _table([_blocks(1, 400)], B)
+    out, _ = ad.prefill_forward(_history([text]), page_table=table[:1], kv_cache=kv, prompt_lens=[100], start_pos=[0],
+                                empty_slots=[0], sampling_params=_greedy(1), pixel_values=[None], image_grid_thw=[None],
+                                mm_placeholder_offsets=[None], mm_placeholder_lengths=[None])  # fmt: skip
+    assert ad._no_spec == set() and backend.mtp_spans[-1][:2] == (0, 99) and ad.spec_stats["seeds"] == 1
+    ids = ad.decode_forward(torch.tensor([[int(out[0, 0])], [0], [0], [0]]), torch.tensor([100, -1, -1, -1]),
+                            page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
+    do = ad.propose_draft_tokens(K, *_block({0: ([int(ids[0, 0])], 101)}, K))
+    assert do.num_valid.tolist() == [K, 0, 0, 0] and ad.spec_stats["enters"] == 1
+    ad.release_request(0)
+    assert "ttnn" not in sys.modules and "vllm" not in sys.modules

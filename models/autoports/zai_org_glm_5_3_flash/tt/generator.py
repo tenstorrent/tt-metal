@@ -917,6 +917,7 @@ class Glm53Generator(_ReadinessGenerator):
         self._check_entry(b, slot, entry)
         if b.slots[slot].active:
             raise ValueError(f"restore into slot {slot}, which holds a live request")
+        self._check_not_speculating(b, "restore_slot")  # (every slot's state row is a candidate row of the step)
         self.backend.restore_slot(kv_cache, int(entry), slot)
         self.counters["snapshot_copies"] = self.counters.get("snapshot_copies", 0) + 1
 
@@ -932,7 +933,9 @@ class Glm53Generator(_ReadinessGenerator):
     def _check_not_speculating(b: _CacheBinding, what: str) -> None:
         """Slot state is read only between plain steps. While slot 0 speculates, its committed KDA state / conv
         history sits in candidate row n of the shared state until spec_leave (row 0 holds a candidate), so a copy of
-        slot 0 would store the wrong state (doc/ttnn/17-mtp-spec-decode/lmcache_spec_contract.md)."""
+        slot 0 would store the wrong state (doc/ttnn/17-mtp-spec-decode/lmcache_spec_contract.md); the candidate rows
+        0..K are the other slots' rows, so nothing writes a slot's state (a prefill, a restore) before spec_leave either.
+        """
         if getattr(b, "spec", None) is not None:
             raise RuntimeError(f"{what} while slot 0 speculates: call spec_leave first")
 
@@ -1772,6 +1775,9 @@ class Glm53Generator(_ReadinessGenerator):
         [start_pos[i], start_pos[i] + prompt_lens[i]) are used, see _prefill_user); such a row runs the per-user path
         (never a packed / batched replay: those embed every segment from the one chunk's ids)."""
         b = self._binding(kv_cache)
+        # Stage 17: while slot 0 speculates every slot's state row is one of its candidate rows -- a prefill (and its
+        # prefix_attach / snapshot_after / prefix_states pool copies) runs after spec_leave only
+        self._check_not_speculating(b, "prefill_forward")
         if os.environ.get("GLM53_MOCK") == "1":  # [mock-dram-point] after the first 1 / 8 / 32 served prefill calls
             self._mock_pf_calls = getattr(self, "_mock_pf_calls", 0) + 1
             if self._mock_pf_calls - 1 in (1, 8, 32):
@@ -2522,7 +2528,7 @@ class Glm53Generator(_ReadinessGenerator):
         without it each slot gets its own identity blocks back. `mm[i]` = (positions [m], rows [m, hidden] bf16):
         prompt i's image feature rows (positions inside the prompt; _prefill_user); such a prompt is prefilled on the
         per-user path, never in a batched / packed admission.
-        `spec_k` (Stage 17 M0, opt-in; None / 0 = plain): ONE greedy prompt in slot 0 decodes through the backend's
+        `spec_k` (Stage 17 M0, opt-in; None / 0 = plain): ONE greedy text prompt in slot 0 decodes through the backend's
         speculative step with K = spec_k drafts (= the backend's GLM53_SPEC_K) -- the prefill also fills the MTP layer's
         cache (backend arm_mtp_prefill), then spec_enter, spec_step until max_new_tokens / a stop token (a step commits
         n + 1 tokens: the outputs are plain greedy's), spec_leave; where the context leaves no room for a step the rest
@@ -2561,7 +2567,7 @@ class Glm53Generator(_ReadinessGenerator):
             self.check_context(len(p), mnt[i])
         used = {s: len(prompts[i]) + mnt[i] - 1 for i, s in enumerate(slots)}  # positions the request writes
         if spec_k:  # Stage 17: one greedy user in slot 0; its steps write up to 2 K + 1 rejected positions past the end
-            self._spec_check(b, int(spec_k), slots, params, next_input)
+            self._spec_check(b, int(spec_k), slots, params, next_input, mm)
             used = {s: min(u + 2 * int(spec_k) + 1, b.max_seq_len) for s, u in used.items()}
         if page_table is not None:
             pt = torch.as_tensor(page_table)
@@ -2679,9 +2685,12 @@ class Glm53Generator(_ReadinessGenerator):
                 b.slots[s].finished = True
         return outputs
 
-    def _spec_check(self, b, K: int, slots: Sequence[int], params: Sequence[SamplingParams], next_input) -> None:
+    def _spec_check(self, b, K: int, slots: Sequence[int], params: Sequence[SamplingParams], next_input,
+                    mm=None) -> None:  # fmt: skip
         """generate_batch(spec_k=K)'s preconditions (the backend's speculative step serves ONE greedy user in slot 0)"""
         why = []
+        if mm is not None and any(m is not None for m in mm):  # (the MTP-cache fill embeds token ids, not image rows)
+            why.append("a text prompt (no image rows: the MTP-cache prefill embeds the placeholder ids)")
         if self.spec_k() != K:
             why.append(f"the backend's speculative step with K = {K} (GLM53_SPEC_K; the backend has {self.spec_k()})")
         if list(slots) != [0]:
