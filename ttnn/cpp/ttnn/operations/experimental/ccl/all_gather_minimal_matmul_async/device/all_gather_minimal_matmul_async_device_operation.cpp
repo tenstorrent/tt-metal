@@ -159,6 +159,8 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
     const std::optional<BlockSizes> default_blocks =
         attributes.config.has_value() ? std::nullopt
                                       : std::optional<BlockSizes>(default_block_sizes(M, K, N, fp32_dest_acc_en));
+    // Gather-sender mode also turns on the barrier semaphore's cores, which `attributes` does not hash.
+    const bool gather_senders = agmm_uses_gather_senders(attributes, tensor_args);
     return ttsl::hash::hash_objects_with_default_seed(
         attributes,
         resolve_transpose_core_grid(attributes, M, N),
@@ -171,7 +173,8 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
         rows_free(tensor_args.fused_ternary_input_a),
         rows_free(tensor_args.fused_ternary_input_b),
         attributes.fused_ternary_scalar.has_value(),
-        tensor_args.persistent_weight_buffer);
+        tensor_args.persistent_weight_buffer,
+        gather_senders);
 }
 
 void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(

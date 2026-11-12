@@ -112,6 +112,13 @@ void kernel_main() {
     size_t out_ready_sem_forward = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t barrier_sem = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t M_tiles = get_common_arg_val<uint32_t>(cargidx++);
+#ifdef AGMM_GATHER_SENDERS
+    // Dedicated gather senders (on the column beside the matmul grid) push every peer's blocks here; the in0 cores
+    // only wait, one arrival per piece per source peer.
+    constexpr bool gather_senders = true;
+#else
+    constexpr bool gather_senders = false;
+#endif
 
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
@@ -121,6 +128,11 @@ void kernel_main() {
 
     // Output tensor addresses from common args
     const uint32_t out_addr_common_arg_start = cargidx;
+#ifdef AGMM_GATHER_SENDERS
+    // Trailing arg after the N_chunks output addresses: the arrival counter for the opposite device of a ring of 4
+    // (0 otherwise), whose blocks the gather senders push here.
+    const uint32_t out_ready_sem_far = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks);
+#endif
 
     // Load per-core runtime args
     uint32_t argidx = 0;
@@ -293,7 +305,8 @@ void kernel_main() {
 #ifdef FABRIC_2D
     // Entry barrier, announce side: tell the injector of every peer this core writes into that we entered.
     // A peer's injector reads no block (so none of its senders writes) until every writer has entered: without
-    // this a fast peer's next call lands in a gathered buffer this device is still reading.
+    // this a fast peer's next call lands in a gathered buffer this device is still reading. This is the relay's
+    // barrier; gather senders run their own entry handshake (dm_gather_sender.cpp).
     if constexpr (!is_linear && num_devices > 1) {
         if (barrier_sem != 0) {
             const uint64_t barrier_injector_noc_addr =
@@ -354,10 +367,10 @@ void kernel_main() {
      */
 
 #ifdef FABRIC_2D
-    // Writers into this device: the two neighbours.
+    // Writers into this device when relaying: the two neighbours.
     constexpr uint32_t num_push_sources = 2;
     if constexpr (!is_linear && num_devices > 1) {
-        if (is_injector_core && barrier_sem != 0) {
+        if (!gather_senders && is_injector_core && barrier_sem != 0) {
             auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
             noc_semaphore_wait_min(barrier_ptr, num_push_sources);
             // Consume rather than reset: a faster peer's next-launch announcement may already be here.
@@ -365,6 +378,21 @@ void kernel_main() {
             noc_obj.async_atomic_barrier();
         }
     }
+#endif
+#ifdef AGMM_GATHER_SENDERS
+    // Arrivals into this device per block: from r+1 (forward), r-1 (backward) and, for 4, r+2 (far).
+    volatile tt_l1_ptr uint32_t* out_ready_sem_far_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_far);
+    // Source offset o = (source - my_rank) mod N -> its arrival counter. The left half of a K step d comes from
+    // r+d, the right half from r-d; for N == 2 both neighbours are the same device but arrive on two counters.
+    auto left_source_sem = [&](uint32_t o) {
+        return o == 1 ? out_ready_sem_forward_addr_ptr
+                      : (o == num_devices - 1 ? out_ready_sem_backward_addr_ptr : out_ready_sem_far_addr_ptr);
+    };
+    auto right_source_sem = [&](uint32_t o) {
+        return o == num_devices - 1 ? out_ready_sem_backward_addr_ptr
+                                    : (o == 1 ? out_ready_sem_forward_addr_ptr : out_ready_sem_far_addr_ptr);
+    };
 #endif
 
     bool k_forward = true;
@@ -467,7 +495,7 @@ void kernel_main() {
                 } else {
                     // Ring: bidirectional half-block. Requires K_block_tiles | K_tiles_per_device
                     // (no tail support yet — enforced upstream for Ring).
-                    k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                    k_left_tiles = ring_k_left_tiles(k_block_odd, K_block_tiles);
                     k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 }
                 compute_actual_k_block<is_linear>(
@@ -479,7 +507,7 @@ void kernel_main() {
                     K_tiles_per_device,
                     num_devices,
                     k_forward,
-                    n_block_iter == 0,
+                    !gather_senders && n_block_iter == 0,
                     out_ready_sem_forward_addr_ptr,
                     out_ready_sem_backward_addr_ptr,
                     sem_target_forward,
@@ -489,6 +517,25 @@ void kernel_main() {
                     k_left_tiles,
                     k_block_left_tile,
                     k_block_right_tile);
+#ifdef AGMM_GATHER_SENDERS
+                // Per source, per M block: a neighbour sends the halves of its first-needed K step (step 1), then
+                // those of its second (step N - 1); the opposite device of a ring of 4 sends whole blocks
+                // (step 2). One arrival per piece, in that order (dm_gather_sender).
+                const uint32_t step = actual_k_block / K_blocks_per_device;
+                if (n_block_iter == 0 && is_injector_core && step > 0) {
+                    const uint32_t per_mb_neighbour = (num_devices == 2 ? 1 : 2) * K_blocks_per_device;
+                    auto target_for = [&](uint32_t o) -> uint32_t {
+                        if (num_devices == 4 && o == 2) {
+                            return m_block_iter * K_blocks_per_device + device_k_block_iter + 1;
+                        }
+                        const bool second = num_devices > 2 && step == num_devices - 1;
+                        return m_block_iter * per_mb_neighbour + (second ? K_blocks_per_device : 0) +
+                               device_k_block_iter + 1;
+                    };
+                    noc_semaphore_wait_min(left_source_sem(step), target_for(step));
+                    noc_semaphore_wait_min(right_source_sem(num_devices - step), target_for(num_devices - step));
+                }
+#endif
                 if constexpr (is_linear) {
                     // For Linear tail, the right half is pure zero-fill padding (no real tiles).
                     // Point past the logical K end so read_in0_block_sync's `j < logical_d1` check
@@ -811,4 +858,9 @@ void kernel_main() {
 
     noc_semaphore_set(out_ready_sem_backward_addr_ptr, 0);
     noc_semaphore_set(out_ready_sem_forward_addr_ptr, 0);
+#ifdef AGMM_GATHER_SENDERS
+    if (out_ready_sem_far != 0) {
+        noc_semaphore_set(out_ready_sem_far_addr_ptr, 0);
+    }
+#endif
 }

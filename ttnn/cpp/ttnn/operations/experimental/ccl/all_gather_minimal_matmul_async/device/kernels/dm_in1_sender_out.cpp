@@ -387,7 +387,7 @@ void kernel_main() {
                     k_right_tiles = K_block_tiles - current_K_block_tiles;
                 } else {
                     // Ring: bidirectional half-block. Requires K_block_tiles | K_tiles_per_device.
-                    k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
+                    k_left_tiles = ring_k_left_tiles(k_block_odd, K_block_tiles);
                     k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 }
                 {

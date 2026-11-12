@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
@@ -17,6 +18,28 @@
 #include <vector>
 
 namespace ttnn::experimental::prim {
+
+// The dedicated gather senders' cores: two per link, one per ethernet port, on the last worker column (the one right of
+// a narrower matmul grid), on that link's rows.
+std::vector<tt::tt_metal::CoreCoord> agmm_gather_sender_cores(tt::tt_metal::CoreCoord full_grid, uint32_t num_links);
+
+// Dedicated gather senders: on a Blackhole Fabric2D Ring of up to 4 with a free worker column right of the matmul grid,
+// senders on that column read this device's K slice from DRAM and push it straight into each peer's gathered buffer;
+// the in0 cores never touch the fabric and only wait for arrivals. The senders' entry handshake (a peer writes this
+// device's gathered buffer only after this device entered the call) lives in the barrier semaphore, so they need one
+// that covers their cores; without it the gather relays through the in0 cores. The program hash keys on this.
+bool agmm_uses_gather_senders(
+    const ttnn::MeshDevice& device,
+    ttnn::ccl::Topology topology,
+    uint32_t ring_size,
+    bool fsdp,
+    bool transposed,
+    tt::tt_metal::CoreCoord grid,
+    uint32_t num_links,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore);
+// The same, from the op's attributes and inputs (the program hash and override_runtime_arguments).
+bool agmm_uses_gather_senders(
+    const AllGatherMinimalMatmulAsyncParams& attributes, const AllGatherMinimalMatmulAsyncInputs& tensor_args);
 
 // Block and subblock sizes the factory picks when no config is given: (M, K, N block tiles, subblock_h, subblock_w).
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> default_block_sizes(
