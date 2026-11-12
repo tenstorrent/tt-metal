@@ -55,6 +55,13 @@ struct PerDeviceRuntimeArgsWords {
     uint32_t num_words = 0;
 };
 
+// Passed to DescriptorMeshWorkloadAdapter::create_mesh_workload to let a factory that sets
+// `merge_per_device_programs` merge its per-coordinate programs. The framework passes it when the adapter runs the op
+// itself; a wrapping MeshWorkloadFactory passes it only when its own cache-hit code handles ranges of several devices
+// (it sets values that differ per device with SetRuntimeArgsPerDevice, never from range.start_coord()). Without it the
+// adapter keeps one program per coordinate.
+struct MergePerDevicePrograms {};
+
 struct ProgramMergeOptions {
     // Kernels may run on different cores per device; the merged program runs each kernel on the union of its cores.
     IdleRuntimeArgsFn idle_runtime_args;
@@ -66,10 +73,12 @@ struct ProgramMergeOptions {
 };
 
 // Merges `descriptors` (one per coordinate of a range, in the range's iteration order) into one program. Returns
-// nullopt when they differ in anything besides runtime-arg values (and, with options.idle_runtime_args, kernel core
-// sets): kernels, compile-time args, defines, configs, circular buffers, semaphores, buffer bindings, or a per-device
-// word that a buffer binding patches. Also nullopt when a kernel has named (Blaze) args, or when the union of core sets
-// would put two kernels, or two circular buffers of one index, on a core where no device has both.
+// nullopt when they differ in anything besides runtime-arg values, the cores of semaphores, and (with
+// options.idle_runtime_args) kernel core sets: kernels, compile-time args, defines, configs, circular buffers, buffer
+// bindings, or a per-device word that a buffer binding patches. Each semaphore (id, core type, initial value) is placed
+// on the union of its cores across devices; the merge is refused when that puts one id with two initial values on a
+// core. Also nullopt when a kernel has named (Blaze) args, or when the union of core sets would put two kernels, or two
+// circular buffers of one index, on a core where no device has both.
 std::optional<MergedProgramDescriptor> merge_per_device_program_descriptors(
     const std::vector<tt::tt_metal::ProgramDescriptor>& descriptors, const ProgramMergeOptions& options = {});
 
