@@ -1,19 +1,31 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""GDN request state in vLLM-owned KV cache blocks (MambaSpec groups, mamba_cache_mode "none").
+"""GDN request state in vLLM-owned KV cache blocks (MambaSpec groups, mamba_cache_mode "none" and "align").
 
-vLLM gives each request one state block per MambaSpec group for its whole life. A GDN layer of the group keeps the
-request's recurrent state and convolution history in the K and V buffers of its layer slot, at that block
-(kv_cache_spec.GdnBlockLayout). GdnBlockState binds every GDN layer to float32 and bfloat16 alias_view views of its
-slot's buffers and to a persistent ``state_page_idx`` tensor, which names the pages of the block of each decode row.
+A GDN layer of a MambaSpec group keeps a request's recurrent state and convolution history in the K and V buffers of
+its layer slot, at the block that the group gives the request (kv_cache_spec.GdnBlockLayout). In mode "none" a request
+keeps one state block per group for its whole life. In mode "align" vLLM's ``mamba_state`` names, per row and group,
+the block that holds the start state (``start_blocks``) and the block that takes the end state (``windows``), and
+vLLM keeps some blocks in its prefix cache, so a start block can be shared by several requests and must stay
+unchanged. GdnBlockState binds every GDN layer to float32 and bfloat16 alias_view views of its slot's buffers and to a
+persistent ``state_page_idx`` tensor, which names the pages of the block of each decode row.
 
-* Prefill runs on the layer's batch-1 workspace (``rec_state``, ``conv_carry``) from zero state and then copies the
-  end state into the request's block with paged_fill_cache (write_prefill_state). The views have one page or one
-  half value head per dim-0 slice, so a persistent page table names the destination; the block id never reaches a
-  program hash, and no request compiles a program.
+* Prefill runs on the layer's batch-1 workspace (``rec_state``, ``conv_carry``). A prefill at start_pos 0 starts from
+  zero state; a later one first loads its start block into the workspace (restore). A prefill checkpoint is the
+  workspace written into its block (write_state) between two parts of the prefill; the end state goes into the
+  destination block. The start block is only read. Writes use paged_fill_cache: the views have one page or one half
+  value head per dim-0 slice, so a persistent page table names the destination; the block id never reaches a program
+  hash, and no request compiles a program.
 * Decode runs gdn_decode_step on the blocks directly. The adapter rewrites the page index whenever vLLM moves a row
   or gives a row another request (set_decode_blocks), so moving a row moves no state. The index tensors keep their
-  addresses, so a captured decode trace reads the new index on its next replay.
+  addresses, so a captured decode trace reads the new index on its next replay. A row whose start block differs from
+  its destination first gets the start state copied into the destination, which the step then updates in place.
+* Reads and block-to-block copies address a block through ttnn.narrow views of the alias views. narrow only moves the
+  buffer address, so the programs that warmup compiles on the null block serve every block, also after a trace is
+  captured. Each view starts at its own block's first whole float32 page (GdnBlockLayout.first_fp32_page), so a state
+  moves correctly between blocks whose float32 pages start at different offsets: with bfloat8_b K and V a 1024-token
+  block holds 8.5 float32 pages per bank, so the pages of an odd block start half a page later than those of an even
+  one.
 * zero_blocks clears blocks that vLLM gives to the attention group: float32 state bytes read as bfloat16 can be NaN
   or Inf at positions that attention masks.
 
@@ -29,6 +41,7 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
+    HALF_HEAD_PAGES,
     HIST_SLOTS,
     MAX_DECODE_ROWS,
     GdnDims,
@@ -36,6 +49,7 @@ from models.demos.blackhole.qwen36.tt.kv_cache_spec import (
     layer_index,
     pack_history_rows,
     plan_gdn_block_layout,
+    unpack_history_rows,
 )
 
 # Tokens of zero K / V that one zero_blocks pass writes; blocks are cleared in groups of this many tokens.
@@ -174,6 +188,13 @@ class GdnBlockState:
             for t in self.layout.write_tables(0)
         ]
         self._write_refs = []
+        self._unpack_table = ttnn.from_torch(
+            unpack_history_rows(self.dims).reshape(1, -1).to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=rep,
+        )
         zero_blocks = max(1, _ZERO_TOKENS // block_size)
         self._zero = ttnn.from_torch(
             torch.zeros(1, kv_heads, zero_blocks * block_size, head_dim, dtype=torch.bfloat16),
@@ -232,9 +253,20 @@ class GdnBlockState:
     def set_decode_blocks(self, mamba_state):
         """Point decode row r of every GDN layer at the block of ``mamba_state`` row r of the layer's group. Rows past
         the windows, and padding rows, take block 0, vLLM's null block. Copies an index only when its blocks change:
-        the decode step reads the index tensors and never writes them."""
+        the decode step reads the index tensors and never writes them.
+
+        A row whose start block differs from its destination block (mode "align": this step's token crosses into a
+        new block-table column) first gets the full state of the start block copied into the destination block;
+        gdn_decode_step then updates the destination in place and the start block stays unchanged."""
         rep = ttnn.ReplicateTensorToMesh(self.mesh)
         for g, (layers, windows) in enumerate(self.groups(mamba_state)):
+            starts = getattr(mamba_state.groups[g], "start_blocks", None)
+            if starts is not None:
+                for r in range(min(self.bmax, windows.shape[0])):
+                    src, dst = int(starts[r]), int(windows[r, 0])
+                    if src > 0 and dst > 0 and src != dst:
+                        for dn in layers:
+                            self._copy_state(dn, src, dst)
             blocks = [int(b) for b in windows.reshape(-1)[: self.bmax].tolist()]
             blocks = tuple(blocks + [0] * (self.bmax - len(blocks)))
             if self._decode_blocks.get(g) == blocks:
@@ -254,15 +286,76 @@ class GdnBlockState:
     def write_prefill_state(self, mamba_state, row):
         """Copy the end state of the request that prefill row ``row`` just prefilled (each GDN layer's batch-1
         workspace) into the request's block in every MambaSpec group."""
-        # The copies of the previous call have run: a host readback (prefill logits) came in between.
-        self._write_refs = []
-        for layers, windows in self.groups(mamba_state):
-            block = int(windows[row, 0])
+        self.write_state(mamba_state, [int(windows[row, 0]) for _, windows in self.groups(mamba_state)])
+
+    def write_state(self, mamba_state, blocks):
+        """Copy the batch-1 workspace of every GDN layer of MambaSpec group g of ``mamba_state`` into block
+        ``blocks[g]``: a prefill's end state or one of its checkpoints."""
+        # paged_fill_cache may read the host page tables after it returns; hold them until the device is idle.
+        if self._write_refs:
+            ttnn.synchronize_device(self.mesh)
+            self._write_refs = []
+        for (layers, _), block in zip(self.groups(mamba_state), blocks, strict=True):
             if block <= 0:
-                raise ValueError(f"prefill row {row} has the null block {block} as its GDN state block")
+                raise ValueError(f"a prefill row has the null block {block} as its GDN state block")
             self._set_write_tables(block)
             for dn in layers:
                 self._write_state(dn)
+
+    def restore(self, mamba_state, blocks):
+        """Load the full state that block ``blocks[g]`` holds into the batch-1 workspace of every GDN layer of
+        MambaSpec group g of ``mamba_state``, so that a prefill continues from it. The blocks are only read."""
+        for (layers, _), block in zip(self.groups(mamba_state), blocks, strict=True):
+            if block <= 0:
+                raise ValueError(f"a prefill resumes from the null block {block}")
+            for dn in layers:
+                self._read_state(dn, block)
+
+    def _block_views(self, views, block):
+        """Views of the GDN state of ``block`` in the alias views (rec_k, rec_v, hist) of one layer slot: float32
+        [2 * heads_k, 1, Dk / 2, Dv] of K, the same of V (None when K holds every head), and the packed history
+        [4 * Nv, 1, 32, 32] bfloat16. Each view starts on bank 0, as ttnn.narrow requires: with 8 DRAM banks a half-head
+        slice is one page row, and the history of a block starts on a whole page row of the bfloat16 view."""
+        rec_k, rec_v, hist = views
+        lay = self.layout
+        s0 = lay.first_fp32_page(block) // HALF_HEAD_PAGES
+        k = ttnn.narrow(rec_k, 0, s0, 2 * lay.heads_k)
+        v = ttnn.narrow(rec_v, 0, s0, 2 * lay.heads_v) if lay.heads_v else None
+        h = ttnn.narrow(hist, 0, lay.hist_page(block, 0), HIST_SLOTS * self.dims.nv)
+        return k, v, h
+
+    def _layer_views(self, dn):
+        sb = dn.state_blocks
+        return sb.rec_k, sb.rec_v, sb.hist
+
+    def _read_state(self, dn, block):
+        lay, nv, dk, dv = self.layout, self.dims.nv, self.dims.dk, self.dims.dv
+        k, v, hist = self._block_views(self._layer_views(dn), block)
+        # Half-head slices of the workspace: the same tile order as [1, Nv, Dk, Dv].
+        rec = ttnn.experimental.alias_view(dn.rec_state, [2 * nv, 1, dk // 2, dv], ttnn.float32)
+        ttnn.copy(k, ttnn.narrow(rec, 0, 0, 2 * lay.heads_k))
+        if v is not None:
+            ttnn.copy(v, ttnn.narrow(rec, 0, 2 * lay.heads_k, 2 * lay.heads_v))
+        packed = ttnn.to_layout(hist, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rows = ttnn.reshape(packed, (nv * HIST_SLOTS * 32, 32))
+        carry = ttnn.embedding(
+            self._unpack_table, rows, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [1, (K - 1) * C / 32, 32]
+        _free_copy(rows, packed)
+        ttnn.deallocate(packed)
+        carry_rm = ttnn.reshape(carry, (1, self.dims.kconv - 1, self.dims.conv_dim))
+        tiled = ttnn.to_layout(carry_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _free_copy(carry_rm, carry)
+        ttnn.deallocate(carry)
+        ttnn.copy(tiled, dn.conv_carry)
+        ttnn.deallocate(tiled)
+
+    def _copy_state(self, dn, src, dst):
+        """Copy the full GDN state of layer dn from block ``src`` into block ``dst``, each at its own offsets."""
+        views = self._layer_views(dn)
+        for a, b in zip(self._block_views(views, src), self._block_views(views, dst)):
+            if a is not None:
+                ttnn.copy(a, b)
 
     def _set_write_tables(self, block):
         rep = ttnn.ReplicateTensorToMesh(self.mesh)
@@ -328,12 +421,15 @@ class GdnBlockState:
         self.layers = {}
 
     def warmup(self):
-        """Compile the block write and zero programs on the null block 0, before any trace is captured."""
+        """Compile the block write, read, copy and zero programs on the null block 0, before any trace is captured.
+        The reads leave the null block's bytes in the batch-1 workspace, which every prefill zeroes or restores."""
         if self._warmed:
             return
         self._set_write_tables(0)
         for dn in self.layers.values():
             self._write_state(dn)
+            self._read_state(dn, 0)
+            self._copy_state(dn, 0, 0)
         self.zero_blocks([0])
         ttnn.synchronize_device(self.mesh)
         self._warmed = True

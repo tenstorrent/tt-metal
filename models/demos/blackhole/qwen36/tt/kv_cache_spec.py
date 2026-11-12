@@ -280,6 +280,27 @@ def pack_history_rows(dims):
     return out.reshape(-1)
 
 
+def unpack_history_rows(dims):
+    """int64 [(K - 1) * C / 32]: for each 32-channel row (carry row j, channel chunk ch) of the convolution carry
+    [K - 1, C] viewed as [(K - 1) * C / 32, 32], the row of the packed history viewed as [Nv * 4 * 32, 32] that holds it
+    (pack_history_rows read backwards). A q or k chunk of key head hk is read from value head hk * (Nv / Nk), the
+    first head that holds it."""
+    rf = dims.nv // dims.nk
+    qn, vn = dims.dk // 32, dims.dv // 32
+    kd32 = dims.nk * dims.dk // 32
+    out = torch.zeros(dims.kconv - 1, dims.conv_dim // 32, dtype=torch.int64)
+    for ch in range(dims.conv_dim // 32):
+        if ch < kd32:
+            h, c = (ch // qn) * rf, ch % qn
+        elif ch < 2 * kd32:
+            h, c = ((ch - kd32) // qn) * rf, qn + (ch - kd32) % qn
+        else:
+            h, c = (ch - 2 * kd32) // vn, 2 * qn + (ch - 2 * kd32) % vn
+        for j in range(dims.kconv - 1):
+            out[j, ch] = (h * HIST_SLOTS + j + 1) * 32 + 2 * c
+    return out.reshape(-1)
+
+
 def pack_conv_taps(taps, dims):
     """[Nv, 4, 32, 32] gdn_decode_step taps from 4 per-device tap rows [C] (tap 0 = oldest): tile (h, j) holds tap j
     of the head's [q_hk | k_hk | v_h] channels, chunk c in tile rows 2c and 2c + 1."""
