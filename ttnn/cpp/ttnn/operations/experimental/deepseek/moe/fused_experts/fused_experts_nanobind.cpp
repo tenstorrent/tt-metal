@@ -143,19 +143,22 @@ void bind_fused_experts(nb::module_& mod) {
                 layer: [layer id, shared gate_up, shared down, router gate, router bias, 0 x 11,
                 E gate_up, E down] buffer addresses. Every chip receives [64-byte header (layer id in
                 word 0) | bf16 token row] pages on each requester's input socket, taken round robin
-                through the op's pipeline, and the MoE output, reduced onto mesh coordinate (0, 0), is
-                sent from there on that requester's output socket. A layer id >= num_layers
+                through the op's pipeline, and each chip sends its partial MoE output into that
+                requester's partials buffer on every requester chip, where persistent_moe_request sums
+                them. A layer id >= num_layers
                 (0xFFFFFFFF) closes a requester's input; once all are closed the kernels stop. Needs
                 the whole-mesh all-reduce, the router with a DRAM gate, the shared expert and the
-                one-row replica; the returned tensor is the op's scratch, and results arrive only on
-                the output sockets.
+                one-row replica; the returned tensor is the op's scratch, and results arrive only in
+                the partials buffers.
             persistent_socket_core: Logical core every socket endpoint on this mesh lives on,
                 outside the worker grid.
             persistent_input_sockets: Per requester (at most 8), the receiving end of a D2D socket
                 with a page-sized FIFO, received at ``persistent_socket_core`` on every chip.
-            persistent_output_sockets: Per requester, paired with its input, the sending end of a
-                D2D socket from ``persistent_socket_core`` on (0, 0), whose receivers (one core) each
-                hold a [1, H] bf16 page. All of them must leave (0, 0) in one fabric direction.
+            persistent_partials: Per requester, paired with its input, its partials buffer on its
+                own mesh: an L1 HEIGHT_SHARDED tensor with one shard per all-reduce link, on that
+                part's sum core, of the op's chips' slots of the part (2H / num_links bytes each) then a
+                flag word per chip, zeroed. Every chip sends its partial row there; the requester's
+                ``persistent_moe_request`` sums them.
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
         nb::arg("input_tensor"),
@@ -185,7 +188,7 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("persistent_layer_table") = std::nullopt,
         nb::arg("persistent_socket_core") = std::nullopt,
         nb::arg("persistent_input_sockets") = std::nullopt,
-        nb::arg("persistent_output_sockets") = std::nullopt);
+        nb::arg("persistent_partials") = std::nullopt);
 
     ttnn::bind_function<"persistent_moe_request", "ttnn.experimental.deepseek.moe.">(
         mod,
@@ -195,18 +198,19 @@ void bind_fused_experts(nb::module_& mod) {
 
         Each such chip multicasts one page -- a 64-byte header with ``layer`` in word 0, then the input
         row -- to its request receivers (which must share one core), and then, unless ``layer`` is the
-        stop id 0xFFFFFFFF, waits for the op's reduced row on ``response_socket`` and returns it. The
-        persistent op does not ack request pages: the response proves every receiver is past the page,
-        so this op credits the request socket itself when the response arrives.
+        stop id 0xFFFFFFFF, waits for every chip of the op to send its partial row into ``partials`` and
+        returns their sum, summed in chip order on each part's sum core. The persistent op does not ack
+        request pages; it takes a requester's next page only after this one's partials, so this op
+        credits the request socket itself.
 
         Args:
             input_tensor: The token row, [1, 1, 1, H] bfloat16 ROW_MAJOR, interleaved.
             layer: The layer to run, a row index of the persistent op's layer table, or 0xFFFFFFFF to
-                stop it (no response then).
+                stop it (no result then).
             request_socket: The sending end of the persistent op's input socket; its FIFO holds one
                 page, 64 + 2H bytes.
-            response_socket: The receiving end of the persistent op's output socket, on each sending
-                chip's request core.
+            partials: The partials buffer this requester gave the persistent op (its
+                ``persistent_partials`` entry), on the input's mesh.
 
         Returns:
             ttnn.Tensor: the reduced row, in the input's spec (unwritten after a stop).
@@ -216,7 +220,7 @@ void bind_fused_experts(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("layer"),
         nb::arg("request_socket"),
-        nb::arg("response_socket"));
+        nb::arg("partials"));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail

@@ -154,7 +154,7 @@ struct FusedExpertsDeviceOperation {
         const std::optional<Tensor>& persistent_layer_table,
         const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core,
         const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_input_sockets,
-        const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_output_sockets);
+        const std::optional<std::vector<Tensor>>& persistent_partials);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts
@@ -188,5 +188,5 @@ fused_experts(
     const std::optional<Tensor>& persistent_layer_table = std::nullopt,
     const std::optional<tt::tt_metal::CoreCoord>& persistent_socket_core = std::nullopt,
     const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_input_sockets = std::nullopt,
-    const std::optional<std::vector<tt::tt_metal::distributed::MeshSocket>>& persistent_output_sockets = std::nullopt);
+    const std::optional<std::vector<Tensor>>& persistent_partials = std::nullopt);
 }  // namespace ttnn::prim

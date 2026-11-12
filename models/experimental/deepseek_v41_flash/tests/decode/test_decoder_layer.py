@@ -268,8 +268,12 @@ def test_decoder_layer_decode_tp4(mesh_device, layers, seq_len):
     _check_decode(submesh, layers, seq_len, tp_size=TP_SIZE)
 
 
-def _check_decode(device, layers, seq_len, tp_size: int) -> None:
-    """Decode ``layers`` for ``seq_len`` steps on ``device`` (a 1x``tp_size`` mesh) against the reference."""
+def _check_decode(device, layers, seq_len, tp_size: int, build_layer=None) -> None:
+    """Decode ``layers`` for ``seq_len`` steps on ``device`` (a 1x``tp_size`` mesh) against the reference.
+
+    ``build_layer(i, weights, layer_cache, prefetch_buffers) -> (layer, (module, method))`` builds layer ``i``
+    and names the call whose output is the layer's MoE output; by default a :class:`DeepSeekV41DecoderLayer`
+    with its experts on ``device``, whose MoE is ``layer.mlp.decode_static``."""
     snapshot = _snapshot()
     config = load_config(snapshot)
     loader = DeepseekV4WeightLoader(snapshot)
@@ -294,27 +298,32 @@ def _check_decode(device, layers, seq_len, tp_size: int) -> None:
     decoder_layers, parts = {}, {i: {} for i in layers}
     for i in layers:
         layer_cache = cache.sub(f"layers.{i}")
-        experts = DeepSeekV41PreloadedExperts(
-            config,
-            expert_provider(loader, i),
-            device,
-            dtype=ttnn.bfloat4_b,
-            cache=layer_cache.sub("ffn"),
-            tp_size=tp_size,
-        )
-        layer = DeepSeekV41DecoderLayer(
-            config,
-            i,
-            decoder_layer_weights(loader, i, config),
-            device,
-            experts,
-            cache=layer_cache,
-            weight_dtype=ttnn.bfloat4_b,
-            tp_size=tp_size,
-            prefetch_buffers=prefetch_buffers,
-        )
+        weights = decoder_layer_weights(loader, i, config)
+        if build_layer is None:
+            experts = DeepSeekV41PreloadedExperts(
+                config,
+                expert_provider(loader, i),
+                device,
+                dtype=ttnn.bfloat4_b,
+                cache=layer_cache.sub("ffn"),
+                tp_size=tp_size,
+            )
+            layer = DeepSeekV41DecoderLayer(
+                config,
+                i,
+                weights,
+                device,
+                experts,
+                cache=layer_cache,
+                weight_dtype=ttnn.bfloat4_b,
+                tp_size=tp_size,
+                prefetch_buffers=prefetch_buffers,
+            )
+            moe_call = (layer.mlp, "decode_static")
+        else:
+            layer, moe_call = build_layer(i, weights, layer_cache, prefetch_buffers)
         _spy(layer.self_attn, "decode", parts[i], "attn")
-        _spy(layer.mlp, "decode_static", parts[i], "ffn")
+        _spy(*moe_call, parts[i], "ffn")
         _spy(layer.ffn_hc, "forward", parts[i], "ffn_hc_in", arg=0)
         _spy(layer.ffn_hc, "forward", parts[i], "ffn_hc")
         _spy(layer.attn_hc, "forward", parts[i], "attn_hc")
