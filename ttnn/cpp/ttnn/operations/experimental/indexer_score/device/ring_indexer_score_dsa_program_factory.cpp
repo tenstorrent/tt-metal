@@ -794,7 +794,10 @@ RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
     using namespace CMAKE_UNIQUE_NAMESPACE;
     // Program-cache miss: prove the full-mesh route once; create_workload_descriptor then sees it resolved.
     const auto args = resolve_full_mesh_route(unresolved_args, tensors.q);
-    auto descriptor_cached = descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out);
+    // override_runtime_arguments sets the per-device words of a merged range with SetRuntimeArgsPerDevice, so this
+    // factory takes the merged programs.
+    auto descriptor_cached =
+        descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out, ttnn::MergePerDevicePrograms{});
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     constexpr std::array kernel_indices{
         kAllGatherReaderForwardKernelIndex,

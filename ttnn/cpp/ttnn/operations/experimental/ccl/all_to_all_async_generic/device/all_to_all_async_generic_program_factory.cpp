@@ -674,7 +674,6 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     std::vector<uint32_t> sender_reader_compile_args = {
         tt::CB::c_in0,                              // cb0_id
         page_size,                                  // tensor0_page_size
-        0,                                          // unused: device_index is common runtime arg 1 (per device)
         operation_attributes.num_devices,           // num_devices
         input_shape[operation_attributes.out_dim],  // split_dim_size
         src_in_dims,                                // inner_dims_size
@@ -1029,7 +1028,6 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     for (size_t stream = 0; stream < num_senders_per_link; ++stream) {
         std::vector<uint32_t> sender_writer_compile_args = {
             tt::CB::c_in0,                              // cb0_id
-            0,                                          // unused: device_index is common runtime arg 3
             operation_attributes.num_devices,           // num_devices
             output_shape[operation_attributes.in_dim],  // concat_dim_size
             dst_in_dims,                                // inner_dims_size
@@ -1038,10 +1036,8 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             reserved_packet_header_CB_index,            // reserved_packet_header_cb_id
             semaphore_sent,                             // semaphore_expected_value
             concat_num_tiles,                           // concat_num_tiles
-            0,                                          // unused: full_block_offset is common runtime arg 4
             static_cast<uint32_t>(effective_topology),  // topology
             cluster_axis,                               // replicate_axis
-            0,                                          // unused: source_chip_id is common runtime arg 5
             *sender_device_fabric_node_id.mesh_id,      // source_mesh_id
             is_fabric_2d,                               // is_fabric_2d
             sender_stream_direction_masks[stream],      // fabric_direction_mask

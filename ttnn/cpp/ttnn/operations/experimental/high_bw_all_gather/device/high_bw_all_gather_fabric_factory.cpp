@@ -526,6 +526,7 @@ GatherPlan build_gather_plan(
     // each chip, one program per chip.
     auto pick_local_copy_cores = [&](const std::set<std::pair<size_t, size_t>>& taken) {
         std::vector<tt::tt_metal::CoreCoord> cores;
+        cores.reserve(num_local_copy_cores);
         for (const auto& core : local_copy_core_order) {
             if (cores.size() < num_local_copy_cores && !taken.contains({core.x, core.y})) {
                 cores.push_back(core);
@@ -858,15 +859,19 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     // 1D fabric routes by hop count (always one), 2D by destination chip
     const bool is_2d = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
 
-    // One program serves every chip of a coordinate range (plan.one_program_per_range): the per-core args, which
-    // differ from chip to chip, are per-device runtime args (distributed::SetRuntimeArgsPerDevice). Otherwise one
-    // program per chip, with its own runtime args.
+    // One program serves every chip of a coordinate range (plan.one_program_per_range, where the mesh supports
+    // per-device runtime args on that range): the per-core args, which differ from chip to chip, are per-device
+    // runtime args (distributed::SetRuntimeArgsPerDevice). Otherwise one program per chip, with its own runtime args.
     std::vector<ttnn::MeshCoordinateRange> program_ranges;
-    if (plan.one_program_per_range) {
-        program_ranges.assign(tensor_coords.ranges().begin(), tensor_coords.ranges().end());
-    } else {
-        for (const auto& chip : tensor_coords.coords()) {
-            program_ranges.emplace_back(chip);
+    program_ranges.reserve(tensor_coords.coords().size());
+    for (const auto& range : tensor_coords.ranges()) {
+        if (plan.one_program_per_range &&
+            tt::tt_metal::distributed::PerDeviceRuntimeArgsSupported(*mesh_device, range)) {
+            program_ranges.push_back(range);
+        } else {
+            for (const auto& chip : range) {
+                program_ranges.emplace_back(chip);
+            }
         }
     }
 
@@ -1025,6 +1030,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
             std::vector<uint32_t> local_copy_writer_args{
                 0, num_local_copy_cores, rank, static_cast<uint32_t>(fabric_link_workers.size())};
+            local_copy_writer_args.reserve(local_copy_writer_args.size() + 2 * fabric_link_workers.size());
             for (const auto& fabric_link_worker : fabric_link_workers) {
                 const auto noc = device->worker_core_from_logical_core(fabric_link_worker.core);
                 local_copy_writer_args.push_back(noc.x);
@@ -1070,6 +1076,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             bool reader;
         };
         std::vector<CoreKernelArgs> slots;
+        slots.reserve(2 * all_cores.size());
         for (const auto& core : all_cores) {
             const bool link_worker = link_worker_core_set.contains(core);
             for (const bool reader : {true, false}) {

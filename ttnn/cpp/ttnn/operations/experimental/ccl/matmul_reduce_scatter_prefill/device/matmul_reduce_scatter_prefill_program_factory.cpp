@@ -959,6 +959,7 @@ MatmulReduceScatterPrefillMeshWorkloadFactory::create_mesh_workload(
     };
     for (const auto& range : tensor_coords.ranges()) {
         std::vector<ProgramDescriptor> descriptors;
+        descriptors.reserve(range.shape().mesh_size());
         for (const auto& coord : range) {
             descriptors.push_back(
                 MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord));
