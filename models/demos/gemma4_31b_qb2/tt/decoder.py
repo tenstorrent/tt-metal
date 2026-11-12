@@ -53,7 +53,7 @@ class Decoder:
 
     @classmethod
     def from_state_dict(
-        cls, state_dict, *, hf_config, layer_idx, mesh_device, shared_setup=None, projection_dtype=ttnn.bfloat4_b
+        cls, state_dict, *, hf_config, layer_idx, mesh_device, shared_setup=None, projection_dtype=ttnn.bfloat8_b
     ):
         """Load one layer and share the stack's collective and rotary buffers."""
         import torch

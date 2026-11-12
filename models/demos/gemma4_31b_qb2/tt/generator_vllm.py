@@ -73,7 +73,7 @@ class Gemma4ForCausalLM:
             raise ValueError("Expected the Gemma4 31B checkpoint")
         torch.set_num_threads(8)
         projection_dtype = {"bf4": ttnn.bfloat4_b, "bf8": ttnn.bfloat8_b}[
-            os.environ.get("GEMMA4_QB2_PROJECTION_DTYPE", "bf4")
+            os.environ.get("GEMMA4_QB2_PROJECTION_DTYPE", "bf8")
         ]
         generator = build_generator(mesh_device, max_seq_len=max_seq_len, projection_dtype=projection_dtype)
         return cls(generator, max_batch_size, max_seq_len)
@@ -370,8 +370,13 @@ class Gemma4ForCausalLM:
         return ttnn.to_torch(output).reshape(-1)[: self.max_batch_size].long().reshape(-1, 1)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, **kwargs):
-        # Each unseen logical prefill shape retires traces before compilation.
-        pass
+        # Every 32-token prompt length from position 0 is compiled here: a first-time length costs up to tens of
+        # seconds of program compilation in the middle of a request, and retires the decode trace.
+        pages = self.MAX_PREFILL_TOKENS // Decoder.PAGE_SIZE
+        tables = {i: torch.zeros_like(table) for i, table in kv_cache.page_tables.items()}
+        for table in tables.values():
+            table[0, :pages] = torch.arange(1, pages + 1)
+        self.generator.warm_prefill_shapes(kv_cache, tables, self.MAX_PREFILL_TOKENS)
 
     def warmup_model_decode(self, kv_cache, enable_trace, **kwargs):
         self.generator._tables(kv_cache, kv_cache.page_tables)
