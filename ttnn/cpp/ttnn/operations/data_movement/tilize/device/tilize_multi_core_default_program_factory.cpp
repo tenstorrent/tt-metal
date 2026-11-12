@@ -78,8 +78,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
-    const KernelSpecName COMPUTE_FULL{"compute_full"};
-    const KernelSpecName COMPUTE_CLIFF{"compute_cliff"};
+    const KernelSpecName COMPUTE{"compute"};
 
     // ---- Dataflow buffers (local staging) ----
     DataflowBufferSpec input_dfb{
@@ -142,7 +141,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
-    auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {
+    // The block count per core is a runtime arg, so one compute kernel serves the full and the
+    // cliff cores, and its binary depends only on the width: a new height reuses it.
+    auto make_compute = [&](const KernelSpecName& id) {
         ComputeHardwareConfig compute_cfg;
         compute_cfg.enable_32_bit_dest = fp32_llk_acc;
         // UInt8 uses 32-bit dest as integer (not float): do not enable FP32 unpack-to-dest mode.
@@ -160,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         return KernelSpec{
             .unique_id = id,
             .source = "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp",
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.defines = {{"TILIZE_RUNTIME_BLOCK_CNT", "1"}}, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{
                      .dfb_spec_name = INPUT_DFB,
@@ -172,8 +173,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
                      .accessor_name = "out",
                      .endpoint_type = DFBEndpointType::PRODUCER,
                  }},
-            .compile_time_args =
-                {{"per_core_block_cnt", nblocks_per_core_arg}, {"per_core_block_tile_cnt", ntiles_per_block}},
+            .compile_time_args = {{"per_core_block_tile_cnt", ntiles_per_block}},
+            .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
             .hw_config = std::move(compute_hw),
         };
     };
@@ -184,27 +185,22 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     Group<KernelSpec> kernels;
     kernels.push_back(reader);
     kernels.push_back(writer);
-    if (has_full) {
-        kernels.push_back(make_compute(COMPUTE_FULL, nblocks_per_core));
-    }
-    if (has_cliff) {
-        kernels.push_back(make_compute(COMPUTE_CLIFF, nblocks_per_core_cliff));
-    }
+    kernels.push_back(make_compute(COMPUTE));
 
-    // Reader/writer span all_cores; each compute instance runs on its (disjoint) node group, so each
-    // node's INPUT/OUTPUT DFB instance still sees exactly one producer and one consumer (ordinary 1:1).
+    // Reader, writer and compute span all_cores, so each node's INPUT/OUTPUT DFB instance sees
+    // exactly one producer and one consumer (ordinary 1:1).
     Group<WorkUnitSpec> work_units;
     if (has_full) {
         work_units.push_back(WorkUnitSpec{
             .name = "tilize_full",
-            .kernels = {READER, WRITER, COMPUTE_FULL},
+            .kernels = {READER, WRITER, COMPUTE},
             .target_nodes = core_range,
         });
     }
     if (has_cliff) {
         work_units.push_back(WorkUnitSpec{
             .name = "tilize_cliff",
-            .kernels = {READER, WRITER, COMPUTE_CLIFF},
+            .kernels = {READER, WRITER, COMPUTE},
             .target_nodes = core_range_cliff,
         });
     }
@@ -221,6 +217,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     ProgramRunArgs run_args;
     KernelRunArgs reader_ra{.kernel = READER};
     KernelRunArgs writer_ra{.kernel = WRITER};
+    KernelRunArgs compute_ra{.kernel = COMPUTE};
 
     const bool cliff = has_cliff;
     uint32_t ncores_full = ncores - (cliff ? 1 : 0);
@@ -241,6 +238,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
             writer_ra.runtime_arg_values,
             core,
             {{"num_pages", ntiles_per_block * nblocks_per_core}, {"start_id", tile_start_id}});
+        AddRuntimeArgsForNode(compute_ra.runtime_arg_values, core, {{"per_core_block_cnt", nblocks_per_core}});
 
         tile_start_id += ntiles_per_block * nblocks_per_core;
         page_start_id += tile_height * nblocks_per_core * num_pages_in_row;
@@ -259,9 +257,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
             writer_ra.runtime_arg_values,
             core,
             {{"num_pages", ntiles_per_block * nblocks_per_core_cliff}, {"start_id", tile_start_id}});
+        AddRuntimeArgsForNode(compute_ra.runtime_arg_values, core, {{"per_core_block_cnt", nblocks_per_core_cliff}});
     }
 
-    run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra)};
+    run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra), std::move(compute_ra)};
     run_args.tensor_args = {{INPUT, a.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

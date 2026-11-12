@@ -9,7 +9,8 @@
 // For each tile-row: wait for Wt tiles, pack_untilize_block to produce RM output,
 // push Wt pages to cb_out, pop Wt tiles from cb_in.
 //
-// CT args: [per_core_block_cnt, Wt, cb_in, cb_out, max_bct]
+// CT args: [Wt, cb_in, cb_out, max_bct]
+// RT args: [per_core_block_cnt] -- a runtime arg, so one binary serves every height.
 // max_bct is passed explicitly (4 for FP32/INT32, 8 for BF16/BF8) to avoid
 // reliance on DST_ACCUM_MODE preprocessor define which may not be set by
 // ComputeConfigDescriptor.fp32_dest_acc_en.
@@ -31,11 +32,11 @@ constexpr uint32_t compute_num_blocks_per_column(uint32_t per_core_block_tile_cn
 }
 
 void kernel_main() {
-    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);       // num tile-rows this core handles
-    constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);  // Wt = tiles per tile-row
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t max_bct = get_compile_time_arg_val(4);  // 4 for FP32, 8 for BF16
+    const uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);              // num tile-rows this core handles
+    constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(0);  // Wt = tiles per tile-row
+    constexpr uint32_t src_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t max_bct = get_compile_time_arg_val(3);  // 4 for FP32, 8 for BF16
 
     // Compute optimal blocking for pack_untilize
     constexpr uint32_t num_blocks_per_col = compute_num_blocks_per_column(per_core_block_tile_cnt, max_bct);
