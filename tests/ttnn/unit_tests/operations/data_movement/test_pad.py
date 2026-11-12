@@ -276,6 +276,59 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     assert torch.equal(torch_output_tensor, tt_output_tensor)
 
 
+@pytest.mark.parametrize("pad_w", [0, 32], ids=["height_only", "height_and_width"])
+# FLOAT32 pads with 0 here; packing a non-zero FLOAT32 pad value for the row-major factories is a separate fix.
+@pytest.mark.parametrize("dtype, value", [(ttnn.bfloat16, 3.0), (ttnn.float32, 0.0)], ids=["bfloat16", "float32"])
+def test_pad_rm_l1_height_sharded_to_dram_height_sharded(device, pad_w, dtype, value):
+    """A row-major L1 HEIGHT_SHARDED input padded into a DRAM HEIGHT_SHARDED output. With width padding too, pad
+    pads the width into L1 first and then the height into the requested DRAM output."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((1, 1, 64, 64), dtype=torch.float32).to(
+        torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    )
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, (0, pad_w, 0, 64), mode="constant", value=value)
+    output_width = 64 + pad_w
+
+    compute_grid = device.compute_with_storage_grid_size()
+    num_cores_x, num_cores_y = min(8, compute_grid.x), min(8, compute_grid.y)
+    l1_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+    )
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.ShardSpec(l1_grid, (ttnn.core.divup(64, num_cores_x * num_cores_y), 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    dram_grid = device.dram_grid_size()
+    dram_banks = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1))}
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.types.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_banks,
+            (ttnn.core.divup(128, dram_grid.x * dram_grid.y), output_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+    tt_output_tensor = ttnn.pad(
+        tt_input_tensor, padding=((0, 0), (0, 0), (0, 64), (0, pad_w)), value=value, memory_config=output_mem_config
+    )
+
+    assert tt_output_tensor.memory_config().buffer_type == ttnn.types.BufferType.DRAM
+    assert tt_output_tensor.memory_config().memory_layout == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+    assert torch.equal(torch_output_tensor, ttnn.to_torch(tt_output_tensor))
+
+
 def to_torch_padding(padspec):
     def flatten_to_tuple(padding):
         return tuple(sum(padding, ()))
