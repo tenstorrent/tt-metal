@@ -2242,6 +2242,21 @@ class PACK_API(TemplateParameter):
         return "\n".join(lines)
 
 
+@dataclass
+class PACK_API_GEOMETRY(TemplateParameter):
+    """pack_api_shim.h's output tile geometry for a test whose geometry is a run-time parameter: faces, rows per face, partial faces."""
+
+    num_faces: int = 4
+    face_r_dim: int = 16
+    partial_face: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines = [f"#define PACK_API_SHIM_NUM_FACES {self.num_faces}", f"#define PACK_API_SHIM_FACE_R_DIM {self.face_r_dim}"]
+        if self.partial_face:
+            lines.append("#define PACK_API_SHIM_PARTIAL_FACE 1")
+        return "\n".join(lines)
+
+
 class PACK_RMW_DEST(TemplateParameter):
     """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_; on when LLK_PACK_RMW=1."""
 
