@@ -362,6 +362,7 @@ std::vector<CoreCoord> QuasarNodes(const distributed::MeshDevice& mesh_device) {
 
 CoreRangeSet ToCoreRangeSet(const std::vector<CoreCoord>& nodes) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(nodes.size());
     for (const auto& node : nodes) {
         ranges.emplace_back(node, node);
     }
