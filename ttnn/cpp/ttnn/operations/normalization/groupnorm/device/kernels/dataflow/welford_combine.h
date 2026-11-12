@@ -133,3 +133,39 @@ inline WelfordStats<std::uint16_t> combine_welford_stats(T means, T vars) {
 
     return result;
 }
+
+/**
+ * @brief The bfloat16 combine with the number of subgroups and their size given at run time.
+ *        Same arithmetic as the template above. array_size must be at least 1.
+ */
+template <std::uint32_t STRIDE, typename T>
+inline WelfordStats<std::uint16_t> combine_welford_stats(
+    T means, T vars, std::uint32_t array_size, std::uint32_t count_per_value) {
+    static_assert(
+        std::is_same_v<std::remove_volatile_t<std::remove_pointer_t<T>>, std::uint16_t>,
+        "T must be uint16_t* or volatile uint16_t*");
+
+    const float base_mean = bf16_to_fp32(means[0]);
+    float mean_delta_sum = 0.0f;
+    float mean_delta_sq_sum = 0.0f;
+    float var_sum = bf16_to_fp32(vars[0]);
+
+    for (std::uint32_t i = 1; i < array_size; ++i) {
+        const float next_mean = bf16_to_fp32(means[i * STRIDE]);
+        const float delta = next_mean - base_mean;
+        mean_delta_sum += delta;
+        mean_delta_sq_sum += delta * delta;
+        var_sum += bf16_to_fp32(vars[i * STRIDE]);
+    }
+
+    const float inv_size = 1.0f / static_cast<float>(array_size);
+    const float mean_delta = mean_delta_sum * inv_size;
+    const float means_m2 = mean_delta_sq_sum - (mean_delta_sum * mean_delta);
+
+    WelfordStats<std::uint16_t> result;
+    result.mean = fp32_to_bf16_truncate(base_mean + mean_delta);
+    result.variance = fp32_to_bf16_truncate((var_sum + means_m2) * inv_size);
+    result.count = array_size * count_per_value;
+
+    return result;
+}

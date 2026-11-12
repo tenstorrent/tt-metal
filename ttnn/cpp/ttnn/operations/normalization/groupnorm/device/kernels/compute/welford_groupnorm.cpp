@@ -22,6 +22,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/gn_runtime_size_args.h"
 
 // The optional fused activation is applied to the final output tile in DEST, right before it is
 // packed into dfb_out (see "Write out the final output" below). The UNTILIZE_OUT branch routes the
@@ -89,16 +90,23 @@ void kernel_main() {
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("batch");
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("group");
 
-    constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
-
-    constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
+
+#ifdef GN_RUNTIME_SIZE_ARGS
+    const uint32_t block_h = get_common_arg_val<uint32_t>(gn_size_args::BLOCK_H);
+    const uint32_t per_core_M = get_common_arg_val<uint32_t>(gn_size_args::PER_CORE_M);
+    const uint32_t per_core_MN = get_common_arg_val<uint32_t>(gn_size_args::PER_CORE_MN);
+    const uint32_t num_out_blocks = get_common_arg_val<uint32_t>(gn_size_args::NUM_OUT_BLOCKS);
+#else
+    constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
+    constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t per_core_MN = get_named_compile_time_arg_val("per_core_MN");
+    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
+#endif
 
     constexpr uint32_t single_tile_size_bytes = get_named_compile_time_arg_val("single_tile_size_bytes");
     constexpr uint32_t num_tiles_input_mask = get_named_compile_time_arg_val("num_tiles_input_mask");
-    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
     // These are numbers in absolute terms, on a per group, per batch without tiling
     constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
@@ -135,7 +143,11 @@ void kernel_main() {
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
     constexpr bool sfpu_two_pass_l1_replay = get_named_compile_time_arg_val("sfpu_two_pass_l1_replay") != 0;
+#ifdef GN_RUNTIME_SIZE_ARGS
+    const uint32_t sfpu_two_pass_reciprocal = get_common_arg_val<uint32_t>(gn_size_args::TWO_PASS_RECIPROCAL);
+#else
     constexpr uint32_t sfpu_two_pass_reciprocal = get_named_compile_time_arg_val("sfpu_two_pass_reciprocal");
+#endif
     constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
@@ -225,11 +237,11 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
 
-    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
+    const uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
     bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
-    if constexpr (block_h % num_out_blocks != 0) {
+    if (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = (block_h % num_out_blocks);
