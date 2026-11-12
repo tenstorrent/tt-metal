@@ -426,6 +426,55 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     assert calls == ["bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
 
 
+def test_prefill_warmup_warms_vision_before_any_trace(monkeypatch):
+    """A vision program first created after trace capture can be overwritten by a trace replay, so the eager B=1
+    prefill warmup runs the vision tower first and the traced call does not run it again."""
+    Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
+    calls = []
+    model = SimpleNamespace(num_devices=8, args=SimpleNamespace(max_batch_size=1), _chunked_trace_id=None)
+
+    def record(device):
+        calls.append("record")
+        model._chunked_trace_id = 7
+
+    model.prepare_prefill_trace_chunked = lambda device, page_table, chunk_size: calls.append("prepare")
+    model.record_prefill_trace_chunked = record
+    wrapper = SimpleNamespace(model=[model], mesh_device="mesh", warmup_vision=lambda: calls.append("vision"))
+    kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
+
+    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
+    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
+
+    assert calls == ["vision", "prepare", "prepare", "record"]
+
+
+def test_vision_warmup_covers_each_patch_bucket_once(monkeypatch):
+    """warmup_vision runs one image per vision patch bucket up to the warmup limit, and each image lands in the
+    bucket DropInVisionTransformer pads it to ((n // 2048 + 1) * 2048)."""
+    Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda d: None)
+    patches = []
+
+    def get_image_features(pixels, grid):
+        assert pixels.shape == (int(grid.prod()), 3 * 2 * 16 * 16)
+        patches.append(int(grid.prod()))
+        return "rows"
+
+    vc = SimpleNamespace(in_channels=3, temporal_patch_size=2, patch_size=16)
+    model = SimpleNamespace(
+        vision_model=object(),
+        vision_args=SimpleNamespace(hf_config=SimpleNamespace(vision_config=vc)),
+        get_image_features=get_image_features,
+    )
+    wrapper = SimpleNamespace(model=[model], mesh_device="mesh", _vision_warmup_patches=8191)
+
+    Qwen36ForCausalLM.warmup_vision(wrapper)
+
+    assert [(n // 2048 + 1) * 2048 for n in patches] == [2048, 4096, 6144, 8192]
+    assert wrapper._vision_warmed_bucket == 8192
+
+
 def test_prefill_prepare_is_idempotent_and_record_requires_it(monkeypatch, expect_error):
     """prepare_prefill_trace_chunked re-runs only for new args; record needs a prior prepare."""
     released, prepared = [], []
