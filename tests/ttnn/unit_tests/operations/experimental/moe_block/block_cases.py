@@ -246,6 +246,72 @@ def _m3_reference(x, sd):
     return acc + glu(x @ shared["gate_proj"].float().T, x @ shared["up_proj"].float().T) @ shared["down_proj"].float().T
 
 
+class H3840E640K12Config:
+    """A small-expert, high-top-k MoE shape (benchmark only, synthetic weights): hidden 3840, 640 routed experts of
+    intermediate 640, top-12, one shared expert of intermediate 2944, SwiGLU (silu) on both. The router is not part of
+    the shape; it uses DeepSeek's: sigmoid scores + correction bias, top-k renormalized, x 1.0, no groups."""
+
+    NUM_ROUTED_EXPERTS = 640
+    NUM_EXPERTS_PER_TOKEN = 12
+    EMB_SIZE = 3840
+    MOE_INTERMEDIATE_SIZE = 640
+    SHARED_EXPERT_INTERMEDIATE_SIZE = 2944
+    ROUTE_SCALE = 1.0
+
+    @staticmethod
+    def moe_block_dims():
+        mb = ttnn.experimental.moe_block
+        K = H3840E640K12Config
+        act = mb.ExpertActivation(kind=mb.ExpertActivationKind.Silu)
+        dims = mb.MoEModelDims(
+            num_experts=K.NUM_ROUTED_EXPERTS,
+            top_k=K.NUM_EXPERTS_PER_TOKEN,
+            emb_dim=K.EMB_SIZE,
+            routed_expert_hidden_dim=K.MOE_INTERMEDIATE_SIZE,
+            routed_expert_activation=act,
+            router=mb.RouterSpec(score_func=mb.RouterScoreFunc.Sigmoid, route_scale=K.ROUTE_SCALE),
+            shared_expert_hidden_dim=K.SHARED_EXPERT_INTERMEDIATE_SIZE,
+            shared_expert_activation=act,
+        )
+        return dims, "silu"
+
+
+def _h3840_weights(chips):
+    """One chip's worth of distinct experts (E / chips) repeated over all 640 (as _k3_weights): the weights' values do
+    not change the device time, and 640 distinct bf16 experts would take the host ~9 GB more."""
+    K = H3840E640K12Config
+    g = torch.Generator().manual_seed(17)
+    gate = _bf16_gate(K.NUM_ROUTED_EXPERTS, K.EMB_SIZE, g)
+    epc = max(1, K.NUM_ROUTED_EXPERTS // chips)
+    pool = _bf16_experts(epc, K.EMB_SIZE, K.MOE_INTERMEDIATE_SIZE, g)
+    shared = _bf16_experts(1, K.EMB_SIZE, K.SHARED_EXPERT_INTERMEDIATE_SIZE, g)[0]
+    return {
+        "gate_weights": gate,
+        "routed_expert_weights": [pool[e % epc] for e in range(K.NUM_ROUTED_EXPERTS)],
+        "shared_expert_weights": shared,
+    }
+
+
+def _h3840_reference(x, sd):
+    """The shape's MoE in fp32: sigmoid scores, top-12 of scores + bias, renormalized x 1.0; experts
+    down(silu(gate) * up); plus the shared expert the same."""
+    K = H3840E640K12Config
+    glu = lambda g, u: torch.nn.functional.silu(g) * u  # noqa: E731
+    gate, routed, shared = sd["gate_weights"], sd["routed_expert_weights"], sd["shared_expert_weights"]
+    x = x.float()
+    scores = torch.sigmoid(x @ gate["weight"].float().T)
+    ids = (scores + gate["e_score_correction_bias"].float()).topk(K.NUM_EXPERTS_PER_TOKEN, dim=-1).indices
+    w = scores.gather(-1, ids)
+    w = w / w.sum(-1, keepdim=True) * K.ROUTE_SCALE
+    acc = torch.zeros_like(x)
+    for e in torch.unique(ids).tolist():
+        tok, kk = (ids == e).nonzero(as_tuple=True)
+        r = routed[e]
+        a = glu(x[tok] @ r["gate_proj"].float().T, x[tok] @ r["up_proj"].float().T)
+        acc.index_add_(0, tok, (a @ r["down_proj"].float().T) * w[tok, kk].unsqueeze(1))
+    return acc + glu(x @ shared["gate_proj"].float().T, x @ shared["up_proj"].float().T) @ shared["down_proj"].float().T
+
+
 BARRIER_L1_SMALL = 4096  # (test_moe_block_perf's barrier: L1_SMALL a bank for its all-gathers)
 
 
@@ -279,6 +345,7 @@ MODELS = {
     "kimi_k3": BlockModel("kimi_k3", KimiK3Config, _k3_weights, _k3_reference, pcc=0.965, weka=True),
     "dsv41_flash": BlockModel("dsv41_flash", DeepSeekV41FlashConfig, _dsv41_weights, _dsv41_reference, pcc=0.98),
     "minimax_m3": BlockModel("minimax_m3", MiniMaxM3BlockConfig, _m3_weights, _m3_reference, pcc=0.98, layer=3),
+    "h3840_e640_k12": BlockModel("h3840_e640_k12", H3840E640K12Config, _h3840_weights, _h3840_reference, pcc=0.98),
 }
 
 
