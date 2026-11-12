@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tests.test_drafter_exact_host import VOCAB, tie_rows
@@ -183,13 +184,18 @@ def test_fused_argmax_in_a_trace(mesh_device):
         )
         x0 = torch.cat([_rows(12, tdt, 7)] * 3)[:rows].contiguous()
         inp = ttnn.to_device(host(x0), mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tails = (("replaced", replaced), ("fused", fused))
+        # Both tails compile (and create their CCL semaphores) before either is captured, as the model warms before
+        # it records; each output is read right after its own replay.
+        for _, fn in tails:
+            ttnn.deallocate(fn(inp))
+        ttnn.synchronize_device(mesh_device)
         tids, outs = {}, {}
-        for tag, fn in (("replaced", replaced), ("fused", fused)):
-            ttnn.deallocate(fn(inp))  # compile outside the trace
-            tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            outs[tag] = fn(inp)
-            ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-            tids[tag] = tid
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
+            for tag, fn in tails:
+                tids[tag] = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                outs[tag] = fn(inp)
+                ttnn.end_trace_capture(mesh_device, tids[tag], cq_id=0)
         for seed in (11, 12, 13):
             x = torch.cat([_rows(12, tdt, seed)] * 3)[:rows].contiguous()
             ttnn.copy_host_to_device_tensor(host(x), inp)
