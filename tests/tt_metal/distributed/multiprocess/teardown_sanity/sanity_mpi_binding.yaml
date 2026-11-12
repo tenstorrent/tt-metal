@@ -1,4 +1,4 @@
-# 3 local ranks for launching the raw C probe (sanity_mpi_probe) through tt-run. The probe does not use the mesh
+# 3 local ranks for launching the raw C++ probe (sanity_mpi_probe) through tt-run. The probe does not use the mesh
 # fields; tt-run only needs a rank binding to start the ranks. Used by the tt-run MPI sanity rows.
 rank_bindings:
   - rank: 0

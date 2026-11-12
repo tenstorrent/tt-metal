@@ -33,7 +33,7 @@ set_target_properties(
 # The C rank program of the teardown sanity (tests/tt_metal/distributed/multiprocess/teardown_sanity): uses MPI the
 # way the DistributedContext does, with no tt-metal in it, so the launcher and the transport can be measured alone.
 if(ENABLE_DISTRIBUTED)
-    add_executable(teardown_mpi_probe multiprocess/teardown_sanity/sanity_mpi_probe.c)
+    add_executable(teardown_mpi_probe multiprocess/teardown_sanity/sanity_mpi_probe.cpp)
     target_link_libraries(teardown_mpi_probe PRIVATE OpenMPI::MPI)
     set_target_properties(
         teardown_mpi_probe

@@ -16,10 +16,10 @@ This suite is built in two stacked PRs. This document is the map; each PR fills 
 ## Part 1 — tt-run, the launcher (PR #65121, base)
 
 *Does tt-run address each MPI/launcher failure, and does the MPI install meet what tt-run needs?* The fault rows
-launch the raw C probe (`sanity_mpi_probe.c`) **through tt-run** (no ttnn import, seconds per row) and assert
+launch the raw C++ probe (`sanity_mpi_probe.cpp`) **through tt-run** (no ttnn import, seconds per row) and assert
 tt-run ends the job correctly: the right exit code, every rank gone, nothing left in `/dev/shm`. The multi-host
 group (D) runs the same probe across hosts on the production `mpirun` line. The install group (E) queries the
-OpenMPI / PRRTE build directly. Files: `test_teardown_sanity_mpi.py`, `sanity_mpi_probe.c`,
+OpenMPI / PRRTE build directly. Files: `test_teardown_sanity_mpi.py`, `sanity_mpi_probe.cpp`,
 `sanity_mpi_binding.yaml`, `sanity_common.py`, `run_teardown_multihost_tests.sh`.
 
 ### Group A — fault classes

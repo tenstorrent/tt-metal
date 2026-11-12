@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Teardown sanity, the launcher: does tt-run address the MPI failure modes?
 
-Every row launches the raw C probe (``sanity_mpi_probe.c``, which uses MPI the way tt-metal's DistributedContext
+Every row launches the raw C++ probe (``sanity_mpi_probe.cpp``, which uses MPI the way tt-metal's DistributedContext
 does) THROUGH tt-run, then asks whether tt-run ends the job correctly: the right exit code, the ranks on every host
 gone, nothing left in ``/dev/shm``. tt-run picks the plain launcher and builds the production mpirun line
 (``--mca btl self,tcp``); a group-E configuration variation (a transport, a component, an interface) goes through
 ``--mpi-args``, which reaches PRRTE and OpenMPI. These rows are the ones to run again when the MPI install changes:
-``TT_SANITY_MPI_PREFIX=/opt/openmpi-<version>`` picks the mpirun and the mpicc and the probe is recompiled.
+``TT_SANITY_MPI_PREFIX=/opt/openmpi-<version>`` picks the mpirun and the mpicxx and the probe is recompiled.
 
 A row that passes is a gate: tt-run already handles that failure. A row marked ``@known("P..")`` fails until the
 tt-run fix in this PR is in the tt-run on PATH (the launcher in the CI image is the one this PR changes).
