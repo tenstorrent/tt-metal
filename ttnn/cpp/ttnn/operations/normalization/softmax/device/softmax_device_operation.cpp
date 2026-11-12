@@ -366,12 +366,14 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
 
                 // Each core reduces only its own shard, with no reduction across cores.
                 const auto& input_shape = a.padded_shape();
+                const uint32_t shard_width = a.is_sharded() && a.shard_spec().has_value()
+                                                 ? a.shard_spec()->shape[1]
+                                                 : program_config.block_w * a.tensor_spec().tile().get_width();
                 TT_FATAL(
-                    program_config.block_w * a.tensor_spec().tile().get_width() == input_shape[-1],
+                    shard_width == input_shape[-1],
                     "Sharded softmax normalizes each shard on its own core, so every shard must hold whole rows: "
-                    "block_w ({}) tiles of width {} must cover the row width {}. Shard the input by height instead.",
-                    program_config.block_w,
-                    a.tensor_spec().tile().get_width(),
+                    "the shard width {} must equal the row width {}. Shard the input by height instead.",
+                    shard_width,
                     input_shape[-1]);
 
                 if (attributes.is_scale_causal_mask_hw_dims_softmax && a.is_sharded()) {
