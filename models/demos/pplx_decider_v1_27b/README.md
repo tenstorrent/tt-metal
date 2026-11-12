@@ -298,7 +298,7 @@ doc/                 per-stage READMEs, work logs and perf reports
   activations, fp32 DeltaNet state and fp32 head. The vision tower runs in BF16. BFP4 MLP weights
   were 17 % faster at 2048 but failed the per-row logit-PCC bar; see the datatype sweep.
 - Prompts are right-padded to buckets 128 / 1024 / 2048 / 4096 / 8192; prompts over 8192 tokens are
-  rejected, as in the app.
+  rejected, as in the app, unless the model is built in long-context mode (next section).
 - Batch caps, measured with the whole model and the vision tower resident: 32 rows at buckets 128 and
   1024 (the largest size probed), 16 at 2048, 8 at 4096 and 4 at 8192. The next power of two fails to
   allocate at each of 2048, 4096 and 8192, so the limit is about 32768 tokens per forward. `predict_batch`
@@ -306,6 +306,41 @@ doc/                 per-stage READMEs, work logs and perf reports
 - Tested with one image per request. Several images per request go through the same code but are
   untested.
 - Weights and state take 27.3 GiB of the 31.8 GiB DRAM; with the vision tower, 3.6 GiB stay free.
+
+## Long context (up to 262144 tokens)
+
+The checkpoint's backbone advertises 262144 positions (`max_position_embeddings`); the app stops at 8192.
+Build the model with a larger `max_seq_len` to accept longer prompts on the same single p150a:
+
+```python
+decider = TTDecider.from_pretrained(device, max_seq_len=262144, vision=False)  # or 16384 / 32768 / 65536 / 131072
+```
+
+- Prompts up to 8192 tokens run exactly as in the default model (same buckets, same chunking).
+- A longer prompt is padded to a multiple of 2048 and runs `PplxDeciderModel.forward_long`: batch 1,
+  text only. The residual stream is held as 2048-token pieces that every layer rewrites in place
+  (`PplxDecoderLayer.forward_chunks`), and the 16 full-attention layers share one K/V cache sized for
+  `max_seq_len` (`share_kv_cache`). Prefill already runs layer by layer, so a layer has finished with the
+  cache before the next full-attention layer overwrites it.
+- DRAM at `max_seq_len=262144`: 28.04 GiB allocated after load (3.79 GiB free); the 262144-token residual
+  stream takes 2.5 GiB of that. Use `vision=False`: the tower's 0.96 GiB does not leave room.
+- Measured at 262140 tokens: 389 s per request (warm). Needle check (a fact at the start, filler, a
+  question about it at the end): red / green / blue all answered correctly (0.945 / 0.984 / 0.990).
+  At 7998 tokens `forward_long` matches the app path within 1.1e-4 in probability. Against the HF fp32
+  layer at 262144 tokens (real-prompt input, 128 pieces): layer 0 (DeltaNet) PCC 0.999943, layer 3
+  (full attention) PCC 0.999928; last-token PCC 0.99999 for both.
+- End to end against the full HF model (bf16, CPU, streamed one layer at a time, 3 h 20 min) on the
+  red needle prompt at 262140 tokens: same decision (red); TT 0.945 / 0.011 / 0.044 vs HF
+  0.951 / 0.011 / 0.038 (max |dp| 0.0067); logit PCC 0.9991 (valid options), 0.9989 (all 255);
+  final hidden PCC 0.9951.
+
+```bash
+python models/demos/pplx_decider_v1_27b/demo/long_context.py            # parity + needle at 262144
+python -m models.demos.pplx_decider_v1_27b.reference.hf_reference --seq-len 262144 --layers 0 3   # CPU, ~20 min
+pytest models/demos/pplx_decider_v1_27b/tests/probe/test_long_context_layer.py -q -s             # layers 0, 3 vs HF
+python -m models.demos.pplx_decider_v1_27b.reference.hf_long_golden                              # CPU, full model, ~3.3 h
+python models/demos/pplx_decider_v1_27b/demo/long_context.py --compare-hf red                    # device vs that golden
+```
 
 ## Stage reports
 

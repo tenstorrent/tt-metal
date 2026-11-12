@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 # The app (``DecisionModel.prepare``) rejects prompts longer than this; HF advertises 262144.
 APP_MAX_LENGTH = 8192
+# config.json text_config.max_position_embeddings: the longest prompt of the opt-in long-context mode.
+LONG_MAX_LENGTH = 262144
 
 
 @dataclass(frozen=True)

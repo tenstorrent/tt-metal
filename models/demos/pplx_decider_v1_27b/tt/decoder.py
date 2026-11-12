@@ -93,6 +93,26 @@ class PplxDecoderLayer(LightweightModule):
                 outputs.append(out)
         return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=1)
 
+    def _step(self, chunk: ttnn.Tensor, start: int, last: bool, rotary, state):
+        """One physical chunk at positions ``start..``: -> (layer output of the chunk, DeltaNet state)."""
+        count = chunk.shape[1]
+        normed = self.input_norm(chunk)
+        if self.kind == "full_attention":
+            cos, sin = rotary(start, count)
+            mixed = self.mixer(normed, start_pos=start, cos=cos, sin=sin, last_chunk=last)
+        else:
+            mixed, state = self.mixer(normed, state)
+        ttnn.deallocate(normed)
+        h = ttnn.add(chunk, mixed)
+        ttnn.deallocate(mixed)
+        post = self.post_norm(h)
+        mlp_out = self.mlp(post)
+        ttnn.deallocate(post)
+        out = ttnn.add(h, mlp_out)
+        ttnn.deallocate(h)
+        ttnn.deallocate(mlp_out)
+        return out, state
+
     def forward(self, x: ttnn.Tensor, rotary: PplxRotary | None = None) -> ttnn.Tensor:
         """Fresh-request prefill. x: [1, S, 5120] BF16 TILE -> [1, S, 5120]."""
         if self.kind == "full_attention" and rotary is None:
@@ -100,21 +120,25 @@ class PplxDecoderLayer(LightweightModule):
         outputs, state = [], None
         for start, count in self._chunks(x.shape[1]):
             chunk = x[:, start : start + count, :] if count != x.shape[1] else x
-            normed = self.input_norm(chunk)
-            if self.kind == "full_attention":
-                cos, sin = rotary(start, count)
-                last = start + count == x.shape[1]
-                mixed = self.mixer(normed, start_pos=start, cos=cos, sin=sin, last_chunk=last)
-            else:
-                mixed, state = self.mixer(normed, state)
-            ttnn.deallocate(normed)
-            h = ttnn.add(chunk, mixed)
-            ttnn.deallocate(mixed)
-            post = self.post_norm(h)
-            mlp_out = self.mlp(post)
-            ttnn.deallocate(post)
-            out = ttnn.add(h, mlp_out)
-            ttnn.deallocate(h)
-            ttnn.deallocate(mlp_out)
+            out, state = self._step(chunk, start, start + count == x.shape[1], rotary, state)
             outputs.append(out)
         return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=1)
+
+    def forward_chunks(self, chunks: list[ttnn.Tensor], rotary: PplxRotary | None = None) -> None:
+        """Long-context prefill, in place: ``chunks`` is one request as consecutive [1, t, 5120] pieces.
+
+        Each piece is replaced by this layer's output and its input freed, so only one copy of the
+        residual stream is live (``forward`` holds input and output, 2 x 2.5 GiB at 262144 tokens).
+        Overwriting is safe because a later piece reads only the K/V cache or the DeltaNet state.
+        """
+        if self.kind == "full_attention" and rotary is None:
+            raise ValueError("Full-attention layers need the shared rotary tables")
+        total = sum(c.shape[1] for c in chunks)
+        if total > self.config.args.max_seq_len:
+            raise ValueError(f"Prefill length {total} outside 1..{self.config.args.max_seq_len}")
+        start, state = 0, None
+        for i, chunk in enumerate(chunks):
+            out, state = self._step(chunk, start, i == len(chunks) - 1, rotary, state)
+            start += chunk.shape[1]
+            ttnn.deallocate(chunk)
+            chunks[i] = out

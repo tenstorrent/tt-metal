@@ -59,16 +59,28 @@ class PplxGatedAttention(LightweightModule):
         self.page_size = opts.page_size
         self.num_pages = (c.args.max_seq_len + opts.page_size - 1) // opts.page_size
         shape = [self.num_pages, c.args.num_key_value_heads, opts.page_size, c.args.head_dim]
-        self.key_cache, self.value_cache = [
-            ttnn.zeros(
-                shape,
-                dtype=opts.kv_cache_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=c.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            for _ in range(2)
-        ]
+
+        def allocate():
+            return [
+                ttnn.zeros(
+                    shape,
+                    dtype=opts.kv_cache_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=c.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for _ in range(2)
+            ]
+
+        if opts.share_kv_cache:
+            # Long-context mode: every full-attention layer of the model reuses one pair (see
+            # AttentionOptimizations.share_kv_cache); stale rows stay invisible as below.
+            key = (tuple(shape), opts.kv_cache_dtype)
+            if key not in opts.kv_pool:
+                opts.kv_pool[key] = allocate()
+            self.key_cache, self.value_cache = opts.kv_pool[key]
+        else:
+            self.key_cache, self.value_cache = allocate()
         # One request owns every page, in order (prefill-only model: no page sharing).
         self.page_table = ttnn.from_torch(
             torch.arange(self.num_pages, dtype=torch.int32).reshape(1, -1),

@@ -58,7 +58,7 @@ from models.demos.pplx_decider_v1_27b.tt import paths
 from models.demos.pplx_decider_v1_27b.tt.decoder import DecoderLayerConfig, PplxDecoderLayer
 from models.demos.pplx_decider_v1_27b.tt.embedding import EmbeddingConfig, PplxEmbedding
 from models.demos.pplx_decider_v1_27b.tt.head import PADDED_OPTIONS, DecisionHeadConfig, PplxDecisionHead
-from models.demos.pplx_decider_v1_27b.tt.model_config import APP_MAX_LENGTH, PplxDeciderArgs
+from models.demos.pplx_decider_v1_27b.tt.model_config import APP_MAX_LENGTH, LONG_MAX_LENGTH, PplxDeciderArgs
 from models.demos.pplx_decider_v1_27b.tt.optimizations import Optimizations, PrecisionPolicy, VisionPrecisionPolicy
 from models.demos.pplx_decider_v1_27b.tt.rope import PplxBatchRotary, PplxRequestRotary, PplxRotary, get_rope_index
 from models.demos.pplx_decider_v1_27b.tt.weight_adapter import (
@@ -69,6 +69,11 @@ from models.demos.pplx_decider_v1_27b.tt.weight_adapter import (
 )
 
 BUCKETS = (128, 1024, 2048, 4096, 8192)
+# Opt-in long-context mode (``max_seq_len`` above the app's 8192, up to LONG_MAX_LENGTH): one of these
+# is the model's ``max_seq_len``. A prompt over 8192 tokens is padded to a multiple of LONG_CHUNK only,
+# and runs batch 1, text only, through ``forward_long``.
+LONG_BUCKETS = (16384, 32768, 65536, 131072, LONG_MAX_LENGTH)
+LONG_CHUNK = 2048  # == the default prefill_chunk: the residual stream is held as pieces of this size
 TEXT_PREFIX = "language_model."
 IMAGE_TOKEN_ID = 248056  # config.image_token_id (<|image_pad|>), checked against the config at load
 _ST_DTYPES = {"BF16": torch.bfloat16, "F32": torch.float32, "F16": torch.float16}
@@ -83,8 +88,8 @@ BATCH_CAPS = {128: 32, 1024: 32, 2048: 16, 4096: 8, 8192: 4}
 
 
 def batch_cap(bucket: int, max_batch_size: int) -> int:
-    """Rows per forward at ``bucket``: ``max_batch_size`` clamped to the measured DRAM cap."""
-    return max(1, min(max_batch_size, BATCH_CAPS[bucket]))
+    """Rows per forward at ``bucket``: ``max_batch_size`` clamped to the measured DRAM cap (long prompts: 1)."""
+    return max(1, min(max_batch_size, BATCH_CAPS.get(bucket, 1)))
 
 
 def validate_max_batch_size(max_batch_size: int) -> int:
@@ -97,21 +102,41 @@ def validate_max_batch_size(max_batch_size: int) -> int:
     return max_batch_size
 
 
+def is_long(max_seq_len: int) -> bool:
+    """A model (or request) beyond the app's 8192 tokens: the long-context mode."""
+    return max_seq_len > APP_MAX_LENGTH
+
+
 def buckets_up_to(max_seq_len: int = APP_MAX_LENGTH) -> tuple[int, ...]:
-    """The prefill buckets a model built with ``max_seq_len`` (one of ``BUCKETS``) accepts."""
-    if max_seq_len not in BUCKETS:
-        raise ValueError(f"max_seq_len must be one of the prefill buckets {BUCKETS}, got {max_seq_len}")
-    return tuple(b for b in BUCKETS if b <= max_seq_len)
+    """The prefill buckets a model built with ``max_seq_len`` (one of ``BUCKETS`` / ``LONG_BUCKETS``) accepts.
+
+    A long-context model lists its ``max_seq_len`` last; its long prompts use ``long_length`` instead."""
+    if max_seq_len not in BUCKETS + LONG_BUCKETS:
+        raise ValueError(f"max_seq_len must be one of {BUCKETS + LONG_BUCKETS}, got {max_seq_len}")
+    return tuple(b for b in BUCKETS if b <= max_seq_len) + ((max_seq_len,) if is_long(max_seq_len) else ())
+
+
+def long_length(length: int) -> int:
+    """Padded length of a long prompt: the next multiple of LONG_CHUNK (no bucket ladder)."""
+    return (length + LONG_CHUNK - 1) // LONG_CHUNK * LONG_CHUNK
 
 
 def bucket_for(length: int, max_seq_len: int = APP_MAX_LENGTH) -> int:
-    """Smallest prefill bucket holding ``length`` tokens; prompts over ``max_seq_len`` are rejected like the app."""
+    """Smallest prefill bucket holding ``length`` tokens; prompts over ``max_seq_len`` are rejected like the app.
+
+    In long-context mode a prompt over 8192 tokens gets ``long_length(length)``."""
     if length < 1:
         raise ValueError("A prompt needs at least one token")
     for bucket in buckets_up_to(max_seq_len):
         if length <= bucket:
-            return bucket
+            return long_length(length) if is_long(bucket) else bucket
     raise ValueError(f"Question branch exceeds the {max_seq_len}-token limit; no input was truncated.")
+
+
+def _valid_bucket(bucket: int, max_seq_len: int) -> bool:
+    if bucket in BUCKETS:
+        return bucket in buckets_up_to(max_seq_len)
+    return is_long(bucket) and bucket <= max_seq_len and bucket % LONG_CHUNK == 0
 
 
 def dram_view(device) -> dict:
@@ -360,12 +385,24 @@ class PplxDeciderModel(LightweightModule):
             VisionPrecisionPolicy.resolve(vision_precision)  # unknown names raise even without the tower
             logger.warning(f"vision_precision={vision_precision!r} has no effect with vision=False (no vision tower)")
         reader = reader or SnapshotReader()
-        args = PplxDeciderArgs.from_hf_config(reader.text_config)
+        long_mode = is_long(max_seq_len)
+        if long_mode and prefill_chunk != LONG_CHUNK:
+            raise ValueError(f"Long-context mode runs prefill_chunk={LONG_CHUNK}, got {prefill_chunk}")
+        if long_mode and vision:
+            logger.warning(
+                "Long-context mode with vision=True: the tower's 0.96 GiB may not leave room for long prompts"
+            )
+        args = PplxDeciderArgs.from_hf_config(reader.text_config, max_seq_len=max(max_seq_len, APP_MAX_LENGTH))
+        # Long-context mode: rope tables and the K/V cache cover max_seq_len; the cache is one pair shared
+        # by the 16 full-attention layers. Prompts up to 8192 keep the app path exactly (full-attention
+        # chunk = 8192, so one chunk, as in the default model); longer ones run ``forward_long``.
         opts = Optimizations.build(
             mesh_device,
             policy=policy or PrecisionPolicy.default(),
             max_seq_len=args.max_seq_len,
             prefill_chunk=prefill_chunk,
+            prefill_chunk_full_attention=APP_MAX_LENGTH if long_mode else None,
+            share_kv_cache=long_mode,
         )
         logger.info(f"precision policy {opts.policy.name}: {json.dumps(opts.policy.describe())}")
         cache_source = "argument"
@@ -488,7 +525,7 @@ class PplxDeciderModel(LightweightModule):
         ids = [int(t) for t in input_ids]
         buckets = buckets_up_to(self.config.max_seq_len)
         bucket = bucket or bucket_for(len(ids), self.config.max_seq_len)
-        if bucket not in buckets or len(ids) > bucket:
+        if not _valid_bucket(bucket, self.config.max_seq_len) or len(ids) > bucket:
             raise ValueError(f"{len(ids)} tokens do not fit bucket {bucket} (buckets {buckets})")
         padded = torch.full((1, bucket), self.config.pad_token_id, dtype=torch.int32)
         padded[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
@@ -514,7 +551,7 @@ class PplxDeciderModel(LightweightModule):
             raise ValueError("A prompt needs at least one token")
         buckets = buckets_up_to(self.config.max_seq_len)
         bucket = bucket or bucket_for(max(len(r) for r in rows), self.config.max_seq_len)
-        if bucket not in buckets or max(len(r) for r in rows) > bucket:
+        if not _valid_bucket(bucket, self.config.max_seq_len) or max(len(r) for r in rows) > bucket:
             raise ValueError(f"{max(len(r) for r in rows)} tokens do not fit bucket {bucket} (buckets {buckets})")
         padded = torch.full((len(rows), bucket), self.config.pad_token_id, dtype=torch.int32)
         for b, r in enumerate(rows):
@@ -747,6 +784,17 @@ class PplxDeciderModel(LightweightModule):
         """
         if isinstance(last_index, (list, tuple)) and collect_layer_hidden:
             raise ValueError("collect_layer_hidden is a batch-1 debugging aid")
+        if is_long(tokens.shape[-1]):
+            if tokens.shape[0] != 1 or images is not None or embeds is not None or collect_layer_hidden:
+                raise ValueError("A prompt over 8192 tokens runs batch 1, text only (forward_long)")
+            batched = isinstance(last_index, (list, tuple))
+            probs, logits, extras = self.forward_long(
+                tokens,
+                last_index[0] if batched else last_index,
+                count[0] if isinstance(count, (list, tuple)) else count,
+                return_hidden=return_hidden,
+            )
+            return probs, logits, extras
         hidden_size = self.config.args.hidden_size
         if images is None:
             x = self.embedding(tokens)
@@ -769,6 +817,36 @@ class PplxDeciderModel(LightweightModule):
         if collect_layer_hidden:
             extras["layer_hidden"] = layer_hidden
         return probs, logits, extras
+
+    def forward_long(self, tokens: ttnn.Tensor, last_index: int, count: int, *, return_hidden: bool = False):
+        """Long-context prefill (a prompt over 8192 tokens; model built with a long ``max_seq_len``).
+
+        Same math as ``forward``; the residual stream is a list of LONG_CHUNK-token pieces that every
+        layer rewrites in place (``PplxDecoderLayer.forward_chunks``), so the device holds one copy of
+        it (2.5 GiB at 262144 tokens) next to the weights and the shared K/V cache. Pieces after the
+        one holding the last real token are only right padding and never run: both mixers are causal.
+        """
+        if not is_long(self.config.max_seq_len):
+            raise ValueError("forward_long needs a model built with a long max_seq_len (LONG_BUCKETS)")
+        length = tokens.shape[-1]
+        if length % LONG_CHUNK or length > self.config.max_seq_len or not 0 <= last_index < length:
+            raise ValueError(f"Long prompt of {length} tokens (last index {last_index}) is not a valid long input")
+        num_pieces = last_index // LONG_CHUNK + 1
+        pieces = []
+        for i in range(num_pieces):
+            ids = ttnn.slice(tokens, [0, i * LONG_CHUNK], [1, (i + 1) * LONG_CHUNK])
+            pieces.append(self.embedding(ids))
+            ttnn.deallocate(ids)
+        for layer in self.layers:
+            layer.forward_chunks(pieces, self.rotary)
+        for piece in pieces[:-1]:
+            ttnn.deallocate(piece)
+        last_piece = pieces[-1]
+        probs, logits, final_hidden = self.head(
+            last_piece, last_index - (num_pieces - 1) * LONG_CHUNK, count, return_hidden=return_hidden
+        )
+        ttnn.deallocate(last_piece)
+        return probs, logits, {"final_hidden": final_hidden} if return_hidden else {}
 
     def decide(self, input_ids, count: int, *, bucket: int | None = None) -> list[float]:
         """Probabilities of the ``count`` options: upload -> device forward -> one readback."""

@@ -179,6 +179,11 @@ class AttentionOptimizations:
     sdpa_plain_k_chunk: int = 128
     sdpa_plain_q_chunk_long: int = 128
     sdpa_plain_long_rows: int = 2048
+    # Long-context mode: one K/V cache pair for all 16 full-attention layers instead of one per layer.
+    # Prefill runs layer by layer over the whole request, so layer L has finished reading the cache
+    # before layer L+4 overwrites it (at 262144 tokens a BF16 pair is 1 GiB). ``kv_pool`` holds it.
+    share_kv_cache: bool = False
+    kv_pool: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -222,6 +227,7 @@ class Optimizations:
         max_seq_len: int = 8192,
         prefill_chunk: int = 2048,
         prefill_chunk_full_attention: int | None = None,
+        share_kv_cache: bool = False,
     ) -> "Optimizations":
         policy = policy or PrecisionPolicy.default()
         grid = mesh_device.compute_with_storage_grid_size()
@@ -275,6 +281,7 @@ class Optimizations:
             sdpa_exp_approx=True,
             sdpa_plain_first_chunk=True,
             sdpa_plain_q_chunk_long=256,
+            share_kv_cache=share_kv_cache,
         )
         delta = DeltaOptimizations(
             recurrent_dtype=getattr(ttnn, policy.recurrent_dtype),

@@ -104,7 +104,41 @@ def build_decoder_layer(reader: SnapshotReader, layer_idx: int, dtype=torch.floa
     """One HF decoder layer with exactly its own weights (strict load)."""
     layer = Qwen3_5DecoderLayer(reader.text_config, layer_idx)
     layer.load_state_dict(reader.layer_state_dict(layer_idx), strict=True)
+    if hasattr(layer, "linear_attn"):
+        _split_depthwise_conv(layer.linear_attn.conv1d)
     return layer.to(dtype).eval()
+
+
+def _split_depthwise_conv(conv: torch.nn.Conv1d, max_elements: int = 2**30) -> None:
+    """Run the depthwise causal conv over channel groups when its input is huge.
+
+    The CPU ``conv1d`` segfaults once the input passes 2**31 elements (10240 channels x 262144 tokens).
+    The conv is depthwise (groups == channels), so a channel split gives exactly the same output.
+    """
+    full = conv.forward
+
+    def forward(x):
+        if x.numel() <= max_elements:
+            return full(x)
+        step = max(1, max_elements // (x.shape[0] * x.shape[-1]))
+        outs = []
+        for c in range(0, x.shape[1], step):
+            bias = conv.bias[c : c + step] if conv.bias is not None else None
+            outs.append(
+                torch.nn.functional.conv1d(
+                    x[:, c : c + step],
+                    conv.weight[c : c + step],
+                    bias,
+                    conv.stride,
+                    conv.padding,
+                    conv.dilation,
+                    groups=min(step, x.shape[1] - c),
+                )
+            )
+        return torch.cat(outs, dim=1)
+
+    assert conv.groups == conv.in_channels == conv.out_channels, "depthwise conv expected"
+    conv.forward = forward
 
 
 def build_embedding(reader: SnapshotReader, dtype=torch.float32) -> torch.nn.Embedding:
