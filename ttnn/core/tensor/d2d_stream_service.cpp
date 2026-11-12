@@ -3800,13 +3800,14 @@ std::unique_ptr<d2d_host::ReceiverState> make_host_receiver_state(
     validate_host_config(cfg);
     auto state = std::make_unique<d2d_host::ReceiverState>();
 
-    tt::tt_metal::H2DStreamService::Config h2d_cfg;
-    h2d_cfg.global_spec = cfg.global_spec;
-    h2d_cfg.mapper = ttnn::distributed::create_mesh_mapper(*mesh, cfg.mapper->config());
-    h2d_cfg.fifo_size_bytes = cfg.host_fifo_size_bytes;
-    h2d_cfg.worker_cores = cfg.receiver_worker_cores;
-    h2d_cfg.metadata_size_bytes = cfg.metadata_size_bytes;
-    h2d_cfg.parallel_host_push = true;
+    tt::tt_metal::H2DStreamService::Config h2d_cfg{
+        .global_spec = cfg.global_spec,
+        .mapper = ttnn::distributed::create_mesh_mapper(*mesh, cfg.mapper->config()),
+        .fifo_size_bytes = cfg.host_fifo_size_bytes,
+        .worker_cores = cfg.receiver_worker_cores,
+        .metadata_size_bytes = cfg.metadata_size_bytes,
+        .parallel_host_push = true,
+    };
     state->h2d = std::make_unique<tt::tt_metal::H2DStreamService>(mesh, std::move(h2d_cfg));
 
     state->host_tensor = make_host_tensor(cfg, mesh);
