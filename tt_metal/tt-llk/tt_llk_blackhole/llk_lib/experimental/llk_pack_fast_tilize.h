@@ -18,6 +18,14 @@
 
 #include "llk_pack.h"
 
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_fast_tilize_linked<DstSync::SyncHalf> = true;
+template <>
+inline constexpr bool pack_fast_tilize_linked<DstSync::SyncFull> = true;
+} // namespace ckernel::packer
+
 constexpr std::uint32_t REPLAY_TILE_OFFSET = 0;
 constexpr std::uint32_t REPLAY_TILE_LEN    = 16;
 

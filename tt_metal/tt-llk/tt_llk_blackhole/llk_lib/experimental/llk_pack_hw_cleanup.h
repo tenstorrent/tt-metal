@@ -12,6 +12,13 @@
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_strides_writer<4> = true;
+} // namespace ckernel::packer
+
 using namespace ckernel;
 using namespace ckernel::packer;
 

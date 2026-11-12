@@ -14,6 +14,14 @@
 #include "experimental/llk_unpack_A_sdpa_api.h"
 #endif
 
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<8> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 #if defined(ARCH_BLACKHOLE)

@@ -574,6 +574,14 @@ constexpr std::uint32_t pack_dstacc_format(const std::uint32_t pack_src_format, 
 constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_PAC_LF8       = 2;
 constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD = 4;
 constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_DSTACC        = 8;
+constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_STRIDES       = 16;
+// A header with stride writes of its own (other pack programs, custom matmul and SDPA packs) specializes its tag, so the
+// reconfigure keeps its stride write in that kernel.
+template <int tag>
+inline constexpr bool pack_strides_writer = false;
+// Fast tilize writes the strides too: llk_pack_fast_tilize.h sets this.
+template <DstSync>
+inline constexpr bool pack_fast_tilize_linked = false;
 
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
@@ -738,7 +746,10 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     }
 
     // Set packer strides
-    set_packer_strides<PackMode::Default, true, false>(pack_output_src_format, tile_c_dim);
+    if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES))
+    {
+        set_packer_strides<PackMode::Default, true, false>(pack_output_src_format, tile_c_dim);
+    }
 
     // Program the packer X (datum) counter. _llk_pack_init_ owns this counter ("inits own SETADCXX"),
     // but reconfig also programs it here: a reconfig is not always followed by an init, and on Blackhole

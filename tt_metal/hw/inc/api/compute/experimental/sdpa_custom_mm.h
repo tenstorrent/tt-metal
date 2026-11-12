@@ -13,6 +13,14 @@
 #include "experimental/llk_unpack_AB_custom_mm_api.h"
 #include "experimental/llk_unpack_AB_sdpa_custom_mm_api.h"
 #endif
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<9> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 ALWI void sdpa_custom_mm_block_init_pack_short() {

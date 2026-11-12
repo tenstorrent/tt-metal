@@ -32,6 +32,14 @@
 #endif
 #endif
 
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<5> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 // clang-format off

@@ -35,6 +35,14 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<6> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 // Every op (MUL, ADD, SUB) accumulates both passes into dest, so the output tiles must be zero on entry: a freshly

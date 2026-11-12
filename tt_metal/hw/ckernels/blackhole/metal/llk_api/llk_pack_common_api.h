@@ -170,14 +170,15 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
  * @param  new_output          New output circular buffer / operand index to configure for.
  */
 // The reconfigure's global writes that this kernel's formats keep constant (LLK_PACK_RECONFIG_SKIP_*): a field with the
-// same value for every pack CB was written by hw_configure, and no reconfigure can change it.
+// same value for every pack CB was written by hw_configure, and no reconfigure can change it. The strides stay where
+// another stride writer is linked (fast tilize and untilize, the pack_strides_writer tags).
 template <bool is_fp32_dest_acc_en>
 constexpr std::uint32_t llk_pack_reconfig_skip() {
     using namespace ckernel::packer;
-    std::uint32_t skip =
-        LLK_PACK_RECONFIG_SKIP_PAC_LF8 | LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD | LLK_PACK_RECONFIG_SKIP_DSTACC;
+    std::uint32_t skip = LLK_PACK_RECONFIG_SKIP_PAC_LF8 | LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD |
+                         LLK_PACK_RECONFIG_SKIP_DSTACC | LLK_PACK_RECONFIG_SKIP_STRIDES;
     bool any = false;
-    std::uint32_t lf8 = 0, thr = 0, acc = 0;
+    std::uint32_t lf8 = 0, thr = 0, acc = 0, src0 = 0;
     for (std::uint32_t i = 0; i < sizeof(pack_src_format) / sizeof(pack_src_format[0]); i++) {
         const std::uint32_t src = pack_src_format[i];
         const std::uint32_t dst = pack_dst_format[i];
@@ -192,6 +193,7 @@ constexpr std::uint32_t llk_pack_reconfig_skip() {
             lf8 = v_lf8;
             thr = v_thr;
             acc = v_acc;
+            src0 = masked_data_format(src);
             continue;
         }
         if (v_lf8 != lf8) {
@@ -203,9 +205,19 @@ constexpr std::uint32_t llk_pack_reconfig_skip() {
         if (v_acc != acc) {
             skip &= ~LLK_PACK_RECONFIG_SKIP_DSTACC;
         }
+        // Default-mode strides follow the packer input format alone.
+        if (masked_data_format(src) != src0) {
+            skip &= ~LLK_PACK_RECONFIG_SKIP_STRIDES;
+        }
     }
     if (!any) {
         return 0;
+    }
+    if (pack_fast_tilize_linked<DST_SYNC_MODE> || pack_fast_untilize_linked<DST_SYNC_MODE> || pack_strides_writer<1> ||
+        pack_strides_writer<2> || pack_strides_writer<3> || pack_strides_writer<4> || pack_strides_writer<5> ||
+        pack_strides_writer<6> || pack_strides_writer<7> || pack_strides_writer<8> || pack_strides_writer<9> ||
+        pack_strides_writer<10>) {
+        skip &= ~LLK_PACK_RECONFIG_SKIP_STRIDES;
     }
     return skip;
 }

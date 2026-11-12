@@ -46,6 +46,14 @@
 // tt_metal/tt-llk/tests/python_tests/test_matmul_face_compressed.py.
 // =============================================================================================
 
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<7> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 
 #if defined(ARCH_BLACKHOLE)

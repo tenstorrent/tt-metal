@@ -9,6 +9,13 @@
 #include "ckernel_defs.h"
 #include "experimental/llk_custom_mm_common.h"
 
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_strides_writer<3> = true;
+} // namespace ckernel::packer
+
 namespace ckernel
 {
 

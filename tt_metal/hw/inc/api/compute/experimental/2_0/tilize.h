@@ -20,6 +20,14 @@
 #include "experimental/2_0/llk_pack_tile.h"
 #endif
 
+#if defined(TRISC_PACK) && defined(ARCH_BLACKHOLE)
+// Writes the packer strides itself: the pack reconfigure keeps its stride write.
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_strides_writer<10> = true;
+}  // namespace ckernel::packer
+#endif
+
 namespace ckernel {
 namespace experimental {
 
