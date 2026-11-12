@@ -90,6 +90,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_TEST_MODE,         // Enable watcher test mode
     TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
+    TT_METAL_HOST_TRANSFER_STATS,       // Report host <-> device transfer time and volume at teardown
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
@@ -716,6 +717,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (collection disabled)
         // Usage: export TT_METAL_DISPATCH_DATA_COLLECTION=1
         case EnvVarID::TT_METAL_DISPATCH_DATA_COLLECTION: this->enable_dispatch_data_collection = true; break;
+
+        // TT_METAL_HOST_TRANSFER_STATS
+        // Record the bytes and time of host <-> device transfers and log a summary when the context tears down.
+        // Under fast dispatch, each recorded transfer adds two events to the command queue.
+        // Default: false (not recorded). Set to '0' to disable, any other value enables it.
+        // Usage: export TT_METAL_HOST_TRANSFER_STATS=1
+        case EnvVarID::TT_METAL_HOST_TRANSFER_STATS: this->enable_host_transfer_stats = strcmp(value, "0") != 0; break;
 
         // TT_METAL_GTEST_ETH_DISPATCH
         // Use Ethernet cores for dispatch in tests.

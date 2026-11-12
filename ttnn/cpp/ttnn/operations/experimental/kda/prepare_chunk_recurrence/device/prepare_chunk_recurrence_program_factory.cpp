@@ -37,7 +37,7 @@ uint64_t prepare_chunk_recurrence_l1_bytes(const PrepareChunkRecurrenceParams& a
     constexpr uint64_t batch = prepare_chunk_recurrence_batch_items;
     // A batch of the BF16 q, k, g, v and beta logits, and its activated beta's rows and columns and inverse norms.
     const uint64_t inputs = batch * ((3 * Kt + Vt + 1) * bf16 + 3 * fp32);
-    // eye, tril, ones, gate_tril, gate_ones and the three block masks.
+    // eye, tril, ones, gate_centered, gate_ones and the three block masks.
     const uint64_t constants = 8 * fp32;
     // Six Kt-tile rows per batch item: workspace_0/1/2, centered_inverse_decay, anchor_decay and normalized_k.
     const uint64_t intermediates = batch * 6 * Kt * fp32;
@@ -91,7 +91,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const m2::DFBSpecName eye_dfb{"eye"};
     const m2::DFBSpecName tril_dfb{"tril"};
     const m2::DFBSpecName ones_dfb{"ones"};
-    const m2::DFBSpecName gate_tril_dfb{"gate_tril"};
+    const m2::DFBSpecName gate_centered_dfb{"gate_centered"};
     const m2::DFBSpecName gate_ones_dfb{"gate_ones"};
     const m2::DFBSpecName block_masks_dfb{"block_masks"};
     const m2::DFBSpecName workspace_0_dfb{"workspace_0"};
@@ -151,7 +151,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
         make_dfb(ones_dfb, cc, fp32),
-        make_dfb(gate_tril_dfb, cc, fp32),
+        make_dfb(gate_centered_dfb, cc, fp32),
         make_dfb(gate_ones_dfb, cc, fp32),
         make_dfb(block_masks_dfb, 3, fp32),
         make_dfb(workspace_0_dfb, batch * ck, fp32),
@@ -229,7 +229,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{gate_tril_dfb, "gate_tril", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_centered_dfb, "gate_centered", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{gate_ones_dfb, "gate_ones", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
             },
@@ -246,7 +246,6 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
              {"Kt", Kt},
              {"max_items", max_items},
              {"batch_items", batch},
-             {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)},
              {"GATE_HALF_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale * 0.5F)}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
@@ -264,7 +263,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     unpack_modes[eye_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tril_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[ones_dfb] = UnpackMode::UnpackToSrc;
-    unpack_modes[gate_tril_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[gate_centered_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[gate_ones_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[block_masks_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_0_dfb] = UnpackMode::UnpackToSrc;
@@ -305,7 +304,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{gate_tril_dfb, "gate_tril", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{gate_centered_dfb, "gate_centered", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{gate_ones_dfb, "gate_ones", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_0_dfb, "workspace_0", m2::DFBEndpointType::PRODUCER},
