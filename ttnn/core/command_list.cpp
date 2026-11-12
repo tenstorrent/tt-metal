@@ -577,6 +577,34 @@ void CommandList::enqueue(bool blocking, bool check_dram_overlap) {
         device().mesh_command_queue(metal_list_.cq_id()), metal_list_, blocking, check_dram_overlap);
 }
 
+void CommandList::update_args(const std::unordered_map<std::string, CmdListValue>& values, bool blocking) {
+    ZoneScoped;
+    metal::CmdListArgPatch patch;
+    for (const auto& [name, value] : values) {
+        const auto it = layout_.find(name);
+        TT_FATAL(it != layout_.end(), "Unknown TTNN command-list parameter '{}'", name);
+        if (it->second.is_tensor) {
+            const auto* tensor = std::get_if<Tensor>(&value);
+            TT_FATAL(tensor != nullptr, "TTNN command-list parameter '{}' is a tensor", name);
+            patch.tensor_args.emplace(metal::CmdListTensorArgName(name), std::cref(tensor->mesh_tensor()));
+            continue;
+        }
+        const auto* scalar = std::get_if<CmdListScalar>(&value);
+        TT_FATAL(scalar != nullptr, "TTNN command-list parameter '{}' is a scalar", name);
+        for (const auto& metal_scalar : it->second.metal_scalars) {
+            const metal::ArgValue word = metal_scalar.encode(*scalar);
+            if (metal_scalar.has_runtime) {
+                patch.runtime_args.emplace(metal::CmdListRuntimeArgName(metal_scalar.metal_cmd_list_param_name), word);
+            }
+            if (metal_scalar.has_common_runtime) {
+                patch.common_runtime_args.emplace(
+                    metal::CmdListCommonRuntimeArgName(metal_scalar.metal_cmd_list_param_name), word);
+            }
+        }
+    }
+    metal_list_.update_args(patch, blocking);
+}
+
 void CommandList::deallocate() { metal_list_.deallocate(); }
 
 tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return metal_list_.device(); }
