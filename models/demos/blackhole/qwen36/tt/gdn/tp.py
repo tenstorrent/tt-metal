@@ -24,6 +24,13 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 
+# gdn_spec_step's speed options for a verify (T > 1): value_blocks=4 (up to 4 cores per (row, value head), clamped to the
+# grid) and every kernel_opts bit the operation accepts (2 | 8 | 16 | 32 | 64 | 128 | 1024). Each is bit-identical to
+# the minimal program, tested only at the TP=8 per-device geometry (Nv, Nk, Dk, Dv, conv kernel) below; the kernel config
+# buffer fit depends on the shape, so any other geometry keeps the minimal program.
+SPEC_STEP_FAST_OPTIONS = dict(value_blocks=4, kernel_opts=1274)
+SPEC_STEP_FAST_GEOMETRY = (6, 2, 128, 128, 4)
+
 
 def _replace(old, new):
     """Free ``old`` unless ``new`` is a view of it; returns ``new``."""
@@ -1863,6 +1870,11 @@ class TPGatedDeltaNet:
         e_parts = {u: up(e, self._verify_win_buf.dtype) for u, (_, e) in states.items()}
         self._write_spec_rows(ring_parts, e_parts)
 
+    def _spec_step_options(self, T):
+        """The gdn_spec_step options of a T-token verify: SPEC_STEP_FAST_OPTIONS at the tested geometry, else none."""
+        geometry = (self.Nv, self.Nk, self.Dk, self.Dv, self.K)
+        return dict(SPEC_STEP_FAST_OPTIONS) if T > 1 and geometry == SPEC_STEP_FAST_GEOMETRY else {}
+
     def _forward_verify_blocks(self, x, valid_len, n_users):
         """Speculative verify of n_users rows x T = valid_len / n_users tokens on the state in vLLM KV cache blocks:
         ONE gdn_spec_step reads each row's full state (recurrent state and packed history) from its start block and
@@ -1907,6 +1919,7 @@ class TPGatedDeltaNet:
             ring_page_idx=vb.idx,
             conv_hist=sb.hist,
             **({} if sb.rec_v is None else {"ring_pool2": sb.rec_v}),
+            **self._spec_step_options(vb.T),
         )  # [1, n_users * T, Nv * Dv]
         ttnn.deallocate(qkvzab)
         partial = self._row_proj(gated, tw["out"])

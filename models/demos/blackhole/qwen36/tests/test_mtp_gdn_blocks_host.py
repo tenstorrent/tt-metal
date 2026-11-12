@@ -11,6 +11,7 @@
 * GdnBlockState.set_verify_blocks: one ctrl page and one index per MambaSpec group, bound per group at allocation.
 * MTPBlockEngine's bookkeeping: the drafter starts only after a prompt's last chunk, a row's first verify writes the
   drafter KV of the prompt's last position before the verify, and a row move moves no GDN state.
+* TPGatedDeltaNet's verify call: gdn_spec_step's speed options at the geometry the operation's tests cover only.
 """
 
 import random
@@ -344,3 +345,38 @@ def test_row_moves_move_the_drafter_rows_only(engine):
     assert eng._fresh == {0: 50, 3: 100} and eng._last_hidden[0] == "h3" and eng._active == {0, 3}
     eng.release(3)
     assert 3 not in eng._fresh and 3 not in eng._active
+
+
+TP8_GEOMETRY = (6, 2, 128, 128, 4)  # Nv, Nk, Dk, Dv, conv kernel per device at TP=8
+
+
+@pytest.mark.parametrize(
+    "geometry, T, fast",
+    [(TP8_GEOMETRY, 4, True), (TP8_GEOMETRY, 12, True), (TP8_GEOMETRY, 1, False), ((12, 4, 128, 128, 4), 4, False)],
+    ids=["tp8-T4", "tp8-T12", "tp8-T1", "tp4-T4"],
+)
+def test_a_verify_passes_the_fast_gdn_spec_step_options_at_the_tested_geometry(monkeypatch, geometry, T, fast):
+    """TPGatedDeltaNet._forward_verify_blocks hands gdn_spec_step value_blocks=4 and kernel_opts=1274 on a verify
+    (T > 1) at the TP=8 geometry the operation's tests cover, and no option at any other geometry (TP=4: Nv = 12)."""
+    from models.demos.blackhole.qwen36.tt.gdn import tp
+
+    calls = []
+    monkeypatch.setattr(ttnn.experimental.kda, "gdn_spec_step", lambda *a, **k: calls.append(k) or "gated")
+    monkeypatch.setattr(ttnn, "reshape", lambda t, shape: SimpleNamespace(shape=shape))
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
+    monkeypatch.setattr(tp.tpc, "matmul_1d_decode", lambda *a, **k: SimpleNamespace(shape=(1, 1, 32, 64)))
+    monkeypatch.setattr(tp, "tt_all_reduce", lambda partial, *a, **k: partial)
+    nv, nk, dk, dv, kernel = geometry
+    layer = SimpleNamespace(
+        Nv=nv, Nk=nk, Dk=dk, Dv=dv, K=kernel, qkvz_dim_tp=64, scale=1.0, mesh=None, tt_ccl=None, cfg=None,
+        tw=dict.fromkeys(["qkvz", "conv_taps_rows", "dt_bias_fp32", "neg_exp_A_fp32", "norm_w_1d", "out"]),
+        args=SimpleNamespace(gdn_qkvz_decode_1d_progcfg=None, ccl_topology=lambda: None),
+        state_blocks=SimpleNamespace(verify=SimpleNamespace(T=T, ctrl="ctrl", idx="idx"), rec_k="rk", rec_v="rv", hist="h"),
+        _row_proj=lambda gated, w: SimpleNamespace(shape=(1, 32, 64)),
+    )  # fmt: skip
+    layer._spec_step_options = lambda t: tp.TPGatedDeltaNet._spec_step_options(layer, t)
+    tp.TPGatedDeltaNet._forward_verify_blocks(layer, SimpleNamespace(shape=(1, 32, 64)), 2 * T, 2)
+    (kw,) = calls
+    assert kw["conv_hist"] == "h" and kw["ring_pool2"] == "rv" and kw["ring_page_idx"] == "idx"
+    for key, value in tp.SPEC_STEP_FAST_OPTIONS.items():
+        assert kw.get(key) == (value if fast else None), f"{key} at geometry {geometry}, T = {T}"
