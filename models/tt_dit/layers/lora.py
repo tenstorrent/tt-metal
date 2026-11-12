@@ -58,7 +58,9 @@ swap cycles. In production this is bounded automatically by
 on every page-in). For static pipelines (``dynamic_load=False``) that
 need bit-exact restore across many swaps, snapshot the state dict once
 at construction and call ``load_torch_state_dict`` to re-seed W when
-drift becomes material. (With the A/B cache enabled — ``cache_capacity>0``
+drift becomes material. On a traced pipeline, call ``release_traces()``
+after the re-seed and before the next call: the re-seed replaces weights
+the traces read, and a trace over a replaced weight refuses to run. (With the A/B cache enabled — ``cache_capacity>0``
 — unbind subtracts the *same* device delta that bind added for a cached
 adapter, so those swap cycles are exact and do not drift.)
 
