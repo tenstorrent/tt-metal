@@ -22,6 +22,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/d2d_host_pump.hpp"
 #include "ttnn/tensor/d2d_stage_gate.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -30,6 +31,11 @@ class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
 namespace ttnn {
+
+namespace d2d_host {
+struct SenderState;    // host-mode state behind a sender handle (d2d_stream_service.cpp)
+struct ReceiverState;  // host-mode state behind a receiver handle (d2d_stream_service.cpp)
+}  // namespace d2d_host
 
 struct D2DReceiverDescriptor;     // ttnn/tensor/d2d_pipeline_descriptor.hpp
 class D2DPipelineDescriptorFile;  // ttnn/tensor/d2d_pipeline_descriptor.hpp
@@ -75,6 +81,20 @@ struct D2DStageGateDescriptor {
 struct D2DStreamTensorConfig {
     tt::tt_metal::TensorSpec global_spec;
     std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
+};
+
+// How a transfer travels from the sender mesh to the receiver mesh.
+enum class D2DTransport : uint8_t {
+    // Persistent kernels write straight into the receiver's tensors over tt-fabric.
+    Fabric,
+    // Host mode, for meshes with no fabric route between them: the sender mesh streams to its host
+    // (D2HStreamService), the bytes cross to the receiver's host (in-process for create_pair, MPI for
+    // create_sender / create_receiver), and the receiver mesh is fed from its host (H2DStreamService).
+    // The worker contract (counters, semaphores, metadata, backing tensors) is the same as Fabric's.
+    // Not supported in host mode: relay, stage_gate, extra_tensors, describe() / export_pipeline_descriptor.
+    // The metadata blob must be the same on every coord (the D2H and H2D services carry one per mesh).
+    // The fabric-link lease calls are no-ops.
+    Host,
 };
 
 // Configuration for a D2DStreamService pair. The same per-shard spec & topology
@@ -174,6 +194,12 @@ struct D2DStreamConfig {
     // Both sides must match. Needs a 2D fabric, share_fabric_links and no stage_gate.
     // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 turns it on for every stream.
     bool relay = false;
+
+    D2DTransport transport = D2DTransport::Fabric;
+
+    // Host mode: size of each host FIFO (pinned memory) in bytes; 0 = a default of 4 MiB for the sender's and
+    // the H2D service's own default for the receiver's.
+    uint32_t host_fifo_size_bytes = 0;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
@@ -195,6 +221,10 @@ struct D2DEndpointConfig {
     // Communicator the two endpoints rendezvous over (service-core exchange +
     // MeshSocket handshake). nullptr => DistributedContext::get_current_world().
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context = nullptr;
+
+    // Host mode: tells apart services between the same two ranks. Both endpoints must pass the same value;
+    // it selects the MPI tags (so < 256).
+    uint32_t host_service_index = 0;
 };
 
 // Sender-side handle. Owns: the sender backing tensor, one claimed service core
@@ -273,6 +303,10 @@ public:
     void wait_for_fabric_links();
     void release_fabric_links();
 
+    // Host mode only (TT_FATAL otherwise): the pump's timings, and a rethrow of the failure that stopped it.
+    d2d_host::PumpStats get_host_stats() const;
+    void check_host_transport() const;
+
 private:
     friend class D2DStreamService;
 
@@ -337,6 +371,10 @@ public:
     // side doc for the pairing / ordering contract.
     void wait_for_fabric_links();
     void release_fabric_links();
+
+    // Host mode only (TT_FATAL otherwise): the pump's timings, and a rethrow of the failure that stopped it.
+    d2d_host::PumpStats get_host_stats() const;
+    void check_host_transport() const;
 
     // Stage gate. get_num_stage_gates() is 0 without one; the rest TT_FATAL.
     uint32_t get_num_stage_gates() const;
@@ -418,6 +456,35 @@ public:
         std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx = nullptr);
 
 private:
+    // Host mode (D2DTransport::Host): the three factories hand over to these.
+    static std::pair<std::unique_ptr<D2DStreamServiceSender>, std::unique_ptr<D2DStreamServiceReceiver>>
+    create_host_pair(
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
+        D2DStreamConfig cfg);
+    static std::unique_ptr<D2DStreamServiceSender> create_host_sender(
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
+        D2DStreamConfig cfg,
+        const D2DEndpointConfig& endpoints);
+    static std::unique_ptr<D2DStreamServiceReceiver> create_host_receiver(
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
+        D2DStreamConfig cfg,
+        const D2DEndpointConfig& endpoints);
+    // Wrap a built host-mode state in a handle (they fill the handle's getters from the wrapped service).
+    static std::unique_ptr<D2DStreamServiceSender> wrap_host_sender(
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+        const D2DStreamConfig& cfg,
+        std::unique_ptr<d2d_host::SenderState> state);
+    static std::unique_ptr<D2DStreamServiceReceiver> wrap_host_receiver(
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+        const D2DStreamConfig& cfg,
+        int sender_rank,
+        std::unique_ptr<d2d_host::ReceiverState> state);
+    static void start_host_pump(D2DStreamServiceSender& sender, std::shared_ptr<d2d_host::Channel> channel);
+    static void start_host_pump(D2DStreamServiceReceiver& receiver, std::shared_ptr<d2d_host::Channel> channel);
+    static const std::vector<d2d_host::Part>& host_parts(const D2DStreamServiceSender& sender);
+    static const std::vector<d2d_host::Part>& host_parts(const D2DStreamServiceReceiver& receiver);
+
     // Shared per-side tail of all three factories. Given an already-constructed
     // MeshSocket endpoint (single-host via create_socket_pair, multi-host via the
     // per-endpoint ctor) plus the claimed service cores and backing tensor for one

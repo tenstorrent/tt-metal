@@ -103,6 +103,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_h2d_stream_service.cpp
     tensor/test_d2h_stream_service.cpp
     tensor/test_d2d_stream_service.cpp
+    tensor/test_d2d_host_pump.cpp
     tensor/test_stream_pipeline.cpp
     tensor/test_device_storage_ownership.cpp
     tensor/test_tensor_deallocation.cpp

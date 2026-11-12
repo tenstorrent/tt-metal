@@ -13,6 +13,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -56,6 +57,9 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/d2d_pipeline_descriptor.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/services/d2h_socket_service.hpp"
+#include "ttnn/services/h2d_socket_service.hpp"
+#include "ttnn/tensor/d2d_host_pump.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "stream_service_common.hpp"
@@ -1019,6 +1023,45 @@ struct RelayLocal {
 // worker-sync resources (counters / semaphores / termination words), and the
 // persistent MeshWorkload. The handle destructor tears all of it down.
 
+namespace d2d_host {
+
+// Where the sender mesh's worker handshake stands on one coord: the pump mirrors the D2H reader kernel, which
+// takes `num_workers` increments of the data-ready counter per transfer.
+struct ReadyProbe {
+    tt::tt_metal::IDevice* device = nullptr;
+    CoreCoord service_core;
+    uint32_t counter_addr = 0;
+    uint32_t consumed = 0;
+    bool seen = false;
+};
+
+// Host mode, sender side: the sender mesh drains into the host through a D2HStreamService, and the pump ships
+// each transfer to the peer.
+struct SenderState {
+    std::unique_ptr<tt::tt_metal::D2HStreamService> d2h;
+    Tensor host_tensor;  // per-coord shard buffers the D2H read fills
+    std::vector<std::byte> metadata;
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+    std::vector<Part> parts;  // one per coord, then the metadata blob
+    uint32_t num_workers = 0;
+    std::vector<ReadyProbe> probes;
+    // Last member: stopped before the service it reads from goes away.
+    std::unique_ptr<SenderPump> pump;
+};
+
+// Host mode, receiver side: the pump takes each transfer from the peer and the receiver mesh is fed through an
+// H2DStreamService.
+struct ReceiverState {
+    std::unique_ptr<tt::tt_metal::H2DStreamService> h2d;
+    Tensor host_tensor;  // per-coord shard buffers the peer's transfer lands in
+    std::vector<std::byte> metadata;
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
+    std::vector<Part> parts;
+    std::unique_ptr<ReceiverPump> pump;
+};
+
+}  // namespace d2d_host
+
 struct D2DStreamServiceSender::Impl {
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device;
     TensorSpec per_shard_spec;
@@ -1084,6 +1127,11 @@ struct D2DStreamServiceSender::Impl {
     // The routers this service holds. Last member, so the claims are released only
     // after the handle destructor has stopped the kernels that use them.
     CMAKE_UNIQUE_NAMESPACE::FabricLinkClaims link_claims;
+
+    // Host mode (D2DTransport::Host) only: the service behind this handle, and the L1 address of the semaphore
+    // that tells the workers the sender backing tensor is free. Last member, so it is torn down first.
+    std::optional<DeviceAddr> host_sem_addr;
+    std::unique_ptr<d2d_host::SenderState> host;
 };
 
 struct D2DStreamServiceReceiver::Impl {
@@ -1154,6 +1202,11 @@ struct D2DStreamServiceReceiver::Impl {
     // The router this service's credit-return connection holds. Last member, as on
     // the sender.
     CMAKE_UNIQUE_NAMESPACE::FabricLinkClaims link_claims;
+
+    // Host mode (D2DTransport::Host) only: the service behind this handle, and the L1 address of the semaphore
+    // that tells the workers a transfer landed. Last member, so it is torn down first.
+    std::optional<DeviceAddr> host_sem_addr;
+    std::unique_ptr<d2d_host::ReceiverState> host;
 };
 
 // ===========================================================================
@@ -1173,6 +1226,15 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
     // destroying the service, which leaves both kernels parked at that point.
     try {
         if (impl_ == nullptr) {
+            return;
+        }
+        if (impl_->host) {
+            // Host mode: the pump stops first, then the D2H service frees its own service-core state.
+            if (impl_->host->pump && impl_->host->pump->failed()) {
+                log_warning(tt::LogOp, "D2DStreamServiceSender: the host pump had failed before shutdown");
+            }
+            impl_->host->pump.reset();
+            impl_->host.reset();
             return;
         }
         auto* mesh = impl_->mesh_device.get();
@@ -1267,6 +1329,9 @@ CoreCoord D2DStreamServiceSender::get_service_core(const tt::tt_metal::distribut
 }
 
 uint32_t D2DStreamServiceSender::get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    if (impl_->host) {
+        return 0;  // no fabric lanes
+    }
     auto it = impl_->lane_links.find(coord);
     TT_FATAL(it != impl_->lane_links.end(), "D2DStreamServiceSender::get_num_lanes: no sender at coord {}", coord);
     return static_cast<uint32_t>(it->second.size());
@@ -1283,6 +1348,9 @@ DeviceAddr D2DStreamServiceSender::get_data_ready_counter_addr(
 }
 
 DeviceAddr D2DStreamServiceSender::get_consumed_sem_addr() const {
+    if (impl_->host_sem_addr) {
+        return *impl_->host_sem_addr;
+    }
     TT_FATAL(
         impl_->consumed_sem.has_value(),
         "D2DStreamServiceSender::get_consumed_sem_addr: consumed_sem not allocated (sender_worker_cores empty?)");
@@ -1304,6 +1372,9 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distrib
 uint32_t D2DStreamServiceSender::get_metadata_size_bytes() const { return impl_->metadata_size_bytes; }
 
 void D2DStreamServiceSender::wait_for_fabric_links() {
+    if (impl_->host) {
+        return;  // host mode uses no fabric links
+    }
     TT_FATAL(
         impl_->share_fabric_links,
         "D2DStreamServiceSender::wait_for_fabric_links: service was created with share_fabric_links == false "
@@ -1322,6 +1393,9 @@ void D2DStreamServiceSender::wait_for_fabric_links() {
 }
 
 void D2DStreamServiceSender::release_fabric_links() {
+    if (impl_->host) {
+        return;  // host mode uses no fabric links
+    }
     TT_FATAL(
         impl_->share_fabric_links,
         "D2DStreamServiceSender::release_fabric_links: service was created with share_fabric_links == false");
@@ -1350,6 +1424,15 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
     // transfers), so teardown is clean once outstanding transfers have drained.
     try {
         if (impl_ == nullptr) {
+            return;
+        }
+        if (impl_->host) {
+            // Host mode: the pump stops first, then the H2D service frees its own service-core state.
+            if (impl_->host->pump && impl_->host->pump->failed()) {
+                log_warning(tt::LogOp, "D2DStreamServiceReceiver: the host pump had failed before shutdown");
+            }
+            impl_->host->pump.reset();
+            impl_->host.reset();
             return;
         }
         auto* mesh = impl_->mesh_device.get();
@@ -1437,6 +1520,9 @@ CoreCoord D2DStreamServiceReceiver::get_service_core(const tt::tt_metal::distrib
 }
 
 DeviceAddr D2DStreamServiceReceiver::get_data_ready_sem_addr() const {
+    if (impl_->host_sem_addr) {
+        return *impl_->host_sem_addr;
+    }
     TT_FATAL(
         impl_->data_ready_sem.has_value(),
         "D2DStreamServiceReceiver::get_data_ready_sem_addr: data_ready_sem not allocated (receiver_worker_cores "
@@ -1462,6 +1548,9 @@ DeviceAddr D2DStreamServiceReceiver::get_metadata_addr() const {
 }
 
 void D2DStreamServiceReceiver::wait_for_fabric_links() {
+    if (impl_->host) {
+        return;  // host mode uses no fabric links
+    }
     TT_FATAL(
         impl_->share_fabric_links,
         "D2DStreamServiceReceiver::wait_for_fabric_links: service was created with share_fabric_links == false");
@@ -1476,6 +1565,9 @@ void D2DStreamServiceReceiver::wait_for_fabric_links() {
 }
 
 void D2DStreamServiceReceiver::release_fabric_links() {
+    if (impl_->host) {
+        return;  // host mode uses no fabric links
+    }
     TT_FATAL(
         impl_->share_fabric_links,
         "D2DStreamServiceReceiver::release_fabric_links: service was created with share_fabric_links == false");
@@ -1536,7 +1628,31 @@ bool D2DStreamServiceReceiver::is_stage_gate_open(
     return word.at(0) == static_cast<uint32_t>(d2d_stream::GateState::Open);
 }
 
+d2d_host::PumpStats D2DStreamServiceSender::get_host_stats() const {
+    TT_FATAL(impl_->host && impl_->host->pump, "D2DStreamServiceSender::get_host_stats: not a host-mode sender");
+    return impl_->host->pump->stats();
+}
+
+void D2DStreamServiceSender::check_host_transport() const {
+    TT_FATAL(impl_->host && impl_->host->pump, "D2DStreamServiceSender::check_host_transport: not a host-mode sender");
+    impl_->host->pump->rethrow_if_failed();
+}
+
+d2d_host::PumpStats D2DStreamServiceReceiver::get_host_stats() const {
+    TT_FATAL(impl_->host && impl_->host->pump, "D2DStreamServiceReceiver::get_host_stats: not a host-mode receiver");
+    return impl_->host->pump->stats();
+}
+
+void D2DStreamServiceReceiver::check_host_transport() const {
+    TT_FATAL(
+        impl_->host && impl_->host->pump, "D2DStreamServiceReceiver::check_host_transport: not a host-mode receiver");
+    impl_->host->pump->rethrow_if_failed();
+}
+
 D2DReceiverDescriptor D2DStreamServiceReceiver::describe() const {
+    TT_FATAL(
+        !impl_->host,
+        "D2DStreamServiceReceiver::describe: not supported in host mode (the descriptor names fabric nodes)");
     TT_FATAL(impl_->mesh_device->is_initialized(), "D2DStreamServiceReceiver::describe: the mesh device is closed");
     const bool has_metadata = impl_->metadata_size_bytes > 0;
     return D2DReceiverDescriptor{
@@ -3213,6 +3329,9 @@ D2DStreamService::create_pair(
         "D2DStreamService: sender_mesh shape {} must equal receiver_mesh shape {} (1:1 coord mapping)",
         sender_mesh->shape(),
         receiver_mesh->shape());
+    if (cfg.transport == D2DTransport::Host) {
+        return create_host_pair(sender_mesh, receiver_mesh, std::move(cfg));
+    }
     CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *sender_mesh);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
@@ -3314,6 +3433,9 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
         *ctx->rank(),
         *endpoints.sender_rank);
 
+    if (cfg.transport == D2DTransport::Host) {
+        return create_host_sender(sender_mesh, std::move(cfg), endpoints);
+    }
     CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *sender_mesh);
 
     // Run the mapper locally; the receiver process runs the same mapper on its
@@ -3414,6 +3536,9 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
         "D2DStreamService::create_receiver must run on the receiver rank (local rank {}, endpoints.receiver_rank {})",
         *ctx->rank(),
         *endpoints.receiver_rank);
+    if (cfg.transport == D2DTransport::Host) {
+        return create_host_receiver(receiver_mesh, std::move(cfg), endpoints);
+    }
     CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *receiver_mesh);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
@@ -3581,6 +3706,375 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
         pipeline.ranks[r] = D2DPipelineDescriptor::deserialize(bytes).ranks.at(0);
     }
     return std::make_unique<D2DPipelineDescriptorFile>(path, pipeline);
+}
+
+// ===========================================================================
+// Host mode (D2DTransport::Host)
+// ===========================================================================
+
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Message tags of host mode, per service index. Both stay at or below 32767 (the smallest MPI_TAG_UB the
+// standard allows) and clear of the other tags in this file.
+constexpr int kHostTransferTagBase = 0x7D40;
+constexpr int kHostHandshakeTagBase = 0x7E40;
+constexpr uint32_t kMaxHostServiceIndex = 255;
+constexpr uint32_t kDefaultHostFifoBytes = 4u << 20;
+
+void validate_host_config(const D2DStreamConfig& cfg) {
+    TT_FATAL(cfg.mapper != nullptr, "D2DStreamService: the mapper must be non-null");
+    TT_FATAL(!cfg.relay, "D2DStreamService: host mode does not support relay");
+    TT_FATAL(!enabled_stage_gate(cfg), "D2DStreamService: host mode does not support a stage gate");
+    TT_FATAL(
+        cfg.extra_tensors.empty(),
+        "D2DStreamService: host mode carries one tensor per service; extra_tensors is not supported");
+}
+
+// One buffer per coord's shard, in `coords` order: both ends build the same list from the same mapper.
+std::vector<d2d_host::Part> shard_parts(Tensor& host_tensor, const std::vector<distributed::MeshCoordinate>& coords) {
+    const auto& host_buffer = host_tensor.host_storage().host_tensor().buffer();
+    std::vector<d2d_host::Part> parts;
+    parts.reserve(coords.size() + 1);
+    for (const auto& coord : coords) {
+        auto shard = host_buffer.get_shard(coord);
+        TT_FATAL(shard.has_value(), "D2DStreamService host mode: no host shard at coord {}", coord);
+        const auto bytes = shard->view_bytes();
+        parts.push_back(d2d_host::Part{bytes.data(), bytes.size()});
+    }
+    return parts;
+}
+
+// A host tensor with a zeroed shard at every coord the mapper covers (the buffers the D2H read fills and the
+// peer's transfer lands in).
+// Every coord gets a buffer of its own: a replicating mapper would otherwise hand all coords one shared buffer, and
+// per-coord data would be written over (sender) or received into (receiver) the same bytes.
+Tensor make_host_tensor(const D2DStreamConfig& cfg, const std::shared_ptr<distributed::MeshDevice>& mesh) {
+    auto mapper = ttnn::distributed::create_mesh_mapper(*mesh, cfg.mapper->config());
+    Tensor tensor = (*mapper)(stream_service_common::make_zero_host_tensor(cfg.global_spec));
+    // The tensor is ours alone and the host buffer is only reachable through a const accessor.
+    auto& host_buffer =
+        const_cast<tt::tt_metal::DistributedHostBuffer&>(tensor.host_storage().host_tensor().buffer());
+    const std::vector<distributed::MeshCoordinate> coords(
+        host_buffer.shard_coords().begin(), host_buffer.shard_coords().end());
+    const size_t shard_bytes = host_buffer.get_shard(coords.front())->view_bytes().size();
+    host_buffer.emplace_shards(coords, [shard_bytes](const distributed::MeshCoordinate&) {
+        return tt::tt_metal::HostBuffer(std::vector<std::byte>(shard_bytes, std::byte{0}));
+    });
+    return tensor;
+}
+
+std::unique_ptr<d2d_host::SenderState> make_host_sender_state(
+    const std::shared_ptr<distributed::MeshDevice>& mesh, const D2DStreamConfig& cfg) {
+    validate_host_config(cfg);
+    auto state = std::make_unique<d2d_host::SenderState>();
+    state->num_workers = core_range_size(cfg.sender_worker_cores);
+
+    tt::tt_metal::D2HStreamService::Config d2h_cfg;
+    d2h_cfg.global_spec = cfg.global_spec;
+    d2h_cfg.mapper = ttnn::distributed::create_mesh_mapper(*mesh, cfg.mapper->config());
+    d2h_cfg.fifo_size_bytes = cfg.host_fifo_size_bytes ? cfg.host_fifo_size_bytes : kDefaultHostFifoBytes;
+    d2h_cfg.worker_cores = cfg.sender_worker_cores;
+    d2h_cfg.metadata_size_bytes = cfg.metadata_size_bytes;
+    state->d2h = std::make_unique<tt::tt_metal::D2HStreamService>(mesh, std::move(d2h_cfg));
+
+    state->host_tensor = make_host_tensor(cfg, mesh);
+    const auto& coords = state->d2h->get_backing_tensor().tensor_topology().mesh_coords();
+    state->coords.assign(coords.begin(), coords.end());
+    state->parts = shard_parts(state->host_tensor, state->coords);
+    if (cfg.metadata_size_bytes > 0) {
+        state->metadata.assign(cfg.metadata_size_bytes, std::byte{0});
+        state->parts.push_back(d2d_host::Part{state->metadata.data(), state->metadata.size()});
+    }
+    for (const auto& coord : state->coords) {
+        state->probes.push_back(d2d_host::ReadyProbe{
+            .device = tt::tt_metal::internal::get_device(*mesh, coord),
+            .service_core = state->d2h->get_service_core(coord),
+            .counter_addr = static_cast<uint32_t>(state->d2h->get_data_ready_counter_addr(coord)),
+        });
+    }
+    return state;
+}
+
+std::unique_ptr<d2d_host::ReceiverState> make_host_receiver_state(
+    const std::shared_ptr<distributed::MeshDevice>& mesh, const D2DStreamConfig& cfg) {
+    validate_host_config(cfg);
+    auto state = std::make_unique<d2d_host::ReceiverState>();
+
+    tt::tt_metal::H2DStreamService::Config h2d_cfg{
+        .global_spec = cfg.global_spec,
+        .mapper = ttnn::distributed::create_mesh_mapper(*mesh, cfg.mapper->config()),
+        .fifo_size_bytes = cfg.host_fifo_size_bytes,
+        .worker_cores = cfg.receiver_worker_cores,
+        .metadata_size_bytes = cfg.metadata_size_bytes,
+        .parallel_host_push = true,
+    };
+    state->h2d = std::make_unique<tt::tt_metal::H2DStreamService>(mesh, std::move(h2d_cfg));
+
+    state->host_tensor = make_host_tensor(cfg, mesh);
+    const auto& coords = state->h2d->get_backing_tensor().tensor_topology().mesh_coords();
+    state->coords.assign(coords.begin(), coords.end());
+    state->parts = shard_parts(state->host_tensor, state->coords);
+    if (cfg.metadata_size_bytes > 0) {
+        state->metadata.assign(cfg.metadata_size_bytes, std::byte{0});
+        state->parts.push_back(d2d_host::Part{state->metadata.data(), state->metadata.size()});
+    }
+    return state;
+}
+
+// The two endpoints must lay a transfer out identically: the same number of parts of the same sizes. The
+// sender sends its layout and the receiver answers with whether it matches, so both fail rather than hang.
+void host_handshake(
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ctx,
+    bool is_sender,
+    tt::tt_metal::distributed::multihost::Rank peer,
+    uint32_t service_index,
+    const std::vector<d2d_host::Part>& parts) {
+    namespace multihost = tt::tt_metal::distributed::multihost;
+    const multihost::Tag tag{kHostHandshakeTagBase + static_cast<int>(service_index)};
+    const auto as_bytes = [](std::vector<uint64_t>& words) {
+        return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(words.data()), words.size() * sizeof(uint64_t));
+    };
+
+    std::vector<uint64_t> mine;
+    mine.push_back(parts.size());
+    std::transform(parts.begin(), parts.end(), std::back_inserter(mine), [](const d2d_host::Part& p) {
+        return static_cast<uint64_t>(p.bytes);
+    });
+
+    if (is_sender) {
+        std::vector<uint64_t> count{mine.size()};
+        ctx->send(as_bytes(count), peer, tag);
+        ctx->send(as_bytes(mine), peer, tag);
+        std::vector<uint64_t> verdict(1);
+        ctx->recv(as_bytes(verdict), peer, tag);
+        TT_FATAL(
+            verdict.front() == 0,
+            "D2DStreamService host mode: the receiver's transfer layout differs from the sender's ({} parts)",
+            parts.size());
+        return;
+    }
+    std::vector<uint64_t> count(1);
+    ctx->recv(as_bytes(count), peer, tag);
+    std::vector<uint64_t> theirs(count.front());
+    ctx->recv(as_bytes(theirs), peer, tag);
+    std::vector<uint64_t> verdict{theirs == mine ? 0u : 1u};
+    ctx->send(as_bytes(verdict), peer, tag);
+    TT_FATAL(
+        verdict.front() == 0,
+        "D2DStreamService host mode: the sender's transfer layout differs from the receiver's ({} parts here, {} "
+        "there)",
+        parts.size(),
+        theirs.empty() ? 0 : theirs.front());
+}
+
+// The D2H reader kernel signals its workers once when it starts, before any transfer, and again after each
+// transfer it drained. The D2D contract is one signal per drained transfer, so the start-up one is taken here,
+// before any worker workload can run: wait for it on every worker core, then clear it.
+void consume_d2h_startup_token(
+    distributed::MeshDevice& mesh,
+    const tt::tt_metal::D2HStreamService& d2h,
+    const std::vector<distributed::MeshCoordinate>& coords,
+    const CoreRange& worker_cores) {
+    constexpr auto kTimeout = std::chrono::seconds(30);
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+    const auto sem_addr = static_cast<uint32_t>(d2h.get_transfer_done_sem_addr());
+    std::vector<uint32_t> zero{0};
+    for (const auto& coord : coords) {
+        auto* device = tt::tt_metal::internal::get_device(mesh, coord);
+        for (const auto& core : tt::tt_metal::corerange_to_cores(worker_cores)) {
+            std::vector<uint32_t> word{0};
+            while (word.at(0) == 0) {
+                TT_FATAL(
+                    std::chrono::steady_clock::now() < deadline,
+                    "D2DStreamService host mode: the D2H reader did not start (no start-up signal at coord {})",
+                    coord);
+                tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_addr, sizeof(uint32_t), word);
+            }
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, sem_addr, zero);
+        }
+    }
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
+std::unique_ptr<D2DStreamServiceSender> D2DStreamService::wrap_host_sender(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+    const D2DStreamConfig& cfg,
+    std::unique_ptr<d2d_host::SenderState> state) {
+    const auto& d2h = *state->d2h;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
+    for (const auto& coord : state->coords) {
+        service_cores.emplace(coord, d2h.get_service_core(coord));
+        data_ready_counter_addrs.emplace(coord, d2h.get_data_ready_counter_addr(coord));
+        if (cfg.metadata_size_bytes > 0) {
+            metadata_addrs.emplace(coord, d2h.get_metadata_input_addr(coord));
+        }
+    }
+    CMAKE_UNIQUE_NAMESPACE::consume_d2h_startup_token(*mesh, d2h, state->coords, cfg.sender_worker_cores);
+    auto impl = std::make_unique<D2DStreamServiceSender::Impl>(D2DStreamServiceSender::Impl{
+        .mesh_device = mesh,
+        .per_shard_spec = d2h.get_per_shard_spec(),
+        .backing_tensors = {d2h.get_backing_tensor()},
+        .worker_cores = cfg.sender_worker_cores,
+        .service_cores = std::move(service_cores),
+        .num_workers = state->num_workers,
+        .data_ready_counter_addrs = std::move(data_ready_counter_addrs),
+        .share_fabric_links = false,
+        .metadata_size_bytes = cfg.metadata_size_bytes,
+        .metadata_addrs = std::move(metadata_addrs),
+        .host_sem_addr = d2h.get_transfer_done_sem_addr(),
+        .host = std::move(state),
+    });
+    return std::unique_ptr<D2DStreamServiceSender>(new D2DStreamServiceSender(std::move(impl)));
+}
+
+std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::wrap_host_receiver(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+    const D2DStreamConfig& cfg,
+    int sender_rank,
+    std::unique_ptr<d2d_host::ReceiverState> state) {
+    const auto& h2d = *state->h2d;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
+    for (const auto& coord : state->coords) {
+        service_cores.emplace(coord, h2d.get_service_core(coord));
+        consumed_counter_addrs.emplace(coord, h2d.get_consumed_counter_addr(coord));
+    }
+    auto impl = std::make_unique<D2DStreamServiceReceiver::Impl>(D2DStreamServiceReceiver::Impl{
+        .mesh_device = mesh,
+        .per_shard_spec = h2d.get_per_shard_spec(),
+        .backing_tensors = {h2d.get_backing_tensor()},
+        .worker_cores = cfg.receiver_worker_cores,
+        .service_cores = std::move(service_cores),
+        .sender_rank = sender_rank,
+        .num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.receiver_worker_cores),
+        .consumed_counter_addrs = std::move(consumed_counter_addrs),
+        .share_fabric_links = false,
+        .metadata_size_bytes = cfg.metadata_size_bytes,
+        .metadata_l1_addr = cfg.metadata_size_bytes > 0 ? h2d.get_metadata_addr() : 0,
+        .host_sem_addr = h2d.get_data_ready_sem_addr(),
+        .host = std::move(state),
+    });
+    return std::unique_ptr<D2DStreamServiceReceiver>(new D2DStreamServiceReceiver(std::move(impl)));
+}
+
+const std::vector<d2d_host::Part>& D2DStreamService::host_parts(const D2DStreamServiceSender& sender) {
+    return sender.impl_->host->parts;
+}
+
+const std::vector<d2d_host::Part>& D2DStreamService::host_parts(const D2DStreamServiceReceiver& receiver) {
+    return receiver.impl_->host->parts;
+}
+
+void D2DStreamService::start_host_pump(D2DStreamServiceSender& sender, std::shared_ptr<d2d_host::Channel> channel) {
+    d2d_host::SenderState* state = sender.impl_->host.get();
+    d2d_host::SenderOps ops;
+    ops.parts = state->parts;
+    // Ready once every coord's workers have signalled the next transfer (`num_workers` increments each).
+    ops.ready = [state]() {
+        return std::all_of(state->probes.begin(), state->probes.end(), [state](d2d_host::ReadyProbe& probe) {
+            if (!probe.seen) {
+                std::vector<uint32_t> word;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    probe.device, probe.service_core, probe.counter_addr, sizeof(uint32_t), word);
+                probe.seen = (word.at(0) - probe.consumed) >= state->num_workers;
+            }
+            return probe.seen;
+        });
+    };
+    ops.read = [state]() {
+        state->d2h->read_from_tensor(
+            state->host_tensor, ttsl::Span<std::byte>(state->metadata.data(), state->metadata.size()));
+        for (auto& probe : state->probes) {
+            probe.consumed += state->num_workers;
+            probe.seen = false;
+        }
+    };
+    state->pump = std::make_unique<d2d_host::SenderPump>(std::move(ops), std::move(channel));
+}
+
+void D2DStreamService::start_host_pump(
+    D2DStreamServiceReceiver& receiver, std::shared_ptr<d2d_host::Channel> channel) {
+    d2d_host::ReceiverState* state = receiver.impl_->host.get();
+    d2d_host::ReceiverOps ops;
+    ops.parts = state->parts;
+    ops.write = [state]() {
+        state->h2d->forward_to_tensor(
+            state->host_tensor, ttsl::Span<const std::byte>(state->metadata.data(), state->metadata.size()));
+    };
+    state->pump = std::make_unique<d2d_host::ReceiverPump>(std::move(ops), std::move(channel));
+}
+
+std::pair<std::unique_ptr<D2DStreamServiceSender>, std::unique_ptr<D2DStreamServiceReceiver>>
+D2DStreamService::create_host_pair(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
+    D2DStreamConfig cfg) {
+    auto sender_state = CMAKE_UNIQUE_NAMESPACE::make_host_sender_state(sender_mesh, cfg);
+    auto receiver_state = CMAKE_UNIQUE_NAMESPACE::make_host_receiver_state(receiver_mesh, cfg);
+    const int local_rank = *tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank();
+
+    auto sender = wrap_host_sender(sender_mesh, cfg, std::move(sender_state));
+    auto receiver = wrap_host_receiver(receiver_mesh, cfg, local_rank, std::move(receiver_state));
+    auto [sender_end, receiver_end] = d2d_host::make_loopback_channels();
+    start_host_pump(*receiver, std::move(receiver_end));
+    start_host_pump(*sender, std::move(sender_end));
+    return {std::move(sender), std::move(receiver)};
+}
+
+std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_host_sender(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
+    D2DStreamConfig cfg,
+    const D2DEndpointConfig& endpoints) {
+    TT_FATAL(
+        endpoints.host_service_index <= CMAKE_UNIQUE_NAMESPACE::kMaxHostServiceIndex,
+        "D2DStreamService: host_service_index {} exceeds {}",
+        endpoints.host_service_index,
+        CMAKE_UNIQUE_NAMESPACE::kMaxHostServiceIndex);
+    const auto ctx = endpoints.distributed_context
+                         ? endpoints.distributed_context
+                         : tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto sender =
+        wrap_host_sender(sender_mesh, cfg, CMAKE_UNIQUE_NAMESPACE::make_host_sender_state(sender_mesh, cfg));
+    CMAKE_UNIQUE_NAMESPACE::host_handshake(
+        ctx, /*is_sender=*/true, endpoints.receiver_rank, endpoints.host_service_index, host_parts(*sender));
+    start_host_pump(
+        *sender,
+        d2d_host::make_mpi_channel(
+            ctx,
+            endpoints.receiver_rank,
+            CMAKE_UNIQUE_NAMESPACE::kHostTransferTagBase + static_cast<int>(endpoints.host_service_index)));
+    return sender;
+}
+
+std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_host_receiver(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
+    D2DStreamConfig cfg,
+    const D2DEndpointConfig& endpoints) {
+    TT_FATAL(
+        endpoints.host_service_index <= CMAKE_UNIQUE_NAMESPACE::kMaxHostServiceIndex,
+        "D2DStreamService: host_service_index {} exceeds {}",
+        endpoints.host_service_index,
+        CMAKE_UNIQUE_NAMESPACE::kMaxHostServiceIndex);
+    const auto ctx = endpoints.distributed_context
+                         ? endpoints.distributed_context
+                         : tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto receiver = wrap_host_receiver(
+        receiver_mesh,
+        cfg,
+        *endpoints.sender_rank,
+        CMAKE_UNIQUE_NAMESPACE::make_host_receiver_state(receiver_mesh, cfg));
+    CMAKE_UNIQUE_NAMESPACE::host_handshake(
+        ctx, /*is_sender=*/false, endpoints.sender_rank, endpoints.host_service_index, host_parts(*receiver));
+    start_host_pump(
+        *receiver,
+        d2d_host::make_mpi_channel(
+            ctx,
+            endpoints.sender_rank,
+            CMAKE_UNIQUE_NAMESPACE::kHostTransferTagBase + static_cast<int>(endpoints.host_service_index)));
+    return receiver;
 }
 
 }  // namespace ttnn

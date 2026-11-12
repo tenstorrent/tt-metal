@@ -145,7 +145,10 @@ const CoreRange kWorkerCores4{CoreCoord{0, 0}, CoreCoord{1, 1}};
 // per-transfer grants; the lease tests pass true and drive the grant/release
 // handshake explicitly.
 D2DStreamConfig make_config(
-    const std::shared_ptr<MeshDevice>& sender_mesh, const ttnn::Shape& global_shape, bool share_fabric_links = false) {
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const ttnn::Shape& global_shape,
+    bool share_fabric_links = false,
+    D2DTransport transport = D2DTransport::Fabric) {
     const auto tensor_layout = TensorLayout(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
@@ -158,6 +161,7 @@ D2DStreamConfig make_config(
         .sender_worker_cores = kWorkerCores,
         .receiver_worker_cores = kWorkerCores,
         .share_fabric_links = share_fabric_links,
+        .transport = transport,
     };
 }
 
@@ -803,9 +807,10 @@ void verify_handshake(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
     const ttnn::Shape& global_shape,
-    uint32_t num_iters) {
-    auto [sender, receiver] =
-        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape));
+    uint32_t num_iters,
+    D2DTransport transport = D2DTransport::Fabric) {
+    auto [sender, receiver] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape, /*share_fabric_links=*/false, transport));
 
     auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, num_iters);
     auto sender_workload = make_sender_worker_workload(sender.get(), sender_mesh, num_iters, /*fill_base=*/1);
@@ -832,9 +837,10 @@ void verify_reuse(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
     const ttnn::Shape& global_shape,
-    uint32_t num_rounds) {
-    auto [sender, receiver] =
-        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape));
+    uint32_t num_rounds,
+    D2DTransport transport = D2DTransport::Fabric) {
+    auto [sender, receiver] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape, /*share_fabric_links=*/false, transport));
 
     for (uint32_t round = 0; round < num_rounds; ++round) {
         // Distinct, non-trivial seed per round (avoids 0 / small values that
@@ -1451,12 +1457,13 @@ void verify_metadata_end_to_end(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
     const ttnn::Shape& global_shape,
-    const CoreRange& worker_cores) {
+    const CoreRange& worker_cores,
+    D2DTransport transport = D2DTransport::Fabric) {
     constexpr uint32_t kFillBase = 0x140u;  // metadata {-1, 0, 0x140}
     const std::vector<uint32_t> expected_md = {static_cast<uint32_t>(-1), 0u, kFillBase};
     const uint32_t md_bytes = static_cast<uint32_t>(expected_md.size() * sizeof(uint32_t));
 
-    auto cfg = make_config(sender_mesh, global_shape);
+    auto cfg = make_config(sender_mesh, global_shape, /*share_fabric_links=*/false, transport);
     cfg.sender_worker_cores = worker_cores;
     cfg.receiver_worker_cores = worker_cores;
     cfg.metadata_size_bytes = md_bytes;
@@ -3016,4 +3023,216 @@ TEST_F(D2DStreamServiceTest, PipelineDescriptorExportRowPair) {
 }
 
 }  // namespace
+
+// ===========================================================================
+// Host mode (D2DTransport::Host): the same worker handshake, with the transfer going
+// sender mesh -> host -> receiver mesh instead of over fabric.
+// ===========================================================================
+
+namespace {
+
+struct MeshPair {
+    std::shared_ptr<MeshDevice> sender;
+    std::shared_ptr<MeshDevice> receiver;
+};
+
+// Two distinct submeshes: 1x1 each, or 1x2 each (row pair). nullopt (with a skip reason) when the mesh is too small.
+std::optional<MeshPair> carve_pair(const std::shared_ptr<MeshDevice>& mesh, bool row_pair, std::string& skip_reason) {
+    if (!service_cores_supported()) {
+        skip_reason = "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+        return std::nullopt;
+    }
+    if (!h2d_host_pinning_supported()) {
+        skip_reason = "Host mode pins host memory, which needs the IOMMU in DMA-translation mode.";
+        return std::nullopt;
+    }
+    const auto shape = mesh->shape();
+    if (row_pair) {
+        if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+            skip_reason = "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes";
+            return std::nullopt;
+        }
+        return MeshPair{
+            mesh->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0)),
+            mesh->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0))};
+    }
+    if (shape.dims() != 2 || mesh->num_devices() < 2) {
+        skip_reason = "Need a 2D mesh with >= 2 devices to carve distinct submeshes";
+        return std::nullopt;
+    }
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    return MeshPair{
+        mesh->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)), mesh->create_submesh(MeshShape(1, 1), coord1)};
+}
+
+// One handshake run of `num_iters` transfers on `transport`, returning the first coord's receiver shard.
+std::vector<uint32_t> run_handshake_readback(
+    const MeshPair& pair,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_iters,
+    D2DTransport transport) {
+    auto cfg = make_config(pair.sender, global_shape, /*share_fabric_links=*/false, transport);
+    cfg.sender_worker_cores = worker_cores;
+    cfg.receiver_worker_cores = worker_cores;
+    auto [sender, receiver] = D2DStreamService::create_pair(pair.sender, pair.receiver, std::move(cfg));
+
+    auto receiver_workload = make_receiver_worker_workload(receiver.get(), pair.receiver, num_iters);
+    auto sender_workload = make_sender_worker_workload(sender.get(), pair.sender, num_iters, /*fill_base=*/1);
+    EnqueueMeshWorkload(pair.receiver->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(pair.sender->mesh_command_queue(), sender_workload, /*blocking=*/false);
+    Finish(pair.sender->mesh_command_queue());
+    Finish(pair.receiver->mesh_command_queue());
+
+    if (transport == D2DTransport::Host) {
+        sender->check_host_transport();
+        receiver->check_host_transport();
+        EXPECT_EQ(sender->get_host_stats().transfers, num_iters);
+        const auto stats = receiver->get_host_stats();
+        EXPECT_EQ(stats.transfers, num_iters);
+        const auto sender_stats = sender->get_host_stats();
+        const double mb = static_cast<double>(sender_stats.bytes) / sender_stats.transfers / 1e6;
+        log_info(
+            tt::LogTest,
+            "host mode {:.1f} MB/transfer: sender read {:.1f} ms, send {:.1f} ms; receiver recv {:.1f} ms, write {:.1f} ms (means over {} transfers)",
+            mb,
+            sender_stats.device_ns / 1e6 / sender_stats.transfers,
+            sender_stats.channel_ns / 1e6 / sender_stats.transfers,
+            stats.channel_ns / 1e6 / stats.transfers,
+            stats.device_ns / 1e6 / stats.transfers,
+            sender_stats.transfers);
+    }
+
+    auto mesh_buffer = mesh_buffer_view(receiver->get_backing_tensor());
+    std::vector<uint32_t> readback;
+    ReadShard(
+        pair.receiver->mesh_command_queue(),
+        readback,
+        mesh_buffer,
+        receiver->get_backing_tensor().tensor_topology().mesh_coords().front());
+    return readback;
+}
+
+// Fabric and host mode land identical bytes, for the given size.
+void verify_host_matches_fabric(
+    const MeshPair& pair, const ttnn::Shape& global_shape, const CoreRange& worker_cores, uint32_t num_iters) {
+    const auto via_fabric = run_handshake_readback(pair, global_shape, worker_cores, num_iters, D2DTransport::Fabric);
+    const auto via_host = run_handshake_readback(pair, global_shape, worker_cores, num_iters, D2DTransport::Host);
+    ASSERT_FALSE(via_fabric.empty());
+    EXPECT_EQ(via_fabric.size(), via_host.size());
+    EXPECT_TRUE(via_fabric == via_host) << "host mode and fabric mode landed different bytes";
+    EXPECT_EQ(via_host, make_iota_u32(via_host.size(), num_iters));
+}
+
+}  // namespace
+
+TEST_F(D2DStreamServiceTest, HostHandshakeSingleChipPair) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    verify_handshake(pair->sender, pair->receiver, ttnn::Shape({1, 1, 32, 512}), /*num_iters=*/4, D2DTransport::Host);
+}
+
+TEST_F(D2DStreamServiceTest, HostHandshakeRowPair) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/true, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    verify_handshake(pair->sender, pair->receiver, ttnn::Shape({1, 1, 32, 512}), /*num_iters=*/4, D2DTransport::Host);
+}
+
+TEST_F(D2DStreamServiceTest, HostReuseSingleChipPair) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    verify_reuse(pair->sender, pair->receiver, ttnn::Shape({1, 1, 32, 512}), /*num_rounds=*/6, D2DTransport::Host);
+}
+
+TEST_F(D2DStreamServiceTest, HostMetadataEndToEnd4Cores) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    verify_metadata_end_to_end(
+        pair->sender,
+        pair->receiver,
+        fixed_per_core_shape(kWorkerCores4),
+        kWorkerCores4,
+        D2DTransport::Host);
+}
+
+// Creating and destroying a host-mode pair with no transfer in between, repeatedly, leaves nothing behind.
+TEST_F(D2DStreamServiceTest, HostRecreateWithoutTransfers) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    for (int i = 0; i < 3; ++i) {
+        auto [sender, receiver] = D2DStreamService::create_pair(
+            pair->sender,
+            pair->receiver,
+            make_config(
+                pair->sender, ttnn::Shape({1, 1, 32, 512}), /*share_fabric_links=*/false, D2DTransport::Host));
+        EXPECT_NE(sender->get_consumed_sem_addr(), 0u);
+        EXPECT_NE(receiver->get_data_ready_sem_addr(), 0u);
+    }
+    verify_handshake(pair->sender, pair->receiver, ttnn::Shape({1, 1, 32, 512}), /*num_iters=*/2, D2DTransport::Host);
+}
+
+TEST_F(D2DStreamServiceTest, HostRejectsUnsupportedOptions) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    auto relay_cfg = make_config(pair->sender, ttnn::Shape({1, 1, 32, 512}), false, D2DTransport::Host);
+    relay_cfg.relay = true;
+    EXPECT_ANY_THROW((void)D2DStreamService::create_pair(pair->sender, pair->receiver, std::move(relay_cfg)));
+}
+
+// Host mode vs fabric mode, by size: one page, a small tensor, and the SC4 stage hand-off sizes
+// (K3 2560x7168 bf16 = 36.7 MB, GLM 5120x6144 bf16 = 62.9 MB; here as UINT32 of the same byte count).
+TEST_F(D2DStreamServiceTest, HostMatchesFabricOnePage) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    verify_host_matches_fabric(*pair, ttnn::Shape({1, 1, 1, 1024}), kWorkerCores, /*num_iters=*/3);
+}
+
+TEST_F(D2DStreamServiceTest, HostMatchesFabricSmall) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    verify_host_matches_fabric(*pair, ttnn::Shape({1, 1, 128, 512}), kWorkerCores4, /*num_iters=*/3);
+}
+
+TEST_F(D2DStreamServiceTest, HostMatchesFabricK3Chunk) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    verify_host_matches_fabric(*pair, ttnn::Shape({1, 1, 2560, 3584}), kWorkerCores4, /*num_iters=*/3);
+}
+
+TEST_F(D2DStreamServiceTest, HostMatchesFabricGlmChunk) {
+    std::string skip;
+    auto pair = carve_pair(this->mesh_device_, /*row_pair=*/false, skip);
+    if (!pair) {
+        GTEST_SKIP() << skip;
+    }
+    verify_host_matches_fabric(*pair, ttnn::Shape({1, 1, 5120, 3072}), kWorkerCores4, /*num_iters=*/3);
+}
+
 }  // namespace ttnn::distributed::test

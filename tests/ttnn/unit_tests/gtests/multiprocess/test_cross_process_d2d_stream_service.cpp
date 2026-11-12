@@ -58,7 +58,11 @@
 //   tt-run --rank-binding <rank_binding.yaml> --mpi-args "--allow-run-as-root --tag-output"
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <string>
@@ -89,6 +93,7 @@
 #include <internal/mesh_device.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
@@ -144,6 +149,7 @@ using ::tt::tt_metal::distributed::multihost::DistributedContext;
 using ::tt::tt_metal::distributed::multihost::Rank;
 using ttnn::D2DEndpointConfig;
 using ttnn::D2DStreamConfig;
+using ttnn::D2DTransport;
 using ttnn::D2DStreamService;
 using ttnn::D2DStreamServiceReceiver;
 using ttnn::D2DStreamServiceSender;
@@ -252,7 +258,8 @@ D2DStreamConfig make_cfg(
     const std::shared_ptr<MeshDevice>& mesh,
     const ttnn::Shape& global_shape,
     const CoreRange& worker_cores = kWorkerCores,
-    uint32_t metadata_size_bytes = 0) {
+    uint32_t metadata_size_bytes = 0,
+    D2DTransport transport = D2DTransport::Fabric) {
     const tt::tt_metal::TensorSpec global_spec(
         global_shape,
         TensorLayout(
@@ -267,6 +274,7 @@ D2DStreamConfig make_cfg(
         .receiver_worker_cores = worker_cores,
         .metadata_size_bytes = metadata_size_bytes,
         .share_fabric_links = true,  // LEASE mode (host-driven per-transfer grants)
+        .transport = transport,
     };
 }
 
@@ -901,13 +909,85 @@ MeshWorkload make_stress_fabric_workload(
     return workload;
 }
 
+// Integer from the environment, `fallback` when unset.
+uint32_t env_uint(const char* name, uint32_t fallback) {
+    const char* value = std::getenv(name);
+    return value ? static_cast<uint32_t>(std::stoul(value)) : fallback;
+}
+
+// A "WxH" worker grid from the environment (default 1x1).
+CoreRange env_worker_cores(const char* name) {
+    const char* value = std::getenv(name);
+    uint32_t w = 1, h = 1;
+    if (value && std::sscanf(value, "%ux%u", &w, &h) != 2) {
+        w = h = 1;
+    }
+    return CoreRange{CoreCoord{0, 0}, CoreCoord{w - 1, h - 1}};
+}
+
+// What this rank saw: wall time per iteration (iteration 0 completes only after the first transfer crossed every hop,
+// so it is the end-to-end latency of the chain) and, in host mode, where each hop's time went.
+void report_chain_timing(
+    int rank,
+    const ttnn::Shape& global_shape,
+    D2DTransport transport,
+    const std::vector<double>& iter_done_ms,
+    D2DStreamServiceReceiver* inbound,
+    D2DStreamServiceSender* outbound) {
+    const double mb = static_cast<double>(global_shape.volume()) * sizeof(uint32_t) / 1e6;
+    const size_t n = iter_done_ms.size();
+    const double steady_ms = n > 1 ? (iter_done_ms.back() - iter_done_ms.front()) / static_cast<double>(n - 1) : 0.0;
+    log_info(
+        tt::LogTest,
+        "rank {} {} {:.1f} MB x {}: iteration 0 done at {:.1f} ms, steady {:.1f} ms/iter ({:.2f} GB/s)",
+        rank,
+        transport == D2DTransport::Host ? "host" : "fabric",
+        mb,
+        n,
+        n ? iter_done_ms.front() : 0.0,
+        steady_ms,
+        steady_ms > 0 ? mb / steady_ms : 0.0);
+    if (transport != D2DTransport::Host) {
+        return;
+    }
+    const auto log_stats = [rank, mb](const char* side, const ttnn::d2d_host::PumpStats& s) {
+        if (s.transfers == 0) {
+            return;
+        }
+        const double k = 1e6 * static_cast<double>(s.transfers);
+        log_info(
+            tt::LogTest,
+            "rank {} {} pump {:.1f} MB: wait {:.1f} ms, device {:.1f} ms, channel {:.1f} ms per transfer ({} transfers)",
+            rank,
+            side,
+            mb,
+            static_cast<double>(s.wait_ns) / k,
+            static_cast<double>(s.device_ns) / k,
+            static_cast<double>(s.channel_ns) / k,
+            s.transfers);
+    };
+    if (outbound) {
+        outbound->check_host_transport();
+        log_stats("sender", outbound->get_host_stats());
+    }
+    if (inbound) {
+        inbound->check_host_transport();
+        log_stats("receiver", inbound->get_host_stats());
+    }
+}
+
 // World-size-derived forward pipeline (rank == stage), unbundled op + d2d_sync gate,
 // LEASE mode with one release per iter after the op. Stage 0 (rank 0) owns the H2D feed
 // and pushes it from a SEPARATE THREAD, concurrently with its device loop, so the push
 // is decoupled and every stage's device loop is uniform. Hangs loudly (a gate spin, a
 // MeshSocket handshake, or a Finish never returns) on any desync; the end stage's
 // per-coord readback catches stale/dropped data.
-TEST_F(CrossProcessD2DFixture, ForwardChain) {
+void run_forward_chain(
+    const std::shared_ptr<MeshDevice>& mesh,
+    D2DTransport transport,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_iters) {
     const auto& ctx = DistributedContext::get_current_world();
     // int (not uint32_t): multihost::Rank wraps int, so Rank{rank ± 1} must not narrow.
     const int world_size = *ctx->size();
@@ -915,9 +995,6 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
     if (world_size < 2) {
         GTEST_SKIP() << "D2D forward chain needs >= 2 ranks; got " << world_size;
     }
-
-    constexpr uint32_t kNumIters = 10;
-    const ttnn::Shape global_shape({1, 1, 32, 64});  // shape is irrelevant (mapper replicates)
 
     const int stage = rank;                            // rank == stage; stage 0 (rank 0) owns the H2D feed
     const bool is_stage0 = stage == 0;                 // owns the H2D service (== !has_inbound)
@@ -932,35 +1009,35 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
     std::unique_ptr<H2DStreamService> h2d_service;  // stage 0 only: the host-fed source
     if (has_inbound) {
         inbound = D2DStreamService::create_receiver(
-            mesh_device_,
-            make_cfg(mesh_device_, global_shape),
+            mesh,
+            make_cfg(mesh, global_shape, worker_cores, /*metadata_size_bytes=*/0, transport),
             D2DEndpointConfig{.sender_rank = Rank{rank - 1}, .receiver_rank = Rank{rank}, .distributed_context = ctx});
     } else {
         // Stage 0 has no fabric inbound; its input is a real host->device H2D feed it
         // owns and pushes from a separate thread (spawned after [B1]). Built BEFORE the
         // outbound sender. Host-local — no peer handshake, so construction does not block
         // on other ranks.
-        h2d_service = make_h2d_service(mesh_device_, make_cfg(mesh_device_, global_shape).global_spec);
+        h2d_service = make_h2d_service(mesh, make_cfg(mesh, global_shape).global_spec, worker_cores);
     }
     if (has_outbound) {
         outbound = D2DStreamService::create_sender(
-            mesh_device_,
-            make_cfg(mesh_device_, global_shape),
+            mesh,
+            make_cfg(mesh, global_shape, worker_cores, /*metadata_size_bytes=*/0, transport),
             D2DEndpointConfig{.sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx});
     }
 
     std::unique_ptr<D2HStreamService> d2h_service;
     if (has_inbound && !has_outbound) {
-        const auto spec = make_cfg(mesh_device_, global_shape).global_spec;
+        const auto spec = make_cfg(mesh, global_shape, worker_cores, /*metadata_size_bytes=*/0, transport).global_spec;
         D2HStreamService::Config cfg{
             .global_spec = spec,
-            .mapper = create_mesh_mapper(*mesh_device_, MeshMapperConfig{.placements = replicate_all(*mesh_device_)}),
+            .mapper = create_mesh_mapper(*mesh, MeshMapperConfig{.placements = replicate_all(*mesh)}),
             .fifo_size_bytes = fifo_bytes_for(spec),
             .max_socket_page_size_bytes = fifo_bytes_for(spec),
-            .worker_cores = kWorkerCores,
+            .worker_cores = worker_cores,
             .metadata_size_bytes = 0,
         };
-        d2h_service = std::make_unique<D2HStreamService>(mesh_device_, std::move(cfg));
+        d2h_service = std::make_unique<D2HStreamService>(mesh, std::move(cfg));
     }
 
     // [B1] All services resident across all ranks before any data flows.
@@ -971,7 +1048,7 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
     // is joined after the loop. Default-constructed (non-joinable) on every other stage.
     std::thread h2d_feeder;
     if (is_stage0) {
-        h2d_feeder = std::thread([&] { run_h2d_feed_loop(*h2d_service, global_shape, kNumIters); });
+        h2d_feeder = std::thread([&] { run_h2d_feed_loop(*h2d_service, global_shape, num_iters); });
     }
 
     // Op parameters are loop-invariant (backing/output addresses are fixed at allocation):
@@ -994,14 +1071,17 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         host_buf.resize(d2h_service->payload_size_bytes());
     }
 
-    auto& cq = mesh_device_->mesh_command_queue();
-    for (uint32_t iter = 0; iter < kNumIters; ++iter) {
+    auto& cq = mesh->mesh_command_queue();
+    const auto loop_start = std::chrono::steady_clock::now();
+    std::vector<double> iter_done_ms;
+    std::vector<std::vector<std::byte>> readbacks;
+    for (uint32_t iter = 0; iter < num_iters; ++iter) {
         // (a) Outbound overwrite-gate — the SEPARATE d2d_sync op, BEFORE the op: waits the
         //     prior forward to drain (sender consumed_sem) so the op doesn't overwrite the
         //     outbound backing too early. Skipped on iter 0. It's the SOLE overwrite
         //     protection (no host wait precedes the op), so the gate is load-bearing.
         if (has_outbound && iter > 0) {
-            auto gate = make_gate_workload(outbound.get(), mesh_device_);
+            auto gate = make_gate_workload(outbound.get(), mesh);
             EnqueueMeshWorkload(cq, gate, /*blocking=*/false);
             Finish(cq);
         }
@@ -1012,11 +1092,11 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         //     relay; only the upstream differs (H2D service on stage 0, D2D receiver else).
         MeshWorkload op;
         if (is_stage0) {
-            op = make_relay_like_workload(h2d_service.get(), mesh_device_, dest_addr, produce, downstream);
+            op = make_relay_like_workload(h2d_service.get(), mesh, dest_addr, produce, downstream);
         } else if (has_outbound) {
-            op = make_relay_like_workload(inbound.get(), mesh_device_, dest_addr, produce, downstream);
+            op = make_relay_like_workload(inbound.get(), mesh, dest_addr, produce, downstream);
         } else {
-            op = make_d2h_relay_workload(inbound.get(), mesh_device_, d2h_service.get());
+            op = make_d2h_relay_workload(inbound.get(), mesh, d2h_service.get());
         }
         EnqueueMeshWorkload(cq, op, /*blocking=*/false);
         Finish(cq);
@@ -1034,8 +1114,8 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         // (d) A competing model-graph fabric op (stub CCL) on the outbound link: stands in
         //     for a real graph op (e.g. a row CCL) and runs only because (c) confirmed the
         //     D2D sender vacated the EDM channel.
-        if (has_outbound) {
-            auto stub = make_stub_fabric_workload(outbound.get(), mesh_device_, Rank{rank + 1});
+        if (has_outbound && transport == D2DTransport::Fabric) {
+            auto stub = make_stub_fabric_workload(outbound.get(), mesh, Rank{rank + 1});
             EnqueueMeshWorkload(cq, stub, /*blocking=*/false);
             Finish(cq);
         }
@@ -1047,7 +1127,7 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         if (has_outbound) {
             outbound->release_fabric_links();
         }
-        if (has_inbound && iter + 1 < kNumIters) {
+        if (has_inbound && iter + 1 < num_iters) {
             inbound->release_fabric_links();
         }
 
@@ -1055,11 +1135,18 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
             // ForwardChain: payload only
             d2h_service->read_from_tensor(host_buf);
             d2h_service->barrier();
-            auto expected = make_iota_u32(host_buf.size() / sizeof(uint32_t), kFillBase + iter);
-            std::vector<uint32_t> actual(host_buf.size() / sizeof(uint32_t));
-            std::memcpy(actual.data(), host_buf.data(), host_buf.size());
-            EXPECT_EQ(actual, expected) << "D2H readback mismatch at iter " << iter;
+            // Checked after the loop: comparing tens of MB on the host would otherwise set the pace of the whole chain.
+            readbacks.push_back(host_buf);
         }
+        iter_done_ms.push_back(
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loop_start).count());
+    }
+    report_chain_timing(rank, global_shape, transport, iter_done_ms, inbound.get(), outbound.get());
+    for (uint32_t iter = 0; iter < readbacks.size(); ++iter) {
+        const auto expected = make_iota_u32(readbacks[iter].size() / sizeof(uint32_t), kFillBase + iter);
+        std::vector<uint32_t> actual(readbacks[iter].size() / sizeof(uint32_t));
+        std::memcpy(actual.data(), readbacks[iter].data(), readbacks[iter].size());
+        EXPECT_EQ(actual, expected) << "D2H readback mismatch at iter " << iter;
     }
 
     // Stage 0: the feeder has pushed all tokens (its barrier() returns once the device
@@ -1069,8 +1156,26 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         h2d_feeder.join();
     }
 
-    Synchronize(*mesh_device_, std::nullopt);
+    Synchronize(*mesh, std::nullopt);
     ctx->barrier();  // [B2]
+}
+
+TEST_F(CrossProcessD2DFixture, ForwardChain) {
+    // The shape is irrelevant to the fabric chain (the mapper replicates).
+    run_forward_chain(mesh_device_, D2DTransport::Fabric, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/10);
+}
+
+// The same chain with every boundary a host hop (no fabric route needed between the meshes). Size and
+// iteration count come from the environment so one binary sweeps the SC4 hand-off sizes:
+//   D2D_HOST_ROWS x D2D_HOST_COLS UINT32 (default 32 x 64), D2D_HOST_ITERS (default 10),
+//   D2D_HOST_WORKERS = worker grid width x height as "WxH" (default 1x1).
+TEST_F(CrossProcessD2DFixture, ForwardChainHost) {
+    run_forward_chain(
+        mesh_device_,
+        D2DTransport::Host,
+        ttnn::Shape({1, 1, env_uint("D2D_HOST_ROWS", 32), env_uint("D2D_HOST_COLS", 64)}),
+        env_worker_cores("D2D_HOST_WORKERS"),
+        env_uint("D2D_HOST_ITERS", 10));
 }
 
 // One (grid, tensor-size, iters) point of the ForwardChainStress sweep.
@@ -1455,6 +1560,68 @@ TEST(CrossProcessD2DExport, BadCallFailsOnEveryRank) {
     auto file = D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{0}, ctx);
     EXPECT_EQ(file != nullptr, rank == 0);
     ctx->barrier();
+}
+
+// Host-hop channel and pumps alone (no device): rank 0 sends fake transfers to rank 1 through the same pump and MPI
+// channel that host mode uses. Separates the network and the channel from the device-side work. Run with 2 ranks.
+TEST(CrossProcessD2DHostChannel, Bandwidth) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int rank = *ctx->rank();
+    if (*ctx->size() != 2) {
+        GTEST_SKIP() << "Needs exactly 2 ranks";
+    }
+    constexpr uint32_t kParts = 32;
+    constexpr uint32_t kTransfers = 8;
+    for (const uint32_t total_mb : {37u, 63u}) {
+        const size_t part_bytes = static_cast<size_t>(total_mb) * 1000 * 1000 / kParts;
+        std::vector<std::vector<std::byte>> buffers(kParts, std::vector<std::byte>(part_bytes, std::byte{1}));
+        std::vector<ttnn::d2d_host::Part> parts;
+        for (auto& b : buffers) {
+            parts.push_back(ttnn::d2d_host::Part{b.data(), b.size()});
+        }
+        auto channel = std::shared_ptr<ttnn::d2d_host::Channel>(
+            ttnn::d2d_host::make_mpi_channel(ctx, Rank{1 - rank}, /*tag=*/0x7D00 + static_cast<int>(total_mb)));
+        ctx->barrier();
+        std::atomic<uint32_t> done{0};
+        const auto start = std::chrono::steady_clock::now();
+        if (rank == 0) {
+            std::atomic<uint32_t> produced{0};
+            ttnn::d2d_host::SenderOps ops;
+            ops.parts = parts;
+            ops.ready = [&produced, &done]() { return produced.load() > done.load(); };
+            ops.read = [&done]() { done.fetch_add(1); };
+            ttnn::d2d_host::SenderPump pump(std::move(ops), channel);
+            produced = kTransfers;
+            while (done.load() < kTransfers) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            while (pump.stats().transfers < kTransfers) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            const auto stats = pump.stats();
+            log_info(
+                tt::LogTest,
+                "channel-only {} MB: send {:.1f} ms/transfer ({:.2f} GB/s)",
+                total_mb,
+                static_cast<double>(stats.channel_ns) / 1e6 / kTransfers,
+                static_cast<double>(stats.bytes) / static_cast<double>(stats.channel_ns));
+        } else {
+            ttnn::d2d_host::ReceiverOps ops;
+            ops.parts = parts;
+            ops.write = [&done]() { done.fetch_add(1); };
+            ttnn::d2d_host::ReceiverPump pump(std::move(ops), channel);
+            while (done.load() < kTransfers) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            log_info(
+                tt::LogTest,
+                "channel-only {} MB: {:.1f} ms/transfer end to end at the receiver",
+                total_mb,
+                ms / kTransfers);
+        }
+        ctx->barrier();
+    }
 }
 
 }  // namespace
