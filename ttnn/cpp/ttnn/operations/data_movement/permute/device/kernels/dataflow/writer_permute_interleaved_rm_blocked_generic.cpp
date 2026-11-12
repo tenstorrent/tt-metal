@@ -16,22 +16,17 @@ void kernel_main() {
     // Compile-time constants
     constexpr uint32_t N = get_arg(args::N);
     constexpr uint32_t output_cb_page_size = get_arg(args::output_page_size);
-    constexpr uint32_t num_rows = get_arg(args::num_rows);
-
-    constexpr uint32_t X = get_arg(args::X);
-    constexpr uint32_t X_stride = get_arg(args::X_stride);
     constexpr uint32_t x_dim = get_arg(args::x_dim);
-
-    constexpr uint32_t W_stride = get_arg(args::W_stride);
-    constexpr uint32_t input_cb_page_size = get_arg(args::input_page_size);
     constexpr uint32_t element_size = get_arg(args::element_size);
-
-    constexpr uint32_t num_blocks_total = get_arg(args::num_blocks_total);
-    constexpr uint32_t x_blocks = get_arg(args::x_blocks);
-    constexpr uint32_t w_blocks = get_arg(args::w_blocks);
     constexpr uint32_t x_block_size = get_arg(args::x_block_size);
     constexpr uint32_t w_block_size = get_arg(args::w_block_size);
-    constexpr uint32_t W = get_arg(args::W);
+
+    // The shape-dependent counts are runtime args, so the binary does not depend on the dimension sizes.
+    const uint32_t num_rows = get_arg(args::num_rows);
+    const uint32_t X = get_arg(args::X);
+    const uint32_t W = get_arg(args::W);
+    const uint32_t x_blocks = get_arg(args::x_blocks);
+    const uint32_t w_blocks = get_arg(args::w_blocks);
 
     Noc noc;
     DataflowBuffer dfb_in(dfb::cb_out);
@@ -43,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t w_dim = N - 1;
 
     // Calculate how many "non_x_rows" we have (these are the combinations of all dimensions except X)
-    constexpr uint32_t non_x_rows = num_rows / X;
+    const uint32_t non_x_rows = num_rows / X;
 
     const uint32_t start_block = get_arg(args::start_block);
     const uint32_t end_block = get_arg(args::end_block);
