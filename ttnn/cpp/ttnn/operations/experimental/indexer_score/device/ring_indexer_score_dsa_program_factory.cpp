@@ -905,7 +905,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         }
     }
     const uint32_t slot_metadata_address =
-        update_metadata && has_slot_metadata ? tensors.cache_batch_idx_tensor->buffer()->address() : 0u;
+        update_metadata && has_slot_metadata ? tensors.cache_batch_idx_tensor->mesh_buffer().address() : 0u;
     const uint32_t ag_meta_base = ag_rt::reader_metadata_base(/*num_inputs=*/1);
     std::array<ttsl::SmallVector<std::pair<uint32_t, uint32_t>, 3>, 4> ag_updates;
     if (update_semaphores) {

@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     kda_mesh_param,
     median_device_us,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.entry_correction import EntryCorrection
 from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profiler
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
@@ -26,6 +27,10 @@ pytestmark = run_for_blackhole()
 _ROWS, _HEADS, _KEY = 640, 24, 128
 _CHUNKS = _ROWS // 32
 _CORES = 110
+# The model's entry correction runs at the scan's fidelity.
+_MATH_FIDELITY = kimi_k3_program_config(
+    active_seq_len_local=_ROWS, tp_ccl_topology=ttnn.Topology.Linear
+).recurrence.scan_math_fidelity
 
 # SP takes mesh axis 0. The op runs on each chip alone; the meshes only change the chronology.
 _MESH = pytest.mark.parametrize(
@@ -164,7 +169,7 @@ def test_entry_correction_determinism(mesh_device):
     sp_size, tp_size = tuple(mesh_device.shape)
     terms = closed_form_tensor(_HEADS, _CHUNKS, 32, _KEY, offset=-0.125)
     states = [closed_form_tensor(_HEADS, _KEY, _KEY, offset=offset) for offset in (-0.1, 0.05, 0.02, -0.03)]
-    correction = _Correction(mesh_device, terms, terms.flip(-1), *states, math_fidelity=ttnn.MathFidelity.HiFi2)
+    correction = _Correction(mesh_device, terms, terms.flip(-1), *states, math_fidelity=_MATH_FIDELITY)
     mismatch = DeviceMismatch(mesh_device)
     for interval in _INTERVALS:
         start, end = _interval(sp_size, interval)
@@ -203,7 +208,7 @@ _PERF_SAMPLES = 15
 _PERF_MARGIN = 0.05
 # A full chunk that starts 320 rows into the second rank, as the layer gates place it: that rank splits.
 _PERF_START = _ROWS + 320
-# Device-time references in us, at the model's HiFi2. The op runs on each chip alone.
+# Device-time references in us, at the model's fidelity. The op runs on each chip alone.
 _PERF_REFERENCE_US = {"SP8xTP4": 29.5, "loudbox-SP8xTP1": 24.5, "quietbox-SP4xTP1": 24.4}
 
 
@@ -220,9 +225,9 @@ _PERF_REFERENCE_US = {"SP8xTP4": 29.5, "loudbox-SP8xTP1": 24.5, "quietbox-SP4xTP
     indirect=["mesh_device", "device_params"],
 )
 def test_entry_correction_kimi_k3_perf(mesh_device, layout):
-    """The model's entry correction: 24 heads per chip over 110 cores, HiFi2, the terms in L1."""
+    """The model's entry correction: 24 heads per chip over 110 cores at the model's fidelity, the terms in L1."""
     require_realtime_profiler("the entry_correction device-time gate")
-    _, correction = _random_case(mesh_device, seed=_PERF_START, math_fidelity=ttnn.MathFidelity.HiFi2)
+    _, correction = _random_case(mesh_device, seed=_PERF_START, math_fidelity=_MATH_FIDELITY)
     actual_start = make_actual_start(mesh_device, _PERF_START)
 
     def call():

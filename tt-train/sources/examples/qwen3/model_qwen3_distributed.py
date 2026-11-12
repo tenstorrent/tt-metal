@@ -78,7 +78,11 @@ from ttml.models.qwen3.weights import (
     unpermute_norm_weights,
     expected_fused_load_shape,
 )
-from ttml.common.utils import resolve_padded_load_shape
+from ttml.common.utils import (
+    build_rope_params_from_config,
+    resolve_padded_load_shape,
+    scaled_dot_product_attention_auto,
+)
 from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
@@ -192,7 +196,13 @@ class RowParallelLinear(AbstractModuleBase):
 class DistributedQwen3Attention(AbstractModuleBase):
     """TP Qwen3 attention: Q/K/V=ColumnParallel, O=RowParallel."""
 
-    def __init__(self, config: Qwen3Config, layer_idx: int, shard_dim: Optional[int] = None):
+    def __init__(
+        self,
+        config: Qwen3Config,
+        layer_idx: int,
+        rope_params: ttml.ops.rope.RotaryEmbeddingParams,
+        shard_dim: Optional[int] = None,
+    ):
         super().__init__()
         self.layer_idx = layer_idx
         self.head_dim = config.head_dim
@@ -241,20 +251,7 @@ class DistributedQwen3Attention(AbstractModuleBase):
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
-        rope_scaling = ttml.ops.rope.RopeScalingParams()
-        rs = config.rope_scaling
-        if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
-            rope_scaling.original_context_length = rs.original_context_length
-            rope_scaling.scaling_factor = rs.scaling_factor
-            rope_scaling.high_freq_factor = rs.high_freq_factor
-            rope_scaling.low_freq_factor = rs.low_freq_factor
-
-        self.rope_params = ttml.ops.rope.build_rope_params(
-            sequence_length=config.max_position_embeddings,
-            head_dim=self.head_dim,
-            theta=config.rope_theta,
-            rope_scaling_params=rope_scaling,
-        )
+        self.rope_params = rope_params
 
     def forward(
         self,
@@ -282,14 +279,7 @@ class DistributedQwen3Attention(AbstractModuleBase):
         if past_key_values is not None:
             key_heads, value_heads = past_key_values.update(self.layer_idx, key_heads, value_heads)
 
-        q_seq = query_heads.shape()[2]
-        k_seq = key_heads.shape()[2]
-        sdpa_fn = (
-            ttml.ops.attention.scaled_dot_product_attention
-            if q_seq == k_seq
-            else ttml.ops.attention.scaled_dot_product_attention_composite
-        )
-        attn = sdpa_fn(query_heads, key_heads, value_heads, attention_mask)
+        attn = scaled_dot_product_attention_auto(query_heads, key_heads, value_heads, attention_mask)
 
         return self.o_proj(ttml.ops.multi_head_utils.heads_fusion(attn))
 
@@ -321,9 +311,11 @@ class DistributedQwen3MLP(AbstractModuleBase):
 
 
 class DistributedQwen3DecoderLayer(AbstractModuleBase):
-    def __init__(self, config: Qwen3Config, layer_idx: int, shard_dim=None):
+    def __init__(
+        self, config: Qwen3Config, layer_idx: int, rope_params: ttml.ops.rope.RotaryEmbeddingParams, shard_dim=None
+    ):
         super().__init__()
-        self.self_attn = DistributedQwen3Attention(config, layer_idx, shard_dim)
+        self.self_attn = DistributedQwen3Attention(config, layer_idx, rope_params, shard_dim)
         self.mlp = DistributedQwen3MLP(config, shard_dim)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -395,8 +387,9 @@ class DistributedQwen3Model(AbstractModuleBase):
                 weight_init=sharded_weight_init(3),
                 axis_name="tp",
             )
+        rope_params = build_rope_params_from_config(config, config.head_dim)
         self.layers = ModuleList(
-            [DistributedQwen3DecoderLayer(config, i, shard_dim) for i in range(config.num_hidden_layers)]
+            [DistributedQwen3DecoderLayer(config, i, rope_params, shard_dim) for i in range(config.num_hidden_layers)]
         )
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 

@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     median_device_us,
     pack_transform,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, reset_persistent_semaphores
 from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profiler
@@ -30,6 +31,10 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = run_for_blackhole()
 
 _ROWS, _HEADS, _KEY = 640, 24, 128
+# The model's relay runs at the affine prefix's fidelity.
+_MATH_FIDELITY = kimi_k3_program_config(
+    active_seq_len_local=_ROWS, tp_ccl_topology=ttnn.Topology.Linear
+).recurrence.affine_prefix_math_fidelity
 
 
 def _fabric_1d_ring_params() -> dict:
@@ -106,7 +111,7 @@ class _Transforms:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
+            mesh_device.arch(), math_fidelity=_MATH_FIDELITY, fp32_dest_acc_en=True, packer_l1_acc=False
         )
 
     def final_ranks(self, start: int) -> set[int]:
@@ -173,6 +178,7 @@ def _relay(mesh_device) -> RelayAffinePrefix:
         value_dim=_KEY,
         num_links=_sp_links(mesh_device, 0),
         local_rows=_ROWS,
+        math_fidelity=_MATH_FIDELITY,
     )
 
 
@@ -294,7 +300,7 @@ _PERF_CASES = [
     "mesh_device,device_params,reference_us,margin", _PERF_CASES, indirect=["mesh_device", "device_params"]
 )
 def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us, margin):
-    """The model's relay: 24 heads per chip, HiFi2, entry states in L1 for the entry correction."""
+    """The model's relay: 24 heads per chip, the model's fidelity, entry states in L1 for the entry correction."""
     require_realtime_profiler("the relay_affine_prefix device-time gate")
     layout = "SP{}xTP{}".format(*tuple(mesh_device.shape))
     transforms = _Transforms(mesh_device, seed=_PERF_START)

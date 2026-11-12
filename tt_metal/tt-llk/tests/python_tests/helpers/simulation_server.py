@@ -207,10 +207,19 @@ class SimulationServer:
         self.stop()
         pytest.exit(returncode=1)
 
-    EMU_ERROR_PATTERN = "zServer : ERROR"
+    # Aether/zrun lines that mean the Zebu job has died while the host is still waiting. The Tcl
+    # "child process exited abnormally" is generic, so match only the two lines it appears in.
+    EMU_ERROR_PATTERNS = (
+        "zServer : ERROR",
+        "Error reading pytest exit code",
+        "Error: CANNOT CLOSE: CHILDSTATUS",
+        "errmsg=child process exited abnormally",
+        "fatal error in DPI",
+        "Failed to process offline DPI",
+    )
 
     def _check_emulator_log(self) -> Optional[str]:
-        """Check emulator logs created after start() for zServer ERROR lines."""
+        """Check emulator logs created after start() for a dead Zebu job."""
         new_logs = set(glob.glob(self.EMU_LOG_PATTERN)) - self._emu_logs_baseline
         if not new_logs:
             return None
@@ -223,7 +232,7 @@ class SimulationServer:
         try:
             with open(latest, "r") as f:
                 for line in f:
-                    if self.EMU_ERROR_PATTERN in line:
+                    if any(pattern in line for pattern in self.EMU_ERROR_PATTERNS):
                         error_lines.append(line.rstrip())
         except OSError:
             return None

@@ -32,7 +32,7 @@ int main(int /*argc*/, char** /*argv*/) {
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
         constexpr CoreCoord core = {0, 0};

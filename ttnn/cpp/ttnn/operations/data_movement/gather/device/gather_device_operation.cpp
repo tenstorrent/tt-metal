@@ -65,6 +65,16 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
             "tensor shape: {}",
             output_tensor_shape,
             input_index_tensor_shape);
+        TT_FATAL(
+            tensor_args.output_tensor->layout() == tensor_args.input_tensor.layout(),
+            "Output tensor layout must match the input tensor layout. Got output layout: {} and input layout: {}",
+            tensor_args.output_tensor->layout(),
+            tensor_args.input_tensor.layout());
+        TT_FATAL(
+            tensor_args.output_tensor->dtype() == tensor_args.input_tensor.dtype(),
+            "Output tensor dtype must match the input tensor dtype. Got output dtype: {} and input dtype: {}",
+            tensor_args.output_tensor->dtype(),
+            tensor_args.input_tensor.dtype());
     }
     TT_FATAL(
         tensor_args.input_index_tensor.dtype() == DataType::UINT32 ||

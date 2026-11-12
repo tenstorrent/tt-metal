@@ -168,7 +168,7 @@ int main(int /*argc*/, char** argv) {
     ////////// PROGRAM BLOCK //////////
     {
         distributed::MeshWorkload workload;
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         const auto device_coord = distributed::MeshCoordinate(0, 0);
 
         ////////// TENSIX CORE SETUP //////////
