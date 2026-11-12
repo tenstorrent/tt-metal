@@ -12,6 +12,7 @@ HEIGHT_SHARDED shard height, 1 on the single-token decode path, and *not* the re
 moe_intermediate_size; ``k`` num_experts_per_tok; ``K`` / ``N`` matmul in/out features.
 """
 
+import contextlib
 import math
 import os
 from typing import NamedTuple, Optional
@@ -821,7 +822,32 @@ def _gate_up_k_shards(col_shards: int, k_tiles: int, dram_banks: int) -> int:
     return pieces if k_tiles % pieces == 0 else 1
 
 
-def _load_fused_weight(
+# Set by :func:`fused_weight_hook` (e.g. the persistent MoE's DRAM warm start): every
+# :func:`_load_fused_weight` call goes through it, with the plain loader as its first argument.
+_FUSED_WEIGHT_HOOK = None
+
+
+@contextlib.contextmanager
+def fused_weight_hook(hook):
+    """Route every :func:`_load_fused_weight` in the block through ``hook(load, tensor, device, nd_config, **kwargs)``,
+    ``load`` the plain loader. Not thread-safe: build nothing else that loads fused weights meanwhile."""
+    global _FUSED_WEIGHT_HOOK
+    previous = _FUSED_WEIGHT_HOOK
+    _FUSED_WEIGHT_HOOK = hook
+    try:
+        yield
+    finally:
+        _FUSED_WEIGHT_HOOK = previous
+
+
+def _load_fused_weight(tensor, device, nd_config, **kwargs) -> ttnn.Tensor:
+    """:func:`_load_fused_weight_now`, through the :func:`fused_weight_hook` when one is set."""
+    if _FUSED_WEIGHT_HOOK is not None:
+        return _FUSED_WEIGHT_HOOK(_load_fused_weight_now, tensor, device, nd_config, **kwargs)
+    return _load_fused_weight_now(tensor, device, nd_config, **kwargs)
+
+
+def _load_fused_weight_now(
     tensor: Optional[torch.Tensor],
     device: ttnn.MeshDevice,
     nd_config: ttnn.MemoryConfig,

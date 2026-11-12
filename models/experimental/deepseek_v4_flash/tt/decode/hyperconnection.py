@@ -62,6 +62,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         row_major_streams: bool = False,
+        bias_in_l1: bool = True,
     ):
         """Build the fused ``fn`` projection and split the ``base`` / ``scale`` parameters.
 
@@ -70,6 +71,10 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         in a DSpark verify block): ``fn`` then runs on those same cores and reads each core's shard
         in place as its ``hc * D / 8`` slices of the flattened rows, so its weight's K is stored in
         that core-major order.
+
+        ``bias_in_l1=False`` keeps the ``pre`` / ``post`` / ``comb`` bias tiles in DRAM even with
+        ``row_major_streams``. Every L1 buffer takes its address range on every core, so each module's three
+        tiles cost 6 KB of every core's L1, which adds up when one device holds many layers.
 
         ``weights`` holds the checkpoint's packed ``fn`` ``[(2+hc)*hc, hc*D]`` and ``base``
         ``[(2+hc)*hc]`` tensors plus ``scale``, three host scalars. ``fn`` becomes one
@@ -157,7 +162,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             )
         # The single-user program reads these three tiles on its critical path; L1 saves the DRAM
         # round trip (~0.2 us per call) for 6 KB per module.
-        bias_memory = ttnn.L1_MEMORY_CONFIG if row_major_streams else ttnn.DRAM_MEMORY_CONFIG
+        bias_memory = ttnn.L1_MEMORY_CONFIG if row_major_streams and bias_in_l1 else ttnn.DRAM_MEMORY_CONFIG
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
             device,
