@@ -2528,6 +2528,22 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
     )
 
 
+def test_linear_host_transpose_a_with_bias_output_shape(device):
+    """L1-interleaved inputs select a config that transposes A on the host; the output is still A^T @ B."""
+    torch.manual_seed(0)
+    torch_a = torch.randn(64, 128, dtype=torch.bfloat16)
+    torch_b = torch.randn(64, 32, dtype=torch.bfloat16)
+    torch_bias = torch.randn(1, 32, dtype=torch.bfloat16)
+
+    def to_l1(t):
+        return ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    output = ttnn.to_torch(ttnn.linear(to_l1(torch_a), to_l1(torch_b), bias=to_l1(torch_bias), transpose_a=True))
+    expected = torch_a.float().T @ torch_b.float() + torch_bias.float()
+    assert output.shape == expected.shape
+    assert_with_pcc(expected, output.float(), 0.999)
+
+
 @pytest.mark.parametrize(
     "m, k, n",
     [

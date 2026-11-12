@@ -72,7 +72,40 @@ def test_linear_transpose_a_with_bias_output_shape(device):
     assert_with_pcc(expected, out, 0.999)
 
 
-def test_sparse_matmul_rejects_multiple_m_blocks(device):
+@pytest.mark.parametrize(
+    "a_shape, b_shape, bias_shape",
+    [
+        ((1, 32), (32, 32), (32, 32)),
+        ((1, 1, 32, 64), (1, 1, 64, 64), (1, 4, 32, 64)),
+    ],
+)
+def test_linear_reuse_config_bias_broadcasts_into_optional_output(device, a_shape, b_shape, bias_shape):
+    """When the post-added bias broadcasts the result, the matmul must not write into the larger output."""
+    torch.manual_seed(0)
+    a = torch.randn(a_shape).bfloat16()
+    b = torch.randn(b_shape).bfloat16()
+    bias = torch.randn(bias_shape).bfloat16()
+    expected = a.float() @ b.float() + bias.float()
+    out = _dram(torch.zeros(expected.shape).bfloat16(), device)
+    program_config = qsr.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=b_shape[-1] // 32,
+    )
+    ttnn.experimental.quasar.linear(
+        _dram(a, device),
+        _dram(b, device),
+        bias=_dram(bias, device),
+        program_config=program_config,
+        optional_output_tensor=out,
+    )
+    assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.999)
+
+
+def test_sparse_matmul_rejects_multiple_m_blocks(device, expect_error):
     """mcast_in0 sends one M block to every core, so per_core_M must cover all of M."""
     torch.manual_seed(0)
     m, k, n, experts = 32, 128, 512, 4
@@ -99,7 +132,7 @@ def test_sparse_matmul_rejects_multiple_m_blocks(device):
         fused_activation=None,
         mcast_in0=True,
     )
-    with pytest.raises(RuntimeError, match="requires num_blocks_y == 1"):
+    with expect_error(RuntimeError, "requires num_blocks_y == 1"):
         ttnn.experimental.quasar.sparse_matmul(
             in0,
             in1,
@@ -113,7 +146,7 @@ def test_sparse_matmul_rejects_multiple_m_blocks(device):
         )
 
 
-def test_batched_dram_sharded_rejects_split_k_with_multi_row_m(device):
+def test_batched_dram_sharded_rejects_split_k_with_multi_row_m(device, expect_error):
     """The in0 reader reads each K block as one contiguous run, which needs per_core_M == 1 or one K block."""
     workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     num_banks = len(workers)
@@ -160,5 +193,5 @@ def test_batched_dram_sharded_rejects_split_k_with_multi_row_m(device):
     tensor_args.input_tensors = [in0_t, in1_t]
     tensor_args.optional_input_tensors = [None]
     output = qsr.MatmulDeviceOperation.create_output_tensors(attributes, tensor_args)
-    with pytest.raises(RuntimeError, match="in0_block_w \\(1\\) must equal K \\(2\\)"):
+    with expect_error(RuntimeError, "in0_block_w \\(1\\) must equal K \\(2\\)"):
         qsr.MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory.create_descriptor(attributes, tensor_args, output)
