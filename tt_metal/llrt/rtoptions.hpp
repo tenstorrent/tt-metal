@@ -991,7 +991,10 @@ public:
     const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
 
     // Mock cluster accessors
-    bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
+    // A mock cluster has no device behind it. An emulated device takes its cluster shape from the same
+    // descriptor but runs kernels, so it is not mock.
+    bool get_mock_enabled() const { return has_mock_cluster_desc() && runtime_target_device_ != TargetDevice::Emule; }
+    bool has_mock_cluster_desc() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
     const std::string& get_emule_soc_desc_path() const { return emule_soc_desc_path; }
     bool get_emule_real_fast_dispatch() const { return emule_real_fast_dispatch; }

@@ -80,7 +80,7 @@ inline std::string get_soc_description_file(
 }
 
 std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
-    TT_FATAL(rtoptions.get_mock_enabled(), "Mock cluster descriptor not enabled");
+    TT_FATAL(rtoptions.has_mock_cluster_desc(), "Mock cluster descriptor not enabled");
     std::unique_ptr<tt::umd::ClusterDescriptor> mock_cluster_desc =
         tt::umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
     TT_FATAL(
@@ -139,7 +139,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             }
             return tt::tt_metal::ClusterType::INVALID;
         }
-        temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
+        temp_cluster_desc = rtoptions.has_mock_cluster_desc() ? get_mock_cluster_desc(rtoptions)
                                                          : tt::umd::Cluster::create_cluster_descriptor();
         cluster_desc = temp_cluster_desc.get();
     }
@@ -533,7 +533,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
         std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc;
-        if (rtoptions_.get_mock_enabled()) {
+        if (rtoptions_.has_mock_cluster_desc()) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
