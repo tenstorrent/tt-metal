@@ -1032,38 +1032,46 @@ class TestRunPhase1GenerateRankBindings:
         with expect_error(RuntimeError, "generate_rank_bindings failed"):
             run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run)
 
-    def test_generate_offline_mock_cluster_descriptors(self, temp_dir, monkeypatch):
-        """--offline runs generate_rank_bindings --mock-cluster-desc-from-fsd and loads the rank mapping it writes."""
+    def test_run_phase1_generate_rank_bindings_offline(self, temp_dir, monkeypatch):
+        """offline runs generate_rank_bindings --offline on the FSD directly, without mpirun."""
         from unittest.mock import MagicMock
 
         executable = temp_dir / "generate_rank_bindings"
         executable.touch()
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.write_text("mesh")
         fsd_path = temp_dir / "fsd.textproto"
         fsd_path.touch()
-        run_dir = temp_dir / "run"
-        output_dir = run_dir / "mock_cluster_desc"
+        output_dir = temp_dir / "run"
         monkeypatch.setattr(ttrun_module, "find_generate_rank_bindings_executable", lambda: executable)
-        descs = {rank: output_dir / f"mock_cluster_desc_rank_{rank}.yaml" for rank in (0, 1)}
 
         def mock_run(cmd, cwd=None, **kwargs):
             assert cmd == [
                 str(executable.resolve()),
-                "--mock-cluster-desc-from-fsd",
+                "--offline",
+                "--factory-system-descriptor",
                 str(fsd_path.resolve()),
+                "--mesh-graph-descriptor",
+                str(mgd_path.resolve()),
                 "--output-dir",
                 str(output_dir.resolve()),
             ]
             output_dir.mkdir(parents=True)
-            for desc in descs.values():
-                desc.write_text("cluster_id: host\n")
-            mapping = {"rank_to_cluster_mock_cluster_desc": {rank: str(desc) for rank, desc in descs.items()}}
-            (output_dir / "mock_cluster_desc_mapping.yaml").write_text(yaml.dump(mapping))
+            (output_dir / "rank_bindings.yaml").write_text("rank_bindings: []\n")
+            (output_dir / "rankfile").write_text("rank 0=localhost slot=0\n")
             mock_result = MagicMock()
             mock_result.returncode = 0
             return mock_result
 
-        result = ttrun_module.generate_offline_mock_cluster_descriptors(fsd_path, run_dir, subprocess_run=mock_run)
-        assert result == {rank: desc.resolve() for rank, desc in descs.items()}
+        result = run_phase1_generate_rank_bindings(
+            mgd_path,
+            None,
+            output_dir,
+            subprocess_run=mock_run,
+            factory_system_descriptor=fsd_path,
+            offline=True,
+        )
+        assert result == (output_dir / "rank_bindings.yaml", output_dir / "rankfile")
 
 
 class TestNewModeFlow:
@@ -1267,7 +1275,7 @@ class TestNewModeFlow:
             assert len(call_args.kwargs["mock_rank_to_desc"]) == 2
 
     def test_new_mode_flow_offline(self, runner, temp_dir, monkeypatch):
-        """--offline generates the mock cluster into the Phase 1 run dir and runs Phase 1 on it, without hosts."""
+        """--offline runs Phase 1 offline on the FSD into the Phase 1 run dir, without hosts or a mock mapping."""
         from unittest.mock import patch
 
         monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
@@ -1275,19 +1283,14 @@ class TestNewModeFlow:
         mgd_path.write_text("mesh")
         fsd_path = temp_dir / "fsd.textproto"
         fsd_path.write_text("fsd")
-        generated = {0: temp_dir / "mock0.yaml", 1: temp_dir / "mock1.yaml"}
         rank_bindings_path = temp_dir / "rank_bindings.yaml"
         rankfile_path = temp_dir / "rankfile"
         rank_bindings_path.write_text("rank_bindings:\n  - rank: 0\n")
         rankfile_path.write_text("rank 0=localhost slot=0\n")
 
         with patch.object(
-            ttrun_module, "generate_offline_mock_cluster_descriptors", return_value=generated
-        ) as mock_generate, patch.object(
             ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rank_bindings_path, rankfile_path)
-        ) as mock_phase1, patch.object(
-            ttrun_module, "legacy_flow"
-        ):
+        ) as mock_phase1, patch.object(ttrun_module, "legacy_flow"):
             result = runner.invoke(
                 main,
                 [
@@ -1302,11 +1305,11 @@ class TestNewModeFlow:
             )
 
         assert result.exit_code == 0, result.output
-        run_dir = mock_generate.call_args.args[1]
-        assert run_dir.parent == temp_dir / "generated" / "ttrun"
         assert mock_phase1.call_args.args[1] is None
-        assert mock_phase1.call_args.args[2] == run_dir
-        assert mock_phase1.call_args.kwargs["mock_rank_to_desc"] == generated
+        assert mock_phase1.call_args.args[2].parent == temp_dir / "generated" / "ttrun"
+        assert mock_phase1.call_args.kwargs["mock_rank_to_desc"] is None
+        assert mock_phase1.call_args.kwargs["factory_system_descriptor"] == fsd_path.resolve()
+        assert mock_phase1.call_args.kwargs["offline"] is True
 
 
 class TestLauncherSelection:

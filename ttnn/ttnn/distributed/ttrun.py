@@ -1108,42 +1108,30 @@ def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=subproc
     return result.returncode if hasattr(result, "returncode") else result
 
 
-OFFLINE_MOCK_CLUSTER_DESC_DIRNAME = "mock_cluster_desc"
+def build_generate_rank_bindings_offline_cmd(
+    executable: Path,
+    mgd_path: Path,
+    fsd_path: Path,
+    output_dir: Path,
+    *,
+    mgd_is_mapping_yaml: Optional[bool] = None,
+) -> List[str]:
+    """Command for ``generate_rank_bindings --offline``: Phase 1 on the FSD alone, as one process without mpirun.
 
-
-def build_mock_cluster_desc_from_fsd_cmd(executable: Path, fsd_path: Path, output_dir: Path) -> List[str]:
-    """Command that has generate_rank_bindings write one mock cluster descriptor per FSD host, without MPI."""
+    It writes one mock cluster descriptor per FSD host into ``output_dir/mock_cluster_desc``, then the usual
+    Phase 1 outputs, with ``phase2_mock_mapping.yaml`` pointing at those descriptors.
+    """
+    use_mapping = mesh_graph_path_is_mgd_mapping_yaml(mgd_path) if mgd_is_mapping_yaml is None else mgd_is_mapping_yaml
     return [
         str(executable.resolve()),
-        "--mock-cluster-desc-from-fsd",
+        "--offline",
+        "--factory-system-descriptor",
         str(fsd_path.resolve()),
+        "--mesh-graph-descriptor-mapping" if use_mapping else "--mesh-graph-descriptor",
+        str(mgd_path.resolve()),
         "--output-dir",
         str(output_dir.resolve()),
     ]
-
-
-def generate_offline_mock_cluster_descriptors(
-    fsd_path: Path, run_dir: Path, subprocess_run=subprocess.run
-) -> Dict[int, Path]:
-    """Generate the ``--offline`` mock cluster descriptors into ``run_dir`` and return rank -> descriptor path.
-
-    Phase 1 rank i is FSD host i. Each descriptor's cluster_id is that host's FSD hostname, so Phase 1
-    discovery names the rank after it and the FSD host filter matches it.
-    """
-    output_dir = run_dir / OFFLINE_MOCK_CLUSTER_DESC_DIRNAME
-    cmd = build_mock_cluster_desc_from_fsd_cmd(find_generate_rank_bindings_executable(), fsd_path, output_dir)
-    logger.info(f"{TT_RUN_PREFIX} Offline: generating mock cluster descriptors from {fsd_path}")
-    logger.debug(f"{TT_RUN_PREFIX} Offline command: {' '.join(cmd)}")
-    exit_code = run_generate_rank_bindings(cmd, cwd=ORIGINAL_CWD, subprocess_run=subprocess_run)
-    if exit_code != 0:
-        raise RuntimeError(
-            f"mock cluster descriptor generation failed with exit code {exit_code}. Command: {' '.join(cmd)}"
-        )
-    # The generator writes a rank mapping for a multi-host FSD and a single descriptor for a single-host one.
-    for name in ("mock_cluster_desc_mapping.yaml", "mock_cluster_desc.yaml"):
-        if (output_dir / name).is_file():
-            return load_mock_rank_to_descriptors(output_dir / name)
-    raise RuntimeError(f"mock cluster descriptor generation wrote no descriptors to {output_dir}")
 
 
 def run_phase1_generate_rank_bindings(
@@ -1156,6 +1144,7 @@ def run_phase1_generate_rank_bindings(
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
     factory_system_descriptor: Optional[Path] = None,
+    offline: bool = False,
 ) -> tuple[Path, Path]:
     """Run Phase 1: generate_rank_bindings for rank_bindings (or overlay mapping), rankfile, and mocks.
 
@@ -1171,6 +1160,8 @@ def run_phase1_generate_rank_bindings(
         subprocess_run: Subprocess run function (injectable for testing)
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
         mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
+        offline: Run ``generate_rank_bindings --offline`` on ``factory_system_descriptor`` instead of mpirun;
+            ``hosts``, ``mock_rank_to_desc`` and ``mpi_args`` are not used.
 
     Returns:
         Tuple of (
@@ -1185,16 +1176,23 @@ def run_phase1_generate_rank_bindings(
         RuntimeError: If Phase 1 fails or outputs are missing
     """
     executable = find_generate_rank_bindings_executable()
-    cmd = build_generate_rank_bindings_mpi_cmd(
-        executable,
-        mgd_path,
-        hosts,
-        output_dir,
-        mock_rank_to_desc,
-        mpi_args,
-        mgd_is_mapping_yaml=mgd_is_mapping_yaml,
-        factory_system_descriptor=factory_system_descriptor,
-    )
+    if offline:
+        if factory_system_descriptor is None:
+            raise ValueError("offline requires factory_system_descriptor")
+        cmd = build_generate_rank_bindings_offline_cmd(
+            executable, mgd_path, factory_system_descriptor, output_dir, mgd_is_mapping_yaml=mgd_is_mapping_yaml
+        )
+    else:
+        cmd = build_generate_rank_bindings_mpi_cmd(
+            executable,
+            mgd_path,
+            hosts,
+            output_dir,
+            mock_rank_to_desc,
+            mpi_args,
+            mgd_is_mapping_yaml=mgd_is_mapping_yaml,
+            factory_system_descriptor=factory_system_descriptor,
+        )
 
     logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
@@ -2843,8 +2841,9 @@ def new_mode_flow(
         bare: If True, disable tt-run defaults
         tcp_interface: Network interface for MPI TCP communication
         force_rediscovery: If True, always run Phase 1 and refresh cache (skip cache hit)
-        offline: If True, Phase 1 runs on mock cluster descriptors generated from ``factory_system_descriptor``
-            into the Phase 1 run directory, one rank per FSD host. Phase 2 uses them like any mock run.
+        offline: If True, Phase 1 is ``generate_rank_bindings --offline`` on ``factory_system_descriptor``, one
+            process without mpirun. It writes a mock cluster descriptor per FSD host into the Phase 1 run directory,
+            and Phase 2 uses them like any mock run.
     """
     program = ctx.args
 
@@ -2975,11 +2974,10 @@ def new_mode_flow(
                 executable = find_generate_rank_bindings_executable()
                 if offline:
                     print_command(
-                        build_mock_cluster_desc_from_fsd_cmd(
-                            executable, resolved_fsd, run_dir / OFFLINE_MOCK_CLUSTER_DESC_DIRNAME
+                        build_generate_rank_bindings_offline_cmd(
+                            executable, resolved_mgd, resolved_fsd, run_dir, mgd_is_mapping_yaml=mgd_mapping_yaml
                         ),
-                        prefix=f"{TT_RUN_PREFIX} Offline mock cluster descriptors — dry-run, not executed; "
-                        "Phase 1 then runs one mock rank per FSD host",
+                        prefix=f"{TT_RUN_PREFIX} Phase 1 (generate_rank_bindings --offline) — dry-run, not executed",
                     )
                 else:
                     phase1_cmd = build_generate_rank_bindings_mpi_cmd(
@@ -3020,8 +3018,6 @@ def new_mode_flow(
         if hosts_for_phase1:
             write_phase1_openmpi_hostfile(run_dir / "hostfile", hosts_for_phase1)
         try:
-            if offline:
-                mock_rank_to_desc = generate_offline_mock_cluster_descriptors(resolved_fsd, run_dir)
             rank_bindings_path, rankfile_path = run_phase1_generate_rank_bindings(
                 resolved_mgd,
                 hosts_for_phase1,
@@ -3031,6 +3027,7 @@ def new_mode_flow(
                 mpi_args=phase1_mpi_args,
                 mgd_is_mapping_yaml=mgd_mapping_yaml,
                 factory_system_descriptor=resolved_fsd,
+                offline=offline,
             )
         except (FileNotFoundError, RuntimeError) as e:
             raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
@@ -3176,9 +3173,9 @@ def new_mode_flow(
 @click.option(
     "--offline",
     is_flag=True,
-    help="New mode only: run without a cluster, on mock cluster descriptors generated from "
-    "--factory-system-descriptor (one Phase 1 rank per FSD host). Requires --factory-system-descriptor; "
-    "replaces --hosts and --mock-cluster-rank-binding.",
+    help="New mode only: run without a cluster. Phase 1 is generate_rank_bindings --offline, one process without "
+    "mpirun, which writes a mock cluster descriptor per --factory-system-descriptor host and maps on the FSD. "
+    "Requires --factory-system-descriptor; replaces --hosts and --mock-cluster-rank-binding.",
 )
 @click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
