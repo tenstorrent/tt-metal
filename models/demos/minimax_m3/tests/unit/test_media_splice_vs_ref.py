@@ -150,7 +150,7 @@ def check(got, want, images, first_chunk_start, seq_len):
     assert torch.equal(got[is_image], want[is_image]), "an image row is not its embedding"
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
 @pytest.mark.parametrize("sharded_residual", ["1", "0"], ids=["tp_sharded", "replicated"])
 @pytest.mark.parametrize(
     "seq_len,layout,first_chunk_start",
@@ -198,7 +198,7 @@ def test_one_batched_fetch_per_forward(monkeypatch):
     )
     assert store.calls == 1
     assert torch.equal(mask, want_mask)
-    assert torch.equal(rows, want_rows)
+    assert torch.equal(rows[mask], want_rows[want_mask])
 
 
 def tiny_hf_model():
@@ -256,7 +256,7 @@ def hf_prompt(layout, model):
     return torch.tensor(ids), images, features
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
 @pytest.mark.parametrize(
     "layout,first_chunk_start",
     [

@@ -8,8 +8,19 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 
-from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
+
+
+def _positions(chunk_start: int, sp: int, chunk_local: int) -> torch.Tensor:
+    """rotated_chunk_positions(chunk_start, sp, chunk_local) as an [sp, chunk_local] tensor."""
+    chunk_global = sp * chunk_local
+    chip = torch.arange(sp).unsqueeze(1)
+    boundary = (chunk_start // chunk_local) % sp
+    first = (chunk_start // chunk_global + (chip < boundary)) * chunk_local + (chip == boundary) * (
+        chunk_start % chunk_local
+    )
+    local_row = first + torch.arange(chunk_local)
+    return (local_row // chunk_local) * chunk_global + chip * chunk_local + local_row % chunk_local
 
 
 def build_injection(
@@ -21,11 +32,11 @@ def build_injection(
 ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
     """(rows [sp, F * chunk_local, hidden] bf16, mask [sp, F * chunk_local]) in the forward's per-chip order
     (pack_forward_tokens), or None without refs. rows_of(ref) is the ref's [num_tokens, hidden] embeddings as
-    bf16 bit patterns (uint16); only the rows inside each ref's chunk are written."""
+    bf16 bit patterns (uint16); only the rows inside each ref's chunk are written. Rows outside the mask are
+    uninitialised: inject_media_embeddings selects on the mask and never reads them."""
     if not refs:
         return None
-    per_chunk = [rotated_chunk_positions(c.actual_start, sp, chunk_local) for c in chunks]
-    positions = torch.tensor([[p for chunk in per_chunk for p in chunk[c]] for c in range(sp)])
+    positions = torch.cat([_positions(c.actual_start, sp, chunk_local) for c in chunks], dim=1)
     chunk_of = torch.arange(len(chunks)).repeat_interleave(chunk_local).expand(sp, -1)
     rows, mask = None, torch.zeros(positions.shape, dtype=torch.bool)
     for ref in refs:
@@ -35,7 +46,7 @@ def build_injection(
         emb = rows_of(ref)
         assert emb.shape[0] == ref.num_tokens, f"{emb.shape[0]} rows for {ref}"
         if rows is None:
-            rows = torch.zeros(*positions.shape, emb.shape[1], dtype=torch.bfloat16)
+            rows = torch.empty(*positions.shape, emb.shape[1], dtype=torch.bfloat16)
         picked = np.ascontiguousarray(emb[(positions[sel] - ref.start_pos).numpy()])
         rows[sel] = torch.from_numpy(picked).view(torch.bfloat16)
         mask |= sel

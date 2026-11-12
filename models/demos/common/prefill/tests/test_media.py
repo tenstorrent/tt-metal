@@ -6,8 +6,8 @@
 import pytest
 import torch
 
-from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.media import build_injection
+from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
+from models.demos.common.prefill.media import _positions, build_injection
 from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK, MediaRef, PrefillChunk
 
 SP, LOCAL, HIDDEN = 4, 32, 8
@@ -60,8 +60,14 @@ def test_rows_follow_the_token_layout(chunks, refs):
     want_rows, want_mask = expected(chunks, refs, embs)
     assert want_mask.any()
     assert torch.equal(mask, want_mask)
-    assert torch.equal(rows, want_rows)
+    assert torch.equal(rows[mask], want_rows[want_mask])
 
 
 def test_text_only_forward():
     assert build_injection([], [PrefillChunk(0, 0, C)], None, SP, LOCAL) is None
+
+
+@pytest.mark.parametrize("sp,chunk_local", [(1, 32), (2, 32), (4, 64), (8, 1)])
+def test_positions_match_the_chunk_layout(sp, chunk_local):
+    for start in range(0, 3 * sp * chunk_local, max(1, chunk_local // 2)):
+        assert _positions(start, sp, chunk_local).tolist() == rotated_chunk_positions(start, sp, chunk_local)
