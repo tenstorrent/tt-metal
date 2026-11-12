@@ -37,11 +37,11 @@ KTS = (1, 2, 4, 8)
 class MM_CONTIG(TemplateParameter):
     """sweep_contig: the block forms of the cell are the plain contiguous ones (not block float)"""
 
-    contig: bool
-    f32: bool = False
+    mm_contig: bool
+    mm_f32: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool sweep_contig = {str(self.contig).lower()};\nconstexpr bool sweep_float32_out = {str(self.f32).lower()};"
+        return f"constexpr bool sweep_contig = {str(self.mm_contig).lower()};\nconstexpr bool sweep_float32_out = {str(self.mm_f32).lower()};"
 
 
 def _shapes(cap):
