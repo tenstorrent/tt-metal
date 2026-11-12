@@ -41,10 +41,21 @@ constexpr bool matmul_two_row()
     return reuse_dir == 4 || reuse_dir == 6;
 }
 
+// reuse_dir 3 runs the default body with the held operand the matmul init chose at run time: true holds in0 (as ct_dim >= rt_dim does),
+// false in1; set before the unpack and math inits, read by them and by every call
+inline bool matmul_runtime_reuse_a = true;
+
 template <std::uint32_t reuse_dir>
 constexpr bool matmul_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
-    return reuse_dir == 0 ? ct_dim >= rt_dim : (reuse_dir == 1 || reuse_dir == 4);
+    if constexpr (reuse_dir == 3)
+    {
+        return matmul_runtime_reuse_a;
+    }
+    else
+    {
+        return reuse_dir == 0 ? ct_dim >= rt_dim : (reuse_dir == 1 || reuse_dir == 4);
+    }
 }
 
 // A 32-bit tile takes twice the unpacker cycles of a 16-bit or Bfp8_b / Bfp4_b one (32 against 64 datums per cycle), and the streamed operand

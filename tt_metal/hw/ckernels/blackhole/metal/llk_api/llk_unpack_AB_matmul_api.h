@@ -152,8 +152,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
-    // a forced reuse direction streams on the default body
-    if (reuse_dir == 0 && may_stream_narrow &&
+    // a forced reuse direction streams on the default body; reuse_dir 3 streams narrow when the init kept ct_dim >= rt_dim
+    if ((reuse_dir == 0 || (reuse_dir == 3 && matmul_runtime_reuse_a == (ct_dim >= rt_dim))) && may_stream_narrow &&
         _llk_unpack_AB_matmul_stream_narrow_(
             ct_dim,
             rt_dim,
