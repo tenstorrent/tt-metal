@@ -6,14 +6,13 @@
 
 #include <cstdint>
 #include <optional>
-#include <utility>
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
-#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#include "tt_metal/hw/inc/api/dataflow/dfb_access.h"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -39,9 +38,11 @@ struct DataflowBufferConfig {
     uint16_t producer_risc_mask = 0x0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
     uint8_t num_producers = 1;
     AccessPattern pap = AccessPattern::STRIDED;
+    uint32_t producer_block_size = 0;   // BLOCKED only: tiles per producer block (0 otherwise)
     uint16_t consumer_risc_mask = 0x0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
     uint8_t num_consumers = 1;
     AccessPattern cap = AccessPattern::STRIDED;
+    uint32_t consumer_block_size = 0;  // BLOCKED only: tiles per consumer block (0 otherwise)
 
     // Implicit sync — per-side opt-in to the streamlined ISR-driven credit posting.
     // (Only applies to DM riscs; Tensix riscs always require explicit sync.)

@@ -33,24 +33,23 @@ class PrefetcherPipeSpaceImpl;
 /**
  * Host object for a durable cross-program remote DFB.
  *
- * A PrefetcherPipe is carved from a PrefetcherPipeSpace (below): the space owns the persistent
- * L1 (data ring + config page) on every core it was reserved over, and a pipe is one sender ->
+ * A PrefetcherPipe is carved from a PrefetcherPipeSpace (below): the space owns the L1 (data
+ * ring + config page) on every core it was reserved over, and a pipe is one sender ->
  * receivers mapping inside that reservation. Every pipe carved from one space shares the space's
  * ring and config addresses, which is what lets one Program slot (or one relay DFB) serve several
  * pipes on disjoint cores.
  *
- * Lifetime: ownership runs one way. The space owns the L1; a pipe borrows from its space and
- * must not outlive it; a Program bound to a pipe holds a non-owning reference and must not
- * outlive the pipe. Keep the pipe alive for the entire time any Program uses it; destroying it
- * returns its cores to the space (the next carve on those cores rewrites the config pages). The
- * runtime does not fence peers; only destroy (or let it go out of scope) after every peer
- * program has Finished.
+ * Lifetime: ownership runs one way. The space owns the L1 and a pipe borrows from its space and
+ * must not outlive it. A Program bound to a pipe holds no reference to it: it copies the pipe's
+ * addresses, geometry and credit lanes, as it copies a tensor's address. Keep the pipe alive for
+ * the entire time any Program uses it; destroying it returns its cores to the space (the next
+ * carve on those cores rewrites the config pages), and a Program enqueued afterwards, unless it
+ * has been rebound to a pipe that replaces it, uses L1 the pipe no longer owns. The runtime does
+ * not fence peers; only destroy (or let it go out of scope) after every peer program has Finished.
  *
- * The handle is a movable value. A Program records the implementation object behind it, and a
- * move leaves that object where it is, so a pipe can be handed to a new owner or kept in a
- * container without orphaning a binding. Moving from a pipe empties it, and an empty pipe is only
- * good for destruction or assignment; move-assigning onto a live pipe destroys the pipe that was
- * there, with the same effect on its bindings as letting it go out of scope.
+ * The handle is a movable value. Moving from a pipe empties it, and an empty pipe is only good
+ * for destruction or assignment; move-assigning onto a live pipe destroys the pipe that was
+ * there.
  *
  * Host programming model (Metal 2.0):
  *   auto space = CreatePrefetcherPipeSpace(device, {.sender_cores = ..., .receiver_domain = ...,
@@ -71,10 +70,8 @@ public:
     // Internal (PrefetcherPipeSpace): wrap a carved implementation object.
     explicit PrefetcherPipe(std::unique_ptr<PrefetcherPipeImpl> impl);
 
-    // Movable, not copyable. A handle is a pointer to the implementation object that owns the
-    // claim on the space, and a Program's binding points at that object rather than at the
-    // handle, so relocating a handle keeps every binding valid. Copying would leave two handles
-    // releasing one claim.
+    // Movable, not copyable. A handle owns the implementation object that owns the claim on the
+    // space; copying would leave two handles releasing one claim.
     PrefetcherPipe(const PrefetcherPipe&) = delete;
     PrefetcherPipe& operator=(const PrefetcherPipe&) = delete;
     PrefetcherPipe(PrefetcherPipe&&) noexcept;
@@ -101,35 +98,44 @@ public:
     SenderCoreType sender_core_type() const;
 
     // Stable process-local identity. Unlike the implementation address, this is never reused
-    // after a pipe is destroyed, so program-cache keys can safely distinguish re-carved pipes.
+    // after a pipe is destroyed, so a Program can tell a re-carved pipe from the one it bound.
     PrefetcherPipeIdentity identity() const;
 
     // Initial applied entry size stamped into a DRAM sender's persistent page. Programs and
     // tensor-prefetcher requests may re-grid the pipe to any aligned entry size that fits.
     uint32_t initial_entry_size() const;
 
+    // Credit lanes P the pipe was carved with: the number of data-movement threads that consume it
+    // on each receiver core. Fixed for the pipe's lifetime.
+    uint32_t num_credit_lanes() const;
+
     // Reflection follows shared_ptr<PrefetcherPipe> through the pointer for profiler output and
-    // exact cache keys. identity() is monotonic, so destroying and re-carving the same geometry
-    // cannot collide even if the allocator reuses both addresses and the host implementation slot.
+    // cache keys. The key is the pipe's geometry and addresses, not identity(): a pipe re-carved with
+    // the same geometry at the same addresses hits the programs built for the one it replaces, and
+    // they rebind to it. A hit must be a pipe the cached Program accepts, so these attributes cover
+    // every field of ProgramImpl::PrefetcherPipeBindingKey. They also name a DRAM sender's core,
+    // which the binding key leaves out (see there) but a factory may read.
     static constexpr bool ttsl_reflect_through_shared_ptr = true;
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "identity",
+        "sender_core_type",
         "sender_core",
         "receiver_cores",
         "config_address",
         "buffer_address",
         "initial_entry_size",
-        "ring_size");
-    std::tuple<PrefetcherPipeIdentity, CoreCoord, const CoreRangeSet&, uint32_t, uint32_t, uint32_t, uint32_t>
+        "ring_size",
+        "num_credit_lanes");
+    std::tuple<SenderCoreType, CoreCoord, const CoreRangeSet&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
     attribute_values() const {
         return {
-            identity(),
+            sender_core_type(),
             sender_core(),
             receiver_cores(),
             config_address(),
             buffer_address(),
             initial_entry_size(),
-            ring_size()};
+            ring_size(),
+            num_credit_lanes()};
     }
 
     // Internal (host runtime, tests): the implementation object this pipe owns.
@@ -140,14 +146,28 @@ private:
     std::unique_ptr<PrefetcherPipeImpl> pimpl_;
 };
 
+// Which L1 a PrefetcherPipeSpace takes its data ring and config pages from.
+enum class PrefetcherPipeL1Source : uint8_t {
+    // Allocator for a space with DRAM senders, PersistentArena for a worker-only space.
+    Default,
+    // The persistent arena at the bottom of worker L1, below program-local L1. Takes L1 only on
+    // the space's cores, but the space must be created before any Program places program-local
+    // L1 (CBs, DFBs) on them. Worker-only spaces.
+    PersistentArena,
+    // Lockstep L1 buffers from the device's L1 allocator. A space can be created or destroyed at
+    // any time; enqueueing a Program whose CBs or DFBs overlap a live space fails. The range is
+    // taken on every worker core, not only the space's. Config pages are written through the
+    // calling thread's command queue, so they land after the work already enqueued on it.
+    Allocator,
+};
+
 /**
  * Reservation geometry for a PrefetcherPipeSpace.
  *
- * The space pins persistent L1 on `sender_cores ∪ receiver_domain` before any Program places
- * program-local L1 on those cores. `receiver_domain` is NOT the 1:N map: it is every core that
- * MAY later be carved as a receiver (typically the compute/worker grid or a sub-device), because
- * whoever creates the space (the model / a prefetcher) generally does not know the consumer's
- * receiver layout. The consumer carves pipes once it does.
+ * The space pins L1 on `sender_cores ∪ receiver_domain`. `receiver_domain` is NOT the 1:N map: it
+ * is every core that MAY later be carved as a receiver (typically the compute/worker grid or a
+ * sub-device), because whoever creates the space (the model / a prefetcher) generally does not
+ * know the consumer's receiver layout. The consumer carves pipes once it does.
  */
 struct PrefetcherPipeSpaceConfig {
     // Worker cores that may act as pipe senders. Never DRAM coordinates.
@@ -163,10 +183,12 @@ struct PrefetcherPipeSpaceConfig {
     // [1, receiver_domain.num_cores()].
     uint32_t max_receivers_per_pipe = 0;
     BufferType buffer_type = BufferType::L1;
+    // A space with DRAM senders must use PrefetcherPipeL1Source::Allocator (Default resolves to it).
+    PrefetcherPipeL1Source l1_source = PrefetcherPipeL1Source::Default;
 };
 
 /**
- * A reservation of persistent L1 from which PrefetcherPipes are carved.
+ * A reservation of L1 from which PrefetcherPipes are carved.
  *
  * Creating a space takes ONE ring allocation and ONE config-page allocation over every worker
  * core in `sender_cores ∪ receiver_domain`, so every pipe carved from it shares
@@ -179,8 +201,9 @@ struct PrefetcherPipeSpaceConfig {
  * actually use.
  *
  * Lifetime: the space handle owns the reservation and must outlive every pipe carved from it
- * (pipes point at the space without owning it). Destroying the space releases the L1; a pipe
- * that outlives its space is detached and every later use of it throws.
+ * (pipes point at the space without owning it). Destroying the space releases the L1 (for spaces
+ * created together by CreatePrefetcherPipeSpaces, once all of them are destroyed); a pipe that
+ * outlives its space is detached and every later use of it throws.
  */
 class PrefetcherPipeSpace {
 public:
@@ -208,20 +231,29 @@ public:
     // Reservation cores not currently claimed by a live pipe.
     CoreRangeSet unclaimed_cores() const;
     const distributed::MeshDevice* get_device() const;
+    // Where this space's L1 came from: PersistentArena or Allocator, never Default.
+    PrefetcherPipeL1Source l1_source() const;
 
     /**
      * Carve one pipe. `sender` must be one of `sender_cores` (worker only; DRAM coordinates are
      * rejected), `receivers` a non-empty subset of `receiver_domain` with at most
      * `max_receivers_per_pipe` cores that does not contain `sender`, and none of those cores may
      * be claimed by a live pipe. Writes this pipe's config pages; allocates nothing.
+     *
+     * `num_credit_lanes` is the number of data-movement threads that will consume the pipe on
+     * each receiver core (a relay DFB's num_producers), from 1 to the lanes the space's config
+     * pages reserve: PREFETCHER_PIPE_MAX_CREDIT_LANES on Quasar, 1 elsewhere. Every Program that
+     * binds the pipe's receivers must consume it with that many threads.
      */
-    PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers);
+    PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers, uint32_t num_credit_lanes = 1);
 
     /**
-     * Carve several disjoint pipes in one call. Validated as a whole before anything is claimed
-     * (a core claimed twice within the batch is rejected); create_pipe is this with M = 1.
+     * Carve several disjoint pipes in one call, each with `num_credit_lanes` credit lanes.
+     * Validated as a whole before anything is claimed (a core claimed twice within the batch is
+     * rejected); create_pipe is this with M = 1.
      */
-    std::vector<PrefetcherPipe> create_pipes(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes);
+    std::vector<PrefetcherPipe> create_pipes(
+        std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes, uint32_t num_credit_lanes = 1);
 
     // Internal (host runtime, tests): the implementation object this space owns.
     PrefetcherPipeSpaceImpl& impl() { return *pimpl_; }
@@ -232,15 +264,27 @@ private:
 };
 
 /**
- * @brief Reserve persistent L1 for PrefetcherPipes on `config.sender_cores ∪ config.receiver_domain`.
+ * @brief Reserve L1 for PrefetcherPipes on `config.sender_cores ∪ config.receiver_domain`.
  *
- * Must run before any Program places program-local L1 on those cores (the persistent arena seals
- * a core at that point). Quasar config pages reserve PREFETCHER_PIPE_MAX_CREDIT_LANES credit
- * lanes per receiver slot; the active lane count is a per-Program property set from the receiver
- * kernel's thread count when the pipe is bound.
+ * With PrefetcherPipeL1Source::PersistentArena, must run before any Program places program-local
+ * L1 on those cores (the persistent arena seals a core at that point). Quasar config pages reserve
+ * PREFETCHER_PIPE_MAX_CREDIT_LANES credit lanes per receiver slot; each pipe uses the number it
+ * is carved with (PrefetcherPipeSpace::create_pipe).
  */
-PrefetcherPipeSpace CreatePrefetcherPipeSpace(
-    const distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config);
+PrefetcherPipeSpace CreatePrefetcherPipeSpace(distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config);
+
+/**
+ * @brief Reserve L1 for several spaces at once, so that they share one buffer_address() and one
+ * config_address(), as pipes carved from one space do.
+ *
+ * Each config is checked as CreatePrefetcherPipeSpace checks it. In addition, the spaces'
+ * reservation cores must be pairwise disjoint and every config must resolve to the same
+ * PrefetcherPipeL1Source. The shared ring and config page are sized for the largest of them. With
+ * the Allocator source this takes one range of every worker core's L1 where creating the spaces
+ * one by one would take one range each. The L1 is released once every returned space is destroyed.
+ */
+std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
+    distributed::MeshDevice& device, std::span<const PrefetcherPipeSpaceConfig> configs);
 
 // Select DRAM senders from `bank_to_receivers` and carve one pipe per selected sender from an
 // existing space. Each input pair names a DRAM bank and the complete worker receiver set served
@@ -251,8 +295,10 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards = false);
 
-// The receiver-contiguous weight shard the Tensor prefetcher delivers to one receiver: the shard the
-// weight holds at bank-local index `bank_local_shard` of DRAM bank `bank`.
+// The part of a weight the Tensor prefetcher delivers to one receiver: for a receiver-contiguous
+// weight, the shard it holds at bank-local index `bank_local_shard` of DRAM bank `bank`; for a legacy
+// K-row-major weight (one shard per bank), slice `bank_local_shard` of bank `bank`'s shard, the shard
+// cut across that bank's receivers in order.
 struct TensorPrefetcherReceiverShard {
     CoreCoord receiver;
     uint32_t bank = 0;

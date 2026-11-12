@@ -9,8 +9,10 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
+from models.demos.deepseek_v3_d_p.tests.kda.utils import LayerNrmseThresholds
 from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_matches_reference as _assert_matches_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import build_layer as _build_layer
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import mla_row_permutation as _mla_row_permutation
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_convolution_at_sp_rank,
@@ -25,12 +27,13 @@ pytestmark = run_for_blackhole()
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis", [((1, 8), 0, 1), ((2, 4), 0, 1), ((2, 4), 1, 0)], indirect=["mesh_device"]
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
+    "mesh_device,sp_axis,tp_axis,device_params",
+    [
+        ((1, 8), 0, 1, kda_device_params((1, 8))),
+        ((2, 4), 0, 1, kda_device_params((2, 4))),
+        ((2, 4), 1, 0, kda_device_params((2, 4))),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis, device_params):
     p = tuple(mesh_device.shape)[sp_axis]
@@ -61,7 +64,8 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
         sp_axis,
         tp_axis,
         0,
-        config.num_heads // tuple(mesh_device.shape)[tp_axis] * config.head_k_dim,
+        config,
+        layer.convolution_page_channels,
     ).float()
     reference_initial = KDAReferenceState(
         recurrent=reconstruct_state_at_sp_rank(initial.recurrent, mesh_device, sp_axis, tp_axis, 0).float(),
@@ -168,11 +172,13 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
                     sp_axis=sp_axis,
                     tp_axis=tp_axis,
                     config=config,
+                    page_channels=layer.convolution_page_channels,
                     label=f"padding SP{p} start={start} length={length}",
                     # Short SP1 and full-length offset baselines can exceed
                     # the inherited peak-error gate without padding. These
                     # cases require exact unpadded carries plus CPU PCC/RMSE.
                     state_linf_threshold=None if p == 1 or length == sequence else 0.60,
+                    nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.004),
                 )
                 physical = reconstruct_sp_tp_tensor(output, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
                 valid_output = physical[:, torch.argsort(permutation)][:, :length].clone()

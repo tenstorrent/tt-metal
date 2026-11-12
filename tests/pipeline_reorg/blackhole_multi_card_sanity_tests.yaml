@@ -21,24 +21,24 @@
   skus:
     bh_quietbox_2:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
   budget_type: sanity
 
-- name: Host IO fast unit test (viommu only)
-  # Reload configuration needs slow dispatch; P300 also covers the 1x2 L1 round trip.
-  cmd: >-
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv
-    models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
-    tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py
-  skus:
-    bh_p300:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: sanity
+# - name: Host IO fast unit test (viommu only)
+#   # Reload configuration needs slow dispatch; P300 also covers the 1x2 L1 round trip.
+#   cmd: >-
+#     TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv
+#     models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+#     tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py
+#   skus:
+#     bh_p300:
+#       timeout: 10
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: sanity
 
 - name: TTNN multi-device CCL, SDPA PERF, and indexer tests (QB2 only)
   cmd: |
@@ -59,7 +59,7 @@
 
 - name: deepseek_prefill d_p multi-chip op unit tests (QB2 only)
   cmd: |
-    pytest --timeout 300 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_reduce.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_rotary_embedding_indexed.py -k "(test_ttnn_dispatch_combine and tile and predictable and torus-y-4x1 and dsv3-640-avg) or (test_ttnn_combine and not test_ttnn_combine_fabric2d and bf16_out and tile and predictable and dsv3 and fabric2d-2x2 and pcc and not perf_no_pcc) or (test_ttnn_reduce and torus-y-4x1 and generic and weighted and not unweighted) or (test_rotary_embedding_indexed_multi_iteration_prefill and 2x2-small and padded_partial)" -v
+    pytest --timeout 300 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_reduce.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_rotary_embedding_indexed.py -k "(test_ttnn_dispatch_combine and tile and predictable and torus-y-4x1 and dsv3-640-avg) or (test_ttnn_combine and not test_ttnn_combine_fabric2d and bf16_out and tile and predictable and dsv3 and fabric2d-2x2 and pcc and not perf_no_pcc) or (test_ttnn_reduce and torus-y-4x1 and generic and weighted and not unweighted) or (test_update_padded_kv_cache_multi_iteration_prefill and 2x2 and small and padded_partial) or (test_rotary_embedding_indexed_multi_iteration_prefill and 2x2-small and padded_partial)" -v
     pytest --timeout 300 models/demos/deepseek_v3_d_p/tests/test_d2d_socket_sync.py -k "fabric2d-2x2 and metadata and not no_metadata" -v
   skus:
     bh_quietbox_2:

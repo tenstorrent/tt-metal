@@ -24,6 +24,12 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up = false);
 uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up = false);
 
+// The data format to declare on a slice DFB that holds elements of `dtype` on a device of `arch`. On
+// Quasar it declares UInt16 and UInt32 elements as RawUInt16 and RawUInt32, raw formats of the same
+// element size. Use it only for a DFB that no compute kernel handles in a way that depends on the element
+// type: compute kernels see the raw formats as Float16 and Float32, not as integers.
+tt::DataFormat get_slice_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch);
+
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
@@ -66,7 +72,8 @@ SliceDeviceOperation::tensor_return_value_t slice(
     const std::optional<uint32_t>& slice_dim = std::nullopt,
     const std::optional<uint32_t>& num_devices = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<Tensor>& preallocated_output = std::nullopt);
+    const std::optional<Tensor>& preallocated_output = std::nullopt,
+    bool output_mem_config_inherited = false);
 
 // Row-major factories retain keyed scalar assignments and refresh only tensor bindings.
 tt::tt_metal::experimental::ProgramRunArgs slice_row_major_run_args(const SliceInputs& tensor_args, Tensor& output);

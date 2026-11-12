@@ -24,6 +24,11 @@ namespace ttnn::experimental::prim {
 using namespace tt::tt_metal;
 using namespace ttsl;
 
+// it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
+// expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
+inline constexpr uint32_t CORES_X = 2;
+inline constexpr uint32_t CORES_Y = 4;
+
 struct IntImgDeviceOperation {
     using operation_attributes_t = IntImgParams;
     using tensor_args_t = Tensor;

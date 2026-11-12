@@ -13,7 +13,7 @@ from tracy.process_model_log import (
     get_latest_ops_log_filename,
     get_profiler_folder,
 )
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 from tracy.compare_ops_logs import compare_ops_logs
 from tracy.common import (
     generate_logs_folder,
@@ -325,6 +325,22 @@ class TestCppPostProc:
             generate_logs_folder(get_profiler_folder(request.param["name"])) / PROFILER_CPP_DEVICE_PERF_REPORT
         )
         compare_ops_logs(python_ops_perf_report=python_ops_perf_report, cpp_ops_perf_report=cpp_ops_perf_report)
+
+
+repeated_op_test = {
+    "name": "RepeatedOp",
+    "command": "pytest tests/ttnn/tracy/test_various_ops_profile.py::test_repeated_op_profile",
+}
+
+
+@pytest.mark.parametrize("run_test", [pytest.param(repeated_op_test, id=repeated_op_test["name"])], indirect=True)
+class TestRepeatedOpProfile:
+    def test_program_cache_hit_reported_per_call(self, run_test_do_post_proc):
+        res, _request = run_test_do_post_proc
+        op_rows = res[res["OP TYPE"] != "signpost"]
+        add_rows = op_rows[op_rows["OP CODE"].astype(str).str.lower().str.contains("binary")]
+        cache_hits = [str(value).strip().lower() in ("true", "1") for value in add_rows["PROGRAM CACHE HIT"]]
+        assert cache_hits == [False, True, True], f"Unexpected PROGRAM CACHE HIT values: {cache_hits}"
 
 
 matmul_test_perf_counters = {

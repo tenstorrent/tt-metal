@@ -14,6 +14,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -42,7 +43,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
 }
 }  // namespace detail
 
-void Conv3dDeviceOperation::validate_on_program_cache_miss(
+void Conv3dDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     const auto& input_shape = input_tensor_a.logical_shape();
@@ -152,6 +153,13 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
         args.kernel_size[2],
         args.dilation[2]);
 
+    TT_FATAL(
+        args.config.T_out_block > 0 && args.config.H_out_block > 0 && args.config.W_out_block > 0,
+        "T_out_block ({}), H_out_block ({}) and W_out_block ({}) must be greater than 0",
+        args.config.T_out_block,
+        args.config.H_out_block,
+        args.config.W_out_block);
+
     if (args.config.C_out_block > 0) {
         uint32_t padded_C_out = tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
         TT_FATAL(
@@ -204,7 +212,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             weight_tensor.dtype(),
             weight_tensor.logical_shape());
         [[maybe_unused]] const auto [fidelity, approx, fp32_dest_acc, l1_acc, full_sync] =
-            get_compute_kernel_config_args(hal::get_arch(), args.compute_kernel_config);
+            get_compute_kernel_config_args(input_tensor_a.device()->arch(), args.compute_kernel_config);
         TT_FATAL(
             fp32_dest_acc,
             "enable_fp32_operand_split accumulates three products in fp32 DST; fp32_dest_acc_en must be set.");
@@ -238,6 +246,14 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             "C_in_block ({}) must be a multiple of {}",
             args.config.C_in_block,
             l1_alignment);
+        // Prepared weights pack C_in blocks back to back, while the kernels step through them in whole tiles.
+        const uint32_t kernel_volume = args.kernel_size[0] * args.kernel_size[1] * args.kernel_size[2];
+        TT_FATAL(
+            C_in == args.config.C_in_block || (kernel_volume * args.config.C_in_block) % tt::constants::TILE_WIDTH == 0,
+            "kernel volume ({}) * C_in_block ({}) must be a multiple of {} when C_in is split into multiple blocks",
+            kernel_volume,
+            args.config.C_in_block,
+            tt::constants::TILE_WIDTH);
     }
 
     // Verify number of C_in_blocks is <= the number of cores
@@ -312,6 +328,15 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+// The framework runs the hit validator on every call, so the L1 plan is only derived here, on a miss:
+// it raises with the blocking and the span in the message when the static circular buffers cannot be
+// placed below the top of L1 even at out_subblock_h=1.
+void Conv3dDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_hit(args, tensor_args);
+    select_l1_plan(args, tensor_args);
+}
+
 tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
@@ -338,7 +363,7 @@ tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));
 }
 

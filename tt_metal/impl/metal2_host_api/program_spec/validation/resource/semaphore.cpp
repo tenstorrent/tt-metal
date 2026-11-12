@@ -42,12 +42,12 @@ void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch) {
         ValidateAccessorNameLength(kernel.unique_id, "semaphore", binding.accessor_name);
     }
 
-    // Blackhole supports local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
-    // Wormhole has no compute implementation and Quasar compute remains out of scope.
+    // Blackhole and Quasar support local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
+    // Wormhole has no compute implementation.
     TT_FATAL(
-        !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || arch == tt::ARCH::BLACKHOLE,
+        !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || has_compute_semaphore(arch),
         "KernelSpec '{}' has semaphore bindings. "
-        "Semaphore bindings on compute kernels are supported only on Blackhole.",
+        "Semaphore bindings on compute kernels are supported only on Blackhole and Quasar.",
         kernel.unique_id);
 }
 
@@ -72,12 +72,12 @@ void ValidateComputeSemaphores(const ValidationContext& ctx) {
             "with a DM kernel; use separate semaphores for the compute and data-movement handoffs.",
             name);
     }
-    // Every compute semaphore maps onto the single free Tensix hardware semaphore (index 3), so two in
+    // Every compute semaphore maps onto the one Tensix hardware semaphore reserved for it, so two in
     // one program would alias the same hardware state.
     TT_FATAL(
         sem_has_compute.size() <= 1,
         "{} semaphores are bound by compute kernels; a program may bind at most one compute semaphore "
-        "(Blackhole has a single free Tensix hardware semaphore).",
+        "(one Tensix hardware semaphore is reserved for compute).",
         sem_has_compute.size());
     // The compute semaphore lives in the Tensix Sync Unit, which the host cannot write; it is seeded
     // to 0 by compute_kernel_hw_startup() on the device, so no other initial value can be honored.

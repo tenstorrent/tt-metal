@@ -117,6 +117,16 @@ bool find_device_with_neighbor_in_direction(
     return false;
 }
 
+tt_metal::FabricConfigDescriptor make_control_plane_config(
+    FabricConfig fabric_config, FabricReliabilityMode reliability_mode) {
+    const auto& env_config = tt::tt_metal::MetalContext::instance().get_env().get_fabric_config_descriptor();
+    return tt_metal::FabricConfigDescriptor{
+        .fabric_config = fabric_config,
+        .reliability_mode = reliability_mode,
+        .mesh_id = env_config.mesh_id,
+        .host_rank = env_config.host_rank};
+}
+
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -637,7 +647,11 @@ void check_intermesh_port_assignment_against_golden(const std::string& golden_na
         YAML::Emitter em;
         em << combined;
         std::ofstream o(combined_file);
+        // This re-emit is the intermesh golden. yaml-cpp omits the trailing newline the repo requires.
         o << em.c_str();
+        if (em.size() == 0 || em.c_str()[em.size() - 1] != '\n') {
+            o << '\n';
+        }
     }
 
     std::filesystem::path golden_file =

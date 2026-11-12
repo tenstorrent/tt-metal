@@ -8,7 +8,7 @@ import copy
 import torch
 import torch.nn as nn
 import ttnn
-from models.common.utility_functions import comp_allclose
+from tt_py_test_utils_common.utility_functions import comp_allclose
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_equal

@@ -22,6 +22,8 @@ from models.demos.gemma4_d_p.tt.matmul_config import (
     is_short_m,
     prefill_1d_matmul_program_config,
     prefill_matmul_program_config,
+    short_m_output_memcfg,
+    tile_rows,
     to_l1_width_sharded,
 )
 
@@ -38,14 +40,23 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
 # Rows per device from which the projections are FPU-bound, so one fidelity pass saves time.
 _LOFI_PROJECTION_MIN_ROWS = 512
 
+# Most tile rows for which a projection feeding the reduce-scatter writes its output width-sharded: chunk 4096 at CP8.
+_MAX_SHARDED_OUTPUT_M_TILES = 16
+
+# Most tile rows whose QKV projection output goes to L1: chunk 8192 at CP8.
+_MAX_L1_QKV_M_TILES = 32
+
 
 def projection_math_fidelity(rows):
     return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
 
 
-def projection_matmul_configs(hidden_states, weight):
+def projection_matmul_configs(hidden_states, weight, max_m_tiles=None, fidelity_rows=None):
     """(program_config, compute_kernel_config) for an attention projection: explicit blocking with fp32
     accumulation, or (None, None) for ttnn's defaults.
+
+    fidelity_rows: the rows per device of one request, when hidden_states stacks several (a batched step takes the
+    fidelity of one request's chunk, not of the stacked rows).
 
     Uses the device's full core grid. With this blocking, accumulating in bf16 measurably costs
     prefill KV accuracy, so it accumulates in fp32. LoFi pays from 512 rows per device; below that the
@@ -54,14 +65,14 @@ def projection_matmul_configs(hidden_states, weight):
     """
     device = hidden_states.device()
     grid = device.compute_with_storage_grid_size()
-    program_config = prefill_1d_matmul_program_config(hidden_states, weight, grid) or prefill_matmul_program_config(
-        hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True
-    )
+    program_config = prefill_1d_matmul_program_config(
+        hidden_states, weight, grid, max_m_tiles=max_m_tiles
+    ) or prefill_matmul_program_config(hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True)
     if program_config is None:
         return None, None
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=projection_math_fidelity(hidden_states.shape[-2]),
+        math_fidelity=projection_math_fidelity(fidelity_rows or hidden_states.shape[-2]),
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -69,11 +80,20 @@ def projection_matmul_configs(hidden_states, weight):
     return program_config, compute_kernel_config
 
 
-def apply_attn_projection(hidden_states, weight, memory_config=None):
+def apply_attn_projection(hidden_states, weight, memory_config=None, into_reduce_scatter=False, fidelity_rows=None):
     """hidden_states @ weight for an attention projection, written interleaved (DRAM unless memory_config says
-    otherwise). A short-M activation is read width-sharded from L1."""
-    x = to_l1_width_sharded(hidden_states) if is_short_m(hidden_states) else hidden_states
-    program_config, compute_kernel_config = projection_matmul_configs(x, weight)
+    otherwise). A short-M activation is read width-sharded from L1.
+
+    into_reduce_scatter marks a row-parallel projection whose only consumer is the TP reduce-scatter: up to
+    _MAX_SHARDED_OUTPUT_M_TILES tile rows it writes a width-sharded L1 output instead of an interleaved DRAM one.
+    """
+    sharded_output = into_reduce_scatter and tile_rows(hidden_states) <= _MAX_SHARDED_OUTPUT_M_TILES
+    x = to_l1_width_sharded(hidden_states) if sharded_output or is_short_m(hidden_states) else hidden_states
+    program_config, compute_kernel_config = projection_matmul_configs(
+        x, weight, max_m_tiles=_MAX_SHARDED_OUTPUT_M_TILES if sharded_output else None, fidelity_rows=fidelity_rows
+    )
+    if sharded_output:
+        memory_config = short_m_output_memcfg(x, weight)
     out = ttnn.linear(
         x,
         weight,
@@ -86,14 +106,23 @@ def apply_attn_projection(hidden_states, weight, memory_config=None):
     return out
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
-    """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
-    return apply_attn_projection(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
+def apply_qkv_projection(
+    hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False, fidelity_rows=None
+):
+    """Project to QKV, or QK when kv_tied selects the narrow tied weight.
+
+    Up to _MAX_L1_QKV_M_TILES tile rows the output goes to L1 rather than DRAM, so the matmul's writer doesn't trail
+    its math. The caller frees it after the head split, before attention allocates its circular buffers.
+    """
+    if memory_config is None and tile_rows(hidden_states) <= _MAX_L1_QKV_M_TILES:
+        memory_config = ttnn.L1_MEMORY_CONFIG
+    weight = weights.wqk if kv_tied else weights.wqkv
+    return apply_attn_projection(hidden_states, weight, memory_config=memory_config, fidelity_rows=fidelity_rows)
 
 
-def apply_output_projection(hidden_states, weights: AttentionWeights):
+def apply_output_projection(hidden_states, weights: AttentionWeights, fidelity_rows=None):
     """Project the concatenated attention heads through o_proj."""
-    return apply_attn_projection(hidden_states, weights.o_proj)
+    return apply_attn_projection(hidden_states, weights.o_proj, into_reduce_scatter=True, fidelity_rows=fidelity_rows)
 
 
 def split_qkv_heads_prefill(

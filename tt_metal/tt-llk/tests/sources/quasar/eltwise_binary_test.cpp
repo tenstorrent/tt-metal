@@ -48,10 +48,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
-        const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        const auto bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-            tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        const auto bfd_a =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        const auto bfd_b =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_binary_operands_init_(bfd_a, bfd_b, tensor_shape, num_tiles_per_accum);
@@ -120,8 +120,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, ENABLE_DIRECT_INDEXING>(tensor_shape, ACC_TO_DEST);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, ENABLE_DIRECT_INDEXING>(
+            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape, ACC_TO_DEST);
 
         PROFILER_SYNC();
     }
@@ -130,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
         }
@@ -185,7 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         // Clear a stale FPU-to-PACK wait in modes without a math handshake.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -194,8 +195,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
@@ -215,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_pack_(i, block * OUTPUT_NUM_TILES_IN_BLOCK + i, tensor_shape);
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                     {
                         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }

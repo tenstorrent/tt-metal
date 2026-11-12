@@ -97,7 +97,10 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     const uint32_t num_sin_cos_rows_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
     const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * n_heads;
 
-    uint32_t num_cos_sin_tiles = 2 * head_dim_t * num_sin_cos_rows_per_core;
+    // The reader writes each batch's cos/sin rows contiguously from the write pointer with no wrap check, so the
+    // buffer must be a whole number of those per-batch blocks; only rotary_seq_len_t rows are read per batch.
+    uint32_t num_cos_sin_tiles =
+        2 * head_dim_t * std::max<uint32_t>(1, std::min(num_sin_cos_rows_per_core, rotary_seq_len_t));
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 
     // Reload implementation is always used when cos/sin are HEIGHT_SHARDED
@@ -118,8 +121,13 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     // difference from legacy is that a partial-shard config legacy would have served from the fast L1
     // view now takes the (output-identical) reload path.
     const bool cos_sin_shard_full = cos_sin_sharded && cos.shard_spec()->grid.num_cores() == num_cores;
+    // The fast path assigns tiles to cores in row-major order, so it needs ROW_MAJOR shards.
+    const bool cos_sin_row_major = cos_sin_sharded && cos.shard_spec()->orientation == ShardOrientation::ROW_MAJOR &&
+                                   sin.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
+    // With batch > 1, a core's sequence tile no longer matches the tile in its own shard.
     const bool cos_sin_sharded_reload =
-        cos_sin_sharded && (seq_per_core > 1 || !cos_sin_shard_full || seq_len_t > cos_seq_len_t);
+        cos_sin_sharded && (seq_per_core > 1 || !cos_sin_shard_full || !cos_sin_row_major ||
+                            batch_parallel_factor > 1 || seq_len_t > cos_seq_len_t);
     if (cos_sin_sharded) {
         num_cos_sin_tiles = cos_sin_sharded_reload ? num_input_tiles : head_dim_t;
     }
@@ -359,7 +367,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
         const NodeCoord node = cores[i];
-        const std::initializer_list<std::pair<std::string, uint32_t>> range_args = {
+        const std::initializer_list<std::pair<std::string, ArgValue>> range_args = {
             {"batch_start", a.start_batch},
             {"batch_end", a.end_batch},
             {"seq_t_start", a.start_seq},

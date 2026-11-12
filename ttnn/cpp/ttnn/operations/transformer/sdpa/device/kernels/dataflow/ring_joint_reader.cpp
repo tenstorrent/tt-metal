@@ -19,7 +19,7 @@
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+#include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -237,15 +237,16 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
+    // Length-geometry slots (the _ct values): placeholders with dynamic_local_n, see ring_joint_derived_slots.hpp.
+    constexpr uint32_t q_local_padded_Nt_ct = get_compile_time_arg_val(7);
+    constexpr uint32_t kv_local_padded_Nt_ct = get_compile_time_arg_val(8);
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
     constexpr uint32_t L = get_compile_time_arg_val(10);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_local_q_chunks_ct = get_compile_time_arg_val(11);
     constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_local_k_chunks_ct = get_compile_time_arg_val(13);
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_q_chunks_ct = get_compile_time_arg_val(15);
     constexpr uint32_t ring_size = get_compile_time_arg_val(16);
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(17);
     constexpr uint32_t is_causal = get_compile_time_arg_val(18);
@@ -254,12 +255,13 @@ void kernel_main() {
     // Reader's slot-21 carries chunked_enabled.
     constexpr bool chunked_enabled = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(22);
-    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(23);
+    constexpr uint32_t chunk_size_t_ct = get_compile_time_arg_val(23);
     constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
+    constexpr bool dynamic_local_n = get_named_compile_time_arg_val("dynamic_local_n") == 1;
     static_assert(
-        kv_stripe_split > 0 && q_local_padded_Nt % kv_stripe_split == 0, "Q slab must split into whole KV regions");
-    constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
-    static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
+        kv_stripe_split > 0 && q_local_padded_Nt_ct % kv_stripe_split == 0, "Q slab must split into whole KV regions");
+    constexpr uint32_t kv_region_Nt_ct = q_local_padded_Nt_ct / kv_stripe_split;
+    static_assert(kv_region_Nt_ct * ring_size == chunk_size_t_ct, "chunk_size_t must span one KV region per ring rank");
     constexpr uint32_t q_ring_size = ring_size / kv_stripe_split;
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(24) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(25) == 1;
@@ -274,14 +276,17 @@ void kernel_main() {
     // Slots 31/32 are trace-safe metadata controls. Attention-sink and sliding-window
     // fields occupy 28..30 in this branch.
     // Slot 31: trace-safe slot select. When set, kv_cache_batch_idx is read from the slot_id tensor[0]
-    // on-device (common runtime arg 0 = slot_id DRAM addr) instead of the per-core runtime arg, so a
+    // on-device (metadata common arg 0 = slot_id DRAM addr) instead of the per-core runtime arg, so a
     // captured trace replays across cache slots.
     constexpr bool slot_from_metadata = get_compile_time_arg_val(31) == 1;
     // Slot 32: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl from the
-    // kv_actual_isl tensor[0] (common runtime arg 4 = its DRAM addr), derives logical_nt / q-mapping /
+    // kv_actual_isl tensor[0] (metadata common arg 4 = its DRAM addr), derives logical_nt / q-mapping /
     // ring masks on-device, and hands the compute-needed values to the compute kernel via
     // cb_kv_pad_derived (compute cannot NoC-read the DRAM tensor).
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(32) == 1;
+    // kv_actual_isl's DRAM addr (metadata common arg 4) is only pushed by the host as part of the
+    // slot_from_metadata block.
+    static_assert(!kv_pad_from_metadata || slot_from_metadata);
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     constexpr bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
@@ -349,10 +354,18 @@ void kernel_main() {
     constexpr uint32_t kv_meta_args_offset =
         kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
+#ifdef KV_VALID_END
+    constexpr bool has_kv_valid_end = kv_pad_from_metadata;
+#else
+    constexpr bool has_kv_valid_end = false;
+#endif
+    constexpr uint32_t kv_valid_end_args_offset =
+        has_kv_valid_end ? kv_meta_args.next_compile_time_args_offset() : kv_meta_args_offset;
+    constexpr auto kv_valid_end_args = TensorAccessorArgs<kv_valid_end_args_offset>();
     constexpr uint32_t chains_base_no_kv_pad =
         slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
     constexpr uint32_t post_meta_args_offset =
-        kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
+        kv_pad_from_metadata ? kv_valid_end_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
     // logical_n / logical_l accessors follow the metadata accessors, appended as a pair so these offsets do
     // not depend on which one was supplied. Same VALID-fallback trick as meta_args above.
     constexpr uint32_t logical_n_args_offset =
@@ -364,29 +377,63 @@ void kernel_main() {
     constexpr uint32_t chains_base_offset =
         has_logical_length_tensor ? logical_l_args.next_compile_time_args_offset() : post_meta_args_offset;
 
-    uint32_t argidx = 0;
-    const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t k_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t v_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t gathered_k_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t gathered_v_addr = get_arg_val<uint32_t>(argidx++);
+    const ring_joint::LocalNGeometry local_n =
+        dynamic_local_n
+            ? ring_joint::derive_local_n_geometry(
+                  get_common_arg_val<uint32_t>(ring_joint::dynamic_local_n_reader_common_arg(
+                      has_joint_inputs,
+                      has_gathered_joint_k,
+                      slot_from_metadata,
+                      has_logical_length_tensor,
+                      has_kv_valid_end)),
+                  Sq_chunk_t,
+                  Sk_chunk_t,
+                  kv_stripe_split,
+                  ring_size,
+                  num_joint_q_chunks)
+            : ring_joint::LocalNGeometry{
+                  q_local_padded_Nt_ct,
+                  kv_local_padded_Nt_ct,
+                  num_local_q_chunks_ct,
+                  num_local_k_chunks_ct,
+                  num_q_chunks_ct,
+                  kv_region_Nt_ct,
+                  chunk_size_t_ct};
+    const uint32_t q_local_padded_Nt = local_n.q_local_padded_Nt;
+    const uint32_t kv_local_padded_Nt = local_n.kv_local_padded_Nt;
+    const uint32_t num_local_q_chunks = local_n.num_local_q_chunks;
+    const uint32_t num_local_k_chunks = local_n.num_local_k_chunks;
+    const uint32_t num_q_chunks = local_n.num_q_chunks;
+    const uint32_t kv_region_Nt = local_n.kv_region_Nt;
+    const uint32_t chunk_size_t = local_n.q_chunk_group_tile_count;
+
+    // Tensor addresses are the same on every core, so the factory passes them as the first common runtime args.
+    uint32_t common_argidx = 0;
+    const uint32_t q_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t k_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t v_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t gathered_k_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    const uint32_t gathered_v_addr = get_common_arg_val<uint32_t>(common_argidx++);
     uint32_t joint_q_addr = 0;
     uint32_t joint_k_addr = 0;
     uint32_t joint_v_addr = 0;
     if constexpr (has_joint_inputs) {
-        joint_q_addr = get_arg_val<uint32_t>(argidx++);
-        joint_k_addr = get_arg_val<uint32_t>(argidx++);
-        joint_v_addr = get_arg_val<uint32_t>(argidx++);
+        joint_q_addr = get_common_arg_val<uint32_t>(common_argidx++);
+        joint_k_addr = get_common_arg_val<uint32_t>(common_argidx++);
+        joint_v_addr = get_common_arg_val<uint32_t>(common_argidx++);
     }
-    const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
-    // Gathered joint K/V buffer addresses (sharded path only) — pushed by the factory right after the
-    // attention-sink address, so they must be read here before global_q_start to keep argidx aligned.
+    const uint32_t attention_sink_addr = get_common_arg_val<uint32_t>(common_argidx++);
+    // Gathered joint K/V buffer addresses (sharded path only), right after the attention-sink address.
     uint32_t gathered_joint_k_addr = 0;
     uint32_t gathered_joint_v_addr = 0;
     if constexpr (has_gathered_joint_k) {
-        gathered_joint_k_addr = get_arg_val<uint32_t>(argidx++);
-        gathered_joint_v_addr = get_arg_val<uint32_t>(argidx++);
+        gathered_joint_k_addr = get_common_arg_val<uint32_t>(common_argidx++);
+        gathered_joint_v_addr = get_common_arg_val<uint32_t>(common_argidx++);
     }
+    constexpr uint32_t address_common_arg_count =
+        ring_joint::reader_address_common_arg_count(has_joint_inputs, has_gathered_joint_k);
+
+    uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
@@ -512,9 +559,15 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     constexpr uint32_t rotated_iter_stride = kRotatedReaderIterWords;
 
-    // Common runtime args: metadata block first when present, then the logical-length pair.
+    // Common runtime args after the addresses: metadata block first when present, then the logical-length pair.
+    ASSERT(common_argidx == address_common_arg_count);
+    constexpr uint32_t metadata_common_arg_base = address_common_arg_count;
     constexpr uint32_t logical_length_common_arg_base =
-        slot_from_metadata ? ring_joint::kReaderMetadataCommonArgCount : 0;
+        metadata_common_arg_base + (slot_from_metadata ? ring_joint::kReaderMetadataCommonArgCount : 0);
+    // kv_valid_end is validated incompatible with the logical_n / logical_l tensors, so its arg directly
+    // follows the metadata block.
+    static_assert(!has_kv_valid_end || !has_logical_length_tensor);
+    [[maybe_unused]] constexpr uint32_t kv_valid_end_common_arg = logical_length_common_arg_base;
 
     [[maybe_unused]] uint32_t global_n_partial_col_live = 0;
     [[maybe_unused]] uint32_t joint_l_partial_col_live = 0;
@@ -524,13 +577,13 @@ void kernel_main() {
         CircularBuffer cb_q_scratch(cb_q_in);
         const uint32_t meta_l1 = cb_q_scratch.get_write_ptr();
         if constexpr (slot_from_metadata) {
-            const uint32_t slot_id =
-                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, get_common_arg_val<uint32_t>(0), meta_l1);
+            const uint32_t slot_id = trace_metadata::read_metadata_scalar_u32(
+                meta_noc, meta_args, get_common_arg_val<uint32_t>(metadata_common_arg_base), meta_l1);
             kv_cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
                 slot_id,
-                get_common_arg_val<uint32_t>(1),
-                get_common_arg_val<uint32_t>(2),
-                get_common_arg_val<uint32_t>(3));
+                get_common_arg_val<uint32_t>(metadata_common_arg_base + 1),
+                get_common_arg_val<uint32_t>(metadata_common_arg_base + 2),
+                get_common_arg_val<uint32_t>(metadata_common_arg_base + 3));
         }
         if constexpr (has_logical_n_tensor) {
             const uint32_t logical_n_live = trace_metadata::read_metadata_scalar_u32(
@@ -547,7 +600,7 @@ void kernel_main() {
         }
         if constexpr (kv_pad_from_metadata) {
             uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
+                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(metadata_common_arg_base + 4), meta_l1);
             if constexpr (has_sliding_window) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                     kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
@@ -558,6 +611,12 @@ void kernel_main() {
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
                 kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+            if constexpr (has_kv_valid_end) {
+                const uint32_t kv_valid_end = trace_metadata::read_metadata_scalar_u32(
+                    meta_noc, kv_valid_end_args, get_common_arg_val<uint32_t>(kv_valid_end_common_arg), meta_l1);
+                logical_nt =
+                    trace_metadata::logical_tile_rows_clamped_to_valid_end(logical_nt, kv_actual_isl, kv_valid_end);
+            }
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
@@ -818,7 +877,7 @@ void kernel_main() {
     };
     // K chunks past this device's last Q row are fully masked; compute skips the same ones.
     const uint32_t causal_end_nt = dense_causal_skip
-                                       ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
+                                       ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt_ct>(
                                              logical_nt,
                                              ring_index,
                                              ring_size,
@@ -828,8 +887,10 @@ void kernel_main() {
                                              qmap.q_valid_tile_count)
                                        : logical_nt;
     auto arrival_preview = fused_op_receiver.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
+    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
+    // binary so it carries none of the packed-source path.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -842,7 +903,7 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
@@ -910,9 +971,9 @@ void kernel_main() {
             const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
                 kv_pad_rotation_enabled,
                 chunked_enabled,
-                kv_local_padded_Nt,
-                chunk_size_t,
-                q_local_padded_Nt,
+                kv_local_padded_Nt_ct,
+                chunk_size_t_ct,
+                q_local_padded_Nt_ct,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
         }
@@ -931,7 +992,7 @@ void kernel_main() {
                 iter_num_kv_chunks /= 2;
                 // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
                 // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
-                using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
+                using Straddle = KCausalStraddleInfo<kv_local_padded_Nt_ct, Sk_chunk_t>;
                 if constexpr (Straddle::has_straddle) {
                     iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
                 }
@@ -944,7 +1005,8 @@ void kernel_main() {
         // gqa_max_q_per_core (GQA), which is why this branch needs no per-family case.
         // Indexed by ACTIVE ordinal -- see rotated_active_ordinal.
         // Static: when K/V mcast is enabled, loop the per-chain max so receivers with less real Q
-        // work still participate in padded multicast handshakes without pushing visible data.
+        // work still participate in padded multicast handshakes. Padded slots push their K/V entries,
+        // which compute drains without computing, and never push Q.
         uint32_t loop_q_count;
         uint32_t rotated_my_count = 0;
         RotatedQSlots rotated_slots;
@@ -982,11 +1044,12 @@ void kernel_main() {
                 ASSERT(rotated_my_count % rotation_unit_chunks == 0);
                 // Pad with the corresponding member of the last owned unit. A balanced low
                 // slot must skip on every multicast peer, including cores without a remainder.
-                const uint32_t padded_slot = rotated_my_count - rotation_unit_chunks + q_iter % rotation_unit_chunks;
-                flat_q_index = rotated_slots.at(is_padded_iter ? padded_slot : q_iter);
+                flat_q_index = is_padded_iter ? padded_slot_flat_q<true>(
+                                                    rotated_slots, 0, rotated_my_count, q_iter, rotation_unit_chunks)
+                                              : rotated_slots.at(q_iter);
             } else {
                 is_padded_iter = (q_iter >= q_per_core);
-                flat_q_index = global_q_start + q_iter;
+                flat_q_index = padded_slot_flat_q<false>({}, global_q_start, q_per_core, q_iter, 1);
             }
 
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
@@ -1112,12 +1175,24 @@ void kernel_main() {
                         return true;
                     }
                     // causal_end_nt is logical_nt when the causal skip is off.
-                    return !chunked_kv_chunk_is_live<
-                        kv_pad_rotation_enabled,
-                        chunked_enabled,
-                        kv_local_padded_Nt,
-                        chunk_size_t,
-                        kv_region_Nt>(source_ring_id, source_k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
+                    if constexpr (dynamic_local_n) {
+                        return !chunked_kv_chunk_is_live<kv_pad_rotation_enabled, chunked_enabled>(
+                            source_ring_id,
+                            source_k_chunk,
+                            Sk_chunk_t,
+                            logical_nt,
+                            causal_end_nt,
+                            kv_local_padded_Nt,
+                            chunk_size_t,
+                            kv_region_Nt);
+                    } else {
+                        return !chunked_kv_chunk_is_live<
+                            kv_pad_rotation_enabled,
+                            chunked_enabled,
+                            kv_local_padded_Nt_ct,
+                            chunk_size_t_ct,
+                            kv_region_Nt_ct>(source_ring_id, source_k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
+                    }
                 }();
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile
@@ -1215,15 +1290,9 @@ void kernel_main() {
                         return nq;
                     }
                 }();
+                // Padded slots push like real ones, so a multicast always targets this core's write pointer.
                 CircularBuffer cb_k(cb_k_in);
-                if constexpr ((k_uses_batch_chain && batch_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)) {
-                    // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
-                    // the next K chunk for mcast.
-                    const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
-                    cb_k.reserve_back(reserve_tiles);
-                } else {
-                    cb_k.reserve_back(k_chunk_tiles);
-                }
+                cb_k.reserve_back(k_chunk_tiles);
                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
                 bool received_k_from_chain = false;
                 if constexpr (!has_sliding_window) {
@@ -1307,21 +1376,27 @@ void kernel_main() {
                     }
                 }
 
-                // Skip Q and compute-visible pushes for padded mcast iterations.
-                // Note: push_back is intentionally skipped — without it, the write pointer
-                // doesn't advance, so reserve_back returns the same address each iteration.
-                // This lets the buffer act as a reusable staging area for the mcast.
+                // Padded mcast iterations skip Q and compute work. Only multicast rows pad, and sliding mode never
+                // builds chains.
                 if (is_padded_iter) {
-                    // Padded GQA receivers must also receive V, because the row injector multicasts
-                    // both K and V and waits for every receiver's ready signal. The data remains
-                    // staging-only because we intentionally do not push it to compute.
+                    ASSERT(!has_sliding_window);
+                    // Push every received entry so this core's CB advances with the injector's; compute drains
+                    // padded slots without computing. Push a V entry whenever a real chunk would, received
+                    // (GQA multicast) or empty, so both CBs keep the same phase as the real path.
+                    cb_k.push_back(k_chunk_tiles);
+                    KV_chunks_processed_in_iter++;
                     if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
                         const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
-                        cb_v.reserve_back(2 * v_cb_entry_tiles);
+                        cb_v.reserve_back(v_cb_entry_tiles);
                         if (v_chain.should_receive(nv)) {
                             v_chain.receive(noc);
                         }
+                        cb_v.push_back(v_cb_entry_tiles);
+                    } else if constexpr (!kt_inplace_v) {
+                        CircularBuffer cb_v(cb_v_in);
+                        cb_v.reserve_back(v_cb_entry_tiles);
+                        cb_v.push_back(v_cb_entry_tiles);
                     }
                     continue;
                 }

@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device

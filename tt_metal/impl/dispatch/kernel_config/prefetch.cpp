@@ -6,7 +6,6 @@
 
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
-#include <array>
 #include <map>
 #include <span>
 #include <string>
@@ -20,21 +19,17 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
-#include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "impl/debug/inspector/inspector.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
-#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 using namespace tt::tt_metal;
 
@@ -533,6 +528,9 @@ void PrefetchKernel::CreateKernel() {
 
     const auto& my_dispatch_constants = get_dispatch_mem_map();
     defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
+    if (my_dispatch_constants.prefetch_q_cached()) {
+        defines["PREFETCH_Q_CACHED"] = "1";
+    }
 
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";

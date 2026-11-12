@@ -7,8 +7,12 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _AffineTransform, _distributed_prefix
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    AffineTransform,
+    distributed_prefix,
+    kda_device_params,
+    pack_transform,
+)
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -24,13 +28,13 @@ def _meshes(**overrides):
     return [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(**overrides),
+            kda_device_params((8, 4), **overrides),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
         ),
         pytest.param(
             (2, 4),
-            fabric_1d_device_params(**overrides),
+            kda_device_params((2, 4), **overrides),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP2xTP4",
         ),
@@ -74,8 +78,8 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
     )
-    entry, final = _distributed_prefix(
-        _AffineTransform(per_rank(a), per_rank(b)),
+    entry, final = distributed_prefix(
+        pack_transform(AffineTransform(per_rank(a), per_rank(b))),
         replicated(initial, ttnn.float32),
         sequence_parallel_axis=0,
         compute_config=compute_config,
@@ -108,8 +112,10 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
         zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
     ):
         rank, tp = divmod(index, tp_size)
-        assert_accurate(entries[rank], ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}")
-        assert_accurate(carry, ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
+        assert_accurate(
+            entries[rank], ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}", nrmse_threshold=0.025
+        )
+        assert_accurate(carry, ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}", nrmse_threshold=0.03)
         # Same arithmetic as the op-by-op chain, so the states match it bit for bit.
         assert_bit_identical(
             ttnn.to_torch(ttnn.get_device_tensors(op_by_op_entries[rank])[index]).reshape(_HEADS, _KEY, _VALUE),

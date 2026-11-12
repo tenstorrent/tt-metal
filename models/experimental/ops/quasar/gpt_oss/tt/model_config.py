@@ -17,7 +17,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_quasar, is_wormhole_b0
 from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
@@ -412,7 +412,9 @@ def determine_device_name(mesh_device):
     if num_devices == 0:
         return "CPU"
 
-    if is_blackhole():
+    # Quasar has no product names yet. It takes the Blackhole names, so it also gets the configs keyed on them.
+    # TODO: when Quasar products get names, give Quasar its own entries and update the configs keyed on them.
+    if is_blackhole() or is_quasar():
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",

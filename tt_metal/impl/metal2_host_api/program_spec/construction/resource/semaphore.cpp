@@ -4,37 +4,15 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <map>
-#include <memory>
-#include <numeric>
-#include <optional>
-#include <set>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
-#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
-#include "impl/metal2_host_api/llk_metadata.hpp"
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -94,18 +72,19 @@ bool cached_tier_available(MetalEnvImpl& env) {
 // binder is treated as a possible reader and writer.
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const SemaphoreBinderInfo& binders, MetalEnvImpl& env) {
     const Hal& hal = env.get_hal();
+
+    // COMPUTE_ATOMIC is an UNPACK <-> PACK mechanism (the Tensix hardware semaphore) and nothing else,
+    // so it applies only when EVERY binder is a compute kernel. A mixed compute/DM binding is rejected by
+    // ValidateComputeSemaphores (validation/resource/semaphore.cpp), since a DM core cannot reach that
+    // semaphore. One compute binding compiles into several TRISC binaries with two writers (UNPACK and
+    // PACK), so a compute-bound semaphore must never take the non-atomic path. Wormhole has no compute
+    // implementation; its compute bindings are rejected on the host.
+    if (all_binders_are_compute(binders) && has_compute_semaphore(hal)) {
+        return SemScope::COMPUTE_ATOMIC;
+    }
+
     // Gen1 (Wormhole/Blackhole)
     if (!is_gen2_target(hal)) {
-        // COMPUTE_ATOMIC is a Blackhole UNPACK <-> PACK mechanism (the Tensix hardware semaphore)
-        // and nothing else, so it applies only when EVERY binder is a compute kernel. A mixed
-        // compute/DM binding is rejected by ValidateComputeSemaphores (validation/resource/semaphore.cpp),
-        // since a DM core cannot reach that semaphore. One compute binding compiles into three TRISC
-        // binaries with two writers (UNPACK and PACK), so a compute-bound word must never take the
-        // non-atomic path. Wormhole has no compute implementation; its compute bindings are rejected
-        // on the host.
-        if (all_binders_are_compute(binders) && hal.get_arch() == tt::ARCH::BLACKHOLE) {
-            return SemScope::COMPUTE_ATOMIC;
-        }
         return SemScope::LOCAL_NONATOMIC;
     }
 

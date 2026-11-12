@@ -1,6 +1,6 @@
 ---
 name: quasar-perf-test
-description: Create, extend, debug, and validate Quasar LLK performance tests, their PerfRunType kernel paths, and tile/dimension sweep coverage. Use when adding perf_[op]_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / L1_CONGESTION, choosing PERF_TILE_SIZES or dest-fill matrices, or investigating implausible Quasar perf metrics and dvalid handshakes.
+description: Create, extend, debug, and validate Quasar LLK performance tests, their PerfRunType kernel paths, and tile/dimension sweep coverage. Use when adding perf_[op]_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE, choosing PERF_TILE_SIZES or dest-fill matrices, or investigating implausible Quasar perf metrics and dvalid handshakes.
 ---
 
 # Quasar Perf Test
@@ -10,7 +10,7 @@ description: Create, extend, debug, and validate Quasar LLK performance tests, t
 Create or repair a Quasar performance test while preserving its functional
 `L1_TO_L1` behavior. Reuse the correctness harness, report through
 `PerfConfig`, and give every applicable `PerfRunType` a balanced single-stage
-or congestion path.
+path.
 
 This skill covers three related workflows:
 
@@ -50,7 +50,7 @@ This skill covers three related workflows:
    - `run_types=PERF_RUN_TYPES_QUASAR` from `helpers.llk_params`
    - a fixed `loop_factor=32`, unless the operation has an established value
    - a fixed `is_perf=True`
-   - `DestSync.Half` and `ImpliedMathFormat.Yes` only
+   - `DestSync.Half` only
    - tile sizes and dest-fill matrices from **Perf sweep coverage**, not a
      single hardcoded tile or the full functional dimension grid
 7. Pass `perf_report` and `is_perf=True` to the correctness helper.
@@ -111,10 +111,13 @@ Dest-full tall/wide is the unary throughput case. Skip dest index and SFPU
 `ct<rt` addr_mod branches and unpack-heavy vs math-heavy K are covered. MX,
 Float16_b, and Int8 inputs are LoFi-only; Float16 still sweeps LoFi–HiFi4.
 
-**Check coverage** with `compare_test_and_perf.py --dir quasar`. Composite
-splits name `list` as the input matrix and `tuple` as `tile_dimensions`.
-Ignore `DestSync.Full`, `implied_math_format`, `run_types`, `loop_factor`,
-and `is_perf` when judging coverage.
+**Check coverage** with
+`compare_test_and_perf.py --dir quasar --arch quasar` for Quasar functional
+versus perf. Cross-arch perf versus perf is
+`compare_test_and_perf.py --cross-arch blackhole quasar --kind perf`;
+functional versus functional is `--kind func`. Composite splits name `list`
+as the input matrix and `tuple` as `tile_dimensions`. Ignore `DestSync.Full`,
+`run_types`, `loop_factor`, and `is_perf` when judging coverage.
 
 ## C++ structure
 
@@ -147,7 +150,6 @@ Implement behavior independently in unpack, math, and pack:
 | `UNPACK_ISOLATE` | Real | Clear exactly the source dvalids unpack produces | No-op |
 | `MATH_ISOLATE` | Produce exactly the source dvalids math consumes | Real; do not signal inactive pack | No-op |
 | `PACK_ISOLATE` | No-op | No-op | Real without waiting for math |
-| `L1_CONGESTION` | Real | Clear source dvalids only | Real independently |
 
 Adapt this table to the real pipeline. For example, an unpack-to-dest kernel
 may bypass math entirely.
@@ -182,7 +184,7 @@ total source handshakes =
 - Use `_perf_unpack_loop_set_valid<set_a, set_b>(count)` only when unpack is
   mocked for `MATH_ISOLATE`.
 - Use `_perf_math_loop_clear_valid<clear_a, clear_b>(count)` only when math
-  mocks consumption for `UNPACK_ISOLATE` or `L1_CONGESTION`.
+  mocks consumption for `UNPACK_ISOLATE`.
 - Count tiles and blocks actually consumed.
 - Determine whether the MOP pulses per tile or per face.
 - Determine whether math consumes SrcA, SrcB, or both.
@@ -194,8 +196,16 @@ Known cases:
 - Row/column broadcast may handshake per face; inspect the MOP.
 - Quasar 32-bit unary datacopy uses ELWADD. Unpack produces real SrcA and
   dummy SrcB, so both mock sides use `<true, true>`.
+- Wormhole and Blackhole binary SFPU NONE mocks post a SrcA dvalid plus a SrcB
+  zerosrc dvalid every face, including `dest_acc=No` (`#1230`). Keep that
+  reference on those calls. Quasar posts per tile, and SrcB only when dest is
+  32-bit: `<true, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT)`.
 - A block kernel commonly needs
   `LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM`.
+- Do not shrink `TILE_COUNT` to change the published per-tile number.
+  `tile_cnt` is also the unpack loop bound and the isolate dvalid count. When
+  it counts both operand tiles, per-tile MATH_ISOLATE is about half a result
+  tile.
 
 Never add a synthetic SET/CLEAR pair to flush the pipeline. An extra token can
 race the final operation and pollute a later run.
@@ -208,8 +218,6 @@ Only signal completion when the consumer is active:
 - `MATH_ISOLATE`: run math without `_llk_math_set_dvalid_`.
 - `PACK_ISOLATE`: pack without waiting for math and without destination
   section-done.
-- `L1_CONGESTION`: unpack and pack run independently; math does not pulse
-  destination dvalid.
 - `UNPACK_ISOLATE`: do not signal inactive pack.
 
 Quasar CFG state can persist between run types. For independent pack
@@ -228,7 +236,6 @@ consumer are active.
 - A missing math-isolate metric is expected when math is compiled out.
 - `L1_TO_L1` performs real unpack and signals active pack.
 - `UNPACK_ISOLATE` performs real unpack without signaling inactive pack.
-- `L1_CONGESTION` runs unpack and pack independently.
 - `MATH_ISOLATE` must not emit dummy source dvalid without a math consumer.
 
 ## Diagnose metrics
@@ -237,8 +244,6 @@ Analyze `marker == TILE_LOOP` first.
 
 Healthy relationships:
 
-- `L1_CONGESTION[UNPACK]` is close to `UNPACK_ISOLATE`.
-- `L1_CONGESTION[PACK]` is close to `PACK_ISOLATE`.
 - Format and destination-mode changes have bounded, explainable effects.
 
 Failure signals:
@@ -246,7 +251,6 @@ Failure signals:
 - Values near large powers of two such as 2048, 4096, or 8192
 - Healthy first variant followed by very slow variants
 - Isolate cost orders of magnitude above the corresponding real stage
-- Congestion cost orders of magnitude above isolate
 - A passing run that leaves the next run slow
 
 Treat these as likely handshake, mock-count, section-done, or wait-mask bugs;
@@ -263,8 +267,9 @@ From the `tt-llk` root:
 5. Run the shared non-perf correctness test, including unpack-to-dest and
    destination-accumulation variants when applicable.
 6. If tile sizes or dimensions changed, run
-   `compare_test_and_perf.py --dir quasar` and confirm the composite `tuple`
-   (tile) and `list` (matrix) axes match **Perf sweep coverage**.
+   `compare_test_and_perf.py --dir quasar --arch quasar` and confirm the
+   composite `tuple` (tile) and `list` (matrix) axes match **Perf sweep
+   coverage**.
 7. Check edited files for lint errors and run `git diff --check`.
 
 Do not:

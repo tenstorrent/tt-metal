@@ -22,7 +22,7 @@
 #include <board/board.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
@@ -1066,10 +1066,9 @@ void TestProgressMonitor::write_summary_report(
 
         auto src_asic = control_plane.get_asic_id_from_fabric_node_id(src);
         auto dst_asic = control_plane.get_asic_id_from_fabric_node_id(dst);
-        auto src_host = psd.get_host_name_for_asic(src_asic);
         auto dst_host = psd.get_host_name_for_asic(dst_asic);
-        uint32_t src_rank = psd.get_rank_for_hostname(src_host);
-        uint32_t dst_rank = psd.get_rank_for_hostname(dst_host);
+        uint32_t src_rank = psd.get_mpi_rank_for_asic(src_asic);
+        uint32_t dst_rank = psd.get_mpi_rank_for_asic(dst_asic);
 
         auto& agg = pairs_by_src_rank[src_rank][PairKey{src, dst}];
         agg.src_node = src;

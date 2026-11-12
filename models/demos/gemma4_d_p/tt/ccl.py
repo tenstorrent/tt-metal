@@ -118,7 +118,9 @@ class CCLManager:
         ]
         self._ring_gather_buffers = {}
 
-    def get_ring_gather_buffer(self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    def get_ring_gather_buffer(
+        self, key, n_kv_local, seq, head_dim, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG, batch=1
+    ):
         """Return persistent ring-attention receive storage.
 
         Distinct ``key`` values isolate receive buffers. ``seq`` is the full cache
@@ -126,17 +128,23 @@ class CCLManager:
         ``n_kv_local`` is the per-device head count (this device's TP shard); each
         device holds a zero-filled ``[1, n_kv_local, seq, head_dim]``. The op
         overwrites valid entries and masks invalid ones, so the scratch buffer needs
-        no re-zeroing.
+        no re-zeroing. Create each buffer before trace capture: the first call for a
+        key synchronizes the device.
         """
-        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config))
+        # batch: one receive batch per request of a lanes ring SDPA.
+        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config), batch)
         if cache_key not in self._ring_gather_buffers:
             self._ring_gather_buffers[cache_key] = ttnn.zeros(
-                [1, n_kv_local, seq, head_dim],
+                [batch, n_kv_local, seq, head_dim],
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=memory_config,
             )
+            # Each device runs its zero fill in its own queue, but peers write into this buffer over fabric as soon
+            # as they reach their first use of it. A peer that runs ahead can land rows before a lagging device's
+            # fill, which then zeroes them. Finish the fill on every device before anything targets the buffer.
+            ttnn.synchronize_device(self.mesh_device)
         return self._ring_gather_buffers[cache_key]
 
     def get_rs_semaphore(self):
@@ -311,6 +319,14 @@ def ccl_partition_rows(tensor, mesh_config):
     return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
 
 
+# Tallest reduce-scatter input (rows per device) on the tuned transport: chunk 4096 at CP8.
+_MAX_TUNED_REDUCE_SCATTER_IN_ROWS = 512
+# Four workers per link with short syncs suit short slabs; the automatic choice is better for taller ones.
+_SHORT_SLAB_REDUCE_SCATTER_TRANSPORT = dict(num_workers_per_link=4, chunks_per_sync=2, num_buffers_per_channel=2)
+# Tallest reduce-scatter output kept in L1: 256 rows per device (chunk 8192 at CP8 x TP4).
+_MAX_L1_REDUCE_SCATTER_OUT_ROWS = 256
+
+
 def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
     """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
 
@@ -319,7 +335,13 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
     """
     if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
-    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    if memory_config is None:
+        # The norm after it reads the result straight from L1. Taller outputs stay in DRAM, where they cannot clash
+        # with the next matmul's circular buffers.
+        out_rows = tensor.padded_shape[-2] // mesh_config.tp_degree
+        memory_config = (
+            ttnn.L1_MEMORY_CONFIG if out_rows <= _MAX_L1_REDUCE_SCATTER_OUT_ROWS else ttnn.DRAM_MEMORY_CONFIG
+        )
     if ccl_async_enabled():
         result = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
@@ -337,6 +359,11 @@ def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None
             num_buffers_per_channel=ccl_num_buffers_per_channel(),
         )
     else:
-        result = ttnn.reduce_scatter(tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config)
+        transport = {}
+        if tensor.padded_shape[-2] <= _MAX_TUNED_REDUCE_SCATTER_IN_ROWS:
+            transport = dict(num_links=ccl_manager.num_links, **_SHORT_SLAB_REDUCE_SCATTER_TRANSPORT)
+        result = ttnn.reduce_scatter(
+            tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config, **transport
+        )
     tensor.deallocate(True)
     return result

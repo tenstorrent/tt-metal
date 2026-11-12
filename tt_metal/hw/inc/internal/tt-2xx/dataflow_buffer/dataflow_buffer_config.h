@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "api/dataflow/dfb_access.h"
+
 // Transaction-id space is [0, HW_TXN_ID_MAX]. Id 0 is NOC_OVERLAY_TRID_STATIC (untagged).
 // Quasar-only pool split:
 //   user / kernel : [0, USER_TXN_ID_MAX]
@@ -20,18 +22,13 @@ static_assert(DFB_TXN_ID_BASE > USER_TXN_ID_MAX);
 
 namespace dfb {
 
-enum AccessPattern : uint8_t {
-    STRIDED,
-    ALL,
-    UNKNOWN,
-};
-
 constexpr uint8_t NUM_DFBS = 32;
-// Pack TRISC stores only active logical DFBs in a compact local array. Its TC state is allocated
-// separately from a shared pool, so common one-TC DFBs do not each reserve the six-slot worst case.
-constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 24;
-constexpr uint8_t MAX_PACK_TC_SLOTS = 32;
-static_assert(MAX_PACK_TC_SLOTS >= MAX_ACTIVE_DFBS_PACK);
+// Compute TRISCs (pack and unpack) store only the active logical DFBs in a compact local array and
+// draw tile-counter slots from a shared pool, so common one-TC DFBs do not each reserve the six-slot
+// worst case. The host checks both limits per Neo.
+constexpr uint8_t MAX_ACTIVE_DFBS_TRISC = 24;
+constexpr uint8_t MAX_TRISC_TC_SLOTS = 32;
+static_assert(MAX_TRISC_TC_SLOTS >= MAX_ACTIVE_DFBS_TRISC);
 
 constexpr uint8_t NUM_TENSIX = 4;
 constexpr uint8_t NUM_TILE_COUNTERS_PER_TENSIX = 32;
@@ -180,7 +177,7 @@ constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_SELF_PROG = (1u << 4);
 constexpr uint8_t DFB_HART_FLAG_TRISC_MASK = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
-// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 28B header, followed by
+// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header, followed by
 // uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.
 // This keeps base_addr and limit for the same slot adjacent (8B apart, same cache line).
 // Total TC section = num_tcs*9B rounded up to 4B.
@@ -191,14 +188,15 @@ struct dfb_blob_tc_pair_t {
 static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
 
 // Per-(hart, DFB) init entry in this hart's sequential blob.
-// Fixed 28B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
+// Fixed 32B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
 // uint8_t packed_tile_counter[num_tcs] padded to 4B.
-// Total entry size = 28 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
+// Total entry size = 32 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
 struct dfb_hart_init_entry_t {
     uint8_t logical_dfb_id;
     uint8_t num_tcs;
     uint8_t flags;        // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
-    uint8_t _reserved0;   // kept zeroed for 28B layout stability
+    uint8_t split_tc;     // byte 3: 1 = each transaction is split across all tile counters
+                          // (a share of the credits to each)
     uint32_t entry_size;  // raw bytes; device applies >> cb_addr_shift
     // Host precomputes the ready-to-copy stride_size per hart type:
     //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
@@ -217,8 +215,12 @@ struct dfb_hart_init_entry_t {
                                             // reclaims this byte for remapper_pair_index.
     uint16_t num_entries;                   // bytes 24-25; ring entry count (main update_size path)
     uint16_t capacity;                      // bytes 26-27; producer: TC capacity; consumer: 0
+    uint16_t block_size;                    // bytes 28-29; how many tiles exist in one block. 1 unless the ring is
+                                            // BLOCKED, otherwise block size.
+    uint16_t entries_to_jump;               // bytes 30-31; how many tiles the counter's cursor jumps on each
+                                            // rotation of tile counters.
 } __attribute__((packed));
-static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
 static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
@@ -324,12 +326,24 @@ struct dfb_dm0_isr_txn_threshold_t {
     uint8_t _pad[3];
 };
 
+// What DM0 needs to finish one implicit-sync DFB side at kernel exit (dfb_dm0_flush_side). Every txn id of
+// the side carries the same copy.
+constexpr uint8_t DFB_DM0_FINISH_FLAG_SPLIT = 0x1;      // each op is split across all of an issuer's counters
+constexpr uint8_t DFB_DM0_FINISH_FLAG_BROADCAST = 0x2;  // each op is posted to all of an issuer's counters
+struct dfb_dm0_finish_info_t {
+    uint8_t issuer_hart_mask;  // DM harts that issue on this side; their counters are listed in this order
+    uint8_t flags;             // DFB_DM0_FINISH_FLAG_*
+    uint8_t num_txn_ids;       // the side's txn ids, one ascending block starting at the lowest
+};
+static_assert(sizeof(dfb_dm0_finish_info_t) == 3, "dfb_dm0_finish_info_t must be 3 bytes");
+
 // 32-byte image matching TxnDFBDescriptor layout in dataflow_buffer_interface.h.
 struct dfb_dm0_txn_descriptor_image_t {
     uint8_t num_counters;
     uint8_t tile_counters[18];
     uint8_t tiles_to_post_or_ack;  // union post/ack share offset in TxnDFBDescriptor
-    uint8_t _pad[12];
+    dfb_dm0_finish_info_t finish;
+    uint8_t _pad[9];
 };
 
 // One entry per producer RISC that uses the remapper.
@@ -394,7 +408,7 @@ inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t c
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
-static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
 
 namespace dfb {
 

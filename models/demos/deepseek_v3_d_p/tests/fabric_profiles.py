@@ -10,7 +10,17 @@ import re
 from pathlib import Path
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    create_fabric_router_config,
+    get_max_payload_size,
+    moe_fabric_payload_size,
+)
+
+
+def moe_fabric_payload(model_config):
+    """The payload for a mesh running TtMoe: room for the routed expert / combine overlap on Blackhole, the
+    model's own FABRIC_PAYLOAD_SIZE everywhere else. See init_helpers.moe_fabric_payload_size."""
+    return moe_fabric_payload_size(model_config)
 
 
 def fabric2d_device_params(*, fabric_payload_size=None, **overrides) -> dict:

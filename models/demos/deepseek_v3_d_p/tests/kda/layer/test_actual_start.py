@@ -18,9 +18,11 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    LayerNrmseThresholds,
     assert_matches_reference,
     build_layer,
     collect_mesh_accuracy_and_determinism_results,
+    kda_device_params,
     mla_row_permutation,
     reference_case,
     to_sp_input,
@@ -31,11 +33,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
+    pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True),
 ]
 
 SEQUENCE = 1280
@@ -109,8 +107,10 @@ def test_actual_start_matches_natural_order(
                 sp_axis=sp_axis,
                 tp_axis=tensor_parallel_axis,
                 config=config,
+                page_channels=layer.convolution_page_channels,
                 label=f"SP{sp_size} T{sequence} start={actual_start}",
                 state_linf_threshold=state_peak,
+                nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
             )
         finally:
             for tensor in (hidden_tt, actual_start_tt, initial.recurrent, initial.convolution):
@@ -158,7 +158,9 @@ def test_actual_start_is_deterministic_and_matches_reference(
         sp_axis=sp_axis,
         tp_axis=tensor_parallel_axis,
         config=config,
+        page_channels=layer.convolution_page_channels,
         label=f"tp_axis={tensor_parallel_axis} start={actual_start}",
+        nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
     )
 
 
@@ -204,7 +206,9 @@ def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice) -> No
                 sp_axis=sp_axis,
                 tp_axis=tensor_parallel_axis,
                 config=config,
+                page_channels=layer.convolution_page_channels,
                 label=f"split trace replay={replay}",
+                nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
             )
             current = [
                 ttnn.to_torch(shard).clone()
@@ -269,7 +273,9 @@ def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device:
                 sp_axis=0,
                 tp_axis=1,
                 config=config,
+                page_channels=layer.convolution_page_channels,
                 label=f"split continuation chunk={chunk} start={actual_start}",
+                nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
             )
             after = [
                 ttnn.to_torch(shard)

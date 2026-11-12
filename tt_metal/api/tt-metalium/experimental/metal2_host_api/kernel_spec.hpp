@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
@@ -138,14 +139,17 @@ struct KernelSpec {
         // for multi-threaded kernels; at num_threads == 1 all patterns are equivalent.)
         //   STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
         //   ALL:     each kernel thread accesses every DFB entry
-        //   BLOCKED: a kernel thread accesses blocks of N entries, in strides of N blocks
-        //            (NOT YET SUPPORTED — currently rejected at runtime)
+        //   BLOCKED: a kernel thread accesses a contiguous block of block_size entries, then
+        //            strides by block_size * num_threads to its next block
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
         std::string accessor_name;   // DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
+        uint32_t block_size = 0;  // number of DFB entries per block
+                                  // only meaningful when access_pattern == BLOCKED;
+                                  // set to 0 otherwise.
     };
     Group<DFBBinding> dfb_bindings;
 
@@ -189,15 +193,26 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgs = Table<std::string, uint32_t>;
+    using CompileTimeArgs = Table<std::string, ArgValue>;
     CompileTimeArgs compile_time_args;
+
+    // Compile time array arguments
+    // An array's length is the length of its value, which must be non-empty.
+    //
+    // To retrieve an array in kernel code, use:
+    //   auto values = get_arg(args::<name>);  // read as values[i]; usable in constant expressions
+    using CompileTimeArrayArgs = Table<std::string, ArrayArgValue>;
+    CompileTimeArrayArgs compile_time_array_args;
 
     //----------------------------------------------------------------------------
     // Runtime argument schema (declaration)
 
-    // Schema (names) for the runtime arguments declared by this kernel.
+    // Schema for the runtime arguments declared by this kernel.
     // (The values of these arguments are set as ProgramRunArgs.)
     // Currently, only arguments of uint32_t are supported.
+    //
+    // NOTE: All of a kernel's argument names (compile-time, runtime, and common runtime;
+    //       scalar and array) share the kernel's args:: namespace, so they must be mutually unique.
 
     struct RuntimeArgSchema {
         // Runtime argument names (must be unique, valid C++ identifiers.)
@@ -205,6 +220,21 @@ struct KernelSpec {
 
         // Common runtime argument names (must be unique, valid C++ identifiers.)
         Group<std::string> common_runtime_arg_names;
+
+        // Array arguments: a fixed number of elements, which kernel code reads by index.
+        // (Use these for arguments the kernel reads as elements of an indexed collection.)
+        struct ArrayArgDecl {
+            std::string name;  // must be a unique, valid C++ identifier
+            uint32_t size;     // number of elements; must be > 0
+        };
+
+        // Runtime array arguments
+        // To retrieve an array in kernel code, use:
+        //   auto values = get_arg(args::<name>);  // read as values[i]; values.size() is the length
+        Group<ArrayArgDecl> runtime_array_args;
+
+        // Common runtime array arguments (retrieved in kernel code as for runtime array arguments)
+        Group<ArrayArgDecl> common_runtime_array_args;
     };
     RuntimeArgSchema runtime_arg_schema{};
 
@@ -229,6 +259,9 @@ struct KernelSpec {
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 
+// This alias lifts the array argument declaration type to the namespace level
+using ArrayArgDecl = KernelSpec::RuntimeArgSchema::ArrayArgDecl;
+
 // These aliases lift the kernel resource-binding types to the namespace level
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
@@ -249,6 +282,19 @@ inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_nam
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::PRODUCER,
         .access_pattern = DFBAccessPattern::STRIDED};
+}
+
+// Creates a DFB producer binding with a BLOCKED access pattern.
+// block_size is the number of contiguous entries a thread accesses before striding
+// by block_size * num_threads; it must be > 0.
+inline DFBBinding BlockedProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .access_pattern = DFBAccessPattern::BLOCKED,
+        .block_size = block_size,
+    };
 }
 
 // Creates a DFB consumer binding (with a default-STRIDED access pattern)
@@ -285,17 +331,17 @@ inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_
     };
 }
 
-// Creates a DFB consumer binding with a BLOCKED access pattern
-// Uncomment when BLOCKED support is added (currently TT_FATALs)
-/*
-inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+// Creates a DFB consumer binding with a BLOCKED access pattern.
+// block_size is the number of contiguous entries a thread accesses before striding
+// by block_size * num_threads; it must be > 0.
+inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::CONSUMER,
         .access_pattern = DFBAccessPattern::BLOCKED,
+        .block_size = block_size,
     };
 }
-*/
 
 }  // namespace tt::tt_metal::experimental

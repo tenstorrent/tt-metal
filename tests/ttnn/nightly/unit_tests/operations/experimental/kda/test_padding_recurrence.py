@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 pytestmark = run_for_blackhole()
@@ -17,14 +17,14 @@ def test_padding_preparation_and_scan(device):
     sequence, heads, width = 256, 2, 32
     q, k, v = [torch.randn(1, sequence, heads * width, generator=generator).bfloat16() for _ in range(3)]
     gate = (-0.02 * torch.rand(q.shape, generator=generator)).bfloat16()
-    beta = torch.sigmoid(torch.randn(heads, sequence // 32, 32, 1, generator=generator))
+    beta = torch.randn(1, sequence, heads, generator=generator).bfloat16()  # pre-sigmoid logits
     initial = 0.02 * torch.randn(heads, width, width, generator=generator)
 
     def upload(value, dtype):
         return ttnn.from_torch(value, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
     inputs = [upload(t, ttnn.bfloat16) for t in (q, k, v, gate)]
-    beta_tt, initial_tt = upload(beta, ttnn.float32), upload(initial, ttnn.float32)
+    beta_tt, initial_tt = upload(beta, ttnn.bfloat16), upload(initial, ttnn.float32)
 
     def scalar(value):
         return ttnn.from_torch(
@@ -43,7 +43,7 @@ def test_padding_preparation_and_scan(device):
         summary = ttnn.experimental.kda.summarize_chunk_recurrence(
             *prepared, actual_start=start_bound, actual_end=end_bound
         )
-        return (*prepared, output, state, *summary)
+        return (*prepared, output, state, summary)
 
     for _ in range(2):
         for tensor in run():
@@ -58,7 +58,7 @@ def test_padding_preparation_and_scan(device):
             ttnn.deallocate(source)
             ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
             trimmed = [upload(t[:, :length], ttnn.bfloat16) for t in (q, k, v, gate)]
-            trimmed_beta = upload(beta[:, : length // 32], ttnn.float32)
+            trimmed_beta = upload(beta[:, :length], ttnn.bfloat16)
             expected_terms = ttnn.experimental.kda.prepare_chunk_recurrence(
                 *trimmed, trimmed_beta, heads, actual_start=start
             )
@@ -71,9 +71,7 @@ def test_padding_preparation_and_scan(device):
                     ttnn.to_torch(observed)[:, : length // 32], ttnn.to_torch(expected), rtol=0, atol=0
                 )
             torch.testing.assert_close(ttnn.to_torch(outputs[8]), ttnn.to_torch(expected_state), rtol=0, atol=0)
-            # Dynamic summaries use the PR's BF16 transport boundary.
-            for observed, expected in zip(outputs[9:11], expected_summary[:2], strict=True):
-                torch.testing.assert_close(ttnn.to_torch(observed), ttnn.to_torch(expected).bfloat16(), rtol=0, atol=0)
+            torch.testing.assert_close(ttnn.to_torch(outputs[9]), ttnn.to_torch(expected_summary), rtol=0, atol=0)
             # Rebind cached programs to fresh scalar addresses while the captured
             # scalars describe a different length. Stale addresses cannot pass.
             source = scalar(sequence)
@@ -86,11 +84,10 @@ def test_padding_preparation_and_scan(device):
                     ttnn.to_torch(observed)[:, : length // 32], ttnn.to_torch(expected), rtol=0, atol=0
                 )
             torch.testing.assert_close(ttnn.to_torch(rebound[8]), ttnn.to_torch(expected_state), rtol=0, atol=0)
-            for observed, expected in zip(rebound[9:11], expected_summary[:2], strict=True):
-                torch.testing.assert_close(ttnn.to_torch(observed), ttnn.to_torch(expected).bfloat16(), rtol=0, atol=0)
+            torch.testing.assert_close(ttnn.to_torch(rebound[9]), ttnn.to_torch(expected_summary), rtol=0, atol=0)
             for tensor in (*rebound, fresh_start, fresh_end):
                 ttnn.deallocate(tensor)
-            for tensor in (*trimmed, trimmed_beta, *expected_terms, expected_output, expected_state, *expected_summary):
+            for tensor in (*trimmed, trimmed_beta, *expected_terms, expected_output, expected_state, expected_summary):
                 ttnn.deallocate(tensor)
     finally:
         ttnn.release_trace(device, trace)
@@ -186,7 +183,7 @@ def test_padding_unaligned_end_ignores_padding_values(device):
     sequence, heads, width = 256, 2, 32
     q, k, v = [torch.randn(1, sequence, heads * width, generator=generator).bfloat16() for _ in range(3)]
     gate = (-0.02 * torch.rand(q.shape, generator=generator)).bfloat16()
-    beta = torch.sigmoid(torch.randn(heads, sequence // 32, 32, 1, generator=generator))
+    beta = torch.randn(1, sequence, heads, generator=generator).bfloat16()  # pre-sigmoid logits
     initial = 0.02 * torch.randn(heads, width, width, generator=generator)
     fills = {"zero": 0.0, "nan": float("nan"), "inf": float("inf"), "large": 1e30, "random": None}
 
@@ -206,43 +203,36 @@ def test_padding_unaligned_end_ignores_padding_values(device):
         padded = [t.clone() for t in (q, k, v, gate)]
         for tensor in padded if query else padded[1:]:
             fill_rows(tensor, length, fill)
-        padded_beta = beta.clone().reshape(heads, sequence, 1)
+        padded_beta = beta.clone()
         fill_rows(padded_beta, length, fill)
-        return padded, padded_beta.reshape(beta.shape)
+        return padded, padded_beta
 
     inputs = [upload(t, ttnn.bfloat16) for t in (q, k, v, gate)]
-    beta_tt, initial_tt = upload(beta, ttnn.float32), upload(initial, ttnn.float32)
+    beta_tt, initial_tt = upload(beta, ttnn.bfloat16), upload(initial, ttnn.float32)
     start, end = scalar(0), scalar(sequence)
 
     def run(flat, beta_input, end_bound):
-        """Return named results: prepared terms, scan output and state, head summary.
-
-        start=0 on one device has no separated tail, so the tail summary slots are
-        unspecified and are released here.
-        """
+        """Return named results: prepared terms, scan output and state, head summaries."""
         prepared = ttnn.experimental.kda.prepare_chunk_recurrence(
             *flat, beta_input, heads, actual_start=start, actual_end=end_bound
         )
         output, state = ttnn.experimental.kda.recurrent_chunk_scan(
             *prepared, initial_tt, actual_start=start, actual_end=end_bound, tail_entry_states=initial_tt
         )
-        head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+        summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
             *prepared, actual_start=start, actual_end=end_bound
         )
-        ttnn.deallocate(tail_a)
-        ttnn.deallocate(tail_b)
         return {
             **dict(zip(_PREPARED_TERMS, prepared, strict=True)),
             "output": output,
             "state": state,
-            "head_a": head_a,
-            "head_b": head_b,
+            "summaries": summaries,
         }
 
     def comparable(name, tensor, length):
         """The defined part of a result: valid chunks, and valid rows of query-row terms."""
         host = ttnn.to_torch(tensor)
-        if name in ("state", "head_a", "head_b"):
+        if name in ("state", "summaries"):
             return host
         host = host[:, : -(-length // 32)]
         if name in _QUERY_ROW_TERMS:
@@ -261,7 +251,7 @@ def test_padding_unaligned_end_ignores_padding_values(device):
         for length in (1, 2, 31, 33, 97, 255, 256, 64):
             reference_inputs, reference_beta = with_padding(length, 0.0, query=False)
             reference_tt = [upload(t, ttnn.bfloat16) for t in reference_inputs]
-            reference_beta_tt = upload(reference_beta, ttnn.float32)
+            reference_beta_tt = upload(reference_beta, ttnn.bfloat16)
             ceiling = scalar(-(-length // 32) * 32)
             reference = run(reference_tt, reference_beta_tt, ceiling)
             expected = {name: comparable(name, tensor, length) for name, tensor in reference.items()}

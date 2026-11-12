@@ -18,6 +18,32 @@ struct TileDescriptor;
 
 namespace ttnn::operations::data_movement {
 
+// 32-bit Dest covers true 32-bit datums and the 8-bit integer formats BH reconstructs via int-FPU.
+inline bool requires_32bit_dest(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Float32 || fmt == tt::DataFormat::Int32 ||
+           fmt == tt::DataFormat::UInt32 || fmt == tt::DataFormat::UInt8 || fmt == tt::DataFormat::Int8;
+}
+inline bool requires_32bit_dest(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::INT32 ||
+           dtype == tt::tt_metal::DataType::UINT32 || dtype == tt::tt_metal::DataType::UINT8 ||
+           dtype == tt::tt_metal::DataType::INT8;
+}
+
+// UnpackMode::UnpackToDest lowers to UnpackToDestFp32 which bypasses SrcA; only 32-bit formats
+// are safe. 8-bit integer formats must stay on the SrcA/int-FPU path.
+inline bool requires_unpack_to_dest(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Float32 || fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::UInt32;
+}
+inline bool requires_unpack_to_dest(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::INT32 ||
+           dtype == tt::tt_metal::DataType::UINT32;
+}
+
+// Deprecated: use requires_unpack_to_dest(fmt) directly. Kept until all callers migrate.
+inline bool needs_fp32_unpack_to_dest(bool fp32_dest_acc_en, tt::tt_metal::DataType dtype) {
+    return fp32_dest_acc_en && requires_unpack_to_dest(dtype);
+}
+
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
@@ -87,6 +113,9 @@ uint32_t get_estimated_size_of_cbs(
     uint32_t fixed_staging_bytes = 0);
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
+
+// L1 per worker core the allocator can ever hand out, independent of current occupancy.
+uint32_t get_static_l1_space(const Tensor& input_tensor_a);
 
 // One set of buffers, sized for a single block width.
 //
@@ -197,7 +226,13 @@ BlockPlan make_block_plan(
     uint32_t output_single_tile_size,
     uint32_t tile_height,
     uint32_t tile_width,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles = std::nullopt);
+
+// Widest row-major block the Quasar unpacker may tilize in one pass. On the RTL emulator a
+// tilize_with_val_padding block of 191 or more tiles never completes (176 does; emu-quasar-2x3
+// sweep, #56622), so Quasar keeps every tilize block at or under this width.
+constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 128;
 
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
@@ -436,5 +471,17 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
+
+// True for a BLOCK/WIDTH-sharded memory config whose shard row (shard width * element_size) is not a
+// multiple of the buffer alignment. For an RM buffer with such a config, one page is one shard row,
+// and the device stores pages at the aligned page size. The kernel-side TensorAccessor uses a single
+// page size both as the distance between pages and, in `noc_async_*_sharded`, as the bytes moved per
+// page, so one value is correct for both uses only when the shard row is a multiple of the alignment.
+// Always false for HEIGHT sharding. TensorSpec requires a HEIGHT-sharded tensor's shard width to equal
+// the tensor width, so for RM one page is a whole tensor row, which `noc_async_*_sharded` moves in a
+// single transfer of the size the caller asks for, using the page size only as the distance between pages.
+bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
+
+bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
 }  // namespace ttnn::operations::data_movement

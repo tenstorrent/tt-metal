@@ -9,8 +9,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t BatchSize = 1>
-FORCE_INLINE void transpose(uint32_t dfb_in_id, uint32_t dfb_out_id, DataflowBuffer& dfb_in, DataflowBuffer& dfb_out) {
+template <uint32_t BatchSize = 1, typename DFBIn, typename DFBOut>
+FORCE_INLINE void transpose(uint32_t dfb_in_id, uint32_t dfb_out_id, DFBIn& dfb_in, DFBOut& dfb_out) {
     dfb_in.wait_front(BatchSize);
 
     tile_regs_acquire();

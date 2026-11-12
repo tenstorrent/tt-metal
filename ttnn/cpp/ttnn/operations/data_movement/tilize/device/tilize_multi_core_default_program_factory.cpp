@@ -38,8 +38,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
                         a.dtype() == DataType::UINT8;
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto* src0_buffer = &a.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     auto logical_shape = a.logical_shape();
