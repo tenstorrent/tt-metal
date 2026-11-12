@@ -508,10 +508,12 @@ def test_mk_e2e(mesh_device, monkeypatch):
         assert 1e3 / step_ms >= floor, f"decode {1e3 / step_ms:.1f} tok/s/u < the floor {floor}"
     spec_k = int(os.environ.get("GLM53_SPEC_K", "0") or 0)
     if spec_k > 0 and getattr(backend, "spec", None) is not None and backend.spec.drafter == "mtp":
-        if live == 1 and sampling is None:
+        if live == 1 and sampling is None and mm_in is None:
             _spec_ab(gen, backend, mesh_device, tok, prompts[0], outs[0], timing, step_ms, spec_k, stop)
-        else:
-            logger.info(f"MK_SPEC: skipped (one greedy user: GLM53_MK_LIVE=1, no GLM53_MK_TEMP; live {live})")
+        else:  # (an image prompt never speculates: the MTP-cache prefill embeds token ids, not the feature rows)
+            logger.info(
+                f"MK_SPEC: skipped (one greedy text user: GLM53_MK_LIVE=1, no GLM53_MK_TEMP, no image; live {live})"
+            )
     if isinstance(source, TileCache) and not source.ready:
         source.complete()  # the e2e passed on the tiles it dumped: READ mode from the next run
     if isinstance(source, MkTileCacheSource) and source._added:
