@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Batched decode dense MoE (experts/decode.py decode_forward_dense): the gate / up biases, SwiGLU and routing weights
-// of the [32, E * I_local] gate / up outputs in one program, on their width shards (dense_swiglu_compute.cpp), reader
+// of the [32, E * I_pad] gate / up outputs in one program, on their width shards (dense_swiglu_compute.cpp), reader
 // (BRISC). The gate / up shards and the act output are CBs on the tensors' own L1 (pushed here without a copy); the
 // one-hot expand tile of each column tile is built here; the routing weights' tile is read once; the
-// biases ([32, E * I_local], 32 equal rows, DRAM interleaved) only their row 0: the first two face rows of faces 0 and
+// biases ([32, E * I_pad], 32 equal rows, DRAM interleaved) only their row 0: the first two face rows of faces 0 and
 // 1 (64-byte reads), added by row broadcast.
 //
 // common runtime args: [w, gate_bias, up_bias, core column-tile offset table: per grid core (y GX + x) its first column
@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t cb_ub = get_compile_time_arg_val(5);
     constexpr uint32_t NT = get_compile_time_arg_val(6);
     constexpr uint32_t GX = get_compile_time_arg_val(7);
-    constexpr uint32_t I_LOCAL = get_compile_time_arg_val(8);  // columns per expert
+    constexpr uint32_t I_LOCAL = get_compile_time_arg_val(8);  // columns per expert (padded to whole tiles)
     constexpr auto w_args = TensorAccessorArgs<9>();
     constexpr auto gb_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto ub_args = TensorAccessorArgs<gb_args.next_compile_time_args_offset()>();
@@ -52,7 +52,7 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(cb_w, 1);
     // per column tile (2-page CBs: L1 is tight on these cores): the bias rows, and the expand tile built here (zeros,
-    // 1.0 at (expert of column cc, cc): column c of the [*, E * I_local] layout belongs to expert c / I_LOCAL)
+    // 1.0 at (expert of column cc, cc): column c of the [*, E * I_pad] layout belongs to expert c / I_LOCAL)
     const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
     for (uint32_t j = 0; j < NT; ++j) {
         cb_reserve_back(cb_bg, 1);

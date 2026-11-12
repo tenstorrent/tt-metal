@@ -364,8 +364,9 @@ class ModelArgs:
     WEIGHT_CACHE_FORMAT_VERSION = 1
     # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
     FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
-    # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
-    DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
+    # Layout version of the batched dense decode MoE weights (experts dense_decode_*). 2: each expert padded to whole
+    # tiles (dense_decode_p736_*, experts/dense_layout.py); the routed prefill reads them (no routed copy).
+    DENSE_MOE_DECODE_WEIGHTS_VERSION = 2
     # Settings that choose which weight values or layouts the cache holds: the marker records them, so a run with other
     # values (another pinned revision of the rounded weights, say) loads the HF weights once and writes its own files
     # instead of trusting a marker for files it does not have. Each group only for the builds that read it: the dense

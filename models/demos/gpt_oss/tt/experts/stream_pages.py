@@ -154,25 +154,29 @@ def stream_column_biases(bank_bytes, entries, k_tiles, unpack_bfp):
 
 def width_sharded_tile_entry(n_tile, k_tile, shard_tiles, tile_bytes):
     """(bank, offset) of tile (k_tile, n_tile) of a TILE tensor [K, N] DRAM width-sharded over the banks with shard
-    width shard_tiles tiles (bank b holds tile columns [b * shard_tiles, (b + 1) * shard_tiles), its tiles row-major
-    in the shard). The k stride of such a column is shard_tiles * tile_bytes."""
+    width shard_tiles tiles (ROW_MAJOR shard grid (0, 0)..(banks - 1, 0): bank b holds tile columns
+    [b * shard_tiles, (b + 1) * shard_tiles), its tiles row-major in the shard with row stride shard_tiles, a partial
+    last shard included: tt_metal buffer page mapping). The k stride of such a column is shard_tiles * tile_bytes."""
     b, c = divmod(n_tile, shard_tiles)
     return b, (k_tile * shard_tiles + c) * tile_bytes
 
 
-def dense_page_table(num_experts, inter_local, hidden, gu_shard_tiles, down_shard_tiles, tile_bytes, up_delta=0):
+def dense_page_table(num_experts, inter_pad, hidden, gu_shard_tiles, down_shard_tiles, tile_bytes, up_delta=0):
     """[E, 2 * (2 * n_gu + n_dn)] int64 page table of the batch-32 dense decode expert weights (experts/weights.py
-    load_dense_decode_expert_weights: gate / up [H, E * il] with expert e in columns [e * il, (e + 1) * il), down
-    [E * il, H] with expert e in rows [e * il, (e + 1) * il), all DRAM width-sharded). Gate and up are two tensors:
-    the up entries carry up_delta = up buffer address - gate buffer address (mod 2^32) so both read from the gate
-    source. k strides: gu_shard_tiles * tile_bytes and down_shard_tiles * tile_bytes.
+    load_dense_decode_expert_weights, experts/dense_layout.py: gate / up [H, E * inter_pad] with expert e in columns
+    [e * inter_pad, (e + 1) * inter_pad), down [E * inter_pad, H] with expert e in rows [e * inter_pad,
+    (e + 1) * inter_pad), all DRAM width-sharded, normal (not transposed) tiles). Gate and up are two tensors: the up
+    entries carry up_delta = up buffer address - gate buffer address (mod 2^32) so both read from the gate source.
+    n_gu = inter_pad / 32, n_dn = ceil(hidden / 32); k strides: gu_shard_tiles * tile_bytes (gate / up, K = hidden)
+    and down_shard_tiles * tile_bytes (down, K = inter_pad).
 
-    Only tile-aligned experts can be addressed: inter_local must be a multiple of 32 (gpt-oss-20b at TP 4 has 720,
-    22.5 tiles, so its dense layout cannot be read per expert this way)."""
+    Only whole-tile experts can be addressed: inter_pad must be a multiple of 32 (gpt-oss-20b at TP 4: 720 columns
+    padded to 736, dense_layout.padded_expert_width)."""
     assert (
-        inter_local % TILE == 0
-    ), f"expert width {inter_local} is not whole tiles: the dense layout is not addressable"
-    n_gu, n_dn, k_dn = inter_local // TILE, -(-hidden // TILE), inter_local // TILE
+        inter_pad % TILE == 0
+    ), f"expert width {inter_pad} is not whole tiles: the dense layout is not addressable per expert"
+    n_gu, n_dn, k_dn = inter_pad // TILE, -(-hidden // TILE), inter_pad // TILE
+    assert gu_shard_tiles > 0 and down_shard_tiles > 0
     rows = []
     for e in range(num_experts):
         gate = [width_sharded_tile_entry(e * n_gu + n, 0, gu_shard_tiles, tile_bytes) for n in range(n_gu)]
