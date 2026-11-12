@@ -85,7 +85,7 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
  */
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index);
 
-// True while a ttnn::experimental::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
+// True while a ttnn::command_list::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
 bool is_recording_command_list();
 
 // Throws while recording on the calling thread. For calls whose meaning depends on recorded work, so running them at
