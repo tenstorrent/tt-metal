@@ -99,6 +99,111 @@ def _keyframe_s1_strength(s1_height: int) -> float:
     return KEYFRAME_S1_STRENGTH_COARSE if s1_height < 480 else KEYFRAME_S1_STRENGTH
 
 
+def _s1_pin_strength(
+    lat_idx: int, latent_frames: int, s1s: float, s1_height: int, *, kf_fix: bool, append_token: bool, end_hold: bool
+) -> float:
+    """Stage-1 strength of one in-place image pin. On the aligned-node keyframe path (``kf_fix``) a
+    non-frame-0 in-place pin softens to ``_keyframe_s1_strength``; frame 0 and append-token anchors keep
+    the strength they were asked for.
+
+    ``end_hold`` (LTX_REF_FL_END_HOLD, ref+fl only; task #3075) gives the LAST latent frame frame 0's
+    treatment: it keeps its asked strength, so its denoise mask and its AdaLN timestep agree. The 2-value
+    timestep pair carries frame 0's pinned noise level for every pinned token (``image_cond_strength``),
+    so a softened last frame was told it was clean (timestep 0) while its mask left it 50-75% noise, and
+    stage 1 settled the clip's end off the given frame (end-of-clip colour drift, a motion jump in the
+    last frames). Off, the result is unchanged."""
+    if not kf_fix or lat_idx == 0 or append_token or (end_hold and lat_idx == latent_frames - 1):
+        return s1s
+    return min(s1s, _keyframe_s1_strength(s1_height))
+
+
+# Ref+fl end guide (LTX_REF_FL_END_GUIDE; sulphur task #3360): x0 pull toward the given last frame for the latent
+# frames before it, nearest first. "1" takes this default; "a,b,..." sets them; unset, "" or "0" is off. A
+# "pin:s" item instead (or as well) softens the last frame's own pin to strength s (apply_ref_fl_end_softpin).
+REF_FL_END_GUIDE_DEFAULT = (0.5, 0.25)
+
+
+def _ref_fl_end_guide_strengths(raw: str | None) -> tuple[float, ...]:
+    """Guide strengths from LTX_REF_FL_END_GUIDE (see REF_FL_END_GUIDE_DEFAULT), each clamped to [0, 1];
+    () is off. "pin:s" items are the soft pin's, not guide strengths."""
+    raw = (raw or "").strip()
+    if raw in ("", "0", "false", "False"):
+        return ()
+    if raw in ("1", "true", "True"):
+        return REF_FL_END_GUIDE_DEFAULT
+    items = [v.strip() for v in raw.split(",") if v.strip() and not v.strip().startswith("pin:")]
+    return tuple(max(0.0, min(1.0, float(v))) for v in items)
+
+
+def _ref_fl_end_softpin(raw: str | None) -> float | None:
+    """The last frame's soft-pin strength from a "pin:s" item of LTX_REF_FL_END_GUIDE, clamped to [0, 1); None
+    is off (the hard pin)."""
+    for v in (raw or "").split(","):
+        v = v.strip()
+        if v.startswith("pin:"):
+            return max(0.0, min(0.999, float(v[4:])))
+    return None
+
+
+def apply_ref_fl_end_softpin(clean_latent, denoise_mask, pin_rows, conds, latent_frames, hw, strength):
+    """Soften a ref+fl gen's hard last-frame pin (task #3360, variant "pin:s").
+
+    The hard pin keeps the last latent frame at the given frame at timestep 0 from the first step, so the
+    frames before it run their own way and snap to it at the end. Here its rows leave ``pin_rows`` (free AdaLN
+    timestep, so the model denoises the frame with its neighbours) and keep the given frame as an x0 target at
+    ``strength`` every step (``denoise_mask`` = 1 - strength): the last frame ends as ``strength`` x given +
+    (1 - strength) x the model's own estimate. Edits ``pin_rows``/``denoise_mask`` in place (``clean_latent``
+    already holds the frame) and returns the soft rows ``[N]`` bool, or None when the last frame is not
+    conditioned in place."""
+    last = latent_frames - 1
+    off = last * hw
+    if not any(c[0] == last for c in conds) or not bool(pin_rows[off : off + hw].all()):
+        return None
+    pin_rows[off : off + hw] = False
+    denoise_mask[:, off : off + hw, :] = 1.0 - strength
+    soft_rows = torch.zeros(pin_rows.shape[0], dtype=torch.bool)
+    soft_rows[off : off + hw] = True
+    return soft_rows
+
+
+def apply_ref_fl_end_guide(clean_latent, denoise_mask, pin_rows, conds, latent_frames, hw, strengths):
+    """Spread a ref+fl gen's last frame over the latent frames before it (task #3360).
+
+    On the full schedule the last latent frame is pinned hard and the frame before it is free, so the clip
+    runs its own way and then snaps to the given last frame in its last ~12 pixel frames (mistic-ic: 2.0-2.5x
+    the clip's median frame step there, against 0.9-1.5x in the source ref2v). Here latent frame
+    ``latent_frames - 1 - k`` (k = 1, 2, ...) gets the last frame's latent as its clean target at
+    ``strengths[k - 1]``: each step's x0 estimate is blended toward it by that much (``denoise_mask`` =
+    1 - strength). The rows stay out of ``pin_rows``, so their AdaLN timestep is the free sigma and their
+    start noise is a free frame's (the caller noises with ``guide_rows`` reset to 1). A frame already
+    conditioned (an interior keyframe) is left alone. Edits ``clean_latent``/``denoise_mask`` in place and
+    returns the guide rows ``[N]`` bool, or None when there is no last-frame cond or no strength."""
+    last = latent_frames - 1
+    lat = next((c[1] for c in conds if c[0] == last), None)
+    if lat is None or not any(strengths):
+        return None
+    tokens = lat.float().permute(0, 2, 3, 4, 1).reshape(1, -1, clean_latent.shape[-1])
+    guide_rows = torch.zeros(pin_rows.shape[0], dtype=torch.bool)
+    for k, strength in enumerate(strengths, start=1):
+        off = (last - k) * hw
+        if last - k < 1 or strength <= 0 or bool(pin_rows[off : off + hw].any()):
+            continue
+        clean_latent[:, off : off + hw, :] = tokens
+        denoise_mask[:, off : off + hw, :] = 1.0 - strength
+        guide_rows[off : off + hw] = True
+    return guide_rows if bool(guide_rows.any()) else None
+
+
+def ref_fl_end_guide_step_mask(denoise_mask, guide_rows, sigma_next, sigma_start):
+    """Per-step denoise mask with the end guide annealed: a guide row's pull is its strength times
+    sigma_next / sigma_start, so it steers the early steps and the last step (sigma_next = 0) keeps the
+    model's own x0 (no latent cross-fade toward the last frame). Pinned and free rows are unchanged."""
+    scale = max(0.0, min(1.0, sigma_next / sigma_start)) if sigma_start > 0 else 0.0
+    mask = denoise_mask.clone()
+    mask[:, guide_rows, :] = 1.0 - (1.0 - denoise_mask[:, guide_rows, :]) * scale
+    return mask
+
+
 def _keyframe_s1_sigmas(latent_frames: int) -> list[float]:
     """Trajectory-aligned S1 nodes for a non-frame-0 keyframe, scaled to the active tier's budget.
 
@@ -335,6 +440,8 @@ class _I2VConditioning:
     # their main-grid frame stays free. anchor_frame_indices lists each anchor's target latent frame.
     anchor_frame_indices: list[int] = field(default_factory=list)
     video_N_real_ext: int = 0  # grid + n_anchor*hw; == grid length when no append
+    # Ref+fl end guide (task #3360): free rows whose x0 is pulled toward the last frame; None = no guide.
+    guide_rows: torch.Tensor | None = None
 
 
 class LTXDistilledPipeline(LTXPipeline):
@@ -613,8 +720,21 @@ class LTXDistilledPipeline(LTXPipeline):
             # puts its weights and anything its first forward allocates below every trace.
             if self.vae_encoder is not None and warm_encoders:
                 logger.info(f"warmup image encoder (before capture): {height // 2}x{width // 2} + {height}x{width}")
+                # Static mesh: one encode trace per stage resolution; each gen replays it ("enc" in
+                # LTX_GEN_EAGER_STAGES keeps it eager and captures nothing). Both shapes run eager, then
+                # both get their trace input and prep run here, before any capture. The traces are
+                # recorded last, in _capture_warmup_traces after the DiT and Gemma captures, so no
+                # persistent buffer (ref encoders, DiT statics, CCL buffers, trace io) is allocated
+                # after an encode capture and overwritten by its replay (#3354: the stage-1 hang).
+                self.vae_encoder.traced = False
                 self._warmup_encode(height // 2, width // 2)
                 self._warmup_encode(height, width)
+                if "enc" not in {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",")}:
+                    self.vae_encoder.traced = True
+                    self.vae_encoder.capture_open = True
+                    self._warmup_encode(height // 2, width // 2)
+                    self._warmup_encode(height, width)
+                    self.vae_encoder.capture_open = False
                 # The IC-LoRA reference encoders are also built once and never reloaded here, so the
                 # same before-capture rule applies; the late warmup below skips them on this path.
                 if ref_num_frames is not None:
@@ -934,6 +1054,10 @@ class LTXDistilledPipeline(LTXPipeline):
         t_dit = time.time() - t0
         self.gemma_encoder_pair.open_trace_gate()
         self.gemma_encoder_pair.capture_trace()
+        # The image encode traces go last: their inputs and prep runs were allocated in the early
+        # encoder warmup, and nothing persistent is allocated after this.
+        if self.vae_encoder is not None:
+            self.vae_encoder.capture_traces()
         logger.info(
             f"warmup trace capture: DiT {t_dit:.1f}s, Gemma {time.time() - t0 - t_dit:.1f}s "
             f"({len(pending)} warmup call(s))"
@@ -1482,6 +1606,24 @@ class LTXDistilledPipeline(LTXPipeline):
                 latent_w,
                 append_interior=append_interior,
             )
+        soft_rows = None
+        if has_ref and image_conds:
+            # Ref+fl end guide (task #3360): values-only edit of the trace-baked mask/clean/pin buffers.
+            guide_raw = os.environ.get("LTX_REF_FL_END_GUIDE")
+            softpin = _ref_fl_end_softpin(guide_raw)
+            if softpin is not None:
+                soft_rows = apply_ref_fl_end_softpin(
+                    i2v.clean_latent, i2v.denoise_mask, i2v.pin_rows, image_conds, latent_frames, hw, softpin
+                )
+                if soft_rows is not None:
+                    logger.info(f"  ref+fl end soft pin: last latent frame at strength {softpin}")
+            guide = _ref_fl_end_guide_strengths(guide_raw)
+            if guide:
+                i2v.guide_rows = apply_ref_fl_end_guide(
+                    i2v.clean_latent, i2v.denoise_mask, i2v.pin_rows, image_conds, latent_frames, hw, guide
+                )
+                if i2v.guide_rows is not None:
+                    logger.info(f"  ref+fl end guide: {guide} on {int(i2v.guide_rows.sum()) // hw} latent frame(s)")
         video_N_real = i2v.video_N_real_ext
         video_N = self._sp_pad_len(video_N_real)
         anchor_frames = i2v.anchor_frame_indices
@@ -1538,6 +1680,8 @@ class LTXDistilledPipeline(LTXPipeline):
             # pin_rows now indexes frame-0 (in-place) and/or the appended anchor block; a free interior
             # frame keeps its base value (zeros=noise at S1, the upsampled latent at S2).
             base_v[:, i2v.pin_rows, :] = i2v.clean_latent[:, i2v.pin_rows, :]
+            if soft_rows is not None:  # soft-pinned last frame starts from the given frame, noised at 1 - s
+                base_v[:, soft_rows, :] = i2v.clean_latent[:, soft_rows, :]
         elif initial_video_latent_device is not None:  # T2V S2, device-resident: handled below
             base_v = None
         elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
@@ -1558,7 +1702,11 @@ class LTXDistilledPipeline(LTXPipeline):
                 noise_v, noise_a = self._seeded_noise(seed, v_shape, (B, audio_N_real, self.in_channels))
             else:
                 (noise_v,) = self._seeded_noise(seed, v_shape)
-            video_lat_real = self._noise_video_latent(base_v, i2v.denoise_mask, sigmas[0], noise_v)
+            init_mask = i2v.denoise_mask
+            if i2v.guide_rows is not None:  # guide rows start as free frames; only the x0 blend pulls them
+                init_mask = init_mask.clone()
+                init_mask[:, i2v.guide_rows, :] = 1.0
+            video_lat_real = self._noise_video_latent(base_v, init_mask, sigmas[0], noise_v)
 
             if video_N > video_N_real:
                 video_lat = torch.zeros(B, video_N, self.in_channels)
@@ -1641,6 +1789,15 @@ class LTXDistilledPipeline(LTXPipeline):
             state._tt_timestep.update(
                 torch.tensor([sigma]).reshape(1, 1, B, 1) * 1000.0, traced, device=self.mesh_device
             )
+            if image_cond and i2v.guide_rows is not None:  # annealed end guide: values-only mask update
+                step_mask = ref_fl_end_guide_step_mask(
+                    i2v.denoise_mask, i2v.guide_rows, sigma_next, sigmas[0].item()
+                )
+                mask_host = torch.ones(1, 1, video_N, 1)
+                mask_host[:, :, :video_N_real, :] = step_mask[0, :, 0].unsqueeze(-1)
+                state._tt_i2v_mask.update(
+                    mask_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
+                )
             video_ts_pair_tt = video_pin_mask_tt = None
             if needs_video_ts:
                 # Per-token timestep has 2 values (pinned frame-0 vs. sigma): pass the (2,) pair +
@@ -2243,6 +2400,8 @@ class LTXDistilledPipeline(LTXPipeline):
             kf_fix = nonzero_kf and len(DISTILLED_SIGMA_VALUES) < len(_DEFAULT_S1_SIGMAS)
             if kf_fix:
                 s1_sigmas = _keyframe_s1_sigmas(latent_frames)
+            # ref+fl end-frame hold (task #3075): only a gen with a reference sheet, read per gen.
+            end_hold = reference_video is not None and _env_on("LTX_REF_FL_END_HOLD")
             # Each image conditions the latent frame owning its pixel time (0 -> first,
             # num_frames-1 -> last, any value -> a keyframe). A later image at the same latent slot
             # wins — one encoded frame owns each slot. Tuple: (path, frame_idx, s1[, s2] strength); a
@@ -2257,8 +2416,10 @@ class LTXDistilledPipeline(LTXPipeline):
                 # HELD anchor — so softening only corrupts the reference itself: the anchor is denoised
                 # by (1 - strength), and at the coarse 720p S1 (0.25) it lands three-quarters noise, so
                 # every frame that converges on it decodes to mush. Anchors stay hard.
-                if kf_fix and lat_idx != 0 and not append_token:
-                    s1s = min(s1s, _keyframe_s1_strength(s1_height))  # soften non-frame-0 pin; s2 re-locks
+                # Soften a non-frame-0 pin; s2 re-locks. The ref+fl end-frame hold keeps the last frame hard.
+                s1s = _s1_pin_strength(
+                    lat_idx, latent_frames, s1s, s1_height, kf_fix=kf_fix, append_token=append_token, end_hold=end_hold
+                )
                 by_slot[lat_idx] = (img[0], s1s, s2s)
             # The conditioning latent depends only on (image, resolution), so encode once and memoize.
             # This skips re-running the eager VAE encoder on later gens (e.g. the traced steady-state

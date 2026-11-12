@@ -73,6 +73,7 @@ from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
+from ...models.transformers.minimax_h3 import convert_comfy_minimax_h3 as comfy_h3
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
@@ -433,6 +434,37 @@ def _tqdm_spacer() -> None:
     sys.stderr.flush()
 
 
+_TRANSFORMER_FILE_ENV = "H3_TRANSFORMER_FILE"
+_TRANSFORMER_LAYOUT_ENV = "H3_TRANSFORMER_LAYOUT"
+
+
+def _transformer_file_from_env() -> tuple[Path | None, str]:
+    """`(file, layout)` from H3_TRANSFORMER_FILE / H3_TRANSFORMER_LAYOUT; `(None, "diffusers")` when unset.
+
+    The layout is read from the file's header and must match H3_TRANSFORMER_LAYOUT when that is set:
+    `comfy` (full ComfyUI layout) or `comfy_pruned` (`adaln_t_table` instead of the time embedder).
+    """
+    raw = os.environ.get(_TRANSFORMER_FILE_ENV, "").strip()
+    requested = os.environ.get(_TRANSFORMER_LAYOUT_ENV, "").strip() or None
+    if not raw:
+        if requested not in (None, "diffusers"):
+            raise ValueError(f"{_TRANSFORMER_LAYOUT_ENV}={requested} needs {_TRANSFORMER_FILE_ENV}")
+        return None, "diffusers"
+    path = Path(raw).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"{_TRANSFORMER_FILE_ENV}={raw}: no such file")
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="pt") as f:
+        keys = set(f.keys())
+    if not comfy_h3.is_comfy_layout(keys):
+        raise ValueError(f"{path} is not a ComfyUI-layout MiniMax H3 transformer (no video_patch_proj.weight)")
+    layout = "comfy_pruned" if comfy_h3.is_pruned_layout(keys) else "comfy"
+    if requested is not None and requested != layout:
+        raise ValueError(f"{_TRANSFORMER_LAYOUT_ENV}={requested} but {path.name} is {layout}")
+    return path, layout
+
+
 class MiniMaxH3Pipeline:
     """`t2va` and `fl2va` on a Blackhole mesh. Build with `create_pipeline`."""
 
@@ -495,6 +527,15 @@ class MiniMaxH3Pipeline:
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
         self.task = task
         self.transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
+        # A ComfyUI-layout transformer file (Comfy-Org builds, fine-tunes such as 10Eros-Max) in place
+        # of the partition's weights; the partition's config.json still describes the architecture.
+        self.transformer_file, self.transformer_layout = _transformer_file_from_env()
+        self._adaln_t_table = None
+        if self.transformer_layout == "comfy_pruned":
+            from safetensors import safe_open
+
+            with safe_open(str(self.transformer_file), framework="pt") as f:
+                self._adaln_t_table = f.get_tensor(comfy_h3.CURVE_TABLE_KEY).float()
         self.tp_axis, self.sp_axis = tp_axis, sp_axis
         shape = tuple(mesh_device.shape)
         if tp_axis == sp_axis:
@@ -719,6 +760,28 @@ class MiniMaxH3Pipeline:
             if not single.is_file():
                 raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
             state.update(load_file(str(single)))
+        return state
+
+    def _transformer_cache_name(self) -> str:
+        if self.transformer_file is None:
+            return self.transformer_subfolder
+        stat = self.transformer_file.stat()
+        return f"{self.transformer_layout}_{self.transformer_file.stem}_{stat.st_size}"
+
+    def _read_transformer_state(self) -> dict[str, torch.Tensor]:
+        if self.transformer_file is None:
+            return self._read_safetensors(self.transformer_subfolder)
+        from safetensors.torch import load_file
+
+        logger.info(f"reading {self.transformer_layout} transformer weights from {self.transformer_file}")
+        state = comfy_h3.convert_comfy_state_dict(load_file(str(self.transformer_file)))
+        if self.transformer_layout == "comfy_pruned":
+            state.pop(comfy_h3.CURVE_TABLE_KEY)
+            for key in list(state):
+                if key.endswith("adaln_proj.linear.weight") or key == "norm_out.linear.weight":
+                    state[key] = comfy_h3.pad_curve(state[key].float())
+                elif key.endswith("adaln_proj.linear.bias") or key == "norm_out.linear.bias":
+                    state[key] = state[key].float()
         return state
 
     # ------------------------------------------------------------------ residency
@@ -1220,6 +1283,9 @@ class MiniMaxH3Pipeline:
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
         config["patch_size"] = tuple(config["patch_size"])
+        if self._adaln_t_table is not None:
+            config["time_embed_dim"] = comfy_h3.CURVE_PAD
+            config["adaln_curve"] = True
         weight_mode = self._dit_weight_mode()
         self._host_log(
             f"building the {config['num_layers']}-layer transformer from {self.transformer_subfolder}/, "
@@ -1237,11 +1303,11 @@ class MiniMaxH3Pipeline:
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
-            subfolder=f"{self.transformer_subfolder}_{self._dit_weight_mode()}",
+            subfolder=f"{self._transformer_cache_name()}_{self._dit_weight_mode()}",
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
-            get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
+            get_torch_state_dict=self._read_transformer_state,
         )
         return self._transformer
 
@@ -2457,9 +2523,13 @@ class MiniMaxH3Pipeline:
             if "condition_audio" in slot_roles:
                 level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
             levels = slot_levels(slot_roles, **level_kwargs)
-            self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
-            )
+            if self._adaln_t_table is None:
+                timestep_value = levels.reshape(1, 1, -1, 1)
+            else:
+                # Pruned ComfyUI weights: the AdaLN input is the table's curve at these timesteps.
+                curve = comfy_h3.adaln_curve_embedding(self._adaln_t_table, levels.flatten())
+                timestep_value = comfy_h3.pad_curve(curve).reshape(1, 1, -1, comfy_h3.CURVE_PAD)
+            self._tt_timestep.update(timestep_value, traced=traced, dtype=ttnn.float32, device=self.mesh_device)
 
             video_velocity, audio_velocity = transformer(
                 video_1BVC=self._tt_video.value,

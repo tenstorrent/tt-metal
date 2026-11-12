@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 import torch
 from einops import rearrange
@@ -1148,6 +1148,8 @@ class LTXSpaceToDepthDownsample(Module):
         self.out_channels = out_channels
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # Set by a traced encoder while it captures: gather on device instead of the host round-trip.
+        self.device_gather = False
         prod = math.prod(stride)
         # Skip path groups (in_channels * prod) channels down to out_channels by mean-pooling.
         self.group_size = in_channels * prod // out_channels
@@ -1260,6 +1262,8 @@ class LTXSpaceToDepthDownsample(Module):
 
         if pc.height_parallel.factor <= 1 and pc.width_parallel.factor <= 1:
             return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        if self.device_gather or os.environ.get("LTX_ENC_DEVICE_GATHER", "0") == "1":
+            return self._all_gather_hw_device(x)
 
         if _loc:
             logger.warning(f"LTX_ENC_LOCALIZE: host-gather HW pre in_shape={tuple(x.shape)} dtype={x.get_dtype()}")
@@ -1277,6 +1281,15 @@ class LTXSpaceToDepthDownsample(Module):
             ttnn.synchronize_device(mesh_device)
             logger.warning(f"LTX_ENC_LOCALIZE: host-gather HW done out_shape={tuple(x.shape)}")
         return x
+
+    def _all_gather_hw_device(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """On-device gather of the H/W shards (LTX_ENC_DEVICE_GATHER=1)."""
+        pc = self.parallel_config
+        if pc.height_parallel.factor > 1:
+            x = self.ccl_manager.all_gather(x, dim=2, mesh_axis=pc.height_parallel.mesh_axis, use_hyperparams=False)
+        if pc.width_parallel.factor > 1:
+            x = self.ccl_manager.all_gather(x, dim=3, mesh_axis=pc.width_parallel.mesh_axis, use_hyperparams=False)
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     def _reshard_hw(self, x: ttnn.Tensor, B: int, d: int, h: int, w: int) -> ttnn.Tensor:
         """Re-shard a replicated (B, d, h, w, C) tensor back across the mesh, zero-padding each
@@ -1387,6 +1400,10 @@ def _compute_ltx_encoder_dims(
 
     dims.append(res_dims())  # conv_out
     return dims
+
+
+def _eager_stages() -> set[str]:
+    return {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",") if s.strip()}
 
 
 class LTXVideoEncoder(Module):
@@ -1544,6 +1561,18 @@ class LTXVideoEncoder(Module):
         if os.environ.get("LTX_VAE_ENC_HALO_ONLY", "0") != "1":
             _set_halo_only(self, False)
 
+        # Traced encode: the pipeline sets ``traced`` on a static traced mesh. One capture per input
+        # shape (the pipeline encodes at both stage resolutions); each gen copies its pixels into the
+        # captured input buffer and replays. "enc" in LTX_GEN_EAGER_STAGES runs it eager at runtime.
+        self.traced = False
+        # While the pipeline holds this open (its early warmup, before any capture), a new shape gets
+        # its trace input and prep run; capture_traces() records them after every other capture. A
+        # shape first seen later runs eager: a capture then would allocate under live traces.
+        self.capture_open = False
+        self._encode_tracers: dict[tuple, Tracer] = {}
+        self._encode_logical_hw: dict[tuple, tuple[int, int]] = {}
+        self._last_logical_hw = (0, 0)
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Map per_channel_statistics (dash keys) -> per_channel_mean/std.
         if "per_channel_statistics.mean-of-means" in state:
@@ -1559,7 +1588,7 @@ class LTXVideoEncoder(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(self, sample_BCTHW: torch.Tensor) -> torch.Tensor:
+    def forward(self, sample_BCTHW: torch.Tensor, traced: bool | None = None) -> torch.Tensor:
         """Encode video (B, 3, F, H, W) in [-1, 1] -> normalized latent means (B, 128, F', H', W')."""
         # Crop trailing frames so F == 1 + 8*k (mirrors the reference encoder).
         frames_count = sample_BCTHW.shape[2]
@@ -1582,6 +1611,10 @@ class LTXVideoEncoder(Module):
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
         sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
 
+        if traced is None:
+            traced = self.traced and "enc" not in _eager_stages()
+        # Traced: keep the upload on host so the replay copies it into the captured input buffer
+        # (no device allocation after capture).
         sample_tt = typed_tensor_2dshard(
             sample,
             self.mesh_device,
@@ -1591,8 +1624,60 @@ class LTXVideoEncoder(Module):
             },
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
+            on_host=traced,
         )
 
+        if traced:
+            key = (tuple(sample_tt.shape), logical_h, logical_w)
+            tracer = self._encode_tracers.get(key)
+            if tracer is None and self.capture_open:
+                # Allocate the trace input and run the prep run now (below every capture); the trace
+                # itself is recorded later by capture_traces(), after every other persistent allocation.
+                tracer = Tracer(self.encode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
+                self._encode_tracers[key] = tracer
+                # A host round-trip cannot be captured: the downsample gathers on device inside the trace.
+                self._set_device_gather(True)
+                try:
+                    sample_tt = tracer.prepare(sample_tt, logical_h, logical_w)
+                finally:
+                    self._set_device_gather(False)
+                self._encode_logical_hw[key] = self._last_logical_hw
+                logger.info(f"image encoder: trace input + prep run for {key}, capture deferred")
+            elif tracer is not None and tracer.trace_captured:
+                sample_tt = tracer(sample_tt, logical_h, logical_w)
+            else:
+                logger.warning(f"image encoder: no capture for {key}, encoding eager")
+                traced = False
+                sample_tt = ttnn.to_device(sample_tt, self.mesh_device)
+        if traced:
+            logical_h, logical_w = self._encode_logical_hw[key]
+        else:
+            sample_tt = self.encode_device(sample_tt, logical_h, logical_w)
+            logical_h, logical_w = self._last_logical_hw
+
+        concat_dims = [None, None]
+        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
+        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
+        result = fast_device_to_host(
+            sample_tt,
+            self.mesh_device,
+            concat_dims,
+            ccl_manager=self.ccl_manager,
+        )  # (B, F', H', W', 128)
+
+        result = result[:, :, :logical_h, :logical_w, :]
+        # (B, F', H', W', C) -> (B, C, F', H', W')
+        return result.permute(0, 4, 1, 2, 3)
+
+    def _set_device_gather(self, on: bool) -> None:
+        for block in self.down_blocks:
+            if isinstance(block, LTXSpaceToDepthDownsample):
+                block.device_gather = on
+
+    def encode_device(self, sample_tt: ttnn.Tensor, logical_h: int, logical_w: int) -> ttnn.Tensor:
+        """Device-only encode (conv_in -> down_blocks -> norm_out -> conv_out -> normalize) of an
+        already-sharded input, so the whole region can be captured as one trace. Stashes the final
+        logical dims: the returned tensor still carries mesh padding."""
         _loc = os.environ.get("LTX_ENC_LOCALIZE")
 
         def _mark(tag):
@@ -1628,20 +1713,34 @@ class LTXVideoEncoder(Module):
         mean = self.per_channel_mean.data
         std = self.per_channel_std.data
         sample_tt = ttnn.multiply(ttnn.subtract(sample_tt, mean), ttnn.reciprocal(std))
+        self._last_logical_hw = (logical_h, logical_w)
+        return sample_tt
 
-        concat_dims = [None, None]
-        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
-        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
-        result = fast_device_to_host(
-            sample_tt,
-            self.mesh_device,
-            concat_dims,
-            ccl_manager=self.ccl_manager,
-        )  # (B, F', H', W', 128)
+    def capture_traces(self) -> None:
+        """Capture every prepared encode trace. The pipeline calls this after its last other capture
+        and persistent allocation, so nothing allocated later sits in an encode trace's activation
+        region and no encode replay overwrites a live buffer (#3354: the stage-1 hang)."""
+        pending = [t for t in self._encode_tracers.values() if not t.trace_captured]
+        if not pending:
+            return
+        self._set_device_gather(True)
+        try:
+            for tracer in pending:
+                tracer.capture_prepared()
+        finally:
+            self._set_device_gather(False)
+        logger.info(f"image encoder: captured {len(pending)} encode trace(s) after every other capture")
 
-        result = result[:, :, :logical_h, :logical_w, :]
-        # (B, F', H', W', C) -> (B, C, F', H', W')
-        return result.permute(0, 4, 1, 2, 3)
+    def release_trace(self) -> None:
+        """Release every encode capture before rebuilding or unloading weights."""
+        for tracer in self._encode_tracers.values():
+            tracer.release_trace()
+        self._encode_tracers.clear()
+        self._encode_logical_hw.clear()
+
+    def deallocate_weights(self) -> None:
+        self.release_trace()
+        super().deallocate_weights()
 
 
 # =============================================================================
@@ -1656,6 +1755,25 @@ def _strip_vae_prefix(key: str, *prefixes: str) -> str | None:
         if key.startswith(prefix):
             return key[len(prefix) :]
     return None
+
+
+def vae_key_map(keys: Iterable[str], part: str) -> dict[str, str]:
+    """Map checkpoint keys to ``part`` module keys (``part`` is ``decoder`` or ``encoder``), plus the
+    two per-channel statistics the module also holds.
+
+    Monolith checkpoints prefix the VAE with ``vae.``; split VAE files (LTX-2.5) store bare keys. The
+    prefix is chosen per file, so a monolith's other components can never match the bare form.
+    """
+    keys = list(keys)
+    root = "vae." if any(k.startswith("vae.") for k in keys) else ""
+    mapping = {}
+    for k in keys:
+        short = _strip_vae_prefix(k, f"{root}{part}.")
+        if short is not None:
+            mapping[k] = short
+        elif k in (f"{root}per_channel_statistics.mean-of-means", f"{root}per_channel_statistics.std-of-means"):
+            mapping[k] = k.removeprefix(root)
+    return mapping
 
 
 class LTXVideoVAEAdapter:

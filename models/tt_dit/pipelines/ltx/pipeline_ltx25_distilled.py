@@ -33,6 +33,7 @@ from ...utils.ltx import (
     LTX25_DISTILLED_TRANSFORMER,
     LTX25_SPATIAL_UPSAMPLER,
     LTX25_TEXT_ENCODER,
+    LTX25_VIDEO_VAE_CONV_DEFAULT,
     default_ltx25_path,
     default_ltx25_video_vae,
 )
@@ -253,14 +254,14 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             raise FileNotFoundError(
                 "LTX-2.5 split checkpoints missing: "
                 + ", ".join(absent)
-                + " (set LTX25_ROOT or populate ~/.cache/ltx-checkpoints/ltx-2.5; "
-                "video VAE can fall back to a local 2.3 monolith)"
+                + " (set LTX25_ROOT or populate ~/.cache/ltx-checkpoints/ltx-2.5; the conv video VAE "
+                f"also resolves from LTX25_VIDEO_VAE or {LTX25_VIDEO_VAE_CONV_DEFAULT}, and "
+                "LTX25_VAE_FALLBACK_23=1 opts into a local 2.3 monolith)"
             )
+        if not os.path.isfile(video_vae):
+            raise FileNotFoundError(f"LTX-2.5 video VAE {video_vae} does not exist")
         if "ltx-2.3" in os.path.basename(video_vae) or "LTX-2.3" in video_vae:
-            logger.warning(
-                f"LTX-2.5 conv video VAE falling back to 2.3 monolith {video_vae} "
-                "(download vae/ltx-2.5-video-vae-conv-bf16.safetensors when HF access allows)"
-            )
+            logger.warning(f"LTX-2.5 conv video VAE falling back to 2.3 monolith {video_vae}")
         with safe_open(transformer, framework="pt") as f:
             version = (f.metadata() or {}).get("model_version", "?")
         logger.info(

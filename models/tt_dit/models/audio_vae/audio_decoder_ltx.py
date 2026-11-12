@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 
 import torch
 from loguru import logger
@@ -58,6 +59,11 @@ def _env_flag(name: str, *, default: bool) -> bool:
     raise ValueError(f"{name}={val!r} is not a boolean (expected one of {_TRUE_TOKENS | _FALSE_TOKENS})")
 
 
+def resolve_audio_traced(traced: bool, audio_traced: bool | None) -> bool:
+    """Explicit API choice wins; otherwise the env override defaults to the pipeline policy."""
+    return audio_traced if audio_traced is not None else _env_flag("LTX_AUDIO_TRACE", default=traced)
+
+
 class LTXAudioDecoderAdapter:
     """Owns the LTX audio decode stack: parses the checkpoint's ``audio_vae`` / ``vocoder`` config,
     builds the ``MelDecoder`` + ``VocoderWithBWE`` (two vocoders via the BWE path), selects the
@@ -77,17 +83,115 @@ class LTXAudioDecoderAdapter:
         vae_ccl_manager: CCLManager,
         dit_parallel_config: DiTParallelConfig,
         traced: bool,
+        independent_trace: bool = False,
     ) -> None:
         self._checkpoint_path = checkpoint_path
         self._mesh_device = mesh_device
         self._vae_ccl_manager = vae_ccl_manager
         self._dit_parallel_config = dit_parallel_config
         self._traced = traced
+        self._independent_trace = independent_trace
+        self._warm_trace_identity = None
+        self._trace_reservation_bytes = None
+        if independent_trace and traced:
+            # Deliberately exclude native dynamic-DRAM tracing (zero reserved region).
+            # The caller must reserve a bounded region when opening the existing device.
+            try:
+                view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
+                self._trace_reservation_bytes = view.num_banks * view.total_bytes_per_bank
+            except Exception as exc:
+                raise RuntimeError("Cannot verify the reserved audio trace region") from exc
+            if self._trace_reservation_bytes <= 0:
+                raise ValueError("Independent audio tracing requires a positive device trace_region_size reservation")
 
         self._mel_decoder: MelDecoder | None = None
         self._vocoder_with_bwe: VocoderWithBWE | None = None
 
         self._build()
+
+    def _trace_modules(self):
+        if self._mel_decoder is None or self._vocoder_with_bwe is None:
+            return []
+        voc = self._vocoder_with_bwe
+        return [
+            ("mel", self._mel_decoder, "_forward_device", self._mel_decoder.use_trace),
+            ("vocoder", voc.vocoder, "_forward_device", voc.use_trace and not voc.device_chain),
+            ("bwe", voc.bwe_generator, "_forward_device", voc.use_trace_bwe and not voc.device_chain),
+            ("chain", voc, "_forward_device_chain", voc.device_chain and (voc.use_trace or voc.use_trace_bwe)),
+        ]
+
+    def trace_status(self) -> dict:
+        """Actual tracer counters, not a claim that an enabled flag executed a replay.
+
+        Captures count successfully recorded graphs, even if their first execution
+        fails. Replays count subsequent execute calls that return successfully.
+        Released tracers retain their lifetime counters.
+        Kernel-prewarm-only and eager calls increment neither counter.
+        """
+        stages = {}
+        for name, module, method, enabled in self._trace_modules():
+            tracers = getattr(type(module), method)._tracers_keyed.get(module, {}).values()
+            tracers = list(tracers)
+            stages[name] = {
+                "enabled": enabled,
+                "captured": sum(t.trace_captured for t in tracers),
+                "captures": sum(t.capture_count for t in tracers),
+                "replays": sum(t.replay_count for t in tracers),
+            }
+        return {"requested": self._traced, "reservation_bytes": self._trace_reservation_bytes, "stages": stages}
+
+    def release_traces(self) -> None:
+        """Invalidate warmup identity together with the buffers owned by audio traces."""
+        if self._vocoder_with_bwe is not None:
+            self._vocoder_with_bwe.release_trace()
+        if self._mel_decoder is not None:
+            self._mel_decoder.release_trace()
+        self._warm_trace_identity = None
+
+    def prepare_decode(self, audio_spatial: torch.Tensor) -> None:
+        """Warm independent capture once, retaining only one input/configuration family.
+
+        Full-pipeline tracing keeps its existing ordered warmup. All host bridges stay
+        in place: a later trace must not borrow an earlier trace's device output.
+        """
+        if not self._independent_trace or not self._trace_modules():
+            return
+        mel, voc = self._mel_decoder, self._vocoder_with_bwe
+        flags = (mel.use_trace, voc.use_trace, voc.use_trace_bwe)
+        identity = (tuple(audio_spatial.shape), audio_spatial.dtype, flags, voc.device_chain)
+        if identity == self._warm_trace_identity:
+            return
+        if any(s["captured"] for s in self.trace_status()["stages"].values()):
+            raise RuntimeError("Release audio traces before changing the audio input shape or trace configuration")
+        if not any(enabled for _, _, _, enabled in self._trace_modules()):
+            return
+        view = ttnn.get_memory_view(self._mesh_device, ttnn.BufferType.TRACE)
+        if view.largest_contiguous_bytes_free_per_bank <= 0:
+            raise RuntimeError("No reserved trace capacity remains for independent audio capture")
+        mel.use_trace = voc.use_trace = voc.use_trace_bwe = False
+        try:
+            voc(mel(audio_spatial))
+        except BaseException:
+            # Eager preparation also owns persistent device caches. Keep preflight
+            # refusals outside this handler so existing captures remain intact.
+            self.release_traces()
+            raise
+        finally:
+            mel.use_trace, voc.use_trace, voc.use_trace_bwe = flags
+        # Set only after successful eager warmup. Capture failure is propagated, never
+        # silently labelled replay or retried by allocating another trace family.
+        self._warm_trace_identity = identity
+
+    @contextmanager
+    def decode_scope(self, audio_spatial: torch.Tensor):
+        """Warm before capture and release partial captures if decode fails."""
+        self.prepare_decode(audio_spatial)
+        try:
+            yield
+        except BaseException:
+            if self._independent_trace:
+                self.release_traces()
+            raise
 
     @property
     def mel_decoder(self) -> "MelDecoder | None":
@@ -182,10 +286,8 @@ class LTXAudioDecoderAdapter:
             mesh_device=self._mesh_device,
             dtype=ttnn.float32,
         )
-        # ltx-rt 608eb554 flips BWE/VAE audio-decode trace default off->on at the read-site
-        # (gated on the transformer being traced) so every traced run gets traced audio decode
-        # by default — a measured ~0.4s win (audio decode ~0.48s vs eager ~0.88s), replay
-        # bit-identical. LTX_BWE_TRACE=0 / LTX_VAE_TRACE=0 still force eager.
+        # Audio policy is resolved independently by the pipeline. Existing per-stage
+        # opt-outs remain effective for both independent and whole-pipeline tracing.
         self._vocoder_with_bwe.use_trace = self._traced and _env_flag("LTX_VOC_TRACE", default=True)
         self._vocoder_with_bwe.use_trace_bwe = self._traced and _env_flag("LTX_BWE_TRACE", default=True)
         self._mel_decoder.use_trace = self._traced and _env_flag("LTX_VAE_TRACE", default=True)
@@ -252,6 +354,9 @@ class LTXAudioDecoderAdapter:
             return
         if self._mel_decoder.is_loaded() and self._vocoder_with_bwe.is_loaded():
             return
+        if self._independent_trace:
+            # Reloaded weights may occupy new addresses; no old capture may survive.
+            self.release_traces()
 
         model_name = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
         blocking_key = conv3d_blocking_hash(self._vocoder_with_bwe)
