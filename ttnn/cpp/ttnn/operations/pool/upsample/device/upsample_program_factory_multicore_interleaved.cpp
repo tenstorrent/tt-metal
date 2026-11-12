@@ -26,8 +26,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
     const metal2::KernelSpecName READER{"reader"};
     const metal2::KernelSpecName WRITER{"writer"};
-    const metal2::KernelSpecName COMPUTE_G1{"compute_g1"};
-    const metal2::KernelSpecName COMPUTE_G2{"compute_g2"};
+    const metal2::KernelSpecName COMPUTE{"compute"};
     const metal2::DFBSpecName SRC0{"src0"};
     const metal2::DFBSpecName OUT{"out"};
     const metal2::TensorParamName INPUT{"input"};
@@ -161,8 +160,6 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         {"output_page_size", static_cast<std::uint32_t>(writer_unit_size)},
         {"scale_h", scale_factor_h},
         {"scale_w", scale_factor_w},
-        {"height", output_shape[1]},
-        {"width", output_shape[2]},
     };
 
     if (is_tiled_layout) {
@@ -193,7 +190,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
             .endpoint_type = metal2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {metal2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args = std::move(writer_cta),
-        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks_to_read", "start_block_id"}},
+        // The output height and width are runtime args, so the binary does not depend on them.
+        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks_to_read", "start_block_id", "height", "width"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
@@ -213,9 +211,9 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
 
     // WorkUnitSpecs must have disjoint target_nodes, so a shared READER/WRITER can't sit in one
     // WorkUnitSpec spanning all_cores while COMPUTE sits in another over a sub-range of the same
-    // cores. Row-major (no compute) needs only one WU over all_cores; tiled lists READER/WRITER in
-    // each per-group WU alongside that group's COMPUTE instance — their combined placement (the
-    // union of the WUs they appear in) is still all_cores.
+    // cores. Row-major (no compute) needs only one WU over all_cores; tiled lists READER, WRITER
+    // and the shared COMPUTE in each per-group WU — their combined placement (the union of the WUs
+    // they appear in) is still all_cores.
     if (!is_tiled_layout) {
         spec.work_units.push_back(metal2::WorkUnitSpec{
             .name = "main",
@@ -226,60 +224,33 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         const std::uint32_t num_input_tiles_in_row =
             input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
 
+        // One compute kernel for both core groups: the block count per core is a runtime arg, so
+        // the groups differ only in their runtime args and the binary does not depend on the height.
+        spec.kernels.push_back(metal2::KernelSpec{
+            .unique_id = COMPUTE,
+            .source = std::filesystem::path{UNTILIZE_METAL2_KERNEL},
+            .compiler_options =
+                {.defines = {{"UNTILIZE_RUNTIME_BLOCK_CNT", "1"}}, .opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {metal2::DFBBinding{
+                     .dfb_spec_name = SRC0, .accessor_name = "src", .endpoint_type = metal2::DFBEndpointType::CONSUMER},
+                 metal2::DFBBinding{
+                     .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
+            .compile_time_args = {{"per_core_block_tile_cnt", num_input_tiles_in_row}},
+            .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
+            .hw_config = metal2::ComputeHardwareConfig{},
+        });
         if (core_group_1.num_cores() > 0) {
-            metal2::KernelSpec compute_g1{
-                .unique_id = COMPUTE_G1,
-                .source = std::filesystem::path{UNTILIZE_METAL2_KERNEL},
-                .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-                .dfb_bindings =
-                    {metal2::DFBBinding{
-                         .dfb_spec_name = SRC0,
-                         .accessor_name = "src",
-                         .endpoint_type = metal2::DFBEndpointType::CONSUMER},
-                     metal2::DFBBinding{
-                         .dfb_spec_name = OUT,
-                         .accessor_name = "out",
-                         .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
-                .compile_time_args =
-                    {
-                        {"per_core_block_cnt", work_per_core_group_1},
-                        {"per_core_block_tile_cnt", num_input_tiles_in_row},
-                    },
-                .hw_config = metal2::ComputeHardwareConfig{},
-            };
-            spec.kernels.push_back(compute_g1);
             spec.work_units.push_back(metal2::WorkUnitSpec{
                 .name = "wu_g1",
-                .kernels = {READER, WRITER, COMPUTE_G1},
+                .kernels = {READER, WRITER, COMPUTE},
                 .target_nodes = core_group_1,
             });
         }
-
         if (core_group_2.num_cores() > 0) {
-            metal2::KernelSpec compute_g2{
-                .unique_id = COMPUTE_G2,
-                .source = std::filesystem::path{UNTILIZE_METAL2_KERNEL},
-                .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
-                .dfb_bindings =
-                    {metal2::DFBBinding{
-                         .dfb_spec_name = SRC0,
-                         .accessor_name = "src",
-                         .endpoint_type = metal2::DFBEndpointType::CONSUMER},
-                     metal2::DFBBinding{
-                         .dfb_spec_name = OUT,
-                         .accessor_name = "out",
-                         .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
-                .compile_time_args =
-                    {
-                        {"per_core_block_cnt", work_per_core_group_2},
-                        {"per_core_block_tile_cnt", num_input_tiles_in_row},
-                    },
-                .hw_config = metal2::ComputeHardwareConfig{},
-            };
-            spec.kernels.push_back(compute_g2);
             spec.work_units.push_back(metal2::WorkUnitSpec{
                 .name = "wu_g2",
-                .kernels = {READER, WRITER, COMPUTE_G2},
+                .kernels = {READER, WRITER, COMPUTE},
                 .target_nodes = core_group_2,
             });
         }
@@ -293,6 +264,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
     metal2::ProgramRunArgs run_args;
     metal2::KernelRunArgs reader_run_args{.kernel = READER};
     metal2::KernelRunArgs writer_run_args{.kernel = WRITER};
+    metal2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
 
     for (std::uint32_t i = 0, blocks_processed = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -313,11 +285,21 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         metal2::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
-            {{"num_blocks_to_read", blocks_per_core}, {"start_block_id", blocks_processed}});
+            {{"num_blocks_to_read", blocks_per_core},
+             {"start_block_id", blocks_processed},
+             {"height", output_shape[1]},
+             {"width", output_shape[2]}});
+        if (is_tiled_layout) {
+            metal2::AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values, core, {{"per_core_block_cnt", blocks_per_core}});
+        }
 
         blocks_processed += blocks_per_core;
     }
     run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    if (is_tiled_layout) {
+        run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    }
     run_args.tensor_args = {
         {INPUT, metal2::TensorArgument{input_mesh}},
         {OUTPUT, metal2::TensorArgument{output_mesh}},

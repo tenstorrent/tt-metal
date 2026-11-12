@@ -18,12 +18,13 @@ void kernel_main() {
     */
     uint32_t num_blocks_to_read = get_arg(args::num_blocks_to_read);
     uint32_t start_block_id = get_arg(args::start_block_id);
+    // Output height and width are runtime args, so one binary serves every spatial size.
+    const uint32_t height = get_arg(args::height);
+    const uint32_t width = get_arg(args::width);
 
     constexpr auto output_page_size = get_arg(args::output_page_size);
     constexpr auto scale_h = get_arg(args::scale_h);
     constexpr auto scale_w = get_arg(args::scale_w);
-    constexpr auto height = get_arg(args::height);
-    constexpr auto width = get_arg(args::width);
     constexpr auto block_height = get_arg(args::block_height);
     constexpr auto num_tiles_per_block_row = get_arg(args::num_tiles_per_block_row);
 
@@ -32,29 +33,30 @@ void kernel_main() {
     DataflowBuffer out_dfb(dfb::out);
     Noc noc;
 
-    constexpr uint32_t in_width = width / scale_w;
-    constexpr uint32_t in_height = height / scale_h;
+    const uint32_t in_width = width / scale_w;
+    const uint32_t in_height = height / scale_h;
     uint32_t end_block_id = start_block_id + num_blocks_to_read;
     // reader copied the data from DRAM to CB buffer.
     // writer copy the data from CB buffer to DRAM.
 
-    uint32_t current_stick = block_height * start_block_id;
+    // Position (batch, x = input row, y = input column) of the first stick; later sticks step
+    // through it, so the divisions run once rather than per stick.
+    const uint32_t current_stick = block_height * start_block_id;
+    const uint32_t curr_index = current_stick % (in_width * in_height);
+    uint32_t batch_base = (current_stick / (in_width * in_height)) * width * height;
+    uint32_t x = curr_index / in_width;
+    uint32_t y = curr_index % in_width;
 
     for (uint32_t b = start_block_id; b < end_block_id; b++) {
         out_dfb.wait_front(num_tiles_per_block_row);
 
         for (uint32_t in_block_row = 0; in_block_row < block_height; ++in_block_row) {
-            uint32_t curr_index = current_stick % (in_width * in_height);
-            uint32_t curr_batch = current_stick / (in_width * in_height);
-            uint32_t x = curr_index / in_width;
-            uint32_t y = curr_index % in_width;
-
             uint32_t read_offset = in_block_row * output_page_size;
 
             // calculate the start index where writer will start writing the data.
             // total --> scale_h * scale_w times data will be written to the DRAM.
             // offset calcutes the relative position of the data in the stick.
-            uint32_t start_index = curr_batch * width * height + (scale_h * x) * width + scale_w * y;
+            uint32_t start_index = batch_base + (scale_h * x) * width + scale_w * y;
 
             for (uint32_t j = 0; j < scale_h; j++) {
                 for (uint32_t k = 0; k < scale_w; k++) {
@@ -68,7 +70,13 @@ void kernel_main() {
                         {.page_id = start_index + offset});
                 }
             }
-            current_stick++;
+            if (++y == in_width) {
+                y = 0;
+                if (++x == in_height) {
+                    x = 0;
+                    batch_base += width * height;
+                }
+            }
         }
         noc.async_write_barrier();
         out_dfb.pop_front(num_tiles_per_block_row);
