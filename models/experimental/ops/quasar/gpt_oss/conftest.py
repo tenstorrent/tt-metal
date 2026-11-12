@@ -107,11 +107,40 @@ def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16, quasa
     monkeypatch.setattr(ModelArgs, "weight_cache_path", _weight_cache_path)
 
 
+def merge_heads_on_device(input_tensor, *, num_heads, memory_config=None, output_tensor=None, sub_core_grids=None):
+    """Do what ttnn.experimental.nlp_concat_heads_decode does, with device ops that do not place one head per core.
+
+    Takes [1, batch, heads, head_dim] in TILE layout and returns [1, 1, batch padded to a tile row,
+    num_heads * head_dim] in TILE layout, interleaved in DRAM. In row-major layout the heads of each user are
+    contiguous, so a reshape merges them into the hidden dimension. The Quasar llama and Qwen3-VL models merge
+    heads the same way.
+    """
+    if memory_config is not None or output_tensor is not None or sub_core_grids is not None:
+        raise NotImplementedError(
+            "merge_heads_on_device does not support memory_config, output_tensor or sub_core_grids"
+        )
+    quasar = ttnn.experimental.quasar
+    _, batch, _, head_dim = input_tensor.shape
+    x = input_tensor
+    if x.is_sharded():
+        x = quasar.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+    x = quasar.untilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x = ttnn.reshape(x, (1, 1, batch, num_heads * head_dim))
+    padded_batch = ((batch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    if padded_batch != batch:
+        # The mainline pad, because the row-major pad of ttnn.experimental.quasar binds a DFB as both producer and
+        # consumer of one data movement kernel, which Quasar rejects.
+        x = ttnn.pad(x, [(0, 0), (0, 0), (0, padded_batch - batch), (0, 0)], value=0.0)
+    return quasar.tilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+
+
 @pytest.fixture(autouse=True)
 def quasar_ops(monkeypatch):
-    """On Quasar, route the mainline ops below, which Quasar rejects, to their ttnn.experimental.quasar versions.
+    """On Quasar, replace the mainline ops below, which fail on Quasar.
 
-    Experimental ops maintain the same API as the mainline ops, so the model code needs no change.
+    Most of them are routed to their ttnn.experimental.quasar versions. Experimental ops maintain the same API as
+    the mainline ops, so the model code needs no change. ttnn.experimental.nlp_concat_heads_decode places one head
+    on each core, so on a device with fewer cores than heads it is replaced by merge_heads_on_device.
     """
     if not is_quasar():
         return
@@ -143,6 +172,16 @@ def quasar_ops(monkeypatch):
     )
     for module, name, quasar_module, quasar_name in routes:
         monkeypatch.setattr(module, name, getattr(quasar_module, quasar_name))
+
+    concat_heads_decode = ttnn.experimental.nlp_concat_heads_decode
+
+    def _concat_heads_decode(input_tensor, *, num_heads, **kwargs):
+        device_grid = input_tensor.device().compute_with_storage_grid_size()
+        if device_grid.x * device_grid.y >= num_heads:
+            return concat_heads_decode(input_tensor, num_heads=num_heads, **kwargs)
+        return merge_heads_on_device(input_tensor, num_heads=num_heads, **kwargs)
+
+    monkeypatch.setattr(ttnn.experimental, "nlp_concat_heads_decode", _concat_heads_decode)
 
 
 def pytest_addoption(parser):
