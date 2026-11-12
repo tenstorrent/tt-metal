@@ -195,7 +195,8 @@ class YuvVideoExport:
     muxing starts. Streams are added and packets muxed in the same order as the serial export, so the file is
     byte-identical to one. PyAV encodes with the GIL released, so the worker does not stall the caller.
 
-    ``yuv_planar`` is read until :meth:`finish` returns: the caller must not reuse its buffer before then.
+    ``yuv_planar`` is read until :meth:`finish` returns: the caller must not reuse its buffer before then. It
+    may also be a deferred array (with ``shape`` and ``result()``), which the worker resolves before encoding.
     """
 
     def __init__(self, yuv_planar, output_path: str, fps: int = 24, audio_sampling_rate: int | None = None) -> None:
@@ -228,6 +229,8 @@ class YuvVideoExport:
         import av
 
         try:
+            if hasattr(yuv_planar, "result"):
+                yuv_planar = yuv_planar.result()
             for frame_array in yuv_planar:
                 frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
                 for packet in stream.encode(frame):

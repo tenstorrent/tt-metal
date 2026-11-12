@@ -796,8 +796,15 @@ class LTXDistilledPipeline(LTXPipeline):
         yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
+        async_export = yuv_export and os.environ.get("LTX_ASYNC_EXPORT", "0") == "1"
+        # LTX_AUDIO_OVERLAP=1 (opt-in, with LTX_ASYNC_EXPORT=1): the VAE returns once its YUV reads land and
+        # the export worker assembles the planar frames, so the audio decode is queued on the device without
+        # waiting for that host-only step. The bytes are the same either way.
+        defer_yuv = async_export and os.environ.get("LTX_AUDIO_OVERLAP", "0") == "1"
         t0 = time.time()
-        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+        video_pixels = self.decode_latents(
+            s2_video, latent_frames, latent_h, latent_w, output_type=decode_type, defer_yuv=defer_yuv
+        )
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
@@ -805,7 +812,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # LTX_ASYNC_EXPORT=1 (opt-in) runs the host libx264 encode of the video track on a worker thread
         # under the device audio decode; the mp4 is byte-identical to the serial export.
         video_export = None
-        if yuv_export and os.environ.get("LTX_ASYNC_EXPORT", "0") == "1":
+        if async_export:
             rate = self.tt_vocoder_with_bwe.output_sampling_rate
             video_export = YuvVideoExport(video_pixels, output_path, fps=fps, audio_sampling_rate=rate)
         t0 = time.time()

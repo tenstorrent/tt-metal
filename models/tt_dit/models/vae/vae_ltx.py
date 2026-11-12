@@ -38,7 +38,7 @@ from ...utils.conv3d import (
 from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
 from ...utils.tracing import traced_function
-from ...utils.yuv_d2h import fast_device_to_host_yuv
+from ...utils.yuv_d2h import DeferredYuvPlanar, fast_device_to_host_yuv
 
 if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -762,6 +762,9 @@ def _compute_ltx_decoder_dims(
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
 
+    #: ``forward`` takes ``defer_yuv``; the pipeline passes it only when this is set.
+    supports_defer_yuv = True
+
     def __init__(
         self,
         *,
@@ -953,10 +956,14 @@ class LTXVideoDecoder(Module):
         for tracer in type(self).decode_device._tracers_keyed.get(self, {}).values():
             tracer.release_trace()
 
-    def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
+    def forward(
+        self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", defer_yuv: bool = False
+    ) -> torch.Tensor:
         """Decode latent (B, 128, F', H', W') → video.
 
         output_type: "float" → (B, 3, F, H, W) float32 [-1, 1]; "rgb" → (B, 3, F, H, W) uint8 RGB planar.
+        defer_yuv: with "yuv", return a ``DeferredYuvPlanar`` once the device reads have landed; the host
+            assembly runs when its ``result()`` is called.
         """
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
@@ -1012,7 +1019,13 @@ class LTXVideoDecoder(Module):
                 ccl_manager=self.ccl_manager,
                 logical_h=h_out,
                 logical_w=w_out,
+                defer=defer_yuv,
             )
+            if defer_yuv:
+                # Wait for the reads here, so only host work is left in the deferred half.
+                ttnn.synchronize_device(self.mesh_device)
+                shape = (int(sample_tt.shape[2]), h_out * 3 // 2, w_out)
+                return DeferredYuvPlanar(lambda: planar().reshape(shape), shape)
             # Reshape flat (T, H*W*3//2) -> self-describing
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
 
