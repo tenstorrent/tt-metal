@@ -365,6 +365,17 @@ inline __attribute__((always_inline)) void configure_l1_data_cache() {
 #else
     set_l1_data_cache<false>();
 #endif
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC) && !defined(ENABLE_HW_CACHE_INVALIDATION)
+    // Quasar TRISC: the core's low cache invalidates itself about once every 128 requests, so a poll on L1 that is
+    // missing its fence still ends. Setting CSR_CFG (0x7c0) bit 24, cfgDisLowCachePeriodicFlush, turns that off, so
+    // a poll that is missing a fence hangs instead, as on Blackhole. Set TT_METAL_ENABLE_HW_CACHE_INVALIDATION=1 to
+    // keep the periodic invalidate.
+    asm volatile(
+        "fence\n"
+        "li t1, 1\n"
+        "slli t1, t1, 24\n"
+        "csrrs zero, 0x7c0, t1\n" ::
+            : "t1", "memory");
 #endif
 }
 
