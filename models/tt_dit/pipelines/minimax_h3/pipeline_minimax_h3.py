@@ -650,6 +650,11 @@ def _transformer_file_from_env() -> tuple[Path | None, str]:
 class MiniMaxH3Pipeline:
     """`t2va` and `fl2va` on a Blackhole mesh. Build with `create_pipeline`."""
 
+    # PDD output heads (none unless the transformer file carries them); class defaults so a pipeline built
+    # without __init__ (the unit tests) schedules as before.
+    _pdd: dict | None = None
+    _pdd_active: tuple | None = None
+
     def __init__(
         self,
         *,
