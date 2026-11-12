@@ -13,7 +13,7 @@ keys each request by its prompt (chat messages and tools, a completion prompt or
 
 So requests sharing a long prefix (a document, a long system prompt, a multi-turn conversation) gather on the engines
 that cached it, and spill to another engine (which then caches it too) instead of queueing on one. Responses stream
-back unchanged.
+back unchanged, except a chat answer left wholly in ``reasoning`` (``AnswerFromReasoning``, below).
 
 GET /health is 200 only when every engine answers its own /health. GET /metrics merges every engine's metrics into one
 exposition, each sample labeled with its engine's index (``merge_metrics``).
@@ -35,6 +35,12 @@ Multimodal requests in OpenRouter's forms (``Shim``; ``--no-request-shim`` turns
   the token limit on hard long-video questions;
 - vLLM's 422 (a media URL that could not be fetched) is answered as 400 with vLLM's message (``map_error``): OpenRouter
   counts 400 as the caller's error, 422 in neither list;
+- a chat answer that stops normally with all its text in ``reasoning`` and no ``content`` and no tool call gets that
+  text as its ``content`` too (``AnswerFromReasoning``; ``--no-answer-from-reasoning`` / env
+  ``TT_PROXY_ANSWER_FROM_REASONING=0`` turns it off). With thinking on, the checkpoint answers a transcription-only
+  request as ``<think><think>the words<|im_end|>``: it never closes the block (the fp32 reference gives ``</think>`` a
+  log-probability of -17 there), so vLLM's ``mimo`` reasoning parser files the whole answer under reasoning and
+  OpenRouter's input-audio-transcription check reads an empty completion;
 - a body above ``--max-request-mb`` is refused with 413;
 - with ``--fetch-media`` (env ``TT_PROXY_FETCH_MEDIA=1``) the proxy itself downloads a chat request's http(s) image /
   video / audio URLs (bounded time and size) and inlines them as data URIs, answering 400 when a download fails: vLLM
@@ -609,6 +615,112 @@ async def fetch_media(urls, timeout_s, max_bytes, max_redirects=MAX_MEDIA_REDIRE
     return dict(results)
 
 
+REASONING_KEYS = ("reasoning", "reasoning_content")  # vLLM's field and its older name
+
+
+def _reasoning_of(obj):
+    return next((obj[k] for k in REASONING_KEYS if isinstance(obj.get(k), str) and obj[k]), "")
+
+
+def answer_from_reasoning(body):
+    """(body, number of choices changed) of a non-streamed chat completion: a choice that stopped normally
+    (``finish_reason`` "stop") with blank ``content``, no tool call and text in ``reasoning`` gets that text as its
+    ``content``; the reasoning stays. The original bytes when nothing changes or the body is not such a JSON."""
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return body, 0
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    changed = 0
+    for choice in choices if isinstance(choices, list) else []:
+        message = choice.get("message") if isinstance(choice, dict) else None
+        if not isinstance(message, dict) or choice.get("finish_reason") != "stop":
+            continue
+        content = message.get("content")
+        if (isinstance(content, str) and content.strip()) or (content and not isinstance(content, str)):
+            continue
+        if message.get("tool_calls") or message.get("function_call"):
+            continue
+        text = _reasoning_of(message)
+        if text.strip():
+            message["content"] = text
+            changed += 1
+    return (json.dumps(payload, ensure_ascii=False).encode(), changed) if changed else (body, 0)
+
+
+class AnswerFromReasoning:
+    """The same for a streamed chat completion: events pass through as they arrive, and a choice whose stream ends
+    with ``finish_reason`` "stop" after reasoning deltas only gets one more event before its last, carrying the
+    reasoning text as a ``content`` delta. The reasoning deltas were already sent, so the text is in both fields, as
+    in the non-streamed answer. An incomplete event waits for its end; anything that is not a JSON ``data:`` event is
+    forwarded as it is."""
+
+    def __init__(self):
+        self.buf = b""
+        self.choices = {}  # index -> [reasoning deltas, answered]
+        self.changed = 0
+
+    def feed(self, chunk):
+        """The bytes to send for an upstream chunk (b"" while an event is incomplete)."""
+        self.buf += chunk
+        out = []
+        while True:
+            # An SSE event ends with a blank line; vLLM writes "\n\n", sse-starlette "\r\n\r\n".
+            cut = min((i + len(sep) for sep in (b"\n\n", b"\r\n\r\n") if (i := self.buf.find(sep)) >= 0), default=0)
+            if not cut:
+                break
+            event, self.buf = self.buf[:cut], self.buf[cut:]
+            extra = self._extra(event)
+            if extra:
+                out.append(extra)
+            out.append(event)
+        return b"".join(out)
+
+    def flush(self):
+        """What is left when the upstream closes (an event without its blank line)."""
+        tail, self.buf = self.buf, b""
+        return tail
+
+    def _extra(self, event):
+        """The event to send before ``event``: the answer of a choice this event finishes, or None."""
+        line = event.strip()
+        if not line.startswith(b"data:") or line[5:].strip() == b"[DONE]":
+            return None
+        try:
+            payload = json.loads(line[5:])
+        except (ValueError, UnicodeDecodeError):
+            return None
+        choices = payload.get("choices") if isinstance(payload, dict) else None
+        answers = []
+        for choice in choices if isinstance(choices, list) else []:
+            if not isinstance(choice, dict):
+                continue
+            state = self.choices.setdefault(choice.get("index", 0), [[], False])
+            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+            if delta.get("content") or delta.get("tool_calls") or delta.get("function_call"):
+                state[1] = True
+            text = _reasoning_of(delta)
+            if text and not state[1]:
+                state[0].append(text)
+            if choice.get("finish_reason") == "stop" and not state[1]:
+                answer = "".join(state[0])
+                if answer.strip():
+                    state[1] = True
+                    answers.append(
+                        {
+                            "index": choice.get("index", 0),
+                            "delta": {"content": answer},
+                            "logprobs": None,
+                            "finish_reason": None,
+                        }
+                    )
+        if not answers:
+            return None
+        self.changed += len(answers)
+        head = {k: payload[k] for k in ("id", "object", "created", "model") if k in payload}
+        return b"data: " + json.dumps(dict(head, choices=answers), ensure_ascii=False).encode() + b"\n\n"
+
+
 def _env_flag(name, default):
     value = os.environ.get(name)
     return default if value in (None, "") else value.strip().lower() in ("1", "true", "yes", "on")
@@ -633,6 +745,8 @@ class Shim:
     fetch_allow_private: bool = False
     # (temperature, top_p) for chat requests asking for temperature 0 with thinking on (map_greedy_thinking); None: off.
     thinking_greedy: tuple = None
+    # Give a chat answer left wholly in reasoning its text as content too (answer_from_reasoning).
+    answer_from_reasoning: bool = True
 
     @staticmethod
     def parse_sampling(value):
@@ -660,6 +774,7 @@ class Shim:
             fetch_timeout_s=float(os.environ.get("TT_PROXY_FETCH_TIMEOUT_S") or 30),
             fetch_max_bytes=int(float(os.environ.get("TT_PROXY_FETCH_MAX_MB") or 100) * 2**20),
             fetch_allow_private=_env_flag("TT_PROXY_FETCH_ALLOW_PRIVATE", False),
+            answer_from_reasoning=_env_flag("TT_PROXY_ANSWER_FROM_REASONING", True),
         )
         env.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**env)
@@ -805,7 +920,7 @@ class Router:
         self.down_until = {b: 0.0 for b in self.backends}
         self.rr = itertools.count()
         self.stats = {"prefix_routed": 0, "prefix_spilled": 0, "least_loaded": 0, "matched_chars": 0, "retried": 0}
-        self.stats.update(shim_rejected=0, errors_mapped=0, too_large=0, stale_retried=0)
+        self.stats.update(shim_rejected=0, errors_mapped=0, too_large=0, stale_retried=0, answers_from_reasoning=0)
 
     def up(self, exclude=()):
         now = time.monotonic()
@@ -887,13 +1002,29 @@ def make_app(router, session_factory=None, shim=None):
                         status, data = map_error(up.status, await up.read())
                         router.stats["errors_mapped"] += 1
                         return web.Response(status=status, body=data, content_type="application/json")
-                    resp = web.StreamResponse(
-                        status=up.status, headers={k: v for k, v in up.headers.items() if k.lower() not in HOP}
-                    )
+                    headers_out = {k: v for k, v in up.headers.items() if k.lower() not in HOP}
+                    fix = shim.enabled and shim.answer_from_reasoning and up.status == 200
+                    fix = fix and request.method == "POST" and request.path == "/v1/chat/completions"
+                    kind = up.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                    if fix and kind == "application/json":
+                        started = True  # the engine answered: no resend from here on
+                        data, changed = answer_from_reasoning(await up.read())
+                        router.stats["answers_from_reasoning"] += changed
+                        return web.Response(status=up.status, body=data, headers=headers_out)
+                    answer = AnswerFromReasoning() if fix and kind == "text/event-stream" else None
+                    resp = web.StreamResponse(status=up.status, headers=headers_out)
                     await resp.prepare(request)
                     started = True
                     async for chunk in up.content.iter_any():
-                        await resp.write(chunk)
+                        if answer is not None:
+                            chunk = answer.feed(chunk)
+                        if chunk:
+                            await resp.write(chunk)
+                    if answer is not None:
+                        tail = answer.flush()
+                        if tail:
+                            await resp.write(tail)
+                        router.stats["answers_from_reasoning"] += answer.changed
                     await resp.write_eof()
                     return resp
             except ServerDisconnectedError:
@@ -984,6 +1115,11 @@ def main():
     ap.add_argument("--fetch-timeout-s", type=float, help="per-URL download limit (default 30)")
     ap.add_argument("--fetch-max-mb", type=float, help="per-URL size limit (default 100)")
     ap.add_argument(
+        "--no-answer-from-reasoning",
+        action="store_true",
+        help="leave a chat answer that is wholly in reasoning without content",
+    )
+    ap.add_argument(
         "--thinking-greedy",
         help='"T,P": sample temperature-0 chat requests with thinking on at temperature T, top-p P (e.g. "1.0,0.95")',
     )
@@ -999,6 +1135,7 @@ def main():
         fetch_timeout_s=a.fetch_timeout_s,
         fetch_max_bytes=mib(a.fetch_max_mb),
         thinking_greedy=Shim.parse_sampling(a.thinking_greedy),
+        answer_from_reasoning=False if a.no_answer_from_reasoning else None,
     )
     web.run_app(make_app(router, shim=shim), host=a.host, port=a.port, access_log=None)
 

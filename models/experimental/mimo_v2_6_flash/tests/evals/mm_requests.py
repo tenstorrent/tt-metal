@@ -227,6 +227,10 @@ def body(*messages, max_tokens=512, **extra):
 COLOR_Q = "What color is the shape in the image? Answer with one word."
 VIDEO_Q = "What color is the shape in this video? Answer with one word."
 ASR_Q = "Transcribe the speech in this audio."
+# OpenRouter's input-audio-transcription check: this system prompt and a user turn holding only the clip.
+TRANSCRIBE_SYSTEM = (
+    "You are a transcription engine. Reply with only the exact words spoken in the audio, with no commentary."
+)
 SPEECH_WORDS = ("dream", "nation", "children", "character", "judged")
 
 GET_COLOR_TOOL = {
@@ -284,7 +288,10 @@ def _cases():
         Case(
             "image_gif_animated",
             lambda m: body(
-                user(text("What color is the shape in this image? One word."), image_part(data_uri("image/gif", m.animated_gif())))
+                user(
+                    text("What color is the shape in this image? One word."),
+                    image_part(data_uri("image/gif", m.animated_gif())),
+                )
             ),
             expect_any=("red", "blue", "green"),
             note="first frame is red",
@@ -527,7 +534,9 @@ def _cases():
             "mixed_image_video",
             lambda m: body(
                 user(
-                    text("Name the color of the shape in the image and the color of the shape in the video, two words."),
+                    text(
+                        "Name the color of the shape in the image and the color of the shape in the video, two words."
+                    ),
                     image_part(_img("png", color=(20, 20, 220))(m)),
                     video_part(data_uri("video/mp4", m.video("mp4"))),
                 )
@@ -593,6 +602,35 @@ def _cases():
             lambda m: body(user(text(COLOR_Q), image_part(_img("png")(m))), max_tokens=8),
             thinking=True,
             note="finish_reason length while reasoning; must not be an error",
+        )
+    )
+    # ---- OpenRouter's provider checks, as it sends them (streamed, temperature 1, top_p 0.95, no reasoning field)
+    sent = dict(max_tokens=131072, temperature=1, top_p=0.95, stream=True, stream_options={"include_usage": True})
+    c.append(
+        Case(
+            "openrouter_audio_transcription",
+            lambda m: body(
+                {"role": "system", "content": TRANSCRIBE_SYSTEM}, user(audio_part(b64(m.audio("wav")), "wav")), **sent
+            ),
+            expect_any=SPEECH_WORDS,
+            kind="stream",
+            thinking=True,  # as sent: thinking at the server's default (on)
+            note="the checkpoint answers <think><think>the words<|im_end|>: the words must also be the content",
+        )
+    )
+    c.append(
+        Case(
+            "openrouter_youtube_url",
+            lambda m: body(
+                user(
+                    text("What animal is shown in this video?"),
+                    video_part("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+                ),
+                **sent,
+            ),
+            want="4xx",
+            thinking=True,
+            note="a YouTube link is a web page, not a video file: 400 with a message, never a decoder error",
         )
     )
     return c

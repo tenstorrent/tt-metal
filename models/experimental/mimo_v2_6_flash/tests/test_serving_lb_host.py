@@ -1168,3 +1168,209 @@ def test_map_structured_outputs_leaves_valid_requests(req):
 def test_map_structured_outputs_drops_empty_structured_outputs():
     assert "structured_outputs" not in lb.map_structured_outputs({"model": "m", "structured_outputs": {}})
     assert "structured_outputs" not in lb.map_structured_outputs({"model": "m", "structured_outputs": {"json": None}})
+
+
+# --- a chat answer left wholly in reasoning (MiMo's transcription-only answers with thinking on) ---
+
+
+def sse(*events):
+    return b"".join(b"data: " + (e if isinstance(e, bytes) else json.dumps(e).encode()) + b"\n\n" for e in events)
+
+
+def delta_event(delta, finish=None, index=0):
+    choice = {"index": index, "delta": delta, "logprobs": None, "finish_reason": finish}
+    return {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 7, "model": "m", "choices": [choice]}
+
+
+USAGE_EVENT = {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 7, "model": "m", "choices": []}
+# What the engine streams for OpenRouter's input-audio-transcription request: <think>Affirmative.<|im_end|>.
+UNCLOSED = (
+    delta_event({"role": "assistant", "content": ""}),
+    delta_event({"reasoning": "Affirm"}),
+    delta_event({"reasoning": "ative."}),
+    delta_event({}, finish="stop"),
+    dict(USAGE_EVENT, usage={"prompt_tokens": 48, "completion_tokens": 7, "total_tokens": 55}),
+    b"[DONE]",
+)
+
+
+def stream_events(data):
+    out = []
+    for line in data.split(b"\n\n"):
+        if line.startswith(b"data: ") and line != b"data: [DONE]":
+            out.append(json.loads(line[6:]))
+    return out
+
+
+def stream_text(events, key, index=0):
+    return "".join(
+        c["delta"].get(key) or "" for e in events for c in e["choices"] if c["index"] == index and c.get("delta")
+    )
+
+
+@pytest.mark.parametrize("step", [1, 7, 64, 10**6])
+def test_stream_answer_from_reasoning(step):
+    """The answer arrives as one content delta right before the choice's last event, whatever the chunking."""
+    data = sse(*UNCLOSED)
+    fix = lb.AnswerFromReasoning()
+    out = b"".join(fix.feed(data[i : i + step]) for i in range(0, len(data), step)) + fix.flush()
+    events = stream_events(out)
+    assert fix.changed == 1
+    assert stream_text(events, "reasoning") == "Affirmative." and stream_text(events, "content") == "Affirmative."
+    added = events[3]
+    assert added["choices"] == [
+        {"index": 0, "delta": {"content": "Affirmative."}, "logprobs": None, "finish_reason": None}
+    ]
+    assert {k: added[k] for k in ("id", "object", "created", "model")} == {
+        k: events[0][k] for k in ("id", "object", "created", "model")
+    }
+    assert events[4]["choices"][0]["finish_reason"] == "stop" and events[5]["usage"]["completion_tokens"] == 7
+    # Everything the engine sent is still there, in order, byte for byte.
+    assert out.replace(b"data: " + json.dumps(added, ensure_ascii=False).encode() + b"\n\n", b"") == data
+    assert out.endswith(b"data: [DONE]\n\n")
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        # reasoning, then an answer
+        (delta_event({"reasoning": "think"}), delta_event({"content": "Paris"}), delta_event({}, finish="stop")),
+        # reasoning, then a tool call
+        (
+            delta_event({"reasoning": "think"}),
+            delta_event({"tool_calls": [{"index": 0, "function": {"name": "f", "arguments": "{}"}}]}),
+            delta_event({}, finish="tool_calls"),
+        ),
+        (delta_event({"reasoning": "think"}), delta_event({"tool_calls": [{"index": 0}]}), delta_event({}, "stop")),
+        # cut by max_tokens while reasoning: not an answer
+        (delta_event({"reasoning": "think"}), delta_event({}, finish="length")),
+        # no reasoning at all, or blank reasoning
+        (delta_event({"content": ""}), delta_event({}, finish="stop")),
+        (delta_event({"reasoning": " \n"}), delta_event({}, finish="stop")),
+        # not chat completion events
+        (b"not json", {"error": {"message": "boom"}}, {"choices": "x"}, {"choices": [1]}),
+    ],
+)
+def test_stream_without_a_reasoning_only_answer_is_unchanged(events):
+    data = sse(*events, b"[DONE]")
+    fix = lb.AnswerFromReasoning()
+    assert fix.feed(data) + fix.flush() == data and fix.changed == 0
+
+
+def test_stream_answer_from_reasoning_details():
+    fix = lb.AnswerFromReasoning()
+    # The last event carries a delta itself; another choice has content; \r\n\r\n ends events; comments pass.
+    data = (
+        b": keep-alive\r\n\r\n"
+        + sse(delta_event({"reasoning_content": "Aff"}), delta_event({"content": "Paris"}, index=1)).replace(
+            b"\n\n", b"\r\n\r\n"
+        )
+        + sse(delta_event({"reasoning_content": "irmative"}, finish="stop"), delta_event({}, finish="stop", index=1))
+    )
+    out = fix.feed(data)
+    events = stream_events(out.replace(b"\r\n\r\n", b"\n\n"))
+    assert fix.changed == 1 and out.startswith(b": keep-alive\r\n\r\n")
+    assert stream_text(events, "content", 0) == "Affirmative" and stream_text(events, "content", 1) == "Paris"
+    # An event without its blank line is held until flush.
+    fix = lb.AnswerFromReasoning()
+    assert fix.feed(b'data: {"choices": []}') == b"" and fix.flush() == b'data: {"choices": []}' and fix.flush() == b""
+
+
+def chat_answer(content, reasoning=None, finish="stop", **message):
+    msg = dict({"role": "assistant", "content": content}, **message)
+    if reasoning is not None:
+        msg["reasoning"] = reasoning
+    return {"id": "chatcmpl-1", "choices": [{"index": 0, "message": msg, "finish_reason": finish}], "usage": {}}
+
+
+@pytest.mark.parametrize("content", [None, "", " \n"])
+def test_answer_from_reasoning(content):
+    body, changed = lb.answer_from_reasoning(json.dumps(chat_answer(content, "Affirmative.")).encode())
+    message = json.loads(body)["choices"][0]["message"]
+    assert changed == 1 and message["content"] == "Affirmative." and message["reasoning"] == "Affirmative."
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        chat_answer("Paris", "think"),
+        chat_answer(None, "think", finish="length"),
+        chat_answer(None, "think", tool_calls=[{"id": "1", "function": {"name": "f", "arguments": "{}"}}]),
+        chat_answer(None, "think", finish="tool_calls", tool_calls=[{"id": "1"}]),
+        chat_answer(None),
+        chat_answer("", " "),
+        {"error": {"message": "boom"}},
+        {"choices": "x"},
+        ["not", "an", "object"],
+    ],
+)
+def test_answer_from_reasoning_leaves_other_answers(answer):
+    body = json.dumps(answer).encode()
+    assert lb.answer_from_reasoning(body) == (body, 0)
+    assert lb.answer_from_reasoning(b"not json") == (b"not json", 0)
+
+
+def test_proxy_answers_from_reasoning():
+    """Through the proxy: streamed and not, on by default, off with the switch, and only for chat completions."""
+
+    def engine():
+        async def chat(request):
+            body = await request.json()
+            if not body.get("stream"):
+                return web.json_response(chat_answer(None, "Affirmative."))
+            resp = web.StreamResponse(headers={"Content-Type": "text/event-stream; charset=utf-8"})
+            await resp.prepare(request)
+            for event in UNCLOSED:
+                await resp.write(sse(event))
+                await asyncio.sleep(0)
+            await resp.write_eof()
+            return resp
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", chat)
+        app.router.add_post("/v1/completions", chat)
+        return app
+
+    async def run(shim):
+        backend = TestServer(engine(), host="127.0.0.1")
+        await backend.start_server()
+        router = lb.Router([f"http://127.0.0.1:{backend.port}"])
+        proxy = TestServer(lb.make_app(router, shim=shim), host="127.0.0.1")
+        await proxy.start_server()
+        out = {}
+        try:
+            async with ClientSession() as session:
+                for path in ("/v1/chat/completions", "/v1/completions"):
+                    for stream in (True, False):
+                        req = {"model": "m", "stream": stream, "messages": [{"role": "user", "content": "x"}]}
+                        async with session.post(f"http://127.0.0.1:{proxy.port}{path}", json=req) as resp:
+                            out[path, stream] = (resp.status, resp.headers["Content-Type"], await resp.read())
+            return out, router.snapshot()
+        finally:
+            await proxy.close()
+            await backend.close()
+
+    out, snap = asyncio.run(run(lb.Shim()))
+    status, kind, data = out["/v1/chat/completions", True]
+    events = stream_events(data)
+    assert status == 200 and kind.startswith("text/event-stream")
+    assert stream_text(events, "content") == "Affirmative." and data.endswith(b"data: [DONE]\n\n")
+    status, kind, data = out["/v1/chat/completions", False]
+    assert status == 200 and kind.startswith("application/json")
+    assert json.loads(data)["choices"][0]["message"]["content"] == "Affirmative."
+    assert snap["prefix"]["answers_from_reasoning"] == 2
+    # Other paths, and the switch: what the engine sent.
+    assert out["/v1/completions", True][2] == sse(*UNCLOSED)
+    assert json.loads(out["/v1/completions", False][2])["choices"][0]["message"]["content"] is None
+    for shim in (lb.Shim(answer_from_reasoning=False), lb.Shim(enabled=False)):
+        out, snap = asyncio.run(run(shim))
+        assert out["/v1/chat/completions", True][2] == sse(*UNCLOSED)
+        assert json.loads(out["/v1/chat/completions", False][2])["choices"][0]["message"]["content"] is None
+        assert snap["prefix"]["answers_from_reasoning"] == 0
+
+
+def test_shim_answer_from_reasoning_env(monkeypatch):
+    assert lb.Shim.from_env().answer_from_reasoning is True
+    monkeypatch.setenv("TT_PROXY_ANSWER_FROM_REASONING", "0")
+    assert lb.Shim.from_env().answer_from_reasoning is False
+    assert lb.Shim.from_env(answer_from_reasoning=True).answer_from_reasoning is True
