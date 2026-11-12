@@ -107,27 +107,40 @@ def test_gradients_are_zeroed_at_each_epoch_start():
     trainer.cleanup()
 
 
-def test_an_exception_goes_to_on_error_and_out_of_train(expect_error):
+def test_an_exception_goes_to_on_train_error_and_out_of_train(expect_error):
     recorder = Recorder()
     error = ValueError("boom")
     trainer = FakeTrainer([RaiseAt("on_step_end", 2, error), recorder])
     trainer.setup(make_config())
     with expect_error(ValueError, "boom"):
         trainer.train()
-    assert recorder.args("on_error") == [(error,)]
+    assert recorder.args("on_train_error") == [(error,)]
+    assert "on_setup_error" not in recorder.hooks()
     assert "on_train_end" not in recorder.hooks()
     assert trainer.logger._finished
     trainer.cleanup()
 
 
-def test_a_failing_on_train_start_also_reaches_on_error(expect_error):
+def test_a_failing_on_train_start_also_reaches_on_train_error(expect_error):
     recorder = Recorder()
     error = RuntimeError("no start")
     trainer = FakeTrainer([RaiseAt("on_train_start", 0, error), recorder])
     trainer.setup(make_config())
     with expect_error(RuntimeError, "no start"):
         trainer.train()
-    assert recorder.args("on_error") == [(error,)]
+    assert recorder.args("on_train_error") == [(error,)]
+    trainer.cleanup()
+
+
+@pytest.mark.parametrize("step", ["check", "data", "model"])
+def test_a_failed_setup_goes_to_on_setup_error_and_out_of_setup(step, expect_error):
+    recorder = Recorder()
+    trainer = FakeTrainer([recorder], fail_in=step)
+    with expect_error(RuntimeError, f"{step} failed"):
+        trainer.setup(make_config())
+    [(error,)] = recorder.args("on_setup_error")
+    assert str(error) == f"{step} failed"
+    assert recorder.hooks() == ["on_setup_error"]
     trainer.cleanup()
 
 

@@ -53,7 +53,11 @@ class MetricsCallback(Callback):
         if metrics:
             trainer.logger.log_metrics(metrics, step=trainer.global_step, commit=False)
 
-    def on_error(self, trainer: Any, exception: BaseException) -> None:
+    def on_setup_error(self, trainer: Any, exception: BaseException) -> None:
+        if trainer.logger is not None:
+            trainer.logger.error(f"Setup failed: {exception}", traceback.format_exc())
+
+    def on_train_error(self, trainer: Any, exception: BaseException) -> None:
         if trainer.logger is not None:
             trainer.logger.error(f"Training failed: {exception}", traceback.format_exc())
 

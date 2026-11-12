@@ -164,8 +164,8 @@ model (make it the `model_name` instead), and a full run can't load an adapter.
 A host builds one trainer with its callbacks and runs each job as:
 
 ```python
-trainer.setup(config)  # validates, loads data, opens the device, builds the model and optimizer
 try:
+    trainer.setup(config)  # validates, loads data, opens the device, builds the model and optimizer
     trainer.train()
 finally:
     trainer.cleanup()  # also after a failed setup
@@ -177,13 +177,16 @@ finally:
 - **Cleanup.** `cleanup` frees the model, optimizer and data, then closes the device. It is safe to call more than
   once and after any failure. What the trainer held before its first run, such as the callbacks, is kept for the next
   job.
-- **Callbacks** are objects with any of these methods, each called with the trainer first: `on_train_start`,
-  `on_train_epoch_start`, `on_train_batch_start`, `on_forward_start`, `on_forward_end`, `on_backward_start`,
-  `on_backward_end`, `on_optimizer_step_start`, `on_optimizer_step_end`, `on_step_end`, `on_train_batch_end`,
-  `on_train_epoch_end`, `on_validation_start`, `on_validation_batch_start`, `on_validation_batch_end`,
-  `on_validation_end`, `on_train_end` and `on_error`. They don't have to subclass `Callback`.
-- **Stopping.** An exception from a callback ends the run: `on_error` sees it, then `train` raises it. To cancel a
-  job, raise an exception of your own and catch it around `train`.
+- **Callbacks** are objects with any of these methods, each called with the trainer first: `on_setup_error`,
+  `on_train_start`, `on_train_epoch_start`, `on_train_batch_start`, `on_forward_start`, `on_forward_end`,
+  `on_backward_start`, `on_backward_end`, `on_optimizer_step_start`, `on_optimizer_step_end`, `on_step_end`,
+  `on_train_batch_end`, `on_train_epoch_end`, `on_validation_start`, `on_validation_batch_start`,
+  `on_validation_batch_end`, `on_validation_end`, `on_train_end` and `on_train_error`. They don't have to subclass
+  `Callback`.
+- **Failures.** An exception in `setup` goes to every callback's `on_setup_error`, and one in `train` to
+  `on_train_error`; then the method re-raises it. So a host reports both through its callbacks, with nothing to catch.
+- **Stopping.** An exception from a callback ends the run: `on_train_error` sees it, then `train` raises it. To
+  cancel a job, raise an exception of your own and catch it around `train`.
 - **Reading the run.** `trainer.loss_to_float(loss)`, `trainer.current_learning_rate()` (a list, one LR per
   optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step` and
   `trainer.epoch`.

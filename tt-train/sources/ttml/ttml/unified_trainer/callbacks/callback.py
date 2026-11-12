@@ -8,13 +8,14 @@ from typing import Any, Iterable, Union
 
 
 class Callback:
-    """Hooks into ``Trainer.train`` and ``Trainer.validate``, called in the order listed here.
+    """Hooks into ``Trainer.train`` and ``Trainer.validate``, called in the order listed here, then the hooks
+    for a failed ``Trainer.setup`` or ``Trainer.train``.
 
     Every hook is a no-op, so a subclass overrides only what it needs. ``CallbackHandler`` calls a hook only
     on callbacks that have it, so a callback need not subclass this at all.
 
-    A hook may raise to end training: the exception goes to every callback's ``on_error`` and then out of
-    ``train()``.
+    A hook may raise to end training: the exception goes to every callback's ``on_train_error`` and then out
+    of ``train()``.
     """
 
     def on_train_start(self, trainer: Any) -> None:
@@ -66,10 +67,13 @@ class Callback:
         pass
 
     def on_train_end(self, trainer: Any) -> None:
-        """Only after the loop completes; a failed or stopped run calls ``on_error`` instead."""
+        """Only after the loop completes; a failed or stopped run calls ``on_train_error`` instead."""
 
-    def on_error(self, trainer: Any, exception: BaseException) -> None:
-        pass
+    def on_setup_error(self, trainer: Any, exception: BaseException) -> None:
+        """``setup`` failed and will re-raise ``exception``; ``trainer.logger`` is ``None`` if it failed first."""
+
+    def on_train_error(self, trainer: Any, exception: BaseException) -> None:
+        """``train`` failed or a hook stopped it, and ``train`` will re-raise ``exception``."""
 
 
 class CallbackHandler:

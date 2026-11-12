@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """What a long-lived host (tt-inference-server's training runner) relies on: one trainer built at warmup
-runs many jobs, a callback may stop a job by raising, and a failed setup can be reported to the callbacks.
-Device-free."""
+runs many jobs, a callback may stop a job by raising, and a failed setup reaches the callbacks. Device-free."""
 
 import contextlib
 
@@ -47,8 +46,11 @@ class JobCallback:
         if trainer.global_step >= self.max_steps:
             raise StopTraining(f"Reached max_steps={self.max_steps}")
 
-    def on_error(self, trainer, exception):
-        self.errors.append(exception)
+    def on_setup_error(self, trainer, exception):
+        self.errors.append(("setup", exception))
+
+    def on_train_error(self, trainer, exception):
+        self.errors.append(("train", exception))
 
 
 def job_config(tmp_path, **overrides):
@@ -62,11 +64,7 @@ def job_config(tmp_path, **overrides):
 def run_job(trainer, config):
     """The runner's sequence for one job."""
     try:
-        try:
-            trainer.setup(config)
-        except Exception as exception:
-            trainer.callback_handler("on_error", exception)
-            raise
+        trainer.setup(config)
         with contextlib.suppress(StopTraining):
             trainer.train()
     finally:
@@ -90,7 +88,7 @@ def test_a_job_stopped_by_a_callback_ends_cleanly(tmp_path):
     assert job.saved == [f"{tmp_path}/ckpt-step-2"]
     assert list(trainer.saved) == job.saved
     assert job.batches_per_epoch == 4
-    assert [type(e) for e in job.errors] == [StopTraining]
+    assert [(phase, type(e)) for phase, e in job.errors] == [("train", StopTraining)]
     assert trainer.config is None and not hasattr(trainer, "model")
 
 
@@ -110,6 +108,6 @@ def test_a_failed_setup_reaches_the_callbacks_and_frees_everything(tmp_path, exp
     trainer = FakeTrainer(callbacks=[job], fail_in="model")
     with expect_error(RuntimeError, "model failed"):
         run_job(trainer, job_config(tmp_path))
-    assert [str(e) for e in job.errors] == ["model failed"]
+    assert [(phase, str(e)) for phase, e in job.errors] == [("setup", "model failed")]
     assert trainer.events[-1] == "device.close"
     assert trainer.config is None
