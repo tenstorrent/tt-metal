@@ -29,6 +29,7 @@ Reference: models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py (interface) and
 tests/galaxy_prefill_kv_pcc.py (cache readback + RoPE swizzle convention).
 """
 
+import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -104,6 +105,15 @@ class TtPrefillRuntimeConfig:
         return self.mesh_shape[self.tp_axis]
 
 
+def prefetch_media() -> bool:
+    """PREFILL_PREFETCH_MEDIA=1: fetch and upload the image rows from inside the embedding, after the
+    token lookup is enqueued, so the host's fetch overlaps device work instead of delaying it.
+
+    Off by default. The splice is correct either way — this only moves when the host work happens — so
+    it is a flag while the overlap is being measured, not a permanent fork."""
+    return os.environ.get("PREFILL_PREFETCH_MEDIA", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _media_rows_of(reader, hidden: int, media_refs: list):
     """One fetch_batch for the forward's refs, as a rows_of(ref) callable.
 
@@ -137,6 +147,7 @@ class TtPrefillRuntime:
         self.config = config
         self.media_embedding_reader = media_embedding_reader
         self.media_buffers = None
+        self._pending_media = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -349,13 +360,13 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=cfg.mesh_shape, dims=(cfg.sp_axis, None)),
         )
 
-    def _embed_tokens(self, tokens: ttnn.Tensor, media=None) -> ttnn.Tensor:
+    def _embed_tokens(self, tokens: ttnn.Tensor, media_fn=None) -> ttnn.Tensor:
         """Embed the SP-sharded tokens into the bf16 hidden state the layers consume, delegating to the
         model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] full hidden TP-replicated, or
         [1, 1, s_local, emb_dim/tp] under M3_SHARDED_RESIDUAL — whichever the residual-stream contract
         is (tt/residual.py); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden by
         default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
-        x = self.model.embedding(tokens, media=media)
+        x = self.model.embedding(tokens, media_fn=media_fn)
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
         return x
@@ -382,6 +393,11 @@ class TtPrefillRuntime:
             self.prefill_forward(inp, kv_cache, chunks, media_refs=[MediaRef(0, 0, n, stub_media_key(n, 0))])
         finally:
             self.media_embedding_reader = real_reader
+
+    def _hold_media(self, partials):
+        """Keep the forward's partials so prefill_forward can free them once the embedding is done."""
+        self._pending_media = partials
+        return partials
 
     def _media_partials(self, chunks: list, media_refs: list):
         """D: image rows as per-SP-row partials, or None when the 1D embedding forces the later splice."""
@@ -581,11 +597,21 @@ class TtPrefillRuntime:
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
         if cfg.is_first_rank:
-            media = self._media_partials(chunks, media_refs) if media_refs else None
-            x_embd = self._embed_tokens(input_tensor, media=media)
+            media_fn = None
+            if media_refs:
+                # The embedding calls this after enqueuing the lookup. Under PREFILL_PREFETCH_MEDIA the
+                # fetch happens there and overlaps that work; otherwise it is done here, as before, and
+                # the thunk just hands over the result. self._pending_media is what gets freed below.
+                if prefetch_media():
+                    media_fn = lambda: self._hold_media(self._media_partials(chunks, media_refs))
+                else:
+                    held = self._hold_media(self._media_partials(chunks, media_refs))
+                    media_fn = (lambda: held) if held is not None else None
+            x_embd = self._embed_tokens(input_tensor, media_fn=media_fn)
             ttnn.deallocate(input_tensor)
-            if media is not None:
-                media.deallocate()
+            if self._pending_media is not None:
+                self._pending_media.deallocate()
+                self._pending_media = None
             elif media_refs:
                 x_embd = self._splice_media(x_embd, chunks, media_refs)
         else:
