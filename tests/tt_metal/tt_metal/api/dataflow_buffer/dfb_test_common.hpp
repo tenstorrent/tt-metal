@@ -241,6 +241,9 @@ struct M2SingleDFBParams {
     // DM STRIDED implicit sync only: spread each DM kernel's transfers over a temporary, a copy passed to
     // a helper and the main object, so the kernel-exit finish must see one shared count per DFB.
     bool use_temporaries = false;
+    // Quasar only: run the Tensix producer / consumer side on trisc3 instead of trisc2 / trisc0.
+    bool producer_on_trisc3 = false;
+    bool consumer_on_trisc3 = false;
 };
 
 inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
@@ -253,6 +256,10 @@ inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
 // digest of every entry it drains into an L1 scratch region. These two helpers are the
 // host side of that contract: the same hash, and the region's placement/sizing.
 constexpr uint32_t k_dfb_digest_sentinel = 0xDEADBEEFu;
+
+// A Tensix producer stamps word 0 of every entry it pushes with this base plus its thread id, so
+// the output shows which thread pushed each entry.
+constexpr uint32_t k_dfb_producer_stamp_base = 0x7D000000u;
 
 inline uint32_t fnv1a_page_digest(const std::vector<uint32_t>& words, uint32_t page_id, uint32_t words_per_entry) {
     uint32_t digest = 2166136261u;  // FNV-1a offset basis
@@ -342,6 +349,9 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     if (p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::TENSIX) {
         GTEST_SKIP() << "Tensix→Tensix unsupported (no NoC transfer)";
     }
+    if (mesh_device.arch() != ARCH::QUASAR && (p.producer_on_trisc3 || p.consumer_on_trisc3)) {
+        GTEST_SKIP() << "trisc3 DFB endpoints require Quasar";
+    }
     // An ALL (broadcast) DM consumer under implicit sync deadlocks: the broadcast
     // credit path is not driven for a DM consumer regardless of producer -- DM→DM
     // has no DM↔DM remapper, and a Tensix producer cannot post the DM consumer's
@@ -420,7 +430,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
          .accessor_name = "out",
          .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = p.pap,
-         .block_size = producer_blocked ? p.block_size : 0u}};
+         .block_size = producer_blocked ? p.block_size : 0u,
+         .use_trisc3 = p.producer_on_trisc3}};
     // The BLOCKED kernels also take block_size.
     if (producer_blocked) {
         producer.compile_time_args = {
@@ -430,6 +441,10 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     } else {
         producer.compile_time_args = {
             {"num_entries_per_producer", num_entries_per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
+    }
+    if (p.producer_type == M2PorCType::TENSIX) {
+        producer.compile_time_args.insert({"producer_on_trisc3", p.producer_on_trisc3 ? 1u : 0u});
+        producer.compile_time_args.insert({"producer_stamp_base", k_dfb_producer_stamp_base});
     }
 
     // Consumer kernel
@@ -462,8 +477,11 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             CONSUMER,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp",
             static_cast<uint8_t>(p.num_consumers));
-        // The Tensix consumer needs no block_size arg; the kernel reads it from the ring.
-        consumer.compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}};
+        // The Tensix consumer needs no block_size arg; the kernel reads it from the ring. It does need
+        // consumer_on_trisc3: the kernel runs on every TRISC, and only the consuming one hashes the entries.
+        consumer.compile_time_args = {
+            {"num_entries_per_consumer", num_entries_per_consumer},
+            {"consumer_on_trisc3", p.consumer_on_trisc3 ? 1u : 0u}};
         consumer.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
     }
     consumer.dfb_bindings = {
@@ -471,7 +489,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
          .accessor_name = "in",
          .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = p.cap,
-         .block_size = consumer_blocked ? p.block_size : 0u}};
+         .block_size = consumer_blocked ? p.block_size : 0u,
+         .use_trisc3 = p.consumer_on_trisc3}};
 
     // Config is arch-specific (the _2_0 kernels are the same either way). On WH/BH a DFB lowers to
     // a circular buffer and ValidateProgramSpec requires config_1xx on DM kernels, so mirror the
@@ -625,6 +644,13 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             }
         }
         slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, slice);
+
+        // The producing thread overwrites word 0 of every entry with its stamp, so every output page
+        // must carry the stamp of the thread the host asked for.
+        const uint32_t expected_stamp = k_dfb_producer_stamp_base + (p.producer_on_trisc3 ? 3u : 2u);
+        for (uint32_t page_id = 0; page_id < entries_per_core; ++page_id) {
+            input[page_id * wpe] = expected_stamp;
+        }
     }
 
     // Seed the digest region so a slot the consumer never reached reads back as the

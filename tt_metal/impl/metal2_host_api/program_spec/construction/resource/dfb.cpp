@@ -217,6 +217,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
+        .unpack_on_trisc3 = consumer_binding->use_trisc3,
+        .pack_on_trisc3 = producer_binding->use_trisc3,
         // DFB externally placed storage is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
         // TensorParameter's MeshTensor, an SRAMArenaParameter's allocation, or (relay) from the

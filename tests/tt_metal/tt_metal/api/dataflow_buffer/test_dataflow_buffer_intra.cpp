@@ -19,7 +19,15 @@ namespace tt::tt_metal {
 
 // legacy intra-Tensix self-loop harness + test
 static void run_intra_tensix_dfb_program(
-    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_entries, uint32_t num_threads) {
+    distributed::MeshDevice& mesh_device,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    uint32_t num_threads,
+    bool pack_on_trisc3 = false,
+    bool unpack_on_trisc3 = false) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "intra-tensix DFB self-loop requires Quasar";
+    }
     experimental::dfb::DataflowBufferConfig dfb_config{
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -46,6 +54,11 @@ static void run_intra_tensix_dfb_program(
     const experimental::DFBSpecName INTRA_DFB{"intra_dfb"};
     const experimental::KernelSpecName COMPUTE{"compute"};
 
+    // Per Neo: entries_per_neo push addresses, then entries_per_neo pop addresses.
+    const uint32_t trace_words_per_neo = 2 * entries_per_neo;
+    const uint32_t trace_words = num_threads * trace_words_per_neo;
+    const uint32_t trace_l1_addr = top_of_l1_scratch_addr(mesh_device, trace_words * sizeof(uint32_t));
+
     experimental::DataflowBufferSpec intra_dfb_spec{
         .unique_id = INTRA_DFB,
         .entry_size = entry_size,
@@ -68,18 +81,23 @@ static void run_intra_tensix_dfb_program(
                     .accessor_name = "out",
                     .endpoint_type = experimental::DFBEndpointType::PRODUCER,
                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                    .use_trisc3 = pack_on_trisc3,
                 },
                 {
                     .dfb_spec_name = INTRA_DFB,
                     .accessor_name = "in",
                     .endpoint_type = experimental::DFBEndpointType::CONSUMER,
                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                    .use_trisc3 = unpack_on_trisc3,
                 },
             },
         .compile_time_args =
             {
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
+                {"pack_on_trisc3", pack_on_trisc3 ? 1u : 0u},
+                {"unpack_on_trisc3", unpack_on_trisc3 ? 1u : 0u},
+                {"trace_l1_address", trace_l1_addr},
             },
         .hw_config = experimental::ComputeHardwareConfig{},
     };
@@ -110,6 +128,8 @@ static void run_intra_tensix_dfb_program(
         static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
 
     slow_dispatch::WriteToL1(mesh_device, logical_core, dfb_l1_addr, input);
+    std::vector<uint32_t> trace_zero(trace_words, 0);
+    slow_dispatch::WriteToL1(mesh_device, logical_core, trace_l1_addr, trace_zero);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -123,13 +143,35 @@ static void run_intra_tensix_dfb_program(
     std::vector<uint32_t> l1_data;
     slow_dispatch::ReadFromL1(mesh_device, logical_core, dfb_l1_addr, total_size, l1_data);
     EXPECT_EQ(expected, l1_data) << "Intra-tensix DFB L1 mismatch";
+
+    // Every pop must have read the entry its push wrote. The +2 check above cannot tell: a loop that
+    // reads the entry after the one just written still lands on every entry twice.
+    std::vector<uint32_t> trace;
+    slow_dispatch::ReadFromL1(mesh_device, logical_core, trace_l1_addr, trace_words * sizeof(uint32_t), trace);
+    ASSERT_EQ(trace.size(), trace_words);
+    for (uint32_t neo = 0; neo < num_threads; neo++) {
+        const uint32_t* push_addrs = trace.data() + neo * trace_words_per_neo;
+        const uint32_t* pop_addrs = push_addrs + entries_per_neo;
+        for (uint32_t i = 0; i < entries_per_neo; i++) {
+            EXPECT_NE(push_addrs[i], 0u) << "Neo " << neo << " push " << i << " left no trace";
+            EXPECT_EQ(push_addrs[i], pop_addrs[i]) << "Neo " << neo << " pop " << i << " read a different entry";
+        }
+    }
 }
 
-TEST_F(UnitMeshFixture, TensixIntraTest1xDFB4Sx4S) {
-    if (this->device().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping intra-tensix DFB test for WH/BH until DFB is backported";
-    }
-    run_intra_tensix_dfb_program(this->device(), /*entry_size=*/1024, /*num_entries=*/16, /*num_threads=*/4);
+TEST_F(UnitMeshFixture, TensixIntraTest1xDFB4Sx4S) { run_intra_tensix_dfb_program(this->device(), 1024, 16, 4); }
+
+// Same self-loop with trisc3 on one side, then on both.
+TEST_F(UnitMeshFixture, TensixIntraTest1xDFB4Sx4S_PackOnTrisc3) {
+    run_intra_tensix_dfb_program(this->device(), 1024, 16, 4, /*pack_on_trisc3=*/true, /*unpack_on_trisc3=*/false);
+}
+
+TEST_F(UnitMeshFixture, TensixIntraTest1xDFB4Sx4S_UnpackOnTrisc3) {
+    run_intra_tensix_dfb_program(this->device(), 1024, 16, 4, /*pack_on_trisc3=*/false, /*unpack_on_trisc3=*/true);
+}
+
+TEST_F(UnitMeshFixture, TensixIntraTest1xDFB4Sx4S_BothOnTrisc3) {
+    run_intra_tensix_dfb_program(this->device(), 1024, 16, 4, /*pack_on_trisc3=*/true, /*unpack_on_trisc3=*/true);
 }
 
 // Metal 2.0 intra: DM->Trisc self-loop double-relu
@@ -275,6 +317,324 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     ASSERT_GT(live.capacity.size(), self_rc.config.intra_shadow_tc_id);
     EXPECT_EQ(live.capacity[self_tc], num_entries);
     EXPECT_EQ(live.capacity[self_rc.config.intra_shadow_tc_id], 0u);
+}
+
+// Metal 2.0 C3 double-relu: DM -> in -> relu -> mid -> trisc3 -> back -> relu -> out -> DM. pack produces mid and
+// trisc3 produces back, so each thread programs its own remapper pair.
+TEST_F(UnitMeshFixture, C3_2_0_DMTriscTrisc3TriscDM_DoubleRelu) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "C3 INTRA-scope DFBs require Quasar";
+    }
+
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
+    constexpr uint32_t num_entries = 4;
+    const m2::NodeCoord node{0, 0};
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_MID{"dfb_mid"};
+    const m2::DFBSpecName DFB_BACK{"dfb_back"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+
+    auto make_spec = [&](const m2::DFBSpecName& name) {
+        return m2::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = entry_size,
+            .num_entries = num_entries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        };
+    };
+
+    auto producer = make_dm_dfb_producer(PRODUCER, DFB_IN, IN_TENSOR, num_entries, /*implicit_sync=*/false);
+
+    auto compute = make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_c3_pipeline_2_0.cpp");
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB_MID,
+         .accessor_name = "mid",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB_MID,
+         .accessor_name = "mid",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = true},
+        {.dfb_spec_name = DFB_BACK,
+         .accessor_name = "back",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = true},
+        {.dfb_spec_name = DFB_BACK,
+         .accessor_name = "back",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+    };
+    compute.compile_time_args = {{"per_core_tile_cnt", num_entries}};
+
+    auto consumer = make_dm_dfb_consumer(
+        CONSUMER, DFB_OUT, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/false);
+
+    disable_implicit_sync_for(producer, DFB_IN);
+    disable_implicit_sync_for(consumer, DFB_OUT);
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
+
+    m2::ProgramSpec spec{
+        .name = "c3_2_0",
+        .kernels = {producer, consumer, compute},
+        .dataflow_buffers = {make_spec(DFB_IN), make_spec(DFB_MID), make_spec(DFB_BACK), make_spec(DFB_OUT)},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = PRODUCER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
+        },
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = CONSUMER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
+        },
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
+    };
+    m2::SetProgramRunArgs(program, params);
+
+    // Positive bf16 inputs -> double-relu identity.
+    const uint32_t total_bytes = entry_size * num_entries;
+    auto input = create_random_vector_of_bfloat16(total_bytes, 1.0f, 0xC3C3);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
+
+    // Finalize early so the host can check both DFBs' thread masks and remapper pairs before launch.
+    program.impl().finalize_dataflow_buffer_configs();
+    auto mid_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_MID));
+    auto back_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_BACK));
+    ASSERT_NE(mid_dfb, nullptr);
+    ASSERT_NE(back_dfb, nullptr);
+    EXPECT_EQ(mid_dfb->tensix_trisc_mask, DFB_TRISC_ROLE_PRODUCER_T2 | DFB_TRISC_ROLE_CONSUMER_T3);
+    EXPECT_EQ(back_dfb->tensix_trisc_mask, DFB_TRISC_ROLE_PRODUCER_T3 | DFB_TRISC_ROLE_CONSUMER_T0);
+    ASSERT_FALSE(mid_dfb->groups.empty());
+    ASSERT_FALSE(back_dfb->groups.empty());
+    const auto& mid_rc = mid_dfb->groups[0].hw_risc_configs[0];
+    const auto& back_rc = back_dfb->groups[0].hw_risc_configs[0];
+    EXPECT_GE(mid_rc.config.remapper_pair_index, ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START);
+    EXPECT_GE(back_rc.config.remapper_pair_index, ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START);
+    EXPECT_NE(mid_rc.config.remapper_pair_index, back_rc.config.remapper_pair_index);
+
+    LaunchProgram(this->device(), std::move(program));
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_TRUE(packed_uint32_t_vector_comparison(output, input, [](float a, float b) {
+        return std::abs(a - b) < 0.01f;
+    })) << "M2 C3 double-relu identity mismatch";
+}
+
+// Metal 2.0 C4: the Dest path and a trisc3 self-loop in one kernel. Section 1: DM -> in -> relu -> out -> DM on
+// unpack, math and pack. Section 2: DM -> seed -> trisc3, which primes the acc self-loop, runs num_passes
+// add-one passes over it, and pushes the result to res -> DM.
+TEST_F(UnitMeshFixture, C4_2_0_DestAndTrisc3SelfLoop) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "C4 INTRA-scope DFBs require Quasar";
+    }
+
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
+    constexpr uint32_t num_entries = 4;
+    constexpr uint32_t num_passes = 3;
+    constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    static_assert(num_entries >= 2, "a self-loop pass holds the front entry while it reserves the next");
+    const m2::NodeCoord node{0, 0};
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::DFBSpecName DFB_SEED{"dfb_seed"};
+    const m2::DFBSpecName DFB_ACC{"dfb_acc"};
+    const m2::DFBSpecName DFB_RES{"dfb_res"};
+    const m2::KernelSpecName IN_PRODUCER{"in_producer"};
+    const m2::KernelSpecName SEED_PRODUCER{"seed_producer"};
+    const m2::KernelSpecName OUT_CONSUMER{"out_consumer"};
+    const m2::KernelSpecName RES_CONSUMER{"res_consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+    const m2::TensorParamName SEED_TENSOR{"seed_tensor"};
+    const m2::TensorParamName RES_TENSOR{"res_tensor"};
+
+    const auto tile_tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
+    const auto word_tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tile_tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(this->device(), tile_tensor_spec);
+    auto seed_tensor = MeshTensor::allocate_on_device(this->device(), word_tensor_spec);
+    auto res_tensor = MeshTensor::allocate_on_device(this->device(), word_tensor_spec);
+
+    auto make_spec = [&](const m2::DFBSpecName& name) {
+        return m2::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = entry_size,
+            .num_entries = num_entries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        };
+    };
+
+    auto in_producer = make_dm_dfb_producer(IN_PRODUCER, DFB_IN, IN_TENSOR, num_entries, /*implicit_sync=*/false);
+    auto seed_producer =
+        make_dm_dfb_producer(SEED_PRODUCER, DFB_SEED, SEED_TENSOR, num_entries, /*implicit_sync=*/false);
+    auto out_consumer = make_dm_dfb_consumer(
+        OUT_CONSUMER, DFB_OUT, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/false);
+    auto res_consumer = make_dm_dfb_consumer(
+        RES_CONSUMER, DFB_RES, RES_TENSOR, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/false);
+
+    auto compute = make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_c4_pipeline_2_0.cpp");
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED},
+        {.dfb_spec_name = DFB_SEED,
+         .accessor_name = "seed",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = true},
+        {.dfb_spec_name = DFB_ACC,
+         .accessor_name = "acc",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = true},
+        {.dfb_spec_name = DFB_ACC,
+         .accessor_name = "acc",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = true},
+        {.dfb_spec_name = DFB_RES,
+         .accessor_name = "res",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = true},
+    };
+    compute.compile_time_args = {{"per_core_tile_cnt", num_entries}, {"num_passes", num_passes}};
+
+    disable_implicit_sync_for(in_producer, DFB_IN);
+    disable_implicit_sync_for(seed_producer, DFB_SEED);
+    disable_implicit_sync_for(out_consumer, DFB_OUT);
+    disable_implicit_sync_for(res_consumer, DFB_RES);
+
+    m2::WorkUnitSpec wu{
+        .name = "wu",
+        .kernels = {IN_PRODUCER, SEED_PRODUCER, OUT_CONSUMER, RES_CONSUMER, COMPUTE},
+        .target_nodes = node};
+
+    m2::ProgramSpec spec{
+        .name = "c4_2_0",
+        .kernels = {in_producer, seed_producer, out_consumer, res_consumer, compute},
+        .dataflow_buffers =
+            {make_spec(DFB_IN), make_spec(DFB_OUT), make_spec(DFB_SEED), make_spec(DFB_ACC), make_spec(DFB_RES)},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+                {.unique_id = SEED_TENSOR, .spec = seed_tensor.tensor_spec()},
+                {.unique_id = RES_TENSOR, .spec = res_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+
+    const auto dm_args =
+        m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = IN_PRODUCER, .runtime_arg_values = dm_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = SEED_PRODUCER, .runtime_arg_values = dm_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = OUT_CONSUMER, .runtime_arg_values = dm_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = RES_CONSUMER, .runtime_arg_values = dm_args},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
+        {SEED_TENSOR, std::cref(seed_tensor)},
+        {RES_TENSOR, std::cref(res_tensor)},
+    };
+    m2::SetProgramRunArgs(program, params);
+
+    // Section 1 gets positive bf16 tiles, so relu is the identity. Section 2 gets plain words to add to.
+    const uint32_t total_bytes = entry_size * num_entries;
+    auto input = create_random_vector_of_bfloat16(total_bytes, 1.0f, 0xC4C4);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
+    std::vector<uint32_t> seed(num_entries * words_per_entry);
+    for (uint32_t i = 0; i < seed.size(); i++) {
+        seed[i] = 0x10000u * (i / words_per_entry) + (i % words_per_entry);
+    }
+    slow_dispatch::WriteToBuffer(seed_tensor.mesh_buffer(), seed);
+    m2_writeshard_barrier_uint32(this->device(), seed_tensor, seed);
+
+    // Finalize early so the host can check every DFB's thread mask before launch.
+    program.impl().finalize_dataflow_buffer_configs();
+    auto dfb_of = [&](const m2::DFBSpecName& name) {
+        return program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*name));
+    };
+    for (const auto* name : {&DFB_IN, &DFB_OUT, &DFB_SEED, &DFB_ACC, &DFB_RES}) {
+        ASSERT_NE(dfb_of(*name), nullptr);
+    }
+    EXPECT_EQ(dfb_of(DFB_IN)->tensix_trisc_mask, DFB_TRISC_ROLE_CONSUMER_T0);
+    EXPECT_EQ(dfb_of(DFB_OUT)->tensix_trisc_mask, DFB_TRISC_ROLE_PRODUCER_T2);
+    EXPECT_EQ(dfb_of(DFB_SEED)->tensix_trisc_mask, DFB_TRISC_ROLE_CONSUMER_T3);
+    EXPECT_EQ(dfb_of(DFB_ACC)->tensix_trisc_mask, DFB_TRISC_ROLE_PRODUCER_T3 | DFB_TRISC_ROLE_CONSUMER_T3);
+    EXPECT_EQ(dfb_of(DFB_RES)->tensix_trisc_mask, DFB_TRISC_ROLE_PRODUCER_T3);
+    auto acc_dfb = dfb_of(DFB_ACC);
+    ASSERT_FALSE(acc_dfb->groups.empty());
+    EXPECT_GE(acc_dfb->groups[0].hw_risc_configs[0].config.remapper_pair_index, ::dfb::REMAPPER_ONE_TO_ONE_PAIR_START);
+
+    LaunchProgram(this->device(), std::move(program));
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_TRUE(packed_uint32_t_vector_comparison(output, input, [](float a, float b) {
+        return std::abs(a - b) < 0.01f;
+    })) << "M2 C4 relu identity mismatch";
+
+    std::vector<uint32_t> result;
+    slow_dispatch::ReadFromBuffer(res_tensor.mesh_buffer(), result);
+    std::vector<uint32_t> expected(seed.size());
+    for (uint32_t i = 0; i < seed.size(); i++) {
+        expected[i] = seed[i] + num_passes;
+    }
+    EXPECT_EQ(result, expected) << "M2 C4 self-loop result is not seed + num_passes";
 }
 
 // Metal 2.0 intra-Tensix self-loop harness + test
@@ -569,8 +929,9 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
 }
 
 // T1: pure INTRA must not corrupt DM-visible overlay tile counters 0-15.
-TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
-    if (this->device().arch() != ARCH::QUASAR) {
+static void run_intra_overlay_isolation(
+    distributed::MeshDevice& device, bool pack_on_trisc3 = false, bool unpack_on_trisc3 = false) {
+    if (device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Overlay TC isolation is Quasar-only";
     }
 
@@ -607,8 +968,7 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
     constexpr uint32_t done_idx = final_base + num_mirrored_dm_tcs * words_per_tc;
     constexpr uint32_t scratch_words = done_idx + 1;
 
-    const uint32_t dfb_l1_addr =
-        static_cast<uint32_t>(this->device().allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t dfb_l1_addr = static_cast<uint32_t>(device.allocator()->get_base_allocator_addr(HalMemType::L1));
     const uint32_t scratch_l1_addr = dfb_l1_addr + total_bytes;
 
     const m2::DFBSpecName DFB{"intra_dfb"};
@@ -627,13 +987,17 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
         {.dfb_spec_name = DFB,
          .accessor_name = "out",
          .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = pack_on_trisc3},
         {.dfb_spec_name = DFB,
          .accessor_name = "in",
          .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = m2::DFBAccessPattern::STRIDED},
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = unpack_on_trisc3},
     };
     compute.compile_time_args = {
+        {"pack_on_trisc3", pack_on_trisc3 ? 1u : 0u},
+        {"unpack_on_trisc3", unpack_on_trisc3 ? 1u : 0u},
         {"scratch_l1_address", scratch_l1_addr},
         {"scratch_magic", scratch_magic},
         {"scratch_done", scratch_done},
@@ -666,7 +1030,7 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
         .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    Program program = m2::MakeProgramFromSpec(device, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
@@ -688,25 +1052,24 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
 
     // Kernel only exercises TC push/pop credits; L1 payload is untouched.
     std::vector<uint32_t> scratch_zero(scratch_words, 0);
-    slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), scratch_l1_addr, scratch_zero);
+    slow_dispatch::WriteToL1(device, CoreCoord(0, 0), scratch_l1_addr, scratch_zero);
 
     // This program owns only Tensix-only counters (ClientL + shadow), so every DM-visible counter must survive
     // the run untouched. The kernel's own baseline is sampled after DFB init; snapshotting here additionally
     // covers init-time aliasing, and comparing exact values avoids inferring corruption from a magic capacity.
-    const auto before = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
+    const auto before = read_live_tcs(device, CoreCoord(0, 0), /*neo_id=*/0);
     ASSERT_GE(before.capacity.size(), ::dfb::NUM_TILE_COUNTERS_PER_TENSIX);
 
-    LaunchProgram(this->device(), std::move(program));
+    LaunchProgram(device, std::move(program));
 
     std::vector<uint32_t> scratch;
-    slow_dispatch::ReadFromL1(
-        this->device(), CoreCoord(0, 0), scratch_l1_addr, scratch_words * sizeof(uint32_t), scratch);
+    slow_dispatch::ReadFromL1(device, CoreCoord(0, 0), scratch_l1_addr, scratch_words * sizeof(uint32_t), scratch);
     ASSERT_EQ(scratch.size(), scratch_words);
-    EXPECT_EQ(scratch[0], scratch_magic) << "Pack never wrote overlay isolation scratch";
-    EXPECT_EQ(scratch[done_idx], scratch_done) << "Pack never finished overlay isolation scratch";
+    EXPECT_EQ(scratch[0], scratch_magic) << "Producer never wrote overlay isolation scratch";
+    EXPECT_EQ(scratch[done_idx], scratch_done) << "Producer never finished overlay isolation scratch";
     EXPECT_EQ(scratch[1], entries_per_neo) << "ClientL capacity mismatch";
-    EXPECT_EQ(scratch[ready_idx], handshake_ready) << "Pack never published the baseline handshake";
-    EXPECT_EQ(scratch[pushes_done_idx], handshake_pushes_done) << "Pack never finished the push series";
+    EXPECT_EQ(scratch[ready_idx], handshake_ready) << "Producer never published the baseline handshake";
+    EXPECT_EQ(scratch[pushes_done_idx], handshake_pushes_done) << "Producer never finished the push series";
     EXPECT_EQ(scratch[num_steps_idx], num_steps) << "Kernel decoded a different step count";
 
     // Double-count check on ClientL: nothing is popped until every push has been issued, so
@@ -744,7 +1107,7 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
     // Host-side NEO mirror readback after the drained series: ClientL must be empty, and every DM-visible
     // counter must match the pre-launch snapshot — init sized and reset only ClientL, so anything else moving
     // means a T6 update aliased into the overlay pool.
-    const auto live = read_live_tcs(this->device(), CoreCoord(0, 0), /*neo_id=*/0);
+    const auto live = read_live_tcs(device, CoreCoord(0, 0), /*neo_id=*/0);
     ASSERT_GT(live.capacity.size(), client_l_tc);
     EXPECT_EQ(live.capacity[client_l_tc], entries_per_neo);
     EXPECT_EQ(live.tiles_available[client_l_tc], 0u)
@@ -756,6 +1119,20 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
         EXPECT_EQ(live.space_available[tc], before.space_available[tc])
             << "Mirrored DM TC" << tc << " space_available changed — T6->overlay alias leaked a credit";
     }
+}
+
+TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) { run_intra_overlay_isolation(this->device()); }
+
+TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs_PackOnTrisc3) {
+    run_intra_overlay_isolation(this->device(), /*pack_on_trisc3=*/true, /*unpack_on_trisc3=*/false);
+}
+
+TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs_UnpackOnTrisc3) {
+    run_intra_overlay_isolation(this->device(), /*pack_on_trisc3=*/false, /*unpack_on_trisc3=*/true);
+}
+
+TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs_BothOnTrisc3) {
+    run_intra_overlay_isolation(this->device(), /*pack_on_trisc3=*/true, /*unpack_on_trisc3=*/true);
 }
 
 namespace {

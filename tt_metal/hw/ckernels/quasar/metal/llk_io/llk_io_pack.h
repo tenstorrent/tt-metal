@@ -12,6 +12,26 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #include "llk_io.h"
 
+// Packers that must finish before PUSH_TILES posts the credit: packer 0 on the pack thread, packer 1 (PACR1,
+// SrcS -> L1) on trisc3, where the wait is already satisfied while no such op is in flight.
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+constexpr std::uint8_t DFB_PACK_DONE_WAIT_MASK = 0x2;
+#else
+constexpr std::uint8_t DFB_PACK_DONE_WAIT_MASK = 0x1;
+#endif
+
+// Wait for num_tiles of free space on counter tc_id: WAIT_FREE when a packer follows, a RISC poll when none does
+// (the caller has already let this thread's earlier PUSH_TILES finish).
+inline void dfb_trisc_wait_for_free(const std::int32_t num_tiles, const std::uint32_t tc_id) {
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    while ((ckernel::trisc::tile_counters[tc_id].f.acked & DFB_TILE_COUNTER_COUNT_MASK) <
+           static_cast<std::uint32_t>(num_tiles)) {
+    }
+#else
+    TT_WAIT_FREE(ckernel::p_stall::STALL_PACK, num_tiles, tc_id);
+#endif
+}
+
 /**
  * @brief  Wait for num_tiles of free space in the dataflow buffer
  * @param dfb_id: Dataflow Buffer ID, values = [0-31]
@@ -23,22 +43,25 @@ inline void llk_wait_for_free_tiles(const std::int32_t dfb_id, const std::int32_
     LLK_ASSERT(
         dfb_op_is_whole_share(local_dfb_interface, num_tiles),
         "llk_wait_for_free_tiles: an op on a BLOCKED ring must move this hart's whole share");
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    ckernel::tensix_sync();  // let this thread's earlier PUSH_TILES finish before polling any counter
+#endif
     if (dfb_op_is_split<Pap, Cap, true>(local_dfb_interface)) {
         // Split: the block will belong to every counter, wait for each one's share of free space.
         const std::int32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
         for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
-            TT_WAIT_FREE(
-                ckernel::p_stall::STALL_PACK,
-                per_tc,
-                dfb::get_counter_id(local_dfb_interface.tc_slots[i].packed_tile_counter));
+            dfb_trisc_wait_for_free(per_tc, dfb::get_counter_id(local_dfb_interface.tc_slots[i].packed_tile_counter));
         }
     } else {
         std::uint32_t tc_id =
             dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
-        TT_WAIT_FREE(ckernel::p_stall::STALL_PACK, num_tiles, tc_id);
+        dfb_trisc_wait_for_free(num_tiles, tc_id);
     }
+    // The RISC poll issues no WAIT_FREE, so there is no guard to arm.
+#if !defined(UCK_CHLKC_ISOLATE_SFPU)
     // TEN-4746: arm this dfb; a real pack (PACR) on it must clear this before the matching push.
     LLK_TDMA_GUARD_NOTE_WAIT(dfb_id);
+#endif
 }
 
 /**
@@ -67,7 +90,7 @@ inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_til
             TT_PUSH_TILES(PACK_SEL, per_tc, dfb::get_counter_id(local_dfb_interface.tc_slots[i].packed_tile_counter));
         }
         local_dfb_interface.wr_entry_ptr = 0;
-        dfb_advance_all_slots(local_dfb_interface, static_cast<std::uint32_t>(per_tc));
+        dfb_advance_all_slots<true /*IsProducer*/>(local_dfb_interface, static_cast<std::uint32_t>(per_tc));
         return;
     }
     auto& slot = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx];
@@ -76,5 +99,5 @@ inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_til
     TT_PUSH_TILES(PACK_SEL, num_tiles, tc_id);
 
     local_dfb_interface.wr_entry_ptr = 0;
-    dfb_advance_slot(local_dfb_interface, slot, num_tiles);
+    dfb_advance_slot<true /*IsProducer*/>(local_dfb_interface, slot, num_tiles);
 }

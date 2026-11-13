@@ -2325,6 +2325,10 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
             if (dfb->configs_finalized) {
                 continue;
             }
+            TT_FATAL(
+                !dfb->config.unpack_on_trisc3 && !dfb->config.pack_on_trisc3,
+                "DFB {}: unpack_on_trisc3 / pack_on_trisc3 needs a Quasar device",
+                dfb->id);
             dfb->risc_mask = dfb->config.producer_risc_mask | dfb->config.consumer_risc_mask;
 
             DfbGroup group;
@@ -2476,14 +2480,27 @@ void ProgramImpl::finalize_single_dfb_config(
         "BindDataflowBufferToProducerConsumerKernels after creating kernels");
 
     // Quasar-only:
-    // Derive tensix_trisc_mask from the (now-final) risc masks.
+    // Derive tensix_trisc_mask (DFB_TRISC_ROLE_* bits) from the (now-final) risc masks.
     // has_tensix_risc checks bits 8-11 (zero on Gen1 masks).
-    //  - producer compute -> set trisc2 (bit 2)
-    //  - consumer compute -> set trisc0 (bit 0)
-    // TODO: if/when consumer-compute can target trisc3 instead of trisc0, that
-    // selection would need a dedicated DataflowBufferConfig field.
-    dfb->tensix_trisc_mask = (has_tensix_risc(config.producer_risc_mask) ? (1u << 2) : 0u) |
-                             (has_tensix_risc(config.consumer_risc_mask) ? (1u << 0) : 0u);
+    TT_FATAL(
+        !config.pack_on_trisc3 || has_tensix_risc(config.producer_risc_mask),
+        "DFB {}: pack_on_trisc3 needs a Quasar compute producer",
+        dfb->id);
+    TT_FATAL(
+        !config.unpack_on_trisc3 || has_tensix_risc(config.consumer_risc_mask),
+        "DFB {}: unpack_on_trisc3 needs a Quasar compute consumer",
+        dfb->id);
+    TT_FATAL(
+        !config.is_relay || !(config.pack_on_trisc3 || config.unpack_on_trisc3),
+        "DFB {}: a relay DFB cannot be packed or unpacked on trisc3 (relays run on trisc0 / trisc2 only)",
+        dfb->id);
+    dfb->tensix_trisc_mask = 0;
+    if (has_tensix_risc(config.producer_risc_mask)) {
+        dfb->tensix_trisc_mask |= config.pack_on_trisc3 ? DFB_TRISC_ROLE_PRODUCER_T3 : DFB_TRISC_ROLE_PRODUCER_T2;
+    }
+    if (has_tensix_risc(config.consumer_risc_mask)) {
+        dfb->tensix_trisc_mask |= config.unpack_on_trisc3 ? DFB_TRISC_ROLE_CONSUMER_T3 : DFB_TRISC_ROLE_CONSUMER_T0;
+    }
 
     const bool is_intra_tensix = config.tensix_scope.has_value() && *config.tensix_scope == TensixScope::INTRA;
 

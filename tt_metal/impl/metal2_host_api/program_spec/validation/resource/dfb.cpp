@@ -445,6 +445,38 @@ void ValidateDFBBlockedBindings(const DataflowBufferSpec& dfb, const CollectedSp
     }
 }
 
+void ValidateDFBTrisc3Bindings(
+    const DataflowBufferSpec& dfb, const CollectedSpecData::DFBEndpointInfo& endpoints, tt::ARCH arch) {
+    auto check_bindings = [&](const auto& records, std::string_view role) {
+        for (const auto& rec : records) {
+            if (!rec.binding->use_trisc3) {
+                continue;
+            }
+            TT_FATAL(
+                rec.kernel->is_compute_kernel(),
+                "DFB '{}' {} binding (kernel '{}'): use_trisc3 is only valid on a compute kernel",
+                dfb.unique_id,
+                role,
+                rec.kernel->unique_id);
+            TT_FATAL(
+                is_gen2_arch(arch),
+                "DFB '{}' {} binding (kernel '{}'): use_trisc3 needs a Quasar device",
+                dfb.unique_id,
+                role,
+                rec.kernel->unique_id);
+            TT_FATAL(
+                dfb.advanced_options.prefetcher_pipe_relays.empty(),
+                "DFB '{}' {} binding (kernel '{}'): use_trisc3 is not supported on a PrefetcherPipe relay DFB "
+                "(relays run on trisc0 / trisc2 only)",
+                dfb.unique_id,
+                role,
+                rec.kernel->unique_id);
+        }
+    };
+    check_bindings(endpoints.producers, "PRODUCER");
+    check_bindings(endpoints.consumers, "CONSUMER");
+}
+
 // Validate local DFB endpoint placement and multi-binding consistency.
 //
 // The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
@@ -503,6 +535,13 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
                 records[i].kernel->unique_id,
                 records[i].binding->block_size);
             TT_FATAL(
+                records[i].binding->use_trisc3 == records[0].binding->use_trisc3,
+                "DFB '{}' has multiple {} bindings with mismatched use_trisc3 (kernel '{}' vs kernel '{}')",
+                dfb.unique_id,
+                role,
+                first_kernel,
+                records[i].kernel->unique_id);
+            TT_FATAL(
                 records[i].kernel->num_threads == first_threads,
                 "DFB '{}' has multiple {} KernelSpecs with mismatched num_threads (kernel '{}' = {} vs kernel '{}' "
                 "= {})",
@@ -533,6 +572,7 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
 
     // block_size validity and cross-role BLOCKED legality.
     ValidateDFBBlockedBindings(dfb, endpoints);
+    ValidateDFBTrisc3Bindings(dfb, endpoints, arch);
 
     // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
     // every node it is instantiated on must run exactly one producer instance and exactly one

@@ -35,14 +35,15 @@ extern overlay::RemapperAPI g_remapper_configurator;
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
-// Compute-thread slot (pack and unpack). ring_size is uint32 L1-aligned units so a DFB can span
-// full Quasar L1 (~4 MB). cursor_entry_idx is the write cursor on pack and the read cursor on
-// unpack; its byte offset is not stored but derived (advances in lockstep with stride_size /
-// stride_size_tiles).
+// Compute-thread slot. ring_size is uint32 L1-aligned units so a DFB can span full Quasar L1
+// (~4 MB). wr_entry_idx is the producer's cursor and rd_entry_idx the consumer's; a thread only
+// moves the cursor of a role it holds, and trisc3 can hold both on one DFB. A cursor's byte offset
+// is not stored but derived (it advances in lockstep with stride_size / stride_size_tiles).
 struct DFBTCSlot {
     uint32_t base_addr;
     uint32_t ring_size;
-    uint16_t cursor_entry_idx;
+    uint16_t wr_entry_idx;
+    uint16_t rd_entry_idx;
     uint16_t base_entry_idx;
     dfb::PackedTileCounter packed_tile_counter;
 } __attribute__((packed));
@@ -58,7 +59,7 @@ struct DFBTCSlot {
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
-static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (TRISC) size is incorrect");
+static_assert(sizeof(DFBTCSlot) == 15, "DFBTCSlot (TRISC) size is incorrect");
 // Compute TRISCs draw their tile-counter slots from one shared pool per thread, so an interface entry
 // holds only the index of its contiguous slice (slot_base) and keeps the iface.tc_slots[i] API.
 extern thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS];
@@ -74,7 +75,7 @@ struct DFBTCSlotSpan {
 static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan size is incorrect");
 #endif
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC)
 struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
@@ -83,27 +84,13 @@ struct LocalDFBInterface {
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
+    uint8_t tensix_trisc_mask;
     uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
     uint16_t split_tc;    // one op (a whole block) is split across all of this hart's TCs
     uint16_t jump;        // cursor jump in entries, taken on each TC rotation
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
-static_assert(sizeof(LocalDFBInterface) == 18, "LocalDFBInterface (pack TRISC) size is incorrect");
-#elif defined(COMPILE_FOR_TRISC)
-struct LocalDFBInterface {
-    uint16_t entry_size;
-    uint16_t stride_size;
-    uint16_t num_entries;
-    uint8_t stride_size_tiles;
-    uint8_t num_tcs_to_rr;
-    uint8_t tc_idx;
-    uint8_t tensix_trisc_mask;
-    uint16_t block_size;
-    uint16_t split_tc;
-    uint16_t jump;
-    DFBTCSlotSpan tc_slots;
-} __attribute__((packed));
-static_assert(sizeof(LocalDFBInterface) == 17, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 19, "LocalDFBInterface (TRISC) size is incorrect");
 #else
 struct LocalDFBInterface {
     uint32_t entry_size;
@@ -166,8 +153,8 @@ constexpr uint32_t DFB_EXIT_RECORD_NONE = 0xFFFFFFFFu;
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
-// Byte-offset (L1 units) of the current FIFO cursor from slot.base_addr.
-// cursor_entry_idx and the former byte offset advance in lockstep:
+// Byte-offset (L1 units) of a cursor (wr_entry_idx or rd_entry_idx) from slot.base_addr.
+// A cursor and its byte offset advance in lockstep:
 //   entry += n * stride_size_tiles;  offset += n * stride_size;
 // so offset is recoverable without storing it (saves 4B/slot in compute-TRISC TLS).
 inline __attribute__((always_inline)) uint32_t

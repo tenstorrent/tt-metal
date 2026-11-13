@@ -62,8 +62,8 @@ struct ProgramSpec {
     //   side of a DataflowBufferSpec get the same cores, and DM0 and DM1 are never used.
     //
     // DataflowBufferSpec endpoints (across all kernels that bind a given DataflowBufferSpec):
-    // - All PRODUCER bindings share access_pattern, and their kernels share num_threads and kind
-    //   (compute or data movement). The same holds for all CONSUMER bindings.
+    // - All PRODUCER bindings share access_pattern and use_trisc3, and their kernels share
+    //   num_threads and kind (compute or data movement). The same holds for all CONSUMER bindings.
     // - Gen1: all data-movement PRODUCER kernels share config_1xx->processor. The same holds for
     //   data-movement CONSUMER kernels.
     // - If any kernel binds it as both PRODUCER and CONSUMER, its PRODUCER kernels and its CONSUMER
