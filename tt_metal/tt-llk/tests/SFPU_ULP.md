@@ -178,15 +178,15 @@ fp16 subnormals the pack does not reproduce.
   re-emit in a change of its own; `python -m helpers.ulp_budget_diff diff --base <old>
   --head <new>` lists every cell a change loosens, judged under the architecture the
   `--head` file's name says (`--arch` to name it).
-- **CI.** PR Gate's `llk-sfpu-ulp-pr-check` sweeps the Wormhole cells a change can move
-  (its kernel builds differently, or its row changed) and fails one that measures worse
-  than its row. It also fails a loosened budget unless the PR has the
+- **CI.** PR Gate's `llk-sfpu-ulp-pr-check` sweeps the cells a change can move (its
+  kernel builds differently, or its row changed), on a Wormhole and a Blackhole card, and
+  fails one that measures worse than its row. It also fails a loosened budget unless the PR has the
   `ulp-budget-raise-approved` label and changes only the tables and
   `hardware_free/accuracy/test_sfpu_accuracy_budget.py` (its acknowledgement lists and
   `ONLY_EVER_TOLERANCE`). A row for a new op is never a loosening; under an op already in
   the table, a new variant's declared `atol`/`rtol` is, since it replaces the per-format
-  default. A change to the check itself sweeps every Wormhole cell. Every cell, on both
-  cards, runs nightly (`llk-sfpu-ulp-sweep.yaml`); Blackhole is nightly only.
+  default. A change to the check itself sweeps every cell. Every cell, on both cards,
+  runs nightly (`llk-sfpu-ulp-sweep.yaml`).
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and

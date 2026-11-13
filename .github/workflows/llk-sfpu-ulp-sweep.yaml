@@ -2,9 +2,8 @@ name: "LLK SFPU ULP sweep"
 
 # Nightly (called from llk-e2e.yaml); dispatch it to sweep a branch. Every SFPU ULP sweep cell on
 # a Wormhole and a Blackhole card, each held to its own table
-# (tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml). PR Gate runs only the Wormhole cells a
-# change can move (llk-sfpu-ulp-pr-check.yaml); this covers Blackhole, and changes to the golden
-# or harness alone.
+# (tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml). PR Gate runs only the cells a change
+# can move (llk-sfpu-ulp-pr-check.yaml); this also covers changes to the golden or harness alone.
 
 on:
   workflow_call:

@@ -1,10 +1,10 @@
-# LLK SFPU accuracy in PR Gate: the ULP sweep over the Wormhole cells a change can move.
+# LLK SFPU accuracy in PR Gate: the ULP sweep over the cells a change can move, on each card.
 # Run only by .github/workflows/llk-sfpu-ulp-pr-check.yaml, which builds the picked cells into
 # $RUNNER_TEMP/tt-llk-build and lists their node ids in $ULP_SWEEP_NODES. Same checks as the
-# nightly (llk_sfpu_accuracy_tests.yaml). Blackhole's pr_gate budget is full, so it is nightly
-# only. Every cell from prebuilt ELFs took 1 min 53 s on a WH n300 host; one op's, ~10 s.
+# nightly (llk_sfpu_accuracy_tests.yaml). Every cell from prebuilt ELFs took 1 min 53 s on a WH
+# n300 host (one op's, ~10 s); the whole Blackhole sweep, built on the card, 3.6 min on a p100a.
 
-- name: llk_sfpu_ulp_pr_gate_wormhole
+- name: llk_sfpu_ulp_pr_gate
   split_group: 1
   team: llk
   budget_type: pr_gate
@@ -21,4 +21,6 @@
   skus:
     wh_n150_civ2:
       timeout: 10
+    bh_p150b_civ2_viommu:
+      timeout: 5
   owner_id: U09UC143684 # Nemanja Divnic

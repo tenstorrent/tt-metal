@@ -2,8 +2,8 @@
 # (tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_{wh,bh}.yaml, by CHIP_ARCH).
 # Run only by .github/workflows/llk-sfpu-ulp-sweep.yaml (llk-e2e.yaml calls it; dispatch it to
 # sweep a branch). Fails if pytest fails a gated cell over its figure, or if `headroom` finds a
-# tolerance cell past what its row records. PR Gate runs the same check over the Wormhole cells
-# a change can move (llk_sfpu_ulp_pr_gate_tests.yaml).
+# tolerance cell past what its row records. PR Gate runs the same check over the cells a change
+# can move (llk_sfpu_ulp_pr_gate_tests.yaml).
 # 9-11 min on wh_n150_civ2 and 3.6 on a p100a (2026-10); no variant took over 6 s.
 
 - name: llk_sfpu_ulp_sweep

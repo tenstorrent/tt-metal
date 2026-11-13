@@ -678,9 +678,9 @@ jobs:
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
-  # LLK SFPU ULP PR check (llk-sfpu-ulp-pr-check.yaml): fails a change that makes a
-  # Wormhole SFPU op less accurate, or loosens an SFPU accuracy budget. Not gated on
-  # find-changed-files, which misses some of the sweep's include roots.
+  # LLK SFPU ULP PR check (llk-sfpu-ulp-pr-check.yaml): fails a change that makes an SFPU
+  # op less accurate on Wormhole or Blackhole, or loosens an SFPU accuracy budget. Not gated
+  # on find-changed-files, which misses some of the sweep's include roots.
   llk-sfpu-ulp-pr-check:
     needs: [resolve-docker-pull-refs, build-docker-images]
     if: >-
