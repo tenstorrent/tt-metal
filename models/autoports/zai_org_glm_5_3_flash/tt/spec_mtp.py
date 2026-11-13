@@ -968,7 +968,14 @@ class SpecMTP:
         from models.autoports.zai_org_glm_5_3_flash.tt.mk_mla import dsa_slot_addrs
 
         base = dsa_slot_addrs(dict(self.mtp_st, s0=0), 1)[1]
-        self.ctl("ring", [self.rec.buffer_address()], [self.rec], rings=[base], ring_phase=phase, ring_save=save)
+        self.ctl(
+            "ring",
+            [self.rec.buffer_address()],
+            [self.rec, self.mtp_st["ring"]],
+            rings=[base],
+            ring_phase=phase,
+            ring_save=save,
+        )  # (generic_op takes >= 2 io tensors: the record it reads + the ring it rewrites)
 
     def _verify_runs(self) -> list:
         """the verify's layer runs: the backend's (same-kind runs; sparse_dsa alone), split after every DFlash2 tap
