@@ -11,9 +11,12 @@ import ttnn
 
 
 class TtLoRAWeightsManager:
-    def __init__(self, device, torch_pipeline):
+    def __init__(self, device, torch_pipeline, load_torch_lora=None):
         self._device = device
         self._torch_pipeline = torch_pipeline
+        # Attaches the adapter to the torch pipeline. The SDXL pipeline swaps in a
+        # loader that also handles text-encoder keys; the UNet path only reads the UNet.
+        self._load_torch_lora = load_torch_lora or torch_pipeline.load_lora_weights
 
         self._base_weights_host = {}
         self._base_weights_device = {}
@@ -26,6 +29,25 @@ class TtLoRAWeightsManager:
         )
 
         self._is_fused = False
+
+        # Status tracking for the most recent load_lora_weights() call. These let
+        # the pipeline/runner report back what was actually applied vs skipped.
+        self._skipped_reason = None
+
+    @property
+    def is_fused(self):
+        return self._is_fused
+
+    def adapter_state(self):
+        """Current state of the loaded LoRA adapter.
+
+        ``fused`` is whether the UNet deltas are merged on device, and
+        ``skipped_reason`` is why a load was rejected (``None`` when it was applied).
+        """
+        return {
+            "fused": self._is_fused,
+            "skipped_reason": self._skipped_reason,
+        }
 
     def prepare_lora_linear_params(self, device, weights, bias, dtype, name, permute_weights=True):
         if permute_weights:
@@ -64,10 +86,6 @@ class TtLoRAWeightsManager:
 
         return False
 
-    def _affects_non_unet(self):
-        adapters = self.get_lora_adapters()
-        return any(component != "unet" and adapter_list for component, adapter_list in adapters.items())
-
     def _affects_unsupported_ops(self):
         for key in self._get_lora_params():
             if not any(key.endswith(s) for s in self._get_supported_lora_affecting_ops()):
@@ -75,25 +93,24 @@ class TtLoRAWeightsManager:
         return False
 
     def load_lora_weights(self, lora_path):
+        self._skipped_reason = None
+
         if self.has_lora_adapter():
             logger.info("LoRA weights already loaded, skipping.")
             return
 
-        self._torch_pipeline.load_lora_weights(lora_path)
-
-        if self._affects_non_unet():
-            logger.warning("Only LoRA affecting the UNet is supported, skipping loading LoRA weights.")
-            self._torch_pipeline.unload_lora_weights()
-            return
+        self._load_torch_lora(lora_path)
 
         if self._uses_dora():
             logger.warning("DoRA is not supported, skipping loading LoRA weights.")
             self._torch_pipeline.unload_lora_weights()
+            self._skipped_reason = "dora"
             return
 
         if self._affects_unsupported_ops():
-            logger.warning("LoRA weights affect unsupported operations, skipping loading LoRA weights.")
+            logger.warning("LoRA weights affect unsupported UNet operations, skipping loading LoRA weights.")
             self._torch_pipeline.unload_lora_weights()
+            self._skipped_reason = "unsupported_ops"
             return
 
     def fuse_lora(self, lora_scale=1.0):
@@ -226,3 +243,4 @@ class TtLoRAWeightsManager:
 
         self._torch_pipeline.unload_lora_weights()
         self._is_fused = False
+        self._skipped_reason = None
