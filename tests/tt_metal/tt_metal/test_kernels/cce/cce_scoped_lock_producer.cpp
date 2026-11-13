@@ -18,31 +18,17 @@
 
 namespace abi = cce_scoped_lock_abi;
 using cce_scoped_lock::lock_lines_valid;
+using cce_scoped_lock::new_values_visible;
 using cce_scoped_lock::ring_wrap_valid;
 using cce_scoped_lock::Status;
 using cce_scoped_lock::write_status;
 using cce_test::arg_u64;
+using cce_test::cached_tl1_words;
 using cce_test::DataCheck;
+using cce_test::invalidate_l1_lines;
 using cce_test::own_tl1_words;
 using cce_test::peer_tl1_word;
 using cce_test::poll_bounded;
-using cce_test::status_line_valid;
-
-static void invalidate_l1_lines(uint32_t offset, uint32_t num_bytes) {
-    for (uint32_t line = offset; line < offset + num_bytes; line += cce_test::kLineBytes) {
-        invalidate_l1_dcache(line);
-    }
-}
-
-// Whether probe words [first_line, first_line + num_lines) of `probe_words` read kNewBase + line.
-static bool new_values_visible(
-    const volatile uint32_t* probe_words, uint32_t first_line, uint32_t num_lines, DataCheck& check) {
-    check = DataCheck{};
-    for (uint32_t line = first_line; line < first_line + num_lines; ++line) {
-        check.record(line * abi::kWordsPerLine, probe_words[line * abi::kWordsPerLine], abi::kNewBase + line);
-    }
-    return check.mismatched_words == 0;
-}
 
 // Whether every word w of a ring slot reads ring_word(round, w) through `slot_words`.
 static bool ring_slot_landed(
@@ -57,9 +43,6 @@ static bool ring_slot_landed(
 void kernel_main() {
     const uint32_t mode = get_arg_val<uint32_t>(abi::kArgMode);
     const uint32_t status_offset = get_arg_val<uint32_t>(abi::kArgStatusOffset);
-    if (!status_line_valid(status_offset)) {
-        return;
-    }
     const uint64_t budget_cycles = arg_u64(abi::kArgPollBudgetLo, abi::kArgPollBudgetHi);
     const uint32_t region_offset = get_arg_val<uint32_t>(abi::kArgRegionOffset);
     const uint32_t lock_first_line = get_arg_val<uint32_t>(abi::kArgLockFirstLine);
@@ -217,7 +200,7 @@ void kernel_main() {
                 asm volatile("fence r, rw" ::: "memory");
             }
             const uintptr_t slot_address = region_offset + (round % ring_slots) * slot_bytes;
-            volatile uint32_t* slot_words = reinterpret_cast<volatile uint32_t*>(slot_address);
+            volatile uint32_t* slot_words = cached_tl1_words(slot_address);
             scoped_lock_acquire_cache_ops(slot_address, slot_bytes);
             for (uint32_t word = 0; word < slot_bytes / sizeof(uint32_t); ++word) {
                 slot_words[word] = abi::ring_word(round, word);

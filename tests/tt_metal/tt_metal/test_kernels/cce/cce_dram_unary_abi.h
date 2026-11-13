@@ -9,7 +9,6 @@
 #include "cce_test_status_abi.h"
 
 // cce_dram_unary_{reader,writer} kernel ABI. Both kernels and the host (dram/test_mimir_dm_dram_unary.cpp) include it.
-// Args, codes and status words are append-only: a later stage adds entries after the last one and never renumbers.
 namespace cce_dram_unary_abi {
 
 using cce_test_status_abi::kLineBytes;

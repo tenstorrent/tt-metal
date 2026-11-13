@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// What the scoped-lock producer and consumer kernels share: their argument checks and their status line.
+// What the scoped-lock producer and consumer kernels share: their argument checks, the probe-word check and their
+// status line.
 
 #pragma once
 
@@ -22,6 +23,16 @@ inline bool lock_lines_valid(uint32_t lock_first_line, uint32_t lock_num_lines) 
 inline bool ring_wrap_valid(uint32_t ring_slots, uint32_t slot_lines, uint32_t rounds) {
     return ring_slots != 0 && slot_lines != 0 && ring_slots * slot_lines <= abi::kNumLines && rounds != 0 &&
            rounds <= 0xFF;
+}
+
+// Whether probe words [first_line, first_line + num_lines) of `probe_words` read kNewBase + line.
+inline bool new_values_visible(
+    const volatile uint32_t* probe_words, uint32_t first_line, uint32_t num_lines, cce_test::DataCheck& check) {
+    check = cce_test::DataCheck{};
+    for (uint32_t line = first_line; line < first_line + num_lines; ++line) {
+        check.record(line * abi::kWordsPerLine, probe_words[line * abi::kWordsPerLine], abi::kNewBase + line);
+    }
+    return check.mismatched_words == 0;
 }
 
 struct Status {

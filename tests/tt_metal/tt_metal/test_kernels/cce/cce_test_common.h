@@ -30,11 +30,10 @@ inline constexpr uint64_t kTestAreaBegin =
     MEM_CCE_KERNEL_BASE + static_cast<uint64_t>(MEM_CCE_KERNEL_SIZE) * MEM_CCE_LOCAL_HARTS;
 inline constexpr uint64_t kTestAreaEnd = MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE;
 
-// A status line the host can find: 64 B aligned, inside the test area. Otherwise the kernel writes nothing and the host
-// deadline reports it.
-inline bool status_line_valid(uint32_t status_offset) {
-    return status_offset % kLineBytes == 0 && status_offset >= kTestAreaBegin &&
-           status_offset + static_cast<uint64_t>(kLineBytes) <= kTestAreaEnd;
+// Words of this CCE's TL1 through the cache: the cached twin of own_tl1_words.
+template <typename T = uint32_t>
+FORCE_INLINE volatile T* cached_tl1_words(uint64_t tl1_offset) {
+    return reinterpret_cast<volatile T*>(tl1_offset);
 }
 
 // Ends a status line whose fields are stored: `fence w, w`, then the done magic.
@@ -49,6 +48,13 @@ inline __attribute__((always_inline)) void copy_words(
         const uint32_t value = src[i];
         dst[i] = value;
         xor_accumulator ^= value;
+    }
+}
+
+// cdiscard.d.l1 of every line of [offset, offset + num_bytes).
+inline void invalidate_l1_lines(uint32_t offset, uint32_t num_bytes) {
+    for (uint32_t line = offset; line < offset + num_bytes; line += kLineBytes) {
+        invalidate_l1_dcache(line);
     }
 }
 
