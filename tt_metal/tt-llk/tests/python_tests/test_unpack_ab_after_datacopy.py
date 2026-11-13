@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Datacopy (unpack_A) then ELWADD (unpack_AB) in one DST section, with math behind the unpacker (tt-metal#62995).
+"""Datacopy (unpack_A) then ELWADD (unpack_AB) in one DST section, with math behind the unpacker.
 
-Without the fix this fails only on the first run after a chip reset (tt-smi -r)."""
+Without the unpacker 1 drain in _llk_unpack_AB_init_, this fails only on the first run after a chip reset
+(tt-smi -r), so it is a manual repro: on a warm card it passes either way."""
 
 import torch
 from tt_llk_harness import DataFormat, DestAccumulation, StimuliConfig

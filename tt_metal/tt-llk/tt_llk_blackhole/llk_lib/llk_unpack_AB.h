@@ -190,9 +190,8 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape_a, cons
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
 
-    // After a reset, unpacker 1's first L1 unpack delivers zeros to the FPU if it is issued while unpacker 1
-    // still has SrcB UNPACR_NOP clears (e.g. from a preceding datacopy) waiting on a bank. Let them drain first.
-    // See tt-metal#62995.
+    // After a chip reset, unpacker 1's first L1 unpack gives zeros if queued SrcB clears (e.g. from a datacopy)
+    // are still pending, so let them drain first.
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
 

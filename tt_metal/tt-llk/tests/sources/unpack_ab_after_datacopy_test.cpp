@@ -3,7 +3,7 @@
 
 // Per DST section: datacopy (unpack_A) into slots 0..5 with math stalled after slot 3, then ELWADD (unpack_AB)
 // into slots 6..7. The stall lets the unpacker run ahead, so the first unpack_AB is issued while unpacker 1 still
-// has the datacopy SrcB clears queued (tt-metal#62995).
+// has the datacopy SrcB clears queued.
 
 #include <cstdint>
 
