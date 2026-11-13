@@ -245,7 +245,8 @@ class PluginRunner:
                     page_tables_per_layer=per_layer,
                 )
                 assert res.spec_mode == "argmax_ids"
-                ids = res.argmax_ids[0].tolist()
+                # read_from_device=False leaves an argmax_ids verify unread, as the plugin reads it.
+                ids = m.read_decode_output(res.argmax_ids)[0].tolist()
                 assert all(i == PAD for i in ids[n + 1 :]), f"step {len(steps)}: ids past n={n} not -1: {ids}"
                 assert all(i != PAD for i in ids[: n + 1]), f"step {len(steps)}: -1 inside valid ids {ids} (n={n})"
                 j = 0
