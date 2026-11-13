@@ -685,6 +685,18 @@ def spec_partial(env=os.environ) -> bool:
     return spec_multi_groups(env) > 0 and env.get("GLM53_SPEC_PARTIAL", "0") == "1"
 
 
+def spec_step_caps(K: int, drafter: str, head_sample: bool, head_topk: int, env=os.environ) -> dict:
+    """the capabilities of the speculative step a backend builds with its decode IO (tt/spec_mtp.py SpecMTP: groups,
+    samples, partial) from the build knobs and the plain head -- known BEFORE the step exists: the served adapter
+    declares spec_ids_are_sampled at its init, before vLLM's allocate_kv_cache builds the step. K 0: no step. samples:
+    GLM53_SPEC_SAMPLED with the MTP drafter on a sampling plain head (top-k > 1); partial: GLM53_SPEC_PARTIAL (G > 0)"""
+    if int(K) <= 0:
+        return dict(groups=0, samples=False, partial=False)
+    G = spec_multi_groups(env)
+    samples = spec_sampled_verify(env) and drafter == "mtp" and bool(head_sample) and int(head_topk) > 1
+    return dict(groups=G, samples=bool(samples), partial=bool(G) and spec_partial(env))
+
+
 _M64 = (1 << 64) - 1
 
 
@@ -2442,17 +2454,27 @@ class Glm53Generator(_ReadinessGenerator):
         """the users G of the backend's multi-user speculative step (0: the single-user step / none)"""
         return int(getattr(getattr(self.backend, "spec", None), "groups", 0) or 0)
 
+    def _spec_caps(self) -> dict:
+        """the speculative step's capabilities: the built step's (backend.spec) once it exists, before that the step the
+        backend WILL build with its decode IO (ModelBackend.spec_build_caps = spec_step_caps; the served adapter's init
+        runs before vLLM allocates the cache), else none"""
+        sp = getattr(self.backend, "spec", None)
+        if sp is not None:
+            return dict(samples=bool(getattr(sp, "samples", False)), partial=bool(getattr(sp, "partial", False)))
+        fn = getattr(self.backend, "spec_build_caps", None)
+        return dict(fn()) if fn is not None else dict(samples=False, partial=False)
+
     def spec_samples(self) -> bool:
         """the speculative step's verify head draws every candidate column from the device sampler under the row's own
-        temperature / top-k / top-p / seed (the served adapter's spec_ids_are_sampled, GLM53_SPEC_SAMPLED). False until
-        the backend's step sets ``samples``: tt/spec_mtp.py head_clone is top-1 (greedy) only"""
-        return bool(getattr(getattr(self.backend, "spec", None), "samples", False))
+        temperature / top-k / top-p / seed (the served adapter's spec_ids_are_sampled, GLM53_SPEC_SAMPLED): the built
+        step's ``samples``, before it exists the build-time capability (_spec_caps)"""
+        return bool(self._spec_caps().get("samples", False))
 
     def spec_partial_groups(self) -> bool:
         """the multi-user step serves any non-empty subset of its G group bases (an inactive group's verify rows skipped
-        on device, a joining group seeded alone through spec_enter(slots=)). False until the backend's step sets
-        ``partial``: batch 2 serves exactly G live users"""
-        return bool(getattr(getattr(self.backend, "spec", None), "partial", False))
+        on device, a joining group seeded alone through spec_enter(slots=)): the built step's ``partial``, before it
+        exists the build-time capability (_spec_caps). False: batch 2 serves exactly G live users"""
+        return bool(self._spec_caps().get("partial", False))
 
     def spec_slots(self) -> tuple:
         """the generator slots the speculating users occupy: (0,), or the G group bases (0, K + 1, 2 (K + 1), ..)"""

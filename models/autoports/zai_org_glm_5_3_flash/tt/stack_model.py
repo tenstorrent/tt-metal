@@ -35,6 +35,7 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     PREFILL_CHUNK,
     DecodeIO,
     ModelBackend,
+    spec_step_caps,
 )
 from models.autoports.zai_org_glm_5_3_flash.tt.rt_guard import checked
 
@@ -1124,6 +1125,14 @@ class StackBackend(ModelBackend):
         content, page index = LOCAL block (dsa_shard_owners gives C / nb_local / bpu; the connector reads block g from
         chip g % C at local g // C and writes it there only: design 6.3)"""
         return {self.seq[i]["L"]: t for i, t in kv.extra["latent"].items()}
+
+    def spec_build_caps(self) -> dict:
+        """the speculative step allocate_decode_io builds (generator.spec_step_caps of GLM53_SPEC_K, the drafter and the
+        plain head), before it exists: Glm53Generator.spec_samples() / spec_partial_groups() at the served adapter's init
+        """
+        K = int(os.environ.get("GLM53_SPEC_K", "0") or 0) if self.fl is not None else 0
+        drafter = os.environ.get("GLM53_SPEC_KIND") or os.environ.get("GLM53_SPEC_DRAFTER", "mtp")
+        return spec_step_caps(K, drafter, getattr(self.head, "sample", False), int(getattr(self.head, "topk", 1)))
 
     def allocate_decode_io(self, kv: StackCache) -> DecodeIO:
         B = kv.max_batch

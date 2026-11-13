@@ -624,7 +624,8 @@ class GLM53StackForCausalLM:
         if self.spec_sampled and not self.gen.spec_samples():
             raise RuntimeError(
                 "GLM53_SPEC_SAMPLED=1 declares spec_ids_are_sampled, but the backend's verify head is greedy "
-                "(Glm53Generator.spec_samples() False: tt/spec_mtp.py head_clone draws top-1 only)"
+                "(Glm53Generator.spec_samples() False: the sampled verify needs GLM53_SPEC_K > 0, the MTP drafter and "
+                "the device sampler's head with top-k > 1)"
             )
         self._spec_active = None  # GLM53_SPEC_MULTI: the group bases of the running speculation (the gate at its entry)
 
@@ -743,6 +744,12 @@ class GLM53StackForCausalLM:
         self.kv_cache = self.gen.allocate_kv_cache(
             self.max_batch, self.max_seq_len, num_blocks=num_blocks, null_block=0
         )
+        if (
+            self.spec_sampled and not self.gen.spec_samples()
+        ):  # (init checked the build-time capability: the built step)
+            raise RuntimeError(
+                "GLM53_SPEC_SAMPLED=1: the speculative step built with the cache has a greedy verify head"
+            )
         self._alias = list(range(self.max_batch))  # a fresh cache: every generator slot is free
         self._chain = []
         self.prefix = None

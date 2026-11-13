@@ -60,6 +60,7 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     spec_partial,
     spec_sampled_verify,
     spec_sampler_pages,
+    spec_step_caps,
     spec_verify_masks,
     spec_verify_row_state,
     spec_widths,
@@ -2299,6 +2300,30 @@ def test_spec_multi_refusals_and_room(monkeypatch):
     monkeypatch.setattr(gvs, "SPEC_SAMPLED", True)
     with expect_error(RuntimeError, "GLM53_SPEC_SAMPLED=1 declares spec_ids_are_sampled"):
         gvs.GLM53StackForCausalLM(gen, mb, 4096, spec=True)
+    # the SERVED init order (chain_smtp_2 srv a refused to boot): the adapter's init checks spec_samples() before vLLM's
+    # allocate_kv_cache builds the step (backend.spec None) -> the capability of the step the backend WILL build
+    # (spec_build_caps = spec_step_caps, SpecMTP's own flags); once the cache built it, the built step's flags
+    env = {"GLM53_SPEC_MULTI": "1", "GLM53_SPEC_MULTI_USERS": "2", "GLM53_SPEC_SAMPLED": "1", "GLM53_SPEC_PARTIAL": "1"}
+    assert spec_step_caps(1, "mtp", True, 10, env) == dict(groups=2, samples=True, partial=True)
+    assert spec_step_caps(0, "mtp", True, 10, env) == dict(groups=0, samples=False, partial=False)  # (no step)
+    assert not any(spec_step_caps(1, d, s, k, env)["samples"] for d, s, k in (("none", True, 10), ("mtp", False, 10),
+                                                                              ("mtp", True, 1)))  # fmt: skip
+    assert spec_step_caps(3, "mtp", True, 10, {**env, "GLM53_SPEC_MULTI": "0"}) == dict(groups=0, samples=True,
+                                                                                     partial=False)  # fmt: skip
+    nb = mb * SEQ // BLOCK_SIZE + mb
+    for built_greedy in (False, True):
+        be2 = (_MockSpecMultiBackend if built_greedy else _MockSpecMultiSampledBackend)(mb, K, G)
+        gen2 = Glm53Generator(be2, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=mb, max_seq_len=SEQ)
+        assert be2.spec is None and gen2.spec_samples() is False  # (a backend declaring nothing: greedy)
+        be2.spec_build_caps = lambda: spec_step_caps(K, "mtp", True, 10, env)
+        assert gen2.spec_samples() is True and gen2.spec_partial_groups() is True
+        ad2 = gvs.GLM53StackForCausalLM(gen2, mb, SEQ, spec=True)  # boots: the step it will build samples
+        if built_greedy:  # a build that disagrees with its declaration: the allocation refuses
+            with expect_error(RuntimeError, "built with the cache has a greedy verify head"):
+                ad2.allocate_kv_cache((nb, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+            continue
+        ad2.allocate_kv_cache((nb, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+        assert be2.spec is not None and gen2.spec_samples() is True and gen2.spec_partial_groups() is False
     # ---- the sampled verify (GLM53_SPEC_SAMPLED) and partial groups (GLM53_SPEC_PARTIAL): their pure pieces
     assert spec_sampled_verify({}) is False and spec_sampled_verify({"GLM53_SPEC_SAMPLED": "1"}) is True
     assert spec_partial({"GLM53_SPEC_PARTIAL": "1"}) is False  # (multi-user only)

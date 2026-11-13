@@ -35,9 +35,8 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (  # noqa: F401 
     mtp_prefill_span,
     spec_mtp_pt_width,
     spec_multi_groups,
-    spec_partial,
-    spec_sampled_verify,
     spec_sampler_pages,
+    spec_step_caps,
     spec_verify_masks,
     spec_widths,
 )
@@ -501,12 +500,11 @@ class SpecMTP:
             ), "GLM53_SPEC_MULTI: the in-trace MTP-cache fill (the launch-mode prefill indexes one user's rows)"
         self.be, self.kv, self.K, self.w = be, kv, K, (K + 1) * max(1, G)
         # GLM53_SPEC_SAMPLED (generator.spec_sampled_verify): the verify head draws on device under each user's own
-        # sampler params (head_clone(sample=True), set_sampling); the MTP drafts stay greedy -- exact rejection sampling
-        self.samples = bool(
-            spec_sampled_verify() and drafter == "mtp" and getattr(be.head, "sample", False) and int(be.head.topk) > 1
-        )
-        # GLM53_SPEC_PARTIAL (generator.spec_partial): any non-empty subset of the G groups (set_active before enter)
-        self.partial = bool(G) and spec_partial()
+        # sampler params (head_clone(sample=True), set_sampling); the MTP drafts stay greedy -- exact rejection sampling.
+        # GLM53_SPEC_PARTIAL (generator.spec_partial): any non-empty subset of the G groups (set_active before enter).
+        # Both from generator.spec_step_caps = StackBackend.spec_build_caps (what the served adapter's init declares)
+        caps = spec_step_caps(K, drafter, getattr(be.head, "sample", False), int(be.head.topk))
+        self.samples, self.partial = bool(caps["samples"]), bool(caps["partial"])
         self.active = tuple(range(max(1, G)))  # the groups the running speculation serves (indices into slots)
         self.slots = tuple(u * (K + 1) for u in range(max(1, G)))  # the speculating users' generator slots
         self.drafter = drafter
