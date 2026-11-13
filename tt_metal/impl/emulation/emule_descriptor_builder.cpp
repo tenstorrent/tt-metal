@@ -423,6 +423,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 kd.proc_ids.assign(procs.proc_ids.begin(), procs.proc_ids.end());
                 kd.num_threads = procs.num_threads;
                 kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
+                kd.rvv_enabled = k.get_rvv_enabled();
             }
             TT_FATAL(
                 k.global_semaphore_binding_handles().empty(),
