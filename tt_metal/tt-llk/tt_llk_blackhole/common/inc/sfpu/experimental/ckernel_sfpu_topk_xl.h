@@ -966,7 +966,7 @@ inline void window_sort_rows(const int iterations, const bool dir)
 {
     static_assert((FUSED == detail::Fused::Yes) == (INDICES == detail::IndicesOffset::NONE), "only the unfused layout has a separate index region");
     constexpr int group_offset          = static_cast<int>(GROUP_OFFSET);
-    constexpr int indices_offset        = static_cast<int>(INDICES);
+    [[maybe_unused]] constexpr int indices_offset = static_cast<int>(INDICES);
     constexpr std::uint32_t rows_x2_len = 8; // every load / store helper here: one SFPLOAD / SFPSTORE per LREG
     if constexpr (FUSED == detail::Fused::Yes)
     {
@@ -1108,6 +1108,44 @@ inline void program_sequences_and_misc()
 } // namespace detail
 
 /**
+ * @brief Program only the swap templates of one compare-exchange layer, leaving the Sequence words and Misc as they are.
+ *
+ * @ref loadmacro_configure without its 8 or so config writes and two NOPs, for a caller whose Sequence words are already
+ * in place. The unfused merge and rebuild use it: `topk_mop_config<false>` programs their Sequence words, so every
+ * unfused init and post-copy reinit must run before them.
+ *
+ * @tparam STRIDE: Distance between compared elements, values = <FOUR/EIGHT/SIXTEEN>
+ * @tparam WINDOW_SIZE: Length of one sorted window, values = <EIGHT/SIXTEEN/THIRTY_TWO>
+ * @tparam ORDER: Direction of the first window, values = <ASCENDING/DESCENDING>
+ * @tparam FUSED: Four macros over LREG0-7, or two over LREG0-3 with indices in LREG4-7, values = <Yes/No>
+ * @note Templates are shared by the three Tensix threads: no other thread may issue SFPLOADMACRO while they are
+ *       reprogrammed.
+ */
+template <detail::Stride STRIDE, detail::WindowSize WINDOW_SIZE, detail::Order ORDER, detail::Fused FUSED>
+inline void loadmacro_program_templates()
+{
+    detail::element_swap<STRIDE, WINDOW_SIZE, ORDER, FUSED, detail::UseLoadMacro::Yes>();
+}
+
+/**
+ * @brief @ref loadmacro_program_templates with ORDER chosen at runtime.
+ *
+ * @param ascending: ORDER as a runtime value, true = ASCENDING
+ */
+template <detail::Stride STRIDE, detail::WindowSize WINDOW_SIZE, detail::Fused FUSED>
+inline void loadmacro_program_templates(const bool ascending)
+{
+    if (ascending)
+    {
+        loadmacro_program_templates<STRIDE, WINDOW_SIZE, detail::Order::ASCENDING, FUSED>();
+    }
+    else
+    {
+        loadmacro_program_templates<STRIDE, WINDOW_SIZE, detail::Order::DESCENDING, FUSED>();
+    }
+}
+
+/**
  * @brief Program SFPLOADMACRO to host one compare-exchange layer: its swap templates, the Sequence words and Misc.
  *
  * Template m holds pair m of the layer with only VC; macro m loads the pair's other LREG, which becomes VD and
@@ -1123,7 +1161,7 @@ inline void program_sequences_and_misc()
 template <detail::Stride STRIDE, detail::WindowSize WINDOW_SIZE, detail::Order ORDER, detail::Fused FUSED>
 inline void loadmacro_configure()
 {
-    detail::element_swap<STRIDE, WINDOW_SIZE, ORDER, FUSED, detail::UseLoadMacro::Yes>();
+    loadmacro_program_templates<STRIDE, WINDOW_SIZE, ORDER, FUSED>();
     detail::program_sequences_and_misc<FUSED>();
 }
 
@@ -1135,14 +1173,7 @@ inline void loadmacro_configure()
 template <detail::Stride STRIDE, detail::WindowSize WINDOW_SIZE, detail::Fused FUSED>
 inline void loadmacro_configure(const bool ascending)
 {
-    if (ascending)
-    {
-        detail::element_swap<STRIDE, WINDOW_SIZE, detail::Order::ASCENDING, FUSED, detail::UseLoadMacro::Yes>();
-    }
-    else
-    {
-        detail::element_swap<STRIDE, WINDOW_SIZE, detail::Order::DESCENDING, FUSED, detail::UseLoadMacro::Yes>();
-    }
+    loadmacro_program_templates<STRIDE, WINDOW_SIZE, FUSED>(ascending);
     detail::program_sequences_and_misc<FUSED>();
 }
 
@@ -1198,10 +1229,11 @@ inline void loadmacro_configure(const bool ascending)
 //   descending (sort_k DESC: SWAP(VC=LREG0, VD=LREG2)) -> macroVD = LREG2/3,
 //              templates' VC = LREG0/1
 // The merge always takes the descending form (it calls sort_k with false).
-// Merge and rebuild run `loadmacro_configure` at entry: the two
-// InstructionTemplates for their direction plus Sequence[0/1] and Misc, so they
-// carry no cross-call contract with the fused phases, which reprogram the same
-// registers.
+// Merge and rebuild program only the two InstructionTemplates for their direction
+// (`loadmacro_program_templates`). Sequence[0/1] and Misc are programmed by
+// `topk_mop_config<false>`, i.e. by every unfused init and post-copy reinit, so an
+// unfused merge or rebuild needs one of those after any fused phase, which
+// reprograms the same registers. Doing it per call instead costs about 10 cycles.
 //
 // Index loads/stores stay in software: only 4 macros exist, two of them carry
 // the swaps, and LREG7's store carries the ADDR_MOD fold.
@@ -1625,7 +1657,7 @@ inline void bitonic_sort_len_k(bool ascending)
  * @tparam GROUP_OFFSET: Dest distance from the LREG0-1 rows to the LREG2-3 rows, values = <ONE_FACE/TWO_FACES>
  * @param groups: Groups to run, at least 1
  * @param dir: Direction of every sort
- * @note Overwrites replay slots [0, 18). With SFPLOADMACRO, call loadmacro_configure<EIGHT, THIRTY_TWO, No>(dir) first.
+ * @note Overwrites replay slots [0, 18). With SFPLOADMACRO, run an unfused init and then loadmacro_program_templates<EIGHT, THIRTY_TWO, No>(dir) first.
  */
 template <detail::IndicesOffset INDICES, detail::GroupOffset GROUP_OFFSET>
 inline void unfused_step_groups(const int groups, const bool dir)
@@ -2346,6 +2378,14 @@ inline bool local_sort_head(const std::uint32_t tile_offset, const bool ascendin
 template <bool fused>
 inline void topk_mop_config()
 {
+#if TOPK_XL_UNFUSED_MACRO
+    // The unfused macros' Sequence words and Misc, once per init; merge and rebuild only program their templates.
+    // Clobbers LREG0, which every body reloads.
+    if constexpr (!fused)
+    {
+        detail::program_sequences_and_misc<detail::Fused::No>();
+    }
+#endif
     // Unfused: the SFPLOADMACRO body is 16 instructions (the two SFPSWAPs and
     // two of the eight stores ride the macros); the plain body is 18. The fused
     // body is 16 either way. Must match what `_topk_xl_merge_` records.
@@ -2600,7 +2640,7 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
         // sorts with `descending` (= the ascending=false operand order), so
         // macroVD = LREG2/3 and the templates' VC = LREG0/1. Every scheduled
         // store retires inside the body — no trailing SFPNOPs needed.
-        loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::No>();
+        loadmacro_program_templates<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::No>();
         load_replay_buf<Exec>(0, body_len, [] { topk_xl_unfused_macro::ce_full<indices_offset, distance, 8 /* inc_dst_addr */, false>(); });
 #else
         load_replay_buf<Exec>(
@@ -2714,8 +2754,8 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         leave_transpose_cfg_block();
 
 #if TOPK_XL_UNFUSED_MACRO
-        // Program the direction's macros once for the stride phases below.
-        loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::No>(dir);
+        // Program the direction's templates once for the stride phases below; the Sequence words came from the init.
+        loadmacro_program_templates<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::No>(dir);
 #endif
         for (int col = 0; col < 2; col++)
         {
