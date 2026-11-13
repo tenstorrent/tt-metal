@@ -24,9 +24,10 @@ suite, `k3_accuracy_suite` section [5/5] `k31_dsa_mla`, in tests/pipeline_reorg/
 Synthetic weights from `synthetic.py`, with its one substitution: every layer's FFN is K3's dense FFN
 (a synthetic LatentMoE layer is ~59 GB; the MoE is unchanged from K3 and covered by K3's tests).
 
-Windows: layers 3-7 on a first rank with its embedding, two DSA layers in KV slots 0 and 1 of both
-caches, so a slot collision leaves a zero row; and layer 3 as a pipeline stage's KV-only last layer
-(layer 92's role).
+Windows: the first DSA layer alone (layer 3, a first rank with its embedding), the one DSA-only window,
+so the only one that runs the prefix-from-caches check; the same layer as a pipeline stage's KV-only last
+layer (layer 92's role); and layers 3-7, two DSA layers in KV slots 0 and 1 of both caches, so a slot
+collision leaves a zero row.
 
 The caches and KDA slabs come from the serving allocator (`KimiK31Adapter.allocate_kv_cache`: TP-deduped
 scaled-FP8 KVPE and bf8 index-key caches, one slot per DSA layer of the rank). The capacity must be a
@@ -53,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
 NUM_CHUNKS = 2
 # (first_layer_idx, num_layers, kv_only_last_layer)
 WINDOWS = {
+    "dsa_L3": (3, 1, False),
     "dsa_L3_kv_only": (3, 1, True),
     "dsa_L3_L7": (3, 5, False),
 }

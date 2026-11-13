@@ -597,8 +597,8 @@
   # KDA carries and caches independent of the padding past an unaligned end (the golden runs each prompt once,
   # with one padding); [3/3] a stack split at layer 12 is bit-identical to the undivided one (the golden runs one
   # stage). Measured on bh-glx-120-b08u02 (2026-11-13), pytest time per section incl. synthetic weight
-  # generation: DSA block 2 windows ~4 min, chunked ~2.5 min, split ~6.5 min (~13 min), plus the job's ~5.5 min
-  # "Setup multihost job".
+  # generation: DSA block 3 windows ~3 min, chunked ~1.5-2.5 min, split ~5.5-6.5 min (~10-12 min), plus the
+  # job's ~5.5 min "Setup multihost job".
   cmd: |
     # Stops at the first failure, as the suites above.
     k31_dsa_block() (
