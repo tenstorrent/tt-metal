@@ -145,16 +145,16 @@ def test_prefill_writes_each_rows_blocks(monkeypatch, expect_error):
 
 def test_prefill_checkpoint_writes_each_layers_own_state(monkeypatch, expect_error):
     """write_checkpoint writes the state every GDN layer computed at the prefill checkpoint (not its workspace) into
-    its group's checkpoint block, and frees it."""
+    its group's checkpoint block, and hands it back to the layer (which frees it unless a captured trace owns it)."""
     st, plugin = _state(), _plugin()
     writes, target, freed = [], [], []
     monkeypatch.setattr(st, "_set_write_tables", target.append)
     monkeypatch.setattr(
         st, "_write_state", lambda dn, rec=None, carry=None: writes.append((dn.name, rec, carry, target[-1]))
     )
-    monkeypatch.setattr(ttnn, "deallocate", freed.append)
     for i, dn in st.layers.items():
         dn.take_prefill_checkpoint = lambda i=i: (f"rec{i}", f"conv{i}")
+        dn.release_prefill_checkpoint = lambda rec, conv: freed.extend((rec, conv))
     state = plugin.step_state([(10, 11, 12)], BMAX)
     st.write_checkpoint(state, (30, 31, 32))
     want = [(i, f"rec{i}", f"conv{i}", 30 + g) for g, layers in enumerate(plugin.gdn_groups) for i in layers]

@@ -672,6 +672,7 @@ def _gdn_layer():
     dn = object.__new__(TPGatedDeltaNet)
     dn.tw, dn.Nk, dn.Nv, dn.Dk, dn.Dv = {}, 2, 6, 128, 128
     dn.prefill_checkpoint = None
+    dn.prefill_checkpoint_buffers = None
     return dn
 
 
