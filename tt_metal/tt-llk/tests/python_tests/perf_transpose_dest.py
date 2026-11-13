@@ -5,6 +5,7 @@ import pytest
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    DestSync,
     PerfRunType,
     Transpose,
 )
@@ -15,6 +16,7 @@ from helpers.param_config import (
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     MATH_TRANSPOSE_FACES,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -62,6 +64,8 @@ def test_perf_transpose_dest(
         formats,
         run_types=[PerfRunType.L1_TO_L1],
         templates=[
+            # The kernel only syncs Dest in halves.
+            DEST_SYNC(DestSync.Half),
             MATH_TRANSPOSE_FACES(math_transpose_faces),
         ],
         runtimes=[
