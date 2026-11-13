@@ -12,9 +12,14 @@
 namespace ttnn {
 
 tt::tt_metal::CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
+    TT_FATAL(core_range_set != nullptr, "CoreRangeSet is required");
+    TT_FATAL(core_range_set->ranges() != nullptr, "CoreRangeSet ranges are required");
     std::vector<tt::tt_metal::CoreRange> ranges;
     ranges.reserve(core_range_set->ranges()->size());
     for (const auto* range : *core_range_set->ranges()) {
+        TT_FATAL(range != nullptr, "CoreRange element must not be null");
+        TT_FATAL(range->start() != nullptr, "CoreRange start is required");
+        TT_FATAL(range->end() != nullptr, "CoreRange end is required");
         ranges.emplace_back(
             tt::tt_metal::CoreCoord{range->start()->x(), range->start()->y()},
             tt::tt_metal::CoreCoord{range->end()->x(), range->end()->y()});
@@ -172,6 +177,8 @@ tt::tt_metal::ShardDistributionStrategy from_flatbuffer(flatbuffer::ShardDistrib
 }
 
 tt::tt_metal::ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec) {
+    TT_FATAL(spec != nullptr, "ShardSpec is required");
+    TT_FATAL(spec->grid() != nullptr, "ShardSpec grid is required");
     tt::tt_metal::CoreRangeSet grid = from_flatbuffer(spec->grid());
     std::array<uint32_t, 2> shape = {spec->shape_h(), spec->shape_w()};
     tt::tt_metal::ShardOrientation orientation = from_flatbuffer(spec->orientation());
@@ -203,6 +210,9 @@ flatbuffers::Offset<flatbuffer::NdShardSpec> to_flatbuffer(
 }
 
 tt::tt_metal::NdShardSpec from_flatbuffer(const flatbuffer::NdShardSpec* spec) {
+    TT_FATAL(spec != nullptr, "NdShardSpec is required");
+    TT_FATAL(spec->shard_shape() != nullptr, "NdShardSpec shard_shape is required");
+    TT_FATAL(spec->grid() != nullptr, "NdShardSpec grid is required");
     return tt::tt_metal::NdShardSpec(
         Shape(ttsl::SmallVector<uint32_t>(spec->shard_shape()->cbegin(), spec->shard_shape()->cend())),
         from_flatbuffer(spec->grid()),
@@ -211,12 +221,15 @@ tt::tt_metal::NdShardSpec from_flatbuffer(const flatbuffer::NdShardSpec* spec) {
 }
 
 tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layout) {
+    TT_FATAL(layout != nullptr, "TensorLayout is required");
     tt::tt_metal::PageConfig page_config = [&] {
         switch (layout->page_config_type()) {
             case flatbuffer::PageConfig::row_major: return tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
             case flatbuffer::PageConfig::tile: {
                 const auto* tile_page_config = layout->page_config_as_tile();
+                TT_FATAL(tile_page_config != nullptr, "TilePageConfig is required when page_config is tile");
                 const auto* flat_tile = tile_page_config->tile();
+                TT_FATAL(flat_tile != nullptr, "Tile is required for TilePageConfig");
                 tt::tt_metal::Tile tile(
                     std::array{flat_tile->tile_shape_h(), flat_tile->tile_shape_w()}, flat_tile->transpose_tile());
                 return tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, tile);
@@ -225,6 +238,8 @@ tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layou
         }
     }();
 
+    TT_FATAL(layout->memory_config() != nullptr, "TensorLayout memory_config is required");
+    TT_FATAL(layout->alignment() != nullptr, "TensorLayout alignment is required");
     return tt::tt_metal::restore_tensor_layout_from_serialized(
         from_flatbuffer(layout->data_type()),
         page_config,
@@ -286,6 +301,7 @@ flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
 }
 
 tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* config) {
+    TT_FATAL(config != nullptr, "MemoryConfig is required");
     std::optional<tt::tt_metal::ShardSpec> shard_spec;
     std::optional<tt::tt_metal::NdShardSpec> nd_shard_spec;
     if (config->shard_spec()) {
@@ -313,6 +329,9 @@ flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(
 }
 
 tt::tt_metal::TensorSpec from_flatbuffer(const flatbuffer::TensorSpec* spec) {
+    TT_FATAL(spec != nullptr, "TensorSpec is required");
+    TT_FATAL(spec->shape() != nullptr, "tensor_spec shape is required");
+    TT_FATAL(spec->tensor_layout() != nullptr, "tensor_spec tensor_layout is required");
     return tt::tt_metal::TensorSpec(
         Shape(ttsl::SmallVector<uint32_t>(spec->shape()->cbegin(), spec->shape()->cend())),
         from_flatbuffer(spec->tensor_layout()));

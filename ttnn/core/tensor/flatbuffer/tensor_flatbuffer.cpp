@@ -42,6 +42,8 @@ flatbuffers::Offset<tt::tt_metal::distributed::flatbuffer::MeshCoordinate> to_fl
 
 tt::tt_metal::distributed::MeshCoordinate from_flatbuffer(
     const tt::tt_metal::distributed::flatbuffer::MeshCoordinate* coord) {
+    TT_FATAL(coord != nullptr, "MeshCoordinate is required");
+    TT_FATAL(coord->values() != nullptr, "MeshCoordinate values are required");
     return tt::tt_metal::distributed::MeshCoordinate(
         std::vector<uint32_t>(coord->values()->begin(), coord->values()->end()));
 }
@@ -53,6 +55,8 @@ flatbuffers::Offset<flatbuffer::MeshShape> to_flatbuffer(
 }
 
 tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape* shape) {
+    TT_FATAL(shape != nullptr, "MeshShape is required");
+    TT_FATAL(shape->dimensions() != nullptr, "MeshShape dimensions are required");
     return tt::tt_metal::distributed::MeshShape(
         std::vector<uint32_t>(shape->dimensions()->begin(), shape->dimensions()->end()));
 }
@@ -279,6 +283,8 @@ Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
     ttsl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin) {
+    TT_FATAL(fb_tensor != nullptr, "Tensor flatbuffer pointer must not be null");
+    TT_FATAL(fb_tensor->tensor_spec() != nullptr, "tensor_spec is required for tensor");
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
     const auto* mesh_shape = fb_tensor->mesh_shape();
@@ -291,8 +297,11 @@ Tensor from_flatbuffer(
         ttnn_mesh_shape,
         tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(ttnn_mesh_shape.dims()),
         /*context=*/nullptr);
-    for (size_t i = 0; i < fb_tensor->shards()->size(); ++i) {
-        const auto* shard = fb_tensor->shards()->Get(i);
+    const auto* shards = fb_tensor->shards();
+    TT_FATAL(shards != nullptr, "shards is required for tensor");
+    for (size_t i = 0; i < shards->size(); ++i) {
+        const auto* shard = shards->Get(i);
+        TT_FATAL(shard != nullptr, "TensorShard element must not be null");
 
         const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
         TT_FATAL(inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
