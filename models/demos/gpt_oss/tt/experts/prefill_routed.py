@@ -728,6 +728,19 @@ class RoutedPrefillExperts:
             )
         n_gu, n_dn = inter_pad // tile, H // tile
         table = sp.stream_page_table(layouts["gate_up"], layouts["down"], n_gu, n_dn)  # [E, 2 * (2 n_gu + n_dn)]
+        sp.check_page_table(
+            table,
+            n_gu,
+            n_dn,
+            banks,
+            layouts["gate_up"].k_tiles,
+            layouts["down"].k_tiles,
+            sp.BFP4_BYTES,
+            sp.BFP4_BYTES,
+            sp.BFP4_BYTES,
+            layouts["gate_up"].bank_bytes,
+            layouts["down"].bank_bytes,
+        )
         # One page (row) per expert, the same table on every device (each device's streams have the same layout).
         self.weight_pages = ttnn.from_torch(
             sp.as_uint32_words(table),
@@ -793,6 +806,20 @@ class RoutedPrefillExperts:
         # (unified_routed_expert_moe adds them to the gate source's bank base address in 32-bit arithmetic).
         up_delta = (dense.up.buffer_address() - dense.gate.buffer_address()) % (1 << 32)
         table = sp.dense_page_table(E, il_pad, H, shard_tiles["gate"], shard_tiles["down"], tile_bytes, up_delta)
+        sp.check_page_table(
+            table,
+            n_gu,
+            n_dn,
+            banks,
+            H // tile,
+            n_gu,
+            shard_tiles["gate"] * tile_bytes,
+            shard_tiles["down"] * tile_bytes,
+            tile_bytes,
+            (H // tile) * shard_tiles["gate"] * tile_bytes,  # a bank's shard: K tile rows x shard width
+            (E * il_pad // tile) * shard_tiles["down"] * tile_bytes,
+            up_delta,
+        )
         self.weight_pages = ttnn.from_torch(
             sp.as_uint32_words(table),
             device=self.mesh_device,

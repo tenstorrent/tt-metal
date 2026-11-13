@@ -232,3 +232,49 @@ def test_as_uint32_words():
     t = torch.tensor([[0, 1, (1 << 31) + 5, (1 << 32) - 1]])
     w = sp.as_uint32_words(t)
     assert w.dtype == torch.int32 and torch.equal(w.to(torch.int64) & 0xFFFFFFFF, t)
+
+
+def _model_tables():
+    """The gpt-oss-20b tables the routed prefill builds (TP 4, 8 banks) with the arguments it checks them with: the
+    decode streams (full and round-only) and the batch-32 dense layout (3 workers per bank: shard widths 93 / 12)."""
+    E, H, I_pad, banks, il_pad = 32, 2880, 768, 8, 736
+    out = []
+    for kind in (sp.STREAM_FULL, sp.STREAM_ROUND_ONLY):
+        gu = sp.split_stream_layout("gate_up", kind, E, H, I_pad, banks, 7)
+        dn = sp.split_stream_layout("down", kind, E, H, I_pad, banks, 7)
+        table = sp.stream_page_table(gu, dn, 24, 90)
+        args = (24, 90, banks, gu.k_tiles, dn.k_tiles, 576, 576, 576, gu.bank_bytes, dn.bank_bytes)
+        out.append((table, args, {}))
+    gu_w, dn_w, up_delta = 93, 12, (1 << 32) - (1 << 20)  # up below gate: the delta wraps
+    table = sp.dense_page_table(E, il_pad, H, gu_w, dn_w, 576, up_delta)
+    n_gu = il_pad // TILE
+    args = (n_gu, 90, banks, H // TILE, n_gu, gu_w * 576, dn_w * 576, 576, 90 * gu_w * 576, E * n_gu * dn_w * 576)
+    out.append((table, args, dict(up_delta=up_delta)))
+    return out
+
+
+def test_check_page_table_accepts_model_tables():
+    for table, args, kw in _model_tables():
+        sp.check_page_table(table, *args, **kw)
+
+
+@pytest.mark.parametrize(
+    "corrupt, match",
+    [
+        (lambda t: t.__setitem__((3, 0), 8), "bank 8 of 8"),  # gate entry 0 of expert 3: bank out of range
+        (lambda t: t.__setitem__((5, 1), int(t[5, 1]) + 32), "alignment 64"),  # misaligned offset
+        (lambda t: t.__setitem__((0, -1), int(t[0, -1]) + (1 << 30)), "bank bytes"),  # down column past the bank
+    ],
+)
+def test_check_page_table_rejects_bad_entries(corrupt, match):
+    for table, args, kw in _model_tables():
+        bad = table.clone()
+        corrupt(bad)
+        with pytest.raises(ValueError, match=match):
+            sp.check_page_table(bad, *args, **kw)
+
+
+def test_check_page_table_checks_up_against_its_own_buffer():
+    table, args, kw = _model_tables()[-1]
+    with pytest.raises(ValueError, match="weight_pages up entry"):
+        sp.check_page_table(table, *args, up_delta=0)  # up offsets read as gate offsets: far past the bank

@@ -5,7 +5,9 @@
 // First the zero output columns [z0, z1) of this core's rows (output width > N: the LM head's power-of-two padding),
 // from one zeroed page (all-zero bytes are 0 in BF16 and BFP8_b); then the compute kernel's tiles in its order (M block
 // -> weight group -> column -> DST block of rows -> row) to tile (row, col[c]) of the [.., M, NT * 32] output, col[c]
-// the logical output column of the core's slot c (the stream's slot order undone).
+// the logical output column of the core's slot c (the stream's slot order undone). The compute pushes one tile at a
+// time; the writer takes a DST block's tiles (at most RT) together and waits for their writes once per block. cb_out
+// holds CB_PAGES = 2 RT pages (stream_prefill_linear.py), so a block's tiles may wrap around the CB's end.
 //
 // common runtime args: [out_addr]
 // runtime args: [m0, m_cnt, cols, z0, z1, col[0], ..., col[cols - 1]]
@@ -29,9 +31,13 @@ void kernel_main() {
     constexpr uint32_t MB = get_compile_time_arg_val(3);
     constexpr uint32_t G = get_compile_time_arg_val(4);
     constexpr auto out_args = TensorAccessorArgs<5>();
-    constexpr uint32_t RT = 4;  // stream_prefill_compute.cpp
+    constexpr uint32_t RT = 4;             // stream_prefill_compute.cpp
+    constexpr uint32_t CB_PAGES = 2 * RT;  // cb_out pages (stream_prefill_linear.py: 2 * MAX_RT)
     const uint32_t tile = get_tile_size(cb_out);
     const auto s_out = TensorAccessor(out_args, out_addr, tile);
+    // cb_out's first page (no tile has been taken yet) and its end, for blocks that wrap
+    const uint32_t cb_base = get_read_ptr(cb_out);
+    const uint32_t cb_end = cb_base + CB_PAGES * tile;
 
     if (z1 > z0) {
         cb_reserve_back(cb_zero, 1);  // (this kernel's own page: never pushed)
@@ -55,11 +61,19 @@ void kernel_main() {
             const uint32_t gc = cols - g * G < G ? cols - g * G : G;
             for (uint32_t c = 0; c < gc; ++c) {
                 const uint32_t col = get_arg_val<uint32_t>(COL_ARG + g * G + c);
-                for (uint32_t r = 0; r < rows; ++r) {  // (the DST blocks of rows are in row order)
-                    cb_wait_front(cb_out, 1);
-                    noc_async_write(get_read_ptr(cb_out), s_out.get_noc_addr((m0 + mb + r) * NT + col), tile);
+                for (uint32_t r0 = 0; r0 < rows; r0 += RT) {  // the compute's DST blocks of rows, in row order
+                    const uint32_t rt = rows - r0 < RT ? rows - r0 : RT;
+                    cb_wait_front(cb_out, rt);
+                    uint32_t l1 = get_read_ptr(cb_out);
+                    for (uint32_t r = r0; r < r0 + rt; ++r) {
+                        noc_async_write(l1, s_out.get_noc_addr((m0 + mb + r) * NT + col), tile);
+                        l1 += tile;
+                        if (l1 >= cb_end) {
+                            l1 = cb_base;
+                        }
+                    }
                     noc_async_writes_flushed();
-                    cb_pop_front(cb_out, 1);
+                    cb_pop_front(cb_out, rt);
                 }
             }
         }

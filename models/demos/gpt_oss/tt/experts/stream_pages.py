@@ -27,6 +27,8 @@ TILE = 32
 BFP4_BYTES = 576  # bfloat4_b tile: 64 exponent bytes + 512 mantissa bytes (mxfp4_split.BFP4_BYTES)
 BFP2_BYTES = 320  # BFP2 tile (mxfp4_split.BFP2_BYTES)
 BFP8_BYTES = 1088
+# DRAM address alignment (Blackhole): every tile the op reads starts on it
+DRAM_ALIGN = 64
 # Stream kinds of a decode expert stream with a rounded part (experts/weights.py _load_split_decode_expert_weights).
 STREAM_FULL, STREAM_ROUND_ONLY = "full", "round_only"
 # K positions of the bias tile's residual terms (mxfp4_split.bias_tiles_t)
@@ -123,6 +125,45 @@ def table_entries(table, n_gate_up, n_down):
     """Split a page table into its (gate, up, down) blocks of [E, n, 2] (bank, offset) entries."""
     t = table.reshape(table.shape[0], -1, 2)
     return t[:, :n_gate_up], t[:, n_gate_up : 2 * n_gate_up], t[:, 2 * n_gate_up : 2 * n_gate_up + n_down]
+
+
+def check_page_table(
+    table,
+    n_gate_up,
+    n_down,
+    banks,
+    k_gate_up,
+    k_down,
+    gate_up_stride,
+    down_stride,
+    tile_bytes,
+    gate_up_bank_bytes,
+    down_bank_bytes,
+    up_delta=0,
+    align=DRAM_ALIGN,
+):
+    """Raise ValueError unless every entry of a page table addresses whole tiles inside its source: bank < banks, the
+    offset a multiple of `align`, and every tile k of the column (offset + k * stride, tile_bytes long) inside the
+    bank's region [0, bank bytes). Up entries are checked relative to the up buffer (offset - up_delta mod 2^32,
+    dense_page_table). The op does not check the table (it lives on device): a table built for another layout would
+    read other memory and give wrong numbers instead of failing."""
+    gate, up, down = table_entries(table.to(torch.int64), n_gate_up, n_down)
+    up = up.clone()
+    up[..., 1] = (up[..., 1] - up_delta) % (1 << 32)
+    for name, ent, k, stride, limit in (
+        ("gate", gate, k_gate_up, gate_up_stride, gate_up_bank_bytes),
+        ("up", up, k_gate_up, gate_up_stride, gate_up_bank_bytes),
+        ("down", down, k_down, down_stride, down_bank_bytes),
+    ):
+        bank, off = ent[..., 0], ent[..., 1]
+        end = off + (k - 1) * stride + tile_bytes
+        bad = (bank < 0) | (bank >= banks) | (off < 0) | (off % align != 0) | (end > limit)
+        if bool(bad.any()):
+            e, n = (int(v) for v in bad.nonzero()[0])
+            raise ValueError(
+                f"weight_pages {name} entry (expert {e}, column {n}): bank {int(bank[e, n])} of {banks}, offset "
+                f"{int(off[e, n])} (alignment {align}), last tile ends at {int(end[e, n])} of {limit} bank bytes"
+            )
 
 
 def bank_bytes_from_host(host, banks, page=64):
