@@ -19,9 +19,19 @@ jobs:
     steps:
       - name: Cleanup old pre-releases
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # core.getInput reads this step's `with:` inputs, not workflow_dispatch's.
+          # Empty on scheduled runs.
+          MONTHS_BACK: ${{ inputs.months_back }}
         with:
           script: |
-            const monthsBack = parseInt(core.getInput("months_back") || "3"); // Default to 3 months
+            const raw = process.env.MONTHS_BACK || "3"; // Default to 3 months
+            // Deletions are irreversible: refuse anything but a whole number of months >= 1.
+            if (!/^[1-9][0-9]*$/.test(raw.trim())) {
+              core.setFailed(`months_back must be a whole number of months, 1 or more; got "${raw}"`);
+              return;
+            }
+            const monthsBack = parseInt(raw, 10);
             const now = new Date();
             const cutoffDate = new Date(now.setMonth(now.getMonth() - monthsBack));
 
