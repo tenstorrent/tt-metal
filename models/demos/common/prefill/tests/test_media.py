@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
-from models.demos.common.prefill.media import _positions, build_injection
+from models.demos.common.prefill.media import _positions, build_injection, build_media_partials
 from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK, MediaRef, PrefillChunk
 
 SP, LOCAL, HIDDEN = 4, 32, 8
@@ -71,3 +71,46 @@ def test_text_only_forward():
 def test_positions_match_the_chunk_layout(sp, chunk_local):
     for start in range(0, 3 * sp * chunk_local, max(1, chunk_local // 2)):
         assert _positions(start, sp, chunk_local).tolist() == rotated_chunk_positions(start, sp, chunk_local)
+
+
+@pytest.mark.parametrize(
+    "chunks,refs",
+    [
+        pytest.param([PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)], id="inside_one_chunk"),
+        pytest.param([PrefillChunk(0, 0, C)], [ref(0, 3, 20, 1), ref(0, 40, 30, 2)], id="several"),
+        pytest.param([PrefillChunk(0, C, 2 * C)], [ref(0, 100, 300, 1)], id="image_middle"),
+        pytest.param([PrefillChunk(0, 96, 96 + C)], [ref(0, 100, 50, 1)], id="resume_mid_slab"),
+        pytest.param(
+            [PrefillChunk(0, 0, C), PrefillChunk(1, C, 2 * C), EMPTY_CHUNK],
+            [ref(0, 100, 300, 1), ref(1, 2 * C - 10, 30, 3)],
+            id="packed_two_slots",
+        ),
+    ],
+)
+def test_partials_sum_to_the_image_rows(chunks, refs):
+    """D: summing every SP row's partial reproduces build_injection's rows at the image positions."""
+    embs = {r.media_key: torch.randn(r.num_tokens, HIDDEN).to(torch.bfloat16) for r in refs}
+    rows_of = lambda r: u16(embs[r.media_key])
+    table, lookup, is_img = build_media_partials(refs, chunks, rows_of, SP, LOCAL)
+    want_rows, want_mask = build_injection(refs, chunks, rows_of, SP, LOCAL)
+
+    summed = torch.zeros(lookup.shape[1], HIDDEN, dtype=torch.bfloat16)  # s_total, not one chunk
+    for r in range(SP):
+        summed += table[r][lookup[r].long()]
+
+    assert torch.equal(is_img, want_mask.flatten())
+    assert torch.equal(summed[is_img], want_rows.reshape(-1, HIDDEN)[is_img])
+    assert not summed[~is_img].any(), "a row outside the mask got a contribution"
+    assert (lookup > 0).sum() == is_img.sum(), "every image position is assigned exactly once"
+
+
+def test_partials_balance_across_sp_rows():
+    chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 0, SP * 4, 1)]
+    embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
+    table, lookup, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
+    per_row = [(lookup[r] > 0).sum().item() for r in range(SP)]
+    assert max(per_row) - min(per_row) <= 1, per_row
+
+
+def test_partials_text_only():
+    assert build_media_partials([], [PrefillChunk(0, 0, C)], None, SP, LOCAL) is None

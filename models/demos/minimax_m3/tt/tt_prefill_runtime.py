@@ -41,9 +41,9 @@ import ttnn
 from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.media import build_injection
+from models.demos.common.prefill.media import build_injection, build_media_partials
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
-from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
+from models.demos.minimax_m3.tt.media_injection import MediaPartials, inject_media_embeddings
 from models.demos.minimax_m3.tt.residual import activation_mapper
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 from models.demos.minimax_m3.vision import format as media_format
@@ -102,6 +102,24 @@ class TtPrefillRuntimeConfig:
     @property
     def tp_factor(self) -> int:
         return self.mesh_shape[self.tp_axis]
+
+
+def _media_rows_of(reader, hidden: int, media_refs: list):
+    """One fetch_batch for the forward's refs, as a rows_of(ref) callable.
+
+    A value on another host is a view into the reader's buffer that the next fetch overwrites, so every
+    value is fetched together and its rows are copied out before the next fetch."""
+    keys = list(dict.fromkeys(ref.media_key for ref in media_refs))
+    bufs = reader.fetch_batch([FetchRequest(k) for k in keys])
+    values = {key: media_format.embeddings(buf, hidden) for key, buf in zip(keys, bufs, strict=True)}
+
+    def rows_of(ref):
+        rows = values[ref.media_key]
+        if len(rows) != ref.num_tokens:
+            raise ValueError(f"{ref}: stored value has {len(rows)} tokens")
+        return rows
+
+    return rows_of
 
 
 class TtPrefillRuntime:
@@ -331,35 +349,55 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=cfg.mesh_shape, dims=(cfg.sp_axis, None)),
         )
 
-    def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
+    def _embed_tokens(self, tokens: ttnn.Tensor, media=None) -> ttnn.Tensor:
         """Embed the SP-sharded tokens into the bf16 hidden state the layers consume, delegating to the
         model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] full hidden TP-replicated, or
         [1, 1, s_local, emb_dim/tp] under M3_SHARDED_RESIDUAL — whichever the residual-stream contract
         is (tt/residual.py); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden by
         default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
-        x = self.model.embedding(tokens)
+        x = self.model.embedding(tokens, media=media)
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
         return x
 
+    def _media_partials(self, chunks: list, media_refs: list):
+        """D: image rows as per-SP-row partials, or None when the 1D embedding forces the later splice."""
+        if not self.model.embedding.shard_vocab_on_sp:
+            return None
+        cfg = self.config
+        packed = build_media_partials(
+            media_refs,
+            chunks,
+            _media_rows_of(self.media_embedding_reader, self.hf_config.hidden_size, media_refs),
+            cfg.sp_factor,
+            cfg.chunk_size // cfg.sp_factor,
+        )
+        if packed is None:
+            return None
+        table, lookup, is_img = packed
+        return MediaPartials(
+            self.mesh_device,
+            table,
+            lookup,
+            is_img,
+            mesh_shape=cfg.mesh_shape,
+            sp_axis=cfg.sp_axis,
+            tp_axis=cfg.tp_axis,
+        )
+
     def _splice_media(self, x_embd: ttnn.Tensor, chunks: list, media_refs: list) -> ttnn.Tensor:
         """x_embd with each ref's image positions overwritten by its stored embeddings. Consumes x_embd.
 
-        One fetch_batch per forward: a value on another host is a view into the reader's buffer that the next fetch
-        overwrites, so every value is fetched together and its rows are copied out by build_injection."""
+        The 1D-embedding path: there is no reduce-scatter to carry the rows, so they are uploaded whole
+        and selected with ttnn.where. The 2D path splices inside the embedding instead (_media_partials)."""
         cfg = self.config
-        hidden = self.hf_config.hidden_size
-        keys = list(dict.fromkeys(ref.media_key for ref in media_refs))
-        bufs = self.media_embedding_reader.fetch_batch([FetchRequest(k) for k in keys])
-        values = {key: media_format.embeddings(buf, hidden) for key, buf in zip(keys, bufs, strict=True)}
-
-        def rows_of(ref):
-            rows = values[ref.media_key]
-            if len(rows) != ref.num_tokens:
-                raise ValueError(f"{ref}: stored value has {len(rows)} tokens")
-            return rows
-
-        rows, mask = build_injection(media_refs, chunks, rows_of, cfg.sp_factor, cfg.chunk_size // cfg.sp_factor)
+        rows, mask = build_injection(
+            media_refs,
+            chunks,
+            _media_rows_of(self.media_embedding_reader, self.hf_config.hidden_size, media_refs),
+            cfg.sp_factor,
+            cfg.chunk_size // cfg.sp_factor,
+        )
         return inject_media_embeddings(
             self.mesh_device,
             x_embd,
@@ -518,9 +556,12 @@ class TtPrefillRuntime:
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
         if cfg.is_first_rank:
-            x_embd = self._embed_tokens(input_tensor)
+            media = self._media_partials(chunks, media_refs) if media_refs else None
+            x_embd = self._embed_tokens(input_tensor, media=media)
             ttnn.deallocate(input_tensor)
-            if media_refs:
+            if media is not None:
+                media.deallocate()
+            elif media_refs:
                 x_embd = self._splice_media(x_embd, chunks, media_refs)
         else:
             assert not media_refs, "media is spliced on the first rank only"

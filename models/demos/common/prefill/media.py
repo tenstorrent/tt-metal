@@ -51,3 +51,56 @@ def build_injection(
         rows[sel] = torch.from_numpy(picked).view(torch.bfloat16)
         mask |= sel
     return rows, mask
+
+
+def build_media_partials(
+    refs: list[MediaRef],
+    chunks: list[PrefillChunk],
+    rows_of: Callable[[MediaRef], np.ndarray],
+    sp: int,
+    chunk_local: int,
+) -> Optional[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """(table [sp, k + 1, hidden] bf16, lookup [sp, s_total] uint32, is_img [s_total] bool), or None
+    without refs.
+
+    For the 2D embedding's pre-reduce-scatter partials. Each image row is assigned to exactly one SP
+    row, round-robin, so the reduce-scatter that already runs sums it into place: adding zeros is exact
+    in bf16. Row 0 of every table is zeros and lookup 0 means "not this row's", so a row contributes
+    nothing where it was not assigned.
+
+    ``lookup`` and ``is_img`` are indexed by the all-gathered token order (chip-major, _positions), not
+    by natural position: that is the order the lookup sees inside _forward_2d.
+    """
+    if not refs:
+        return None
+    positions = torch.cat([_positions(c.actual_start, sp, chunk_local) for c in chunks], dim=1)
+    chunk_of = torch.arange(len(chunks)).repeat_interleave(chunk_local).expand(sp, -1)
+    flat_pos = positions.flatten()
+
+    flats, ref_id, row_in_ref = [], [], []
+    for j, ref in enumerate(refs):
+        c = chunks[ref.chunk_index]
+        lo, hi = max(ref.start_pos, c.actual_start), min(ref.end_pos, c.actual_end)
+        sel = ((chunk_of == ref.chunk_index) & (positions >= lo) & (positions < hi)).flatten().nonzero().flatten()
+        flats.append(sel)
+        ref_id.append(torch.full_like(sel, j))
+        row_in_ref.append(flat_pos[sel] - ref.start_pos)
+    flats, ref_id, row_in_ref = torch.cat(flats), torch.cat(ref_id), torch.cat(row_in_ref)
+
+    # Round-robin: the n-th image row goes to SP row n % sp, at slot n // sp + 1. Slot 0 stays zero, so
+    # a row that was not assigned a position contributes nothing to the reduce-scatter's sum.
+    order = torch.arange(flats.numel())
+    sp_row, slot = order % sp, order // sp + 1
+
+    s_total = positions.numel()
+    hidden = rows_of(refs[0]).shape[1]
+    table = torch.zeros(sp, int(slot.max()) + 1 if slot.numel() else 1, hidden, dtype=torch.bfloat16)
+    lookup = torch.zeros(sp, s_total, dtype=torch.int32)
+    is_img = torch.zeros(s_total, dtype=torch.bool)
+    lookup[sp_row, flats] = slot.to(torch.int32)
+    is_img[flats] = True
+    for j, ref in enumerate(refs):  # one gather per ref, not one per image row
+        m = ref_id == j
+        picked = np.ascontiguousarray(rows_of(ref)[row_in_ref[m].numpy()])
+        table[sp_row[m], slot[m]] = torch.from_numpy(picked).view(torch.bfloat16)
+    return table, lookup, is_img

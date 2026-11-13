@@ -167,11 +167,16 @@ class TtParallelEmbedding(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=tuple(shard_dims)),
         )
 
-    def forward(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, tokens: ttnn.Tensor, media=None) -> ttnn.Tensor:
         """tokens: SP-seq-sharded (replicated across TP) uint32 indices [1, 1, s_local] -> bf16
         [1, 1, s_local, emb_dim] full hidden replicated across the TP cols, or [1, 1, s_local,
-        emb_dim / tp] under a sharded residual — the M3 residual-stream contract either way."""
+        emb_dim / tp] under a sharded residual — the M3 residual-stream contract either way.
+
+        media (MediaPartials, 2D only): image rows spliced into the partials before the reduce-scatter,
+        so the collective that already runs delivers them. The 1D path has no reduce-scatter to ride and
+        splices after the embedding instead (tt/media_injection.py)."""
         if not self.shard_vocab_on_sp:
+            assert media is None, "media partials need the 2D embedding; the 1D path splices afterwards"
             emb = ttnn.embedding(tokens, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
             if len(emb.shape) == 3:
                 emb = ttnn.unsqueeze_to_4D(emb)
@@ -179,9 +184,9 @@ class TtParallelEmbedding(LightweightModule):
             if tp > 1 and self.gather_emb:
                 emb = self.mesh_config.allgather(emb, self.ccl_manager, axis=self.tp_axis, dim=3)
             return emb
-        return self._forward_2d(tokens)
+        return self._forward_2d(tokens, media)
 
-    def _forward_2d(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
+    def _forward_2d(self, tokens: ttnn.Tensor, media=None) -> ttnn.Tensor:
         sp = self.mesh_device.shape[self.sp_axis]
         tp = self.mesh_device.shape[self.tp_axis]
 
@@ -204,6 +209,17 @@ class TtParallelEmbedding(LightweightModule):
         emb = ttnn.embedding(local_idx, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
         if len(emb.shape) == 3:
             emb = ttnn.unsqueeze_to_4D(emb)  # [1,1,s_total,emb_dim/tp]
+
+        # 2b) Image rows, if any. Each is assigned to ONE SP row (build_media_partials), so this row
+        #     supplies it and every other row contributes zero at that position — the reduce-scatter
+        #     below then sums it into place, exactly, with no new collective. ttnn.embedding returns
+        #     zeros where lookup is 0 (row 0 of the table), so one where() both supplies the image row
+        #     here and suppresses the token embedding on the rows that did not get it.
+        if media is not None:
+            gathered = ttnn.embedding(media.lookup, media.table, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
+            if len(gathered.shape) == 3:
+                gathered = ttnn.unsqueeze_to_4D(gathered)
+            emb = ttnn.where(media.is_img, gathered, emb)
 
         # 3) SP reduce-scatter on the seq dim: sum across vocab shards (each token resolved by exactly one
         #    SP row) AND scatter seq back to per-row shards -> [1,1,s_local,emb_dim/tp].
