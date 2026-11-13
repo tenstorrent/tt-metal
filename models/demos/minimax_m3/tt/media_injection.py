@@ -13,8 +13,8 @@ class MediaInjectionBuffers:
     """The splice's device tensors, allocated once and refilled each forward.
 
     Shapes are fixed for a deployment (``forward_tokens_budget`` rows, ``hidden`` columns), so the
-    forward pays no allocation and no host tilize. The mask is replicated over TP: it has no hidden
-    dimension to shard.
+    forward pays no host tilize. The mask is replicated over TP: it has no hidden dimension to shard.
+    It goes up row-major and is tilized on device, for the reason MediaPartials.is_img does.
     """
 
     def __init__(self, mesh_device, *, rows_shape, mesh_shape, sp_axis: int, tp_axis: int, emb_tp_sharded: bool):
@@ -24,31 +24,44 @@ class MediaInjectionBuffers:
         self._mapper = lambda tp_sharded: activation_mapper(
             mesh_device, mesh_shape=mesh_shape, sp_axis=sp_axis, tp_axis=tp_axis, emb_tp_sharded=tp_sharded
         )
-        self.cond = self._alloc(mesh_device, torch.zeros(1, 1, sp * local, 1, dtype=torch.int32), ttnn.uint32, False)
+        self._cond_rows = self._alloc(
+            mesh_device, torch.zeros(1, 1, sp * local, 1, dtype=torch.int32), ttnn.uint32, False, ttnn.ROW_MAJOR_LAYOUT
+        )
+        self.cond = ttnn.to_layout(self._cond_rows, ttnn.TILE_LAYOUT)
         self.rows = self._alloc(
-            mesh_device, torch.zeros(1, 1, sp * local, hidden, dtype=torch.bfloat16), ttnn.bfloat16, emb_tp_sharded
+            mesh_device,
+            torch.zeros(1, 1, sp * local, hidden, dtype=torch.bfloat16),
+            ttnn.bfloat16,
+            emb_tp_sharded,
+            ttnn.TILE_LAYOUT,
         )
 
-    def _alloc(self, mesh_device, t: torch.Tensor, dtype, tp_sharded: bool) -> ttnn.Tensor:
+    def _alloc(self, mesh_device, t: torch.Tensor, dtype, tp_sharded: bool, layout) -> ttnn.Tensor:
         return ttnn.from_torch(
             t,
             device=mesh_device,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self._mapper(tp_sharded),
         )
 
     def refill(self, rows: torch.Tensor, mask: torch.Tensor, *, emb_tp_sharded: bool) -> None:
         sp, local, hidden = self.shape
-        host = lambda t, dtype, tp_sharded: ttnn.from_torch(
+        host = lambda t, dtype, tp_sharded, layout: ttnn.from_torch(
             t.reshape(1, 1, sp * local, -1).contiguous(),
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=layout,
             mesh_mapper=self._mapper(tp_sharded),
         )
-        ttnn.copy_host_to_device_tensor(host(mask.to(torch.int32), ttnn.uint32, False), self.cond)
-        ttnn.copy_host_to_device_tensor(host(rows.to(torch.bfloat16), ttnn.bfloat16, emb_tp_sharded), self.rows)
+        ttnn.copy_host_to_device_tensor(
+            host(mask.to(torch.int32), ttnn.uint32, False, ttnn.ROW_MAJOR_LAYOUT), self._cond_rows
+        )
+        ttnn.copy_host_to_device_tensor(
+            host(rows.to(torch.bfloat16), ttnn.bfloat16, emb_tp_sharded, ttnn.TILE_LAYOUT), self.rows
+        )
+        ttnn.deallocate(self.cond)
+        self.cond = ttnn.to_layout(self._cond_rows, ttnn.TILE_LAYOUT)
 
 
 class MediaPartials:
@@ -57,7 +70,13 @@ class MediaPartials:
     table [h, hidden/tp] per chip (row 0 zeros), lookup [1,1,s_total] per chip (0 = not this SP row's),
     is_img [1,1,s_total,1] replicated. Allocated once per table height — build_media_partials snaps the
     height to a power of two, so a deployment uses a handful — and refilled with
-    copy_host_to_device_tensor, so a forward pays no allocation and no host tilize.
+    copy_host_to_device_tensor, so a forward pays no host tilize.
+
+    is_img goes up row-major and is tilized on device: ttnn.where needs a TILE condition, but tilizing
+    a width-1 tensor on the host pads that dimension to a full tile, so a tiled upload would send 32
+    uint32 per position to carry one bit. That tilize is the one tensor a forward allocates. Refilling
+    frees the previous tile, which is safe only because a command queue completes in order: the forward
+    still reading it runs before anything writes the reused address. Keep the uploads on one queue.
     """
 
     def __init__(self, mesh_device, *, sp: int, height: int, hidden: int, s_total: int, mesh_shape, sp_axis, tp_axis):
@@ -83,13 +102,14 @@ class MediaPartials:
             ttnn.ROW_MAJOR_LAYOUT,
             self._sp_only,
         )
-        self.is_img = self._to_device(
+        self._is_img_rows = self._to_device(
             mesh_device,
             torch.zeros(1, 1, s_total, 1, dtype=torch.int32),
             ttnn.uint32,
-            ttnn.TILE_LAYOUT,
+            ttnn.ROW_MAJOR_LAYOUT,
             self._replicated,
         )
+        self.is_img = ttnn.to_layout(self._is_img_rows, ttnn.TILE_LAYOUT)
 
     def _to_device(self, mesh_device, t, dtype, layout, dims):
         return ttnn.from_torch(
@@ -112,9 +132,13 @@ class MediaPartials:
             self._host(lookup.reshape(sp, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self._sp_only), self.lookup
         )
         ttnn.copy_host_to_device_tensor(
-            self._host(is_img.reshape(1, 1, -1, 1).to(torch.int32), ttnn.uint32, ttnn.TILE_LAYOUT, self._replicated),
-            self.is_img,
+            self._host(
+                is_img.reshape(1, 1, -1, 1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self._replicated
+            ),
+            self._is_img_rows,
         )
+        ttnn.deallocate(self.is_img)
+        self.is_img = ttnn.to_layout(self._is_img_rows, ttnn.TILE_LAYOUT)
 
 
 def inject_media_embeddings(
