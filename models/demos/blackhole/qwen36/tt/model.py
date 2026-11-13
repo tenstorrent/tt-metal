@@ -17,6 +17,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.decode_allreduce import get_decode_allreduce
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
@@ -74,6 +75,8 @@ class Qwen36Model:
             self.tt_ccl = TT_CCL(mesh_device)
         else:
             self.tt_ccl = None
+        # The replicated decode residual (decode_allreduce.py), or None; shared with every layer through tt_ccl.
+        self._decode_ar = get_decode_allreduce(args, self.tt_ccl)
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
         # Rope is host-recomputed each step, so callers explicitly request a
@@ -575,7 +578,11 @@ class Qwen36Model:
         tensor -> single tile-row -> 1 core (~80us/token). Passing the framework's 'lm_head' norm
         config runs the sharded multi-core norm across lm_head_core_grid instead; output_mem_config
         is forced back to DRAM so the LM-head matmul input is byte-identical (layout-only change).
+
+        A full-width x is the replicated decode residual (decode_allreduce.py): its local norm, no gather.
         """
+        if self._decode_ar is not None and x.shape[-1] == self.args.dim:
+            return self._decode_ar.final_norm(x, self.norm.norm)
         if self.num_devices > 1:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
@@ -994,6 +1001,10 @@ class Qwen36Model:
         if self.num_devices > 1:
             # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
+            # The MTP drafter consumes the fractured hidden (return_hidden), so that caller keeps the fractured residual.
+            dar = None if return_hidden else self._residual_ar(x.shape[-2])
+            if dar is not None:
+                x = dar.enter(x)
         _cap = getattr(self, "_capture_layer", None)
         for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
@@ -1277,13 +1288,33 @@ class Qwen36Model:
         sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
         return cos, sin
 
+    def _residual_ar(self, rows):
+        """The DecodeResidualAllReduce a decode or verify forward of ``rows`` rows runs on, or None for the fractured
+        residual: the replicated residual is one tile of rows, and its GDN path exists only with the GDN state in vLLM
+        KV cache blocks (bound before any decode or verify trace is captured)."""
+        if self._decode_ar is None or rows > ttnn.TILE_SIZE:
+            return None
+        if any(layer.attention.state_blocks is None for layer in self.layers if not layer.is_full_attention):
+            return None
+        return self._decode_ar
+
     def _spec_tail(self, x):
         """Shared tail of the verify and seed bodies: residual ``x`` [1,1,R,dim] (freed here) ->
         (logits [1,1,R,vocab] replicated per device, feed [1,1,R,dim/tp] fractured).
 
         The bucket is exactly the R real rows, so there is no row-select. ``feed`` is the post-norm
         drafter feed (spec_feed_rows); its programs are the inner norm's, already compiled by the
-        self.norm call."""
+        self.norm call.
+
+        A full-width x is the replicated decode residual: the final norm is the decode step's local norm and the feed
+        is this device's dim/tp span of its output (mesh_partition, as Qwen36MTP.forward_decode re-fractures)."""
+        if self._decode_ar is not None and x.shape[-1] == self.args.dim:
+            normed = self._final_norm_decode(x)  # [1,1,R,dim] DRAM, replicated
+            ttnn.deallocate(x)
+            logits = self._lm_head(normed)
+            feed = ttnn.mesh_partition(normed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(normed)
+            return logits, feed
         rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,R,dim]
@@ -1308,6 +1339,9 @@ class Qwen36Model:
         x = self.embd(self._vfy_token_buf)
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        dar = self._residual_ar(rows)
+        if dar is not None:
+            x = dar.enter(x)  # every layer and _spec_tail then run on the replicated residual, as the decode step
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is

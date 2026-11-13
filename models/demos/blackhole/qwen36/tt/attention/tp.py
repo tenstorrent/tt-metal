@@ -789,8 +789,12 @@ class TPAttention:
         spec_page_table=None,
         spec_n_users=1,
         spec_user_page_table=None,
+        decode_ar=None,
     ):
         """One decode step for B "users".
+
+        decode_ar: a decode_allreduce.ResidualAllReduce when x is the norm of the replicated decode residual; it sums
+        the wo partials and adds the residual instead of the reduce-scatter.
 
         alias_kv_write: the B rows are NOT independent users — they all belong to ONE sequence and
         therefore share ONE page table (identical rows), the way the speculative verify runs its
@@ -1043,6 +1047,8 @@ class TPAttention:
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(wo_partial)
         return tt_all_reduce(
             wo_partial,
             self.mesh,
