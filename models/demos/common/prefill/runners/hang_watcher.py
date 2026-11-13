@@ -3,11 +3,10 @@
 
 """Prefill's stage hang watcher, started by arm_hang_detector: python hang_watcher.py <probe.json>
 
-ttnn.stream_hang_detection's watcher, with prefill's warm-up and verdict label. Prefill's run loop takes a chunk in
-only after its previous push finished and sends the activation before the indices, which
-is what the default rules rely on. Before the first real chunk, the trace capture may send a warm-up chunk on from
-every rank with a D2D output, and every later rank takes it in through its D2D input like a real chunk; consumed()
-evens out the difference.
+ttnn.stream_hang_detection's watcher, with prefill's warm-up and verdict label. Prefill's run loop sends the
+activation before the indices, which is what the default rules rely on. Before the first real chunk, the trace
+capture may send a warm-up chunk on from every rank with a D2D output, and every later rank takes it in through its
+D2D input like a real chunk; consumed() evens out the difference.
 """
 
 from __future__ import annotations

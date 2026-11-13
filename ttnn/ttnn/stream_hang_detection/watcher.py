@@ -25,8 +25,8 @@ a still stage waits on the first of:
 
     SENDER       an output's produced > pushed == forwarded: a ready chunk its sender never pushed
     OUTBOUND     an output's produced < the one before's produced == pushed: its send never ran
-    COMPUTE      consumed > produced: took a chunk in and never produced it
     DOWNSTREAM   an output's produced > forwarded: the next stage has not taken our last chunk
+    COMPUTE      consumed > produced: took a chunk in and never produced it
     INBOUND      the next input's arrived > consumed: a chunk arrived and was never consumed
     UPSTREAM     anything else: idle, or the stage before us is stuck
 
@@ -35,13 +35,13 @@ the one the run loop waits on: the first with the lowest consumed. COMPUTE also 
 op: both sit between consumed and produced.
 
 The stage is the culprit if a device waits on SENDER, OUTBOUND or INBOUND, or on COMPUTE having produced fewer
-chunks than every device consumed. Waiting on a neighbour is never the stage's fault as long as its run loop takes
-a chunk in only after its previous push finished: then a stage held back by its downstream never has a chunk in hand
-on every device.
+chunks than every device consumed. Waiting on a neighbour is never the stage's fault. DOWNSTREAM comes before
+COMPUTE because a run loop may take its next chunk in before its previous push finished, so a stage held back by its
+downstream can hold a chunk it has not produced.
 
-These defaults assume a run loop that waits for its previous push, takes every input in, computes, then sends its
-outputs one after another in list order. A pipeline whose run loop differs, or that moves chunks its counters do not
-see, overrides state(), judge() or the counts they use.
+These defaults assume a run loop that takes every input in, computes, then sends its outputs one after another in
+list order. A pipeline whose run loop differs, or that moves chunks its counters do not see, overrides state(),
+judge() or the counts they use.
 """
 
 from __future__ import annotations
@@ -146,8 +146,8 @@ class WaitingOn(Enum):
 
     SENDER = auto()
     OUTBOUND = auto()
-    COMPUTE = auto()
     DOWNSTREAM = auto()
+    COMPUTE = auto()
     INBOUND = auto()
     UPSTREAM = auto()
 
@@ -200,11 +200,11 @@ class StreamHangWatcher:
         for before, o in zip(device.outputs, device.outputs[1:]):
             if o.produced.chunks < before.produced.chunks == before.pushed.chunks:
                 return WaitingOn.OUTBOUND
-        if self.consumed(device) > self.produced(device):
-            return WaitingOn.COMPUTE
-        # The next chunk is taken in only after the last push, so this waits on the next stage.
+        # Before COMPUTE: a stage may take its next chunk in before its last push is done.
         if any(o.produced.chunks != o.forwarded.chunks for o in device.outputs):
             return WaitingOn.DOWNSTREAM
+        if self.consumed(device) > self.produced(device):
+            return WaitingOn.COMPUTE
         nxt = min(device.inputs, key=lambda i: i.consumed.chunks)
         return WaitingOn.INBOUND if nxt.arrived.chunks > nxt.consumed.chunks else WaitingOn.UPSTREAM
 
