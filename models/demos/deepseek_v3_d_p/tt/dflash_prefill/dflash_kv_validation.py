@@ -275,6 +275,17 @@ def dflash_kv_table_pcc_check(
     or None when there is nothing to check. Table-based counterpart of ``dflash_kv_cache_pcc_check`` that
     never raises. ``rope_convention`` reindexes the golden K to the device's stored-K convention (see
     :func:`_load_golden_kv`)."""
+    from ..runners.kv_chunk_table import DFLASH_LATENT_CONFIG_NAME
+
+    if DFLASH_LATENT_CONFIG_NAME in {table.config_name(i) for i in range(table.num_configs())}:
+        return dflash_latent_table_pcc_check(
+            table,
+            slot_id,
+            real_len,
+            read_config_slice=read_config_slice,
+            threshold=threshold,
+            golden_dir=golden_dir,
+        )
     ids = _dflash_config_ids(table)
     if ids is None:
         return None
@@ -348,4 +359,185 @@ def dflash_kv_table_pcc_check(
             f"[dflash-pcc] slot {slot_id} drafter KV over [0,{cmp_len}) PASSED: min PCC {min_pcc:.6f} "
             f">= {threshold} (V {mins['v']:.6f}, K {mins['k']:.6f})"
         )
+    return min_pcc
+
+
+# ---------------------------------------------------------------------------
+# MLA (DFlash2) drafter: ONE latent cache [kv_a_layernorm(c_kv) | rope(k_pe)] per draft layer. The golden is
+# ``latent_cache.safetensors`` holding ``latent_cache`` of shape [num_layers, seq, kv_lora_rank + rope_dim]
+# (fp32), i.e. blaze ``mla_golden.latent_kv`` of the context feature, stacked over draft layers.
+# c_kv (cols [0, kv_lora_rank)) is checked BEFORE k_pe (the rest), for the same reason V precedes K above:
+# c_kv never touches RoPE, so c_kv-passes-while-k_pe-fails localizes a fault to the rope table / pairing.
+# ---------------------------------------------------------------------------
+
+LATENT_GOLDEN_FILE = "latent_cache.safetensors"
+LATENT_GOLDEN_KEY = "latent_cache"
+
+
+def read_slot_dflash_latent(
+    mesh_device, cache, *, chunk_size_global: int, num_layers: int, slot_id: int, out_len: int
+) -> torch.Tensor:
+    """Read one slot of the MLA drafter latent cache back as ``[num_layers, out_len, latent_dim]`` fp32 in natural
+    token order, undoing the user-major slot fold, the block-cyclic SP layout and (when deduped) the TP split.
+
+    Per-device reconstruction (the cache's declared topology differs between the replicated and deduped
+    allocations, so a mesh composer cannot cover both): chip (row r, col c) of an sp x tp mesh holds, per
+    chunk, the ``chunk_local / cols`` tokens starting at ``chunk * chunk_global + r * chunk_local + c * width``,
+    where ``cols`` is tp when deduped and 1 (any column is a full replica) otherwise. Requires the production
+    (sp_axis=0, tp_axis=1) layout, as the deduped table builder does."""
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache
+
+    sp, tp = tuple(mesh_device.shape)
+    deduped = is_tp_deduped_kv_cache(cache, (sp, tp))
+    cols = tp if deduped else 1
+    s = list(cache.shape)  # per-device: [users * layers, 1, rows_local, latent_dim]
+    assert (slot_id + 1) * num_layers <= s[0], f"slot {slot_id} x {num_layers} layers exceeds cache dim0 {s[0]}"
+    chunk_local = chunk_size_global // sp
+    assert chunk_local % cols == 0, f"chunk_local {chunk_local} does not split across {cols} TP columns"
+    width = chunk_local // cols
+    rows_local = s[2]
+    assert rows_local % width == 0, f"per-device rows {rows_local} are not whole {width}-token chunk slices"
+    cache_len = rows_local * sp * cols
+    assert out_len <= cache_len, f"out_len {out_len} exceeds drafter latent cache_len {cache_len}"
+
+    sl = ttnn.slice(
+        cache,
+        [slot_id * num_layers, 0, 0, 0],
+        [(slot_id + 1) * num_layers, s[1], s[2], s[3]],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    shards = ttnn.get_device_tensors(sl)  # row-major over the mesh
+    natural = torch.zeros(num_layers, cache_len, s[3], dtype=torch.float32)
+    lr = torch.arange(rows_local)
+    for r in range(sp):
+        for c in range(cols):
+            host = ttnn.to_torch(shards[r * tp + c]).float()[:, 0]  # [layers, rows_local, latent_dim]
+            pos = (lr // width) * chunk_size_global + r * chunk_local + c * width + lr % width
+            natural[:, pos, :] = host
+    ttnn.deallocate(sl)
+    return natural[:, :out_len, :]
+
+
+def _load_golden_latent(golden_dir: Path, *, num_layers: int, latent_dim: int, out_len: int, clamp: bool = False):
+    from safetensors import safe_open
+
+    path = golden_dir / LATENT_GOLDEN_FILE
+    if not path.is_file():
+        raise FileNotFoundError(f"drafter latent golden {path} not found (set {GOLDEN_KV_ENV} or unset it to skip)")
+    with safe_open(path, framework="pt") as f:
+        sl = f.get_slice(LATENT_GOLDEN_KEY)
+        shape = list(sl.get_shape())
+        assert (
+            shape[0] == num_layers and shape[2] == latent_dim
+        ), f"{LATENT_GOLDEN_KEY} shape {shape} does not match (draft_layer={num_layers}, seq, latent={latent_dim})"
+        n = min(out_len, shape[1]) if clamp else out_len
+        assert shape[1] >= n, f"{LATENT_GOLDEN_KEY} has only {shape[1]} positions, need {n}"
+        golden = sl[:, :n, :].to(torch.float32)
+    logger.info(f"[dflash-pcc] golden latent {tuple(golden.shape)} from {golden_dir}")
+    return golden
+
+
+def _pcc_latent(tag: str, expected, actual, kv_lora_rank: int, threshold: float, failures: list) -> dict:
+    """Per-layer PCC of the c_kv half, then the k_pe half; returns the worst of each."""
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    worst = {"c_kv": 1.0, "k_pe": 1.0}
+    for i in range(expected.shape[0]):
+        line = []
+        for part, cols in (("c_kv", slice(0, kv_lora_rank)), ("k_pe", slice(kv_lora_rank, None))):
+            _, pcc = comp_pcc(expected[i, :, cols], actual[i, :, cols])
+            worst[part] = min(worst[part], pcc)
+            line.append(f"{part}={pcc:.6f}")
+            if pcc <= threshold:
+                failures.append(f"{tag} layer {i} {part}: PCC {pcc:.6f} <= {threshold}")
+        logger.info(f"[dflash-pcc]   {tag} layer {i}: " + " ".join(line))
+    return worst
+
+
+def dflash_latent_cache_pcc_check(
+    mesh_device,
+    latent_cache,
+    *,
+    chunk_size_global: int,
+    num_layers: int,
+    kv_lora_rank: int,
+    slot_id: int,
+    out_len: int,
+    golden_dir=None,
+    threshold: float = None,
+    record_only: bool = False,
+) -> float:
+    """MLA counterpart of :func:`dflash_kv_cache_pcc_check`: PCC one slot of the device latent cache against
+    the golden, c_kv before k_pe. Returns the minimum PCC (1.0 unmeasured when no golden is present); raises
+    on failure unless ``record_only``."""
+    golden_dir = Path(golden_dir or os.environ.get(GOLDEN_KV_ENV) or GOLDEN_KV_DEFAULT)
+    if not (golden_dir / LATENT_GOLDEN_FILE).is_file():
+        logger.info(f"[dflash-pcc] SKIPPED: no {LATENT_GOLDEN_FILE} in {golden_dir} (set {GOLDEN_KV_ENV})")
+        return 1.0
+    if threshold is None:
+        threshold = float(os.environ.get(PCC_ENV, DEFAULT_PCC))
+    latent_dim = latent_cache.shape[-1]
+    golden = _load_golden_latent(golden_dir, num_layers=num_layers, latent_dim=latent_dim, out_len=out_len)
+    actual = read_slot_dflash_latent(
+        mesh_device,
+        latent_cache,
+        chunk_size_global=chunk_size_global,
+        num_layers=num_layers,
+        slot_id=slot_id,
+        out_len=out_len,
+    )
+    failures: list = []
+    worst = _pcc_latent(f"drafter-latent (slot {slot_id})", golden, actual, kv_lora_rank, threshold, failures)
+    min_pcc = min(worst.values())
+    if failures:
+        msg = f"[dflash-pcc] drafter latent below {threshold} ({len(failures)} slice(s)): " + "; ".join(failures[:8])
+        if record_only:
+            logger.warning(f"{msg} (record-only, not asserted)")
+        else:
+            raise AssertionError(msg)
+    else:
+        logger.success(
+            f"[dflash-pcc] drafter latent PASSED: min PCC {min_pcc:.6f} >= {threshold} "
+            f"(c_kv {worst['c_kv']:.6f}, k_pe {worst['k_pe']:.6f})"
+        )
+    return min_pcc
+
+
+def dflash_latent_table_pcc_check(
+    table, slot_id: int, real_len: int, *, read_config_slice, threshold: float, golden_dir: str = None
+) -> float | None:
+    """Table-readback counterpart of :func:`dflash_latent_cache_pcc_check`: read the latent cache back THROUGH
+    the published ``dflash_latent`` config (the migration path) and PCC it. Never raises; None when unchecked."""
+    from ..runners.kv_chunk_table import DFLASH_LATENT_CONFIG_NAME
+
+    golden_dir = golden_dir or os.environ.get(GOLDEN_KV_ENV, "").strip()
+    if not golden_dir:
+        logger.info(f"[dflash-pcc] table carries the drafter latent cache but {GOLDEN_KV_ENV} is unset; not checked.")
+        return None
+    config_id = table.config_id_of(DFLASH_LATENT_CONFIG_NAME)
+    cfg = table.config(config_id)
+    layer_rows = _dflash_layer_rows(table, config_id, slot_id)
+    latent_dim = (cfg.chunk_size_bytes // _BFP8_TILE_BYTES) * 32
+    golden = _load_golden_latent(
+        Path(golden_dir), num_layers=len(layer_rows), latent_dim=latent_dim, out_len=real_len, clamp=True
+    )
+    cmp_len = golden.shape[1]
+    read_len = ((cmp_len + _KV_BLOCK_TOKENS - 1) // _KV_BLOCK_TOKENS) * _KV_BLOCK_TOKENS
+    if read_len > cfg.max_sequence_length:
+        raise RuntimeError(f"drafter latent max_sequence_length {cfg.max_sequence_length} < {read_len} to read")
+    actual = torch.stack(
+        [read_config_slice(config_id, layer, slot_id, read_len, latent_dim)[:cmp_len] for layer in layer_rows]
+    ).float()
+    # kv_lora_rank is not in the table; 512 for every MLA drafter served here (the k_pe half is the last 64).
+    kv_lora_rank = latent_dim - 64
+    failures: list = []
+    worst = _pcc_latent(f"drafter-latent (slot {slot_id})", golden, actual, kv_lora_rank, threshold, failures)
+    min_pcc = min(worst.values())
+    if failures:
+        logger.error(
+            f"[dflash-pcc] slot {slot_id}: drafter latent over [0,{cmp_len}) below {threshold}: "
+            + "; ".join(failures[:8])
+        )
+    else:
+        logger.success(f"[dflash-pcc] slot {slot_id} drafter latent over [0,{cmp_len}) PASSED: min PCC {min_pcc:.6f}")
     return min_pcc
