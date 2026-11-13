@@ -37,7 +37,8 @@ class KimiK31Adapter(KimiK3Adapter):
     hf_model_default = "/mnt/weka/model-weights/llm/moonshotai/Kimi-K3.1-Pro-dequantized"
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill"
     # Miguel's 8192-token vLLM trace of K3.1 (kimi_k31_pro_10k_v2: all 93 decoder outputs, KV and indexer
-    # keys of all 24 DSA layers), rewritten into K3's per-stream layout by tests/kimi_k3/convert_golden.py.
+    # keys of all 24 DSA layers), rewritten into K3's per-stream layout by a one-shot converter outside the repo
+    # (the golden's metadata.json `converted_from` names its source and version).
     # Under scratch/ because stable/, where K3's golden sits, is writable by storage-wg only. `_conv2`: converter
     # version 2, whose decoder_output is K3's running sum (the version-1 directory holds the tracer's FFN output).
     prefill_trace_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/golden/kimi_k31_pro_10k_v2_conv2"
