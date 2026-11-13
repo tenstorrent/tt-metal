@@ -151,23 +151,26 @@ class CurrentSourceBridgeTests(unittest.TestCase):
         self.assertIsNone(session.previous)
 
     def test_tail_reaches_current_source_reference_preparation(self):
-        # Video references use their own 768px canvas, independently of the
-        # generation target. Constant per-frame colors survive spatial rescaling
+        # Default matching follows the target area; diffusers mode retains the
+        # reference canvas. Constant per-frame colors survive spatial rescaling
         # and let this check retain exact temporal/channel and audio assertions.
         video = torch.linspace(0, 1, 66).reshape(22, 3, 1, 1).expand(22, 3, 32, 32)
         audio = torch.rand(2, 29333)
         tail = b.tensor_media(video, audio).slice_copy(0, 22, 0, 29333)
         ref = p.MiniMaxH3Reference(video=tail.video, audio=tail.audio, fps=24, sample_rate=32000)
         expected_colors = p.reference_media_to_uint8(video)[:, :1, :1, :]
-        for target_height, target_width in ((32, 32), (64, 96)):
-            with self.subTest(target=(target_height, target_width)):
-                prepared, frames = r.prepare_references(
-                    [ref], 124, 32000, target_height=target_height, target_width=target_width
-                )
-                self.assertEqual(frames, 124)
-                self.assertEqual(prepared[0].frames.shape, (22, 768, 768, 3))
-                self.assertTrue((prepared[0].frames == expected_colors).all())
-                torch.testing.assert_close(prepared[0].waveform, audio)
+        for mode in ("match", "diffusers"):
+            for target_height, target_width in ((32, 32), (64, 96)):
+                with self.subTest(mode=mode, target=(target_height, target_width)):
+                    prepared, frames = r.prepare_references(
+                        [ref], 124, 32000, reference_resize_mode=mode,
+                        target_height=target_height, target_width=target_width
+                    )
+                    side = target_height if mode == "match" else 768
+                    self.assertEqual(frames, 124)
+                    self.assertEqual(prepared[0].frames.shape, (22, side, side, 3))
+                    self.assertTrue((prepared[0].frames == expected_colors).all())
+                    torch.testing.assert_close(prepared[0].waveform, audio)
 
     def test_interrupted_delivery_closes_chain_and_releases_context(self):
         def sink(chunk):
