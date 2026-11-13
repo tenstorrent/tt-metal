@@ -4,13 +4,24 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <set>
 #include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -71,6 +82,95 @@ public:
 
 private:
     bool popped_ = false;
+};
+
+// What a program factory supports for one program, independent of any call's binds. Built by CmdListBinder on each
+// program-cache miss and matched against the active binds when the program is recorded.
+struct CmdListTensorBinding {
+    std::string invoke_name;
+    tt::tt_metal::experimental::TensorParamName program_spec_param_name;
+};
+
+struct CmdListRuntimeArgBinding {
+    tt::tt_metal::experimental::KernelSpecName kernel_name;
+    std::string arg_name;
+    std::vector<tt::tt_metal::experimental::NodeCoord> nodes;
+};
+
+struct CmdListCommonRuntimeArgBinding {
+    tt::tt_metal::experimental::KernelSpecName kernel_name;
+    std::string arg_name;
+};
+
+struct CmdListScalarBinding {
+    std::string invoke_name;
+    std::string metal_cmd_list_param_name;  // unqualified; defaults to invoke_name
+    CmdListEncodeFn encode;
+    std::vector<CmdListRuntimeArgBinding> runtime_args;
+    std::vector<CmdListCommonRuntimeArgBinding> common_runtime_args;
+};
+
+struct CmdListBindings {
+    std::string factory_name;  // set by the adapter; qualifies Metal param names
+    std::vector<CmdListTensorBinding> tensors;
+    std::vector<CmdListScalarBinding> scalars;
+};
+
+// Builds a program factory's CmdListBindings in map_cmd_list_parameters, checking each binding against the program:
+//   ttnn::command_list::CmdListBinder binder{spec, run_params};
+//   binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/TensorParamName{"src"});
+//   binder.param(/*invoke_name=*/"scale", /*encode=*/encode_float32_bits)
+//       .runtime(/*kernel_name=*/KernelSpecName{"reader"}, /*arg_name=*/"pre_scale");
+//   return std::move(binder).finish();
+class CmdListBinder {
+public:
+    CmdListBinder(
+        const tt::tt_metal::experimental::ProgramSpec& spec,
+        const tt::tt_metal::experimental::ProgramRunArgs& run_params);
+
+    // Binds op keyword `invoke_name` to TensorParameter `program_spec_param_name`. A keyword may bind several.
+    void tensor(
+        std::string_view invoke_name, const tt::tt_metal::experimental::TensorParamName& program_spec_param_name);
+
+    // One Metal parameter: one encoding, bound to one or more kernel arguments of either kind.
+    class Param {
+    public:
+        // Binds runtime argument `arg_name` of `kernel_name`. nodes defaults to every node run_params sets it on.
+        Param& runtime(
+            const tt::tt_metal::experimental::KernelSpecName& kernel_name,
+            std::string arg_name,
+            std::optional<std::vector<tt::tt_metal::experimental::NodeCoord>> nodes = std::nullopt);
+
+        // Binds common runtime argument `arg_name` of `kernel_name`.
+        Param& common_runtime(const tt::tt_metal::experimental::KernelSpecName& kernel_name, std::string arg_name);
+
+    private:
+        friend class CmdListBinder;
+        Param(CmdListBinder& binder, std::size_t index) : binder_(binder), index_(index) {}
+        CmdListBinder& binder_;
+        std::size_t index_;  // into bindings_.scalars
+    };
+
+    // Declares a Metal parameter fed by op keyword `invoke_name` through `encode`. metal_cmd_list_param_name defaults
+    // to invoke_name; name it only when one keyword needs a second encoding.
+    Param param(
+        std::string_view invoke_name,
+        CmdListEncodeFn encode = encode_uint32,
+        std::optional<std::string> metal_cmd_list_param_name = std::nullopt);
+
+    CmdListBindings finish() &&;
+
+private:
+    const tt::tt_metal::experimental::KernelSpec& kernel_spec(
+        const tt::tt_metal::experimental::KernelSpecName& kernel_name) const;
+    void claim_arg(bool common, const tt::tt_metal::experimental::KernelSpecName& kernel_name, const std::string& arg);
+
+    const tt::tt_metal::experimental::ProgramSpec& spec_;
+    const tt::tt_metal::experimental::ProgramRunArgs& run_params_;
+    CmdListBindings bindings_;
+    std::unordered_set<std::string> bound_tensors_;
+    std::unordered_set<std::string> declared_params_;
+    std::set<std::tuple<bool, std::string, std::string>> bound_args_;  // (common, kernel, argument)
 };
 
 }  // namespace ttnn::command_list

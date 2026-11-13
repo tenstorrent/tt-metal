@@ -189,6 +189,43 @@ inline void log_operation(
 
 #endif
 
+// Records `workload` into the calling thread's TTNN CommandListBuilder. With binds pushed and a spec-adapter
+// workload, first collects each program's stored CmdListBindings and the tensors this call binds.
+template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
+[[gnu::noinline]] void record_mesh_workload(
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    const typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
+    const auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+    if (spec_shared_variables == nullptr || !has_active_cmd_list_binds()) {
+        record_to_command_list(operation_name, mesh_device, workload);
+        return;
+    }
+    const auto io_mesh_tensors =
+        mesh_device_operation_t::SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
+    std::vector<CmdListProgramBindings> programs;
+    for (const auto& [range, program] : workload.get_programs()) {
+        const auto& sv = spec_shared_variables->at(range);
+        if (!sv.cmd_list_bindings) {
+            continue;
+        }
+        // The cache-miss enumeration: io tensors, then the parked op-owned tensors.
+        CmdListProgramBindings& entry = programs.emplace_back(
+            CmdListProgramBindings{.program = &program, .bindings = sv.cmd_list_bindings.get(), .bound_tensors = {}});
+        for (const auto& binding : sv.bindings) {
+            const tt::tt_metal::MeshTensor& tensor =
+                binding.tensor_idx < io_mesh_tensors.size()
+                    ? io_mesh_tensors[binding.tensor_idx].get()
+                    : (*sv.op_owned_tensors)[binding.tensor_idx - io_mesh_tensors.size()];
+            entry.bound_tensors.emplace_back(binding.tensor_parameter_name, &tensor);
+        }
+    }
+    record_to_command_list(operation_name, mesh_device, workload, programs);
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -196,6 +233,7 @@ void enqueue_mesh_workload(
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
+    const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables,
     [[maybe_unused]] bool program_cache_hit = false) {
     // Generate and set runtime_id for all programs (always, for dispatcher)
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
@@ -228,8 +266,8 @@ void enqueue_mesh_workload(
     }
 
     if (is_recording_command_list()) [[unlikely]] {
-        record_to_command_list(
-            get_operation_name<mesh_device_operation_t>(operation_attributes), mesh_device, workload);
+        record_mesh_workload<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, spec_shared_variables);
     } else {
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     }
@@ -282,6 +320,19 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
         program_factory);
 }
 
+// The cached workload's shared variables if a spec adapter built it, else nullptr.
+template <typename mesh_device_operation_t, typename CachedMeshWorkload>
+const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables_of(
+    const CachedMeshWorkload& cached_mesh_workload) {
+    if constexpr (std::is_same_v<
+                      decltype(cached_mesh_workload.shared_variables),
+                      typename mesh_device_operation_t::SpecSharedVariablesMap>) {
+        return &cached_mesh_workload.shared_variables;
+    } else {
+        return nullptr;
+    }
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename UseWorkload>
 void handle_mesh_adapter_cache_hit(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -317,7 +368,8 @@ void handle_mesh_adapter_cache_hit(
             }
         }
 
-        use_workload(cached_mesh_workload.workload);
+        use_workload(
+            cached_mesh_workload.workload, spec_shared_variables_of<mesh_device_operation_t>(cached_mesh_workload));
     });
 }
 
@@ -357,7 +409,7 @@ void create_and_cache_mesh_workload(
         auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
             operation_attributes, tensor_coords, tensor_args, tensor_return_value);
         // Cached only after this use returns, so a use that throws leaves the cache unchanged.
-        use_workload(cached_workload.workload);
+        use_workload(cached_workload.workload, spec_shared_variables_of<mesh_device_operation_t>(cached_workload));
 
         // Don't cache programs during NO_DISPATCH graph capture mode because
         // buffer addresses are invalid (address=0). Caching such programs would
@@ -427,7 +479,8 @@ ProgramCacheLookup look_up_program_cache(
 }
 
 // Passes the operation's mesh workload to `use_workload`: on a hit, the cached workload with this invocation's runtime
-// arguments applied; on a miss, a newly created workload, which is cached once `use_workload` returns.
+// arguments applied; on a miss, a newly created workload, which is cached once `use_workload` returns. The second
+// argument is the workload's shared variables when a spec adapter built it, else nullptr.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename UseWorkload>
 void use_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -486,9 +539,16 @@ void launch_operation_with_adapter(
         tensor_return_value,
         mesh_device,
         lookup,
-        [&](tt::tt_metal::distributed::MeshWorkload& workload) {
+        [&](tt::tt_metal::distributed::MeshWorkload& workload,
+            const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
             enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, lookup.hit);
+                operation_attributes,
+                tensor_args,
+                tensor_return_value,
+                mesh_device,
+                workload,
+                spec_shared_variables,
+                lookup.hit);
         });
 
     // Stash factory identity after adapter work so nested function_end events cannot consume it.
@@ -528,7 +588,8 @@ void prepare_operation_with_adapter(
         tensor_return_value,
         mesh_device,
         lookup,
-        [&](tt::tt_metal::distributed::MeshWorkload& workload) {
+        [&](tt::tt_metal::distributed::MeshWorkload& workload,
+            const typename mesh_device_operation_t::SpecSharedVariablesMap* /*spec_shared_variables*/) {
             tt::tt_metal::experimental::program_preparation::prepare(*mesh_device, workload);
         });
 }
