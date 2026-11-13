@@ -57,8 +57,8 @@
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
-#include "impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
@@ -1908,9 +1908,10 @@ bool MeshDeviceImpl::initialize_impl(
     if (dram_sender_placement_ == DramSenderPlacement::DramCore) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
     } else if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        const auto layout = ::tt::tt_metal::tensor_prefetcher_region_layout(metal_env().get_cluster());
         drisc_l1_arena_ = ::tt::tt_metal::DriscL1Arena::for_dispatch_engine(
-            metal_context().dispatch_mem_map().unused_l1_base() + tensor_prefetcher_fifo::kSenderStateZoneOffset,
-            tensor_prefetcher_fifo::kSenderStateZoneBytes);
+            metal_context().dispatch_mem_map().unused_l1_base() + layout.sender_state_zone_offset(),
+            layout.sender_state_zone_bytes());
     }
 
     is_internal_state_initialized = true;
@@ -1998,9 +1999,11 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
+    // A dispatch engine holds every endpoint, so a second one per bank would only split the bank's
+    // receivers into two pipes without adding a data path.
     if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
         check_dram_bank(device, bank_id);
-        return {CoreCoord(bank_id, 0), CoreCoord(bank_id, 1)};
+        return {CoreCoord(bank_id, 0)};
     }
     const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
 

@@ -28,6 +28,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 
 #include "tt_metal/common/scoped_timer.hpp"
+#include "impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "impl/buffers/tensor_prefetcher_request.hpp"
 
 namespace tt::tt_metal {
@@ -368,6 +369,7 @@ private:
         uint32_t written = 0;
     };
     uint32_t fifo_region_base_ = 0;
+    tensor_prefetcher_fifo::RegionLayout fifo_layout_;
     std::vector<DeviceFifo> fifos_;
 
     // MeshCoordinate -> index into devices_, populated once at start() so

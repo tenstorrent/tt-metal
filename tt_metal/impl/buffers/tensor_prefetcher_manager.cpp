@@ -627,15 +627,18 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
     // the rest agree, because everything downstream (socket placement, kernel placement, pipe sender
     // indices) indexes senders by slot and would otherwise silently drive another device's wrong
     // DRISC core.
-    const auto senders_on = [this](const IDevice* device) {
+    // Two roles per bank on DRAM cores (the free subchannel, then the NOC1-endpoint subchannel); one on a
+    // dispatch engine, which holds every endpoint.
+    const size_t roles_per_bank = on_dispatch_engine() ? 1 : 2;
+    const auto senders_on = [this, roles_per_bank](const IDevice* device) {
         std::vector<CoreCoord> senders;
-        senders.reserve(2 * num_banks_);
+        senders.reserve(roles_per_bank * num_banks_);
         for (uint32_t b = 0; b < num_banks_; ++b) {
-            // Two roles per bank: the free subchannel then the NOC1-endpoint subchannel.
             const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(device, b);
             TT_FATAL(
-                bank_senders.size() == 2,
-                "Tensor prefetcher expected two DRAM sender roles for bank {} on device {}, found {}",
+                bank_senders.size() == roles_per_bank,
+                "Tensor prefetcher expected {} DRAM sender roles for bank {} on device {}, found {}",
+                roles_per_bank,
                 b,
                 device->id(),
                 bank_senders.size());

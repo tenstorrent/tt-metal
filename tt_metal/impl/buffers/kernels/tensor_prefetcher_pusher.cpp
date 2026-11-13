@@ -14,6 +14,7 @@
 //
 // Compile-time defines (set by TensorPrefetcherKernel):
 //   TENSOR_PREFETCHER_REGION_BASE      L1 base of the region described in tensor_prefetcher_fifo.hpp
+//   TENSOR_PREFETCHER_LANES            lanes per request slot (fifo::RegionLayout)
 //   TENSOR_PREFETCHER_STAGE_RING_SIZE  bytes of that region's stage ring
 
 #include <stdint.h>
@@ -33,12 +34,11 @@ using experimental::DramSenderConfigPage;
 using experimental::PrefetcherPipe;
 using tensor_prefetcher::FifoConsumer;
 using tensor_prefetcher::LanePage;
-using tensor_prefetcher::pushed_ptr;
-using tensor_prefetcher::staged_ptr;
 using tensor_prefetcher::TensorStream;
 
-constexpr uint32_t region_base = TENSOR_PREFETCHER_REGION_BASE;
-constexpr uint32_t stage_ring_base = region_base + fifo::kStageRingOffset;
+constexpr tensor_prefetcher::Region region{
+    .base = TENSOR_PREFETCHER_REGION_BASE, .layout = fifo::RegionLayout{TENSOR_PREFETCHER_LANES}};
+constexpr uint32_t stage_ring_base = region.stage_ring_base();
 constexpr uint32_t stage_ring_size = TENSOR_PREFETCHER_STAGE_RING_SIZE;
 
 static_assert(fifo::kMaxReceivers <= 32, "A pass tracks its receivers in one 32-bit mask");
@@ -69,7 +69,7 @@ private:
     struct alignas(PrefetcherPipe) Storage {
         uint8_t bytes[sizeof(PrefetcherPipe)];
     };
-    Storage storage_[fifo::kMaxLanes];
+    Storage storage_[TENSOR_PREFETCHER_LANES];
     uint32_t num_lanes_;
 };
 
@@ -84,7 +84,7 @@ bool push_tensor(
     uint32_t pushed[fifo::kMaxReceivers];
     uint32_t blocks_pushed[fifo::kMaxReceivers];
     for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-        pushed[i] = *pushed_ptr(region_base, i);
+        pushed[i] = *region.pushed(i);
         blocks_pushed[i] = 0;
     }
     uint32_t remaining = stream.num_receivers * stream.block_count;
@@ -92,7 +92,7 @@ bool push_tensor(
     while (remaining > 0) {
         uint32_t writing = 0;
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-            if (blocks_pushed[i] == stream.block_count || *staged_ptr(region_base, i) == pushed[i]) {
+            if (blocks_pushed[i] == stream.block_count || *region.staged(i) == pushed[i]) {
                 continue;
             }
             PrefetcherPipe& pipe = pipes[stream.lane[i]];
@@ -117,7 +117,7 @@ bool push_tensor(
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
             if (writing & (1u << i)) {
                 pipes[stream.lane[i]].push_back_to_receiver(stream.receiver_in_lane[i], 1, noc);
-                *pushed_ptr(region_base, i) = ++pushed[i];
+                *region.pushed(i) = ++pushed[i];
                 ++blocks_pushed[i];
                 --remaining;
             }
@@ -157,7 +157,7 @@ bool drain(const FifoConsumer& requests, const LanePage& page) {
 // Serves one request slot. False if termination was requested first.
 bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot) {
     const uint32_t num_lanes = slot->num_lanes;
-    ASSERT(num_lanes > 0 && num_lanes <= fifo::kMaxLanes);
+    ASSERT(num_lanes > 0);
     volatile tt_l1_ptr tt::tt_metal::TensorPrefetcherRequestHeader* header = LanePage(slot, 0).header();
     if (header->base.cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_DRAIN) {
         for (uint32_t l = 0; l < num_lanes; ++l) {
@@ -181,4 +181,4 @@ bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHea
 
 }  // namespace
 
-void kernel_main() { tensor_prefetcher::serve_requests(region_base, fifo::kPusherRdOffset, push_request); }
+void kernel_main() { tensor_prefetcher::serve_requests(region, fifo::kPusherRdOffset, push_request); }

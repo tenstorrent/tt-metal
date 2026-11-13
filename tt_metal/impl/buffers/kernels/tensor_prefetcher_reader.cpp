@@ -19,6 +19,7 @@
 //
 // Compile-time defines (set by TensorPrefetcherKernel):
 //   TENSOR_PREFETCHER_REGION_BASE      L1 base of the region described in tensor_prefetcher_fifo.hpp
+//   TENSOR_PREFETCHER_LANES            lanes per request slot (fifo::RegionLayout)
 //   TENSOR_PREFETCHER_STAGE_RING_SIZE  bytes of that region's stage ring
 
 #include <stdint.h>
@@ -31,12 +32,11 @@
 namespace fifo = tt::tt_metal::tensor_prefetcher_fifo;
 using tensor_prefetcher::FifoConsumer;
 using tensor_prefetcher::LanePage;
-using tensor_prefetcher::pushed_ptr;
-using tensor_prefetcher::staged_ptr;
 using tensor_prefetcher::TensorStream;
 
-constexpr uint32_t region_base = TENSOR_PREFETCHER_REGION_BASE;
-constexpr uint32_t stage_ring_base = region_base + fifo::kStageRingOffset;
+constexpr tensor_prefetcher::Region region{
+    .base = TENSOR_PREFETCHER_REGION_BASE, .layout = fifo::RegionLayout{TENSOR_PREFETCHER_LANES}};
+constexpr uint32_t stage_ring_base = region.stage_ring_base();
 constexpr uint32_t stage_ring_size = TENSOR_PREFETCHER_STAGE_RING_SIZE;
 
 static_assert(fifo::kMaxReceivers <= 32, "A pass tracks its receivers in one 32-bit mask");
@@ -48,7 +48,7 @@ namespace {
 bool wait_for_pusher(const FifoConsumer& requests, uint32_t num_receivers) {
     WAYPOINT("TRPW");
     for (uint32_t i = 0; i < num_receivers; ++i) {
-        while (*pushed_ptr(region_base, i) != *staged_ptr(region_base, i)) {
+        while (*region.pushed(i) != *region.staged(i)) {
             if (requests.terminate_requested()) {
                 return false;
             }
@@ -63,7 +63,7 @@ bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream) {
     uint32_t staged[fifo::kMaxReceivers];
     uint32_t next_block[fifo::kMaxReceivers];
     for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-        staged[i] = *staged_ptr(region_base, i);
+        staged[i] = *region.staged(i);
         next_block[i] = 0;
     }
     uint32_t remaining = stream.num_receivers * stream.block_count;
@@ -71,8 +71,7 @@ bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream) {
     while (remaining > 0) {
         uint32_t reading = 0;
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-            if (next_block[i] == stream.block_count ||
-                staged[i] - *pushed_ptr(region_base, i) == fifo::kStageSlotsPerReceiver) {
+            if (next_block[i] == stream.block_count || staged[i] - *region.pushed(i) == fifo::kStageSlotsPerReceiver) {
                 continue;
             }
             const uint32_t dst = stream.stage_slot_addr(stage_ring_base, i, staged[i] % fifo::kStageSlotsPerReceiver);
@@ -91,7 +90,7 @@ bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream) {
         noc_async_read_barrier();
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
             if (reading & (1u << i)) {
-                *staged_ptr(region_base, i) = ++staged[i];
+                *region.staged(i) = ++staged[i];
                 ++next_block[i];
                 --remaining;
             }
@@ -106,7 +105,7 @@ bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream) {
 // for the pusher to empty the ring. False if termination was requested.
 bool stage_request(
     const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t& layout_receivers) {
-    ASSERT(slot->num_lanes > 0 && slot->num_lanes <= fifo::kMaxLanes);
+    ASSERT(slot->num_lanes > 0);
     volatile tt_l1_ptr tt::tt_metal::TensorPrefetcherRequestHeader* header = LanePage(slot, 0).header();
     if (header->base.cmd_id != tt::tt_metal::DRAM_PREFETCHER_CMD_PREFETCH) {
         return true;  // DRAIN is the pusher's alone.
@@ -135,9 +134,7 @@ bool stage_request(
 void kernel_main() {
     uint32_t layout_receivers = 0;
     tensor_prefetcher::serve_requests(
-        region_base,
-        fifo::kReaderRdOffset,
-        [&](const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot) {
+        region, fifo::kReaderRdOffset, [&](const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot) {
             return stage_request(requests, slot, layout_receivers);
         });
 }

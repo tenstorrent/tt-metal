@@ -23,6 +23,7 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -62,7 +63,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsR
         GTEST_SKIP() << "Requires fast dispatch on a dispatch engine serving one CQ";
     }
     const DispatchMemMap& mem_map = this->device().impl().metal_context().dispatch_mem_map();
-    ASSERT_GE(mem_map.unused_l1_size(), fifo::kMinRegionBytes);
+    const fifo::RegionLayout layout = tensor_prefetcher_region_layout(this->device().impl().metal_env().get_cluster());
+    ASSERT_GE(mem_map.unused_l1_size(), layout.min_region_bytes());
     const uint32_t base = mem_map.unused_l1_base();
     const CoreCoord core =
         dram_sender_dispatch_engine(this->device().impl().get_context_id(), this->device().get_device_ids()[0]);
@@ -92,7 +94,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsR
             ASSERT_GE(wait_for_retired(written - fifo::kFifoSlots + 1), written - fifo::kFifoSlots + 1)
                 << "Tensor prefetcher kernels stopped retiring slots";
         }
-        write_words(this->device(), core, base + fifo::slot_offset(written), nop_words);
+        write_words(this->device(), core, base + layout.slot_offset(written), nop_words);
         write_words(this->device(), core, base + fifo::kFifoWrOffset, {written + 1});
     }
     EXPECT_EQ(wait_for_retired(kNumSlots), kNumSlots);
@@ -101,8 +103,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsR
 }
 
 // Pipes carved for the Tensor prefetcher through the ordinary DRAM-sender API land on the dispatch
-// engine: each endpoint's sender config page is in the engine's L1, and its receivers return credits
-// to the engine.
+// engine: one endpoint per bank, whose sender config page is in the engine's L1 and whose receivers
+// return credits to the engine.
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDramSenderPipesLiveOnDispatchEngine) {
     if (!dram_senders_on_dispatch_engine(this->device())) {
         GTEST_SKIP() << "Requires fast dispatch on a dispatch engine serving one CQ";
@@ -110,49 +112,45 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDramSenderPipesLiveOnD
     auto& mesh_device = this->device();
     const CoreCoord grid = mesh_device.compute_with_storage_grid_size();
     ASSERT_GE(grid.x * grid.y, 2u);
-    // Two receivers on bank 0, which splits them across the bank's two sender endpoints: two pipes
-    // whose endpoints share the one dispatch engine.
+    // Two receivers on bank 0: one pipe, from the bank's one endpoint on the dispatch engine.
     const std::vector<CoreCoord> receivers = {CoreCoord(0, 0), grid.x > 1 ? CoreCoord(1, 0) : CoreCoord(0, 1)};
 
     experimental::PrefetcherPipeSpaceConfig config;
-    config.num_dram_senders = 2;
+    config.num_dram_senders = 1;
     config.receiver_domain = CoreRangeSet(CoreRange(receivers[0])).merge(CoreRangeSet(CoreRange(receivers[1])));
     config.ring_size = 4096;
-    config.max_receivers_per_pipe = 1;
+    config.max_receivers_per_pipe = 2;
     auto space = experimental::CreatePrefetcherPipeSpace(mesh_device, config);
     const std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{0, config.receiver_domain}};
     auto pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers);
-    ASSERT_EQ(pipes.size(), 2u);
+    ASSERT_EQ(pipes.size(), 1u);
+    const experimental::PrefetcherPipe& pipe = pipes[0];
+    EXPECT_EQ(pipe.sender_core_type(), experimental::SenderCoreType::Dram);
+    EXPECT_EQ(pipe.sender_core(), CoreCoord(0, 0)) << "an endpoint keeps naming its bank and role";
+    ASSERT_EQ(pipe.receiver_cores(), config.receiver_domain);
 
     const ChipId chip = mesh_device.get_device_ids()[0];
     const CoreCoord dispatch_engine = dram_sender_dispatch_engine(mesh_device.impl().get_context_id(), chip);
     const CoreCoord dispatch_engine_virtual =
         mesh_device.virtual_core_from_logical_core(dispatch_engine, CoreType::DISPATCH);
-    const uint32_t page_bytes = pipes[0].config_page_size();
-    for (uint32_t b = 0; b < pipes.size(); ++b) {
-        const experimental::PrefetcherPipe& pipe = pipes[b];
-        EXPECT_EQ(pipe.sender_core_type(), experimental::SenderCoreType::Dram);
-        EXPECT_EQ(pipe.sender_core(), CoreCoord(0, b)) << "an endpoint keeps naming its bank and role";
-        ASSERT_EQ(pipe.receiver_cores(), CoreRangeSet(CoreRange(receivers[b])));
-
-        const auto sender_page = read_words(
-            mesh_device,
-            dispatch_engine,
-            static_cast<uint32_t>(pipe.impl().sender_state_drisc_l1_base()),
-            page_bytes,
-            CoreType::DISPATCH);
-        EXPECT_EQ(sender_page.at(REMOTE_DFB_CFG_IS_SENDER), 1u) << "endpoint " << b;
-        EXPECT_EQ(sender_page.at(REMOTE_DFB_CFG_NUM_RECEIVERS), 1u) << "endpoint " << b;
-
+    const uint32_t page_bytes = pipe.config_page_size();
+    const auto sender_page = read_words(
+        mesh_device,
+        dispatch_engine,
+        static_cast<uint32_t>(pipe.impl().sender_state_drisc_l1_base()),
+        page_bytes,
+        CoreType::DISPATCH);
+    EXPECT_EQ(sender_page.at(REMOTE_DFB_CFG_IS_SENDER), 1u);
+    EXPECT_EQ(sender_page.at(REMOTE_DFB_CFG_NUM_RECEIVERS), 2u);
+    for (const CoreCoord& receiver : receivers) {
         const auto receiver_page =
-            read_words(mesh_device, receivers[b], pipe.config_address(), page_bytes, CoreType::WORKER);
-        EXPECT_EQ(receiver_page, pipe.impl().config_page(receivers[b])) << "endpoint " << b;
-        EXPECT_EQ(receiver_page.at(PREFETCHER_PIPE_CONFIG_HEADER_WORDS), dispatch_engine_virtual.x) << "endpoint " << b;
+            read_words(mesh_device, receiver, pipe.config_address(), page_bytes, CoreType::WORKER);
+        EXPECT_EQ(receiver_page, pipe.impl().config_page(receiver)) << "receiver " << receiver.str();
+        EXPECT_EQ(receiver_page.at(PREFETCHER_PIPE_CONFIG_HEADER_WORDS), dispatch_engine_virtual.x)
+            << "receiver " << receiver.str();
         EXPECT_EQ(receiver_page.at(PREFETCHER_PIPE_CONFIG_HEADER_WORDS + 1), dispatch_engine_virtual.y)
-            << "endpoint " << b;
+            << "receiver " << receiver.str();
     }
-    // Two endpoints on one engine must not share a sender page.
-    EXPECT_NE(pipes[0].impl().sender_state_drisc_l1_base(), pipes[1].impl().sender_state_drisc_l1_base());
 }
 
 }  // namespace tt::tt_metal

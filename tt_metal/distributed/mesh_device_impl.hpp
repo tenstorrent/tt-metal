@@ -427,7 +427,8 @@ public:
     // prefetcher on `device`: element 0 is the free non-endpoint subchannel
     // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
-    // pair lets two DRISC cores share a bank's receiver set.
+    // pair lets two DRISC cores share a bank's receiver set. Under
+    // DramSenderPlacement::DispatchEngine a bank has one endpoint, so the list has one element.
     //
     // The result names endpoint roles (see metal_SocDescriptor::dram_bank_endpoint_coords), so a
     // well-formed descriptor set returns the same coords for every `device` in a mesh; the
