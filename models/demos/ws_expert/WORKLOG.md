@@ -236,3 +236,22 @@ credit word by fabric inline write. Targets dealt round-robin over the 6 connect
 | 4 (80) | 2048 | 117,068 | 78.7% | 78.7% | 48 GB/s | 0.99994 |
 Same as the on-chip L1-landing numbers: the fabric is not the limit for one receiver with 6 incoming links
 (~26 GB/s a connection used).
+
+### Step 2: every chip runs experts (build_all, kernels wf_bsend / wf_relay_all)
+All 8 chips run the 80-core groups on their own tokens; expert e is owned by chip e % 8, whose senders read its
+slices from DRAM (chunk-contiguous) and land them everywhere: one 2D multicast a branch (E-only, W-only, N/S with E/W
+teeth; the source chip is not part of a fabric multicast) plus a local NoC lander. Arrival counters became one word
+a ring slot (consecutive experts of a group come from different owners and can land out of order).
+Credits: a freed count u of core c (group g) frees exactly one later slot, expert g + (u + 1) G, so it goes only to
+that expert's owner: the relay queues {owner, c, core, u} into this chip's link-0 branch sender of the owner's
+first-hop direction, which sends it as a fabric inline write between its packets (the relay holds no fabric
+connection, so link 1 carries data too: a second sender a branch, targets split by core parity).
+| version | M 586 (util tile, all chips) | M 2048 | pcc |
+|---|---|---|---|
+| link 0 data, relay on link 1 | 23-25% | 70-72% | 0.99994 |
+| both links data, credits via link-0 senders | 37-40% | 78-81% | 0.99994 |
+M 586 is limited by the tree: with N/S trunk + E/W teeth the horizontal link into an end-of-row chip carries 6/8 of
+all weights (its own row's 3 owners + the other row's 3 teeth) while its vertical link carries 1/8. At 70% (M 586)
+that link pair would need ~107 GB/s (~54 GB/s a link). Measured now: ~30 GB/s a hot link, ~69 GB/s into a chip.
+Next: a row trunk with vertical teeth (owner multicasts E/W in its row; each chip of that row forwards to its
+vertical neighbour) puts at most 4/8 on any link (ideal 3.5/8).
