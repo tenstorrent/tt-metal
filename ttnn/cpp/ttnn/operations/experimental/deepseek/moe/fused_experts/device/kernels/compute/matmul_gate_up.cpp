@@ -177,6 +177,8 @@ void kernel_main() {
     // cores_per_expert / 2 + c) the second, whose partial its writer lands in the producer's cb_wtmp.
     const bool routed_partner =
         FE_ROUTED_SPLIT > 1u && local_idx >= cores_per_expert / 2u && local_idx < cores_per_expert / 2u + num_producers;
+    // Odd groups' readers deliver their K-pieces in reverse (see fetch_gate_up.h): see piece_of below.
+    const bool reverse_pieces = FE_ROUTED_SPLIT > 1u && (expert_group & 1u) != 0u;
 #if defined(FE_PERSISTENT)
     const bool uses_input = true;
 #else
@@ -205,6 +207,8 @@ void kernel_main() {
     // The K-pieces each of a producer and its partner multiplies (all of them unsplit).
     constexpr uint32_t kMyPieces = kGateUpPieces / FE_ROUTED_SPLIT;
     static_assert(FE_ROUTED_SPLIT == 1u || kMyPieces * FE_ROUTED_SPLIT == kGateUpPieces, "whole K-pieces per part");
+    // The K-piece (of this core's half) that its p-th received piece is.
+    auto piece_of = [&](uint32_t p) -> uint32_t { return reverse_pieces ? kMyPieces - 1u - p : p; };
     // Gate and up then share one DST acquire: 4 fp32 tiles at half sync.
     static_assert(kGateUpPieces == 1 || kShardTileCols <= 4, "a split gate_up slice holds gate and up in DST at once");
 #ifdef FE_CUSTOM_MM
@@ -270,10 +274,10 @@ void kernel_main() {
                         w_cb.wait_front(gate_up_reserve_tiles);
                         if (p + 1 == kMyPieces) {
                             custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
-                                cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                                cb_input_id, cb_weights_id, piece_of(p) * kPieceK, 0, 0, kPieceK, kShardTileCols);
                         } else {
                             custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
-                                cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                                cb_input_id, cb_weights_id, piece_of(p) * kPieceK, 0, 0, kPieceK, kShardTileCols);
                         }
                         w_cb.pop_front(gate_up_reserve_tiles);
                     }
@@ -298,11 +302,15 @@ void kernel_main() {
                             for (uint32_t k = 0; k < kPieceK; ++k) {
                                 for (uint32_t n = 0; n < swiglu_tiles; ++n) {
                                     matmul_tiles(
-                                        cb_input_id, cb_weights_id, p * kPieceK + k, k * kShardTileCols + n, n);
+                                        cb_input_id,
+                                        cb_weights_id,
+                                        piece_of(p) * kPieceK + k,
+                                        k * kShardTileCols + n,
+                                        n);
                                     matmul_tiles(
                                         cb_input_id,
                                         cb_weights_id,
-                                        p * kPieceK + k,
+                                        piece_of(p) * kPieceK + k,
                                         k * kShardTileCols + swiglu_tiles + n,
                                         swiglu_tiles + n);
                                 }
@@ -423,7 +431,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t p = 0; p < kMyPieces; ++p) {
                     w_cb.wait_front(gate_up_reserve_tiles);
-                    const uint32_t k0 = (kMyPieces + p) * kPieceK;
+                    const uint32_t k0 = (kMyPieces + piece_of(p)) * kPieceK;
                     if (p + 1 == kMyPieces) {
                         custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
                             cb_input_id, cb_weights_id, k0, 0, 0, kPieceK, kShardTileCols);
@@ -441,7 +449,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t p = 0; p < kMyPieces; ++p) {
                     w_cb.wait_front(gate_up_reserve_tiles);
-                    const uint32_t k0 = (kMyPieces + p) * kPieceK;
+                    const uint32_t k0 = (kMyPieces + piece_of(p)) * kPieceK;
                     for (uint32_t k = 0; k < kPieceK; ++k) {
                         for (uint32_t n = 0; n < kShardTileCols; ++n) {
                             matmul_tiles(cb_input_id, cb_weights_id, k0 + k, k * kShardTileCols + n, n);
