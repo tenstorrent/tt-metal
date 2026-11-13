@@ -84,6 +84,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # still reads ~0.999 while the pe half collapses to ~0.02 -- a broken comparison that looks
     # exactly like a broken model.
     kv_pe_interleave = False
+    # KDA state is recurrent and prefill samples no first token, so a migration handoff leaves the next prompt
+    # token for decode to run (tt-blaze kimi_k3/entry.py MIGRATION_RESUME_NEEDS_FIRST_TOKEN).
+    migration_handoff_tail_tokens = 1
     l1_small_size = KimiK3Config.L1_SMALL_SIZE
     # `weight_cache_path` appends `{name}_{arch}_{N}dev/{sp}x{tp}`, so this is the root only. The
     # cache generator writes `<root>/kimi_k3_bh_32dev/<checkpoint-id>/mesh8x4.tpaxis1`, keyed by
