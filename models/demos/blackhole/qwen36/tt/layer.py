@@ -10,6 +10,7 @@ import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
+from models.demos.blackhole.qwen36.tt.decode_allreduce import get_decode_allreduce
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
@@ -69,6 +70,8 @@ class Qwen36DecoderLayer:
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1)
         self.is_full_attention = args.is_full_attention_layer(layer_num)
+        # Shared with the model (one per TT_CCL): its persistent buffer is allocated here, before any trace.
+        self._decode_ar = get_decode_allreduce(args, tt_ccl) if self.num_devices > 1 else None
 
         prefix = f"layers.{layer_num}"
 
@@ -271,6 +274,15 @@ class Qwen36DecoderLayer:
         # full-dim activation they expect. This is the weight-load amortization that makes verifying
         # K+1 tokens cost ~one decode step instead of ~K+1.
         _norm_mode = Mode.DECODE if (decode_cfg or mode != "prefill") else Mode.PREFILL
+        # A full-width input in a decode-mode forward is the replicated residual of
+        # decode_allreduce.DecodeResidualAllReduce, which only the MTP verify enters; a fractured one takes the path
+        # below.
+        dar = self._decode_ar
+        if dar is not None and not (_norm_mode == Mode.DECODE and x.shape[-1] == self.args.dim):
+            dar = None
+        verify = spec_verify_mode if self.is_full_attention else (gdn_recurrent and not gdn_seed)
+        if dar is not None and not verify:
+            raise ValueError("the replicated decode residual reaches a layer only in the MTP verify")
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -294,7 +306,12 @@ class Qwen36DecoderLayer:
             _attn_norm_config = _ff_norm_config = (
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+        if dar is not None:
+            attn_input = dar.rms_norm(x, self.attention_norm.norm)
+            dar_kw = {"decode_ar": dar.with_residual(x)}
+        else:
+            attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+            dar_kw = {}
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
@@ -334,6 +351,7 @@ class Qwen36DecoderLayer:
                         spec_n_users=n_users,
                         spec_user_page_table=spec_user_page_table,
                         kv_only=kv_only,
+                        **dar_kw,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
@@ -355,6 +373,7 @@ class Qwen36DecoderLayer:
                             n_users=n_users,
                             state_blk_idx=state_blk_idx,
                             conv_sel=conv_sel,
+                            **dar_kw,
                         )
                     elif gdn_collect:
                         # Batched per-user prefill: stash this user's from-scratch state for
@@ -394,6 +413,14 @@ class Qwen36DecoderLayer:
         ttnn.deallocate(attn_input)
         if kv_only:
             return None
+
+        if dar is not None:
+            h = attn_output  # the all-reduce added x
+            ff_input = dar.rms_norm(h, self.ffn_norm.norm)
+            ff_output = self.feed_forward.forward(ff_input, mode=mode, decode_ar=dar.with_residual(h))
+            ttnn.deallocate(ff_input)
+            ttnn.deallocate(h)
+            return ff_output
 
         h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)

@@ -148,6 +148,7 @@ def test_the_verify_takes_its_ids_from_the_shard_before_the_gather(monkeypatch):
 
     log = []
     model = Qwen36Model.__new__(Qwen36Model)
+    model._decode_ar = None  # the fractured residual
     model._lmhead_vocab_sharded = True
     model.lm_head_weight = "w"
     model.norm = lambda rows, mode: "normed"
@@ -170,9 +171,43 @@ def test_the_verify_takes_its_ids_from_the_shard_before_the_gather(monkeypatch):
     assert model._vfy_shard_ids("shard") is None
 
 
+def test_the_verify_on_the_replicated_residual_takes_its_ids_from_the_shard(monkeypatch):
+    """On the replicated decode residual (decode_allreduce.py: a full-width x), the verify tail takes the final norm
+    locally, runs the per-shard argmax on this device's vocab shard before the gather, and hands the drafter this
+    device's span of the norm; without shard_ids it takes the plain LM head."""
+    import ttnn
+
+    log = []
+    model = Qwen36Model.__new__(Qwen36Model)
+    model._decode_ar = object()
+    model.args = SimpleNamespace(dim=64)
+    model._lmhead_vocab_sharded = True
+    model.lm_head_weight = "w"
+    model._final_norm_decode = lambda x: log.append(("final norm", x.name)) or "normed"
+    model._gather_vocab = lambda shard: log.append(("gather", shard)) or "logits"
+    model._lm_head = lambda normed: log.append(("lm_head", normed)) or "logits"
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
+    monkeypatch.setattr(ttnn, "linear", lambda x, w: log.append(("linear", x, w)) or "shard")
+    monkeypatch.setattr(ttnn, "mesh_partition", lambda t, **kw: log.append(("partition", t, kw["dim"])) or "feed")
+    x = SimpleNamespace(shape=(1, 1, 32, 64), name="x")
+    ids = lambda shard: log.append(("ids", shard)) or "ids"
+    assert model._spec_tail_ids(x, ids) == ("logits", "feed", "ids")
+    assert log == [
+        ("final norm", "x"),
+        ("linear", "normed", "w"),
+        ("ids", "shard"),
+        ("gather", "shard"),
+        ("partition", "normed", 3),
+    ]
+    log.clear()
+    assert model._spec_tail(x) == ("logits", "feed")
+    assert log == [("final norm", "x"), ("lm_head", "normed"), ("partition", "normed", 3)]
+
+
 def _layer(full_attention=True, num_devices=8):
     layer = MagicMock()
     layer.is_full_attention, layer.num_devices = full_attention, num_devices
+    layer._decode_ar = None  # the fractured residual
     layer.args.get_norm_config.return_value = {}
     layer.attention_norm.return_value = "attn_input"
     layer.attention.forward_decode.return_value = None
