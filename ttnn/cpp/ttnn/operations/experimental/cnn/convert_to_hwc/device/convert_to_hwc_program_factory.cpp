@@ -318,9 +318,10 @@ void setup_circular_buffers(
         config.input_format,
         config.is_input_in_dram ? nullptr : input.buffer()));
 
-    // CB_IN_BATCH: [C x block_size_width] staging for gathered sticks
+    // CB_IN_BATCH: [TILE_HEIGHT x block_size_width] staging for gathered sticks. Tilize reads TILE_HEIGHT rows,
+    // so the reader zeroes rows C..TILE_HEIGHT-1.
     const uint32_t cb_in_batch_page_size = block_size_width * config.element_size_bytes;
-    const uint32_t cb_in_batch_total_size = config.gather_l1_output_shard_height * cb_in_batch_page_size;
+    const uint32_t cb_in_batch_total_size = TILE_HEIGHT * cb_in_batch_page_size;
     desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid, CBIndex::CB_IN_BATCH, cb_in_batch_total_size, cb_in_batch_page_size, config.input_format, nullptr));
 
@@ -485,7 +486,7 @@ tt::tt_metal::ProgramDescriptor ConvertToHWCProgramFactory::create_descriptor(
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(writer_compile_time_args1);
 
     auto compute_compile_time_args =
-        make_compute_compile_args(tiling.total_tiles_per_block, config.gather_l1_output_shard_height, num_blocks);
+        make_compute_compile_args(tiling.total_tiles_per_block, tt::constants::TILE_HEIGHT, num_blocks);
 
     tt::tt_metal::KernelDescriptor writer_kernel_0;
     writer_kernel_0.kernel_source =
