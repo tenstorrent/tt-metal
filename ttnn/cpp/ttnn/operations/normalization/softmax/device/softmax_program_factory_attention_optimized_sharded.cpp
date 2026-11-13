@@ -7,6 +7,7 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
@@ -130,10 +131,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         }
     }
 
-    // define core ranges (full sharded grid)
-    std::uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
-    std::uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
-    const CoreRangeSet all_device_cores{CoreRange({0, 0}, {num_cores_c - 1, num_cores_r - 1})};
+    // define core ranges (sharded grid from input tensor's shard spec)
+    const CoreRangeSet all_device_cores = input_tensor.shard_spec().value().grid;
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};
@@ -498,18 +497,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         }
     };
 
-    if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-        for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
-            }
-        }
-    } else {
-        for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-            for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
-            }
-        }
+    const bool row_wise = (shard_orient == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    const auto cores = corerange_to_cores(all_device_cores, all_device_cores.num_cores(), row_wise);
+    for (const auto& core : cores) {
+        emit_reader_args(core);
     }
 
     if (!reader_ra.runtime_arg_values.empty()) {
