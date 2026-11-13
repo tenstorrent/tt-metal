@@ -498,7 +498,7 @@
   # reads `variant.ttnn_cache_env` and nothing else, with no fallback to the share, so without it
   # the fixture points at the checkpoint dir and the section dies on `TTNN cache incomplete`.
   #
-  # [4/5] and [5/5] are K3.1's counterparts of [1/5] and [2/5] (tt_metal_tracker-ao3i.6.1), last so a
+  # [4/5] and [5/5] are K3.1's counterparts of [1/5] and [2/5], last so a
   # K3.1 failure masks no K3 section: test_k31_depth_ladder_matches_golden, layers 0-23 (PP4 stage 0)
   # on K3.1's real weights against its vLLM trace -- L24 on the 10K trace (two chunks), L24-128k on the
   # 128K trace (26 chunks, K3's long-context check). Each keeps its K3 counterpart's bound; measured

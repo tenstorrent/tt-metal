@@ -325,10 +325,10 @@ def test_driver_cache_plan_follows_cache_kind(model, tmp_path, monkeypatch):
 
 
 def test_producer_scores_the_k31_index_cache_against_the_trace(tmp_path, monkeypatch):
-    """The runner gate's index check on K3.1 (tt_metal_tracker-ao3i.5.3): it reads the trace's single-file
+    """The runner gate's index check on K3.1: it reads the trace's single-file
     `indexer/indexer_k_layer_N` golden, walks config 1 at the DSA layers only (K3.1 has no `indexer_types`, and
     its other rows hold KDA state), and scores the device keys in the trace's natural basis (K3.1's index cache holds
-    unrotated keys, tt_metal_tracker-ao3i.5.9)."""
+    unrotated keys)."""
     import json
 
     import torch

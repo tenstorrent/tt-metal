@@ -105,8 +105,8 @@ def score_compute_kernel_config(config, arch) -> ttnn.DeviceComputeKernelConfig 
     """The indexer score matmul's compute config from ``config.index_score_math_fidelity``.
 
     Absent -> None: the op's own default (LoFi for bf8 x bf8), which DS-V3.2 / GLM run. Kimi-K3.1 sets HiFi2
-    (tt_metal_tracker-ao3i.2.7). Only the fidelity varies: bf16 dest without L1 accumulation are the op's defaults and
-    the only modes it is validated for."""
+    (why: ``kimi_k3_1_hf_config``). Only the fidelity varies: bf16 dest without L1 accumulation are the op's
+    defaults and the only modes it is validated for."""
     fidelity = getattr(config, "index_score_math_fidelity", None)
     if fidelity is None:
         return None

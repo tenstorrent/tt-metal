@@ -397,17 +397,17 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 #   per chunk; rows past the prompt (vLLM's decode steps) feed the model but are not scored.
 #
 # The bar is K3's, per layer by depth: SHALLOW_LAYER_PCC through layer 11, DEEP_LAYER_PCC through layer 23 (K3's
-# depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K
-# (tt_metal_tracker-ao3i.5.1): worst 0.9966 (layers 0-11), 0.9869 (12-23).
+# depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K:
+# worst 0.9966 (layers 0-11), 0.9869 (12-23).
 #
 # The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
 #
-# * Key cache (tt_metal_tracker-ao3i.5.3): the trace's `indexer/indexer_k_layer_i` is the post-LayerNorm key in
+# * Key cache: the trace's `indexer/indexer_k_layer_i` is the post-LayerNorm key in
 #   the natural basis (its own fp8 cache dequantizes to it at PCC 0.9996). K3.1's decode reads its cache in that
-#   basis, so the device key is compared as stored (`index_hadamard=False`, tt_metal_tracker-ao3i.5.9): a
+#   basis, so the device key is compared as stored (`index_hadamard=False`): a
 #   Hadamard-rotated cache reads PCC -0.22..0.17 and fails. PCC on the prompt rows, as the producer's index check does.
 #   Bar KV_CACHE_PCC, the KV cache's (the producer holds the index cache to the same threshold as the kvpe).
-# * Top-k (tt_metal_tracker-ao3i.5.2): each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
+# * Top-k: each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
 #   scored as set recall |device ∩ trace| / |trace| per query row (test_ttnn_csa*.py's measure), averaged
 #   over the prompt rows at positions >= INDEX_TOPK. Rows before that select every causal key on both sides
 #   (recall 1 by construction, checked). Bar K31_TOPK_RECALL, per golden (below).
@@ -420,12 +420,12 @@ def k31_layer_pcc(layer: int) -> float:
     return SHALLOW_LAYER_PCC if layer < KimiK3Config.ATTN_RES_BLOCK_SIZE else DEEP_LAYER_PCC
 
 
-# The package's indexer overlap floor (test_ttnn_csa_indexer._assert_topk_overlap). Measured at 10K
-# (tt_metal_tracker-ao3i.5.2): mean recall 0.913 (layer 51) .. 0.971. The trace's cut is crowded (~150 of 2048
+# The package's indexer overlap floor (test_ttnn_csa_indexer._assert_topk_overlap). Measured at 10K:
+# mean recall 0.913 (layer 51) .. 0.971. The trace's cut is crowded (~150 of 2048
 # selected keys within 1% of the row's score spread above it), and through layer 47 >= 98% of the trace keys the
 # device misses rank >= 1500 of 2048 by trace score: near-ties a bf8 key/query moves across the cut. From layer 55
 # on, 6-11% of misses come from the trace's top half, in rows owned mostly by newline/','/'.' tokens: the
-# frequent-token hidden-state error that sets in at layers 48-59 (tt_metal_tracker-ao3i.5.5), not the indexer
+# frequent-token hidden-state error that sets in at layers 48-59, not the indexer
 # (its key cache stays >= 0.992 there). 0.95, the CSA chunked floor, would fail layers 3, 7, 51 and 63-92 on that.
 #
 # Near-tie recall falls with the number of candidates, so one floor cannot serve both goldens: at 128K the cut holds
@@ -433,12 +433,11 @@ def k31_layer_pcc(layer: int) -> float:
 # 11-23 keep the 10K signature (>= 94% of misses rank >= 1500, median margin 0.3-0.6% of the spread): mean 0.928-0.941 at LoFi.
 # Layers 3 and 7 carry ~3x the later layers' per-key score error at both lengths (miss margin p50 ~1.2%, p90 ~3.4% of
 # the spread, unchanged from 10K), so the crowding costs them more. The first layers' larger score error and the
-# trend toward 1M are tt_metal_tracker-ao3i.5.7; its largest device step, the score matmul's LoFi, is now HiFi2
-# (``index_score_math_fidelity``, tt_metal_tracker-ao3i.2.7): layers 3 / 7 0.867 / 0.875 at 128K (0.834 / 0.837 at
+# trend toward 1M are not fully explained; the largest device step in that error, the score matmul's LoFi, is now
+# HiFi2 (``index_score_math_fidelity``): layers 3 / 7 0.867 / 0.875 at 128K (0.834 / 0.837 at
 # LoFi), 0.944 / 0.952 at 10K (0.929 / 0.936). The 128K floor is 0.85, ~1.7 points under them, as 0.9 sits ~1.3
 # under the 10K minimum (layer 51, LoFi-measured; HiFi2 raised every measured layer); a fallback to LoFi fails it.
-# Unlike 0.9, 0.85 comes from this measurement alone, not from an external reference (0.8 at LoFi: orchestrator
-# decision, tt_metal_tracker-ao3i.5.2).
+# Unlike 0.9, 0.85 comes from this measurement alone, not from an external reference (the LoFi-era floor was 0.8).
 K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.85}
 
 
