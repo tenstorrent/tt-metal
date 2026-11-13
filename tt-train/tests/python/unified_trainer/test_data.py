@@ -43,7 +43,13 @@ class CharTokenizer:
 
 
 def config(**overrides):
-    fields = {"dataset_id": "sst2", "model_name": "m", "optimizer": {"lr": 1e-4}, "batch_size": 2, "max_length": 32}
+    fields = {
+        "dataset_id": "sst2",
+        "model": {"name": "m"},
+        "optimizer": {"lr": 1e-4},
+        "batch_size": 2,
+        "max_length": 32,
+    }
     return SFTTrainerConfig.model_validate({**fields, **overrides})
 
 

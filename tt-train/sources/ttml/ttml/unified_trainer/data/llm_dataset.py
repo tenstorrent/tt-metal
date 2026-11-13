@@ -84,7 +84,7 @@ class LLMDataset:
             raise ValueError(f"{type(self).__name__} has the splits 'train' and 'validation', not {self.split!r}")
 
     def _cache_key(self) -> tuple:
-        return (type(self), self.config.model_name, self.config.max_length, self.config.seed)
+        return (type(self), self.config.model.name, self.config.max_length, self.config.seed)
 
     @classmethod
     def clear_cache(cls) -> None:

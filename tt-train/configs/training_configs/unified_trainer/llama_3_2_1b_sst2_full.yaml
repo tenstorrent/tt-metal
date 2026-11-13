@@ -5,8 +5,10 @@
 #
 # Checkpoints are HF model directories (AutoModelForCausalLM.from_pretrained loads them) under
 # <project_dir>/checkpoints/; each holds all weights, so only the last one is kept.
+model:
+  name: meta-llama/Llama-3.2-1B-Instruct
+
 dataset_id: sst2
-model_name: meta-llama/Llama-3.2-1B-Instruct
 max_length: 64
 batch_size: 8
 num_epochs: 1

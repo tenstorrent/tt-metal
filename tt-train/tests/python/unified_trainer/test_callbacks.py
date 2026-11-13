@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""MetricsCallback and CheckpointCallback on a framework-free trainer. Device-free."""
+"""MetricsCallback and CheckpointCallback on a framework-free trainer, and runs that start from the checkpoints
+CheckpointCallback saves. Device-free."""
 
 import json
 import os
@@ -79,6 +80,11 @@ def final_checkpoint(tmp_path):
     return os.path.join(str(tmp_path), "checkpoints", "final")
 
 
+def starting_from(init_type, path):
+    """The ``model`` section of a run that starts from the checkpoint at ``path``."""
+    return {"name": "fake", "init_strategy": {"type": init_type, "path": path}}
+
+
 def test_checkpoints_every_frequency_steps_and_at_the_end(tmp_path):
     trainer = FakeTrainer([CheckpointCallback()])
     run(trainer, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, rotation_strategy=KEEP_ALL))
@@ -116,10 +122,10 @@ def test_init_loads_the_weights_and_trains_from_step_0(tmp_path):
     first = FakeTrainer([CheckpointCallback()])
     run(first, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, save_optim=True))
 
+    # The trainer loads the checkpoint itself: the run needs no CheckpointCallback to start from one.
     recorder = Recorder()
-    second = FakeTrainer([CheckpointCallback(), recorder])
-    init = {"type": "init", "path": final_checkpoint(tmp_path)}
-    run(second, checkpoint=checkpoint_config(tmp_path / "second", init_strategy=init))
+    second = FakeTrainer([recorder])
+    run(second, model=starting_from("init", final_checkpoint(tmp_path)))
     assert second.loaded == [final_checkpoint(tmp_path)]
     assert recorder.args("on_step_end") == [(1,), (2,), (3,), (4,)]
 
@@ -129,10 +135,10 @@ def test_resume_continues_after_the_checkpoint_s_step(tmp_path):
     run(first, max_steps=2, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, save_optim=True))
 
     recorder = Recorder()
-    second = FakeTrainer([CheckpointCallback(), recorder])
-    resume = {"type": "resume", "path": final_checkpoint(tmp_path)}
-    second.setup(make_config(checkpoint=checkpoint_config(tmp_path / "second", init_strategy=resume)))
+    second = FakeTrainer([recorder])
+    second.setup(make_config(model=starting_from("resume", final_checkpoint(tmp_path))))
     try:
+        assert second.global_step == 2
         second.train()
         # The two steps of the first run, then its last two batches.
         assert second.optimizer.steps == 4
@@ -146,10 +152,13 @@ def test_resume_needs_the_optimizer_state(tmp_path, expect_error):
     first = FakeTrainer([CheckpointCallback()])
     run(first, max_steps=2, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS))
 
-    second = FakeTrainer([CheckpointCallback()])
-    resume = {"type": "resume", "path": final_checkpoint(tmp_path)}
+    recorder = Recorder()
+    second = FakeTrainer([recorder])
     with expect_error(FileNotFoundError, "has no optimizer state"):
-        run(second, checkpoint=checkpoint_config(tmp_path / "second", init_strategy=resume))
+        second.setup(make_config(model=starting_from("resume", final_checkpoint(tmp_path))))
+    # It fails the setup, so the run never starts.
+    assert recorder.hooks() == ["on_setup_error"]
+    second.cleanup()
 
 
 def test_after_a_resume_the_train_loss_averages_the_steps_it_trained(tmp_path):
@@ -157,12 +166,11 @@ def test_after_a_resume_the_train_loss_averages_the_steps_it_trained(tmp_path):
     run(first, max_steps=1, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, save_optim=True))
 
     logged = LoggedMetrics()
-    second = FakeTrainer([CheckpointCallback(), logged, MetricsCallback()])
-    resume = {"type": "resume", "path": final_checkpoint(tmp_path)}
+    second = FakeTrainer([logged, MetricsCallback()])
     run(
         second,
         metrics={"steps_freq": 2, "val_metrics": []},
-        checkpoint=checkpoint_config(tmp_path / "second", init_strategy=resume),
+        model=starting_from("resume", final_checkpoint(tmp_path)),
     )
     # Step 2 is the only step of its window this run trained; steps 3 and 4 make the next one.
     assert logged.logged() == [({"train/loss": 3.0}, 2), ({"train/loss": 1.5}, 4)]

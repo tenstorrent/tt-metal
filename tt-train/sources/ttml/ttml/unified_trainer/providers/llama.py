@@ -48,13 +48,13 @@ def lora_layers(target_modules: Sequence[str]) -> list[tuple[tuple[str, ...], st
     known = {name for projections, _ in LORA_LAYERS for name in projections}
     unknown = sorted(targets - known)
     if unknown:
-        _fail("lora.target_modules", f"{unknown} are not Llama projections; choose from {sorted(known)}")
+        _fail("model.lora.target_modules", f"{unknown} are not Llama projections; choose from {sorted(known)}")
     selected = []
     for projections, pattern in LORA_LAYERS:
         chosen = targets.intersection(projections)
         if chosen and len(chosen) != len(projections):
             _fail(
-                "lora.target_modules",
+                "model.lora.target_modules",
                 f"{', '.join(projections)} are one fused layer in ttml's Llama, so LoRA targets all of them or "
                 f"none; got only {sorted(chosen)}",
             )
@@ -110,10 +110,11 @@ class LlamaProvider:
             _fail("max_length", f"must be a multiple of {TILE} (the ttml tile size), got {max_length}")
         if max_length > hf_config.get("max_position_embeddings", max_length):
             _fail("max_length", f"exceeds the model's max_position_embeddings ({hf_config['max_position_embeddings']})")
-        if config.lora is not None:
-            if config.lora.task_type != "CAUSAL_LM":
-                _fail("lora.task_type", f"only CAUSAL_LM is supported, got {config.lora.task_type!r}")
-            lora_layers(config.lora.target_modules)
+        lora = config.model.lora
+        if lora is not None:
+            if lora.task_type != "CAUSAL_LM":
+                _fail("model.lora.task_type", f"only CAUSAL_LM is supported, got {lora.task_type!r}")
+            lora_layers(lora.target_modules)
         self._llama_config(config, hf_config)
 
     def _llama_config(self, config: SFTTrainerConfig, hf_config: dict[str, Any]) -> Any:
@@ -127,7 +128,7 @@ class LlamaProvider:
             return LlamaConfig.from_hf(hf_config, max_position_embeddings=config.max_length, **overrides)
         except ValueError as e:
             raise UnsupportedTrainingConfig(
-                f"model_name: {config.model_name} can't be built as a ttml Llama: {e}"
+                f"model.name: {config.model.name} can't be built as a ttml Llama: {e}"
             ) from e
 
     def build(self, config: SFTTrainerConfig, hf_config: dict[str, Any]) -> Any:
@@ -136,13 +137,13 @@ class LlamaProvider:
         from ttml.modules import LoraModel
 
         llama_config = self._llama_config(config, hf_config)
-        weights = model_dir(config.model_name)
+        weights = model_dir(config.model.name)
         # Loaded before LoRA wraps it: the loader checks it covers every parameter of a plain Llama.
         model = Llama(llama_config)
         load_from_safetensors(model, weights)
-        if config.lora is None:
+        lora = config.model.lora
+        if lora is None:
             return model
-        lora = config.lora
         lora_config = TtmlLoraConfig(
             rank=lora.r,
             # Scaling alpha / r, as in PEFT.
@@ -153,7 +154,7 @@ class LlamaProvider:
         try:
             return LoraModel(model, lora_config)
         except (ValueError, RuntimeError) as e:
-            raise UnsupportedTrainingConfig(f"lora.target_modules: {e}") from e
+            raise UnsupportedTrainingConfig(f"model.lora.target_modules: {e}") from e
 
     def _adapted_layers(self, model: Any) -> Iterator[tuple[Any, tuple[Any, ...]]]:
         """``(LoraLinear, the HF tensors its weight holds)`` for each LoRA layer of a ``LoraModel``."""
@@ -169,11 +170,11 @@ class LlamaProvider:
         tensors: dict[str, np.ndarray] = {}
         for layer, blocks in self._adapted_layers(model):
             tensors.update(lora_to_peft(_read(layer.lora_A.tensor), _read(layer.lora_B.tensor), blocks))
-        lora = config.lora
+        lora = config.model.lora
         return AdapterState(
             tensors=tensors,
             config=peft_adapter_config(
-                config.model_name,
+                config.model.name,
                 r=lora.r,
                 alpha=lora.alpha,
                 dropout=lora.dropout,
@@ -185,7 +186,7 @@ class LlamaProvider:
     def import_adapter(self, model: Any, state: AdapterState, config: SFTTrainerConfig) -> None:
         import ttml
 
-        lora = config.lora
+        lora = config.model.lora
         adapter = state.config
         expected = {
             "peft_type": "LORA",
@@ -202,10 +203,10 @@ class LlamaProvider:
         if mismatched:
             details = ", ".join(f"{key}: adapter {got!r}, run {want!r}" for key, (got, want) in mismatched.items())
             _fail("checkpoint", f"the adapter doesn't match this run's LoRA ({details})")
-        if not _same_model(adapter.get("base_model_name_or_path"), config.model_name):
+        if not _same_model(adapter.get("base_model_name_or_path"), config.model.name):
             _fail(
                 "checkpoint",
-                f"the adapter is for {adapter['base_model_name_or_path']!r}, this run trains {config.model_name!r}",
+                f"the adapter is for {adapter['base_model_name_or_path']!r}, this run trains {config.model.name!r}",
             )
 
         tensors = with_peft_prefix(state.tensors)
@@ -222,7 +223,7 @@ class LlamaProvider:
     def export_weights(self, model: Any, config: SFTTrainerConfig, directory: str) -> None:
         from ttml.models.llama import export_hf_model
 
-        export_hf_model(model, directory, hf_source_dir=model_dir(config.model_name))
+        export_hf_model(model, directory, hf_source_dir=model_dir(config.model.name))
 
     def import_weights(self, model: Any, directory: str, config: SFTTrainerConfig) -> None:
         from ttml.models.llama import load_from_safetensors

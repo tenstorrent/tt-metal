@@ -34,16 +34,17 @@ ATTENTION = ["q_proj", "k_proj", "v_proj", "o_proj"]
 EVERY_PROJECTION = ATTENTION + ["gate_proj", "up_proj", "down_proj"]
 
 
-def config(targets=ATTENTION, **overrides):
+def config(targets=ATTENTION, model_name="meta-llama/Llama-3.2-1B", lora=None, **overrides):
+    """A LoRA run on ``targets``, or with ``lora`` as given; ``targets=None`` trains every weight."""
+    if lora is None and targets is not None:
+        lora = {"r": 4, "alpha": 8, "target_modules": list(targets)}
     fields = {
         "dataset_id": "sst2",
-        "model_name": "meta-llama/Llama-3.2-1B",
+        "model": {"name": model_name, "lora": lora},
         "optimizer": {"lr": 1e-4},
         "batch_size": 2,
+        "max_length": 64,
     }
-    fields["max_length"] = 64
-    if targets is not None:
-        fields["lora"] = {"r": 4, "alpha": 8, "target_modules": list(targets)}
     return SFTTrainerConfig.model_validate({**fields, **overrides})
 
 
@@ -68,7 +69,7 @@ def test_the_patterns_match_the_ttml_layer_names(layer, projections):
 
 @pytest.mark.parametrize("targets", [["q_proj", "v_proj"], ["k_proj"], ["gate_proj"], ["up_proj", "down_proj"]])
 def test_a_partly_targeted_fused_layer_is_rejected(targets, expect_error):
-    with expect_error(UnsupportedTrainingConfig, "lora.target_modules: .* one fused layer"):
+    with expect_error(UnsupportedTrainingConfig, "model.lora.target_modules: .* one fused layer"):
         lora_layers(targets)
 
 
@@ -98,11 +99,19 @@ def test_gradient_checkpointing_passes():
         ({"dtype": "torch.bfloat16"}, {}, "dtype: ttml Llama weights"),
         ({"max_length": 48}, {}, "max_length: must be a multiple of 32"),
         ({"max_length": 256}, {}, "max_length: exceeds the model's max_position_embeddings"),
-        ({"lora": {"r": 4, "alpha": 8, "target_modules": ATTENTION, "task_type": "SEQ_CLS"}}, {}, "lora.task_type"),
-        ({"lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"]}}, {}, "lora.target_modules: .* one fused layer"),
-        ({}, {"hidden_act": "gelu"}, "model_name: .* hidden_act 'gelu'"),
-        ({}, {"quantization_config": {"quant_method": "gptq"}}, "model_name: .* quantized"),
-        ({}, {"rope_scaling": {"rope_type": "yarn", "factor": 4.0}}, "model_name: .* rope type 'yarn'"),
+        (
+            {"lora": {"r": 4, "alpha": 8, "target_modules": ATTENTION, "task_type": "SEQ_CLS"}},
+            {},
+            "model.lora.task_type",
+        ),
+        (
+            {"lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"]}},
+            {},
+            "model.lora.target_modules: .* one fused layer",
+        ),
+        ({}, {"hidden_act": "gelu"}, "model.name: .* hidden_act 'gelu'"),
+        ({}, {"quantization_config": {"quant_method": "gptq"}}, "model.name: .* quantized"),
+        ({}, {"rope_scaling": {"rope_type": "yarn", "factor": 4.0}}, "model.name: .* rope type 'yarn'"),
     ],
 )
 def test_an_untrainable_config_is_rejected(overrides, hf_overrides, error, expect_error):
@@ -116,7 +125,7 @@ def test_get_provider_reads_the_model_type(tmp_path, expect_error):
     assert provider is PROVIDERS["llama"] and hf_config == HF_CONFIG
 
     (tmp_path / "config.json").write_text(json.dumps({**HF_CONFIG, "model_type": "qwen3"}))
-    with expect_error(UnsupportedTrainingConfig, "no provider for model_type 'qwen3'"):
+    with expect_error(UnsupportedTrainingConfig, "model.name: no provider for model_type 'qwen3'"):
         get_provider(config(model_name=str(tmp_path)))
 
 

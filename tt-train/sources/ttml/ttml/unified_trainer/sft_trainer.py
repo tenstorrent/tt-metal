@@ -62,7 +62,7 @@ class SFTTrainer(Trainer):
         ttml.manual_seed(self.config.seed)
 
     def _load_dataloaders(self) -> tuple[Any, Optional[Any]]:
-        tokenizer = load_tokenizer(self.config.model_name)
+        tokenizer = load_tokenizer(self.config.model.name)
         train_dataset = get_dataset(self.config, "train", tokenizer)
         if len(train_dataset) < self.config.batch_size:
             raise ValueError(
@@ -174,7 +174,7 @@ class SFTTrainer(Trainer):
         """A PEFT adapter directory for a LoRA run, else an HF model directory; with ``trainer_state.json``, and
         with ``optimizer`` ``optimizer_state.pkl``."""
         with staged_directory(path) as directory:
-            if self.config.lora is not None:
+            if self.config.model.lora is not None:
                 write_adapter(directory, self.provider.export_adapter(self.model, self.config))
             else:
                 self.provider.export_weights(self.model, self.config, str(directory))
@@ -191,17 +191,17 @@ class SFTTrainer(Trainer):
 
     def load_checkpoint(self, path: str, optimizer: bool = False) -> dict:
         """Loads what ``save_checkpoint`` wrote for this kind of run; the other kind of checkpoint is an error."""
-        if self.config.lora is not None:
+        if self.config.model.lora is not None:
             if is_model_dir(path):
                 raise UnsupportedTrainingConfig(
                     f"checkpoint: {path} is a full model, not a LoRA adapter; to train adapters on it, make it "
-                    "the model_name"
+                    "the model.name"
                 )
             self.provider.import_adapter(self.model, read_adapter(path), self.config)
         else:
             if is_adapter_dir(path):
                 raise UnsupportedTrainingConfig(
-                    f"checkpoint: {path} is a LoRA adapter, and this run trains every weight; set lora to train it"
+                    f"checkpoint: {path} is a LoRA adapter, and this run trains every weight; set model.lora to train it"
                 )
             if not is_model_dir(path):
                 raise FileNotFoundError(f"{path} is not an HF model directory (config.json and *.safetensors)")

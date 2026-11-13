@@ -15,7 +15,7 @@ From the command line, with a recipe from `tt-train/configs/training_configs/uni
 ```bash
 python -m ttml.unified_trainer \
   --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_sst2_lora.yaml \
-  --set max_steps=100 --set lora.r=8
+  --set max_steps=100 --set model.lora.r=8
 ```
 
 Each `--set key=value` overrides one field; dotted keys reach into sections, and values are parsed as YAML.
@@ -44,8 +44,8 @@ Checkpoints the ttml Llama can't represent are rejected before the device opens:
 biases, an activation other than SiLU, and RoPE scaling other than `llama3` or the default. Other architectures plug in
 as model providers (see [Adding a model](#adding-a-model)).
 
-**LoRA or every weight.** With a `lora` section the run trains LoRA adapters and nothing else. Without one, it trains
-every weight. `target_modules` uses HF projection names. ttml's Llama fuses some projections into one layer, which has
+**LoRA or every weight.** With a `lora` section in `model`, the run trains LoRA adapters and nothing else. Without
+one, it trains every weight. `target_modules` uses HF projection names. ttml's Llama fuses some projections into one layer, which has
 one LoRA pair, so a fused group is targeted whole or not at all:
 
 | HF projections | ttml Llama layer |
@@ -78,7 +78,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | Field | Default | Description |
 |---|---|---|
 | `dataset_id` | | `sst2`, `alpaca` or `custom`. |
-| `model_name` | | An HF hub id or a local HF model directory. |
+| `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora` (unset) trains LoRA adapters: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`); unset trains every weight. `init_strategy` (unset) is a checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). |
 | `dtype` | `bfloat16` | Must be `bfloat16`. |
 | `max_length` | | Tokens per example: a multiple of 32, at most the model's `max_position_embeddings`. |
 | `batch_size` | | Examples per micro-batch. |
@@ -91,7 +91,6 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `master_dtype` | `bfloat16` | `float32` keeps fp32 master weights for AdamW; full fine-tuning needs it (see below). |
 | `seed` | `0` | Seeds initialization, LoRA dropout and data shuffling. |
 | `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
-| `lora` | unset | `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). Unset trains every weight. |
 | `custom_dataset` | unset | `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
 | `metrics` | | `steps_freq` (10): train metrics are averaged over and logged every this many steps. `train_metrics` (`[loss]`, `learning_rate` also works), `val_metrics` (`[loss]`). |
 | `logging` | | `log_level` (`INFO`), `use_wandb` (false), `wandb_project`, `wandb_run_name`, `wandb_tags`. |
@@ -144,7 +143,6 @@ The `checkpoint` section:
 |---|---|---|
 | `save_strategy` | `type: none` | When to save; see below. Unless `none`, the final checkpoint is also saved at the end. |
 | `rotation_strategy` | `type: last` | Which checkpoints to keep; see below. |
-| `init_strategy` | unset | A checkpoint to start from; see below. Unset starts from the pretrained weights. |
 | `project_dir` | `runs/unified_trainer` | Checkpoints go in `<project_dir>/checkpoints/`. |
 | `final_checkpoint_name` | `final` | |
 | `save_optim` | `false` | Also save the optimizer state, so a run can resume from the checkpoint. |
@@ -184,15 +182,29 @@ same `project_dir`, such as the one a run resumed from, are kept. `<project_dir>
 lists the run's checkpoints that are kept, with their step, epoch and metrics. A checkpoint is written to a staging
 directory and moved into place when complete, so a failed save leaves the previous one intact.
 
-`init_strategy` loads the checkpoint directory at `path` before training. Its `type` is one of:
+### Starting from a checkpoint
+
+`model.init_strategy` names a checkpoint directory, which `setup` loads once it has built the model and optimizer.
+Unset, the run starts from the pretrained weights of `model.name`.
+
+```yaml
+model:
+  name: meta-llama/Llama-3.2-1B-Instruct
+  init_strategy:
+    type: resume
+    path: runs/my_run/checkpoints/final
+```
+
+Its `type` is one of:
 
 - `init`: the trained weights only. Training starts at step 0 with a fresh optimizer.
-- `resume`: also the optimizer state, which the checkpoint holds if it was saved with `save_optim`. Training continues
-  after the checkpoint's step, on the batches the run would have trained on next, so keep `batch_size`,
-  `gradient_accumulation_steps`, `optimizer`, the data and the `seed` as they were.
+- `resume`: also the optimizer state, which the checkpoint holds if it was saved with `checkpoint.save_optim`.
+  Training continues after the checkpoint's step, on the batches the run would have trained on next, so keep
+  `batch_size`, `gradient_accumulation_steps`, `optimizer`, the data and the `seed` as they were.
 
-A checkpoint of the other kind is an error: a LoRA run can't load a full model (make it the `model_name` instead), and
-a full run can't load an adapter.
+The trainer loads it whichever callbacks it has, so a run needs no `CheckpointCallback` to start from a checkpoint. A
+checkpoint that doesn't load fails `setup`. A checkpoint of the other kind is an error: a LoRA run can't load a full
+model (make it the `model.name` instead), and a full run can't load an adapter.
 
 ---
 
@@ -202,7 +214,8 @@ A host builds one trainer with its callbacks and runs each job as:
 
 ```python
 try:
-    trainer.setup(config)  # validates, loads data, opens the device, builds the model and optimizer
+    trainer.setup(config)  # validates, loads data, opens the device, builds the model and optimizer,
+                           # and loads the checkpoint model.init_strategy names
     trainer.train()
 finally:
     trainer.cleanup()  # also after a failed setup
@@ -210,7 +223,7 @@ finally:
 
 - **Validation first.** `setup` checks the config against the model before it opens the device or downloads weights.
   A config the model can't train raises `UnsupportedTrainingConfig`, a `ValueError` whose message starts with the field
-  at fault, for example `lora.target_modules: ...`.
+  at fault, for example `model.lora.target_modules: ...`.
 - **Cleanup.** `cleanup` frees the model, optimizer and data, then closes the device. It is safe to call more than
   once and after any failure. What the trainer held before its first run, such as the callbacks, is kept for the next
   job.
@@ -240,7 +253,7 @@ A model provider builds the ttml model for an HF `model_type` and maps its weigh
 
 - `check(config, hf_config)`: raise `UnsupportedTrainingConfig` for anything the model can't train. It runs before the
   device opens.
-- `build(config, hf_config)`: the model with pretrained weights, wrapped in LoRA when `config.lora` is set.
+- `build(config, hf_config)`: the model with pretrained weights, wrapped in LoRA when `config.model.lora` is set.
 - `export_adapter` / `import_adapter`: the LoRA weights as PEFT tensors and adapter config, and back.
 - `export_weights` / `import_weights`: every weight, as an HF model directory, and back.
 

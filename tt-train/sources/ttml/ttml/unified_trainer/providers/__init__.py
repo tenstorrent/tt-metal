@@ -21,13 +21,13 @@ PROVIDERS: dict[str, ModelProvider] = {"llama": LlamaProvider()}
 
 
 def get_provider(config: TrainerConfig) -> tuple[ModelProvider, dict[str, Any]]:
-    """The provider for ``config.model_name``, and the model's HF config."""
-    hf_config = load_hf_config(config.model_name)
+    """The provider for ``config.model.name``, and the model's HF config."""
+    hf_config = load_hf_config(config.model.name)
     model_type = hf_config.get("model_type")
     provider = PROVIDERS.get(model_type)
     if provider is None:
         raise UnsupportedTrainingConfig(
-            f"model_name: no provider for model_type {model_type!r} ({config.model_name}); "
+            f"model.name: no provider for model_type {model_type!r} ({config.model.name}); "
             f"available: {sorted(PROVIDERS)}"
         )
     return provider, hf_config

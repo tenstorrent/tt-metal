@@ -105,7 +105,7 @@ def trainer_for(lora):
 
     trainer = SFTTrainer()
     trainer.config = SFTTrainerConfig(
-        dataset_id="sst2", model_name="m", optimizer={"lr": 1e-4}, batch_size=1, max_length=32, lora=lora
+        dataset_id="sst2", model={"name": "m", "lora": lora}, optimizer={"lr": 1e-4}, batch_size=1, max_length=32
     )
     trainer.provider, trainer.model = LlamaProvider(), None
     return trainer
@@ -122,7 +122,7 @@ def test_a_checkpoint_of_the_other_kind_is_rejected(tmp_path, expect_error):
     write_adapter(adapter, AdapterState({}, {"peft_type": "LORA"}))
 
     lora = {"r": 4, "alpha": 8, "target_modules": ["o_proj"]}
-    with expect_error(UnsupportedTrainingConfig, "is a full model, not a LoRA adapter; .* make it the model_name"):
+    with expect_error(UnsupportedTrainingConfig, "is a full model, not a LoRA adapter; .* make it the model.name"):
         trainer_for(lora).load_checkpoint(str(model))
     with expect_error(UnsupportedTrainingConfig, "is a LoRA adapter, and this run trains every weight"):
         trainer_for(None).load_checkpoint(str(adapter))

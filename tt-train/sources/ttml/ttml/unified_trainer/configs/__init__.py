@@ -8,7 +8,6 @@ from .checkpoint import (
     BestRotation,
     CheckpointConfig,
     EpochSave,
-    InitStrategy,
     LastRotation,
     NoRotation,
     NoSave,
@@ -19,6 +18,7 @@ from .loader import apply_override, load_config
 from .logging import LoggingConfig
 from .lora import LoraConfig
 from .metrics import MetricsConfig
+from .model import InitStrategy, ModelConfig
 from .optimizer import OPTIMIZERS, AdamWConfig, OptimizerConfig
 from .trainer import SFTTrainerConfig, TrainerConfig
 
@@ -34,6 +34,7 @@ __all__ = [
     "LoggingConfig",
     "LoraConfig",
     "MetricsConfig",
+    "ModelConfig",
     "NoRotation",
     "NoSave",
     "OptimizerConfig",

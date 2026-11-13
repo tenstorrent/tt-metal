@@ -26,7 +26,7 @@ class MetricsCallback(Callback):
         total, trainable = trainer.parameter_counts()
         trainer.logger.log_model_info(
             {
-                "model_name": trainer.config.model_name,
+                "model_name": trainer.config.model.name,
                 "total_params": total,
                 "trainable_params": trainable,
                 "train_dataset_size": _dataset_size(trainer.train_dataloader, trainer.config.batch_size),

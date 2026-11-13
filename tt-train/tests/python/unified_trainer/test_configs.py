@@ -22,7 +22,12 @@ from ttml.unified_trainer.configs import apply_override
 
 RECIPES = Path(__file__).resolve().parents[3] / "configs" / "training_configs" / "unified_trainer"
 
-MINIMAL = {"dataset_id": "sst2", "model_name": "meta-llama/Llama-3.2-1B", "optimizer": {"lr": 1e-4}, "batch_size": 8}
+MINIMAL = {
+    "dataset_id": "sst2",
+    "model": {"name": "meta-llama/Llama-3.2-1B"},
+    "optimizer": {"lr": 1e-4},
+    "batch_size": 8,
+}
 
 
 def sft(**overrides):
@@ -31,9 +36,9 @@ def sft(**overrides):
 
 def test_defaults_train_every_weight_without_checkpoints():
     config = sft()
-    assert config.lora is None
+    assert config.model.lora is None
+    assert config.model.init_strategy is None
     assert config.checkpoint.save_strategy.type == "none"
-    assert config.checkpoint.init_strategy is None
     assert not config.checkpoint.save_optim
     assert (config.num_epochs, config.gradient_accumulation_steps, config.max_steps, config.val_steps_freq) == (
         1,
@@ -51,7 +56,9 @@ def test_defaults_train_every_weight_without_checkpoints():
     "overrides",
     [
         {"epochs": 2},
-        {"lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "rank": 4}},
+        {"model": {"name": "m", "revision": "main"}},
+        {"model": {"name": "m", "init_strategy": {"type": "init", "path": "runs", "strict": True}}},
+        {"model": {"name": "m", "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "rank": 4}}},
         {"optimizer": {"lr": 1e-4, "momentum": 0.9}},
         {"checkpoint": {"save_every": 10}},
         {"checkpoint": {"save_strategy": {"type": "none", "frequency": 10}}},
@@ -59,7 +66,18 @@ def test_defaults_train_every_weight_without_checkpoints():
         {"metrics": {"log_freq": 10}},
         {"logging": {"wandb_watch_mode": "all"}},
     ],
-    ids=["top level", "lora", "optimizer", "checkpoint", "save strategy", "rotation strategy", "metrics", "logging"],
+    ids=[
+        "top level",
+        "model",
+        "init strategy",
+        "lora",
+        "optimizer",
+        "checkpoint",
+        "save strategy",
+        "rotation strategy",
+        "metrics",
+        "logging",
+    ],
 )
 def test_unknown_fields_are_rejected(overrides, expect_error):
     with expect_error(ValidationError, "Extra inputs are not permitted"):
@@ -70,6 +88,11 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
     "overrides, field",
     [
         ({"batch_size": 0}, "batch_size"),
+        ({"model": "m"}, "model"),
+        ({"model": {}}, "model.name"),
+        ({"model": {"name": ""}}, "model.name"),
+        ({"model": {"name": "m", "init_strategy": {"type": "last", "path": "runs"}}}, "model.init_strategy.type"),
+        ({"model": {"name": "m", "init_strategy": {"type": "resume"}}}, "model.init_strategy.path"),
         ({"optimizer": {"lr": -1.0}}, "optimizer.0.lr"),
         ({"optimizer": {"lr": 1e-4, "weight_decay": -1.0}}, "optimizer.0.weight_decay"),
         ({"optimizer": {"lr": 1e-4, "beta2": 1.0}}, "optimizer.0.beta2"),
@@ -80,9 +103,12 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
         ({"optimizer": {"lr": 1e-4, "modules": []}}, "optimizer.0.modules"),
         ({"max_length": 0}, "max_length"),
         ({"gradient_accumulation_steps": 0}, "gradient_accumulation_steps"),
-        ({"lora": {"r": 0, "alpha": 8, "target_modules": ["q_proj"]}}, "lora.r"),
-        ({"lora": {"r": 4, "alpha": 8, "target_modules": []}}, "lora.target_modules"),
-        ({"lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "dropout": 1.0}}, "lora.dropout"),
+        ({"model": {"name": "m", "lora": {"r": 0, "alpha": 8, "target_modules": ["q_proj"]}}}, "model.lora.r"),
+        ({"model": {"name": "m", "lora": {"r": 4, "alpha": 8, "target_modules": []}}}, "model.lora.target_modules"),
+        (
+            {"model": {"name": "m", "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "dropout": 1.0}}},
+            "model.lora.dropout",
+        ),
         ({"checkpoint": {"save_strategy": "step"}}, "checkpoint.save_strategy"),
         ({"checkpoint": {"save_strategy": {"type": "always"}}}, "checkpoint.save_strategy"),
         (
@@ -97,8 +123,6 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
             {"checkpoint": {"rotation_strategy": {"type": "best", "mode": "lowest"}}},
             "checkpoint.rotation_strategy.best.mode",
         ),
-        ({"checkpoint": {"init_strategy": {"type": "last", "path": "runs"}}}, "checkpoint.init_strategy.type"),
-        ({"checkpoint": {"init_strategy": {"type": "resume"}}}, "checkpoint.init_strategy.path"),
         ({"master_dtype": "float16"}, "master_dtype"),
     ],
 )
@@ -118,7 +142,6 @@ def test_each_checkpoint_strategy_type_takes_its_own_options():
         checkpoint={
             "save_strategy": {"type": "epoch"},
             "rotation_strategy": {"type": "best", "keep_n": 2},
-            "init_strategy": {"type": "resume", "path": "runs/checkpoints/final"},
         },
     ).checkpoint
     assert isinstance(checkpoint.save_strategy, EpochSave) and checkpoint.save_strategy.frequency == 1
@@ -181,17 +204,36 @@ def test_a_custom_dataset_needs_its_files(expect_error):
     )
 
 
-def test_model_name_is_a_field():
-    assert sft().model_name == MINIMAL["model_name"]
-    assert "model_name" in sft().model_dump(mode="json")
+def test_the_model_section_names_the_model_its_lora_and_the_checkpoint_it_starts_from():
+    assert sft().model_dump(mode="json")["model"] == {
+        "name": "meta-llama/Llama-3.2-1B",
+        "lora": None,
+        "init_strategy": None,
+    }
+    lora = {"r": 4, "alpha": 8, "target_modules": ["o_proj"]}
+    init = {"type": "resume", "path": "runs/checkpoints/final"}
+    assert sft(model={"name": "m", "lora": lora, "init_strategy": init}).model_dump(mode="json")["model"] == {
+        "name": "m",
+        "lora": {**lora, "dropout": 0.0, "task_type": "CAUSAL_LM"},
+        "init_strategy": init,
+    }
+
+
+def test_a_config_needs_a_model(expect_error):
+    without_model = {key: value for key, value in MINIMAL.items() if key != "model"}
+    with expect_error(ValidationError, r"\nmodel\n  Field required"):
+        SFTTrainerConfig.model_validate({**without_model, "max_length": 64})
 
 
 @pytest.mark.parametrize(
     "override, expected",
     [
-        ("lora.r=16", {"lora": {"r": 16}}),
+        ("model.lora.r=16", {"model": {"lora": {"r": 16}}}),
         ("optimizer.lr=1.0e-5", {"optimizer": {"lr": 1e-5}}),
-        ("lora.target_modules=[q_proj, k_proj]", {"lora": {"target_modules": ["q_proj", "k_proj"]}}),
+        (
+            "model.lora.target_modules=[q_proj, k_proj]",
+            {"model": {"lora": {"target_modules": ["q_proj", "k_proj"]}}},
+        ),
         ("checkpoint.save_strategy={type: none}", {"checkpoint": {"save_strategy": {"type": "none"}}}),
         (
             "custom_dataset.column_mapping={output: answer}",
@@ -208,7 +250,7 @@ def test_apply_override_parses_values_as_yaml(override, expected):
 @pytest.mark.parametrize(
     "override, error",
     [
-        ("lora.r", "expected dotted.key=value"),
+        ("model.lora.r", "expected dotted.key=value"),
         ("=4", "expected dotted.key=value"),
         ("batch_size.x=1", "'batch_size' is not a section"),
     ],
@@ -220,12 +262,22 @@ def test_apply_override_rejects_malformed_overrides(override, error, expect_erro
 
 def test_load_config_applies_overrides(tmp_path):
     recipe = tmp_path / "recipe.yaml"
-    recipe.write_text("dataset_id: sst2\nmodel_name: m\noptimizer:\n  lr: 1.0e-4\nbatch_size: 8\nmax_length: 64\n")
+    recipe.write_text("dataset_id: sst2\nmodel:\n  name: m\noptimizer:\n  lr: 1.0e-4\nbatch_size: 8\nmax_length: 64\n")
     config = load_config(
-        recipe, ["batch_size=2", "optimizer.lr=1.0e-5", "lora.r=4", "lora.alpha=8", "lora.target_modules=[o_proj]"]
+        recipe,
+        [
+            "batch_size=2",
+            "optimizer.lr=1.0e-5",
+            "model.lora.r=4",
+            "model.lora.alpha=8",
+            "model.lora.target_modules=[o_proj]",
+            "model.init_strategy={type: init, path: runs/final}",
+        ],
     )
-    assert config.batch_size == 2 and config.lora.target_modules == ["o_proj"]
+    assert config.batch_size == 2 and config.model.lora.target_modules == ["o_proj"]
     assert config.optimizer[0].lr == 1e-5
+    # An override into a section keeps the section's other fields.
+    assert (config.model.name, config.model.init_strategy.path) == ("m", "runs/final")
 
 
 def test_load_config_rejects_a_non_mapping(tmp_path, expect_error):

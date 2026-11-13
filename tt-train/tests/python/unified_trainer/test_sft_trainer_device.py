@@ -121,11 +121,11 @@ def write_jsonl(path, rows):
     return str(path)
 
 
-def sft_config(model_dir, tmp_path, checkpoint=None, rows=None, **overrides):
+def sft_config(model_dir, tmp_path, checkpoint=None, rows=None, lora=None, init_strategy=None, **overrides):
     rows = rows or [{"instruction": "Say the word.", "output": "tenstorrent"}] * 16
     fields = {
         "dataset_id": "custom",
-        "model_name": str(model_dir),
+        "model": {"name": str(model_dir), "lora": lora, "init_strategy": init_strategy},
         "custom_dataset": {
             "file_type": "jsonl",
             "train_dataset_path": write_jsonl(tmp_path / "train.jsonl", rows),
@@ -240,7 +240,7 @@ def test_an_exported_adapter_makes_the_same_logits_in_peft(tiny_llama, tmp_path,
     ids = sample_ids()
     device = DeviceManager()
     try:
-        model = provider.build(config, load_hf_config(config.model_name))
+        model = provider.build(config, load_hf_config(config.model.name))
         model.eval()
         base = ttml_logits(model, ids)
         rng = np.random.default_rng(0)
@@ -320,18 +320,15 @@ def test_init_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_t
     finally:
         first.cleanup()
 
-    # The next run starts from the final checkpoint of the first; one step at a learning rate of 0 keeps it.
-    init = {
-        "save_strategy": {"type": "none"},
-        "init_strategy": {"type": "init", "path": str(final_checkpoint(tmp_path))},
-    }
-    second = SFTTrainer(callbacks=[CheckpointCallback()])
+    # The next run starts from the final checkpoint of the first; one step at a learning rate of 0 keeps it. It
+    # has no CheckpointCallback: the trainer loads the checkpoint, and nothing overwrites it.
+    second = SFTTrainer()
     try:
         second.setup(
             sft_config(
                 tiny_llama,
                 tmp_path,
-                checkpoint=init,
+                init_strategy={"type": "init", "path": str(final_checkpoint(tmp_path))},
                 lora=lora(ATTENTION),
                 optimizer={"lr": 0.0},
                 max_steps=1,
@@ -400,7 +397,7 @@ def test_a_resumed_run_trains_as_the_run_it_continues(
     # Distinct rows, so training on other batches than the uninterrupted run would show in the losses.
     rows = [{"instruction": f"Say word {i}.", "output": "tenstorrent"[: 3 + i % 9]} for i in range(16)]
 
-    def train(project, checkpoint):
+    def train(project, checkpoint, init_strategy=None):
         losses = Losses()
         trainer = SFTTrainer(callbacks=[losses, CheckpointCallback()])
         checkpoint = {"project_dir": str(tmp_path / project), "save_optim": True, **checkpoint}
@@ -410,6 +407,7 @@ def test_a_resumed_run_trains_as_the_run_it_continues(
                     tiny_llama,
                     tmp_path,
                     checkpoint=checkpoint,
+                    init_strategy=init_strategy,
                     rows=rows,
                     num_epochs=2,
                     gradient_accumulation_steps=2,
@@ -426,7 +424,7 @@ def test_a_resumed_run_trains_as_the_run_it_continues(
     uninterrupted = train("run", {"save_strategy": {"type": "step", "frequency": 3}})
     (step_3,) = (tmp_path / "run" / "checkpoints").glob("checkpoint_step3_*")
     # From the middle of the first epoch, through the second.
-    resumed = train("resumed", {"init_strategy": {"type": "resume", "path": str(step_3)}})
+    resumed = train("resumed", {}, init_strategy={"type": "resume", "path": str(step_3)})
 
     assert len(uninterrupted) == 8 and resumed == uninterrupted[3:]
     assert_same_bits(final_checkpoint(tmp_path) / weights, final_checkpoint(tmp_path, "resumed") / weights)

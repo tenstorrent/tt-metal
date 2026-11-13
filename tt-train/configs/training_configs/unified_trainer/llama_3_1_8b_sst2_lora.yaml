@@ -3,8 +3,15 @@
 #
 #   python -m ttml.unified_trainer \
 #     --config tt-train/configs/training_configs/unified_trainer/llama_3_1_8b_sst2_lora.yaml
+model:
+  name: meta-llama/Llama-3.1-8B-Instruct
+  lora:
+    r: 4
+    alpha: 8
+    # ttml fuses q, k and v into one layer, and gate and up into another: target all of a group or none.
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+
 dataset_id: sst2
-model_name: meta-llama/Llama-3.1-8B-Instruct
 max_length: 64
 batch_size: 8
 num_epochs: 1
@@ -17,12 +24,6 @@ optimizer:
   type: adamw
   lr: 1.0e-4
   weight_decay: 0.01
-
-lora:
-  r: 4
-  alpha: 8
-  # ttml fuses q, k and v into one layer, and gate and up into another: target all of a group or none.
-  target_modules: [q_proj, k_proj, v_proj, o_proj]
 
 metrics:
   steps_freq: 10

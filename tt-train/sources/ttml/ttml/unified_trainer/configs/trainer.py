@@ -9,21 +9,19 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .checkpoint import CheckpointConfig
 from .dataset import CustomDatasetConfig
 from .logging import LoggingConfig
-from .lora import LoraConfig
 from .metrics import MetricsConfig
+from .model import ModelConfig
 from .optimizer import OptimizerConfigs
 
 
 class TrainerConfig(BaseModel):
     """What every trainer reads. Unknown fields are rejected, so a typo fails instead of being ignored."""
 
-    # No protected namespaces: `model_name` is a field, not pydantic's.
-    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+    model_config = ConfigDict(extra="forbid")
 
     # "sst2", "alpaca" or "custom" (see ``ttml.unified_trainer.data``).
     dataset_id: str
-    # An HF hub id or a local HF model directory.
-    model_name: str
+    model: ModelConfig
     dtype: str = "bfloat16"
 
     # One optimizer, or a list of them that each train the weights their `modules` match. Every trainable weight
@@ -42,8 +40,6 @@ class TrainerConfig(BaseModel):
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
 
-    # Train LoRA adapters; unset trains every weight (full fine-tuning).
-    lora: Optional[LoraConfig] = None
     custom_dataset: Optional[CustomDatasetConfig] = None
 
     @model_validator(mode="after")

@@ -40,7 +40,7 @@ class ModelProvider(Protocol):
         """
 
     def build(self, config: TrainerConfig, hf_config: dict[str, Any]) -> Any:
-        """Load the pretrained model, wrapped in ``ttml.modules.LoraModel`` when ``config.lora`` is set.
+        """Load the pretrained model, wrapped in ``ttml.modules.LoraModel`` when ``config.model.lora`` is set.
 
         The model takes the standard ttml causal-LM input the trainer assumes:
         ``logits = model(input_ids, None)``, with ``input_ids`` ``[B, 1, 1, T]`` uint32, ``logits``

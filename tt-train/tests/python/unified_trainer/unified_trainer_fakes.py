@@ -21,7 +21,7 @@ from ttml.unified_trainer.trainer import Trainer
 
 
 def make_config(**overrides: Any) -> TrainerConfig:
-    fields = {"dataset_id": "sst2", "model_name": "fake", "optimizer": {"lr": 0.1}, "batch_size": 1}
+    fields = {"dataset_id": "sst2", "model": {"name": "fake"}, "optimizer": {"lr": 0.1}, "batch_size": 1}
     return TrainerConfig.model_validate({**fields, **overrides})
 
 
