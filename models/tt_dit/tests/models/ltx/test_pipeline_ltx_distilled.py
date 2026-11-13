@@ -24,22 +24,18 @@ from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import (
     pixel_to_latent_frame,
 )
 from models.tt_dit.tests.models.ltx.tools.ltx_eval import write_sidecar
-from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
-from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_I2V_IMAGE,
     DEFAULT_LTX_I2V_PROMPT,
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
-    missing_checkpoints_fail,
     print_ltx_timing_table,
     traced_default,
 )
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import line_params, ring_params, ring_params_8k
 from models.tt_dit.utils.vbench import assert_vbench_quality
-from models.tt_dit.utils.test import skip_if_unsupported_num_links
 
 
 def _apply_local_iter_env() -> None:
@@ -492,7 +488,7 @@ def test_pipeline_distilled(
                 logger.info(f"=== traced steady-state pass (gen #{gen}, seed {gen_seed}, pure replay{arm}) ===")
                 run(prompt=replay_prompt(gen), number=gen, seed=gen_seed)
                 check_output_with_clip(replay_prompt(gen), gen)
-                check_output_with_vbench(replay_prompt(gen), gen)
+                check_output_with_vbench(replay_prompt(gen), gen, gen_seed)
             # LTX_E2E_EXTRA_REPLAYS=N: N more pure replays of the same gen, so a served queue's
             # steady-state step time (not only the first replay after capture) is on the record.
             # LTX_E2E_AB_ENV="K=V K2=V2": set on the even extra gens (#2, #4, ...) and unset on the odd ones,
