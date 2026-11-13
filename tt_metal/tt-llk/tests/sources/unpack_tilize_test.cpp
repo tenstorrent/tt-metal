@@ -50,6 +50,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
+            // Zero aliases bottom faces to top faces on Wormhole, so perf must use the functional block stride too.
             const std::uint32_t block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(BLOCK_CT_DIM);
 
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
