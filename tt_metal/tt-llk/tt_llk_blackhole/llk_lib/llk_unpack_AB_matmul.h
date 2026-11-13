@@ -22,24 +22,30 @@ using namespace ckernel::unpacker;
 // Reuse direction (ct_dim >= rt_dim) the unpack MOP was programmed for; written and read only under LLK asserts.
 inline bool unpack_matmul_init_reuse_a = true;
 
-// Set by the first ttsync matmul unpack init of a kernel; _llk_unpack_AB_matmul_ttsync_restore_ clears it at kernel end.
-inline std::uint32_t unpack_matmul_ttsync_on = 0;
-
-// The TRISC wrapper of a kernel that includes this file calls _llk_unpack_AB_matmul_ttsync_restore_ after the kernel; in a
-// kernel without a ttsync init the flag is never written and the call folds away.
+// The TRISC wrapper of a kernel whose matmul calls run the ttsync unpack calls _llk_unpack_AB_matmul_ttsync_enable_ before the
+// kernel and _llk_unpack_AB_matmul_ttsync_restore_ after it, so a matmul init does nothing for it.
 #define LLK_UNPACK_AB_MATMUL_TTSYNC_RESTORE 1
 
-// Turn Auto TTSync off and restore the MOP and REPLAY declarations if a ttsync matmul init changed them.
+// Turn Auto TTSync on for the row GPR stores; the unpack MOP and replay never touch the address GPRs, so the RISC's stores need not
+// wait for them.
+inline void _llk_unpack_AB_matmul_ttsync_enable_()
+{
+    TTI_RESOURCEDECL(1, 0x19F, 13);
+    TTI_RESOURCEDECL(1, 0x19F, 14);
+    set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
+    // the enable takes effect only after a drain
+    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::TRISC_CFG);
+    TTI_NOP;
+    tensix_sync();
+}
+
+// Turn Auto TTSync off and restore the MOP and REPLAY declarations.
 inline void _llk_unpack_AB_matmul_ttsync_restore_()
 {
-    if (unpack_matmul_ttsync_on)
-    {
-        TTI_RESOURCEDECL(1, 0x1FF, 13);
-        TTI_RESOURCEDECL(1, 0x1FF, 14);
-        set_ttsync_enables<0>();
-        tensix_sync();
-        unpack_matmul_ttsync_on = 0;
-    }
+    TTI_RESOURCEDECL(1, 0x1FF, 13);
+    TTI_RESOURCEDECL(1, 0x1FF, 14);
+    set_ttsync_enables<0>();
+    tensix_sync();
 }
 
 /**
@@ -493,22 +499,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     {
         _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_z, reuse_dir>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
-
-    if constexpr (auto_ttsync)
-    {
-        if (!unpack_matmul_ttsync_on)
-        {
-            // the unpack MOP and replay never touch the address GPRs, so the RISC's stores need not wait for them
-            TTI_RESOURCEDECL(1, 0x19F, 13);
-            TTI_RESOURCEDECL(1, 0x19F, 14);
-            set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
-            unpack_matmul_ttsync_on = 1;
-            // the enable takes effect only after a drain; once on, the row GPR stores need none
-            TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::TRISC_CFG);
-            TTI_NOP;
-            tensix_sync();
-        }
-    }
 }
 
 /**
@@ -714,7 +704,6 @@ inline void _llk_unpack_AB_matmul_(
 
         if constexpr (auto_ttsync)
         {
-            LLK_ASSERT(unpack_matmul_ttsync_on, "a ttsync matmul unpack needs a ttsync matmul init before it");
             LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
             LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
             // still counted for the context poll of the kernel's other unpack calls; the SEMGET below releases it

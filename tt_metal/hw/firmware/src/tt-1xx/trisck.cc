@@ -91,10 +91,18 @@ uint32_t _start() {
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
+#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(LLK_UNPACK_AB_MATMUL_TTSYNC_RESTORE) && \
+    defined(MATMUL_FE_MARK)
+    // once per kernel that names a plain matmul_block_init, so a matmul re-init costs nothing for it
+    if constexpr (llk_unpack_AB_matmul_kernel_ttsync() && ckernel::matmul_fe_mark::is_used(0)) {
+        _llk_unpack_AB_matmul_ttsync_enable_();
+    }
+#endif
     run_kernel();
-#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(LLK_UNPACK_AB_MATMUL_TTSYNC_RESTORE)
+#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(LLK_UNPACK_AB_MATMUL_TTSYNC_RESTORE) && \
+    defined(MATMUL_FE_MARK)
     // the next kernel on the core starts with Auto TTSync off and the default MOP and REPLAY declarations
-    if constexpr (llk_unpack_AB_matmul_kernel_ttsync()) {
+    if constexpr (llk_unpack_AB_matmul_kernel_ttsync() && ckernel::matmul_fe_mark::is_used(0)) {
         _llk_unpack_AB_matmul_ttsync_restore_();
     }
 #endif

@@ -305,7 +305,17 @@ class MATMUL_PRODUCTION(TemplateParameter):
             ) == key:
                 return tuple(
                     dict.fromkeys(
-                        own + extra + tuple(sorted(set(r["unpack_formats"].split())))
+                        own
+                        + extra
+                        + tuple(
+                            sorted(
+                                f
+                                for f in set(
+                                    r["unpack_formats"].replace("|", " ").split()
+                                )
+                                if f in DataFormat.__members__
+                            )
+                        )
                     )
                 )
         return tuple(dict.fromkeys(own + extra))
