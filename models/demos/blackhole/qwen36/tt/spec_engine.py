@@ -58,7 +58,7 @@ MAX_SPEC_ROWS = ttnn.TILE_SIZE
 # Prompt lengths warmed in prepare: exact bucket lengths take the no-mask prefill path, the others the masked one.
 _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 2248, 2448, 2948, 3948, 4096)
 # MTPBlockEngine logs its one-enqueue counts at every this many verifies.
-ONE_ENQUEUE_LOG_EVERY = 100
+ONE_ENQUEUE_LOG_EVERY = 1000
 # Runner contract: token id for unused tail columns of a returned block.
 PLACEHOLDER_TOKEN_ID = -1
 SPEC_MODES = ("argmax_ids", "logits")
