@@ -7,13 +7,16 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 
 #include <bit>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 #include <cstdint>
 
 namespace ttnn::prim {
@@ -130,10 +133,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         }
     }
 
-    // define core ranges (full sharded grid)
-    std::uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
-    std::uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
-    const CoreRangeSet all_device_cores{CoreRange({0, 0}, {num_cores_c - 1, num_cores_r - 1})};
+    // Define the core ranges from the input tensor's actual shard grid, not from the program
+    // config anchored at (0, 0). The config's compute_with_storage_grid_size only carries the
+    // extent, so an origin-anchored range launches the kernels on cores that do not hold the
+    // shards when the shard grid is offset, and the shards on the offset cores are left with
+    // their input logits. shard_spec() is already known present from the TT_FATAL above.
+    const CoreRangeSet all_device_cores{input_tensor.shard_spec().value().grid};
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};
@@ -498,18 +503,13 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         }
     };
 
-    if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-        for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
-            }
-        }
-    } else {
-        for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-            for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
-            }
-        }
+    // Iterate the cores that actually hold shards, in the shard orientation's order, so the
+    // per-core runtime args (pre_scale, mask_start_tile_id) advance with the shard order instead
+    // of with a dense grid measured from the origin.
+    const std::vector<CoreCoord> shard_cores =
+        corerange_to_cores(all_device_cores, std::nullopt, shard_orient == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    for (const CoreCoord& shard_core : shard_cores) {
+        emit_reader_args(shard_core);
     }
 
     if (!reader_ra.runtime_arg_values.empty()) {

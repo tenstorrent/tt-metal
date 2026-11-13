@@ -641,6 +641,110 @@ def test_softmax_sd(device):
     )
 
 
+# Height-sharded softmax used to launch its kernels on a core range anchored at (0, 0) taken from
+# compute_with_storage_grid_size, so a shard grid offset from the origin softmaxed the shards on
+# the origin cores and left the rest holding their input logits. These cover the three grid
+# origins, both shard orientations, with and without a mask, for both in-place entry points, and
+# assert per shard that every shard moved away from its input before checking the values.
+OFFSET_SHARDED_GRID_CASES = [
+    pytest.param((0, 0), id="grid_origin_0_0"),
+    pytest.param((1, 0), id="grid_origin_1_0"),
+    pytest.param((0, 1), id="grid_origin_0_1"),
+]
+
+OFFSET_SHARDED_ORIENTATIONS = [
+    pytest.param(ttnn.ShardOrientation.ROW_MAJOR, id="row_major"),
+    pytest.param(ttnn.ShardOrientation.COL_MAJOR, id="col_major"),
+]
+
+
+def _offset_sharded_memory_config(origin, orientation, cores_x=4, cores_y=4, shard_shape=(128, 128)):
+    start = ttnn.CoreCoord(origin[0], origin[1])
+    end = ttnn.CoreCoord(origin[0] + cores_x - 1, origin[1] + cores_y - 1)
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(ttnn.CoreRangeSet({ttnn.CoreRange(start, end)}), list(shard_shape), orientation),
+    )
+
+
+def _assert_every_shard_updated(torch_input, torch_output, shard_rows=128):
+    """A shard left holding its input logits is the failure signature, so check that first."""
+    flat_in = torch_input.reshape(-1, torch_input.shape[-1])
+    flat_out = torch_output.reshape(-1, torch_output.shape[-1])
+    for shard_idx in range(flat_in.shape[0] // shard_rows):
+        lo = shard_idx * shard_rows
+        hi = lo + shard_rows
+        assert not torch.equal(flat_in[lo:hi], flat_out[lo:hi]), f"shard {shard_idx} was left untouched by softmax"
+
+
+def _offset_sharded_program_config():
+    return ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(4, 4),
+        subblock_w=4,
+        block_h=4,
+        block_w=4,
+    )
+
+
+@pytest.mark.parametrize("origin", OFFSET_SHARDED_GRID_CASES)
+@pytest.mark.parametrize("orientation", OFFSET_SHARDED_ORIENTATIONS)
+def test_softmax_in_place_sharded_offset_grid(device, origin, orientation):
+    torch.manual_seed(0)
+    shape = (1, 16, 128, 128)
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16).float() * 10
+    torch_expected = ttnn.softmax_in_place.golden_function(torch_input)
+
+    memory_config = _offset_sharded_memory_config(origin, orientation)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE, memory_config=memory_config)
+
+    output = ttnn.softmax_in_place(input_tensor, program_config=_offset_sharded_program_config())
+    torch_output = ttnn.to_torch(output)
+
+    _assert_every_shard_updated(torch_input, torch_output)
+    assert_numeric_metrics(
+        torch_expected,
+        torch_output,
+        pcc_threshold=0.999,
+        rtol=0.330,
+        atol=0.086,
+        frobenius_threshold=0.025,
+    )
+
+
+@pytest.mark.parametrize("origin", OFFSET_SHARDED_GRID_CASES)
+@pytest.mark.parametrize("orientation", OFFSET_SHARDED_ORIENTATIONS)
+def test_scale_mask_softmax_in_place_sharded_offset_grid(device, origin, orientation):
+    torch.manual_seed(0)
+    shape = (1, 16, 128, 128)
+    scale = 1.0
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16).float() * 10
+    keep = torch.rand(shape, dtype=torch.bfloat16).float()
+    torch_mask = keep.masked_fill(keep > 0.5, 0.0).masked_fill(keep <= 0.5, float("-inf"))
+    torch_expected = F.softmax(torch_input * scale + torch_mask, dim=-1, dtype=torch.bfloat16)
+
+    memory_config = _offset_sharded_memory_config(origin, orientation)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE, memory_config=memory_config)
+    mask_tensor = ttnn.from_torch(torch_mask, device=device, layout=ttnn.Layout.TILE)
+
+    output = ttnn.scale_mask_softmax_in_place(
+        input_tensor, scale, mask_tensor, program_config=_offset_sharded_program_config()
+    )
+    torch_output = ttnn.to_torch(output)
+
+    _assert_every_shard_updated(torch_input, torch_output)
+    assert_numeric_metrics(
+        torch_expected,
+        torch_output,
+        pcc_threshold=0.999,
+        rtol=0.330,
+        atol=0.086,
+        frobenius_threshold=0.025,
+    )
+
+
 @pytest.mark.parametrize(
     "shape, dim, dtype",
     [
