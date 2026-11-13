@@ -1637,6 +1637,40 @@ class Glm53Generator(_ReadinessGenerator):
         fn = getattr(self.backend, "prefill_slice_rows", None)
         return int(fn(int(rows))) if fn is not None else 0
 
+    def _tail_split(self, plans: list) -> list:
+        """GLM53_PF_TAIL_SPLIT = k >= 2 (default 0 = off): the request's LAST chunk, when it holds more tokens than the
+        smallest prefill bucket b but fits k of them, runs as ceil(n / b) chunks of b (the last one partial) instead of
+        one chunk padded to the next bucket -- a 4,150-token AgentX suffix replays 3 x 2,048 rows instead of 8,192. Every
+        piece starts b tokens after the previous one (b is a multiple of every continuation alignment), uses the b-row
+        keys the prefill already captured (no new trace), and goes through the slice-boundary rule afterwards like any
+        chunk. Counted in prefill_tail_splits / prefill_tail_rows_saved."""
+        k = int(os.environ.get("GLM53_PF_TAIL_SPLIT", "0") or 0)
+        tpp = getattr(self.backend, "tpp", None)
+        if k < 2 or not plans or tpp is None or len(tpp.buckets) < 2:
+            return plans
+        b = int(min(tpp.buckets))
+        last = plans[-1]
+        pieces = -(-int(last.n_valid) // b)
+        natural = next((int(c) for c in sorted(tpp.buckets) if c >= last.n_valid), None)
+        if last.n_valid <= b or pieces > k or natural is None or pieces * b >= natural:
+            return plans
+        if b % int(self.backend.continuation_align):
+            return plans  # (a piece must start on the continuation grid)
+        if slice_boundary(int(last.n_valid) - (pieces - 1) * b - 1, self._slice_rows(b)):
+            return (
+                plans  # (the last piece would end on a chip slice boundary: keep the unsplit chunk, its rule applies)
+            )
+        out = list(plans[:-1])
+        for j in range(pieces):
+            nv = min(b, int(last.n_valid) - j * b)
+            out.append(ChunkPlan(start=last.start + j * b, offset=last.offset + j * b, n_valid=nv,
+                                 physical=round_up(nv, self.backend.prefill_align)))  # fmt: skip
+        self.counters["prefill_tail_splits"] = self.counters.get("prefill_tail_splits", 0) + 1
+        self.counters["prefill_tail_rows_saved"] = (
+            self.counters.get("prefill_tail_rows_saved", 0) + natural - pieces * b
+        )
+        return out
+
     def _slice_safe(self, plans: list) -> list:
         """Stage 16's slice-boundary rule (slice_plan) over a request's chunk plan, on backends that pick a chunk's
         bucket with it (`prefill_slice_plan`: the TP prefill, TPPrefill.slice_plan): a chunk whose last valid row would
@@ -1880,6 +1914,7 @@ class Glm53Generator(_ReadinessGenerator):
             st.seq_len = 0
         plans = plan_prefill(n, start_pos, self.backend.prefill_chunk_tokens, self.backend.prefill_align)
         if not all_logits:  # all-rows logits run the decode-step prefill (no sequence-parallel bucket)
+            plans = self._tail_split(plans)
             plans = self._slice_safe(plans)
         outs, result = [], None
         if no_head and (all_logits or sample is not None):

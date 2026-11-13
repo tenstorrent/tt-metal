@@ -73,7 +73,14 @@ OSL = int(os.environ.get("GLM53_MK_OSL", "128"))
 # the prefill chunk (8,192 with the 8x4 defaults' buckets), so the attach and the cold prefill run the same chunks past it
 PREFIX = os.environ.get("GLM53_MK_PREFIX", "0") == "1"
 PREFIX_LEN = int(os.environ.get("GLM53_MK_PREFIX_LEN", "32768"))
-PREFIX_TAIL = 256  # the prompts' document runs about this many tokens past the boundary (then the question)
+# the prompts' document runs about this many tokens past the boundary (then the question); GLM53_MK_PREFIX_TAIL = an
+# AgentX-sized suffix (B's prefill after the attach = this + the question)
+PREFIX_TAIL = int(os.environ.get("GLM53_MK_PREFIX_TAIL", "256"))
+# GLM53_MK_PF_BENCH=N: after the e2e, N timed replays of every captured prefill key (bucket x start: position 0, full and
+# half-full; each sparse window's last chunk) on slot 0 -> MK_PF_BENCH lines (device ms per chunk, per valid token, per
+# row) and a fixed + per-row fit per start class (F17, doc/perf/short_prefill.md). Timing only: it runs after the gates
+# and writes garbage into slot 0's state / pages.
+PF_BENCH = int(os.environ.get("GLM53_MK_PF_BENCH", "0") or 0)
 PREFIX_SPILL = os.environ.get("GLM53_MK_PREFIX_SPILL", "0") == "1"
 _ISL_SEQ = PREFIX_LEN + PREFIX_TAIL if PREFIX else ISL  # the longest prompt the cache must hold
 SEQ = int(os.environ.get("GLM53_MK_SEQ", str(max(2048, 1 << (_ISL_SEQ + OSL + 64).bit_length()))))
@@ -762,11 +769,63 @@ def test_mk_e2e(mesh_device, monkeypatch):
                 f"MK_SPEC: skipped (greedy text users: GLM53_MK_LIVE=1, or = GLM53_SPEC_MULTI_USERS {G} with "
                 f"GLM53_SPEC_MULTI=1; no GLM53_MK_TEMP, no image; live {live})"
             )
+    if PF_BENCH > 0:
+        _pf_bench(backend, mesh_device, tok, PF_BENCH)
     if isinstance(source, TileCache) and not source.ready:
         source.complete()  # the e2e passed on the tiles it dumped: READ mode from the next run
     if isinstance(source, MkTileCacheSource) and source._added:
         source.save_manifest()
         logger.info(f"MkTileCacheSource: {source._added} tensors added to the manifest")
+
+
+def _pf_bench(backend, mesh_device, tok, n_rep: int) -> None:
+    """GLM53_MK_PF_BENCH: wall ms of one TP prefill chunk per captured key, device-synchronised before and after (the
+    host's input writes + the trace replay; head-less where the key has a head-less trace, as a non-final chunk runs).
+    Cases per bucket c: start 0 with c and c / 2 + 1 valid rows (the padded cost), and start w - c for every sparse
+    window w (the window's last chunk: the most context it reads). The first replay of each case is discarded."""
+    tpp = getattr(backend, "tpp", None)
+    if tpp is None:
+        logger.info("MK_PF_BENCH: skipped (no TP prefill attached)")
+        return
+    kv, align = tpp.kv, int(getattr(tpp, "start_align", 64))
+    io = kv.extra["io"]
+    src = torch.tensor(chat_prompt(tok, max(tpp.buckets) + 64), dtype=torch.int64)
+    sync = lambda: ttnn.synchronize_device(mesh_device)  # noqa: E731
+    windows = sorted(int(t) for t in (getattr(tpp, "sparse_ts", None) or []))
+    res = []
+    for c in sorted(int(x) for x in tpp.buckets):
+        cases = [(0, c), (0, c // 2 + 1)]
+        cases += [(w - c, c) for w in windows if w > c and (w - c) % align == 0 and w <= tpp.max_seq]
+        for s, nv in cases:
+            toks = torch.zeros(c, dtype=torch.int64)
+            toks[:nv] = src[:nv]
+            try:
+                ts = []
+                for i in range(n_rep + 1):
+                    sync()
+                    t0 = time.perf_counter()
+                    backend.prefill_chunk(toks, kv_cache=kv, slot=0, chunk_start=s, n_valid=nv, logits_rows="none",
+                                          io=io)  # fmt: skip
+                    sync()
+                    if i:
+                        ts.append((time.perf_counter() - t0) * 1e3)
+                ts.sort()
+                med = ts[len(ts) // 2]
+                res.append((c, s, nv, med))
+                logger.info(f"MK_PF_BENCH: bucket {c} start {s} valid {nv}: median {med:.1f} ms (min {ts[0]:.1f}, max "
+                            f"{ts[-1]:.1f}, n {len(ts)}) = {med * 1e3 / nv:.1f} us per valid token, {med * 1e3 / c:.1f} "
+                            f"us per row")  # fmt: skip
+            except Exception as e:  # noqa: BLE001  (one key failing must not hide the others)
+                logger.warning(f"MK_PF_BENCH: bucket {c} start {s} valid {nv}: {type(e).__name__}: {e}")
+    full0 = sorted((c, m) for c, s, nv, m in res if s == 0 and nv == c)
+    if len(full0) >= 2:  # fixed + per-row least squares over the full chunks at position 0
+        n_ = len(full0)
+        mx = sum(c for c, _ in full0) / n_
+        my = sum(m for _, m in full0) / n_
+        sxx = sum((c - mx) ** 2 for c, _ in full0)
+        r = sum((c - mx) * (m - my) for c, m in full0) / sxx if sxx else 0.0
+        logger.info(f"MK_PF_BENCH fit (start 0, full chunks {[c for c, _ in full0]}): {my - r * mx:.1f} ms fixed + "
+                    f"{r * 1e3:.1f} us per row")  # fmt: skip
 
 
 def _prefix_e2e(gen, tok, mesh_device, source) -> None:
@@ -811,6 +870,10 @@ def _prefix_e2e(gen, tok, mesh_device, source) -> None:
                     f"({r['blob_bytes'] / 2**20:.1f} MiB), entry 0 clobbered, imported into entry 1 in "
                     f"{r['import_s'] * 1e3:.0f} ms; B attached entry 1: ids B == B_cold {same}")  # fmt: skip
     logger.info(f"MK_PREFIX_TEXT B: {text(r['ids_b'])!r}")
+    import hashlib as _hl
+
+    logger.info(f"MK_PREFIX_ALL_IDS: sha256 {_hl.sha256(repr(list(r['ids_b'])).encode()).hexdigest()[:16]} "
+                f"(B, {len(r['ids_b'])} ids; suffix {n_sfx} tokens)")  # fmt: skip
     if not same:
         logger.info(f"MK_PREFIX_TEXT B_cold: {text(r['ids_cold'])!r}")
     logger.info(f"MK_PREFIX counters: prefix_attaches {c['prefix_attaches']} prefix_snapshots {c['prefix_snapshots']} "
