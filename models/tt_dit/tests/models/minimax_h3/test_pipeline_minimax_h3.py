@@ -41,7 +41,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
 )
 from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
 from ..wan2_2.common import check_output_sanity
-from .common import GALAXY_MESHES, MESH_4X8_RING
+from .common import GALAXY_MESHES, MESH_4X8_LINE, MESH_4X8_RING
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -150,11 +150,11 @@ def test_requested_dynamic_length_precedence(monkeypatch, expect_error):
 
 
 # Pure (no-device) coverage of which denoise path the constructor kwargs select on each preset.
-def _denoise_path(preset, *, coresident=None, topology=ttnn.Topology.Ring, **kwargs):
+def _denoise_path(preset, *, coresident=None, **kwargs):
     """(trace_denoise, bucket_denoise, dynamic_length) for the kwargs given; the rest default to None."""
     kwargs = dict(trace_denoise=None, bucket_denoise=None, bucket_ladder=None, dynamic_length=None) | kwargs
     coresident = preset.get("coresident", True) if coresident is None else coresident
-    path = _resolve_denoise_path(preset, coresident=coresident, topology=topology, **kwargs)
+    path = _resolve_denoise_path(preset, coresident=coresident, **kwargs)
     return path.trace_denoise, path.bucket_denoise, path.dynamic_length
 
 
@@ -187,37 +187,6 @@ def test_resolve_denoise_path_bh_4x8(monkeypatch, expect_error):
     assert _denoise_path(preset, dynamic_length=False) == bucketed
     with expect_error(ValueError, "eager-only"):
         _denoise_path(preset, trace_denoise=True)
-
-
-def test_resolve_denoise_path_line_topology(monkeypatch, expect_error):
-    """The AGMM / MMRS pins behind the length classes are Ring-only: the preset's dynamic default yields to a
-    line topology, an explicit dynamic request on one is refused."""
-    monkeypatch.delenv(_DYNAMIC_LENGTH_ENV, raising=False)
-    preset, line = _PRESETS_BH[(4, 8)], ttnn.Topology.Linear
-    path = _resolve_denoise_path(
-        preset,
-        trace_denoise=None,
-        bucket_denoise=None,
-        bucket_ladder=None,
-        dynamic_length=None,
-        coresident=True,
-        topology=line,
-    )
-    assert (path.trace_denoise, path.bucket_denoise, path.dynamic_length, path.line_fallback) == (
-        False,
-        True,
-        False,
-        True,
-    )
-    assert "line topology" in path.name
-    with expect_error(ValueError, "Ring topology"):
-        _denoise_path(preset, dynamic_length=True, topology=line)
-    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "1")
-    with expect_error(ValueError, "Ring topology"):
-        _denoise_path(preset, topology=line)
-    monkeypatch.delenv(_DYNAMIC_LENGTH_ENV, raising=False)
-    assert _denoise_path(preset, dynamic_length=False, topology=line) == (False, True, False)
-    assert _denoise_path(preset, topology=ttnn.Topology.Ring) == (False, False, True)
 
 
 def test_resolve_max_sequence_length(expect_error):
@@ -306,7 +275,6 @@ def test_denoise_path_name():
     assert _DenoisePath(True, True, False, False).name == "bucketed, traced"
     assert _DenoisePath(False, True, False, False).name == "bucketed"
     assert _DenoisePath(False, False, False, False).name == "unbucketed"
-    assert _DenoisePath(False, True, False, False, line_fallback=True).name.startswith("bucketed (line topology")
 
 
 # Pure (no-device) coverage of the dynamic-length padding and admission rule.
@@ -341,7 +309,9 @@ def _assert_no_denoise_misses(pipeline, warm_s: int, measured_s: int) -> None:
 
 @pytest.mark.skipif(os.environ.get(DYNAMIC_GATE_ENV) == "0", reason=f"{DYNAMIC_GATE_ENV}=0 opts out of the gate")
 @pytest.mark.timeout(5400)
-@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"), [MESH_4X8_RING, MESH_4X8_LINE], indirect=["mesh_device", "device_params"]
+)
 def test_t2va_dynamic_length_zero_misses(mesh_device, reset_seeds):
     """Per length class: one quiet request, then a measured one at a new padded length in the same class, which
     must add no denoise program. No init warm-up, so the class's first request is its only compile; audio is
@@ -379,7 +349,9 @@ def test_t2va_dynamic_length_zero_misses(mesh_device, reset_seeds):
     reason=f"the full-warm gate (init warm-up, then a cross-class measure) runs on request: set {DYNAMIC_GATE_ENV}=1",
 )
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"), [MESH_4X8_RING, MESH_4X8_LINE], indirect=["mesh_device", "device_params"]
+)
 def test_t2va_dynamic_length_zero_misses_full_warm(mesh_device, reset_seeds):
     """The served configuration: the init warm-up, a quiet 5 s request, then a measured 10 s one across the class
     boundary, which must add no denoise program."""

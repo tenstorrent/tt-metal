@@ -50,12 +50,14 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
 
-    8x4 takes K3's TorusXY, a ring of chips the torus over its one axis (TorusY for Nx1, TorusX for 1xN), and 2x2,
-    2x4 and 4x2 an unwrapped Fabric2D.
+    8x4 takes K3's TorusXY, a 4x4 prefill stage (a Galaxy tray half) its TorusX, a ring of chips the torus over its
+    one axis (TorusY for Nx1, TorusX for 1xN), and 2x2, 2x4 and 4x2 an unwrapped Fabric2D.
     """
     rows, columns = mesh_shape
     if (rows, columns) == (8, 4):
         profile = torus_xy_device_params
+    elif (rows, columns) == (4, 4):
+        profile = torus_x_device_params
     elif columns == 1 and rows > 1:
         profile = torus_y_device_params
     elif rows == 1 and columns > 1:
