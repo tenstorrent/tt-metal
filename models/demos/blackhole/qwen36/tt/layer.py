@@ -232,6 +232,7 @@ class Qwen36DecoderLayer:
         spec_verify_mode=False,
         spec_page_table=None,
         spec_user_page_table=None,
+        spec_pos_groups=None,
         n_users=1,
         state_blk_idx=None,
         conv_sel=None,
@@ -250,7 +251,8 @@ class Qwen36DecoderLayer:
         # users x T = rows // n_users candidates, user-major (row u*T + j). GDN reshapes them to
         # [n_users, T, C] and reads each user's initial state / conv window through the shared device
         # selectors state_blk_idx / conv_sel; full attention groups the SDPA and the aliased KV write
-        # per user (spec_n_users, spec_user_page_table).
+        # per user (spec_n_users, spec_user_page_table; spec_pos_groups: the KV write's positions per
+        # candidate, built once per verify).
         # decode_cfg: run a SHORT prefill-mode forward (spec verify, <=TILE_SIZE rows) with the DECODE
         # matmul/norm configuration. Every matmul in the stack already selects decode-vs-prefill purely
         # on `x.shape[-2] <= TILE_SIZE`, so at a 32-row bucket they all pick the DRAM-sharded decode
@@ -337,6 +339,7 @@ class Qwen36DecoderLayer:
                         spec_page_table=spec_page_table,
                         spec_n_users=n_users,
                         spec_user_page_table=spec_user_page_table,
+                        spec_pos_groups=spec_pos_groups,
                         **dar_kw,
                     )
             else:
