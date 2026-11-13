@@ -15,6 +15,7 @@
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/fabric_over_noc_routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>
@@ -476,6 +477,7 @@ private:
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> fsd_physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
+    std::unique_ptr<FabricOverNocRoutingTableGenerator> fabric_over_noc_routing_table_generator_;
     std::unique_ptr<MeshGraph> mesh_graph_;
     // The live view re-discovered by refresh_connectivity_diff(). Held as a member because
     // link_health_ keeps a pointer to it between refreshes; physical_system_descriptor_ cannot be
@@ -607,16 +609,6 @@ private:
     void write_routing_tables_for_fabric_ethernet_() const;
     tt::tt_fabric::fabric_over_noc_routing_l1_info_t init_fabric_over_noc_routing_table_(
         ChipId src_phys, const FabricNodeId& src_node) const;
-    void fill_local_entries_fabric_over_noc_(
-        tt::tt_fabric::fabric_over_noc_routing_l1_info_t& routing_table, ChipId src_phys) const;
-    size_t select_cross_chip_access_point_(ChipId src_phys, ChipId dst_phys, tt::umd::TTDevice& dst_device) const;
-    void fill_cross_chip_entries_fabric_over_noc_(
-        tt::tt_fabric::fabric_over_noc_routing_l1_info_t& routing_table,
-        ChipId dst_phys,
-        uint32_t dst_chip,
-        tt::umd::TTDevice& dst_device,
-        size_t ap_idx) const;
-    void verify_core_coordinates_(const std::vector<tt::umd::CoreCoord>& cores, uint32_t x_max, uint32_t y_max) const;
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_routing_info_to_devices(
         MeshId mesh_id,

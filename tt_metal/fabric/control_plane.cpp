@@ -586,6 +586,11 @@ void ControlPlane::init_control_plane(
     // with a FabricConfig that differs from peers.
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
 
+    if (this->is_fabric_over_noc() && this->get_fabric_config() != FabricConfig::DISABLED) {
+        this->fabric_over_noc_routing_table_generator_ =
+            std::make_unique<FabricOverNocRoutingTableGenerator>(*this->topology_mapper_, this->cluster_.get());
+    }
+
     this->generate_intermesh_connectivity();
 
     // After intermesh, so intra-mesh directions and the mesh graph are settled.
@@ -1652,152 +1657,23 @@ tt::tt_fabric::fabric_over_noc_routing_l1_info_t ControlPlane::init_fabric_over_
     return routing_table;
 }
 
-void ControlPlane::fill_local_entries_fabric_over_noc_(
-    tt::tt_fabric::fabric_over_noc_routing_l1_info_t& routing_table, ChipId src_phys) const {
-    // For Horizon x2: fill LOCAL/REMOTE window entries for this device's own NOC
-    // column only.  Cross-column entries (reaching the other device on the same
-    // physical chip) are left to the cross-device Access Point (AP) selection code so that
-    // the correct access point is used.  Filling them here with REMOTE_WINDOW
-    // would clobber the AP-selected address and break the reverse direction.
-    const uint32_t dev_id = src_phys;
-    for (uint32_t local_y = 0; local_y < tt::tt_fabric::MAX_HORIZON_NOC_Y; local_y++) {
-        const uint32_t phys_x = routing_table.my_noc_x;
-        const uint32_t phys_y = local_y;
-        const uint32_t selector = phys_x + phys_y * tt::tt_fabric::HORIZON_ATT_WORKER_GRID_X;
-        const bool is_self = (phys_x == routing_table.my_noc_x && phys_y == routing_table.my_noc_y);
-        const uint64_t addr = is_self ? tt::tt_fabric::HORIZON_LOCAL_WINDOW_COMPARE
-                                      : tt::tt_fabric::HORIZON_REMOTE_WINDOW_COMPARE |
-                                            (uint64_t(selector) << tt::tt_fabric::HORIZON_REMOTE_ENDPOINT_SHIFT);
-        routing_table.flat_addr[0][dev_id][phys_x][phys_y] = addr;
-    }
-}
-
-size_t ControlPlane::select_cross_chip_access_point_(
-    ChipId src_phys, ChipId dst_phys, tt::umd::TTDevice& dst_device) const {
-    const auto access_points = dst_device.get_access_points();
-    // Select the first Access Point whose flat address falls outside LOCAL and REMOTE windows.
-    // APs inside those windows loop back to the local chip rather than crossing the crossbar.
-    size_t selected_ap_idx = access_points.size();
-    const auto probe_cores = this->cluster_.get().get_soc_desc(dst_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0);
-    if (!probe_cores.empty()) {
-        const auto& probe_core = probe_cores[0];
-        for (size_t i = 0; i < access_points.size(); ++i) {
-            const auto probe_addr = dst_device.get_flat_address(
-                access_points[i], probe_core, tt::umd::WindowFlags::UnicastWrite, tt::umd::IoOrdering::Posted, 0);
-            if (!probe_addr.has_value()) {
-                continue;
-            }
-            const bool in_local =
-                (*probe_addr >> tt::tt_fabric::HORIZON_LOCAL_WINDOW_MASK_BITS) ==
-                (tt::tt_fabric::HORIZON_LOCAL_WINDOW_COMPARE >> tt::tt_fabric::HORIZON_LOCAL_WINDOW_MASK_BITS);
-            const bool in_remote =
-                (*probe_addr >> tt::tt_fabric::HORIZON_REMOTE_WINDOW_MASK_BITS) ==
-                (tt::tt_fabric::HORIZON_REMOTE_WINDOW_COMPARE >> tt::tt_fabric::HORIZON_REMOTE_WINDOW_MASK_BITS);
-            if (!in_local && !in_remote) {
-                selected_ap_idx = i;
-                break;
-            }
-        }
-    }
-    TT_FATAL(
-        selected_ap_idx < access_points.size(),
-        "Fabric-over-NoC routing table: no valid cross-chip AP for src={} dst={}: "
-        "all {} APs fall within LOCAL or REMOTE window",
-        src_phys,
-        dst_phys,
-        access_points.size());
-    return selected_ap_idx;
-}
-
-void ControlPlane::fill_cross_chip_entries_fabric_over_noc_(
-    tt::tt_fabric::fabric_over_noc_routing_l1_info_t& routing_table,
-    ChipId dst_phys,
-    uint32_t dst_chip,
-    tt::umd::TTDevice& dst_device,
-    size_t ap_idx) const {
-    const auto access_points = dst_device.get_access_points();
-    // Assumption: the flat address to reach core (x, y) on a destination chip is the same
-    // regardless of which source chip is computing it (symmetric AXI address space).
-    // This holds for Horizon x2 where both devices share the same NOC2AXI ATT configuration.
-    for (const auto& core :
-         this->cluster_.get().get_soc_desc(dst_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
-        const auto flat = dst_device.get_flat_address(
-            access_points[ap_idx],
-            core,
-            tt::umd::WindowFlags::UnicastWrite,
-            tt::umd::IoOrdering::Posted,
-            /*offset=*/0);
-        if (flat.has_value()) {
-            routing_table.flat_addr[0][dst_chip][core.x][core.y] = *flat;
-        }
-    }
-}
-
-void ControlPlane::verify_core_coordinates_(
-    const std::vector<tt::umd::CoreCoord>& cores, uint32_t x_max, uint32_t y_max) const {
-    for (const auto& core : cores) {
-        TT_FATAL(
-            core.x < x_max && core.y < y_max,
-            "Tensix core ({}, {}) exceeds fabric-over-noc routing table bounds ({}, {}); "
-            "soc descriptor and fabric constants are inconsistent",
-            core.x,
-            core.y,
-            x_max,
-            y_max);
-    }
-}
-
 void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
     this->fabric_over_noc_routing_tables_.clear();
 
-    // Horizon x2 supports exactly one physical mesh (AXI crossbar, not Ethernet links).
-    // flat_addr is indexed by routing plane [0] — assert this assumption holds.
-    TT_FATAL(
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size() <= tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH,
-        "configure_routing_tables_for_fabric_over_noc: expected at most {} devices in one mesh, got {}",
-        tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH,
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size());
-
-    {
-        const auto& first_phys = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.begin()->second;
-        const auto ip_variant = this->cluster_.get().get_soc_desc(first_phys).get_arch_descriptor().get_ip_variant();
-        uint32_t max_x = 0, max_y = 0;
-        if (ip_variant == tt::IpVariant::HORIZON) {
-            max_x = tt::tt_fabric::MAX_HORIZON_NOC_X;
-            max_y = tt::tt_fabric::MAX_HORIZON_NOC_Y;
-        } else {
-            TT_FATAL(false, "Quasar IP Variant not found for core coordinate verification");
-        }
-        for (const auto& [node, phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
-            this->verify_core_coordinates_(
-                this->cluster_.get().get_soc_desc(phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0), max_x, max_y);
-        }
-    }
+    this->fabric_over_noc_routing_table_generator_->generate_routing_table();
+    const auto& flat_addr_table = this->fabric_over_noc_routing_table_generator_->get_routing_table();
 
     for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         auto routing_table = this->init_fabric_over_noc_routing_table_(src_phys, src_node);
 
         for (const auto& [dst_node, dst_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
             // Index by physical chip ID — the kernel receives dst_dev_id as the physical chip ID.
-            const uint32_t dst_chip = dst_phys;
-
-            if (dst_phys == src_phys) {
-                this->fill_local_entries_fabric_over_noc_(routing_table, src_phys);
-                continue;
+            const auto& entry = flat_addr_table[0][src_phys][dst_phys];
+            for (uint32_t x = 0; x < tt::tt_fabric::MAX_HORIZON_NOC_X; x++) {
+                for (uint32_t y = 0; y < tt::tt_fabric::MAX_HORIZON_NOC_Y; y++) {
+                    routing_table.flat_addr[0][dst_phys][x][y] = entry.flat_addr[x][y];
+                }
             }
-            TT_FATAL(
-                dst_chip < tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH,
-                "Fabric-over-NoC routing table: dst chip {} >= MAX_HORIZON_DEVS_PER_MESH ({})",
-                dst_chip,
-                tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
-
-            auto* dst_device = this->cluster_.get().get_driver()->get_tt_device(dst_phys);
-            if (!dst_device || dst_device->get_access_points().empty()) {
-                continue;
-            }
-
-            const size_t ap_idx = this->select_cross_chip_access_point_(src_phys, dst_phys, *dst_device);
-            this->fill_cross_chip_entries_fabric_over_noc_(routing_table, dst_phys, dst_chip, *dst_device, ap_idx);
         }
 
         this->fabric_over_noc_routing_tables_[src_phys] = routing_table;
