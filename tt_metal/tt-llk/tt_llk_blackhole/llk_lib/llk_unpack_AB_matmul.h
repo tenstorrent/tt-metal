@@ -82,6 +82,16 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
     }
 }
 
+// The matmul's unpack MOP: template 0 without B or halo, which the expander runs from Flags, InsnA0 and SkipA0 only.
+inline void _llk_unpack_AB_matmul_program_mop_(const std::uint32_t context_0_instr, const std::uint32_t context_1_instr)
+{
+    volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+    mop_sync();
+    mop_cfg[1] = 0;
+    mop_cfg[3] = context_0_instr;
+    mop_cfg[7] = context_1_instr;
+}
+
 /**
  * Whether the operand a matmul streams holds 8 bits per datum or less: the stream_narrow template argument of @ref _llk_unpack_AB_matmul_init_.
  * @param dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles); only
@@ -185,18 +195,7 @@ inline void _llk_unpack_AB_matmul_narrow_mop_config_(
             });
     }
 
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        false,                                    // src B
-        false,                                    // halo - just used for 4 unpacks
-        lltt::replay_insn(0, replay_buf_run_len), // runs when context is 0
-        0,
-        0,
-        0,
-        lltt::replay_insn(replay_buf_run_len, replay_buf_run_len), // runs when context is 1
-        0,
-        0);
-
-    tmp.program();
+    _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, replay_buf_run_len), lltt::replay_insn(replay_buf_run_len, replay_buf_run_len));
 }
 
 /**
@@ -237,8 +236,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
                     TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 0, stream_z);
                 });
-            ckernel_unpack_template z_tmp = ckernel_unpack_template(false, false, lltt::replay_insn(0, 2), 0, 0, 0, lltt::replay_insn(2, 2), 0, 0);
-            z_tmp.program();
+            _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, 2), lltt::replay_insn(2, 2));
             return;
         }
     }
@@ -386,18 +384,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             });
     }
 
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        false,                                    // src B
-        false,                                    // halo - just used for 4 unpacks
-        lltt::replay_insn(0, replay_buf_run_len), // runs when context is 0
-        0,
-        0,
-        0,
-        lltt::replay_insn(replay_buf_run_len, replay_buf_run_len), // runs when context is 1
-        0,
-        0);
-
-    tmp.program();
+    _llk_unpack_AB_matmul_program_mop_(lltt::replay_insn(0, replay_buf_run_len), lltt::replay_insn(replay_buf_run_len, replay_buf_run_len));
 }
 
 /**
