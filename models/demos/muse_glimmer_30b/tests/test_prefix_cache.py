@@ -233,6 +233,7 @@ def _adapter(monkeypatch, snapshots=3):
     a.n_blocks = 131072 // BLOCK
     a.buckets = gv.prefill_buckets(131072)
     a.model = _FakeModel()
+    a._segment = 0  # the default is 16384; tests that need segments set it
     a._prefix = pc.RingSnapshotRegistry(first=gv.DECODE_B_PAD + 1, capacity=snapshots)
     a._page_table_tt = lambda row, width: ("tt", row.clone(), width)
     a.copies = []
@@ -379,5 +380,7 @@ def test_segment_rows_must_be_a_multiple_of_256(monkeypatch, expect_error):
         pc.segment_rows()
     monkeypatch.setenv("MUSE_PREFIX_SEGMENT", "16384")
     assert pc.segment_rows() == 16384
+    monkeypatch.delenv("MUSE_PREFIX_SEGMENT")
+    assert pc.segment_rows() == 16384 and pc.retained_rings() == 96  # the shipped defaults with the cache on
     monkeypatch.delenv("MUSE_PREFIX_CACHE")
-    assert pc.segment_rows() == 0
+    assert pc.segment_rows() == 0 and pc.retained_rings() == 0

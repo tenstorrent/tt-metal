@@ -29,14 +29,15 @@ def enabled() -> bool:
 
 
 def retained_rings() -> int:
-    """Retained snapshot rings per chip (24.4 MB each at 39 sliding layers, 36 blocks, BFP8; keep at least the lane count + a few,
+    """Retained snapshot rings per chip (24.4 MB each at 39 sliding layers, 36 blocks, BFP8; default 96 = 2.3 GB per chip with the segment snapshots, keep at least the lane count x 3,
     since every turn of a conversation adds a snapshot and the superseded ones leave only by LRU)."""
-    return int(os.environ.get("MUSE_PREFIX_SNAPSHOTS", 32)) if enabled() else 0
+    return int(os.environ.get("MUSE_PREFIX_SNAPSHOTS", 96)) if enabled() else 0
 
 
 def segment_rows() -> int:
-    """MUSE_PREFIX_SEGMENT: rows per prefill segment (a multiple of 256) with a ring snapshot after each, 0 = off (default)."""
-    n = int(os.environ.get("MUSE_PREFIX_SEGMENT", 0)) if enabled() else 0
+    """MUSE_PREFIX_SEGMENT: rows per prefill segment (a multiple of 256) with a ring snapshot after each (default 16384 when the
+    cache is on; 0 = off). 8192 would also catch branch points between 8K and 16K but needs twice the snapshots (untested)."""
+    n = int(os.environ.get("MUSE_PREFIX_SEGMENT", 16384)) if enabled() else 0
     if n and n % CACHE_ALIGN:
         raise ValueError(f"MUSE_PREFIX_SEGMENT must be a multiple of {CACHE_ALIGN}, got {n}")
     return n
