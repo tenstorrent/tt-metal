@@ -935,6 +935,19 @@ ALWI void matmul_block_init_fe(
         matmul_fe_key<ct, rt>(ct)>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 }
 
+// mark: the size of matmul_fe_mark::set<0>, which naming it here makes the TRISC wrapper see (the unpack and pack init
+// macro)
+template <
+    std::uint32_t in0_cb,
+    std::uint32_t in1_cb,
+    std::uint32_t ct,
+    std::uint32_t rt,
+    std::size_t mark,
+    typename... Args>
+ALWI void matmul_block_init_fe_marked(const std::uint32_t call_line, Args... args) {
+    matmul_block_init_fe<in0_cb, in1_cb, ct, rt>(call_line, args...);
+}
+
 template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt>
 ALWI void matmul_block_fe(
     const std::uint32_t call_line,
@@ -996,7 +1009,7 @@ inline constexpr auto self_test_set = sizeof(set<1>);
 static_assert(is_used<1>(0), "matmul_fe_mark: a completed set<N> must make used(tag<N>) callable");
 static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unused");
 }  // namespace ckernel::matmul_fe_mark
-#define MATMUL_FE_MARK() ((void)sizeof(::ckernel::matmul_fe_mark::set<0>))
+#define MATMUL_FE_MARK() sizeof(::ckernel::matmul_fe_mark::set<0>)
 
 // the cb ids, ct and rt of a plain call where they are constant expressions (pk-state's front-end dispatch); a call
 // with template arguments is not a macro call
@@ -1032,10 +1045,9 @@ static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unu
     matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
         line, a, b, i0, i1, d, tr, ct, rt, kt)
 #else
-#define matmul_block_init(in0_cb_id, in1_cb_id, ...)                                     \
-    (MATMUL_FE_MARK(),                                                                   \
-     matmul_block_init_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu>( \
-         __builtin_LINE(), in0_cb_id, in1_cb_id, ##__VA_ARGS__))
+#define matmul_block_init(in0_cb_id, in1_cb_id, ...)                                                             \
+    matmul_block_init_fe_marked<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu, MATMUL_FE_MARK()>( \
+        __builtin_LINE(), in0_cb_id, in1_cb_id, ##__VA_ARGS__)
 #define matmul_block(in0_cb_id, in1_cb_id, ...)                                    \
     matmul_block_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu>( \
         __builtin_LINE(), in0_cb_id, in1_cb_id, __VA_ARGS__)

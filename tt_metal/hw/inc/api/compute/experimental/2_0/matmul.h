@@ -151,6 +151,10 @@ template <std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, typename..
 ALWI void matmul_block_init_fe(std::uint32_t, Args... args) {
     (matmul_block_init)(args...);
 }
+template <std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::size_t, typename... Args>
+ALWI void matmul_block_init_fe_marked(std::uint32_t, Args... args) {
+    (matmul_block_init)(args...);
+}
 template <std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, typename... Args>
 ALWI void matmul_block_fe(std::uint32_t, Args... args) {
     (matmul_block)(args...);
