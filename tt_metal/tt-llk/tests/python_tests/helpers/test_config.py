@@ -1434,15 +1434,25 @@ class TestConfig:
             *src_include_append,
         ]
 
-        # Counters on compiles every variant differently (counters.h), so it hashes apart from counters off.
-        counters = (
+        # These process-wide switches change every compiled variant. They live
+        # outside ``self.__dict__``, so key them explicitly: CONSUME mode trusts
+        # ``variant_id`` and never rebuilds an ELF.
+        build_modes = [
+            (
+                "llk-asserts-off"
+                if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
+                else "llk-asserts-on"
+            )
+        ]
+        # Counters compile every variant differently through counters.h.
+        build_modes += (
             [TestConfig._perf_counters_suffix()]
             if TestConfig.ENABLE_PERF_COUNTERS
             else []
         )
         self.variant_id = sha256(
             str(
-                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + counters)
+                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + build_modes)
             ).encode()
         ).hexdigest()
 

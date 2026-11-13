@@ -40,11 +40,11 @@ run test_sfpu_square_quasar.py with --no-split
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
 - `--speed-of-light` — compile runtime parameters as constants (the build the nightly `LLK perf` run measures; the PR and merge perf gates build without it)
-- `--perf` — perf sweep with the Wormhole/Blackhole CI build: `-m perf` (plus `--mode perf` for SFPU sweep modules), `TT_LLK_DISABLE_ASSERTS=1`, and `--dist loadgroup -n 15` for the silicon consumer. Quasar perf CI keeps asserts; pass `--keep-asserts` to match it. Unlike CI the local runner does not stop at the first failure. `simulate` / `--rerun` need a prior `compile --perf` of the same tests, or they exit 4; a module or `--k` with no perf variants also exits 4. Prints a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`; a non-PASS consumer marks it partial. Validate a PASS result with `.claude/skills/perf-report/SKILL.md`
+- `--perf` — perf sweep matching each architecture's CI assert mode: `TT_LLK_DISABLE_ASSERTS=1` for Wormhole/Blackhole and `=0` for Quasar, plus `-m perf` (`--mode perf` for SFPU sweep modules) and `--dist loadgroup -n 15` for the silicon consumer. Unlike CI the local runner does not stop at the first failure. Asserts-on and asserts-off builds have distinct ELF variant IDs, so `simulate` cannot reuse the other kind. A module or `--k` with no perf variants exits 4. Prints a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`; a non-PASS consumer marks it partial. Validate a PASS result with `.claude/skills/perf-report/SKILL.md`
 - `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`; `--keep-runs 0` keeps all); need `--perf`. Tags match `[A-Za-z0-9][A-Za-z0-9._-]*` and are single-use
 - `--consumer-jobs <N>` — silicon consumer parallelism (default 15; 0 is serial); needs `--perf`
 - `--perf-counters` / `--dump-perf-counters` — counter report (a separate report kind); need `--perf`
-- `--keep-asserts` — keep `LLK_ASSERT` in a `--perf` build (matches Quasar perf CI; differs from Wormhole/Blackhole CI)
+- `--keep-asserts` — keep `LLK_ASSERT` in a `--perf` build (already the Quasar default; differs from Wormhole/Blackhole CI)
 
 The never-call-pytest rule covers tests that build kernels or use a device or simulator. Host-only work is outside it: `tests/run_hardware_free.sh` and `compare_test_and_perf.py`.
 

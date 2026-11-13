@@ -41,12 +41,12 @@
 #   --speed-of-light  Pass pytest --speed-of-light (compile-time formats / SOL path).
 #   --perf            Perf sweep with CI's build: selects -m perf (and
 #                     --mode perf for SFPU sweep modules), sets
-#                     TT_LLK_DISABLE_ASSERTS=1 for both phases, and on silicon
-#                     runs the consumer with --dist loadgroup -n <consumer-jobs>.
+#                     TT_LLK_DISABLE_ASSERTS=1 for Wormhole/Blackhole and =0
+#                     for Quasar, and on silicon runs the consumer with
+#                     --dist loadgroup -n <consumer-jobs>.
 #                     Unlike CI it does not stop at the first failure. Asserts
 #                     off is the Wormhole/Blackhole CI build; Quasar perf CI
-#                     keeps them (--keep-asserts). simulate needs a prior
-#                     compile --perf of the same tests. Prints the report
+#                     keeps them by default. Prints the report
 #                     directory in a RUN_LLK_TESTS_PERF_REPORT line, marked
 #                     partial when the consumer did not pass. Selecting no perf
 #                     variant is exit 4. A run tag is single-use.
@@ -61,8 +61,8 @@
 #   --perf-counters   Pass --enable-perf-counters (a separate report kind).
 #   --dump-perf-counters
 #                     Also write raw counter values (<module>.counters.csv).
-#   --keep-asserts    In --perf mode, keep LLK_ASSERT compiled in. The numbers
-#                     are then not comparable with CI.
+#   --keep-asserts    In --perf mode, keep LLK_ASSERT compiled in. This is the
+#                     Quasar default and differs from Wormhole/Blackhole CI.
 #   --no-split        Skip compile-producer step; run pytest --run-simulator without
 #                     --compile-consumer (combined compile+run in one pytest invocation).
 #                     Use for issue-solver tests that don't pre-build ELFs.
@@ -79,8 +79,7 @@
 #   2  Compile step failed  (only from the 'run' command)
 #   3  Environment error (flock timeout, venv missing)
 #   4  Usage / validation error (missing required options). With --perf also:
-#      an invalid or already used --run-tag, no perf variants selected, or
-#      no matching compile --perf before simulate
+#      an invalid or already used --run-tag, or no perf variants selected
 #
 # Agents invoke this via the Bash tool with timeout: 1800000 (synchronous,
 # never run_in_background). The script blocks until completion and returns one
@@ -307,29 +306,6 @@ _validate() {
   fi
 }
 
-# The ELF variant hash does not include the asserts define, and the consumer
-# never rebuilds, so simulate --perf would run whatever the last compile of
-# each test built. A --perf compile records its asserts setting per test file;
-# any other compile of the file removes the record.
-_perf_compile_marker() {
-  printf '%s' "${WORKTREE}/perf_data/.perf-compile-${ARCH}-${1//\//_}"
-}
-
-_check_perf_compile_markers() {
-  [[ "$PERF" == "true" && "$NO_SPLIT" == "false" ]] || return 0
-  local test_file marker recorded
-  for test_file in "${TEST_FILES[@]}"; do
-    marker=$(_perf_compile_marker "$test_file")
-    recorded=""
-    [[ -f "$marker" ]] && recorded=$(<"$marker")
-    if [[ "$recorded" != "${PERF_ENV[*]}" ]]; then
-      echo "ERROR: no compile --perf of ${test_file} with ${PERF_ENV[*]} since its last other compile;" >&2
-      echo "       the ELFs may carry another asserts setting. Run compile --perf with the same flags first." >&2
-      return 4
-    fi
-  done
-}
-
 # pytest exit 5 means nothing was collected. Under --perf that is a module or
 # --k with no perf variants, not a failure.
 _no_perf_variants() {
@@ -348,13 +324,13 @@ _perf_pytest_args() {
 }
 
 # Environment for a --perf build. Wormhole and Blackhole perf CI compile without
-# LLK_ASSERT, so a local build with asserts measures different code. Quasar perf
-# CI keeps asserts; --keep-asserts matches it.
+# LLK_ASSERT; Quasar perf CI keeps it. The asserts setting is part of the ELF
+# variant hash, so producer and consumer cannot silently share the other kind.
 _perf_env_prefix() {
   PERF_ENV=()
   [[ "$PERF" == "true" ]] || return 0
   # Set both ways, so an exported TT_LLK_DISABLE_ASSERTS cannot override the flag.
-  if [[ "$KEEP_ASSERTS" == "true" ]]; then
+  if [[ "$KEEP_ASSERTS" == "true" || "$ARCH" == "quasar" ]]; then
     PERF_ENV+=(TT_LLK_DISABLE_ASSERTS=0)
   else
     PERF_ENV+=(TT_LLK_DISABLE_ASSERTS=1)
@@ -428,10 +404,7 @@ _do_compile() {
 
   _vlog "compile: ${target_label} (arch=${ARCH}, -n ${JOBS}${kflag[*]:+, -k '${K_FILTER}'}$([[ "$SPEED_OF_LIGHT" == true ]] && echo ', sol'))"
 
-  local test_file compile_exit
-  for test_file in "${TEST_FILES[@]}"; do
-    rm -f "$(_perf_compile_marker "$test_file")"
-  done
+  local compile_exit
 
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
@@ -458,12 +431,6 @@ _do_compile() {
     if [[ $compile_exit -eq 5 ]]; then
       _no_perf_variants
       return 4
-    fi
-    if [[ $compile_exit -eq 0 ]]; then
-      mkdir -p "${WORKTREE}/perf_data"
-      for test_file in "${TEST_FILES[@]}"; do
-        printf '%s' "${PERF_ENV[*]}" >"$(_perf_compile_marker "$test_file")"
-      done
     fi
   fi
   return "$compile_exit"
@@ -509,7 +476,6 @@ _do_simulate() {
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
   _perf_pytest_args
   _perf_env_prefix
-  _check_perf_compile_markers || return 4
   if [[ "$PERF" == "true" ]]; then
     pytest_flags="${pytest_flags} ${PERF_PYTEST_ARGS[*]}"
     if [[ "$MODE" == "hardware" && "$CONSUMER_JOBS" -gt 0 ]]; then
