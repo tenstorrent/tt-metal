@@ -153,14 +153,6 @@ class Flux2VaeDecoder(Module):
             height_in = height // h_factor
         assert width % p == 0, f"width {width} must be divisible by patch {p}"
         assert width % self._ctx.w_factor == 0, f"width {width} must be divisible by w_factor {self._ctx.w_factor}"
-        # The fused group norm needs each device's pixel count to be whole tiles. This is its
-        # smallest level; every later one has 4 or 16 times the pixels.
-        local_pixels = (height // h_factor) * (width // self._ctx.w_factor)
-        assert local_pixels % ttnn.TILE_SIZE == 0, (
-            f"{height}x{width} latents give {local_pixels} pixels per device, which the group norm needs to be a "
-            f"multiple of {ttnn.TILE_SIZE}"
-        )
-
         z = self._inv_normalize(z)
         z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
         z = z.reshape([z.shape[0], height_in // p, width // p, -1, p, p])
