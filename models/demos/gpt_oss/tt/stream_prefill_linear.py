@@ -41,6 +41,10 @@ MAX_RT = 4  # output rows per DST block (FP32 DST, half sync: 4 tiles)
 MAX_MB = 8  # row tiles per M block (L1 permitting)
 L1_CAP = 900 * 1024  # circular-buffer bytes per core at most
 L1_MARGIN = 16 * 1024  # kept free below the lowest L1 buffer
+# The free L1 below the lowest L1 buffer is rounded down to this step before it sizes a plan: the budget is part of the
+# program cache key, so small changes in L1 occupancy between calls reuse the plan and kernels instead of building
+# new ones in the middle of a request.
+L1_BUDGET_STEP = 64 * 1024
 MAX_WRITER_COLS = 300  # the writer's runtime args hold the core's column list
 # plan_work cost model (rough, Blackhole per device): DRAM read bandwidth, one core's read bandwidth, one 32x32x32
 # HiFi2 tile multiply
@@ -328,12 +332,13 @@ def _ones_tensor(mesh_device, dtype):
 
 def _l1_budget(mesh_device):
     """Circular-buffer bytes per core: below the lowest L1 buffer now allocated (a program's circular buffers must end
-    below it), at most L1_CAP."""
+    below it), rounded down to L1_BUDGET_STEP, at most L1_CAP."""
     base = mesh_device.l1_allocator_base()
     low = mesh_device.lowest_occupied_compute_l1_address()
     if not low:
         return L1_CAP
-    return max(0, min(L1_CAP, low - base - L1_MARGIN))
+    free = max(0, low - base - L1_MARGIN)
+    return min(L1_CAP, free // L1_BUDGET_STEP * L1_BUDGET_STEP)
 
 
 def _core_ranges(ttnn, n, gx):

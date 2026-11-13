@@ -31,6 +31,9 @@ void kernel_main() {
     const uint32_t n_groups = (cols + G - 1) / G;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
+    // The matmul is set up for a block of rt rows; only packs run between blocks, so it is set up again only when rt
+    // changes (the last, partial block of an M block).
+    uint32_t init_rt = 0;
     bool loaded = false;
     for (uint32_t mb = 0; mb < m_cnt; mb += MB) {
         const uint32_t rows = m_cnt - mb < MB ? m_cnt - mb : MB;
@@ -43,7 +46,10 @@ void kernel_main() {
             for (uint32_t c = 0; c < gc; ++c) {
                 for (uint32_t r0 = 0; r0 < rows; r0 += RT) {
                     const uint32_t rt = rows - r0 < RT ? rows - r0 : RT;
-                    matmul_block_init(cb_x, cb_w, 0, 1, rt, KT);
+                    if (rt != init_rt) {
+                        matmul_block_init(cb_x, cb_w, 0, 1, rt, KT);
+                        init_rt = rt;
+                    }
                     tile_regs_acquire();
                     for (uint32_t k = 0; k < KT; ++k) {
                         matmul_block(cb_x, cb_w, r0 * KT + k, c * KT + k, 0, false, 1, rt, KT);
