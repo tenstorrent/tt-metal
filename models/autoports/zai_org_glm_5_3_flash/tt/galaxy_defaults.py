@@ -49,6 +49,11 @@ KNOBS = {
     # test_local_all_matches_the_rounds): local select 174 -> 0.7 us per DSA layer at B 1; e2e 4 K x 1 18.6 -> 17.3 ms
     # (53.7 -> 57.7 tok/s/u), 32 K x 4 21.0 -> 20.6 ms, every user's ids identical (4 K x 1, 32 K x 4, 4 K x 16)
     "GLM53_DSA_SHARD_LOCAL_ALL": "1",
+    # GLM53_DSA_SHARD_SEL2 (rev 73; needs R8): past 512 local pools the local select's rounds keep the same integers at less
+    # coordinator work (the cores report their above counts in the tie round, packed report / pull sums, per-owner
+    # quota chunks; host proof test_sel2_matches_the_rounds): coordinator round 27.0 -> 9.1 us at B 1; e2e 128 K x 1
+    # 18.6 -> 18.1 ms, 1 M x 1 18.7 -> 18.2 ms; every user's ids identical (128 K x 1, 128 K x 4, 1 M x 1)
+    "GLM53_DSA_SHARD_SEL2": "1",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",

@@ -959,7 +959,7 @@ def shard_round_marks(pair: int, r8: bool = True) -> bool:
 
 
 def shard_sel2(pair: int, r8: bool = True) -> bool:
-    """rev 73 GLM53_DSA_SHARD_SEL2 (default 0): the shard local select's rounds with the same integers at less
+    """rev 73 GLM53_DSA_SHARD_SEL2 (default 0; on in tt/galaxy_defaults.py): the shard local select's rounds with the same integers at less
     coordinator work (dsa_shard.hpp SEL2: no per-round above counts -- the cores report theirs in the tie round --,
     packed report / pull sums, per-owner quota chunks; emulated by local_select_sel2); needs R8; the pair / the 2x4
     never take it"""
