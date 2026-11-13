@@ -278,9 +278,8 @@ uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
 BufferDistributionSpec::core_groups_tuple() const {
     auto groups = core_groups();
-    const auto num_cores_with_data = groups.cores_with_data.num_cores();
     return {
-        num_cores_with_data,
+        groups.cores_with_data.num_cores(),
         std::move(groups.cores_with_data),
         std::move(groups.cores_in_group_1),
         std::move(groups.cores_in_group_2),

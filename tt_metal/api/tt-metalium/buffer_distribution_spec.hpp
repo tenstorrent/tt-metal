@@ -73,8 +73,6 @@ public:
         size_t num_shards_per_core_in_group_1 = 0;
         size_t num_shards_per_core_in_group_2 = 0;
     };
-    // Computed on each call: merging the cores into ranges is costly, and only some program factories ask for it, while
-    // every sharded buffer allocation builds a distribution spec.
     CoreGroups core_groups() const;
     // CoreGroups represented as a tuple compatible with split_work_to_cores function.
     // Returns: number of cores with data, cores with data, cores in group 1, cores in group 2,

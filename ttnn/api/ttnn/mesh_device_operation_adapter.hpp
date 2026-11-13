@@ -1330,15 +1330,12 @@ public:
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             return key;  // custom hash -> opt out beyond the op-identity prefix
         } else {
-            // Built on every call, cache hits included: encode into one string, with room for a typical key, instead
-            // of growing it step by step and concatenating temporaries. The bytes are canonical_key's.
-            constexpr std::size_t kCanonicalKeyReserveBytes = 2048;
-            key.reserve(kCanonicalKeyReserveBytes);
+            key.reserve(2048);
             ttsl::hash::detail::append_canonical_all(key, attrs, tensor_args);
-            const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
-            std::for_each(coords.begin(), coords.end(), [&](const auto& coord) {
+            for (const auto& coord :
+                 mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
                 ttsl::hash::detail::append_canonical(key, coord);
-            });
+            }
             return key;
         }
     }

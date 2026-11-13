@@ -750,8 +750,6 @@ std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshCoo
         ttsl::fmt_detail::to_string(range.end_coord()));
 }
 
-// Coordinates and ranges key the maps that dispatch looks programs and devices up in on every enqueue: fold their
-// values with the same mixer as hash_objects, without its generic per-element dispatch.
 size_t std::hash<tt::tt_metal::distributed::MeshCoordinate>::operator()(
     const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
     ttsl::hash::hash_t seed = coord.dims();

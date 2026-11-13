@@ -341,11 +341,10 @@ void MeshBuffer::initialize_device_buffers() {
     // built now, only the reference (first local) buffer, which dispatch reads, is built here; get_device_buffer()
     // builds the others on first use.
     const bool build_all = build_all_device_buffers_at_allocation(*mesh_device);
-    // The view's devices and the buffers are both in row-major order over the mesh shape: walk them together by
-    // index, without a coordinate lookup per device.
+    // View devices and buffers share row-major order: walk them by index instead of a lookup per coordinate.
     const auto& view = mesh_device->get_view().impl();
     auto& buffers = buffers_.values();
-    TT_ASSERT(view.shape() == buffers_.shape(), "MeshBuffer and its mesh view differ in shape");
+    TT_ASSERT(view.shape() == buffers_.shape());
     bool is_reference = true;
     size_t index = 0;
     for (const auto& device : view) {
