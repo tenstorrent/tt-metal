@@ -70,7 +70,8 @@ def test_quasar_schema_is_not_wh_bh_schema():
     # vector_mode is emitted by both architectures (ternary SFPU on WH/BH), so it is shared.
     assert "vector_mode" not in qsr_only
     assert "enable_2x_format" in qsr_only
-    assert "enable_direct_indexing" in qsr_only
+    # enable_direct_indexing is also emitted (as False) by the WH/BH eltwise binary tests.
+    assert "enable_direct_indexing" not in qsr_only
     assert stat_column("L1_TO_L1[FPU]", MEAN) in qsr_only
     assert stat_column("L1_TO_L1[SFPU]", MEAN) in qsr_only
     assert stat_column("SFPU_ISOLATE", MEAN) in qsr_only

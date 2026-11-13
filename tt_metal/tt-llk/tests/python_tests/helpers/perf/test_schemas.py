@@ -95,7 +95,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary": {
-        "version": 9,
+        "version": 10,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -103,6 +103,7 @@ PERF_TEST_SCHEMAS = {
             "broadcast_type",
             "dest_acc",
             "dest_sync",
+            "enable_direct_indexing",
             "face_c_dim",
             "face_r_dim",
             "formats.input_A",
@@ -145,7 +146,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary_broadcast": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -153,6 +154,7 @@ PERF_TEST_SCHEMAS = {
             "broadcast_type",
             "dest_acc",
             "dest_sync",
+            "enable_direct_indexing",
             "face_c_dim",
             "face_r_dim",
             "formats.input_A",
@@ -1042,11 +1044,12 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_binary_quasar": {
-        "version": 8,
+        "version": 9,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
             "block_rt_dim",
+            "broadcast_type",
             "dest_acc",
             "dest_sync",
             "enable_direct_indexing",
@@ -1080,8 +1083,11 @@ PERF_TEST_SCHEMAS_QSR = {
             "output_num_blocks",
             "output_num_tiles_in_block",
             "output_tile_cnt",
+            "reuse_dest_type",
             "tile_cnt",
             "unpack_to_dest",
+            "unpack_transpose_faces",
+            "unpack_transpose_within_face",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {
