@@ -50,6 +50,10 @@ constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
 constexpr uint32_t kRouterCores = 12;
 // The persistent op's source ring on each sender: kFeSourceRing (kernels/persistent.h) words.
 constexpr uint32_t kFeSourceRingBytes = 16u * 4u;
+// The persistent op's sharded router: partial cores per chip (the router row's first ones).
+constexpr uint32_t kRouterParts = 10;
+// Bound on the link-0 sender's candidate exchange routes (the whole-mesh branches out of a chip).
+constexpr uint32_t kMaxExchangeRoutes = 4;
 // A core's score and ranking tiles sit in DEST together: 8 16-bit tiles in half-sync mode.
 constexpr uint32_t kRouterMaxTilesPerCore = 4;
 
@@ -77,6 +81,11 @@ struct AllReduceBranch {
 struct PersistentEpilogue {
     // GlobalSemaphore on the output cores; unused by the persistent op's kernels, which stage at the senders.
     uint32_t out_ready1_sem_addr;
+    // The sharded router's GlobalSemaphores: the reducer's parts count and forwarded count, and the exchange
+    // sender's ready count.
+    uint32_t parts_sem_addr;
+    uint32_t forwarded_sem_addr;
+    uint32_t cand_ready_sem_addr;
     // kFeHdrWords + kFeGoWords words on every core of the input replica's grid, zeroed.
     tt::tt_metal::Buffer* header;
     // The writers' output staging argument; unused by the persistent op's kernels.
@@ -415,14 +424,36 @@ ProgramDescriptor build_program_descriptor(
             k_tiles,
             input_tile.get_height());
         router_cores = CoreRangeSet{CoreRange{{0, GRID_Y}, {num_router_cores - 1u, GRID_Y}}};
-        const auto& nd = tensor_args.router_weight->memory_config().nd_shard_spec().value();
+        if (persistent == nullptr) {
+            const auto& nd = tensor_args.router_weight->memory_config().nd_shard_spec().value();
+            TT_FATAL(
+                router_gate_in_dram || (nd.grid == router_cores && nd.orientation == ShardOrientation::ROW_MAJOR &&
+                                        nd.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D),
+                "fused_experts: an L1 router_weight must be ND-sharded ROW_MAJOR ROUND_ROBIN_1D over the router "
+                "cores {}, got grid {}",
+                router_cores.str(),
+                nd.grid.str());
+        }
+    }
+    // The persistent op's router is sharded by expert over its chips (router_partial.cpp, router_reduce.cpp):
+    // chip m scores the gate's tile column m, K-split over kRouterParts partial cores of the router row, summed
+    // and top-k'd on the reducer core next to them; the route merge, the row's last core, merges every chip's
+    // candidates. num_router_cores is then the candidate slot count, one per chip.
+    const bool sharded_router = run_router && persistent != nullptr;
+    const uint32_t router_k_slice = sharded_router ? k_tiles / kRouterParts : 0u;
+    const CoreRangeSet router_part_cores =
+        sharded_router ? CoreRangeSet{CoreRange{{0, GRID_Y}, {kRouterParts - 1u, GRID_Y}}} : CoreRangeSet{};
+    const CoreCoord router_reducer{kRouterParts, GRID_Y};
+    if (sharded_router) {
         TT_FATAL(
-            router_gate_in_dram || (nd.grid == router_cores && nd.orientation == ShardOrientation::ROW_MAJOR &&
-                                    nd.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D),
-            "fused_experts: an L1 router_weight must be ND-sharded ROW_MAJOR ROUND_ROBIN_1D over the router cores "
-            "{}, got grid {}",
-            router_cores.str(),
-            nd.grid.str());
+            num_router_cores == kRouterParts + 2u && k_tiles % kRouterParts == 0 && router_k_slice % 2u == 0,
+            "fused_experts: the sharded router takes {} partial cores, a reducer and the route merge on a {}-core "
+            "router row, with an even K slice of {} K tiles each; got {} router cores and {} K tiles",
+            kRouterParts,
+            kRouterParts + 2u,
+            kRouterParts,
+            num_router_cores,
+            k_tiles);
     }
     // Without a replica the router cores take the {1,0} broadcast too, as one multicast rectangle down to
     // the router row, which therefore has to be full.
@@ -1191,7 +1222,50 @@ ProgramDescriptor build_program_descriptor(
     constexpr uint32_t cb_rout = CBIndex::c_18;
     const uint32_t router_bias_tile_bytes = input_tile.get_tile_size(tt::DataFormat::Float16_b);
     const uint32_t router_score_tile_bytes = input_tile.get_tile_size(tt::DataFormat::Float16_b);
-    if (run_router) {
+    // The sharded router's (persistent): a partial core's cb_rin (as above), cb_rw (its K slice of the chip's
+    // gate column) and cb_part (its 1x32 partial); the reducer's cb_parts (every partial core's, in part order,
+    // declared on the partial cores too so they write it at the same address), cb_rbias and cb_rout.
+    constexpr uint32_t cb_rpart = CBIndex::c_22;
+    constexpr uint32_t cb_rparts = CBIndex::c_23;
+    if (sharded_router) {
+        const CoreRangeSet reducer_set{CoreRange(router_reducer, router_reducer)};
+        auto tiny_cb = [&](uint32_t index, uint32_t tiles, const CoreRangeSet& cores) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = tiles * router_score_tile_bytes,
+                .core_ranges = cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = index,
+                    .data_format = tt::DataFormat::Float16_b,
+                    .page_size = router_score_tile_bytes,
+                    .tile = input_tile_desc,
+                }}},
+            });
+        };
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = input_cb_bytes,
+            .core_ranges = router_part_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_rin,
+                .data_format = input_df,
+                .page_size = input_page_size,
+                .tile = input_tile_desc,
+            }}},
+            .buffer = input_buffer,
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = router_k_slice * router_tile_bytes,
+            .core_ranges = router_part_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_rw,
+                .data_format = datatype_to_dataformat_converter(tensor_args.router_weight->dtype()),
+                .page_size = router_tile_bytes,
+            }}},
+        });
+        tiny_cb(cb_rpart, 1, router_part_cores);
+        tiny_cb(cb_rparts, kRouterParts, router_part_cores.merge(reducer_set));
+        tiny_cb(cb_rbias, router_tiles, reducer_set);
+        tiny_cb(cb_rout, 2, reducer_set);
+    } else if (run_router) {
         if (!router_bcast_input) {
             desc.cbs.push_back(CBDescriptor{
                 .total_size = input_cb_bytes,
@@ -1932,7 +2006,116 @@ ProgramDescriptor build_program_descriptor(
     make_writer(writer_noc0_cores, DataMovementProcessor::RISCV_0, NOC::NOC_0);
 
     // ---- In-op router on the router cores: bias reader + top-k (NoC 0) and the gate compute. ----
-    if (run_router) {
+    // The persistent op's candidate slots (two halves of one slot per chip), in the reduce scratch past a sender's
+    // staging and source ring, at the same address on every core: the route merge's, the reducer's own copy, and
+    // the exchange sender's (router_reduce.cpp, fe_reduce_sender.cpp).
+    auto cand_slots_addr = [&]() -> uint32_t {
+        const uint32_t ar_core_bytes =
+            (operation_attributes.output_memory_config.shard_spec()->shape[1] / TILE_DIM) * out_tile_bytes;
+        const uint32_t offset = tt::align(2u * ar_cores_per_link * ar_core_bytes + kFeSourceRingBytes, 64u);
+        TT_FATAL(
+            offset + 2u * num_router_cores * router_cand_slot_bytes <= all_reduce->scratch->aligned_size_per_bank(),
+            "fused_experts: the sharded router's candidate slots end at {} B, past the {} B scratch",
+            offset + 2u * num_router_cores * router_cand_slot_bytes,
+            all_reduce->scratch->aligned_size_per_bank());
+        return static_cast<uint32_t>(all_reduce->scratch->address()) + offset;
+    };
+    if (sharded_router) {
+        TT_FATAL(fuse_ar && !ar_senders.empty(), "fused_experts: the sharded router exchanges through link 0's sender");
+        const auto merge_noc = device->worker_core_from_logical_core(route_merge);
+        const auto reducer_noc = device->worker_core_from_logical_core(router_reducer);
+        const auto exchange_noc = device->worker_core_from_logical_core(ar_senders[0]);
+
+        std::vector<uint32_t> part_reader_ct_args = {
+            cb_rin,
+            k_tiles,
+            cb_rw,
+            router_k_slice,
+            router_tile_bytes,
+            cb_rpart,
+            cb_rparts,
+            router_score_tile_bytes,
+        };
+        TensorAccessorArgs(*router_weight_buffer).append_to(part_reader_ct_args);
+        KernelDescriptor part_reader;
+        part_reader.kernel_source = std::string(kKernelDir) + "/dataflow/router_partial.cpp";
+        part_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        part_reader.core_ranges = router_part_cores;
+        part_reader.compile_time_args = part_reader_ct_args;
+        part_reader.config =
+            DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        KernelDescriptor part_compute;
+        part_compute.kernel_source = std::string(kKernelDir) + "/compute/router_partial.cpp";
+        part_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        part_compute.core_ranges = router_part_cores;
+        part_compute.compile_time_args = {cb_rin, k_tiles, cb_rw, cb_rpart, router_k_slice};
+        // custom_mm, as in matmul_decode: LoFi only, and its split_acc finalization assumes a 16-bit DEST.
+        part_compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false};
+        for (uint32_t p = 0; p < kRouterParts; ++p) {
+            const CoreCoord core{p, GRID_Y};
+            part_reader.emplace_runtime_args(
+                core,
+                {p * router_k_slice,
+                 p,
+                 static_cast<uint32_t>(reducer_noc.x),
+                 static_cast<uint32_t>(reducer_noc.y),
+                 persistent->parts_sem_addr});
+            part_compute.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{p * router_k_slice});
+        }
+        desc.kernels.push_back(std::move(part_reader));
+        desc.kernels.push_back(std::move(part_compute));
+
+        std::vector<uint32_t> reducer_reader_ct_args = {
+            cb_rparts,
+            kRouterParts,
+            cb_rbias,
+            cb_rout,
+            top_k,
+            all_reduce->device_index,
+            router_cand_slot_bytes,
+            num_router_cores,
+            sem_router_id,
+            router_tiles,
+            static_cast<uint32_t>(router_bias_buffer->page_size()),
+        };
+        TensorAccessorArgs(*router_bias_buffer).append_to(reducer_reader_ct_args);
+        KernelDescriptor reducer_reader;
+        reducer_reader.kernel_source = std::string(kKernelDir) + "/dataflow/router_reduce.cpp";
+        reducer_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        reducer_reader.core_ranges = CoreRangeSet(CoreRange(router_reducer, router_reducer));
+        reducer_reader.compile_time_args = reducer_reader_ct_args;
+        reducer_reader.config =
+            DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        reducer_reader.emplace_runtime_args(
+            router_reducer,
+            {cand_slots_addr(),
+             static_cast<uint32_t>(merge_noc.x),
+             static_cast<uint32_t>(merge_noc.y),
+             static_cast<uint32_t>(exchange_noc.x),
+             static_cast<uint32_t>(exchange_noc.y),
+             persistent->parts_sem_addr,
+             persistent->cand_ready_sem_addr,
+             persistent->forwarded_sem_addr});
+        KernelDescriptor reducer_compute;
+        reducer_compute.kernel_source = std::string(kKernelDir) + "/compute/router_reduce.cpp";
+        reducer_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        reducer_compute.core_ranges = CoreRangeSet(CoreRange(router_reducer, router_reducer));
+        reducer_compute.compile_time_args = {
+            cb_rparts, kRouterParts, cb_rbias, cb_rout, router_tiles, all_reduce->device_index};
+        // fp32 DEST, so the partials add without a 16-bit rounding per step.
+        reducer_compute.config =
+            ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
+        desc.kernels.push_back(std::move(reducer_reader));
+        desc.kernels.push_back(std::move(reducer_compute));
+        // The route merge takes every chip's candidates from the slots.
+        for (auto& kernel : desc.kernels) {
+            if (kernel.kernel_source.ends_with("/dataflow/compute_expert_ids.cpp") &&
+                kernel.core_ranges.contains(CoreRangeSet(CoreRange(route_merge, route_merge)))) {
+                kernel.defines.emplace_back("FE_ROUTER_SHARDED", "1");
+                kernel.defines.emplace_back("FE_CAND_ADDR", std::to_string(cand_slots_addr()) + "u");
+            }
+        }
+    } else if (run_router) {
         std::vector<uint32_t> router_reader_ct_args = {
             cb_rin,
             k_tiles,
@@ -2136,7 +2319,9 @@ ProgramDescriptor build_program_descriptor(
                 static_cast<uint32_t>(params.partials_addresses.size()),
                 static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()),
                 params.num_chips,
-                static_cast<uint32_t>(params.partials_connection_chip_ids.at(all_reduce->device_index).size()),
+                router_cand_slot_bytes,
+                sem_router_id,
+                params.sub_parts,
             };
         } else {
             ar_sender.kernel_source = std::string(kKernelDir) + "/dataflow/ar_sender.cpp";
@@ -2171,8 +2356,12 @@ ProgramDescriptor build_program_descriptor(
                 for (size_t k = 0; k < params.partials_addresses.size(); ++k) {
                     sender_args.push_back(connection_index.at(k));
                     sender_args.push_back(params.partials_addresses[k]);
-                    sender_args.push_back(params.sum_core_noc_xs[k].at(link));
-                    sender_args.push_back(params.sum_core_noc_ys[k].at(link));
+                    for (uint32_t sp = 0; sp < params.sub_parts; ++sp) {
+                        sender_args.push_back(params.sum_core_noc_xs[k].at(link * params.sub_parts + sp));
+                    }
+                    for (uint32_t sp = 0; sp < params.sub_parts; ++sp) {
+                        sender_args.push_back(params.sum_core_noc_ys[k].at(link * params.sub_parts + sp));
+                    }
                     sender_args.push_back(static_cast<uint32_t>(routes[k].size() / kD2DRouteArgs));
                     sender_args.insert(sender_args.end(), routes[k].begin(), routes[k].end());
                 }
@@ -2181,6 +2370,41 @@ ProgramDescriptor build_program_descriptor(
                 for (size_t c = 0; c < chip_ids.size(); ++c) {
                     dst_nodes.push_back(tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_ids[c]}, chip_ids[c]));
                 }
+                // Link 0 also carries the sharded router's candidate exchange, along the whole-mesh branches, each
+                // on the connection in its first hop's direction (shared with the partials' when they go there).
+                const bool exchange = sharded_router && link == 0u;
+                sender_args.push_back(exchange ? static_cast<uint32_t>(all_reduce->branches.size()) : 0u);
+                if (exchange) {
+                    TT_FATAL(
+                        all_reduce->branches.size() <= kMaxExchangeRoutes,
+                        "fused_experts: the candidate exchange takes {} branches, more than the sender's {}",
+                        all_reduce->branches.size(),
+                        kMaxExchangeRoutes);
+                    const auto merge_noc = device->worker_core_from_logical_core(route_merge);
+                    const auto reducer_noc = device->worker_core_from_logical_core(router_reducer);
+                    sender_args.insert(
+                        sender_args.end(),
+                        {cand_slots_addr(),
+                         static_cast<uint32_t>(merge_noc.x),
+                         static_cast<uint32_t>(merge_noc.y),
+                         static_cast<uint32_t>(reducer_noc.x),
+                         static_cast<uint32_t>(reducer_noc.y),
+                         persistent->cand_ready_sem_addr,
+                         persistent->forwarded_sem_addr});
+                    for (const auto& branch : all_reduce->branches) {
+                        const auto first_hop = device->get_fabric_node_id(branch.first_hop);
+                        auto it = std::find(dst_nodes.begin(), dst_nodes.end(), first_hop);
+                        if (it == dst_nodes.end()) {
+                            dst_nodes.push_back(first_hop);
+                            it = dst_nodes.end() - 1;
+                        }
+                        sender_args.push_back(static_cast<uint32_t>(it - dst_nodes.begin()));
+                        append_d2d_route_args(
+                            D2DRoute{.dst = first_hop, .hops = branch.hops, .next = first_hop, .steer = kD2DNoSteer},
+                            sender_args);
+                    }
+                }
+                sender_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
             } else {
                 for (uint32_t i = first; i < first + count; ++i) {
                     sender_args.push_back(device->worker_core_from_logical_core(ar_out_cores[i]).x);
@@ -2217,8 +2441,9 @@ ProgramDescriptor build_program_descriptor(
                 ctrl_core.str(),
                 ctrl_rect.str());
             TT_FATAL(
-                router_gate_in_dram && input_replicated && !rm_rows,
-                "fused_experts: the persistent op needs a DRAM router gate and the one-row input replica");
+                sharded_router && input_replicated && !rm_rows,
+                "fused_experts: the persistent op needs the router (sharded over its chips, each layer's gate column "
+                "from the layer table) and the one-row input replica");
 
             uint32_t rewind_cbs = 0;
             for (const auto& cb : desc.cbs) {
@@ -2293,7 +2518,8 @@ ProgramDescriptor build_program_descriptor(
                 route_rect[2],
                 route_rect[3],
                 route_rect[4] + 1u,
-                num_router_cores + 1u,
+                // The router stage's ready reports: every router core's, and the route merge's.
+                sharded_router ? kRouterParts + 2u : num_router_cores + 1u,
                 sem_route_ready_id,
                 static_cast<uint32_t>(route_merge_noc.x),
                 static_cast<uint32_t>(route_merge_noc.y),
@@ -2387,7 +2613,8 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
     const auto sem_type = allocator->get_bank_size(BufferType::L1_SMALL) > 0 ? BufferType::L1_SMALL : BufferType::L1;
     // out_ready (the even iterations' when persistent), then the persistent op's odd iterations' out_ready
     // and its credit.
-    const uint32_t num_semaphores = persistent.has_value() ? 3u : 1u;
+    // Then the sharded router's parts, forwarded and ready counts.
+    const uint32_t num_semaphores = persistent.has_value() ? 6u : 1u;
     for (uint32_t s = 0; s < num_semaphores; ++s) {
         workload.semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(
             mesh_device, mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, sub_devices[0]), 0, sem_type));
@@ -2507,6 +2734,9 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
         if (persistent.has_value()) {
             epilogue.persistent = PersistentEpilogue{
                 .out_ready1_sem_addr = static_cast<uint32_t>(workload.semaphores[1].address()),
+                .parts_sem_addr = static_cast<uint32_t>(workload.semaphores[3].address()),
+                .forwarded_sem_addr = static_cast<uint32_t>(workload.semaphores[4].address()),
+                .cand_ready_sem_addr = static_cast<uint32_t>(workload.semaphores[5].address()),
                 .header = header->buffer(),
                 .out_staging = out_staging->buffer(),
             };
