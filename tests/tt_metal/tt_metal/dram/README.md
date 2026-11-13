@@ -183,7 +183,7 @@ Every source in the existing DM suite gets exactly one disposition, picked by th
 
 Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by column means no existing test covers that descriptor. A `—` means the row has no evidence column. Covered-by filters are glob patterns that allow for the instantiation prefix and parameter suffix. A 2x-only test is never listed under 1x1.
 
-**`data_movement/sources.cmake` (38 tests plus `dm_common.cpp`)**
+**`data_movement/sources.cmake` (39 tests plus `dm_common.cpp`)**
 
 | Source | Disposition | Covered by: 2x | Covered by: 1x1 | Reason / prerequisite | Case overrides |
 |---|---|---|---|---|---|
@@ -223,6 +223,7 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 | `data_movement/quasar_cache_perf/test_quasar_cache_perf.cpp` | B-port | `*MimirDmCachePerf*` | `*MimirDmCachePerf*` | Functional only, nightly; no timing asserts; cache probes done | — |
 | `data_movement/quasar_examples/quasar_idma/test_idma_example.cpp` | B-port | `*MimirDmIdma*`, `*MimirLocalDram*` | `*MimirDmIdma*`, `*MimirLocalDram*` | cce_idma_copy; iDMA probes done. `*MimirLocalDram*` is the local-GDDR matrix (every CCE, hart, view, size and alignment) on `kModeTridBatch`; MM-8 uses the single-command modes | IDMA_1D_Strided: B-port as `Strided1D` (own TL1) and `Strided1DLocalGddr` (local GDDR source), with 64 B elements, and as `Strided1DSubLine` and `Strided1DSubLineLocalGddr` with upstream's 8 B elements and 16 B source stride; remote strided endpoints not ported |
 | `data_movement/quasar_examples/quasar_addrgen/test_addrgen_example.cpp` | B-port | `*MimirDmAddrgen.Pattern/Strided*:*MimirDmAddrgen.Pattern/Face_*` | `*MimirDmAddrgen.Pattern/Strided*:*MimirDmAddrgen.Pattern/Face_*` | Pop addresses into TL1 and compare on host; `addrgen_reset` probe done; explicit-count pops (`pop_*_addrgen<ADDRGEN_0>(1)`) work around tt-metal #59983 (the count-less pop encodes rs1 = x1); the banking registers stay at reset, as upstream: a one-bank banking loop from a probe run that also changed the pops was removed after every addrgen, im2col and strided iDMA case passed without it on 2026-10-22 | Interleaved_Banking: C (encodes ATT endpoint IDs 20..23) |
+| `data_movement/quasar_examples/quasar_addrgen/test_tensor_accessor_addrgen.cpp` | covered | `*MimirDmAddrgen.Pattern/Strided*:*MimirDmAddrgen.Pattern/Face_*`, `*MimirDmMeshBufferDram*` | `*MimirDmAddrgen.Pattern/Strided*:*MimirDmAddrgen.Pattern/Face_*`, `*MimirDmMeshBufferDram*` | Needs TensorAccessor buffers, dataflow buffers and Tensix workers; the HW addrgen walks are covered by `MimirDmAddrgen` and interleaved DRAM pages by `MimirDmMeshBufferDram` | — |
 | `data_movement/quasar_examples/quasar_im2col/test_im2col_example.cpp` | B-port | `*MimirDmAddrgen.Pattern/Im2Col_*` | `*MimirDmAddrgen.Pattern/Im2Col_*` | Pop addresses into TL1 and compare on host; `addrgen_reset` probe done; the loop index resets to 0 at loop end, as the RTL notes describe (neosim overlay-addrgen-rtl-semantics.md; tensix-ip_docs overlay/rocc/address_generator.md); `addrgen_api.hpp:38-39` says modulo and is out of date | — |
 | `data_movement/quasar_narrow_row/test_pack_untilize_narrow_row.cpp` | C | — | — | Compute; no Tensix | — |
 | `data_movement/dm_common.cpp` | out-of-scope | — | — | Helper, not a test | — |
@@ -300,11 +301,11 @@ The table is kept by hand, with no checker script. These three checks are redone
 1. Every `data_movement/sources.cmake` source has exactly one row.
 2. Every covered-by filter that is not `gap` or `—` matches at least one test in `mimir_tests --gtest_list_tests`. A 2x-only test also lists on 1x1, so the 1x1 column names only tests that run there.
 3. Every `MM8/` test listed by `--gtest_list_tests --gtest_filter='MM8/*'` is matched by some covered-by filter and by some run row.
-4. Every test listed by `--gtest_list_tests --gtest_filter='MM41/*:MM42/*:MM43/*:MM42Detector/*'` is matched by exactly one row from 81 to 130.
+4. Every test listed by `--gtest_list_tests --gtest_filter='MM41/*:MM42/*:MM43/*'` is matched by exactly one row from 81 to 130.
 
 ## MM-8 DM regression
 
-These rows are the plan's `mm_data_movement_regression`. They continue from row 71, with the same environment and timeout prefix as rows 2b onward. Each case runs as its own invocation (list them with `--gtest_list_tests --gtest_filter='MM8/*'`, with `TT_METAL_EMU_SOC_DESC` set: the `MimirDmMeshBufferDram` case names end in the descriptor name, and without it they end in `Unconfigured` and match nothing). Add `--gtest_output=xml:<dir>/<descriptor>_<row>.xml` to each command; it is the Gate 6 evidence, read against the covered-by columns above. On `mimir_1x1` (2026-10-21), 80 cases ran (the 44 `MM8/*` cases of the first port and the 36 MM-7 rows marked "all"): 75 passed, 5 skipped, 0 failed. The skips are `MimirDmIdma.Copy/RemoteTl1` and `Copy/RemoteGddr` (need two Mimirs), `MimirDmDramUnary.ReaderWriterHandshake/Cce2` and `Cce3` (1x1 has 2 CCEs), and `MM7T5TraceCaptureReplay` (always skips). On `mimir_1x1` (2026-10-23, soc-zebu-03, at `3a3d04f9bd2`), the follow-up's 46 `MM8/*` cases that run there and the 9 `MimirKernelLoad` cases of row 3 that run there all passed (55 of 55). The 5 `MM8/*` cases that skip there (`MimirDmIdma.Copy/RemoteTl1`, `Copy/RemoteGddr` and `Copy/RemoteTl1KernelVerified`, and `MimirDmDramUnary.ReaderWriterHandshake/Cce2` and `Cce3`) were not run. Rerun MM3 KernelLoad (row 3) with these rows: the follow-up changed its echo kernel.
+These rows are the plan's `mm_data_movement_regression`. They continue from row 71, with the same environment and timeout prefix as rows 2b onward. Each case runs as its own invocation (list them with `--gtest_list_tests --gtest_filter='MM8/*'`, with the descriptor selected by `TT_METAL_SOC_DESC`, or by `TT_METAL_EMU_SOC_DESC` with `TT_METAL_EMU_SERVER` also set: the `MimirDmMeshBufferDram` case names end in the descriptor name, and without a selected descriptor they end in `Unconfigured` and match nothing). Add `--gtest_output=xml:<dir>/<descriptor>_<row>.xml` to each command; it is the Gate 6 evidence, read against the covered-by columns above. On `mimir_1x1` (2026-10-21), 80 cases ran (the 44 `MM8/*` cases of the first port and the 36 MM-7 rows marked "all"): 75 passed, 5 skipped, 0 failed. The skips are `MimirDmIdma.Copy/RemoteTl1` and `Copy/RemoteGddr` (need two Mimirs), `MimirDmDramUnary.ReaderWriterHandshake/Cce2` and `Cce3` (1x1 has 2 CCEs), and `MM7T5TraceCaptureReplay` (always skips). On `mimir_1x1` (2026-10-23, soc-zebu-03, at `3a3d04f9bd2`), the follow-up's 46 `MM8/*` cases that run there and the 9 `MimirKernelLoad` cases of row 3 that run there all passed (55 of 55). The 5 `MM8/*` cases that skip there (`MimirDmIdma.Copy/RemoteTl1`, `Copy/RemoteGddr` and `Copy/RemoteTl1KernelVerified`, and `MimirDmDramUnary.ReaderWriterHandshake/Cce2` and `Cce3`) were not run. Rerun MM3 KernelLoad (row 3) with these rows: the follow-up changed its echo kernel.
 
 CI: `mimir_tests` is built only with `TT_UMD_BUILD_GRENDEL_JTAG=ON`, which is off by default, and no CI runner has a Mimir emulator. So MM-8-T5 CI placement is not done, and these rows are run by hand.
 
@@ -326,7 +327,7 @@ New rule: after any row that ends on a host deadline, start a fresh emulator ses
 
 ## MM4x: test plan Sections 4.1-4.3
 
-`MM41` covers Section 4.1 (CCE caches), `MM42` Section 4.2 (atomics) and `MM43` Section 4.3 (transaction IDs). `MM42Detector` holds the non-gating MIM-560 detector, so `MM42/*` does not run it. The plan is `~/.claude/plans/the-changes-in-this-cozy-lollipop.md`.
+`MM41` covers Section 4.1 (CCE caches), `MM42` Section 4.2 (atomics) and `MM43` Section 4.3 (transaction IDs). The plan is `~/.claude/plans/the-changes-in-this-cozy-lollipop.md`.
 
 ### MM4x probe results
 
