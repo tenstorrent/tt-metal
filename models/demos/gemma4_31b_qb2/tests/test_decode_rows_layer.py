@@ -58,6 +58,7 @@ def test_decode_rows_agree_with_the_32_row_trace(qb2_mesh, layer_index):
         out = layer.decode_forward(
             device(x),
             positions=device(positions, True),
+            rope_positions=device(positions.clamp_min(0), True),
             page_table=device(table.unsqueeze(0).repeat(rows, 1), True),
             kv_cache=cache,
             cyclic_cache=False,
