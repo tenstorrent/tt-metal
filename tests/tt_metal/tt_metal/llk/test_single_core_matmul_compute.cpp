@@ -663,10 +663,10 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t in0_tile_size = tt::tile_size(in0_fmt);
     const size_t in1_tile_size = tt::tile_size(in1_fmt);
     const size_t out_tile_size = tt::tile_size(out_fmt);
-    // Partials CB carries the in-flight DEST tiles. Sizing it as the output format is a
-    // conservative bound — it matches existing BF16 behaviour and works for FP8 since the
-    // packer gasket converts Float32 DEST → out_fmt at L1 write time.
-    const size_t partials_tile_size = out_tile_size;
+    // L1 accumulation needs an addable format; FP8 is packed only into the final output.
+    const tt::DataFormat partials_fmt =
+        cfg.packer_l1_acc && out_fmt == tt::DataFormat::Fp8_e4m3 ? tt::DataFormat::Float32 : out_fmt;
+    const size_t partials_tile_size = tt::tile_size(partials_fmt);
     const size_t in0_block_size_bytes = M * K * in0_tile_size;
     const size_t in1_block_size_bytes = K * N * in1_tile_size;
     const size_t in0_total_size_bytes = num_blocks * in0_block_size_bytes;
@@ -729,7 +729,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         .unique_id = PARTIALS_DFB,
         .entry_size = static_cast<std::uint32_t>(partials_tile_size),
         .num_entries = M * N,
-        .data_format_metadata = out_fmt,
+        .data_format_metadata = partials_fmt,
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -772,6 +772,9 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                 },
         };
         compute_hw_config = experimental::ComputeHardwareConfig{.enable_32_bit_dest = cfg.fp32_dest_acc_en};
+        if (partials_fmt == tt::DataFormat::Float32) {
+            compute_hw_config.unpack_modes = {{PARTIALS_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}};
+        }
     }
 
     const experimental::KernelSpec reader_spec{
@@ -956,14 +959,9 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         TT_FATAL(false, "blocked_matmul: unsupported out_fmt {}", static_cast<int>(out_fmt));
     }
 
-    // For BF16 output: per-element close (tight tolerances are realistic).
-    // For FP8 output: per-element checks are not meaningful — FP8 quantization compounds
-    // across blocks, and PACKER_L1_ACC re-quantizes every block-output through Fp8 storage.
-    // PCC is the structural-correctness backstop; thresholds reflect realistic FP8 fidelity loss
-    // (lower for L1Acc, which round-trips through Fp8 L1 every block instead of through Float32 DEST).
+    // FP8 output quantization makes PCC more appropriate than per-element tolerances.
     if (out_fmt == tt::DataFormat::Fp8_e4m3) {
-        const double min_pcc = cfg.packer_l1_acc ? 0.85 : 0.95;
-        pass &= check_pcc(dest_floats, golden_floats, min_pcc);
+        pass &= check_pcc(dest_floats, golden_floats, /*min_pcc=*/0.95);
     } else {
         const float rtol = 0.05f;
         const float atol = 0.05f + 0.05f * static_cast<float>(K * num_blocks);
@@ -1315,6 +1313,19 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockSpillReloadC
         .packer_l1_acc = false,
         .in0_fmt = tt::DataFormat::Fp8_e4m3,
         .in1_fmt = tt::DataFormat::Fp8_e4m3,
+        .out_fmt = tt::DataFormat::Fp8_e4m3,
+        .fp32_dest_acc_en = true};
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
+}
+TEST_F(LLKBlackholeSingleCardFixture, TensixTestSingleCoreMultiBlockSpillReloadComputeMatmulBf16ToFp8) {
+    unit_tests::compute::matmul::BlockedMatmulConfig config{
+        .M = 2,
+        .K = 2,
+        .N = 2,
+        .num_blocks = 4,
+        .packer_l1_acc = false,
+        .in0_fmt = tt::DataFormat::Float16_b,
+        .in1_fmt = tt::DataFormat::Float16_b,
         .out_fmt = tt::DataFormat::Fp8_e4m3,
         .fp32_dest_acc_en = true};
     ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));

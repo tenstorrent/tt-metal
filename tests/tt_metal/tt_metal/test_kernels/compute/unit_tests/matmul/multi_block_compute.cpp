@@ -8,6 +8,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -41,12 +42,14 @@ void kernel_main() {
         tile_regs_acquire();
 #ifndef PACKER_L1_ACC
         if (block_id > 0) {
+            reconfig_data_format(in1_id, partials_id, in0_id, partials_id);
             copy_init(partials_id);
             cb_partials.wait_front(out_block_num_tiles);
             for (uint32_t i = 0; i < out_block_num_tiles; i++) {
                 copy_tile(partials_id, i, i);
             }
             cb_partials.pop_front(out_block_num_tiles);
+            reconfig_data_format(partials_id, in1_id, partials_id, in0_id);
             matmul_init(in0_id, in1_id);
         }
 #endif
@@ -110,6 +113,7 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
     pack_reconfig_l1_acc(0);
 
+    reconfig_data_format(in1_id, partials_id, in0_id, partials_id);
     copy_init(partials_id);
     cb_partials.wait_front(out_block_num_tiles);
     tile_regs_acquire();
@@ -121,6 +125,7 @@ void kernel_main() {
     tile_regs_commit();
     tile_regs_wait();
 
+    pack_reconfig_data_format(partials_id, out_id);
     pack_init(out_id);
     cb_out.reserve_back(out_block_num_tiles);
     for (uint32_t tile_index = 0; tile_index < out_block_num_tiles; tile_index++) {
