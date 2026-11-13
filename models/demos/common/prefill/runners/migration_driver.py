@@ -61,6 +61,9 @@ def _parse_layers(spec: str):
 
 
 class MigrationDriver:
+    #: KV Manager /migrate failure reasons that mean "not yet", not "wrong": retried for PREFILL_MIGRATION_KVM_RETRY_S.
+    KVM_RETRY_REASONS = ("receiver_unready",)
+
     def __init__(self, *, chunk_size: int, num_layers: int, default_dst_slot_offset: int):
         self.chunk_size = chunk_size
         self.num_layers = num_layers
@@ -71,13 +74,40 @@ class MigrationDriver:
         self.layers = _parse_layers(os.environ.get("PREFILL_MIGRATION_LAYERS", ""))
         self.done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
         self.handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
+        # Prompt tokens past the prefilled ones that the handoff leaves for decode to run (``tail_tokens``). A model
+        # with recurrent state (Kimi-K3's KDA) needs at least one: decode cannot re-run a token the migrated state
+        # already applied, and prefill samples no first token. The adapter sets the default.
+        tail = os.environ.get("PREFILL_MIGRATION_HANDOFF_TAIL")
+        if tail is None:
+            from models.demos.common.prefill.runners import prefill_producer as producer
+
+            tail = getattr(producer.ADAPTER, "migration_handoff_tail_tokens", 0)
+        self.handoff_tail = int(tail)
+        if self.handoff_tail < 0:
+            raise ValueError(f"PREFILL_MIGRATION_HANDOFF_TAIL must be >= 0, got {self.handoff_tail}")
         self.client = None
+        # tt-d-gen KV Manager: POST each layer run to the prefill leader's /migrate (its HTTP health port) instead of
+        # the tt-llm-engine migration worker's queues. Both sides then publish their tables by file export.
+        self.kvm_url = os.environ.get("PREFILL_MIGRATION_KVM_URL", "").rstrip("/")
+        self.kvm_receiver = os.environ.get("PREFILL_MIGRATION_KVM_RECEIVER", "")
+        self.kvm_mode = os.environ.get("PREFILL_MIGRATION_KVM_MODE", "full")
+        self.kvm_session_id = int(os.environ.get("PREFILL_MIGRATION_KVM_SESSION_ID", str(os.getpid())))
 
     @property
     def cross_endpoint(self) -> bool:
         return self.dest_endpoint_id != self.src_endpoint_id
 
+    @property
+    def via_kvm(self) -> bool:
+        return bool(self.kvm_url)
+
     def attach(self) -> None:
+        if self.via_kvm:
+            logger.info(
+                f"[migration_driver] KV Manager mode: POST {self.kvm_url}/migrate "
+                f"(receiver={self.kvm_receiver or '-'}, mode={self.kvm_mode}, session={self.kvm_session_id})"
+            )
+            return
         self.client = self._attach_client()
         if self.cross_endpoint:
             self._pair_cross_endpoint()
@@ -104,7 +134,7 @@ class MigrationDriver:
     def run(
         self, stats, *, num_slots: int = None, slot_traces: dict = None, pools_by_trace: dict = None, kv_table=None
     ) -> list:
-        if self.client is None:
+        if self.client is None and not self.via_kvm:
             raise RuntimeError("[migration_driver] run() called before attach()")
         if os.environ.get("PREFILL_DFLASH", "0") == "1" and (
             kv_table is None
@@ -195,6 +225,8 @@ class MigrationDriver:
             logger.info(f"[migration_driver] migrating layer subset {self.layers}")
         migrated = 0
         next_uuid = 1
+        if self.via_kvm and triples:
+            self._wait_kvm_healthy()
         for src_slot, dst_slot, real_len in triples:
             runs = _layer_runs(layers, real_len, producer.ADAPTER.layer_position_range)
             for layer_start, layer_end, pos_start, pos_end in runs:
@@ -204,6 +236,18 @@ class MigrationDriver:
                 )
                 uuid = next_uuid
                 next_uuid += 1
+                if self.via_kvm:
+                    self._post_kvm_migrate(
+                        command_id=uuid,
+                        migration_id=src_slot * 65536 + dst_slot + 1,
+                        src_slot=src_slot,
+                        dst_slot=dst_slot,
+                        layer_begin=layer_start,
+                        layer_end=layer_end,
+                        pos_begin=pos_start,
+                        pos_end=pos_end,
+                    )
+                    continue
                 token = self.client.migrate(
                     uuid=uuid,
                     remote_endpoint_id=self.dest_endpoint_id,
@@ -222,6 +266,100 @@ class MigrationDriver:
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
         return migrated
 
+    def _wait_kvm_healthy(self) -> None:
+        """Block until the leader KVM's /health answers 200: the fleet comes up only once both sides' tables
+        exist, which can be after this prefill has finished. PREFILL_MIGRATION_KVM_HEALTH_WAIT_S bounds it."""
+        import urllib.error
+        import urllib.request
+
+        budget = float(os.environ.get("PREFILL_MIGRATION_KVM_HEALTH_WAIT_S", "3600"))
+        deadline = time.monotonic() + budget
+        last = None
+        while True:
+            try:
+                with urllib.request.urlopen(f"{self.kvm_url}/health", timeout=10) as resp:
+                    if resp.status == 200:
+                        logger.info(f"[migration_driver] KVM {self.kvm_url} healthy")
+                        return
+                    last = f"HTTP {resp.status}"
+            except urllib.error.HTTPError as e:
+                last = f"HTTP {e.code}"
+            except (urllib.error.URLError, OSError) as e:
+                last = str(e)
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"[migration_driver] KVM {self.kvm_url}/health not 200 after {budget:.0f}s: {last}")
+            logger.info(f"[migration_driver] waiting for KVM {self.kvm_url}/health ({last})")
+            time.sleep(10)
+
+    def _post_kvm_migrate(
+        self,
+        *,
+        command_id: int,
+        migration_id: int,
+        src_slot: int,
+        dst_slot: int,
+        layer_begin: int,
+        layer_end: int,
+        pos_begin: int,
+        pos_end: int,
+    ) -> dict:
+        """One synchronous KV Manager /migrate; raises unless it reports SUCCESSFUL.
+
+        A Snapshot config (Kimi-K3's KDA state) moves whole whatever position range the request names."""
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        body = {
+            "command_session_id": self.kvm_session_id,
+            "command_id": command_id,
+            "migration_id": migration_id,
+            "src_slot": src_slot,
+            "dst_slot": dst_slot,
+            "layer_begin": layer_begin,
+            "layer_end": layer_end,
+            "src_position_begin": pos_begin,
+            "src_position_end": pos_end,
+            "dst_position_begin": pos_begin,
+            "dst_position_end": pos_end,
+            "mode": self.kvm_mode,
+        }
+        if self.kvm_receiver:
+            body["receiver"] = self.kvm_receiver
+        # The prefill leader's /health does not cover the receiving group: a /migrate sent while decode's
+        # formation is still registering fails with reason receiver_unready, which is retried.
+        retry_budget = float(os.environ.get("PREFILL_MIGRATION_KVM_RETRY_S", "900"))
+        retry_deadline = time.monotonic() + retry_budget
+        t0 = time.monotonic()
+        while True:
+            req = urllib.request.Request(
+                f"{self.kvm_url}/migrate",
+                data=_json.dumps(body).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout_ms / 1000.0) as resp:
+                    code, text = resp.status, resp.read().decode()
+            except urllib.error.HTTPError as e:
+                code, text = e.code, e.read().decode(errors="replace")
+            try:
+                reply = _json.loads(text) if text.strip() else {}
+            except ValueError:
+                reply = {"raw": text}
+            if reply.get("status") == "SUCCESSFUL":
+                break
+            if reply.get("reason") in self.KVM_RETRY_REASONS and time.monotonic() < retry_deadline:
+                logger.info(f"[migration_driver] KVM /migrate {reply.get('reason')}; retrying in 10 s")
+                time.sleep(10)
+                continue
+            raise RuntimeError(f"[migration_driver] KVM /migrate HTTP {code} failed for {body}: {reply}")
+        logger.info(
+            f"[migration_driver] KVM /migrate ok: layers=[{layer_begin},{layer_end}) pos=[{pos_begin},{pos_end}) "
+            f"{reply.get('duration_ms', '?')} ms (wall {time.monotonic() - t0:.1f} s)"
+        )
+        return reply
+
     def _write_handoff(self, triples: list, slot_traces: dict, pools_by_trace: dict) -> None:
         if not self.handoff_path:
             return
@@ -233,6 +371,29 @@ class MigrationDriver:
         slots = []
         for src, dst, real_len in triples:
             pool = pools_by_trace[slot_traces[src]]
+            if self.handoff_tail:
+                # The prompt continues past what prefill applied: decode runs pool[real_len : real_len + tail] and
+                # takes its first token from the last of them.
+                end = real_len + self.handoff_tail
+                if end > len(pool):
+                    # The pool holds only the positions prefill was asked for; the tail continues the same trace.
+                    pool = _trace_continuation(pool, slot_traces[src], end)
+                if end > len(pool):
+                    raise ValueError(
+                        f"slot {src}: a {self.handoff_tail}-token handoff tail needs prompt tokens up to {end}, but "
+                        f"its pool holds {len(pool)}; shorten the request or use a longer trace"
+                    )
+                tail = [int(t) for t in pool[real_len:end]]
+                slots.append(
+                    {
+                        "dst_slot": int(dst),
+                        "prompt_len": int(end),
+                        "prefill_len": int(real_len),
+                        "tail_tokens": tail,
+                        "last_prompt_token": tail[-1],
+                    }
+                )
+                continue
             last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
             slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
         base_dir = os.path.abspath(os.path.dirname(self.handoff_path) or ".")
@@ -283,6 +444,23 @@ class MigrationDriver:
                 f.write(f"{s} {d}\n")
         logger.success(f"[migration_driver] wrote DONE sentinel {done_path} ({len(pairs)} pair(s)): {pairs}")
         return pairs
+
+
+def _trace_continuation(pool, trace, end: int):
+    """``pool`` extended from its trace to at least ``end`` tokens, or ``pool`` unchanged when the trace cannot.
+
+    The producer loads a slot's pool only as deep as the request it prefills, so a handoff tail past the request
+    reads the next prompt tokens from the trace itself, after checking the trace starts with the pool."""
+    try:
+        from models.demos.common.prefill.runners import prefill_producer as producer
+
+        ids = producer.load_trace_token_ids(trace)
+    except Exception as e:  # no trace on disk, or an unreadable one: keep the pool and let the caller refuse
+        logger.warning(f"[migration_driver] could not read trace {trace!r} for the handoff tail: {e}")
+        return pool
+    if len(ids) < end or [int(t) for t in ids[: len(pool)]] != [int(t) for t in pool]:
+        return pool
+    return ids
 
 
 def _layer_runs(layers, real_len: int, position_range) -> list:
