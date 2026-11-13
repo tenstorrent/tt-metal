@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_with_unpadding_single_core_program_factory.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 
 #include <cmath>
 
@@ -51,9 +52,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     CoreRange default_core({0, 0}, {0, 0});
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
 
-    tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_dfb_data_format = get_untilize_with_unpadding_dfb_data_format(a.dtype(), a.device()->arch());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
-    tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_dfb_data_format =
+        get_untilize_with_unpadding_dfb_data_format(output.dtype(), a.device()->arch());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     log_debug(tt::LogOp, "untilize_with_unpadding_single_core");
