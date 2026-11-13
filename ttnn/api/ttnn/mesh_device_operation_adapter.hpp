@@ -35,6 +35,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::device_operation {
@@ -868,11 +869,12 @@ public:
 
         // Stored across cache entries: for each TensorArgument in a program's ProgramRunArgs, which
         // tensor (by index into the deterministic enumeration of io tensors followed by op-owned
-        // tensors) it was bound to. Pointer identity is only valid within a single call; the index
-        // is stable across calls.
+        // tensors) it was bound to. Each entry of candidate_indices is one such index; there is more
+        // than one only if the miss call passed the same MeshTensor in several slots, and then any
+        // of them is correct until a hit passes different tensors there (see refine_bindings).
         struct ResolvedTensorBinding {
             TensorParamName tensor_parameter_name;
-            std::size_t tensor_idx;
+            ttsl::SmallVector<std::size_t, 2> candidate_indices;
         };
 
         // The same for each PrefetcherPipeArgument: the index into operation_attributes_t::prefetcher_pipes
@@ -898,13 +900,64 @@ public:
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
         };
 
+        // True when at least one TensorParameter still has multiple candidate slots (from an
+        // aliased cache-miss call) and the current call supplies distinct MeshTensors across those
+        // slots, so a single representative index is no longer unambiguous. Op-owned tensors are
+        // sole-owner allocations that never alias, so every multi-candidate index lies within
+        // io_mesh_tensors.
+        static bool bindings_need_refinement(
+            const std::vector<ResolvedTensorBinding>& bindings,
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
+            for (const auto& b : bindings) {
+                if (b.candidate_indices.size() <= 1) {
+                    continue;
+                }
+                const auto* first = &io_mesh_tensors.at(b.candidate_indices[0]).get();
+                for (std::size_t i = 1; i < b.candidate_indices.size(); ++i) {
+                    if (&io_mesh_tensors.at(b.candidate_indices[i]).get() != first) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Narrow any multi-candidate bindings by intersecting each parameter's candidate slots
+        // with the io_mesh_tensors positions matching the TensorArgument produced for this call.
+        static void refine_bindings(
+            std::vector<ResolvedTensorBinding>& bindings,
+            const tt::tt_metal::experimental::Table<TensorParamName, TensorArgument>& factory_tensor_args,
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
+            for (auto& b : bindings) {
+                if (b.candidate_indices.size() <= 1) {
+                    continue;
+                }
+                auto arg = factory_tensor_args.get(b.tensor_parameter_name);
+                TT_FATAL(
+                    arg.has_value(),
+                    "Refinement of cached ProgramSpec failed: factory did not emit TensorArgument '{}'",
+                    b.tensor_parameter_name);
+                const auto* target = &tt::tt_metal::experimental::mesh_tensor_of(*arg);
+                ttsl::SmallVector<std::size_t, 2> narrowed;
+                for (const std::size_t idx : b.candidate_indices) {
+                    if (idx < io_mesh_tensors.size() && &io_mesh_tensors[idx].get() == target) {
+                        narrowed.push_back(idx);
+                    }
+                }
+                TT_FATAL(
+                    !narrowed.empty(),
+                    "TensorArgument '{}' did not match any of its candidate io-tensor slots during cache-hit "
+                    "disambiguation",
+                    b.tensor_parameter_name);
+                b.candidate_indices = std::move(narrowed);
+            }
+        }
+
         // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
         template <typename CachedWorkload>
         static void refresh_tensor_args(
             CachedWorkload& cached_workload,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
-            const auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
             const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
@@ -920,10 +973,19 @@ public:
 
                 tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
                 for (const auto& b : sv.bindings) {
-                    fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
+                    fresh_tensor_args.emplace(
+                        b.tensor_parameter_name, TensorArgument{mesh_tensors[b.candidate_indices.front()]});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
             }
+        }
+
+        template <typename CachedWorkload>
+        static void refresh_tensor_args(
+            CachedWorkload& cached_workload,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            refresh_tensor_args(cached_workload, collect_mesh_tensors(tensor_args, tensor_return_value));
         }
 
         // Cache-hit pipe refresh: supply each program the pipes now at its resolved positions in
@@ -989,8 +1051,15 @@ public:
             return result;
         }
 
-        // Match each TensorArgument's MeshTensor reference back to its index in the combined
-        // enumeration (io tensors followed by op-owned tensors). Cache-miss path only.
+        // Match each TensorArgument's MeshTensor reference back to its candidate indices in the
+        // combined enumeration (io tensors followed by op-owned tensors). Cache-miss path only.
+        //
+        // All matching slots are recorded rather than greedily claiming the first unclaimed slot:
+        // ProgramRunArgs::tensor_args is a Table whose iteration order is unspecified (and need not
+        // match the reflection order of tensor_args_t), so when two slots alias the same MeshTensor
+        // on a cache miss, MeshTensor pointer identity alone cannot tell which parameter belongs to
+        // which slot (#57248). Recording every matching slot lets SetProgramRunArgs run the aliased
+        // miss as-is and defers disambiguation to the first cache hit where those slots diverge.
         //
         // NOTE on host perf: the index-based binding scheme is what makes a fast cache-hit path
         // possible, but the current straightforward implementation isn't there yet -- the
@@ -1002,32 +1071,21 @@ public:
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
-            // Tracks which enumeration slots have already been claimed by an earlier
-            // TensorParameter in this loop. Without this, two parameters aliasing the same
-            // tensor (e.g. batch_norm's running_mean == running_var) would both resolve to
-            // the *first* matching slot via find_if, collapsing their indices together. On a
-            // later cache hit with distinct-but-same-spec tensors, the collapsed index map is
-            // replayed verbatim, silently rebinding the second parameter to the first tensor.
-            // Scanning left-to-right and skipping claimed slots recovers the intended
-            // positional binding (first occurrence -> first slot, second occurrence -> next
-            // matching unclaimed slot) instead of aliasing both onto the same index.
-            std::vector<bool> claimed(mesh_tensors.size(), false);
             // The name is the Table key; the TensorArgument value carries only the tensor ref.
             for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
                 const auto* target = &tt::tt_metal::experimental::mesh_tensor_of(tensor_arg);
-                std::size_t idx = 0;
-                for (; idx < mesh_tensors.size(); ++idx) {
-                    if (!claimed[idx] && &mesh_tensors[idx].get() == target) {
-                        break;
+                ttsl::SmallVector<std::size_t, 2> matches;
+                for (std::size_t idx = 0; idx < mesh_tensors.size(); ++idx) {
+                    if (&mesh_tensors[idx].get() == target) {
+                        matches.push_back(idx);
                     }
                 }
                 TT_FATAL(
-                    idx != mesh_tensors.size(),
+                    !matches.empty(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args / "
                     "tensor_return_value, or one of the factory's op_owned_tensors (got an unowned MeshTensor)",
                     tensor_parameter_name);
-                claimed[idx] = true;
-                bindings.push_back({tensor_parameter_name, idx});
+                bindings.push_back({tensor_parameter_name, std::move(matches)});
             }
             return bindings;
         }
@@ -1146,6 +1204,21 @@ public:
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
+        // Re-running a factory that uploads op_owned_tensors would hit "Writes are not supported during
+        // trace capture" deep inside the factory; fail here instead with the actual cause and remedy.
+        static void assert_safe_to_reinvoke_op_owned_factory(
+            const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
+            auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
+            for (std::uint8_t cq = 0; cq < mesh_device->num_hw_cqs(); ++cq) {
+                TT_FATAL(
+                    !mesh_device->mesh_command_queue(cq).trace_id().has_value(),
+                    "{}: program cache hit requires disambiguating tensor bindings from an aliased warmup call, "
+                    "which cannot run during trace capture because this operation allocates op-owned tensors. "
+                    "Warm up the cache with distinct tensor arguments before begin_trace_capture.",
+                    ttsl::get_type_name<DeviceOperation>());
+            }
+        }
+
         // The framework's cache-hit dispatcher (handle_mesh_adapter_cache_hit in
         // device_operation.hpp) prefers a method named `apply_descriptor` over
         // `override_runtime_arguments` when both exist. We adopt the name to
@@ -1156,7 +1229,29 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
+            const auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
+            bool needs_refinement = false;
+            bool has_op_owned_tensors = false;
+            for (const auto& [coordinate_range, _] : cached_workload.workload.get_programs()) {
+                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                if (SpecBindingSupport::bindings_need_refinement(sv.bindings, io_mesh_tensors)) {
+                    needs_refinement = true;
+                    has_op_owned_tensors =
+                        has_op_owned_tensors || (sv.op_owned_tensors && !sv.op_owned_tensors->empty());
+                }
+            }
+            if (needs_refinement) {
+                if (has_op_owned_tensors) {
+                    assert_safe_to_reinvoke_op_owned_factory(tensor_args, tensor_return_value);
+                }
+                auto fresh_artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+                for (const auto& [coordinate_range, _] : cached_workload.workload.get_programs()) {
+                    auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                    SpecBindingSupport::refine_bindings(
+                        sv.bindings, fresh_artifacts.run_params.tensor_args, io_mesh_tensors);
+                }
+            }
+            SpecBindingSupport::refresh_tensor_args(cached_workload, io_mesh_tensors);
             SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
         }
     };
@@ -1210,7 +1305,10 @@ public:
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
         using ResolvedTensorBinding = typename SpecBindingSupport::ResolvedTensorBinding;
 
-        using shared_variables_t = typename SpecBindingSupport::SpecSharedVariables;
+        struct WorkloadSharedVariables : SpecBindingSupport::SpecSharedVariables {
+            ttnn::MeshCoordinateRangeSet tensor_coords;
+        };
+        using shared_variables_t = WorkloadSharedVariables;
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
         static consteval bool has_override_runtime_arguments() {
@@ -1267,10 +1365,11 @@ public:
                 shared_variables.emplace(
                     per_coord.range,
                     shared_variables_t{
-                        .bindings =
-                            SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
-                        .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
-                            per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)});
+                        {.bindings =
+                             SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
+                         .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
+                             per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)},
+                        tensor_coords});
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
@@ -1295,7 +1394,27 @@ public:
                     tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, skip_validation);
                 }
             } else {
-                SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
+                const auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
+                const ttnn::MeshCoordinateRangeSet* tensor_coords = nullptr;
+                for (const auto& [coordinate_range, _] : cached_workload.workload.get_programs()) {
+                    const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                    if (SpecBindingSupport::bindings_need_refinement(sv.bindings, io_mesh_tensors)) {
+                        tensor_coords = &sv.tensor_coords;
+                        break;
+                    }
+                }
+                if (tensor_coords != nullptr) {
+                    auto fresh_artifacts = WorkloadSpecFactory::create_mesh_workload_artifacts(
+                        attrs, tensor_args, tensor_return_value, *tensor_coords);
+                    for (auto& per_coord : fresh_artifacts.programs) {
+                        if (auto it = cached_workload.shared_variables.find(per_coord.range);
+                            it != cached_workload.shared_variables.end()) {
+                            SpecBindingSupport::refine_bindings(
+                                it->second.bindings, per_coord.run_params.tensor_args, io_mesh_tensors);
+                        }
+                    }
+                }
+                SpecBindingSupport::refresh_tensor_args(cached_workload, io_mesh_tensors);
             }
         }
     };

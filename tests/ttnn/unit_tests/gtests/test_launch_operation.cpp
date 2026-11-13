@@ -653,5 +653,155 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
         (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
+TEST_F(LaunchOperation2x4Test, SpecBindingSupportResolvesAndRefinesAliasedBindings) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
+    using TensorParamName = tt::tt_metal::experimental::TensorParamName;
+    using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
+    using TensorTable = tt::tt_metal::experimental::Table<TensorParamName, TensorArgument>;
+
+    const tt::tt_metal::TensorSpec spec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto make_tensor = [&]() { return ttnn::create_device_tensor(spec, mesh_device_.get()); };
+
+    const auto find_candidates = [](const auto& bindings, std::string_view name) {
+        for (const auto& b : bindings) {
+            if (b.tensor_parameter_name == TensorParamName{std::string(name)}) {
+                return b.candidate_indices;
+            }
+        }
+        ADD_FAILURE() << "missing binding for " << name;
+        return ttsl::SmallVector<std::size_t, 2>{};
+    };
+
+    // 1. Out-of-order Table parameters primed with aliased inputs (SamplingInputs pattern:
+    //    io enumeration order is [k=0, p=1, temp=2, out=3], while Table lists temp before p).
+    {
+        auto k = make_tensor();
+        auto shared = make_tensor();
+        auto out = make_tensor();
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> miss_io = {
+            std::cref(k.mesh_tensor()),
+            std::cref(shared.mesh_tensor()),
+            std::cref(shared.mesh_tensor()),
+            std::cref(out.mesh_tensor())};
+        TensorTable miss_table{
+            {TensorParamName{"temp"}, TensorArgument{shared.mesh_tensor()}},
+            {TensorParamName{"k"}, TensorArgument{k.mesh_tensor()}},
+            {TensorParamName{"p"}, TensorArgument{shared.mesh_tensor()}},
+            {TensorParamName{"out"}, TensorArgument{out.mesh_tensor()}},
+        };
+
+        auto bindings = Adapter::resolve_bindings(miss_table, miss_io);
+        EXPECT_THAT(find_candidates(bindings, "k"), ElementsAre(0u));
+        EXPECT_THAT(find_candidates(bindings, "temp"), ElementsAre(1u, 2u));
+        EXPECT_THAT(find_candidates(bindings, "p"), ElementsAre(1u, 2u));
+        EXPECT_THAT(find_candidates(bindings, "out"), ElementsAre(3u));
+
+        // Another aliased call (different tensor, same aliasing pattern) needs no refinement.
+        auto shared_2 = make_tensor();
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> aliased_hit_io = {
+            std::cref(k.mesh_tensor()),
+            std::cref(shared_2.mesh_tensor()),
+            std::cref(shared_2.mesh_tensor()),
+            std::cref(out.mesh_tensor())};
+        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, aliased_hit_io));
+
+        // Distinct p and temp trigger refinement and recover p -> 1, temp -> 2 despite reversed Table order.
+        auto p_distinct = make_tensor();
+        auto temp_distinct = make_tensor();
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> distinct_hit_io = {
+            std::cref(k.mesh_tensor()),
+            std::cref(p_distinct.mesh_tensor()),
+            std::cref(temp_distinct.mesh_tensor()),
+            std::cref(out.mesh_tensor())};
+        EXPECT_TRUE(Adapter::bindings_need_refinement(bindings, distinct_hit_io));
+
+        TensorTable distinct_table{
+            {TensorParamName{"temp"}, TensorArgument{temp_distinct.mesh_tensor()}},
+            {TensorParamName{"k"}, TensorArgument{k.mesh_tensor()}},
+            {TensorParamName{"p"}, TensorArgument{p_distinct.mesh_tensor()}},
+            {TensorParamName{"out"}, TensorArgument{out.mesh_tensor()}},
+        };
+        Adapter::refine_bindings(bindings, distinct_table, distinct_hit_io);
+        EXPECT_THAT(find_candidates(bindings, "p"), ElementsAre(1u));
+        EXPECT_THAT(find_candidates(bindings, "temp"), ElementsAre(2u));
+        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, distinct_hit_io));
+        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, aliased_hit_io));
+    }
+
+    // 2. Multi-stage 3-way partial aliasing: [x, x, x] -> [u, u, v] -> [p, q, r].
+    {
+        auto x = make_tensor();
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> miss_io = {
+            std::cref(x.mesh_tensor()), std::cref(x.mesh_tensor()), std::cref(x.mesh_tensor())};
+        TensorTable miss_table{
+            {TensorParamName{"in2"}, TensorArgument{x.mesh_tensor()}},
+            {TensorParamName{"in0"}, TensorArgument{x.mesh_tensor()}},
+            {TensorParamName{"in1"}, TensorArgument{x.mesh_tensor()}},
+        };
+
+        auto bindings = Adapter::resolve_bindings(miss_table, miss_io);
+        EXPECT_THAT(find_candidates(bindings, "in0"), ElementsAre(0u, 1u, 2u));
+        EXPECT_THAT(find_candidates(bindings, "in1"), ElementsAre(0u, 1u, 2u));
+        EXPECT_THAT(find_candidates(bindings, "in2"), ElementsAre(0u, 1u, 2u));
+
+        // Step 1: [u, u, v] narrows in2 -> {2} and leaves in0, in1 -> {0, 1}.
+        auto u = make_tensor();
+        auto v = make_tensor();
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> partial_io = {
+            std::cref(u.mesh_tensor()), std::cref(u.mesh_tensor()), std::cref(v.mesh_tensor())};
+        EXPECT_TRUE(Adapter::bindings_need_refinement(bindings, partial_io));
+        TensorTable partial_table{
+            {TensorParamName{"in2"}, TensorArgument{v.mesh_tensor()}},
+            {TensorParamName{"in0"}, TensorArgument{u.mesh_tensor()}},
+            {TensorParamName{"in1"}, TensorArgument{u.mesh_tensor()}},
+        };
+        Adapter::refine_bindings(bindings, partial_table, partial_io);
+        EXPECT_THAT(find_candidates(bindings, "in0"), ElementsAre(0u, 1u));
+        EXPECT_THAT(find_candidates(bindings, "in1"), ElementsAre(0u, 1u));
+        EXPECT_THAT(find_candidates(bindings, "in2"), ElementsAre(2u));
+        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, partial_io));
+
+        // Step 2: [p, q, r] resolves in0 -> {0} and in1 -> {1}.
+        auto p = make_tensor();
+        auto q = make_tensor();
+        auto r = make_tensor();
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> full_io = {
+            std::cref(p.mesh_tensor()), std::cref(q.mesh_tensor()), std::cref(r.mesh_tensor())};
+        EXPECT_TRUE(Adapter::bindings_need_refinement(bindings, full_io));
+        TensorTable full_table{
+            {TensorParamName{"in2"}, TensorArgument{r.mesh_tensor()}},
+            {TensorParamName{"in0"}, TensorArgument{p.mesh_tensor()}},
+            {TensorParamName{"in1"}, TensorArgument{q.mesh_tensor()}},
+        };
+        Adapter::refine_bindings(bindings, full_table, full_io);
+        EXPECT_THAT(find_candidates(bindings, "in0"), ElementsAre(0u));
+        EXPECT_THAT(find_candidates(bindings, "in1"), ElementsAre(1u));
+        EXPECT_THAT(find_candidates(bindings, "in2"), ElementsAre(2u));
+        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, full_io));
+    }
+
+    // 3. A single io tensor bound to two distinct TensorParameters in ProgramSpec must resolve both
+    //    parameters to slot 0 without colliding or requiring refinement.
+    {
+        auto x = make_tensor();
+        auto out = make_tensor();
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> io = {
+            std::cref(x.mesh_tensor()), std::cref(out.mesh_tensor())};
+        TensorTable table{
+            {TensorParamName{"src_a"}, TensorArgument{x.mesh_tensor()}},
+            {TensorParamName{"src_b"}, TensorArgument{x.mesh_tensor()}},
+            {TensorParamName{"dst"}, TensorArgument{out.mesh_tensor()}},
+        };
+
+        auto bindings = Adapter::resolve_bindings(table, io);
+        EXPECT_THAT(find_candidates(bindings, "src_a"), ElementsAre(0u));
+        EXPECT_THAT(find_candidates(bindings, "src_b"), ElementsAre(0u));
+        EXPECT_THAT(find_candidates(bindings, "dst"), ElementsAre(1u));
+        EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, io));
+    }
+}
+
 }  // namespace
 }  // namespace ttnn
