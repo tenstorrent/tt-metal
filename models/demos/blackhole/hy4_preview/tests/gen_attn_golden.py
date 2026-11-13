@@ -25,6 +25,18 @@ from models.demos.blackhole.hy4_preview.reference import oracle as O
 from models.demos.blackhole.hy4_preview.reference.dump_ref import long_prompt
 from models.demos.blackhole.hy4_preview.reference.oracle import Conv, Hy4Oracle
 
+VARIANTS = {
+    1: "Chapter {i}. The engineering team measured a latency of {a} ms across {b} nodes, then rewrote the scheduler loop and agreed to revisit the cache policy after the next release. ",
+    2: "def handler_{i}(x):\n    # scale the input by {a} and shift by {b}\n    return x * {a} + {b}\n\n",
+    3: "In the year {i}, the village of Ashford harvested {a} bushels of wheat and {b} of barley, which the elders recorded in the ledger before the first frost arrived. ",
+}
+
+
+def variant_text(v):
+    if v == 0:
+        return long_prompt(120)
+    return "".join(VARIANTS[v].format(i=i, a=(i * 7) % 23 + 1, b=(i * 5) % 17 + 1) for i in range(1, 200))
+
 
 def attn_taps(ck, layer, x4, st, conv):
     cfg = ck.cfg
@@ -77,7 +89,8 @@ def main():
     from tokenizers import Tokenizer
 
     tok = Tokenizer.from_file("/mnt/tt-data/Hy4-Preview/tokenizer.json")
-    ids = [120000] + tok.encode(long_prompt(120)).ids
+    variant = int(sys.argv[sys.argv.index("--variant") + 1]) if "--variant" in sys.argv else 0
+    ids = [120000] + tok.encode(variant_text(variant)).ids
     assert len(ids) >= n_tok, len(ids)
     ids = torch.tensor([ids[:n_tok]])
     conv = Conv(**json.loads(os.environ.get("HY4_CONV", "{}")))

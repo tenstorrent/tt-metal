@@ -96,3 +96,22 @@ def attention_dataflow(cfg, sd, h, allowed, rope_interleave=True, tp=8, position
         out = out + (o * gate) @ column_shard(hw["o_proj"], c, tp)[0, 0]
         inter[f"o_c{c}"] = o
     return out, inter
+
+
+def column_intermediates(cfg, hw, qa, rows, allowed, c, p0, rope_interleave=True, tp=8):
+    """CPU values of column c's stages for the chunk at positions p0..p0+n: qa [n,2048] (post q_a_layernorm), rows [p0+n, 576] cache rows, allowed [n, p0+n] bool
+    -> dict(qfull [1,8,n,576], o_lat [1,8,n,512], o [n,2048]) in the device tap layouts."""
+    n = qa.shape[0]
+    hc = cfg.num_attention_heads // tp
+    nope, rope = cfg.qk_nope_head_dim, cfg.qk_rope_head_dim
+    cos, sin = rope_tables(torch.arange(p0, p0 + n), rope, cfg.rope_theta, rope_interleave)
+    qc = (qa @ column_shard(hw["q_b"], c, tp)[0, 0]).view(n, hc, nope + rope)
+    q_abs = torch.einsum("shd,hdk->shk", qc[..., :nope], column_shard(hw["w_uk"], c, tp)[0])
+    q_pe = apply_rope_host(qc[..., nope:].permute(1, 0, 2), cos, sin, rope_interleave).permute(1, 0, 2)
+    qfull = torch.cat([q_abs, q_pe], -1)
+    sc = torch.einsum("shk,tk->hst", qfull, rows) * (nope + rope) ** -0.5
+    sink = column_shard(hw["sink_over_scale"], c, tp).reshape(-1) * (nope + rope) ** -0.5
+    p = sparse_softmax_sink(sc, allowed, sink)
+    o_lat = torch.einsum("hst,tk->shk", p, rows[:, : cfg.kv_lora_rank])
+    o = torch.einsum("shk,hkd->shd", o_lat, column_shard(hw["w_uv_t"], c, tp)[0]).reshape(n, -1)
+    return {"qfull": qfull.permute(1, 0, 2).unsqueeze(0), "o_lat": o_lat.permute(1, 0, 2).unsqueeze(0), "o": o}

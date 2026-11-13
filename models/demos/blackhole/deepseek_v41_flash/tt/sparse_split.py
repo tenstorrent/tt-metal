@@ -49,7 +49,9 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     )  # q [1,S,32,512] TILE (qk_heads output): read as tile pages, no RM regroup / tilize
     H, S, D = (32, int(q.shape[1]), int(q.shape[3])) if qt else (int(q.shape[1]), int(q.shape[2]), int(q.shape[3]))
     topk = int(idx.shape[3])
-    assert H == 32 and D == v_dim == 512 and sink is not None
+    assert (
+        H == 32 and v_dim == 512 and D in (512, 576) and sink is not None
+    )  # Hy4: K row 576 (512 latent + 64 rope), V = its first 512 (was D == v_dim == 512)
     assert q.dtype == ttnn.bfloat16 and idx.dtype == ttnn.uint32 and kv.dtype in (ttnn.bfloat16, ttnn.fp8_e4m3)
     grid = md.compute_with_storage_grid_size()
     G = max(1, min(int(split), max_split(S, grid.x, grid.y)))

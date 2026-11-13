@@ -53,6 +53,7 @@ class Hy4Attention:
         self.spec = cfg.layer(layer)
         self.has_indexer = self.spec.has_indexer_weights
         hw = build_attn_host_weights(cfg, sd, self.cols)
+        self.host_w = hw
         T = lambda k, dt=wdtype, ly=ttnn.TILE_LAYOUT: upload(md, hw[k].tensor, dt, ly, shard_dim=hw[k].shard_dim)
         self.w_q_a, self.w_q_b, self.w_kv_a = T("q_a"), T("q_b"), T("kv_a")
         self.w_uk, self.w_uv_t = T("w_uk", ttnn.bfloat16), T("w_uv_t", ttnn.bfloat16)
@@ -62,6 +63,9 @@ class Hy4Attention:
         self.sink = T(
             "sink_over_scale", sink_over_scale_dtype, ttnn.ROW_MAJOR_LAYOUT
         )  # [1,1,1,64] replicated -> prefill uses all 64 heads (see _sink_full)
+        self.sink_dec = T(
+            "sink_dec", sink_over_scale_dtype, ttnn.ROW_MAJOR_LAYOUT
+        )  # [1,1,1,32] per column: 8 heads + 24 zero pad
         self.sink_full = upload(md, hw["sink_over_scale"].tensor, sink_over_scale_dtype, ttnn.ROW_MAJOR_LAYOUT)
         self.rope = RopeDev(md, cfg.qk_rope_head_dim, cfg.rope_theta, rope_interleave)
         self.idx_rope = RopeDev(md, cfg.qk_rope_head_dim, cfg.rope_theta, idx_rope_interleave)
@@ -84,6 +88,21 @@ class Hy4Attention:
         self.cache = KVCache(self.kv_fmt)
         if self.indexer is not None:
             self.indexer.reset()
+
+    def rope_tabs(self, start, n):
+        """(cos, sin, idx_cos, idx_sin) device tables for positions start .. start + n (host uploads: call outside a trace)."""
+        pos = list(range(start, start + n))
+        c, s = self.rope.tables(pos)
+        if self.has_indexer:
+            ic, is_ = self.idx_rope.tables(pos)
+        else:
+            ic = is_ = None
+        return c, s, ic, is_
+
+    def _free(self, t, name):
+        """deallocate unless the tensor is held as a tap (dump-diff mode)."""
+        if self.taps is None or name not in self.taps:
+            ttnn.deallocate(t)
 
     def _tap(self, name, t):
         if self.taps is not None:
@@ -116,12 +135,13 @@ class Hy4Attention:
         return F.BF16 if self.kv_fmt == "bf16" else F.SCALED_FP8
 
     # ------------------------------------------------------------------ prefill (one chunk of n rows, positions start .. start+n)
-    def prefill_chunk(self, h, start, ids_in=None):
+    def prefill_chunk(self, h, start, ids_in=None, ids_override=None, append=True, tabs=None):
         """h [1,1,n,6144] TILE bf16 (n multiple of 512... 8 x 32 rows after the all_to_all); ids_in: top-k ids of the index-source layer (shared layers).
+        append=False: the cache / key cache already hold this chunk's rows (re-run for tracing: static shapes, nothing grows); tabs = ``rope_tabs(start, n)`` (made outside a trace).
         Returns (out [1,1,n,6144], ids [1,1,n,2048])."""
         cfg, md = self.cfg, self.md
         n = h.shape[2]
-        cos, sin = self.rope.tables(list(range(start, start + n)))
+        cos, sin, icos, isin = tabs if tabs is not None else self.rope_tabs(start, n)
         # q_a (N-sharded) -> gather -> norm
         qa_c = ttnn.linear(h, self.w_q_a, compute_kernel_config=self.ckc)
         qa_g = self.mesh_config.allgather(qa_c, self.ccl, axis=1, dim=3)
@@ -136,18 +156,19 @@ class Hy4Attention:
         ttnn.deallocate(kv)
         self._tap("lat", lat)
         self._tap("k_pe", k_pe)
-        kvc = self._append_cache(lat, k_pe)
+        kvc = self._append_cache(lat, k_pe) if append else self.cache.rows
         # indices
         if self.has_indexer:
-            icos, isin = self.idx_rope.tables(list(range(start, start + n)))
-            ids = self.indexer.select(h, qa, start, icos, isin, self.taps)
+            ids = self.indexer.select(h, qa, start, icos, isin, self.taps, append=append)
         else:
             assert ids_in is not None, "shared-indexer layer needs the ids of its index source"
             ids = ids_in
         self._tap("ids", ids)
+        if ids_override is not None:  # experiments: attention uses these ids instead
+            ids = ids_override
         # query
         q = ttnn.linear(qa, self.w_q_b, compute_kernel_config=self.ckc)  # [1,1,n,2048]
-        ttnn.deallocate(qa)
+        self._free(qa, "qa")
         q_nope, q_pe = ttnn.experimental.nlp_create_q_heads_split(
             q, num_heads=self.hc, split_head_dim=cfg.qk_nope_head_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1,8,n,192], [1,8,n,64]
@@ -160,7 +181,7 @@ class Hy4Attention:
         ttnn.deallocate(q_pe)
         self._tap("qfull", qfull)
         o_lat = self._sparse_prefill(qfull, kvc, ids)  # [1,8,n,512]
-        ttnn.deallocate(qfull)
+        self._free(qfull, "qfull")
         self._tap("o_lat", o_lat)
         out = self._finish(o_lat, h)
         return out, ids
@@ -168,11 +189,11 @@ class Hy4Attention:
     def _sparse_prefill(self, qfull, kvc, ids):
         """heads->sequence all_to_all over the columns, stock sparse_sdpa on H=64 x n/8 rows, back."""
         n = qfull.shape[2]
-        q_rm = ttnn.to_layout(qfull, ttnn.ROW_MAJOR_LAYOUT)
-        q_seq = ttnn.experimental.all_to_all_async_generic(
-            q_rm, in_dim=1, out_dim=2, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
-        )  # [1,64,n/8,576]
-        ttnn.deallocate(q_rm)
+        q_t = ttnn.experimental.all_to_all_async_generic(
+            qfull, in_dim=1, out_dim=2, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
+        )  # [1,64,n/8,576] TILE (the op takes TILE only)
+        q_seq = ttnn.to_layout(q_t, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(q_t)
         idx_c = ttnn.mesh_partition(ids, dim=2, cluster_axis=1)  # this column's n/8 rows
         out = ttnn.transformer.sparse_sdpa(
             q_seq,
@@ -205,5 +226,89 @@ class Hy4Attention:
         ttnn.deallocate(g)
         part = ttnn.linear(og, self.w_o, compute_kernel_config=self.ckc)  # [1,1,n,6144] partial
         ttnn.deallocate(og)
-        self._tap("partial", part)
         return self.mesh_config.allreduce(part, self.ccl, axis=1)
+
+    # ------------------------------------------------------------------ decode (one token per user = per mesh row; all rows at the same position in v0)
+    def dense_ids(self, pos):
+        """ids [1,1,1,2048] for a context of pos + 1 <= 2048 keys: 0..pos then the sentinel (host-built constant: v0 / tests; an on-device iota is the production form)."""
+        import torch
+
+        ix = torch.full((1, 1, 1, self.cfg.index_topk), -1, dtype=torch.int32)
+        ix[..., : pos + 1] = torch.arange(pos + 1, dtype=torch.int32)
+        return upload(self.md, ix, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def decode_step(self, h, pos, ids_in=None, v1=False, append=True, tabs=None, dense_ids=None):
+        """h [1,1,1,6144] TILE bf16 (one user per mesh row; rows may differ). The cache / key cache hold the ``pos`` earlier rows. Returns (out [1,1,1,6144], ids)."""
+        cfg = self.cfg
+        cos, sin, icos, isin = tabs if tabs is not None else self.rope_tabs(pos, 1)
+        qa_c = ttnn.linear(h, self.w_q_a, compute_kernel_config=self.ckc)
+        qa_g = self.mesh_config.allgather(qa_c, self.ccl, axis=1, dim=3)
+        ttnn.deallocate(qa_c)
+        qa = self._rms(qa_g, self.q_a_norm)
+        ttnn.deallocate(qa_g)
+        kv = ttnn.linear(h, self.w_kv_a, compute_kernel_config=self.ckc)
+        lat = self._rms(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, 1, cfg.kv_lora_rank]), self.kv_a_norm)
+        k_pe = self.rope.apply(ttnn.slice(kv, [0, 0, 0, cfg.kv_lora_rank], [1, 1, 1, cfg.kv_a_out]), cos, sin, self.ckc)
+        ttnn.deallocate(kv)
+        self._tap("lat", lat)
+        self._tap("k_pe", k_pe)
+        kvc = self._append_cache(lat, k_pe) if append else self.cache.rows
+        if self.has_indexer:
+            if pos + 1 <= cfg.index_topk:  # dense: every causal key is selected; the indexer only appends its key
+                if append:
+                    self.indexer.append_keys(h, icos, isin)
+                ids = dense_ids if dense_ids is not None else self.dense_ids(pos)
+            else:
+                ids = self.indexer.select_decode(h, qa, pos, icos, isin, append=append)
+        else:
+            assert ids_in is not None
+            ids = ids_in
+        self._tap("ids", ids)
+        q = ttnn.linear(qa, self.w_q_b, compute_kernel_config=self.ckc)  # [1,1,1,2048]
+        ttnn.deallocate(qa)
+        q_nope, q_pe = ttnn.experimental.nlp_create_q_heads_split(
+            q, num_heads=self.hc, split_head_dim=cfg.qk_nope_head_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(q)
+        q_abs = ttnn.matmul(q_nope, self.w_uk, compute_kernel_config=self.ckc)
+        ttnn.deallocate(q_nope)
+        q_pe = self.rope.apply(q_pe, cos, sin, self.ckc)
+        qfull = ttnn.concat([q_abs, q_pe], dim=3)  # [1,8,1,576]
+        ttnn.deallocate(q_abs)
+        ttnn.deallocate(q_pe)
+        self._tap("qfull", qfull)
+        o_lat = self._sparse_decode(qfull, kvc, ids, v1)  # [1,8,1,512]
+        self._tap("o_lat", o_lat)
+        out = self._finish(o_lat, h)
+        return out, ids
+
+    def _sparse_decode(self, qfull, kvc, ids, v1=False):
+        """8 local heads zero-padded to the 32 the op needs (pad heads cost no latency: one query row per core), stock op (v0) or the DSV4 key-split kernel (v1, bf16 KV only)."""
+        qp = ttnn.pad(qfull, [(0, 0), (0, 32 - self.hc), (0, 0), (0, 0)], 0)
+        q_rm = ttnn.to_layout(qp, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(qp)
+        if v1:
+            from models.demos.blackhole.deepseek_v41_flash.tt import sparse_split as SS
+
+            assert self.kv_fmt == "bf16", "the DSV4 split kernel reads bf16 / plain fp8 caches only (no scaled FP8)"
+            out = SS.sparse_sdpa_split(
+                q_rm, kvc, ids, self.cfg.kv_lora_rank, self.scale, 128, 8, self.ckc_sdpa, self.sink_dec
+            )
+        else:
+            out = ttnn.transformer.sparse_sdpa(
+                q_rm,
+                kvc,
+                ids,
+                self.cfg.kv_lora_rank,
+                kv_format=self._kv_format(),
+                scale=self.scale,
+                k_chunk_size=128,
+                compute_kernel_config=self.ckc_sdpa,
+                attention_sink=self.sink_dec,
+            )  # [1,32,1,512] RM
+        ttnn.deallocate(q_rm)
+        o8 = ttnn.slice(out, [0, 0, 0, 0], [1, self.hc, 1, self.cfg.kv_lora_rank])
+        ttnn.deallocate(out)
+        o_t = ttnn.to_layout(o8, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(o8)
+        return o_t
