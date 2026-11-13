@@ -133,11 +133,14 @@ class Flux2VaeDecoder(Module):
         m = self.bn_running_mean.data
         return z * s + m
 
-    def preprocess_and_unpatchify(self, z: ttnn.Tensor, *, height: int, width: int) -> ttnn.Tensor:
+    def preprocess_and_unpatchify(
+        self, z: ttnn.Tensor, *, height: int, width: int, split_height: bool = False
+    ) -> ttnn.Tensor:
         # N, (H / P) * (W / P), C * P * P -> N, H/h_factor, W/w_factor, C
-        # Input may be H-sharded (h_factor rows per device) or fully replicated. W is split here,
-        # once the spatial layout is restored (H and W are interleaved in the patchified tokens),
-        # and before tilizing: a tiled split needs each device's W to be whole tiles.
+        # The input is H-sharded (H/h_factor rows per device), or replicated with split_height set,
+        # in which case H is split here. W is always split here, once the spatial layout is restored
+        # (H and W are interleaved in the patchified tokens). Both splits run on the row-major
+        # tensor: a tiled split needs each device's share to be whole tiles.
         p = self._PATCH_SIZE
         assert (
             height % (p * self._ctx.h_factor) == 0
@@ -149,6 +152,9 @@ class Flux2VaeDecoder(Module):
 
         z = self._inv_normalize(z)
         z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
+        if split_height and self._ctx.h_factor > 1:
+            # Token rows are contiguous, so each device takes a band of whole rows.
+            z = ttnn.mesh_partition(z, dim=1, cluster_axis=self._ctx.h_mesh_axis)
         z = z.reshape([z.shape[0], height_local // p, width // p, -1, p, p])
         z = ttnn.permute(z, [0, 1, 4, 2, 5, 3])
         z = z.reshape([z.shape[0], height_local, width, -1])
@@ -159,9 +165,8 @@ class Flux2VaeDecoder(Module):
 
     @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
     def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
-        # Input arrives H-sharded when SP is active (preprocess_and_unpatchify uses per-device
-        # H), or replicated when SP is off — both cases work for post_quant_conv (per-position
-        # Linear) and the SP-aware conv pyramid below.
+        # Input arrives from preprocess_and_unpatchify, split over the H and W axes where the VAE has
+        # them. post_quant_conv is a per-position Linear, and the conv pyramid below exchanges halos.
         z = self.post_quant_conv.forward(z)
 
         z = self.conv_in.forward(z)
