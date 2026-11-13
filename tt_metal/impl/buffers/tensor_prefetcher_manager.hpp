@@ -281,16 +281,18 @@ private:
     bool on_dispatch_engine() const;
     // The rest of start() for this placement: stage-ring geometry, FIFO state, the worker.
     void start_on_dispatch_engine();
-    // Rejects at queue time what the dispatch-engine kernels do not serve.
-    void validate_dispatch_engine_requests(
-        const std::vector<std::shared_ptr<const Request>>& requests,
-        const RequestTarget& target,
-        const MeshCommandQueue* trace_capture_cq) const;
+    // Rejects, before a request records any state, what the dispatch-engine kernels do not serve.
+    void validate_dispatch_engine_pages(
+        const std::vector<std::vector<uint8_t>>& sender_pages, const RequestTarget& target) const;
     void worker_loop_dispatch_engine();
     // Writes one FIFO slot to device `d`, waiting for a free slot first.
     void write_fifo_slot(uint32_t d, std::span<const uint8_t> slot);
     // Slots both kernels on device `d` have retired.
     uint32_t fifo_slots_retired(uint32_t d) const;
+    // Waits until both kernels on device `d` have retired `target` slots. With an operation timeout set
+    // (TT_METAL_OPERATION_TIMEOUT_SECONDS), no slot retiring for that long is a hang: it runs the dispatch
+    // timeout hook and throws, which on the worker thread ends the process.
+    void wait_for_fifo_retired(uint32_t d, uint32_t target) const;
     // Waits until both kernels on every device have retired every slot written to them.
     void wait_for_fifo_idle() const;
 

@@ -475,6 +475,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
                 return single_chip_arch_1cq;
             }
             return dispatch_engine_hosts_tensor_prefetcher(
+                       this->descriptor_.cluster(),
                        dispatch_core_manager_.get_dispatch_core_type(),
                        num_hw_cqs,
                        descriptor_.metal_context().dispatch_mem_map())

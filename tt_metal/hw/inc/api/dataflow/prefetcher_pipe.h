@@ -683,6 +683,20 @@ public:
         WAYPOINT("CNBD");
     }
 
+    // Whether receiver_idx has acked every entry sent to it on every lane: barrier()'s condition for one
+    // receiver, without waiting. Lets a sender that must also watch for something else (a termination
+    // request) wait for a drain in its own loop.
+    FORCE_INLINE bool receiver_drained(uint32_t receiver_idx) {
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        for (uint32_t lane = 0; lane < num_credit_lanes(); ++lane) {
+            if (load_remote_l1_credit(local_acked_ptr(iface, receiver_idx, lane)) !=
+                *local_sent_ptr(iface, receiver_idx, lane)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // -----------------------------------------------------------------------
     // Receiver-side API
     // -----------------------------------------------------------------------

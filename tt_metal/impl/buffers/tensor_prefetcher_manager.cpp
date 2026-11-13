@@ -1410,6 +1410,9 @@ std::vector<std::shared_ptr<const TensorPrefetcherManager::Request>> TensorPrefe
     std::vector<std::vector<std::vector<uint8_t>>> pages = serialize_request_pages(target, tensors);
     for (const auto& sender_pages : pages) {
         validate_request_pages(sender_pages);
+        if (on_dispatch_engine()) {
+            validate_dispatch_engine_pages(sender_pages, target);
+        }
     }
 
     // Target devices: subset if given, else full mesh. Caller is responsible
@@ -1459,16 +1462,14 @@ void TensorPrefetcherManager::queue(
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherRequest");
-    auto requests = build_requests(target, device_subset, tensors);
-    if (on_dispatch_engine()) {
-        validate_dispatch_engine_requests(requests, target, trace_capture_cq);
-    }
-    send_or_capture(requests, trace_capture_cq);
+    TT_FATAL(
+        trace_capture_cq == nullptr || !on_dispatch_engine(),
+        "QueueTensorPrefetcherRequest: trace capture is not supported when fast dispatch runs the Tensor prefetcher "
+        "(#65545)");
+    send_or_capture(build_requests(target, device_subset, tensors), trace_capture_cq);
 }
 
-bool TensorPrefetcherManager::on_dispatch_engine() const {
-    return mesh_device_->impl().dram_sender_placement() == DramSenderPlacement::DispatchEngine;
-}
+bool TensorPrefetcherManager::on_dispatch_engine() const { return dram_senders_on_dispatch_engine(*mesh_device_); }
 
 void TensorPrefetcherManager::set_stage_ring_size(uint32_t raw_bytes, uint32_t l1_alignment) {
     // Align down to LCM(2, 3, l1_alignment) so both halves (K-row path) and thirds (recv-contig path)

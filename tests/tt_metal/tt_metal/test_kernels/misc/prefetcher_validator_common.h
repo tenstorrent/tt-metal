@@ -21,21 +21,35 @@
 
 namespace prefetcher_validator {
 
-// Overflow poll window, in this core's cycles: long enough to cover a sender's round trip to publish
-// one more entry after this receiver's last pop -- the window an overshoot would show up in, a few
-// thousand cycles -- while still ending the test if none does. Bounded by cycles rather than poll
-// iterations, so a slow uncached read (as on a simulator) cannot stretch it.
+// Overflow poll window: long enough to cover a sender's round trip to publish one more entry after this
+// receiver's last pop -- the window an overshoot would show up in -- while still ending the test if none
+// does. On Wormhole and Blackhole that is 2^18 polls, milliseconds of silicon time and far past a DRAM
+// sender's credit round trip under load. Quasar runs on emulators today, where each uncached poll costs
+// so much wall time that 2^18 of them take half an hour, so its window is bounded in this core's cycles
+// instead: 2^16, still well past the round trip.
+#ifdef ARCH_QUASAR
 constexpr uint64_t kExtraPollCycles = 1ull << 16;
+#else
+constexpr uint32_t kExtraPollIterations = 1u << 18;
+#endif
 
 // Polls `has_extra_entry` until it reports an entry or the window closes; returns whether it did.
 template <typename HasExtraEntry>
 FORCE_INLINE bool extra_entry_within_poll_window(HasExtraEntry&& has_extra_entry) {
+#ifdef ARCH_QUASAR
     const uint64_t end = get_timestamp() + kExtraPollCycles;
     do {
         if (has_extra_entry()) {
             return true;
         }
     } while (get_timestamp() < end);
+#else
+    for (uint32_t poll = 0; poll < kExtraPollIterations; ++poll) {
+        if (has_extra_entry()) {
+            return true;
+        }
+    }
+#endif
     return false;
 }
 

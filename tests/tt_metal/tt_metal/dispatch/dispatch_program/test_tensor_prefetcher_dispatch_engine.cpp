@@ -52,10 +52,6 @@ void write_words(
     mesh_device.impl().metal_env().get_cluster().l1_barrier(mesh_device.get_device_ids()[0]);
 }
 
-bool dram_senders_on_dispatch_engine(const distributed::MeshDevice& mesh_device) {
-    return mesh_device.impl().dram_sender_placement() == DramSenderPlacement::DispatchEngine;
-}
-
 }  // namespace
 
 // Fast dispatch launches the Tensor prefetcher's reader and pusher on the dispatch engine together with the CQ

@@ -6,9 +6,10 @@
 // tensor_prefetcher_reader.cpp: the reader stages weight blocks from DRAM into this core's L1 and the
 // pusher sends staged blocks on to the receivers. Both retire every request slot the host writes.
 //
-// The pusher serves whichever receiver has a block staged and room in its PrefetcherPipe ring, not the
-// receivers in a fixed order: a consumer that needs all of its receivers to progress together would
-// otherwise deadlock with a pusher stalled on one of them. Each lane of a request is one DRAM-bank
+// The pusher serves whichever receivers have a block staged and room in their PrefetcherPipe rings, not
+// the receivers in a fixed order: a consumer that needs all of its receivers to progress together would
+// otherwise deadlock with a pusher stalled on one of them. Each pass writes one block to every such
+// receiver, waits once for all of those writes to land, then credits them. Each lane of a request is one DRAM-bank
 // sender endpoint, whose PrefetcherPipe sender state the host keeps in this core's L1.
 //
 // Compile-time defines (set by TensorPrefetcherKernel):
@@ -32,29 +33,27 @@ using experimental::DramSenderConfigPage;
 using experimental::PrefetcherPipe;
 using tensor_prefetcher::FifoConsumer;
 using tensor_prefetcher::LanePage;
+using tensor_prefetcher::pushed_ptr;
+using tensor_prefetcher::staged_ptr;
 using tensor_prefetcher::TensorStream;
 
 constexpr uint32_t region_base = TENSOR_PREFETCHER_REGION_BASE;
 constexpr uint32_t stage_ring_base = region_base + fifo::kStageRingOffset;
 constexpr uint32_t stage_ring_size = TENSOR_PREFETCHER_STAGE_RING_SIZE;
 
-namespace {
+static_assert(fifo::kMaxReceivers <= 32, "A pass tracks its receivers in one 32-bit mask");
 
-FORCE_INLINE volatile tt_l1_ptr uint32_t* staged_ptr(uint32_t i) {
-    return tensor_prefetcher::staged_ptr(region_base, i);
-}
-FORCE_INLINE volatile tt_l1_ptr uint32_t* pushed_ptr(uint32_t i) {
-    return tensor_prefetcher::pushed_ptr(region_base, i);
-}
+namespace {
 
 // The PrefetcherPipe of each lane, alive for one tensor. Constructing one applies that tensor's block
 // size to the pipe; destroying it persists the pipe's cursors for the next request.
 class LanePipes {
 public:
-    LanePipes(const LanePage* pages, uint32_t num_lanes, uint32_t entry_size) : num_lanes_(num_lanes) {
+    LanePipes(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t num_lanes, uint32_t entry_size) :
+        num_lanes_(num_lanes) {
         for (uint32_t l = 0; l < num_lanes_; ++l) {
-            new (&storage_[l])
-                PrefetcherPipe(DramSenderConfigPage{pages[l].header().prefetch.target_config_page_addr}, entry_size);
+            const uint32_t config_page_addr = LanePage(slot, l).header()->prefetch.target_config_page_addr;
+            new (&storage_[l]) PrefetcherPipe(DramSenderConfigPage{config_page_addr}, entry_size);
         }
     }
     LanePipes(const LanePipes&) = delete;
@@ -75,21 +74,25 @@ private:
 };
 
 // Pushes every block of one tensor as the reader stages it. False if termination was requested first.
-bool push_tensor(const FifoConsumer& requests, const LanePage* pages, uint32_t num_lanes, const TensorStream& stream) {
-    LanePipes pipes(pages, num_lanes, stream.block_bytes);
+bool push_tensor(
+    const FifoConsumer& requests,
+    volatile tt_l1_ptr fifo::SlotHeader* slot,
+    uint32_t num_lanes,
+    const TensorStream& stream) {
+    LanePipes pipes(slot, num_lanes, stream.block_bytes);
     Noc noc;
     uint32_t pushed[fifo::kMaxReceivers];
     uint32_t blocks_pushed[fifo::kMaxReceivers];
     for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-        pushed[i] = *pushed_ptr(i);
+        pushed[i] = *pushed_ptr(region_base, i);
         blocks_pushed[i] = 0;
     }
     uint32_t remaining = stream.num_receivers * stream.block_count;
     WAYPOINT("TPPW");
     while (remaining > 0) {
-        bool progressed = false;
+        uint32_t writing = 0;
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-            if (blocks_pushed[i] == stream.block_count || *staged_ptr(i) == pushed[i]) {
+            if (blocks_pushed[i] == stream.block_count || *staged_ptr(region_base, i) == pushed[i]) {
                 continue;
             }
             PrefetcherPipe& pipe = pipes[stream.lane[i]];
@@ -100,55 +103,76 @@ bool push_tensor(const FifoConsumer& requests, const LanePage* pages, uint32_t n
             const CoreLocalMem<uint8_t> block(
                 stream.stage_slot_addr(stage_ring_base, i, pushed[i] % fifo::kStageSlotsPerReceiver));
             pipe.write_to_receiver(noc, r, block, 1);
-            // The block must land before the credit that advertises it, and before the reader may
-            // reuse its stage slot.
-            pipe.flush_writes(noc);
-            pipe.push_back_to_receiver(r, 1, noc);
-            *pushed_ptr(i) = ++pushed[i];
-            ++blocks_pushed[i];
-            --remaining;
-            progressed = true;
+            writing |= 1u << i;
         }
-        if (!progressed && requests.terminate_requested()) {
-            return false;
+        if (writing == 0) {
+            if (requests.terminate_requested()) {
+                return false;
+            }
+            continue;
+        }
+        // The blocks must land before the credits that advertise them, and before the reader may reuse
+        // their stage slots. The flush covers every pipe's writes on this NoC.
+        pipes[0].flush_writes(noc);
+        for (uint32_t i = 0; i < stream.num_receivers; ++i) {
+            if (writing & (1u << i)) {
+                pipes[stream.lane[i]].push_back_to_receiver(stream.receiver_in_lane[i], 1, noc);
+                *pushed_ptr(region_base, i) = ++pushed[i];
+                ++blocks_pushed[i];
+                --remaining;
+            }
         }
     }
     WAYPOINT("TPPD");
     return true;
 }
 
-// Waits for every receiver of each pipe a DRAIN page names to ack all it was sent.
-void drain(const LanePage& page) {
-    const uint32_t num_targets = page.header().drain.num_targets;
-    const uint32_t* targets =
-        reinterpret_cast<const uint32_t*>(page.bytes() + sizeof(tt::tt_metal::TensorPrefetcherRequestHeader));
+// Waits for every receiver of each pipe a DRAIN page names to ack all it was sent. False if termination
+// was requested first.
+bool drain(const FifoConsumer& requests, const LanePage& page) {
+    const uint32_t num_targets = page.header()->drain.num_targets;
+    volatile tt_l1_ptr uint32_t* targets = page.body_words();
     for (uint32_t t = 0; t < num_targets; ++t) {
+        const uint32_t config_page_addr = targets[t];
+        volatile tt_l1_ptr uint32_t* config_page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_page_addr);
         // Keep the entry size the pipe last applied, so draining never re-grids it.
-        const uint32_t applied_entry_size = experimental::load_prefetcher_pipe_config_word(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(targets[t]), PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE);
-        PrefetcherPipe pipe(DramSenderConfigPage{targets[t]}, applied_entry_size);
+        PrefetcherPipe pipe(
+            DramSenderConfigPage{config_page_addr},
+            experimental::load_prefetcher_pipe_config_word(config_page, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE));
+        const uint32_t num_receivers =
+            experimental::load_prefetcher_pipe_config_word(config_page, REMOTE_DFB_CFG_NUM_RECEIVERS);
         WAYPOINT("TPDW");
-        pipe.barrier();
+        for (uint32_t r = 0; r < num_receivers; ++r) {
+            while (!pipe.receiver_drained(r)) {
+                if (requests.terminate_requested()) {
+                    return false;
+                }
+            }
+        }
         WAYPOINT("TPDD");
     }
+    return true;
 }
 
 // Serves one request slot. False if termination was requested first.
 bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot) {
-    LanePage pages[fifo::kMaxLanes];
-    const uint32_t num_lanes = tensor_prefetcher::copy_lane_pages(slot, pages);
-    if (pages[0].header().base.cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_DRAIN) {
+    const uint32_t num_lanes = slot->num_lanes;
+    ASSERT(num_lanes > 0 && num_lanes <= fifo::kMaxLanes);
+    volatile tt_l1_ptr tt::tt_metal::TensorPrefetcherRequestHeader* header = LanePage(slot, 0).header();
+    if (header->base.cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_DRAIN) {
         for (uint32_t l = 0; l < num_lanes; ++l) {
-            drain(pages[l]);
+            if (!drain(requests, LanePage(slot, l))) {
+                return false;
+            }
         }
         return true;
     }
-    ASSERT(pages[0].header().base.cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_PREFETCH);
-    const uint32_t num_tensors = pages[0].header().prefetch.num_entries;
+    ASSERT(header->base.cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_PREFETCH);
+    const uint32_t num_tensors = header->prefetch.num_entries;
     TensorStream stream;
     for (uint32_t e = 0; e < num_tensors; ++e) {
-        tensor_prefetcher::plan_tensor(slot, pages, e, stage_ring_size, stream);
-        if (!push_tensor(requests, pages, num_lanes, stream)) {
+        tensor_prefetcher::plan_tensor(slot, e, stage_ring_size, stream);
+        if (!push_tensor(requests, slot, num_lanes, stream)) {
             return false;
         }
     }

@@ -36,8 +36,11 @@ inline constexpr uint32_t kControlBytes = 4 * kLineBytes;
 // One slot = a header naming the DRAM bank behind each lane, then one 128 B request page per lane
 // (the Tensor prefetcher request page, tensor_prefetcher_request.hpp). A lane is one DRAM-bank sender
 // endpoint; a bank's endpoint is implied by the H2D socket a page arrives on when the sender is a DRAM
-// core, so here the bank travels in the header instead.
-inline constexpr uint32_t kMaxLanes = 8;
+// core, so here the bank travels in the header instead. A request names at most both endpoints of every
+// bank: two per bank, for devices with up to kMaxDramBanks DRAM views (the dispatch-engine placement is
+// not offered on a device with more).
+inline constexpr uint32_t kMaxDramBanks = 16;
+inline constexpr uint32_t kMaxLanes = 2 * kMaxDramBanks;
 inline constexpr uint32_t kLanePageBytes = kRequestPageBytes;
 inline constexpr uint32_t kSlotHeaderBytes = kLineBytes;
 inline constexpr uint32_t kSlotBytes = kSlotHeaderBytes + kMaxLanes * kLanePageBytes;
@@ -52,11 +55,11 @@ inline constexpr uint32_t kStagedOffset = kFifoOffset + kFifoBytes;
 inline constexpr uint32_t kPushedOffset = kStagedOffset + kMaxReceivers * kLineBytes;
 
 // PrefetcherPipe sender config pages of the DRAM-bank endpoints placed on this dispatch engine. Fixed
-// size, so carving a pipe never moves the stage ring under a running kernel. Four endpoints (two DRAM
-// banks of two endpoints each) with the 1 KiB a DRAM core keeps for its one endpoint's pages
-// (DriscL1Arena::kSenderStateZoneSize); a carve past that fails with the arena's zone-full error.
+// size, so carving a pipe never moves the stage ring under a running kernel. Every endpoint a request can
+// name gets the 1 KiB a DRAM core keeps for its one endpoint's pages (DriscL1Arena::kSenderStateZoneSize).
+inline constexpr uint32_t kSenderStateBytesPerEndpoint = 1024;
 inline constexpr uint32_t kSenderStateZoneOffset = kPushedOffset + kMaxReceivers * kLineBytes;
-inline constexpr uint32_t kSenderStateZoneBytes = 4 * 1024;
+inline constexpr uint32_t kSenderStateZoneBytes = kMaxLanes * kSenderStateBytesPerEndpoint;
 
 // The rest of the region stages blocks between the reader and the pusher. It is split evenly between a
 // request's receivers, kStageSlotsPerReceiver slots each, so the reader can keep reading for every
@@ -81,11 +84,12 @@ enum SlotCommand : uint32_t {
 };
 
 struct SlotHeader {
-    uint32_t command;
-    uint32_t num_lanes;
-    uint32_t lane_bank_id[kMaxLanes];
-    uint32_t reserved[(kSlotHeaderBytes / sizeof(uint32_t)) - 2 - kMaxLanes];
+    uint32_t command = 0;
+    uint32_t num_lanes = 0;
+    uint8_t lane_bank_id[kMaxLanes] = {};
+    uint8_t reserved[kSlotHeaderBytes - 2 * sizeof(uint32_t) - kMaxLanes] = {};
 };
+static_assert(kMaxDramBanks <= 256, "SlotHeader::lane_bank_id holds a bank id in one byte");
 static_assert(sizeof(SlotHeader) == kSlotHeaderBytes, "SlotHeader must fill exactly one header line");
 static_assert(kSlotBytes % kLineBytes == 0, "FIFO slots must be whole cache lines");
 
