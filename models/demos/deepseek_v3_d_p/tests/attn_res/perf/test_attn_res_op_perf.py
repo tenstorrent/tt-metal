@@ -79,24 +79,29 @@ STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 # (bh-glx-120-b07u08, 2026-11-08, 10 runs: block_mix 290.6, gather_softmax 68.6 us) times that Galaxy's pool ratio for
 # the same op, from run 42340900388's commit dbc10eb0a4c run there interleaved (3 runs: block_mix 292.2, gather_softmax
 # 68.1 us). That Galaxy runs block_mix ~6% slower than the pool and gather_softmax at about the pool's speed.
-# The pool confirmed both (run 42490578916: block_mix 274.4, gather_softmax 70.0 us).
-# block_stats only reports: it settles per process into one of three levels, ~105 / ~117 / ~136 us across 27 pool
-# readings (2026-11-05..08, medians 101.5-139.6, one Galaxy showing all three; b07u08 adds ~76). The level correlates
-# with host launch skew (a cheaper host dispatch made the low level likely), which is the suspected cause but is not
-# established. No band around one reference fits that spread and still catches a regression; see
-# tt_metal_tracker-ao3i.2.5.2. The owed steps only report too: no pool reading when set, and the owed shape (one site,
-# C = 6) need not share block_mix's ratio (b07u08 95.3 us; c10u14 85.3 us at 75 W).
+# The pool confirmed both (run 42490578916: block_mix 274.4, gather_softmax 70.0 us). On bh-glx-120-b08u02
+# (2026-11-13, interleaved with the old code on the same host) these steps and their new/old ratios match b07u08's.
+# owed/attn_res_block_mix is the pool's own reading: runs 42490578916 and 42494997776 (two runners), medians
+# 85.4 / 85.5 us, every sample within 84.7-86.1 us.
+# block_stats only reports, in both batches: it settles per process into one of three levels, ~105 / ~117 / ~136 us
+# across 27 pool readings (2026-11-05..08, medians 101.5-139.6, one Galaxy showing all three; b07u08 adds ~76). The
+# level correlates with host launch skew (a cheaper host dispatch made the low level likely), which is the suspected
+# cause but is not established. No band around one reference fits that spread and still catches a regression; see
+# tt_metal_tracker-ao3i.2.5.2.
+# owed/attn_res_gather_softmax only reports: its two pool medians agree (73.1 / 73.3 us), but its samples spread far
+# wider than the block read's (pool 71.4-91.7 us in one process, b08u02 51-114 us, medians 83-85 us), so two
+# readings do not yet show that a 5% band around one median holds.
 #
 # SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
 # end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
 # 394 / 416. Local medians, synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2,
-# gather_softmax 120.2 / 121.2 / 123.4.
+# gather_softmax 120.2 / 121.2 / 123.4. That measurement predates the owed batch, so its owed steps only report.
 # Locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
     "SP8xTP4": {
         "owed/attn_res_block_stats": None,
-        "owed/attn_res_block_mix": None,
+        "owed/attn_res_block_mix": 85.4,
         "owed/attn_res_gather_softmax": None,
         "block/attn_res_block_stats": None,
         "block/attn_res_block_mix": 273.6,
