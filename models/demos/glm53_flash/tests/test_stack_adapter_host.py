@@ -1165,6 +1165,110 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     assert pc.exact_splits([512], [700]) == {}  # 640 gains 128 < 256 over the grid snapshot at 512
 
 
+class _MockHostTierBackend(_MockPrefixBackend):
+    """+ the host tier's device side: export_snapshot / import_snapshot of a pool entry (virtual slot max_batch + k) as
+    a token-list tensor blob, recorded"""
+
+    def __init__(self, max_batch: int):
+        super().__init__(max_batch)
+        self.exports: list = []
+        self.imports: list = []
+
+    def ensure_state_export(self, kv) -> bool:
+        return True  # (StackBackend: the KDA pack + DSA row staging, allocated before the first capture)
+
+    def export_snapshot(self, kv, entry: int, n_tokens=None):
+        self.exports.append((int(entry), n_tokens))
+        return {"state": torch.tensor(list(kv.state[self.max_batch + int(entry)]), dtype=torch.int64)}
+
+    def import_snapshot(self, kv, entry: int, states) -> None:
+        self.imports.append(int(entry))
+        kv.state[self.max_batch + int(entry)] = [int(t) for t in states["state"].tolist()]
+
+
+def test_prefix_cache_host_tier_spill_restore_and_dominated(monkeypatch):
+    """GLM53_PREFIX_HOST_BYTES: a full pool spills its least recently used entry to the host tier instead of dropping
+    it; a hit on a host entry (its pages resident) is confirmed, imported into a free device entry before the prefill
+    and attached -- the same first token as a cold prefill; above the head a conversation turn's snapshot becomes
+    DOMINATED once its next turn snapshots past it and is then the first victim, dropped (never spilled)."""
+    monkeypatch.setattr(gvs, "PREFIX_CACHE", True)
+    monkeypatch.setenv("GLM53_PREFIX_HOST_BYTES", str(1 << 30))
+    monkeypatch.setenv("GLM53_PREFIX_SPILL_MIN", "0")
+    backend = _MockHostTierBackend(B)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    pc = ad.prefix
+    assert pc.host and pc.store.host_bytes == 1 << 30 and pc.store.spill_fn is not None
+    doc = _prompt(256, 5)
+    a, b = doc + _prompt(40, 50), doc + _prompt(30, 20)
+    row_a = _blocks(0, len(a))
+    _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, len(a)])
+    ad.release_request(0)
+    key128, key256 = pc.store.key(a, 128), pc.store.key(a, 256)
+    # ---- C (384 tokens of another document) needs three entries: A's 128 and 256 (LRU) are spilled, not dropped
+    c = _prompt(384, 9) + _prompt(10, 33)
+    _prefill_steps(ad, kv, c, _blocks(1, len(c)), slot=1, ends=[128, 256, 384, len(c)])
+    ad.release_request(1)
+    assert pc.store.entries[key128].tier == "host" and pc.store.entries[key256].tier == "host"
+    assert [x[0] for x in backend.exports] == [0, 1] and pc.stats["spills"] == 2
+    assert pc.store.host_used == sum(e.bytes for e in pc.store.entries.values() if e.tier == "host") > 0
+    # ---- B: vLLM proposes A's 4 cached blocks; the host entry at 256 is confirmed (its pages are resident) ...
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256 and pc.stats["confirmed_host"] == 1
+    # ... and restored into a device entry (C's least recently used 128 spills for it) before B's prefill attaches it
+    row_b = row_a[:4] + _blocks(2, len(b))[4:]
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[2], sampling_params=_greedy(1))  # fmt: skip
+    g = ad._alias[2]
+    e256 = pc.store.entries[key256]
+    assert e256.tier == "device" and backend.imports == [e256.device_entry] == [2]
+    assert backend.state_io[-1] == (g, 256, 2, None)  # the suffix only, from the restored entry
+    assert kv.state[g] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
+    assert pc.stats["restores"] == 1 and pc.stats["attaches"] == 1 and pc.stats["fallbacks"] == 0
+    assert pc.store.entries[pc.store.key(c, 128)].tier == "host" and pc.stats["spills"] == 3
+    ad.release_request(2)
+    # ---- dominated: above the head (128 here) a conversation turn's snapshot is superseded by its next turn's
+    pc.head = 128
+    d1 = _prompt(300, 61)
+    row_d = _blocks(3, 520)
+    _prefill_steps(ad, kv, d1, row_d, slot=3, ends=[128, 256, len(d1)])
+    ad.release_request(3)
+    kd256 = pc.store.key(d1, 256)
+    assert kd256 in pc.store.entries and not pc.store.entries[kd256].dominated
+    d2 = d1 + _prompt(150, 70)  # the next turn: 450 tokens, resumes at 256, snapshots at 384
+    assert ad.confirm_prefix_cache_hit(d2, [], 256) == 256
+    start = 256
+    for end in (384, len(d2)):
+        ad.prefill_forward(_history([d2[:end]]), page_table=_table([row_d[: -(-end // BLOCK_SIZE)]], 1), kv_cache=kv,
+                           prompt_lens=[end], start_pos=[start], empty_slots=[0],
+                           sampling_params=_greedy(1) if end == len(d2) else None)  # fmt: skip
+        start = end
+    assert pc.store.entries[kd256].dominated and pc.stats["dominated"] == 1
+    assert pc.store.key(d2, 384) in pc.store.entries and pc.stats["attaches"] == 2
+    ad.release_request(0)
+    # the dominated 256 is the first victim -- dropped, no export -- ahead of the older D 128
+    n_exp = len(backend.exports)
+    ent = pc.store.reserve_device()
+    assert ent is not None and kd256 not in pc.store.entries and len(backend.exports) == n_exp
+    assert pc.store.stats["dropped_dominated"] == 1 and pc.store.stats["evicted_dominated"] == 1
+    assert pc.store.key(d1, 128) in pc.store.entries
+    pc.store.unreserve(ent)
+    rep = ad.prefix.report()
+    assert rep["host_used"] > 0 and rep["spilled"] == pc.stats["spills"] and rep["restores"] == 1
+
+
+def test_prefix_cache_no_host_tier_without_the_env(monkeypatch):
+    """GLM53_PREFIX_HOST_BYTES unset (or a backend without export / import): no host tier -- the pool drops its LRU
+    entry as before"""
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch)
+    assert not ad.prefix.host and ad.prefix.store.host_bytes == 0 and ad.prefix.store.spill_fn is None
+    monkeypatch.setenv("GLM53_PREFIX_HOST_BYTES", str(1 << 30))
+    pc2 = gvs.StackPrefixCache(gen, kv, B)  # the plain prefix mock cannot stage an export (ensure_state_export)
+    assert not pc2.host and pc2.store.spill_fn is None
+
+
 # ------------------------------------------------------------------------------- image input (GLM53_STACK_MM)
 MM_WIDTH = 8  # the mock's feature width (the generator never looks at it)
 

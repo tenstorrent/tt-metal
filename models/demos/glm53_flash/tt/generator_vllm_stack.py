@@ -356,6 +356,20 @@ def resident_blocks(obm, blocks) -> bool:
     return True
 
 
+HOST_BYTES_ENV_NAME = "GLM53_PREFIX_HOST_BYTES"
+
+
+def _blob_bytes(blob) -> int:
+    """bytes of a host-tier blob (export_snapshot's nested dicts / lists of tensors)"""
+    if isinstance(blob, torch.Tensor):
+        return int(blob.numel()) * int(blob.element_size())
+    if isinstance(blob, dict):
+        return sum(_blob_bytes(v) for v in blob.values())
+    if isinstance(blob, (list, tuple)):
+        return sum(_blob_bytes(v) for v in blob)
+    return 0
+
+
 class StackPrefixCache:
     """GLM53_STACK_PREFIX=1: the adapter's prefix cache -- tt/prefix_cache.py's ``PrefixStore`` bookkeeping over the
     backend's device snapshot pool (``GLM53_PREFIX_DEVICE_ENTRIES`` entries, the virtual slots max_batch + k). vLLM
@@ -376,13 +390,26 @@ class StackPrefixCache:
                 a block of [0, start) evicted meanwhile it is prefilled from position 0 instead (the plugin passes the
                 whole history; vLLM's accounting is unaffected);
       release   the request's slot detaches from its entry.
+    Eviction (the pool is full): a DOMINATED entry first -- a conversation turn's snapshot once the request that attached
+    it snapshotted further (its next turn resumes from the longer one; entries at or below ``PREFIX_HEAD``, the shared
+    system / tool prefixes, never become dominated) -- else the least recently used unread entry. Host tier
+    (``GLM53_PREFIX_HOST_BYTES`` > 0, opt-in): that LRU entry is exported to host RAM (``export_snapshot``, through the
+    backend's state-export staging, allocated here before any capture) instead of dropped, when it covers at least
+    ``GLM53_PREFIX_SPILL_MIN`` tokens (default 16,384; dominated entries are never spilled); ``confirm`` also answers
+    with a host entry whose pages are resident, and ``plan`` imports it into a free device entry (``import_snapshot``)
+    before the attach -- an idle conversation then resumes at its last snapshot instead of re-prefilling from 0.
     Image requests (GLM53StackForConditionalGeneration) take no part: the key hashes token ids, which carry no pixels
     (every image row is the same ``<|image|>`` id), so ``confirm`` refuses a prompt with mm items and ``plan`` neither
     attaches nor snapshots the rows its caller names in ``skip`` (rows holding vision tokens).
     ``confirm`` runs on vLLM's scheduler thread, the rest on the worker's: one lock around the store."""
 
     def __init__(self, gen, kv, max_batch: int):
-        from models.autoports.zai_org_glm_5_3_flash.tt.prefix_cache import BOUNDARY, PrefixStore, signature
+        from models.autoports.zai_org_glm_5_3_flash.tt.prefix_cache import (
+            BOUNDARY,
+            HOST_BYTES_ENV,
+            PrefixStore,
+            signature,
+        )
 
         entries = int(getattr(gen.backend, "snapshot_entries", 0) or 0)
         if entries <= 0:
@@ -404,13 +431,87 @@ class StackPrefixCache:
         self.stats = {
             k: 0
             for k in ("confirmed", "confirmed_tokens", "not_resident", "attaches", "fallbacks", "snapshots",
-                      "snapshots_skipped", "mm_excluded", "tail_superseded", "exact_splits")  # fmt: skip
+                      "snapshots_skipped", "mm_excluded", "tail_superseded", "exact_splits", "dominated",
+                      "confirmed_host", "spills", "restores", "restore_failed")  # fmt: skip
         }
+        self.stats.update(spill_s=0.0, restore_s=0.0)
+        self.base: dict = {}  # generator slot -> the key of the entry its request attached (dominated past it)
+        self.host = self._host_tier(int(os.environ.get(HOST_BYTES_ENV, "0") or 0))
 
     @property
     def grid(self) -> int:
         """the snapshot grid: the backend's prefill chunk (the TP prefill's largest bucket: known after the warm-up)"""
         return int(self.gen.backend.prefill_chunk_tokens)
+
+    # ---- the host tier (GLM53_PREFIX_HOST_BYTES)
+    def _host_tier(self, nbytes: int) -> bool:
+        """wire the store's spill hook when the backend can export / import a pool entry; the export staging must
+        exist before the first trace capture (here: allocate_kv_cache, before the warm-up)"""
+        if nbytes <= 0:
+            return False
+        be = self.gen.backend
+        ok, why = False, "the backend cannot stage a snapshot export (no ensure_state_export)"
+        ensure = getattr(be, "ensure_state_export", None)  # (every ModelBackend has export / import_snapshot stubs)
+        if callable(ensure):
+            try:
+                ok = bool(ensure(self.kv))
+                why = "no KDA export staging (GLM53_KDA_EXPORT_STAGE_LAYERS=0)"
+            except RuntimeError as exc:  # (a capture ran already: too late to allocate the staging)
+                why = str(exc)
+        if not ok:
+            logger.warning(f"GLM53 stack prefix: {HOST_BYTES_ENV_NAME}={nbytes} ignored -- {why}; no host tier")
+            return False
+        self.store.host_bytes = int(nbytes)
+        self.store.spill_min = int(os.environ.get("GLM53_PREFIX_SPILL_MIN", "16384"))
+        self.store.spill_fn = self._spill
+        logger.info(
+            f"GLM53 stack prefix: host tier of {nbytes / 2**30:.1f} GiB (entries of >= {self.store.spill_min} tokens)"
+        )
+        return True
+
+    def _spill(self, e):
+        """PrefixStore.spill_fn (the caller holds self.lock, worker thread): device entry e -> (host blob, bytes)"""
+        t0 = time.perf_counter()
+        blob = self.gen.export_snapshot(self.kv, int(e.device_entry), n_tokens=int(e.n_tokens))
+        nbytes = _blob_bytes(blob)
+        dt = time.perf_counter() - t0
+        self.stats["spills"] += 1
+        self.stats["spill_s"] += dt
+        logger.info(
+            f"GLM53 stack prefix: spilled [0, {e.n_tokens}) from entry {e.device_entry} to the host tier "
+            f"({nbytes / 2**20:.0f} MiB in {dt:.2f} s; host {(self.store.host_used + nbytes) / 2**30:.1f} of "
+            f"{self.store.host_bytes / 2**30:.1f} GiB)"
+        )
+        return blob, nbytes
+
+    def _restore(self, key: str, e):
+        """a confirmed hit on the host tier (worker thread, self.lock held): import its blob into a free device entry ->
+        the entry, now on the device; None (the request is prefilled from 0) when no device entry is free or the import
+        fails. A reader guards the entry meanwhile: the spill a reserve may trigger never evicts it from the host."""
+        e.readers += 1
+        try:
+            ent = self.store.reserve_device()
+            if ent is None:
+                self.stats["restore_failed"] += 1
+                return None
+            t0 = time.perf_counter()
+            try:
+                self.gen.import_snapshot(self.kv, int(ent), e.host_blob)
+            except Exception as exc:  # noqa: BLE001  (a failed import must not fail the request: prefill from 0)
+                self.store.unreserve(ent)
+                self.stats["restore_failed"] += 1
+                logger.warning(f"GLM53 stack prefix: host-tier restore of [0, {e.n_tokens}) failed: {exc}")
+                return None
+            self.store.promote(key, int(ent))
+            dt = time.perf_counter() - t0
+            self.stats["restores"] += 1
+            self.stats["restore_s"] += dt
+            logger.info(
+                f"GLM53 stack prefix: restored [0, {e.n_tokens}) from the host tier into entry {ent} in {dt:.2f} s"
+            )
+            return e
+        finally:
+            e.readers -= 1
 
     # ---- pins: a confirmed hit's entry is never reused before its request's prefill attaches it
     def _pin(self, fp: int, e) -> None:
@@ -448,10 +549,11 @@ class StackPrefixCache:
                 pos, e = self.store.longest_cached(ids, max_tokens=cap)
                 if e is None:
                     break
-                if e.tier == "device" and resident_blocks(obm, e.pages[: -(-pos // BLOCK_SIZE)]):
-                    self._pin(fp, e)
+                if e.tier in ("device", "host") and resident_blocks(obm, e.pages[: -(-pos // BLOCK_SIZE)]):
+                    self._pin(fp, e)  # (a host entry is imported into the device pool by plan, before its attach)
                     self.stats["confirmed"] += 1
                     self.stats["confirmed_tokens"] += pos
+                    self.stats["confirmed_host"] += int(e.tier == "host")
                     return pos
                 self.stats["not_resident"] += 1
                 cap = pos - 1  # a shorter registered prefix may still be resident
@@ -483,20 +585,32 @@ class StackPrefixCache:
                     continue
                 key = self.store.key(tokens[i, :s0].tolist(), s0) if s0 % self.store.boundary == 0 else None
                 e = self.store.entries.get(key) if key is not None else None
+                blocks = rows[i, : -(-s0 // BLOCK_SIZE)].tolist()
+                host = e is not None and e.tier == "host"
+                if host and e.n_tokens == s0 and resident_blocks(obm, blocks):
+                    self._restore(key, e)  # (still pinned by its confirmation: the host tier keeps it meanwhile)
                 if key is not None:
                     self._take_pin(key)
-                blocks = rows[i, : -(-s0 // BLOCK_SIZE)].tolist()
                 if e is not None and e.tier == "device" and e.n_tokens == s0 and resident_blocks(obm, blocks):
                     self.store.attach(key, g)
                     attach[i] = int(e.device_entry)
+                    if e.n_tokens > self.head:  # a conversation's own snapshot: dominated once this request passes it
+                        self.base[g] = key
                     self.stats["attaches"] += 1
                     logger.info(
                         f"GLM53 stack prefix: generator slot {g} attaches snapshot entry {e.device_entry} at {s0}"
+                        + (" (restored from the host tier)" if host else "")
                     )
                 else:
                     starts[i] = 0
                     self.stats["fallbacks"] += 1
-                    why = "no snapshot at that position" if e is None else "a cached block was evicted"
+                    why = (
+                        "no snapshot at that position"
+                        if e is None
+                        else "its host-tier snapshot could not be restored"
+                        if e.tier == "host"
+                        else "a cached block was evicted"
+                    )
                     logger.warning(f"GLM53 stack prefix: generator slot {g}'s hit at {s0}: {why}, prefilled from 0")
             planned = set()
             for i, (s0, end) in enumerate(zip(starts, ends)):
@@ -549,6 +663,11 @@ class StackPrefixCache:
             for key, n, pages, ent, g in self._pending:
                 self.store.register(key, n_tokens=n, pages=pages, kind="P", device_entry=ent)
                 self.stats["snapshots"] += 1
+                base = self.base.get(g)  # the snapshot this request attached: its next turn resumes from this one
+                if base is not None and base != key and self.store.entries.get(base) is not None:
+                    if self.store.entries[base].n_tokens < n and self.store.dominate(base):
+                        self.stats["dominated"] += 1
+                    self.base.pop(g, None)
                 if n > self.head:  # the request's previous tail snapshot is superseded (free unless read / pinned)
                     prev = self.tail.get(g)
                     old = self.store.entries.get(prev) if prev is not None and prev != key else None
@@ -573,6 +692,7 @@ class StackPrefixCache:
         with self.lock:
             self.store.release_slot(int(gslot))
             self.tail.pop(int(gslot), None)  # a later request in the slot starts its own chain
+            self.base.pop(int(gslot), None)
 
     def report(self) -> dict:
         with self.lock:

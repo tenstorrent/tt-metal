@@ -129,6 +129,9 @@ class Entry:
     bytes: int = 0
     readers: int = 0  # live slots attached to it (an entry with readers is never evicted from the device tier)
     hits: int = 0
+    #: a longer snapshot of the same prompt chain exists (the request that attached this entry snapshotted past it:
+    #: a conversation's previous turn). Evicted first, never spilled -- the next turn resumes from the longer one
+    dominated: bool = False
     tick: int = 0  # LRU
     created: float = field(default_factory=time.time)
 
@@ -150,6 +153,9 @@ class PrefixStore:
         self.attached: dict[int, str] = {}  # slot -> key it reads (readers accounting)
         self.trailing: dict[int, tuple[int, int]] = {}  # slot -> (device entry, position) of its decode snapshot
         self.host_used = 0
+        #: the host tier takes an evicted device entry only from this many tokens on (a shorter one re-prefills in about
+        #: the time its export + import take); 0: every entry
+        self.spill_min = 0
         self._tick = 0
         self.stats = {k: 0 for k in ("registered", "hits", "misses", "attached", "evicted_device", "evicted_host",
                                      "spilled", "invalidated", "trailing_snapshots", "trailing_committed",
@@ -189,25 +195,50 @@ class PrefixStore:
 
     # ---- device tier
     def reserve_device(self) -> Optional[int]:
-        """A free device entry, evicting the LRU unreferenced one if needed (None: no device tier / all busy)."""
+        """A free device entry, evicting an unreferenced one if needed (None: no device tier / all busy): a dominated
+        entry first (``dominate``: dropped, its prompt has a longer snapshot), else the least recently used one (spilled
+        to the host tier when there is one and it is worth keeping, else dropped)."""
         if self.device_entries == 0:
             return None
         if self.free_device:
             return self.free_device.pop(0)
-        victim = next((e for e in self.entries.values() if e.tier == "device" and e.readers == 0), None)
+        victim = self._device_victim()
         if victim is None:
             return None
         if not self._spill_victim(victim):
             self.evict(victim.key)
         return self.free_device.pop(0)
 
+    def _device_victim(self) -> Optional["Entry"]:
+        """the device entry to give up: an unread dominated one first (oldest first), else the least recently used
+        unread one (``entries`` keeps LRU order: attach / register move an entry to the end)"""
+        cand = [e for e in self.entries.values() if e.tier == "device" and e.readers == 0]
+        if not cand:
+            return None
+        return next((e for e in cand if e.dominated), cand[0])
+
+    def dominate(self, key: str) -> bool:
+        """a longer snapshot of `key`'s prompt chain now exists (the request that attached it snapshotted past it): the
+        entry becomes the first eviction candidate once it has no readers, and is never spilled"""
+        e = self.entries.get(key)
+        if e is None or e.dominated:
+            return False
+        e.dominated = True
+        self.stats["dominated"] = self.stats.get("dominated", 0) + 1
+        return True
+
     #: host-tier spill hook (Stage 12 host KV tier): entry -> (host blob, bytes), or None to refuse (the entry is
     #: then dropped as before). The adapter exports the entry's virtual slot (backend.export_snapshot).
     spill_fn: Optional[Callable[["Entry"], Optional[tuple]]] = None
 
     def _spill_victim(self, victim: "Entry") -> bool:
-        """With a host tier and a spill hook: move the LRU device entry to the host tier instead of dropping it."""
+        """With a host tier and a spill hook: move the evicted device entry to the host tier instead of dropping it --
+        unless it is dominated (a longer snapshot of its prompt exists) or shorter than ``spill_min`` tokens."""
         if self.host_bytes <= 0 or self.spill_fn is None:
+            return False
+        if victim.dominated or victim.n_tokens < self.spill_min:
+            k = "dropped_dominated" if victim.dominated else "dropped_short"
+            self.stats[k] = self.stats.get(k, 0) + 1
             return False
         try:
             res = self.spill_fn(victim)
@@ -268,7 +299,8 @@ class PrefixStore:
         if self.host_bytes <= 0:
             raise ValueError("no host tier")
         while self.host_used + need > self.host_bytes:
-            victim = next((e for e in self.entries.values() if e.tier == "host" and e.readers == 0), None)
+            cand = [e for e in self.entries.values() if e.tier == "host" and e.readers == 0]
+            victim = next((e for e in cand if e.dominated), cand[0] if cand else None)
             if victim is None:
                 raise ValueError("host tier full of entries with readers")
             self.evict(victim.key)
@@ -313,6 +345,8 @@ class PrefixStore:
         else:
             self.host_used -= e.bytes
             self.stats["evicted_host"] += 1
+        if e.dominated:
+            self.stats["evicted_dominated"] = self.stats.get("evicted_dominated", 0) + 1
         for p in e.pages:
             n = self.pins.get(p, 0) - 1
             if n <= 0:
