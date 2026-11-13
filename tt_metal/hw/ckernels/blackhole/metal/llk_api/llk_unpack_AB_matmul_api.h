@@ -34,7 +34,7 @@ inline void llk_unpack_AB_matmul_init_impl(
     const bool partial_face_a,
     const bool partial_face_b) {
     static_assert(
-        auto_ttsync == 0 || llk_unpack_AB_matmul_kernel_ttsync(),
+        auto_ttsync == 0 || auto_ttsync == 3 || llk_unpack_AB_matmul_kernel_ttsync(),
         "only a kernel the firmware restores may turn Auto TTSync on");
     _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow, stream_z, reuse_dir>(
         transpose,
@@ -66,7 +66,7 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t kt_dim,
     const std::uint32_t held_a = matmul_held_a_init) {
     static_assert(
-        auto_ttsync == 0 || llk_unpack_AB_matmul_kernel_ttsync(),
+        auto_ttsync == 0 || auto_ttsync == 3 || llk_unpack_AB_matmul_kernel_ttsync(),
         "the ttsync matmul unpack runs only where every matmul init turns it on");
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_<

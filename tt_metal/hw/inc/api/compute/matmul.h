@@ -971,14 +971,51 @@ constexpr std::uint32_t matmul_fe_key(const std::uint32_t dim) {
     return (ct != 0xFFu && rt != 0xFFu && !LLK_SIZE_MODE) ? dim : 0;
 }
 
-// the unpack_auto_ttsync of a plain call: one value per kernel (MATMUL_FE_MARK, and tag 8 read at the end of the unit), so
-// its init and calls agree
+// Whether a plain call of constant cbs and block (ct, rt, kt) runs the ttsync unpack in a kernel whose class rule polls
+// (llk_matmul_forms.h matmul_kernel_ttsync_block); a run-time key (0xFF) keeps the class rule
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::uint32_t kt>
+constexpr bool matmul_fe_ttsync_cell() {
+#if defined(UCK_CHLKC_UNPACK)
+    if constexpr (
+        in0_cb < sizeof(unpack_src_format) && in1_cb < sizeof(unpack_src_format) && ct != 0xFFu && rt != 0xFFu &&
+        kt != 0xFFu) {
+#ifdef PACKER_L1_ACC
+        constexpr bool l1_acc = true;
+#else
+        constexpr bool l1_acc = false;
+#endif
+        return matmul_kernel_ttsync_block(
+            MATH_FIDELITY,
+            DST_SYNC_MODE == DstSync::SyncFull,
+            DST_ACCUM_MODE,
+            unpack_src_format,
+            static_cast<DataFormat>(unpack_src_format[in0_cb]),
+            static_cast<DataFormat>(unpack_src_format[in1_cb]),
+            rt,
+            ct,
+            kt,
+            MM_THROTTLE,
+            l1_acc);
+    }
+#endif
+    return false;
+}
+
+// MATMUL_FE_CELL_MARK's value: 3 and tag 5 where the call's cell runs the ttsync unpack, else 1 (tag 6, unread)
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::uint32_t kt, bool ok>
+struct matmul_fe_cell_mark {
+    static constexpr bool cell = ok && matmul_fe_ttsync_cell<in0_cb, in1_cb, ct, rt, kt>();
+    static constexpr std::size_t value = sizeof(matmul_fe_mark::set<cell ? 5 : 6>) + (cell ? 2 : 0);
+};
+
+// the unpack_auto_ttsync of a plain call: the kernel's class rule (MATMUL_FE_MARK 1 or 2, one value per kernel, and tag 8 read at the
+// end of the unit), or 3 where the call's cell runs the ttsync unpack in a polling class (MATMUL_FE_CELL_MARK)
 template <std::size_t mark>
 constexpr std::uint32_t matmul_fe_unpack_ttsync() {
 #if defined(UCK_CHLKC_UNPACK)
     constexpr bool runtime_cut =
         matmul_fe_hifi3_wide() && !matmul_fe_mark::is_used_d<8, std::integral_constant<std::size_t, mark>>(0);
-    return (mark == 1 && llk_unpack_AB_matmul_kernel_ttsync() && !runtime_cut) ? 1 : 0;
+    return mark == 3 ? 3 : ((mark == 1 && llk_unpack_AB_matmul_kernel_ttsync() && !runtime_cut) ? 1 : 0);
 #else
     return 0;
 #endif
@@ -1083,7 +1120,7 @@ ALWI void matmul_block_fe(
     matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
         line, a, b, i0, i1, d, tr, ct, rt, kt)
 #else
-// the unpack and pack calls key no ct or rt (MATMUL_FE_MARK, MATMUL_FE_SHAPE only)
+// the unpack and pack macros: the class rule's mark and the shape mark, and on a call that names ct, rt and kt the cell mark
 #define matmul_block_init(...) MATMUL_FE_CAT(MATMUL_FE_UINIT_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define MATMUL_FE_UINIT(a, b, ct, rt) \
     matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt)>
@@ -1102,20 +1139,25 @@ ALWI void matmul_block_fe(
 #else
 #define MATMUL_FE_PACK_SHAPE(ct, rt) 0
 #endif
+#define MATMUL_FE_UCELL(a, b, ct, rt, kt)                                                                                \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu,                                                \
+                         MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt)>
 #define MATMUL_FE_UINIT_2(a, b) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b)
 #define MATMUL_FE_UINIT_3(a, b, tr) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b, tr)
 #define MATMUL_FE_UINIT_4(a, b, tr, ct) MATMUL_FE_UINIT(a, b, ct, 1)(__builtin_LINE(), a, b, tr, ct)
 #define MATMUL_FE_UINIT_5(a, b, tr, ct, rt) MATMUL_FE_UINIT(a, b, ct, rt)(__builtin_LINE(), a, b, tr, ct, rt)
-#define MATMUL_FE_UINIT_6(a, b, tr, ct, rt, kt) MATMUL_FE_UINIT(a, b, ct, rt)(__builtin_LINE(), a, b, tr, ct, rt, kt)
-#define MATMUL_FE_UINIT_7(a, b, tr, ct, rt, kt, line) MATMUL_FE_UINIT(a, b, ct, rt)(line, a, b, tr, ct, rt, kt)
+#define MATMUL_FE_UINIT_6(a, b, tr, ct, rt, kt) MATMUL_FE_UCELL(a, b, ct, rt, kt)(__builtin_LINE(), a, b, tr, ct, rt, kt)
+#define MATMUL_FE_UINIT_7(a, b, tr, ct, rt, kt, line) MATMUL_FE_UCELL(a, b, ct, rt, kt)(line, a, b, tr, ct, rt, kt)
 #define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_UBLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define MATMUL_FE_UBLOCK(a, b, ct, rt) \
     matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt)>
+#define MATMUL_FE_UBCELL(a, b, ct, rt, kt) \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt)>
 // the experimental 2_0 call (no transpose argument)
 #define MATMUL_FE_UBLOCK_8(a, b, i0, i1, d, ct, rt, kt) MATMUL_FE_UBLOCK(a, b, ct, rt)(__builtin_LINE(), a, b, i0, i1, d, ct, rt, kt)
 #define MATMUL_FE_UBLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt) \
-    MATMUL_FE_UBLOCK(a, b, ct, rt)(__builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
+    MATMUL_FE_UBCELL(a, b, ct, rt, kt)(__builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
 #define MATMUL_FE_UBLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line) \
-    MATMUL_FE_UBLOCK(a, b, ct, rt)(line, a, b, i0, i1, d, tr, ct, rt, kt)
+    MATMUL_FE_UBCELL(a, b, ct, rt, kt)(line, a, b, i0, i1, d, tr, ct, rt, kt)
 #endif
 #endif

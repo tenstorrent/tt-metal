@@ -58,6 +58,17 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
+// G2h: a production key of compile-time block keys whose class polls runs the ttsync unpack on its cell (llk_matmul_forms.h
+// matmul_kernel_ttsync_block, as the front end's matmul_fe_ttsync_cell); in1 is the test's A operand, in0 its B
+#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && !defined(MATMUL_TTSYNC_BLOCK_PROD)
+#define MATMUL_TTSYNC_BLOCK_PROD                                                                                                           \
+    ckernel::matmul_kernel_ttsync_block(                                                                                                   \
+        MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS, MATMUL_PK_IN_B, MATMUL_PK_IN_A, \
+        MATMUL_PK_RT, MATMUL_PK_CT, MATMUL_PK_KT, MATMUL_PK_THROTTLE, MATMUL_PK_L1ACC)
+#elif !defined(MATMUL_TTSYNC_BLOCK_PROD)
+#define MATMUL_TTSYNC_BLOCK_PROD false
+#endif
+
 __attribute__((noinline)) int main(void) // not in the naked _start (no stack frame) when a kernel is built with LTO
 {
     mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
@@ -109,7 +120,7 @@ __attribute__((noinline)) int main(void) // not in the naked _start (no stack fr
         _llk_unpack_AB_matmul_ttsync_enable_();
 #elif defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_PRODUCTION)
         // as the firmware
-        if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS))
+        if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) || MATMUL_TTSYNC_BLOCK_PROD)
         {
             _llk_unpack_AB_matmul_ttsync_enable_();
         }
@@ -127,7 +138,7 @@ __attribute__((noinline)) int main(void) // not in the naked _start (no stack fr
     _llk_unpack_AB_matmul_ttsync_restore_();
 #elif defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_PRODUCTION)
     // as the firmware
-    if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS))
+    if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) || MATMUL_TTSYNC_BLOCK_PROD)
     {
         _llk_unpack_AB_matmul_ttsync_restore_();
     }

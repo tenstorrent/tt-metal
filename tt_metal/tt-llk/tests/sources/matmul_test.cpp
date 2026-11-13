@@ -45,6 +45,17 @@
 #define MATMUL_REUSE_DIR MATMUL_PROD_DIR
 #endif
 
+// G2h: a production key of compile-time block keys whose class polls runs the ttsync unpack on its cell (llk_matmul_forms.h
+// matmul_kernel_ttsync_block, as the front end's matmul_fe_ttsync_cell); in1 is the test's A operand, in0 its B
+#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && !defined(MATMUL_TTSYNC_BLOCK_PROD)
+#define MATMUL_TTSYNC_BLOCK_PROD                                                                                                           \
+    ckernel::matmul_kernel_ttsync_block(                                                                                                   \
+        MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS, MATMUL_PK_IN_B, MATMUL_PK_IN_A, \
+        MATMUL_PK_RT, MATMUL_PK_CT, MATMUL_PK_KT, MATMUL_PK_THROTTLE, MATMUL_PK_L1ACC)
+#elif !defined(MATMUL_TTSYNC_BLOCK_PROD)
+#define MATMUL_TTSYNC_BLOCK_PROD false
+#endif
+
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -158,9 +169,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
 #if defined(MATMUL_PRODUCTION)
-    // a plain call's kernel rule, the function llk_unpack_AB_matmul_kernel_ttsync calls
+    // a plain call's kernel rule, the function llk_unpack_AB_matmul_kernel_ttsync calls, and on a polling class the block rule of a
+    // call with constant keys (matmul_fe_ttsync_cell; in1 is the test's A operand, in0 its B)
     constexpr std::uint32_t unpack_auto_ttsync =
-        matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) ? 1 : 0;
+        matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) ? 1
+        : MATMUL_TTSYNC_BLOCK_PROD                                                                                               ? 3
+                                                                                                                                 : 0;
 #else
 #ifdef MATMUL_UNPACK_TTSYNC_EXCL
     constexpr std::uint32_t unpack_ttsync_req = 2;

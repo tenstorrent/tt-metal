@@ -2747,6 +2747,8 @@ inline constexpr matmul_ttsync_off_cell matmul_ttsync_off_cells[] = {
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4},
     {MathFidelity::HiFi2, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1},
     {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1},
+    // LoFi half sync Bfp8_b 1x2 block of 2 k steps: 0.45 slower than the polling production block at 10 of 10 points (G2 census)
+    {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 1, 2},
 };
 
 // Whether the ttsync unpack (unpack_auto_ttsync) is kept for a block: the cells where it measured 0 slower than the context poll (matmul_prod_keys.py
@@ -2801,6 +2803,60 @@ constexpr bool matmul_unpack_ttsync_cell(
                !(fid == MathFidelity::HiFi2 && in_f == DataFormat::Float16_b && out_f == DataFormat::Float32 && !f32_acc);
     }
     return take;
+}
+
+// A block of compile-time (rt, ct, kt) that runs the ttsync unpack in a kernel whose class rule (matmul_kernel_ttsync) polls: two or more k
+// steps, its cell kept the ttsync unpack (matmul_unpack_ttsync_cell) for every format the kernel holds as the output, and it is not a main
+// form cell. A
+// LoFi kernel that mixes a 32-bit operand with a fast one stays on the class rule: its polling calls pick the held operand at run time.
+// formats: every CB format of the kernel (255 = no CB)
+template <std::size_t N>
+constexpr bool matmul_kernel_ttsync_block(
+    const MathFidelity fidelity,
+    const bool full_sync,
+    const bool fp32_dest,
+    const std::uint8_t (&formats)[N],
+    const DataFormat in0,
+    const DataFormat in1,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle = 0,
+    const bool l1_acc            = false)
+{
+    // one k step, and the Bfp8_b 3x1 block of two, measured slower than the polling production block (G2 census, 10 of 10 points)
+    if (matmul_kernel_ttsync(fidelity, full_sync, fp32_dest, formats) || rt == 0 || ct == 0 || kt < 2 ||
+        (in0 == DataFormat::Bfp8_b && in1 == DataFormat::Bfp8_b && rt == 3 && ct == 1 && kt == 2))
+    {
+        return false;
+    }
+    if (fidelity == MathFidelity::LoFi)
+    {
+        bool wide = false, fast = false;
+        for (const std::uint8_t f : formats)
+        {
+            wide = wide || matmul_format_is_32bit(static_cast<DataFormat>(f));
+            fast = fast || matmul_format_streams_fast(static_cast<DataFormat>(f), throttle != 0);
+        }
+        if (wide && fast)
+        {
+            return false;
+        }
+    }
+    for (const std::uint8_t f : formats)
+    {
+        if (f == 0xff)
+        {
+            continue;
+        }
+        const DataFormat out = static_cast<DataFormat>(f);
+        if (!matmul_unpack_ttsync_cell(fidelity, !full_sync, fp32_dest, in1, in0, out, rt, ct, kt) ||
+            matmul_grid_main_form(fidelity, !full_sync, fp32_dest, in1, in0, out, rt, ct, kt, throttle, l1_acc))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, int sync, std::uint32_t h, std::uint32_t w, bool several_blocks = false, std::uint32_t dest_sections = 1>

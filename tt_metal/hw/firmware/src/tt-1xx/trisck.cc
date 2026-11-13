@@ -94,7 +94,8 @@ uint32_t _start() {
 #if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(LLK_UNPACK_AB_MATMUL_TTSYNC_RESTORE) && \
     defined(MATMUL_FE_TTSYNC_CUT)
     // once per kernel that names a plain matmul_block_init, so a matmul re-init costs nothing for it
-    if constexpr (llk_unpack_AB_matmul_kernel_ttsync() && ckernel::matmul_fe_mark::is_used(0) && !MATMUL_FE_TTSYNC_CUT()) {
+    if constexpr ((llk_unpack_AB_matmul_kernel_ttsync() && ckernel::matmul_fe_mark::is_used(0) && !MATMUL_FE_TTSYNC_CUT()) ||
+                  ckernel::matmul_fe_mark::is_used<5>(0)) {
         _llk_unpack_AB_matmul_ttsync_enable_();
     }
 #endif
@@ -102,7 +103,8 @@ uint32_t _start() {
 #if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(LLK_UNPACK_AB_MATMUL_TTSYNC_RESTORE) && \
     defined(MATMUL_FE_TTSYNC_CUT)
     // the next kernel on the core starts with Auto TTSync off and the default MOP and REPLAY declarations
-    if constexpr (llk_unpack_AB_matmul_kernel_ttsync() && ckernel::matmul_fe_mark::is_used(0) && !MATMUL_FE_TTSYNC_CUT()) {
+    if constexpr ((llk_unpack_AB_matmul_kernel_ttsync() && ckernel::matmul_fe_mark::is_used(0) && !MATMUL_FE_TTSYNC_CUT()) ||
+                  ckernel::matmul_fe_mark::is_used<5>(0)) {
         _llk_unpack_AB_matmul_ttsync_restore_();
     }
 #endif
