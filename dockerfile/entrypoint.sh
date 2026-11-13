@@ -1,11 +1,8 @@
 #!/bin/bash
 set -e
 
-# The image ships no SSH host keys (they would be shared by every container);
-# generate this container's on first start. Existing keys are kept.
-ssh-keygen -A
-
-# Start SSHD in the background
+# Start SSHD in the background. The image ships no SSH host keys; the
+# /usr/sbin/sshd wrapper generates this container's on start.
 service ssh start
 
 # Exec the passed command (replace shell with target command)
