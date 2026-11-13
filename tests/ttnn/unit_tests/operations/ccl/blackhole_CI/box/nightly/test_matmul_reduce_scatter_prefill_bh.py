@@ -117,10 +117,12 @@ def run_case(
     l1_headroom=None,
     memory_config=None,
     grid=ttnn.MatmulReduceScatterPrefillGrid.GRID_2D,
+    seed=0,
 ):
+    """Runs the op and checks it; returns (A, W, output) on device so a caller can keep them allocated."""
     mesh_shape = tuple(mesh_device.shape)
-    a = random_stacked(mesh_shape, a_shape, seed=0)
-    w = quantize_like_device(random_stacked(mesh_shape, w_shape, seed=1, scale=w_shape[0] ** -0.5), weight_dtype)
+    a = random_stacked(mesh_shape, a_shape, seed=seed)
+    w = quantize_like_device(random_stacked(mesh_shape, w_shape, seed=seed + 1, scale=w_shape[0] ** -0.5), weight_dtype)
     ta = to_mesh(a, mesh_device, dtype, memory_config=a_memory_config)
     tw = to_mesh(w, mesh_device, weight_dtype, memory_config=w_memory_config)
     expected = reference(a, w, cluster_axis, scatter_dim)
@@ -148,6 +150,7 @@ def run_case(
     if preallocated is not None:
         assert out.buffer_address() == preallocated.buffer_address(), "the op did not write the preallocated output"
     check(out, expected, mesh_device, weight_dtype)
+    return ta, tw, out
 
 
 # (a_shape, w_shape, scatter_dim, dtype, weight_dtype); the op always accumulates in fp32 DEST
@@ -394,20 +397,23 @@ DRAM_SHARDED_W_CASES = [
 @pytest.mark.parametrize("name", DRAM_SHARDED_W_CASES)
 def test_dram_sharded_weight(mesh_device, name):
     a_shape, w_shape, scatter_dim, dtype, weight_dtype = MODEL_CASES[name]
-    for _ in range(2):  # the second call is a program-cache hit with a new W buffer
-        run_case(
-            mesh_device,
-            a_shape,
-            w_shape,
-            cluster_axis=1,
-            scatter_dim=scatter_dim,
-            topology=ttnn.Topology.Ring,
-            dtype=dtype,
-            weight_dtype=weight_dtype,
-            num_links=2,
-            w_memory_config=dram_width_sharded(mesh_device, *w_shape),
-            grid=grid_of(name),
-        )
+    kwargs = dict(
+        cluster_axis=1,
+        scatter_dim=scatter_dim,
+        topology=ttnn.Topology.Ring,
+        dtype=dtype,
+        weight_dtype=weight_dtype,
+        num_links=2,
+        w_memory_config=dram_width_sharded(mesh_device, *w_shape),
+        grid=grid_of(name),
+    )
+    # The first call's tensors stay allocated, so the second call's operands hold different data at different
+    # addresses: its program-cache hit is correct only if the runtime args are re-pointed at the new buffers.
+    _, tw_first, _ = run_case(mesh_device, a_shape, w_shape, seed=0, **kwargs)
+    entries = mesh_device.num_program_cache_entries()
+    _, tw_second, _ = run_case(mesh_device, a_shape, w_shape, seed=2, **kwargs)
+    assert tw_second.buffer_address() != tw_first.buffer_address(), "the second W reused the first W's buffer"
+    assert mesh_device.num_program_cache_entries() == entries, "the second call built a new program"
 
 
 @skip_for_wormhole_b0()
