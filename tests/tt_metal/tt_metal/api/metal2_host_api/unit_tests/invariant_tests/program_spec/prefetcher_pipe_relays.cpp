@@ -77,15 +77,30 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayComputeProducerFails) {
         "exactly the relayed pipe set");
 }
 
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayDFBBlockedProducerFails) {
-    auto spec = MakeFullPipeSpec();
-    KernelNamed(spec, "receiver").dfb_bindings = {BlockedProducerOf(relay_dfb_name, "relay", /*block_size=*/4)};
-    EXPECT_SPEC_REJECTED(spec, "relay DFB does not support the BLOCKED access pattern");
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayBlockedProducerBlockIsPipeEntryPasses) {
+    // Two credit lanes, two relay entries per pipe entry, each lane owns one pipe entry at a time,
+    // which is a block of two relay entries.
+    ProgramSpec spec = MakeFullPipeSpec(/*receiver_threads=*/2);
+    spec.dataflow_buffers[0].entry_size = pipe_entry_size / 2;
+    spec.dataflow_buffers[0].num_entries = pipe_num_entries * 2;
+    KernelNamed(spec, "receiver").dfb_bindings = {BlockedProducerOf(relay_dfb_name, "relay", /*block_size=*/2)};
+    EXPECT_SPEC_VALID(spec);
 }
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayDFBBlockedConsumerFails) {
-    auto spec = MakeFullPipeSpec();
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayBlockedProducerBlockNotPipeEntryFails) {
+    ProgramSpec spec = MakeFullPipeSpec(/*receiver_threads=*/2);
+    spec.dataflow_buffers[0].entry_size = pipe_entry_size / 2;
+    spec.dataflow_buffers[0].num_entries = pipe_num_entries * 2;
+    KernelNamed(spec, "receiver").dfb_bindings = {BlockedProducerOf(relay_dfb_name, "relay", /*block_size=*/4)};
+    EXPECT_SPEC_REJECTED(
+        spec, "a BLOCKED relay producer's block_size (4) must equal the relay entries per pipe entry (2");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayBlockedConsumerPasses) {
+    // The compute consumer takes the relay in whole blocks; the pipe side is unchanged.
+    ProgramSpec spec = MakeFullPipeSpec();
     KernelNamed(spec, "compute").dfb_bindings = {BlockedConsumerOf(relay_dfb_name, "relay", /*block_size=*/4)};
-    EXPECT_SPEC_REJECTED(spec, "relay DFB does not support the BLOCKED access pattern");
+    EXPECT_SPEC_VALID(spec);
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayProducerNotBindingPipeFails) {
