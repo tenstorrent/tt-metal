@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     CHUNK,
     build_stack,
     compose,
+    hf_config,
     placements,
     release,
     synthetic_state_dict,
@@ -91,6 +92,8 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
     first_layer_idx, num_layers = TRACE_WINDOWS[window]
     state_dict = synthetic_state_dict(first_layer_idx, num_layers)
     stack, caches = build_stack(mesh_device, state_dict, first_layer_idx, num_layers, num_users=NUM_USERS)
+    # Every window is a first rank that embeds its own tokens: a stand-in table would map them all to one row.
+    assert stack.embed.vocab_size == hf_config().vocab_size, f"embedding has {stack.embed.vocab_size} rows"
     kvpe, index = caches.kvpe, caches.index
     # Fresh caches, restored in place before the traced pass so both passes start from the same state.
     pristine = (kvpe.storage.cpu(), index.cpu())
