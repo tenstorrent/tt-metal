@@ -10,6 +10,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import socket
 import wave
 
@@ -481,6 +482,13 @@ def test_rewrite_leaves_supported_forms_alone():
         ({"reasoning": {"effort": "none"}}, {"enable_thinking": False}, None),
         ({"reasoning": {"effort": "high"}}, {"enable_thinking": True}, None),
         ({"reasoning": {"max_tokens": 0}}, {"enable_thinking": False}, None),
+        ({"reasoning": {"max_tokens": 2000}}, {"enable_thinking": True}, None),  # a reasoning budget: thinking on
+        ({"reasoning": {"max_tokens": True}}, None, None),  # not a number: not a switch
+        # A switch-off wins over the other fields, whichever they are.
+        ({"reasoning": {"enabled": False, "effort": "high"}}, {"enable_thinking": False}, None),
+        ({"reasoning": {"enabled": False, "max_tokens": 2000}}, {"enable_thinking": False}, None),
+        ({"reasoning": {"enabled": True, "effort": "none"}}, {"enable_thinking": False}, None),
+        ({"reasoning": {"effort": "high", "max_tokens": 0}}, {"enable_thinking": False}, None),
         ({"reasoning": {"exclude": True}}, None, False),
         ({"reasoning": {"enabled": False}, "chat_template_kwargs": {"x": 1}}, {"x": 1, "enable_thinking": False}, None),
         # An explicit switch wins; the top-level reasoning_effort is vLLM's own.
@@ -513,6 +521,14 @@ def test_map_reasoning(fields, want_kwargs, want_include):
         ({"temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}, None),
         ({"temperature": 0, "reasoning": {"enabled": False}}, None),
         ({"temperature": 0, "reasoning": {"effort": "none"}}, None),
+        # The top-level reasoning_effort is vLLM's to map (map_reasoning leaves it): "none" is thinking off there.
+        ({"temperature": 0, "reasoning_effort": "none"}, None),
+        ({"temperature": 0, "reasoning_effort": "none", "reasoning": {"enabled": True}}, None),
+        ({"temperature": 0, "reasoning_effort": "high"}, (1.0, 0.95)),
+        (
+            {"temperature": 0, "reasoning_effort": "none", "chat_template_kwargs": {"enable_thinking": True}},
+            (1.0, 0.95),
+        ),
         ({"temperature": 0.7}, None),
         ({}, None),
         ({"temperature": False}, None),
@@ -878,7 +894,8 @@ def test_fetch_media_inlines_and_fails_with_400_messages():
     assert "larger than 4096 bytes" in out["big.mp4"] and "larger than 4096 bytes" in out["streamed.mp4"]
     assert "more than 3 redirects" in out["loop"]
     assert "only http(s) URLs" in out["to-file"]
-    assert out["refused"].startswith("Failed to fetch media from URL: ClientConnectorError")
+    assert out["refused"].startswith("Failed to fetch media from URL: " + lb.UNREACHABLE)
+    assert "ClientConnectorError" not in out["refused"] and "Connect call failed" not in out["refused"]
 
 
 BLOCKED = [
@@ -955,12 +972,13 @@ def test_fetch_refuses_non_public_targets_before_connecting(monkeypatch):
     out = asyncio.run(run())
     for url, message in out.items():
         assert message.startswith("Failed to fetch media from URL: "), (url, message)
-        assert "refused" in message or "only http(s)" in message, (url, message)
+        assert lb.UNREACHABLE in message or "only http(s)" in message, (url, message)
     assert hits == []
 
 
-def test_fetch_checks_every_redirect_hop():
+def test_fetch_checks_every_redirect_hop(caplog):
     hits = []
+    caplog.set_level(logging.WARNING, logger="mimo.serving.lb")
 
     async def run():
         host = TestServer(media_host(hits), host="127.0.0.1")
@@ -978,16 +996,187 @@ def test_fetch_checks_every_redirect_hop():
         return out
 
     out = asyncio.run(run())
-    assert "127.0.0.2 (loopback); refused" in out["to-other-loopback"]
-    assert "169.254.169.254 (link-local); refused" in out["to-metadata"]
+    # The client reads one message for every refused hop; the address and the reason are in the proxy's log only.
+    for name in ("to-other-loopback", "to-metadata"):
+        text = out[name].split(" (http://", 1)[0]  # the message before the client's own URL
+        assert text == "Failed to fetch media from URL: " + lb.UNREACHABLE, out[name]
+        assert "127.0.0.2" not in out[name] and "169.254" not in out[name]
+    assert "127.0.0.2 (loopback); refused" in caplog.text
+    assert "169.254.169.254 (link-local); refused" in caplog.text
     # Only the first hops reached the server; the refused targets never got a connection.
     assert [path for path, _ in hits] == ["/to-other-loopback", "/to-metadata"]
 
 
-def test_fetch_connects_only_to_the_checked_address(monkeypatch):
+def test_fetch_errors_do_not_describe_the_proxys_network(monkeypatch, caplog):
+    """A name that does not resolve, one that resolves to a private address and one that refuses the connection are
+    answered with the same text: the answer is no DNS oracle into the network the proxy runs in."""
+    caplog.set_level(logging.WARNING, logger="mimo.serving.lb")
+
+    async def fake_resolve(host, port):
+        if host == "db.internal":
+            return ["10.20.30.40"]
+        if host == "closed.test":
+            return ["127.0.0.1"]
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(lb, "resolve_host", fake_resolve)
+
+    async def run():
+        out = {}
+        for host, policy in (("db.internal", None), ("nxdomain.internal", None), ("closed.test", only_127_0_0_1)):
+            try:
+                await lb.fetch_media([f"http://{host}:{free_port()}/x.png"], 2.0, 4096, address_policy=policy)
+            except lb.ShimError as exc:
+                out[host] = str(exc)
+        return out
+
+    out = asyncio.run(run())
+    texts = {host: message.split(" (http://", 1)[0] for host, message in out.items()}
+    assert set(texts) == {"db.internal", "nxdomain.internal", "closed.test"}
+    assert set(texts.values()) == {"Failed to fetch media from URL: " + lb.UNREACHABLE}
+    for message in out.values():
+        for secret in ("10.20.30.40", "private", "resolve", "Name or service", "Connect call failed", "127.0.0.1"):
+            assert secret not in message, message
+    for logged in ("db.internal resolves to 10.20.30.40 (private)", "cannot resolve nxdomain.internal", "closed.test"):
+        assert logged in caplog.text
+
+
+def test_fetch_bounds_a_requests_total_and_the_downloads_in_flight():
+    """One request's URLs together stay within ``max_total_bytes`` (the first failure stops the others), and the
+    proxy-wide limiter bounds how many downloads run at once."""
+    state = {"now": 0, "peak": 0, "done": 0}
+
+    async def counted(_):
+        state["now"] += 1
+        state["peak"] = max(state["peak"], state["now"])
+        try:
+            await asyncio.sleep(0.05)
+            return web.Response(body=PNG, content_type="image/png")
+        finally:
+            state["now"] -= 1
+            state["done"] += 1
+
+    async def run():
+        app = web.Application()
+        app.router.add_get("/{name}", counted)
+        host = TestServer(app, host="127.0.0.1")
+        await host.start_server()
+        urls = [f"http://127.0.0.1:{host.port}/{i}.png" for i in range(12)]
+        out = {}
+        try:
+            got = await lb.fetch_media(urls, 5.0, 4096, address_policy=only_127_0_0_1, limiter=asyncio.Semaphore(3))
+            out["limited"] = (len(got), state["peak"])
+            state.update(peak=0)
+            await lb.fetch_media(urls, 5.0, 4096, address_policy=only_127_0_0_1)
+            out["unlimited_peak"] = state["peak"]
+            # 12 files of 2568 bytes against a 3-file total: refused, although every file is under the per-URL limit.
+            try:
+                await lb.fetch_media(urls, 5.0, 4096, address_policy=only_127_0_0_1, max_total_bytes=3 * len(PNG))
+            except lb.ShimError as exc:
+                out["total"] = str(exc)
+            out["within"] = len(
+                await lb.fetch_media(urls[:3], 5.0, 4096, address_policy=only_127_0_0_1, max_total_bytes=3 * len(PNG))
+            )
+        finally:
+            await host.close()
+        return out
+
+    out = asyncio.run(run())
+    assert out["limited"] == (12, 3)
+    assert out["unlimited_peak"] > 3
+    assert f"more than {3 * len(PNG)} bytes in total" in out["total"]
+    assert out["within"] == 3
+
+
+def test_fetch_stops_the_other_downloads_at_the_first_failure(expect_error):
+    finished = []
+
+    async def slow(_):
+        await asyncio.sleep(1.0)
+        finished.append("slow")
+        return web.Response(body=PNG, content_type="image/png")
+
+    async def run():
+        app = web.Application()
+        app.router.add_get("/slow.png", slow)
+        host = TestServer(app, host="127.0.0.1")
+        await host.start_server()
+        base = f"http://127.0.0.1:{host.port}"
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        try:
+            with expect_error(lb.ShimError, "HTTP 404"):
+                await lb.fetch_media(
+                    [base + "/slow.png", base + "/missing.png"], 5.0, 4096, address_policy=only_127_0_0_1
+                )
+            return loop.time() - start
+        finally:
+            await host.close()
+
+    assert asyncio.run(run()) < 0.8 and finished == []
+
+
+def test_proxy_refuses_more_media_urls_than_a_request_may_link():
+    async def run():
+        hits = []
+        host = TestServer(media_host(hits), host="127.0.0.1")
+        engine = TestServer(echo_engine(), host="127.0.0.1")
+        await host.start_server()
+        await engine.start_server()
+        router = lb.Router([f"http://127.0.0.1:{engine.port}"])
+        shim = lb.Shim(fetch_media=True, fetch_allow_private=True, fetch_max_urls=2, fetch_max_total_bytes=2 * len(PNG))
+        proxy = TestServer(lb.make_app(router, shim=shim), host="127.0.0.1")
+        await proxy.start_server()
+        base, url = f"http://127.0.0.1:{host.port}", f"http://127.0.0.1:{proxy.port}"
+
+        def body(n, same=False):
+            parts = [
+                {"type": "image_url", "image_url": {"url": f"{base}/cat.png" + ("" if same else f"?a={i}")}}
+                for i in range(n)
+            ]
+            return json.dumps(chat_with(*parts)).encode()
+
+        try:
+            async with ClientSession() as session:
+                out = {
+                    "three": await raw_post(session, url, body(3)),
+                    "repeated": await raw_post(session, url, body(5, same=True)),  # one distinct URL, one download
+                    "two": await raw_post(session, url, body(2)),
+                }
+                return out, len(hits), router.snapshot()
+        finally:
+            await proxy.close()
+            await engine.close()
+            await host.close()
+
+    out, downloads, snap = asyncio.run(run())
+    status, got = out["three"]
+    assert status == 400 and "links 3 media URLs, more than the 2" in got["error"]["message"]
+    assert out["repeated"][0] == 200 and out["two"][0] == 200
+    assert downloads == 3  # nothing was downloaded for the refused request
+    assert snap["prefix"]["shim_rejected"] == 1
+
+
+def test_shim_fetch_limits_from_env(monkeypatch):
+    for name in ("TT_PROXY_FETCH_MAX_URLS", "TT_PROXY_FETCH_MAX_TOTAL_MB", "TT_PROXY_FETCH_CONCURRENCY"):
+        monkeypatch.delenv(name, raising=False)
+    shim = lb.Shim.from_env()
+    assert (shim.fetch_max_urls, shim.fetch_max_total_bytes, shim.fetch_concurrency) == (32, 150 << 20, 8)
+    # Inlined as base64, a request's downloads still fit the body limit the engines are served with.
+    assert shim.fetch_max_total_bytes * 4 / 3 <= shim.max_request_bytes
+    monkeypatch.setenv("TT_PROXY_FETCH_MAX_URLS", "4")
+    monkeypatch.setenv("TT_PROXY_FETCH_MAX_TOTAL_MB", "1.5")
+    monkeypatch.setenv("TT_PROXY_FETCH_CONCURRENCY", "0")
+    shim = lb.Shim.from_env()
+    assert (shim.fetch_max_urls, shim.fetch_max_total_bytes, shim.fetch_concurrency) == (4, 3 << 19, 1)
+    assert lb.Shim.from_env(fetch_max_urls=7).fetch_max_urls == 7
+
+
+def test_fetch_connects_only_to_the_checked_address(monkeypatch, caplog):
     """DNS rebinding: the name is resolved once, checked, and the connection goes to that address. ``media.test``
     never resolves through DNS (.test is reserved), so the download works only through the pinned address."""
     hits, lookups = [], []
+    caplog.set_level(logging.WARNING, logger="mimo.serving.lb")
 
     async def fake_resolve(host, port):
         lookups.append(host)
@@ -1014,7 +1203,9 @@ def test_fetch_connects_only_to_the_checked_address(monkeypatch):
     assert list(out["pinned"].values()) == ["data:image/png;base64," + base64.b64encode(PNG).decode()]
     assert hits == [("/cat.png", f"media.test:{port}")]  # the name in Host, the checked address on the wire
     assert lookups == ["media.test", "mixed.test"]  # one lookup per hop, none by aiohttp
-    assert "10.0.0.1 (private); refused" in out["mixed"]  # one non-public answer refuses the name
+    # One non-public answer refuses the name; which one is in the log, not in the answer.
+    assert lb.UNREACHABLE in out["mixed"] and "10.0.0.1" not in out["mixed"]
+    assert "mixed.test resolves to 10.0.0.1 (private); refused" in caplog.text
 
 
 def test_shim_from_env(monkeypatch):
@@ -1075,25 +1266,31 @@ def test_proxy_fetches_media_when_enabled():
     # The default: a loopback media host is refused with 400, and the engine is never asked.
     base, out, snap = asyncio.run(run(True, allow_private=False))
     status, got = out["cat.png"]
-    assert status == 400 and "(loopback); refused" in got["error"]["message"]
+    assert status == 400 and lb.UNREACHABLE in got["error"]["message"] and "loopback" not in got["error"]["message"]
     assert sum(snap["served"].values()) == 0
 
 
-def closing_engine(close_first):
-    """A raw HTTP/1.1 engine that reads the first ``close_first`` requests and closes their connections without a
-    reply (an engine closing a pooled keep-alive connection as the proxy writes into it), then answers normally."""
+def closing_engine(close_at, delay_s=0.0):
+    """A raw HTTP/1.1 engine that answers its requests on a kept-alive connection, except request number ``close_at``
+    (1-based): that one it reads, waits ``delay_s``, and closes the connection without a reply. Number 2 with no delay
+    is an engine closing a pooled keep-alive connection as the proxy writes into it; with a delay, or as number 1 (a
+    new connection), it is an engine that took the request and died."""
     seen = {"n": 0}
 
     async def handle(reader, writer):
         while True:
-            head = await reader.readuntil(b"\r\n\r\n")
+            try:
+                head = await reader.readuntil(b"\r\n\r\n")
+            except asyncio.IncompleteReadError:
+                return
             length = 0
             for line in head.decode().split("\r\n"):
                 if line.lower().startswith("content-length:"):
                     length = int(line.split(":", 1)[1])
             await reader.readexactly(length)
             seen["n"] += 1
-            if seen["n"] <= close_first:
+            if seen["n"] == close_at:
+                await asyncio.sleep(delay_s)
                 writer.close()
                 return
             body = json.dumps({"backend": "R"}).encode()
@@ -1105,33 +1302,163 @@ def closing_engine(close_first):
     return handle, seen
 
 
-@pytest.mark.parametrize("close_first, want_status", [(1, 200), (2, 500)])
-def test_proxy_resends_once_after_an_unanswered_disconnect(close_first, want_status):
+@pytest.mark.parametrize(
+    "close_at, delay_s, want_statuses, want_requests, want_resends",
+    [
+        (2, 0.0, [200, 200], 3, 1),  # a pooled connection closed under the request: resent on a new connection
+        (2, 0.5, [200, 500], 2, 0),  # the engine held the request before it went away: it may have run, no resend
+        (1, 0.0, [500, 200], 2, 0),  # a new connection is never a stale one: no resend
+    ],
+)
+def test_proxy_resends_only_a_request_lost_to_a_stale_connection(
+    monkeypatch, close_at, delay_s, want_statuses, want_requests, want_resends
+):
+    monkeypatch.setattr(lb, "STALE_DISCONNECT_S", 0.2)
+
     async def run():
-        handle, seen = closing_engine(close_first)
+        handle, seen = closing_engine(close_at, delay_s)
         server = await asyncio.start_server(handle, "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
         router = lb.Router([f"http://127.0.0.1:{port}"])
         proxy = TestServer(lb.make_app(router), host="127.0.0.1")
         await proxy.start_server()
+        statuses = []
         try:
             async with ClientSession() as session:
-                async with session.post(
-                    f"http://127.0.0.1:{proxy.port}/v1/chat/completions",
-                    data=chat("short", "q"),
-                    headers={"Content-Type": "application/json"},
-                ) as r:
-                    status = r.status
-            return status, seen["n"], router.snapshot()
+                for _ in range(2):
+                    async with session.post(
+                        f"http://127.0.0.1:{proxy.port}/v1/chat/completions",
+                        data=chat("short", "q"),
+                        headers={"Content-Type": "application/json"},
+                    ) as r:
+                        statuses.append(r.status)
+            return statuses, seen["n"], router.snapshot()
         finally:
             await proxy.close()
             server.close()
             await server.wait_closed()
 
-    status, requests, snap = asyncio.run(run())
-    assert status == want_status
-    assert requests == 2  # one resend, never more
+    statuses, requests, snap = asyncio.run(run())
+    assert statuses == want_statuses
+    assert requests == want_requests
+    assert snap["prefix"]["stale_retried"] == want_resends
+
+
+def test_proxy_resends_a_stale_request_once():
+    """Two closes in a row: the resend goes out on a new connection, and a second disconnect is not resent again."""
+
+    async def run():
+        seen = {"n": 0}
+
+        async def handle(reader, writer):
+            while True:
+                try:
+                    head = await reader.readuntil(b"\r\n\r\n")
+                except asyncio.IncompleteReadError:
+                    return
+                length = max(
+                    [int(l.split(":", 1)[1]) for l in head.decode().split("\r\n") if l.lower().startswith("content-l")],
+                    default=0,
+                )
+                await reader.readexactly(length)
+                seen["n"] += 1
+                if seen["n"] > 1:
+                    writer.close()
+                    return
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+                await writer.drain()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        router = lb.Router([f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"])
+        proxy = TestServer(lb.make_app(router), host="127.0.0.1")
+        await proxy.start_server()
+        statuses = []
+        try:
+            async with ClientSession() as session:
+                for _ in range(2):
+                    async with session.post(
+                        f"http://127.0.0.1:{proxy.port}/v1/chat/completions",
+                        data=chat("short", "q"),
+                        headers={"Content-Type": "application/json"},
+                    ) as r:
+                        statuses.append(r.status)
+            return statuses, seen["n"], router.snapshot()
+        finally:
+            await proxy.close()
+            server.close()
+            await server.wait_closed()
+
+    statuses, requests, snap = asyncio.run(run())
+    assert statuses == [200, 500]
+    assert requests == 3  # the stale one and one resend, never more
     assert snap["prefix"]["stale_retried"] == 1
+
+
+# ---------------------------------------------------------------- bodies the shim re-serializes or walks
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"reasoning": {"enabled": False}},
+        {"response_format": {"type": "json_schema", "json_schema": {"name": "answer"}}},
+    ],
+)
+def test_a_rewritten_request_with_a_lone_surrogate_is_forwarded(extra):
+    """``"\ud800"`` is valid JSON with no UTF-8 form. A text request the shim rewrites (any ``reasoning`` object, a
+    schema-less ``json_schema``) is forwarded with its non-ASCII characters escaped, as it arrived, instead of raising
+    UnicodeEncodeError (a 500)."""
+    raw = ('{"model":"m","messages":[{"role":"user","content":"\\ud800 hi \\u4f60\\u597d"}]}')[:-1].encode()
+    raw += b"," + json.dumps(extra)[1:].encode()
+    body, hashes = lb.prepare("/v1/chat/completions", raw, lb.Shim(), 256)
+    assert body != raw and body.isascii()
+    sent = json.loads(body)
+    assert sent["messages"] == json.loads(raw)["messages"]
+    assert hashes == []  # a short prompt; keyed without an error
+    # Without a surrogate the rewrite stays UTF-8, not escaped.
+    clean = json.dumps(dict({"model": "m", "messages": [{"role": "user", "content": "你好"}]}, **extra)).encode()
+    assert "你好".encode() in lb.prepare("/v1/chat/completions", clean, lb.Shim(), 256)[0]
+
+
+def test_answer_from_reasoning_with_a_lone_surrogate():
+    body = b'{"choices":[{"finish_reason":"stop","message":{"content":null,"reasoning":"\\ud83d words"}}]}'
+    out, changed = lb.answer_from_reasoning(body)
+    assert changed == 1 and json.loads(out)["choices"][0]["message"]["content"] == "\ud83d words"
+
+
+def nested(depth, leaf):
+    return b'{"a":[' * depth + leaf + b"]}" * depth
+
+
+@pytest.mark.parametrize("depth", [300, 20000])
+def test_deeply_nested_json_is_a_400_not_a_500(depth, expect_error):
+    """A body nested beyond the recursion limit (in json itself or in the shim's walks) is a ShimError, answered 400;
+    one nested a few hundred levels (a frame per level in ``media_key_view``, also on Python 3.10) is served."""
+    deep = nested(depth, b'{"image_url":"https://h/x.png"}').decode()
+    raw = ('{"model":"m","messages":[{"role":"user","content":[' + deep + "]}]}").encode()
+    if depth < 400:
+        body, _ = lb.prepare("/v1/chat/completions", raw, lb.Shim(), 256)
+        assert body is raw
+        return
+    with expect_error(lb.ShimError, "nested too deeply"):
+        lb.prepare("/v1/chat/completions", raw, lb.Shim(), 256)
+
+    async def run(session, url, router, backends):
+        async with session.post(url + "/v1/chat/completions", data=raw) as r:
+            return r.status, await r.json(), router.snapshot()
+
+    status, out, snap = asyncio.run(with_proxy([fake_engine("A")], run))
+    assert status == 400 and out["error"]["message"] == lb.TOO_DEEP
+    assert snap["prefix"]["shim_rejected"] == 1 and sum(snap["served"].values()) == 0
+
+
+def test_media_key_view_takes_one_frame_per_level():
+    import sys
+
+    levels = (sys.getrecursionlimit() - 200) // 2  # dict and list alternate: two calls per '{"a":[' level
+    obj = json.loads(nested(levels, b'{"image_url":"data:image/png;base64,AAAA"}'))
+    view = lb.media_key_view(obj)
+    assert view is not obj and json.dumps(view).count("<media sha256:") > 0
 
 
 @pytest.mark.parametrize(
