@@ -52,4 +52,3 @@ def uncovered_class_lengths(padded_lengths: Iterable[int], sp_factor: int) -> li
         if cls.name not in covered and lengths[0] < first < lengths[-1]:
             out.append(first)
     return out
-
