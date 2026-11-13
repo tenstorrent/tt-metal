@@ -11,8 +11,8 @@
 #include <fmt/format.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
@@ -20,28 +20,28 @@
 
 namespace ttnn::prim {
 
+using tt::tt_metal::AddRuntimeArgsForNode;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
-using tt::tt_metal::experimental::AddRuntimeArgsForNode;
-using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementHardwareConfig;
-using tt::tt_metal::experimental::DedicatedNocSharing;
-using tt::tt_metal::experimental::DFBBinding;
-using tt::tt_metal::experimental::DFBEndpointType;
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::Group;
-using tt::tt_metal::experimental::KernelRunArgs;
-using tt::tt_metal::experimental::KernelSpec;
-using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::DataflowBufferSpec;
+using tt::tt_metal::DataMovementHardwareConfig;
+using tt::tt_metal::DedicatedNocSharing;
+using tt::tt_metal::DFBBinding;
+using tt::tt_metal::DFBEndpointType;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::Group;
+using tt::tt_metal::KernelRunArgs;
+using tt::tt_metal::KernelSpec;
+using tt::tt_metal::KernelSpecName;
+using tt::tt_metal::ProgramRunArgs;
+using tt::tt_metal::ProgramSpec;
+using tt::tt_metal::TensorParameter;
+using tt::tt_metal::TensorParamName;
+using tt::tt_metal::WorkUnitSpec;
 using tt::tt_metal::experimental::PrefetcherPipeArgument;
 using tt::tt_metal::experimental::PrefetcherPipeParameter;
 using tt::tt_metal::experimental::PrefetcherPipeParamName;
-using tt::tt_metal::experimental::ProgramRunArgs;
-using tt::tt_metal::experimental::ProgramSpec;
-using tt::tt_metal::experimental::TensorParameter;
-using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::WorkUnitSpec;
 
 ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_program_artifacts(
     const DramPrefetcherParams& operation_attributes,

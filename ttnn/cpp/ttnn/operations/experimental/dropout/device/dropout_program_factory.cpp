@@ -11,8 +11,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <internal/mesh_device.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -28,16 +28,16 @@ constexpr auto kComputeKernelPath =
 
 // Spec names. The kernels reach the DFBs as dfb::in0 / dfb::out and the tensors as
 // tensor::input / tensor::output.
-const tt::tt_metal::experimental::KernelSpecName kReader{"reader"};
-const tt::tt_metal::experimental::KernelSpecName kWriter{"writer"};
-const tt::tt_metal::experimental::KernelSpecName kComputeGroup1{"compute_g1"};
-const tt::tt_metal::experimental::KernelSpecName kComputeGroup2{"compute_g2"};
+const tt::tt_metal::KernelSpecName kReader{"reader"};
+const tt::tt_metal::KernelSpecName kWriter{"writer"};
+const tt::tt_metal::KernelSpecName kComputeGroup1{"compute_g1"};
+const tt::tt_metal::KernelSpecName kComputeGroup2{"compute_g2"};
 
-const tt::tt_metal::experimental::DFBSpecName kSrc0Dfb{"in0"};
-const tt::tt_metal::experimental::DFBSpecName kOutputDfb{"out"};
+const tt::tt_metal::DFBSpecName kSrc0Dfb{"in0"};
+const tt::tt_metal::DFBSpecName kOutputDfb{"out"};
 
-const tt::tt_metal::experimental::TensorParamName kInputTensor{"input"};
-const tt::tt_metal::experimental::TensorParamName kOutputTensor{"output"};
+const tt::tt_metal::TensorParamName kInputTensor{"input"};
+const tt::tt_metal::TensorParamName kOutputTensor{"output"};
 
 constexpr uint32_t kNumInputTiles = 2;
 constexpr uint32_t kNumOutputTiles = 2;
@@ -83,31 +83,31 @@ using namespace tt::constants;
  *        used during runtime argument setup.
  */
 struct DropoutKernels {
-    tt::tt_metal::experimental::KernelSpec reader;
-    tt::tt_metal::experimental::KernelSpec writer;
-    tt::tt_metal::experimental::KernelSpec compute_group_1;
-    std::optional<tt::tt_metal::experimental::KernelSpec> compute_group_2;
+    tt::tt_metal::KernelSpec reader;
+    tt::tt_metal::KernelSpec writer;
+    tt::tt_metal::KernelSpec compute_group_1;
+    std::optional<tt::tt_metal::KernelSpec> compute_group_2;
 };
 
 /**
  *   Helper struct to hold the runtime arguments of every kernel in DropoutKernels.
  */
 struct DropoutKernelRunArgs {
-    tt::tt_metal::experimental::KernelRunArgs reader{.kernel = kReader};
-    tt::tt_metal::experimental::KernelRunArgs writer{.kernel = kWriter};
-    tt::tt_metal::experimental::KernelRunArgs compute_group_1{.kernel = kComputeGroup1};
-    std::optional<tt::tt_metal::experimental::KernelRunArgs> compute_group_2;
+    tt::tt_metal::KernelRunArgs reader{.kernel = kReader};
+    tt::tt_metal::KernelRunArgs writer{.kernel = kWriter};
+    tt::tt_metal::KernelRunArgs compute_group_1{.kernel = kComputeGroup1};
+    std::optional<tt::tt_metal::KernelRunArgs> compute_group_2;
 };
 
 /**
  *   Create and configure a dataflow buffer spec.
  */
-inline tt::tt_metal::experimental::DataflowBufferSpec create_dataflow_buffer(
-    const tt::tt_metal::experimental::DFBSpecName& dfb_name,
+inline tt::tt_metal::DataflowBufferSpec create_dataflow_buffer(
+    const tt::tt_metal::DFBSpecName& dfb_name,
     tt::DataFormat data_format,
     uint32_t single_tile_size,
     uint32_t num_tiles) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
 
     return DataflowBufferSpec{
         .unique_id = dfb_name,
@@ -120,8 +120,8 @@ inline tt::tt_metal::experimental::DataflowBufferSpec create_dataflow_buffer(
 /**
  *   Create a reader kernel spec.
  */
-inline tt::tt_metal::experimental::KernelSpec create_reader_kernel(std::string_view kernel_path) {
-    using namespace tt::tt_metal::experimental;
+inline tt::tt_metal::KernelSpec create_reader_kernel(std::string_view kernel_path) {
+    using namespace tt::tt_metal;
 
     return KernelSpec{
         .unique_id = kReader,
@@ -149,8 +149,8 @@ inline tt::tt_metal::experimental::KernelSpec create_reader_kernel(std::string_v
 /**
  *   Create a writer kernel spec.
  */
-inline tt::tt_metal::experimental::KernelSpec create_writer_kernel(std::string_view kernel_path) {
-    using namespace tt::tt_metal::experimental;
+inline tt::tt_metal::KernelSpec create_writer_kernel(std::string_view kernel_path) {
+    using namespace tt::tt_metal;
 
     return KernelSpec{
         .unique_id = kWriter,
@@ -178,12 +178,12 @@ inline tt::tt_metal::experimental::KernelSpec create_writer_kernel(std::string_v
 /**
  * Create a compute kernel spec (for dropout) with the given compile-time arguments.
  */
-inline tt::tt_metal::experimental::KernelSpec create_compute_kernel(
-    const tt::tt_metal::experimental::KernelSpecName& unique_id,
-    tt::tt_metal::experimental::KernelSpec::CompileTimeArgs&& compile_time_args,
+inline tt::tt_metal::KernelSpec create_compute_kernel(
+    const tt::tt_metal::KernelSpecName& unique_id,
+    tt::tt_metal::KernelSpec::CompileTimeArgs&& compile_time_args,
     std::string_view kernel_path,
     bool math_approx_mode) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
 
     return KernelSpec{
         .unique_id = unique_id,
@@ -275,7 +275,7 @@ void for_each_dropout_core(const DropoutCoreSplit& split, const Fn& fn) {
  *        for each core in the grid.
  */
 inline void assign_per_core_runtime_args(DropoutKernelRunArgs& run_args, const DropoutCoreSplit& split, uint32_t seed) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
 
     for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
         // Compute kernel: (seed)
@@ -313,7 +313,6 @@ ttnn::device_operation::ProgramArtifacts DropoutProgramFactory::create_program_a
     const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
@@ -468,12 +467,12 @@ ttnn::device_operation::MeshWorkloadArtifacts DropoutMeshWorkloadFactory::create
     return artifacts;
 }
 
-tt::tt_metal::experimental::ProgramRunArgs DropoutProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs DropoutProgramFactory::override_runtime_arguments(
     const DropoutParams& operation_attributes,
     const DropoutInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
 
@@ -535,7 +534,7 @@ tt::tt_metal::experimental::ProgramRunArgs DropoutProgramFactory::override_runti
     return run_args;
 }
 
-tt::tt_metal::experimental::ProgramRunArgs DropoutMeshWorkloadFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs DropoutMeshWorkloadFactory::override_runtime_arguments(
     const DropoutParams& operation_attributes,
     const DropoutInputs& tensor_args,
     Tensor& tensor_return_value,

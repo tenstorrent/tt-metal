@@ -10,7 +10,7 @@ namespace tt::tt_metal {
 class TensorSpec;
 }  // namespace tt::tt_metal
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 //  TensorSpecRelaxations
@@ -147,4 +147,4 @@ bool tensorspecs_match_with_relaxation(
 std::uint64_t hash_tensorspec_with_relaxation(
     const tt::tt_metal::TensorSpec& spec, const TensorSpecRelaxations& relaxation);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal
