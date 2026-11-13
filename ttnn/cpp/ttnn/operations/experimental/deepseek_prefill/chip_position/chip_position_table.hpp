@@ -36,7 +36,6 @@ std::optional<std::vector<uint32_t>> chip_lookup_table(
     if (std::empty(coords) || !chip_lookup_available()) {
         return std::nullopt;
     }
-    constexpr uint32_t kMaxFabricChips = 256;  // tt::tt_fabric::MAX_MESH_SIZE (hostdevcommon/fabric_common.h)
     std::vector<uint32_t> table;
     std::optional<tt::tt_fabric::MeshId> mesh_id;
     for (const auto& coord : coords) {
@@ -46,7 +45,7 @@ std::optional<std::vector<uint32_t>> chip_lookup_table(
         }
         mesh_id = node.mesh_id;
         const uint32_t chip = node.chip_id;
-        if (chip >= kMaxFabricChips) {
+        if (chip >= tt::tt_fabric::MAX_MESH_SIZE) {  // the routing table's my_device_id range
             return std::nullopt;
         }
         if (table.size() <= chip) {

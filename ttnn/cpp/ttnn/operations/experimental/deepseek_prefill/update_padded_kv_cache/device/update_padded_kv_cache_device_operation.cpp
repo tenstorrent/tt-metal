@@ -637,10 +637,10 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     auto* device = input.device();
     const bool has_metadata = tensor_args.slot_idx.has_value();
     const bool has_valid = tensor_args.valid_global.has_value() || args.valid_global.has_value();
-    // linear_coord comes from the chip table (whole mesh, or only `coord`'s entry); nothing else uses `coord`.
-    const auto mesh_chip_table = whole_mesh_chip_table(args, tensor_args);
-    const std::vector<uint32_t> chip_table =
-        mesh_chip_table.value_or(std::vector<uint32_t>{linear_coord_of(args, tensor_args, coord)});
+    // linear_coord comes from the whole-mesh chip table, else (a per-chip program) common arg 0, which keeps it out
+    // of the compile-time args so every chip shares one kernel binary. Nothing else uses `coord`.
+    const std::vector<uint32_t> chip_table = whole_mesh_chip_table(args, tensor_args).value_or(std::vector<uint32_t>{});
+    const uint32_t linear_coord = chip_table.empty() ? linear_coord_of(args, tensor_args, coord) : 0;
 
     const auto& cache_shape = cache.padded_shape();
     const auto& input_shape = input.padded_shape();
@@ -701,8 +701,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
     // KV dedup: sp and tp linearize to ONE block-cyclic axis of size sp*tp (tp_factor=1 without tp_axis).
     const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
-    const uint32_t linear_factor = sp_factor * tp_factor;           // effective block-cyclic chip count
-    const uint32_t chunk_local_t = window_Ht / tp_factor;           // tile-rows THIS chip actually writes
+    const uint32_t linear_factor = sp_factor * tp_factor;  // effective block-cyclic chip count
+    const uint32_t chunk_local_t = window_Ht / tp_factor;  // tile-rows THIS chip actually writes
 
     // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == window_Ht at tp=1).
     const uint32_t num_blocks_of_work = input_shape[1] * chunk_local_t;
@@ -836,17 +836,17 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.config = WriterConfigDescriptor{};
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
-    // 0-7 are structural (constant for this cached program): 0 is unused (linear_coord is in the chip table),
-    // linear_factor/chunk_local_t describe the sp*tp axis, layer_idx is hashed. Indices 8 and 9 carry the
-    // per-call values that override_runtime_arguments patches on cache hits (the buffer-binding fast
-    // path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
+    // 0-7 are structural (constant for this cached program): linear_coord (0 with a chip table, which then holds
+    // it)/linear_factor/chunk_local_t are this chip's position on the linearized sp*tp axis, layer_idx is hashed.
+    // Indices 8 and 9 carry the per-call values that override_runtime_arguments patches on cache hits (the
+    // buffer-binding fast path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
     // [9]=kv_actual_global tensor's raw DRAM address; scalar path -> [8]=slot_idx, [9]=kv_actual_global.
     // The kernel composes batch_idx = slot_idx*num_layers + layer_idx.
     if (has_metadata) {
         const uint32_t slot_idx_addr = tensor_args.slot_idx->mesh_buffer().address();
         const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->mesh_buffer().address();
         writer_kernel.emplace_common_runtime_args({
-            0,  // unused (linear_coord)
+            linear_coord,
             linear_factor,
             chunk_local_t,
             args.layer_idx,
@@ -863,7 +863,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
-            0,  // unused (linear_coord)
+            linear_coord,
             linear_factor,
             chunk_local_t,
             args.layer_idx,
@@ -884,7 +884,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     const uint32_t reader_kv_actual =
         has_metadata ? tensor_args.kv_actual_global->mesh_buffer().address() : args.kv_actual_global;
     reader_kernel.emplace_common_runtime_args({
-        0,  // unused (linear_coord)
+        linear_coord,
         linear_factor,
         chunk_local_t,
         window_Ht,
@@ -913,9 +913,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         reader_kernel.emplace_common_runtime_args({tensor_args.scales->buffer()});
     }
     writer_kernel.emplace_common_runtime_args({dst_buffer});
-    // The chip table follows the other compile-time args (cache_dataflow_helpers.hpp).
+    // The chip table (size 0 without one) follows the other compile-time args (cache_dataflow_helpers.hpp).
     for (KernelDescriptor* kernel : {&reader_kernel, &writer_kernel}) {
-        kernel->named_compile_time_args.emplace_back("chip_lookup", static_cast<uint32_t>(mesh_chip_table.has_value()));
         kernel->named_compile_time_args.emplace_back(
             "chip_table_offset", static_cast<uint32_t>(kernel->compile_time_args.size()));
         kernel->named_compile_time_args.emplace_back("chip_table_size", static_cast<uint32_t>(chip_table.size()));

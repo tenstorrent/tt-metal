@@ -26,13 +26,18 @@ inline uint32_t read_metadata(Noc& noc, const CircularBuffer& scratch, uint32_t 
     return CoreLocalMem<volatile uint32_t>(scratch.get_write_ptr())[0];
 }
 
-// This chip's position on the linearized sp*tp axis, from the chip table appended to the compile-time args.
+// This chip's position on the linearized sp*tp axis: from the whole-mesh chip table appended to the compile-time
+// args, or, without one (a per-chip program), common runtime arg 0.
 inline uint32_t linear_coord_from_chip_table() {
-    constexpr uint32_t offset = get_named_compile_time_arg_val("chip_table_offset");
     constexpr uint32_t size = get_named_compile_time_arg_val("chip_table_size");
-    const uint32_t index = deepseek_prefill::chip_table_index<get_named_compile_time_arg_val("chip_lookup") != 0>();
-    ASSERT(index < size);
-    return kernel_compile_time_args[offset + index];
+    if constexpr (size == 0) {
+        return get_common_arg_val<uint32_t>(0);
+    } else {
+        constexpr uint32_t offset = get_named_compile_time_arg_val("chip_table_offset");
+        const uint32_t index = deepseek_prefill::chip_table_index<true>();
+        ASSERT(index < size);
+        return kernel_compile_time_args[offset + index];
+    }
 }
 
 }  // namespace kv_cache_dataflow

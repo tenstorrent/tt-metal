@@ -878,8 +878,8 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    // kv_actual_global is not hashed and can change per chunk; per-core RTAs and my_sp_coord are stable
-    // (same shapes / same coordinate), so a cache hit only refreshes tensor addresses and, on the scalar
+    // kv_actual_global is not hashed and can change per chunk; per-core RTAs and the chip table are stable
+    // (same shapes / same coordinates), so a cache hit only refreshes tensor addresses and, on the scalar
     // path, the kv_actual_global common arg. The metadata path advances the value on-device (the reader
     // re-reads element [0]), so only its tensor address needs refreshing. has_metadata is hashed, so it
     // matches the cached program on every hit -- read it straight from tensor_args. The run args are

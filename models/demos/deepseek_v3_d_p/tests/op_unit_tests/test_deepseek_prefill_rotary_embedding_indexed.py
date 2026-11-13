@@ -509,6 +509,119 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
     logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} chunks")
 
 
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [*_mesh_variants((2, 2)), *_mesh_variants((2, 4))], indirect=True
+)
+def test_rotary_embedding_indexed_repeated_cache_hits(mesh_device):
+    """Cache hits skip the run-arg update when tensor addresses and kv_actual_global repeat.
+
+    Every output is checked against torch across: identical repeated calls, new input data at the same
+    address, a changed scalar kv_actual_global, an input reallocated at a new address, the metadata path
+    with its value changed in place, and a command list recorded after operands were replaced by new
+    buffers at the same addresses (recording always updates)."""
+    sp_axis = 0
+    sp = mesh_device.shape[sp_axis]
+    C = 4 * ttnn.TILE_SIZE  # per-chip chunk (tokens)
+    chunk_global = C * sp
+    cache_global = 512 * sp
+    cos_full, sin_full = _make_cos_sin(cache_global, ROPE_HEAD_DIM)
+
+    def upload(tensor, mesh_mapper):
+        return ttnn.from_torch(
+            tensor,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
+    shard_seq = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, None))
+    cos_tt = upload(block_cyclic_reorder(cos_full, C, sp, seq_dim=2), shard_seq)
+    sin_tt = upload(block_cyclic_reorder(sin_full, C, sp, seq_dim=2), shard_seq)
+    trans_tt = upload(get_rot_transformation_mat(), ttnn.ReplicateTensorToMesh(mesh_device))
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+
+    def host_value(value):
+        return ttnn.from_torch(
+            torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    def reference(torch_input, kv_actual):
+        positions = _rotated_chip_positions(kv_actual, sp, C)
+        flat = [positions[c][r] for c in range(sp) for r in range(C)]
+        cos_sel = cos_full[0, 0, flat, :].unsqueeze(0).unsqueeze(0)
+        sin_sel = sin_full[0, 0, flat, :].unsqueeze(0).unsqueeze(0)
+        return (torch_input * cos_sel) + (rotate_half(torch_input, meta_style=True) * sin_sel)
+
+    def check(tt_out, torch_input, kv_actual):
+        out = ttnn.to_torch(tt_out, mesh_composer=composer)[:, :1]  # drop the TP-replicated copies
+        assert_with_pcc(reference(torch_input, kv_actual), out, 0.99)
+
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+
+    def run(tt_input, torch_input, start, kv_actual):
+        # Freeing the output lets the next call's output land at the same address, so the run args repeat.
+        out = rope(tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=start, cluster_axis=sp_axis)
+        check(out, torch_input, kv_actual)
+        ttnn.deallocate(out)
+
+    mesh_device.enable_program_cache()
+    torch.manual_seed(0)
+    inputs = [torch.randn(1, 1, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16) for _ in range(4)]
+    kv_a, kv_b = 0, C + ttnn.TILE_SIZE  # slab-aligned, then a boundary chip straddling a slab
+    tt_input = upload(inputs[0], shard_seq)
+
+    run(tt_input, inputs[0], kv_a, kv_a)
+    entries = mesh_device.num_program_cache_entries()
+    run(tt_input, inputs[0], kv_a, kv_a)  # identical call
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(inputs[1], layout=ttnn.TILE_LAYOUT, mesh_mapper=shard_seq), tt_input
+    )
+    run(tt_input, inputs[1], kv_a, kv_a)  # same addresses, new input data
+    run(tt_input, inputs[1], kv_b, kv_b)  # same addresses, new kv_actual_global
+    run(tt_input, inputs[1], kv_a, kv_a)
+
+    # Hold the freed range so the new input lands at a different address.
+    blocker = upload(inputs[1], shard_seq)
+    ttnn.deallocate(tt_input)
+    tt_input = upload(inputs[2], shard_seq)
+    run(tt_input, inputs[2], kv_a, kv_a)
+    ttnn.deallocate(blocker)
+    assert mesh_device.num_program_cache_entries() == entries
+
+    metadata = ttnn.from_torch(
+        torch.tensor([kv_a], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    run(tt_input, inputs[2], metadata, kv_a)
+    ttnn.copy_host_to_device_tensor(host_value(kv_b), metadata)
+    run(tt_input, inputs[2], metadata, kv_b)  # same addresses; the device reads the new value
+
+    # Replace the input with a new buffer at the same address, then record: the recorded bindings must name it.
+    ttnn.deallocate(tt_input)
+    tt_input = upload(inputs[3], shard_seq)
+    builder = ttnn.experimental.CommandListBuilder(mesh_device)
+    command_list = None
+    try:
+        with builder:
+            out = rope(tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=metadata, cluster_axis=sp_axis)
+        command_list = builder.build()
+        ttnn.copy_host_to_device_tensor(host_value(kv_a), metadata)
+        command_list.enqueue(check_dram_overlap=True)
+        check(out, inputs[3], kv_a)
+    finally:
+        if command_list is not None:
+            command_list.deallocate()
+        builder.deallocate()
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 2 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize("rotary_offset", [0, 32])
