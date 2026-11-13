@@ -23,7 +23,6 @@ using cce_dram_unary::Semaphores;
 using cce_dram_unary::Status;
 using cce_dram_unary::write_status;
 using cce_test::arg_u64;
-using cce_test::own_tl1_words;
 using cce_test::poll_bounded;
 
 void kernel_main() {
@@ -54,13 +53,13 @@ void kernel_main() {
             }
             asm volatile("fence r, r" ::: "memory");
 
-            const volatile uint32_t* slot =
-                own_tl1_words(args.staging_offset + static_cast<uint64_t>(chunk % args.num_slots) * args.chunk_bytes);
-            volatile uint32_t* destination = reinterpret_cast<volatile uint32_t*>(experimental::cce_gddr_address(
-                args.local_mimir, destination_offset + static_cast<uint64_t>(chunk) * args.chunk_bytes));
-            for (uint32_t word = 0; word < chunk_words; ++word) {
-                destination[word] = slot[word];
-            }
+            const uint32_t slot = static_cast<uint32_t>(
+                MEM_L1_UNCACHED_BASE + args.staging_offset + (chunk % args.num_slots) * args.chunk_bytes);
+            experimental::cce_gddr_write(
+                args.local_mimir,
+                destination_offset + static_cast<uint64_t>(chunk) * args.chunk_bytes,
+                slot,
+                chunk_words);
             asm volatile("fence r, w" ::: "memory");
             *semaphores.drained = chunk + 1;
             status.chunks_done = chunk + 1;
