@@ -1483,6 +1483,7 @@ const PerDeviceRuntimeArgs::DeviceImages& update_device_images(
     }
 
     // rebuild
+    images.rebuilds++;
     static thread_local std::vector<uint32_t> offsets;  // word offset of each resolved field in `packed`
     offsets.resize(resolved.size());
     uint32_t begin = size_words;
