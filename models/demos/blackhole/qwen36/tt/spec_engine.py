@@ -57,6 +57,8 @@ EAGER_RESEED_PROMPT_LEN = 131072
 MAX_SPEC_ROWS = ttnn.TILE_SIZE
 # Prompt lengths warmed in prepare: exact bucket lengths take the no-mask prefill path, the others the masked one.
 _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 2248, 2448, 2948, 3948, 4096)
+# MTPBlockEngine logs its one-enqueue counts at every this many verifies.
+ONE_ENQUEUE_LOG_EVERY = 100
 # Runner contract: token id for unused tail columns of a returned block.
 PLACEHOLDER_TOKEN_ID = -1
 SPEC_MODES = ("argmax_ids", "logits")
@@ -1875,11 +1877,14 @@ class MTPBlockEngine(MTPSpecEngine):
     def _one_enqueue_ready(self):
         return self._acc_trace is not None and not self._timing
 
-    def shutdown(self):
+    def _log_one_enqueue_counts(self):
         logger.info(
             f"[spec_engine] one-enqueue steps: {self.one_enqueue_steps} of {self.verify_steps} verifies; "
             f"{self.one_enqueue_host_proposes} of them drafted again on the host"
         )
+
+    def shutdown(self):
+        self._log_one_enqueue_counts()
         if self._acc_trace is not None:
             ttnn.release_trace(self.mesh, self._acc_trace)
             self._acc_trace = None
@@ -1961,6 +1966,8 @@ class MTPBlockEngine(MTPSpecEngine):
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
         self._step_pending = None
+        if self.verify_steps % ONE_ENQUEUE_LOG_EVERY == 0:  # a server's engine is killed without a shutdown
+            self._log_one_enqueue_counts()
         self.verify_steps += 1
         B, T = self.B, self.T
         tokens = self._ints(tokens, (B, T))
