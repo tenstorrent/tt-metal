@@ -28,6 +28,12 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import (
+    check_regime,
+    interleaved_ns,
+    read_kernel_ns,
+    spread,
+)
 from ttnn.operations.examples.reduce_block import (
     DIMS,
     POLICIES,
@@ -54,7 +60,6 @@ def _cross_check(out_a, out_b, dim, atol, label):
 
 
 TILE = 32
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 # Per-accum correctness tolerance (max abs err vs fp64 mean) — catches wiring/scale/tile-order bugs while
 # allowing the real bf16 quantization + accumulation error.
@@ -132,28 +137,16 @@ def _check(output, golden, dim, accum, label):
 # =============================================================================
 # In-process device-kernel timing (validated pattern)
 # =============================================================================
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    total, found = 0.0, False
-    for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
 def _measure(device, runners, trials, kernel_iters):
     for run in runners.values():
         run()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
+    read_kernel_ns(device)
     samples = {key: [] for key in runners}
     for trial in range(trials + 1):
         for key, run in runners.items():
             run()
-            duration = _read_kernel_ns(device)
+            duration = read_kernel_ns(device)
             assert duration is not None, f"no profiler data for {key}"
             if trial:
                 samples[key].append(duration / kernel_iters)
@@ -1311,29 +1304,34 @@ def test_reduce_block_within_tile_skip(device):
 # =============================================================================
 # Regimes: where AccumulateViaAdd helps vs does not, vs the library reduce_tile
 # =============================================================================
-# (id, dim, (Ht, Wt, NC), kind, threshold)
-#   helps:          assert speedup (reduce_tile_ns / accumulate_via_add_ns) >= threshold
-#   does_not_help:  assert speedup <= threshold
+# (id, reduce dim, (Ht, Wt, NC) in tiles, kind, measured speedup per arch)
+#   speedup = reduce_tile_ns / accumulate_via_add_ns (baseline `reduce_tile`, lever `accumulate_via_add`; 1 Tensix
+#   core, sharded L1, bf16 in, fp32 accumulation, HiFi4, 200 in-kernel iters, ns per in-kernel iter).
+#   `accumulate_via_add_inline` is measured in the same interleaved rounds and only logged.
+#   measured = {"wh": Wormhole B0 n150, "bh": Blackhole p150b}, from README.md "When it helps".
+# The bound is derived per arch from the number measured on THAT arch by `perf_test_utils.regime_bound`
+# (helps: about half the measured gain, at least the noise margin below it; does_not_help: at most the
+# measured value plus the noise margin, never below 1.0x). An arch with no measured number is logged, not
+# asserted; a missed bound gets one confirmation pass (pooled samples) before it fails. `measure` regimes
+# only log: their verdict differs between boards.
 _REGIME_TRIALS = 11
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only
-# log -- numbers per board in README.md.
+_REGIME_KERNEL_ITERS = 200
 _REGIMES = [
-    ("helps_row_32t", "row", (2, 32, 1), "helps", 1.49),  # WH 2.09x, BH 1.98x
-    ("helps_col_32t", "col", (32, 2, 1), "helps", 1.4),  # WH 1.88x, BH 3.64x
-    ("helps_scalar_32t", "scalar", (4, 8, 1), "helps", 2.0),  # WH 3.04x, BH 4.12x
-    ("not_row_2t", "row", (4, 2, 1), "does_not_help", 1.0),  # WH 0.51x, BH 0.39x
-    ("not_row_4t", "row", (2, 4, 1), "does_not_help", 1.0),  # WH 0.81x, BH 0.66x
-    ("measure_col_4t", "col", (4, 2, 1), "measure", None),  # WH 0.90x, BH 1.11x -- verdict differs
-    ("measure_scalar_4t", "scalar", (2, 2, 1), "measure", None),  # WH 1.02x, BH 1.08x -- verdict differs
+    ("helps_row_32t", "row", (2, 32, 1), "helps", {"wh": 2.09, "bh": 1.98}),
+    ("helps_col_32t", "col", (32, 2, 1), "helps", {"wh": 1.88, "bh": 3.64}),
+    ("helps_scalar_32t", "scalar", (4, 8, 1), "helps", {"wh": 3.04, "bh": 4.12}),
+    ("not_row_2t", "row", (4, 2, 1), "does_not_help", {"wh": 0.51, "bh": 0.39}),
+    ("not_row_4t", "row", (2, 4, 1), "does_not_help", {"wh": 0.81, "bh": 0.66}),
+    ("measure_col_4t", "col", (4, 2, 1), "measure", {"wh": 0.90, "bh": 1.11}),  # verdict differs by arch
+    ("measure_scalar_4t", "scalar", (2, 2, 1), "measure", {"wh": 1.02, "bh": 1.08}),  # verdict differs by arch
 ]
 
 
 @pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
 def test_reduce_block_regimes(device, regime):
-    name, dim, shape, kind, threshold = regime
+    name, dim, shape, kind, measured = regime
     Ht, Wt, NC = shape
     x_dev, golden = _make_input(device, dim, Ht, Wt, NC)
-    kernel_iters = 200
 
     def runner(variant, iters):
         return lambda: run_op(x_dev, variant=variant, dim=dim, Ht=Ht, Wt=Wt, NC=NC, accum="fp32", kernel_iters=iters)
@@ -1342,20 +1340,32 @@ def test_reduce_block_regimes(device, regime):
     for variant in variants:
         _check(runner(variant, 1)(), golden, dim, "fp32", f"{variant}/{dim} {shape}")
 
-    samples = _measure(device, {v: runner(v, kernel_iters) for v in variants}, _REGIME_TRIALS, kernel_iters)
-    med = {v: statistics.median(samples[v]) for v in variants}
-    speedup = med["reduce_tile"] / med["accumulate_via_add"]
-    logger.info(
-        f"[{_arch_label(device)}] {name}: dim={dim} shape(Ht,Wt,NC)={shape} reduced_tiles={ {'row': Wt, 'col': Ht, 'scalar': Ht * Wt}[dim] } "
-        f"out_tiles={out_tile_count(dim, Ht, Wt, NC)} reduce_tile={med['reduce_tile']:.0f} ns "
-        f"(min {min(samples['reduce_tile']):.0f}, max {max(samples['reduce_tile']):.0f}) "
-        f"accumulate_via_add={med['accumulate_via_add']:.0f} ns "
-        f"(min {min(samples['accumulate_via_add']):.0f}, max {max(samples['accumulate_via_add']):.0f}) "
-        f"inline={med['accumulate_via_add_inline']:.0f} ns speedup={speedup:.2f}x "
-        f"inline_speedup={med['reduce_tile'] / med['accumulate_via_add_inline']:.2f}x trials={_REGIME_TRIALS}"
+    def measure():
+        samples = interleaved_ns(
+            device,
+            {v: runner(v, _REGIME_KERNEL_ITERS) for v in variants},
+            trials=_REGIME_TRIALS,
+            per_launch_divisor=_REGIME_KERNEL_ITERS,
+        )
+        inline_speedup = statistics.median(samples["reduce_tile"]) / statistics.median(
+            samples["accumulate_via_add_inline"]
+        )
+        logger.info(
+            f"{name}: accumulate_via_add_inline {spread(samples['accumulate_via_add_inline'])} ns, "
+            f"speedup vs reduce_tile {inline_speedup:.3f}x (logged only)"
+        )
+        return samples["reduce_tile"], samples["accumulate_via_add"]
+
+    reduced = {"row": Wt, "col": Ht, "scalar": Ht * Wt}[dim]
+    check_regime(
+        device,
+        name,
+        kind,
+        measured,
+        measure,
+        detail=(
+            f"dim={dim} shape (Ht, Wt, NC)={shape} tiles, {reduced} reduced tiles per output tile, "
+            f"{out_tile_count(dim, Ht, Wt, NC)} output tiles, 1 Tensix core, "
+            f"ns per in-kernel iter (of {_REGIME_KERNEL_ITERS})"
+        ),
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"{name}: speedup {speedup:.2f}x < {threshold}"
-    elif kind == "does_not_help":
-        assert speedup <= threshold, f"{name}: speedup {speedup:.2f}x > {threshold}"
-    # kind == "measure": correctness is checked above, the speedup is only logged

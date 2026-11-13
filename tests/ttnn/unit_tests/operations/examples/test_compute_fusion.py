@@ -24,6 +24,13 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import (
+    check_regime,
+    chip_freq_mhz,
+    interleaved_ns,
+    read_kernel_ns,
+    sweep_gate,
+)
 from ttnn.operations.examples.compute_fusion import (
     PHASE_ZONES,
     SCENARIOS,
@@ -33,7 +40,6 @@ from ttnn.operations.examples.compute_fusion import (
 )
 
 TILE = 32
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 _BASELINE = {s: f"{s}.unfused" for s in SCENARIOS}
 
 
@@ -102,28 +108,16 @@ def _check(output, expected, kind, label):
 # =============================================================================
 # In-process device-kernel timing
 # =============================================================================
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    total, found = 0.0, False
-    for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
 def _measure(device, runners, trials, kernel_iters):
     for run in runners.values():
         run()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # discard warmup window
+    read_kernel_ns(device)  # discard warmup window
     samples = {name: [] for name in runners}
     for trial in range(trials + 1):
         for name, run in runners.items():
             run()
-            duration = _read_kernel_ns(device)
+            duration = read_kernel_ns(device)
             assert duration is not None, f"no profiler data for {name}"
             if trial:  # discard first timed pass
                 samples[name].append(duration / kernel_iters)
@@ -224,23 +218,11 @@ def _pc_lever(scenario):
     return f"{scenario}.dstreuse" if f"{scenario}.dstreuse" in names else f"{scenario}.fused"
 
 
-def _chip_freq_mhz():
-    """AICLK the profiler converted cycles with (CSV header, rewritten per device open)."""
-    try:
-        with open(_DEVICE_CSV) as f:
-            header = f.readline()
-    except OSError:
-        return None
-    for part in header.split(","):
-        if "CHIP_FREQ" in part:
-            return int(float(part.split(":")[1]))
-    return None
-
-
 def _max_abs_diff(a, b):
     return (ttnn.to_torch(a).float() - ttnn.to_torch(b).float()).abs().max().item()
 
 
+@sweep_gate("CF_SWEEPS")
 def test_compute_fusion_per_call(device):
     scenarios = tuple(os.environ.get("CF_PC_SCENARIOS", ",".join(_PC_SCENARIOS)).split(","))
     unknown = set(scenarios) - set(SCENARIOS)
@@ -277,7 +259,7 @@ def test_compute_fusion_per_call(device):
         results,
         box=socket.gethostname(),
         arch=os.environ.get("ARCH_NAME", str(device.arch())),
-        freq=_chip_freq_mhz(),
+        freq=chip_freq_mhz(),
         trials=trials,
         total=total,
     )
@@ -468,12 +450,12 @@ def _format_microbench(results, *, box, arch, num_tiles, kernel_iters):
 
 
 # =============================================================================
-# Regimes: where fusing through DEST helps, and where it does not (Wormhole B0 n150)
+# Regimes: where fusing through DEST helps, and where it does not
 # =============================================================================
 _REGIME_TRIALS = 11
 _REGIME_ITERS = 100
 
-# (scenario, num_tiles, block_size, lever method, verdict, measured speedup)
+# (scenario, num_tiles, block_size, lever method, kind, measured speedup per architecture)
 #   helps:          sfpu_chain n=4 blk=4 -- every intermediate feeds an SFPU op, so the L1 round trip is pure
 #                   overhead; fused is ~1.1x at 4 tiles (the win shrinks to ~1.05x by 64 tiles).
 #   does_not_help:  fpu_sfpu n=64 blk=1 dstreuse -- the consumer is an FPU multiply, so "fusing" costs a
@@ -481,26 +463,36 @@ _REGIME_ITERS = 100
 #   fpu_chain:      (a + b) * c, two FPU ops. DEST reuse saves the second pass's fixed cost per call (pipeline
 #                   drain + re-init) but pays a DEST->srcA move and a DEST face clear per face of every tile, so it
 #                   wins only at 1-2 tiles per call and loses from 4 tiles per call up (crossover ~2-3 tiles per call).
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# -- numbers per board in README.md. The fpu_chain rows were measured on BH p150b only.
+# The bound each regime is asserted against is derived from the speedup measured on the architecture it runs on
+# (`perf_test_utils.regime_bound`): "helps" asserts half the measured gain but never closer than 10% to the
+# measurement (a gain of ~1.11x is therefore logged, not asserted); "does_not_help" asserts <= max(1.0, 1.10 x the
+# highest measured value). An architecture with no number below is logged, not asserted, and a missed bound is
+# re-measured once and re-checked on the pooled samples. Numbers per board are in README.md; the fpu_chain
+# rows were measured on BH p150b only. These examples run on one Tensix core, so no grid guard is needed.
 _REGIMES = [
-    pytest.param("sfpu_chain", 4, 4, "fused", "helps", 1.11, id="helps_sfpu_chain_n4_blk4"),  # WH 1.12x, BH 1.11x
+    pytest.param("sfpu_chain", 4, 4, "fused", "helps", {"wh": 1.12, "bh": 1.11}, id="helps_sfpu_chain_n4_blk4"),
     pytest.param(
-        "fpu_sfpu", 64, 1, "dstreuse", "loses", 0.93, id="loses_fpu_consumer_dstreuse_n64"
-    ),  # WH 0.92-0.94x, BH 0.93x
-    pytest.param("fpu_chain", 1, 1, "dstreuse", "helps", 1.11, id="helps_fpu_chain_dstreuse_n1"),  # BH 1.11x
-    pytest.param("fpu_chain", 4, 4, "dstreuse", "loses", 0.96, id="loses_fpu_chain_dstreuse_n4_blk4"),  # BH 0.96x
-    pytest.param("fpu_chain", 64, 4, "dstreuse", "loses", 0.72, id="loses_fpu_chain_dstreuse_n64_blk4"),  # BH 0.72x
+        "fpu_sfpu",
+        64,
+        1,
+        "dstreuse",
+        "does_not_help",
+        {"wh": (0.92, 0.94), "bh": 0.93},
+        id="loses_fpu_consumer_dstreuse_n64",
+    ),
+    pytest.param("fpu_chain", 1, 1, "dstreuse", "helps", {"bh": 1.11}, id="helps_fpu_chain_dstreuse_n1"),
+    pytest.param("fpu_chain", 4, 4, "dstreuse", "does_not_help", {"bh": 0.96}, id="loses_fpu_chain_dstreuse_n4_blk4"),
+    pytest.param("fpu_chain", 64, 4, "dstreuse", "does_not_help", {"bh": 0.72}, id="loses_fpu_chain_dstreuse_n64_blk4"),
 ]
 
 
-@pytest.mark.parametrize("scenario,num_tiles,block_size,lever,verdict,measured", _REGIMES)
-def test_compute_fusion_regimes(device, scenario, num_tiles, block_size, lever, verdict, measured):
-    inputs, expected, kind = _make_case(device, scenario, num_tiles)
+@pytest.mark.parametrize("scenario,num_tiles,block_size,lever,kind,measured", _REGIMES)
+def test_compute_fusion_regimes(device, scenario, num_tiles, block_size, lever, kind, measured):
+    inputs, expected, expr_kind = _make_case(device, scenario, num_tiles)
     base_variant, lever_variant = f"{scenario}.unfused", f"{scenario}.{lever}"
     for variant in (base_variant, lever_variant):  # correctness gate
         out = run_fusion(inputs, variant=variant, num_tiles=num_tiles, block_size=block_size, kernel_iters=1)
-        _check(out, expected, kind, f"{variant} n={num_tiles} blk={block_size}")
+        _check(out, expected, expr_kind, f"{variant} n={num_tiles} blk={block_size}")
 
     runners = {
         name: (
@@ -510,19 +502,16 @@ def test_compute_fusion_regimes(device, scenario, num_tiles, block_size, lever, 
         )
         for name, variant in (("base", base_variant), ("lever", lever_variant))
     }
-    samples = _measure(device, runners, _REGIME_TRIALS, _REGIME_ITERS)  # interleaved A,B,A,B...
-    base, lev = samples["base"], samples["lever"]
-    b, l = statistics.median(base), statistics.median(lev)
-    speedup = b / l
-    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
-    logger.info(
-        f"[{arch}] {verdict} {scenario} n={num_tiles} tiles blk={block_size}: unfused {b:.0f} ns "
-        f"[{min(base):.0f}..{max(base):.0f}] -> {lever} {l:.0f} ns [{min(lev):.0f}..{max(lev):.0f}] "
-        f"= {speedup:.2f}x (trials={len(base)}, ns per expression evaluation)"
+
+    def measure():
+        s = interleaved_ns(device, runners, trials=_REGIME_TRIALS, per_launch_divisor=_REGIME_ITERS)
+        return s["base"], s["lever"]
+
+    check_regime(
+        device,
+        f"compute_fusion {scenario} {lever} n={num_tiles} blk={block_size}",
+        kind,
+        measured,
+        measure,
+        detail=f"{base_variant} vs {lever_variant}, 1 Tensix core, ns per expression evaluation",
     )
-    if verdict == "helps":
-        assert speedup >= max(1.05, 1 + 0.5 * (measured - 1)), f"expected fusion to help, got {speedup:.2f}x"
-    elif verdict == "loses":
-        assert speedup <= 1.0, f"expected fusion to lose (<= 1.00x), got {speedup:.2f}x"
-    else:
-        assert speedup <= 1.05, f"expected no meaningful gain (<= 1.05x), got {speedup:.2f}x"

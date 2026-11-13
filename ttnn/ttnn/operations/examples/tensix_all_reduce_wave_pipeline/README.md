@@ -82,7 +82,7 @@ measured.
 
 ## Run the predefined sweep (regenerates `report.md`)
 ```bash
-WP_TRIALS=3 WP_REPORT=ttnn/ttnn/operations/examples/tensix_all_reduce_wave_pipeline/report.md \
+EXAMPLES_SWEEPS=1 WP_TRIALS=3 WP_REPORT=ttnn/ttnn/operations/examples/tensix_all_reduce_wave_pipeline/report.md \
   scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce_wave_pipeline.py
 ```
 

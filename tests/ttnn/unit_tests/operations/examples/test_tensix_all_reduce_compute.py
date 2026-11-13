@@ -18,13 +18,12 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import check_regime, interleaved_ns
 from ttnn.operations.examples.tensix_all_reduce_compute import (
     VARIANTS,
     create_sharded_memory_config,
     reduce_blocks,
 )
-
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 
 def _selected_variants():
@@ -67,33 +66,9 @@ def _run_checked(tt_input, expected, variant, num_blocks, num_tiles, kernel_iter
     return output
 
 
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    total = 0.0
-    found = False
-    for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
 def _measure(device, runners, trials, kernel_iters):
-    for run in runners.values():
-        run()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
-    samples = {variant: [] for variant in runners}
-    for trial in range(trials + 1):
-        for variant, run in runners.items():
-            run()
-            duration = _read_kernel_ns(device)
-            assert duration is not None
-            if trial:
-                samples[variant].append(duration / kernel_iters)
-    return samples
+    """{variant: [ns per kernel iteration, ...]}; warm-up and per-launch timing follow `interleaved_ns`."""
+    return interleaved_ns(device, runners, trials=trials, per_launch_divisor=kernel_iters)
 
 
 def _format_report(results, *, box, arch, num_tiles, trials, kernel_iters):
@@ -162,15 +137,33 @@ def test_tensix_all_reduce_compute_device_perf(device):
         Path(report_path).write_text(report)
 
 
-# (id, baseline variant, lever variant, num_blocks, num_tiles, kernel_iters, kind, threshold)
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only
-# log -- numbers per board in README.md.
+# (id, baseline variant, lever variant, num_blocks, num_tiles, kernel_iters, kind, measured)
+# The bound is derived from the per-arch measured speedup by `perf_test_utils.regime_bound` (helps: half the
+# measured gain, never closer than the noise margin; does_not_help: at most the measured value plus the noise
+# margin, never below 1.0). An architecture without a measured number is logged, not asserted; a missed bound
+# is re-measured once and the samples are pooled. `measure` regimes flip between boards and only log -- numbers
+# per board in README.md. Every case runs on one Tensix core, so no grid guard is needed.
 _REGIMES = [
-    # WH 5.89x, BH 9.37x
-    ("helps_8blocks_6tiles_steady", "sfpu_serial_bf16", "fpu_dest_reuse_fp32", 8, 6, 100, "helps", 3.9),
-    # WH 1.38x, BH 1.30x
-    ("helps_weakly_2blocks_1tile_single_call", "sfpu_serial_bf16", "fpu_dest_reuse_fp32", 2, 1, 1, "helps", 1.14),
-    # WH 1.03x, BH 0.94x
+    (
+        "helps_8blocks_6tiles_steady",
+        "sfpu_serial_bf16",
+        "fpu_dest_reuse_fp32",
+        8,
+        6,
+        100,
+        "helps",
+        {"wh": 5.89, "bh": 9.37},
+    ),
+    (
+        "helps_weakly_2blocks_1tile_single_call",
+        "sfpu_serial_bf16",
+        "fpu_dest_reuse_fp32",
+        2,
+        1,
+        1,
+        "helps",
+        {"wh": 1.38, "bh": 1.30},
+    ),
     (
         "does_not_help_dst_precision_16blocks",
         "fpu_dest_reuse_bf16",
@@ -179,20 +172,20 @@ _REGIMES = [
         6,
         100,
         "does_not_help",
-        1.05,
+        {"wh": 1.03, "bh": 0.94},
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "baseline, lever, num_blocks, num_tiles, kernel_iters, kind, threshold",
+    "baseline, lever, num_blocks, num_tiles, kernel_iters, kind, measured",
     [r[1:] for r in _REGIMES],
     ids=[r[0] for r in _REGIMES],
 )
 def test_tensix_all_reduce_compute_regimes(
-    device, baseline, lever, num_blocks, num_tiles, kernel_iters, kind, threshold
+    device, baseline, lever, num_blocks, num_tiles, kernel_iters, kind, measured, request
 ):
-    """Interleaved A/B (baseline, lever, baseline, ...) of one lever; median of 11 retained trials."""
+    """Interleaved A/B (baseline, lever, baseline, ...) of one lever."""
     trials = 11
     tt_input, expected = _make_input(device, num_blocks, num_tiles)
     for variant in (baseline, lever):
@@ -203,18 +196,16 @@ def test_tensix_all_reduce_compute_regimes(
         )
         for variant in (baseline, lever)
     }
-    samples = _measure(device, runners, trials, kernel_iters)
-    base_ns = statistics.median(samples[baseline])
-    lever_ns = statistics.median(samples[lever])
-    speedup = base_ns / lever_ns
-    logger.info(
-        f"REGIME {kind} blocks={num_blocks} tiles/block={num_tiles} kernel_iters={kernel_iters} "
-        f"{baseline}={base_ns:.1f}ns [{min(samples[baseline]):.1f}-{max(samples[baseline]):.1f}] "
-        f"{lever}={lever_ns:.1f}ns [{min(samples[lever]):.1f}-{max(samples[lever]):.1f}] "
-        f"speedup={speedup:.3f}x trials={trials} arch={device.arch()}"
+
+    def measure():
+        samples = _measure(device, runners, trials, kernel_iters)
+        return samples[baseline], samples[lever]
+
+    check_regime(
+        device,
+        request.node.callspec.id,
+        kind,
+        measured,
+        measure,
+        detail=f"{num_blocks} blocks x {num_tiles} tiles, {kernel_iters} kernel iterations per launch",
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"expected >= {threshold}x, got {speedup:.3f}x"
-    elif kind == "does_not_help":
-        assert speedup <= threshold, f"expected <= {threshold}x, got {speedup:.3f}x"
-    # kind == "measure": correctness is checked above, the speedup is only logged

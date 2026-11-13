@@ -197,11 +197,11 @@ the ~190 GB/s DRAM peak, and is flat from ≈32 Tensix cores up (bf16).
 
 | regime / source | shape | Tensix cores | tiles per Tensix core | trap median ns (GB/s) | lever median ns (GB/s) | speedup | current test asserts |
 |---|---|--:|--:|---|---|--:|---|
-| helps_1core_256tiles | 512×512 | 1 | 256 | 118883.4 (118455.8–118975.2), 8.8 | 40360.5 (40346.4–40451.0), 26.0 | 2.95× | ≥ 1.8× |
-| helps_8cores_512tiles_per_core | 2048×2048 | 8 | 512 | 238574.5 (238003.2–238816.2), 70.3 | 86107.6 (85914.2–86713.0), 194.8 | 2.77× | ≥ 1.85× |
+| helps_1core_256tiles | 512×512 | 1 | 256 | 118883.4 (118455.8–118975.2), 8.8 | 40360.5 (40346.4–40451.0), 26.0 | 2.95× | helps, `measured` WH 2.63× / BH 2.95× (bound from `regime_bound`) |
+| helps_8cores_512tiles_per_core | 2048×2048 | 8 | 512 | 238574.5 (238003.2–238816.2), 70.3 | 86107.6 (85914.2–86713.0), 194.8 | 2.77× | helps, `measured` WH 2.73× / BH 2.77× |
 | probe | 2048×2048 | 16 | 256 | 121075 (138.6) | 49568 (338.5) | 2.44× | — |
 | probe | 2048×2048 | 32 | 128 | 66587 (252.0) | 43079 (389.5) | 1.55× | — |
-| small_64cores_64tiles_per_core | 2048×2048 | 64 | 64 | 44142.8 (43793.0–44766.4), 380.1 | 40994.4 (40815.6–41233.2), 409.3 | 1.08× | ≤ 1.15× (WH 0.98×) |
+| small_64cores_64tiles_per_core | 2048×2048 | 64 | 64 | 44142.8 (43793.0–44766.4), 380.1 | 40994.4 (40815.6–41233.2), 409.3 | 1.08× | does_not_help, `measured` WH 0.98× / BH 1.08×; skips below 64 Tensix cores |
 | small_120cores_34tiles_per_core | 2048×2048 | 120 | ~34 | 43554 (385.2) | 40519 (414.1) | 1.07× | sweep / probe — not asserted |
 | probe | 4096×4096 | 120 | ~137 | 169144 (396.8) | 155676 (431.1) | 1.09× | — |
 

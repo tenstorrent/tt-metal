@@ -26,6 +26,7 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import check_regime, interleaved_ns, read_kernel_ns
 from ttnn.operations.examples.reduce_accumulate import (
     BASELINE,
     DIMS,
@@ -38,7 +39,6 @@ from ttnn.operations.examples.reduce_accumulate import (
 )
 
 TILE = 32
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 _DEFAULT_WIDTHS = (1, 2, 4, 8, 16, 32)  # tiles reduced
 
 # Per-accum correctness tolerance (max abs err vs fp64 mean) — catches wiring/scale bugs while
@@ -99,28 +99,16 @@ def _check(output, golden, dim, accum, label):
 # =============================================================================
 # In-process device-kernel timing (validated pattern)
 # =============================================================================
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    total, found = 0.0, False
-    for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
 def _measure(device, runners, trials, kernel_iters):
     for run in runners.values():
         run()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
+    read_kernel_ns(device)
     samples = {key: [] for key in runners}
     for trial in range(trials + 1):
         for key, run in runners.items():
             run()
-            duration = _read_kernel_ns(device)
+            duration = read_kernel_ns(device)
             assert duration is not None, f"no profiler data for {key}"
             if trial:
                 samples[key].append(duration / kernel_iters)
@@ -229,6 +217,7 @@ def test_reduce_accumulate_device_perf(device):
         arch=_arch_label(device),
         trials=trials,
         kernel_iters=kernel_iters,
+        thresholds={dim: dispatch_min(dim, device) for dim in DIMS},
     )
     logger.info("\n" + report)
     if report_path := os.environ.get("RA_REPORT"):
@@ -238,7 +227,9 @@ def test_reduce_accumulate_device_perf(device):
 # =============================================================================
 # Report
 # =============================================================================
-def _format_report(samples, acc, variants, dims, accums, widths, *, perf_accum, box, arch, trials, kernel_iters):
+def _format_report(
+    samples, acc, variants, dims, accums, widths, *, perf_accum, box, arch, trials, kernel_iters, thresholds
+):
     def med(variant, dim, n):
         return statistics.median(samples[(variant, dim, n)])
 
@@ -258,8 +249,8 @@ def _format_report(samples, acc, variants, dims, accums, widths, *, perf_accum, 
         "vs the reduce library (FPU). Widths are the tile count reduced. Output fp32, input bf16, HiFi4.",
         "",
         "variants: helper (standard reduce library) | fast (accumulate + SFPU finalize) | "
-        f"dispatch (fast when N >= per-dim threshold [row={dispatch_min('row')}, col={dispatch_min('col')}, "
-        f"scalar={dispatch_min('scalar')}], else helper).",
+        f"dispatch (fast when N >= the per-dim threshold for this arch [row={thresholds['row']}, "
+        f"col={thresholds['col']}, scalar={thresholds['scalar']} tiles], else helper).",
         "dims: row (reduce width, REDUCE_ROW) | col (reduce height, REDUCE_COL) | scalar (reduce both).",
         f"perf measured at accum={perf_accum} (data-independent; bf16 accum within noise).",
         "",
@@ -298,10 +289,10 @@ def _format_report(samples, acc, variants, dims, accums, widths, *, perf_accum, 
         lines.append("")
 
     lines += [
-        f"Notes: the fast path's crossover is DIM-DEPENDENT (measured `dispatch` thresholds: row="
-        f"{dispatch_min('row')}, col={dispatch_min('col')}, scalar={dispatch_min('scalar')} tiles) — the FPU "
-        "REDUCE_COL datapath is cheaper than REDUCE_ROW, so col needs more tiles and wins less (max ~1.7x vs "
-        "~2.9x for row/scalar). `dispatch` falls back to the library below the threshold, so it is never slower. "
+        f"Notes: the fast path's crossover depends on the reduce dim AND the arch (`dispatch` thresholds for "
+        f"{arch}: row={thresholds['row']}, col={thresholds['col']}, scalar={thresholds['scalar']} tiles; "
+        "per-arch crossovers in README.md, When it helps). `dispatch` falls back to the library below the "
+        "threshold, so it is never slower at the measured widths. "
         "It generalizes to all three dims (SFPU `sfpu_reduce` does REDUCE_ROW/COL; scalar is ROW then COL). "
         "Accuracy: fast ~= helper in fp32 and MORE accurate in bf16 (SFPU collapses columns in fp32 before one "
         "rounding); on **scalar** fast multiplies by 1/N once vs the library's AVG-scalar 1/sqrt(N)-twice, so it "
@@ -313,53 +304,59 @@ def _format_report(samples, acc, variants, dims, accums, widths, *, perf_accum, 
 # =============================================================================
 # Regimes: where the accumulate+SFPU-finalize fast path helps vs does not
 # =============================================================================
-# (id, dim, tiles reduced, kind, threshold)
-#   helps:          assert speedup (helper_ns / fast_ns) >= threshold  (= 1 + 0.5*(measured-1), >= 1.05)
-#   does_not_help:  assert speedup <= threshold
+# (id, reduce dim, tiles reduced per output tile, kind, measured speedup per arch)
+#   speedup = helper_ns / fast_ns (baseline `helper`, lever `fast`; both on 1 Tensix core, sharded L1, bf16 in,
+#   fp32 accumulation, HiFi4, 200 in-kernel iters, ns per in-kernel iter).
+#   measured = {"wh": Wormhole B0 n150, "bh": Blackhole p150b}, from README.md "When it helps".
+# The bound is derived per arch from the number measured on THAT arch by `perf_test_utils.regime_bound`
+# (helps: about half the measured gain, at least the noise margin below it; does_not_help: at most the
+# measured value plus the noise margin, never below 1.0x). An arch with no measured number is logged, not
+# asserted; a missed bound gets one confirmation pass (pooled samples) before it fails. `measure` regimes
+# only log: their verdict differs between boards.
+# These regimes compare `helper` and `fast` directly, so the `dispatch` thresholds do not affect them.
 _REGIME_TRIALS = 11
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only
-# log -- numbers per board in README.md.
+_REGIME_KERNEL_ITERS = 200
 _REGIMES = [
-    ("helps_row_32t", "row", 32, "helps", 1.36),  # WH 1.96x, BH 1.73x
-    ("helps_col_32t", "col", 32, "helps", 1.35),  # WH 1.72x, BH 2.97x
-    ("helps_scalar_32t", "scalar", 32, "helps", 1.9),  # WH 2.93x, BH 3.73x
-    ("not_row_1t", "row", 1, "does_not_help", 1.0),  # WH 0.50x, BH 0.47x
-    ("not_row_4t", "row", 4, "does_not_help", 1.0),  # WH 0.83x, BH 0.69x
-    ("not_col_4t", "col", 4, "does_not_help", 1.0),  # WH 0.81x, BH 0.96x
-    (
-        "flat_scalar_4t",
-        "scalar",
-        4,
-        "measure",
-        None,
-    ),  # WH 0.95x; BH 0.97x on the old reduce helper, 1.05x on the current one: flat
+    ("helps_row_32t", "row", 32, "helps", {"wh": 1.96, "bh": 1.73}),
+    ("helps_col_32t", "col", 32, "helps", {"wh": 1.72, "bh": 2.97}),
+    ("helps_scalar_32t", "scalar", 32, "helps", {"wh": 2.93, "bh": 3.73}),
+    ("not_row_1t", "row", 1, "does_not_help", {"wh": 0.50, "bh": 0.47}),
+    ("not_row_4t", "row", 4, "does_not_help", {"wh": 0.83, "bh": 0.69}),
+    ("not_col_4t", "col", 4, "does_not_help", {"wh": 0.81, "bh": 0.96}),
+    # BH: 0.97x on the old reduce helper, 1.05x on the current one -- flat, so only logged.
+    ("flat_scalar_4t", "scalar", 4, "measure", {"wh": 0.95, "bh": (0.97, 1.05)}),
 ]
 
 
 @pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
 def test_reduce_accumulate_regimes(device, regime):
-    name, dim, n, kind, threshold = regime
+    name, dim, n, kind, measured = regime
     x_dev, golden = _make_input(device, dim, n)
-    kernel_iters = 200
 
     def runner(variant):
-        return lambda: run_op(x_dev, variant=variant, dim=dim, num_tiles=n, accum="fp32", kernel_iters=kernel_iters)
+        return lambda: run_op(
+            x_dev, variant=variant, dim=dim, num_tiles=n, accum="fp32", kernel_iters=_REGIME_KERNEL_ITERS
+        )
 
     # correctness of both variants (reuses the file's accuracy gate)
     for variant in ("helper", "fast"):
         out = run_op(x_dev, variant=variant, dim=dim, num_tiles=n, accum="fp32", kernel_iters=1)
         _check(out, golden, dim, "fp32", f"{variant}/{dim} N={n}")
 
-    samples = _measure(device, {"helper": runner("helper"), "fast": runner("fast")}, _REGIME_TRIALS, kernel_iters)
-    base, lever = statistics.median(samples["helper"]), statistics.median(samples["fast"])
-    speedup = base / lever
-    logger.info(
-        f"[{_arch_label(device)}] {name}: dim={dim} tiles_reduced={n} helper={base:.0f} ns (min {min(samples['helper']):.0f}, "
-        f"max {max(samples['helper']):.0f}) fast={lever:.0f} ns (min {min(samples['fast']):.0f}, "
-        f"max {max(samples['fast']):.0f}) speedup={speedup:.2f}x trials={_REGIME_TRIALS}"
+    def measure():
+        samples = interleaved_ns(
+            device,
+            {"helper": runner("helper"), "fast": runner("fast")},
+            trials=_REGIME_TRIALS,
+            per_launch_divisor=_REGIME_KERNEL_ITERS,
+        )
+        return samples["helper"], samples["fast"]
+
+    check_regime(
+        device,
+        name,
+        kind,
+        measured,
+        measure,
+        detail=f"dim={dim} tiles reduced={n}, 1 Tensix core, ns per in-kernel iter (of {_REGIME_KERNEL_ITERS})",
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"{name}: speedup {speedup:.2f}x < {threshold}"
-    elif kind == "does_not_help":
-        assert speedup <= threshold, f"{name}: speedup {speedup:.2f}x > {threshold}"
-    # kind == "measure": correctness is checked above, the speedup is only logged

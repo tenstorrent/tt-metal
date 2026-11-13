@@ -12,8 +12,8 @@
                                                     [--ks 1,2,4,8,16,32,64] [--max-oversub 2]
                                                     [--iters K] [--trials N]
 
-    # reduce case on ROW_MAJOR sticks (one DRAM page = one row of W = 32 * Wt bf16 datums; a split
-    # into k slices reads / writes k pieces of W * 2 / k B per stick instead of one whole stick)
+    # reduce case on Layout::ROW_MAJOR sticks (one DRAM page = one row of W = 32 * Wt bf16 datums; a
+    # split into k slices reads / writes k pieces of W * 2 / k B per stick instead of one whole stick)
     python -m ttnn.operations.examples.width_split --reduce --layout row_major
                                                     [--rows 1,4,16,47,64,128] [--wts 2,4,8,16,32,64]
                                                     [--ks 1,2,4] [--max-oversub 2] [--iters K] [--trials N]
@@ -23,6 +23,11 @@ scripts/run_safe_pytest.sh (device lock, in-process profiler, post-run reset),
 printing the same ns/op + cores + speedup table (single_core vs width_split,
 per width). Run from the repo root with the Python env active. H is fixed at 32
 (one tile-row — the wide-short case); only the width sweeps.
+
+--reduce runs a measurement sweep that a plain pytest run skips; the CLI switches it on (WS_SWEEPS=1).
+--layout picks the C++ `Layout` of the reduce case's input and output (`Layout::TILE` or
+`Layout::ROW_MAJOR`), not its `TensorMemoryLayout` (always INTERLEAVED in DRAM). A (Wt, k) whose
+circular buffers do not fit L1 is skipped by the sweep, not run.
 """
 
 import argparse
@@ -67,8 +72,9 @@ def main():
         "--layout",
         default="tile",
         choices=["tile", "row_major"],
-        help="reduce case: input/output Layout (tile = 2 KB tile pages; row_major = W * 2 B stick pages, "
-        "tilized/untilized in the kernel). Default tile.",
+        help="reduce case: the C++ Layout of input and output, not the TensorMemoryLayout (always "
+        "INTERLEAVED DRAM): tile = Layout::TILE, 2048 B tile pages; row_major = Layout::ROW_MAJOR, W * 2 B "
+        "stick pages, tilized / untilized in the kernel. Default tile.",
     )
     ap.add_argument(
         "--rows",
@@ -78,13 +84,14 @@ def main():
     ap.add_argument(
         "--wts",
         default=None,
-        help="reduce case: tile-columns Wt to sweep (W = 32 * Wt; a stick is 64 * Wt B). "
-        "Default 4,8,16,32,64 (tile) / 2,4,8,16,32,64 (row_major).",
+        help="reduce case: tile-columns Wt to sweep (W = 32 * Wt; a stick is 64 * Wt B). A Wt whose k = 1 "
+        "circular buffers do not fit L1 is skipped. Default 4,8,16,32,64 (tile) / 2,4,8,16,32,64 (row_major).",
     )
     ap.add_argument(
         "--ks",
         default=None,
-        help="reduce case: split factors k to try (kept when k divides Wt). "
+        help="reduce case: split factors k to try (kept when k divides Wt, fits the Tensix grid and its "
+        "circular buffers fit L1). "
         "Default 1,2,4,8,16,32,64 (tile) / 1,2,4 (row_major).",
     )
     ap.add_argument(
@@ -101,6 +108,7 @@ def main():
         prefix = "WSRM" if args.layout == "row_major" else "WSR"
         env = dict(
             os.environ,
+            WS_SWEEPS="1",  # the reduce sweeps are opt-in (skipped by a plain pytest run)
             WSR_MAX_OVERSUB=str(args.max_oversub),
             WS_ITERS=str(args.iters),
             WS_TRIALS=str(args.trials),

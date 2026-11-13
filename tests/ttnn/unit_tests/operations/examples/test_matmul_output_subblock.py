@@ -12,6 +12,8 @@ ttnn/ttnn/operations/examples/matmul_output_subblock/README.md.
         tests/ttnn/unit_tests/operations/examples/test_matmul_output_subblock.py::test_matmul_output_subblock_correctness
     scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_matmul_output_subblock.py::test_matmul_output_subblock_device_perf
+
+The device-perf test writes its markdown report only when MOS_REPORT names a path.
 """
 
 import os
@@ -30,6 +32,7 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import check_regime, interleaved_ns, read_kernel_ns
 from ttnn.operations.examples.matmul_output_subblock import (
     matmul_output_subblock,
     create_sharded_memory_config,
@@ -53,12 +56,8 @@ N_WARMUP = 3
 N_PROFILE_ITERS = int(os.environ.get("MOS_TRIALS", "10"))
 _INNER = 5
 VARIANT_LIST = tuple(os.environ.get("MOS_VARIANTS", ",".join(VARIANTS)).split(","))
-REPORT_PATH = os.environ.get(
-    "MOS_REPORT",
-    str(Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/matmul_output_subblock/report.md"),
-)
+REPORT_PATH = os.environ.get("MOS_REPORT")  # a report file is written only when the caller names a path
 PCC = 0.99
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 
 def _make_inputs(device):
@@ -82,32 +81,17 @@ def _make_inputs(device):
     return tt_a, tt_b, a, b
 
 
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    per_chip = ttnn.get_latest_programs_perf_data()
-    total, found = 0.0, False
-    for programs in (per_chip or {}).values():
-        for program in programs:
-            results = getattr(program, "program_analyses_results", None) or {}
-            entry = results.get(_DURATION_KEY)
-            if entry is None:
-                continue
-            total += float(entry.duration)
-            found = True
-    return total if found else None
-
-
 def _measure_ns(device, run_fn):
     """Median ns/op over N_PROFILE_ITERS rounds (each round = mean of _INNER launches), plus std%."""
     for _ in range(N_WARMUP):
         run_fn()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # flush warmup window
+    read_kernel_ns(device)  # flush warmup window
     samples = []
     for _ in range(N_PROFILE_ITERS):
         for _ in range(_INNER):
             run_fn()
-        total = _read_kernel_ns(device)
+        total = read_kernel_ns(device)
         if total is None:
             return None, None
         samples.append(total / _INNER)
@@ -189,15 +173,16 @@ def test_matmul_output_subblock_device_perf(device):
         reuse = "none" if (sb_h == 1 and sb_w == 1) else ("B (across A)" if sb_h > sb_w else "A (across B)")
         m, s = ns[variant]
         md.append(f"| {variant} | {sb_h}×{sb_w} | {reuse} | {m:.1f} | {s:.1f} | {base/m:.2f}x |")
-    try:
-        Path(REPORT_PATH).write_text("\n".join(md) + "\n")
-        logger.info(f"[matmul_output_subblock] wrote {REPORT_PATH}")
-    except OSError as e:
-        logger.warning(f"[matmul_output_subblock] could not write report: {e}")
+    if REPORT_PATH:
+        try:
+            Path(REPORT_PATH).write_text("\n".join(md) + "\n")
+            logger.info(f"[matmul_output_subblock] wrote {REPORT_PATH}")
+        except OSError as e:
+            logger.warning(f"[matmul_output_subblock] could not write report: {e}")
 
 
 # =============================================================================
-# Regimes (Wormhole B0 n150): interleaved A,B,A,B... medians of >= 10 trials per variant
+# Regimes: interleaved A,B,A,B... trials per variant, verdict from `perf_test_utils.check_regime`
 # =============================================================================
 _REGIME_TRIALS = 11
 _REGIME_ITERS = 20
@@ -224,60 +209,57 @@ def _regime_inputs(device, mt, nt, kt):
     return mk(a, mt, kt), mk(b, kt, nt), tt_c, a @ b
 
 
-# (Mt, Nt, Kt tiles, baseline, lever, verdict, measured speedup)
+# (Mt, Nt, Kt tiles, baseline, lever, kind, measured speedup per architecture)
 #   helps:          16x16 output tiles, Kt=1: sb_1x1 -> sb_2x4 (8-tile subblock, A reused across 4 B-tiles).
 #   measure:        tall sb_8x1 -> wide sb_1x8 (same problem), and Kt=4 sb_1x1 -> sb_2x4: the verdict flips between boards.
 #   does_not_help:  2x2 output tiles, Kt=1: sb_1x1 -> sb_2x2. Only 4 output tiles per pass, so there is no
 #                   operand reload left to amortize.
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# -- numbers per board in README.md.
+# The bound each regime is asserted against is derived from the speedup measured on the architecture it runs on
+# (`perf_test_utils.regime_bound`): "helps" asserts half the measured gain but never closer than 10% to the
+# measurement; "does_not_help" asserts <= max(1.0, 1.10 x the highest measured value) (so the Wormhole 1.02x
+# bound is 1.122x). "measure" regimes only log, as does an architecture with no number below; a missed bound is
+# re-measured once and re-checked on the pooled samples. Numbers per board in README.md. Single Tensix core, so no
+# grid guard is needed.
 _REGIMES = [
-    pytest.param(16, 16, 1, "sb_1x1", "sb_2x4", "helps", 1.46, id="helps_16x16t_Kt1_1x1_to_2x4"),  # WH 1.75x, BH 1.46x
+    pytest.param(16, 16, 1, "sb_1x1", "sb_2x4", "helps", {"wh": 1.75, "bh": 1.46}, id="helps_16x16t_Kt1_1x1_to_2x4"),
     pytest.param(
-        16, 16, 1, "sb_8x1", "sb_1x8", "measure", None, id="measure_16x16t_Kt1_tall8x1_to_wide1x8"
-    ),  # WH 1.40x, BH 1.00x
+        16,
+        16,
+        1,
+        "sb_8x1",
+        "sb_1x8",
+        "measure",
+        {"wh": 1.40, "bh": 1.00},
+        id="measure_16x16t_Kt1_tall8x1_to_wide1x8",
+    ),
     pytest.param(
-        16, 16, 4, "sb_1x1", "sb_2x4", "measure", None, id="measure_16x16t_Kt4_1x1_to_2x4"
-    ),  # WH ~1.69x, BH 1.10x
-    pytest.param(
-        2, 2, 1, "sb_1x1", "sb_2x2", "does_not_help", 1.01, id="flat_2x2t_Kt1_1x1_to_2x2"
-    ),  # WH 1.02x, BH 0.97x
+        16, 16, 4, "sb_1x1", "sb_2x4", "measure", {"wh": 1.69, "bh": 1.10}, id="measure_16x16t_Kt4_1x1_to_2x4"
+    ),
+    pytest.param(2, 2, 1, "sb_1x1", "sb_2x2", "does_not_help", {"wh": 1.02, "bh": 0.97}, id="flat_2x2t_Kt1_1x1_to_2x2"),
 ]
 
 
-@pytest.mark.parametrize("mt,nt,kt,base_variant,lever_variant,verdict,measured", _REGIMES)
-def test_matmul_output_subblock_regimes(device, mt, nt, kt, base_variant, lever_variant, verdict, measured):
+@pytest.mark.parametrize("mt,nt,kt,base_variant,lever_variant,kind,measured", _REGIMES)
+def test_matmul_output_subblock_regimes(device, mt, nt, kt, base_variant, lever_variant, kind, measured):
     tt_a, tt_b, tt_c, expected = _regime_inputs(device, mt, nt, kt)
     for variant in (base_variant, lever_variant):  # correctness gate
         out = ttnn.to_torch(matmul_output_subblock(tt_a, tt_b, variant=variant, kernel_iters=1)).to(torch.float32)
         assert_with_pcc(expected, out, PCC)
 
-    runs = {}
+    runners = {}
     for name, variant in (("base", base_variant), ("lever", lever_variant)):
         desc = create_program_descriptor(tt_a, tt_b, tt_c, variant=variant, kernel_iters=_REGIME_ITERS)
-        runs[name] = lambda d=desc: ttnn.generic_op([tt_a, tt_b, tt_c], d)
-    for run in runs.values():
-        run()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # discard warmup window
-    samples = {"base": [], "lever": []}
-    for trial in range(_REGIME_TRIALS + 1):
-        for name, run in runs.items():
-            run()
-            ns = _read_kernel_ns(device)
-            assert ns is not None, f"no profiler data for {name}"
-            if trial:  # discard first timed pass
-                samples[name].append(ns / _REGIME_ITERS)
-    base, lever = samples["base"], samples["lever"]
-    b, l = statistics.median(base), statistics.median(lever)
-    speedup = b / l
-    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
-    logger.info(
-        f"[{arch}] {verdict} M={mt} N={nt} K={kt} tiles: {base_variant} {b:.0f} ns [{min(base):.0f}..{max(base):.0f}] "
-        f"-> {lever_variant} {l:.0f} ns [{min(lever):.0f}..{max(lever):.0f}] = {speedup:.2f}x "
-        f"(trials={len(base)}, ns per matmul)"
+        runners[name] = lambda d=desc: ttnn.generic_op([tt_a, tt_b, tt_c], d)
+
+    def measure():
+        s = interleaved_ns(device, runners, trials=_REGIME_TRIALS, per_launch_divisor=_REGIME_ITERS)
+        return s["base"], s["lever"]
+
+    check_regime(
+        device,
+        f"matmul_output_subblock M={mt} N={nt} K={kt} {base_variant}->{lever_variant}",
+        kind,
+        measured,
+        measure,
+        detail=f"M={mt} N={nt} K={kt} tiles, 1 Tensix core, ns per matmul",
     )
-    if verdict == "helps":
-        assert speedup >= max(1.05, 1 + 0.5 * (measured - 1)), f"expected a clear win, got {speedup:.2f}x"
-    elif verdict == "does_not_help":
-        assert speedup <= 1.05, f"expected no meaningful gain (<= 1.05x), got {speedup:.2f}x"

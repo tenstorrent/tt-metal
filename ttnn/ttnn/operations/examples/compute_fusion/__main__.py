@@ -53,6 +53,7 @@ def main():
     scenarios = list(SCENARIOS) if "all" in args.scenario else list(dict.fromkeys(args.scenario))
     env = dict(os.environ, CF_SCENARIOS=",".join(scenarios))
     if args.per_call:
+        env["CF_SWEEPS"] = "1"  # test_compute_fusion_per_call is an opt-in measurement sweep
         if "all" not in args.scenario:
             env["CF_PC_SCENARIOS"] = ",".join(scenarios)
         env.update(

@@ -247,7 +247,7 @@ would take a 32-bit DEST value into SrcA, which holds fewer mantissa bits than f
 differently; that configuration is not measured here.
 
 ```bash
-CF_PC_REPORT=/tmp/per_call.md scripts/run_safe_pytest.sh --run-all \
+EXAMPLES_SWEEPS=1 CF_PC_REPORT=/tmp/per_call.md scripts/run_safe_pytest.sh --run-all \
   tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py::test_compute_fusion_per_call
 ```
 
@@ -306,4 +306,4 @@ BH p150b rows — the same regimes test and device_perf sweep on that board, `bh
 2026-10-19 (details in `report.md`); `fpu_chain` rows — regimes (11 interleaved trials, kernel-iters 100) and the
 per-call sweep on `bh-50-special-adamjanovic-for-reservation-143315`, 1350 MHz, 2026-10-26.
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_compute_fusion.py::test_compute_fusion_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each regime is asserted against a bound derived from the speedup measured on that architecture by `perf_test_utils.regime_bound`, an architecture with no measured number and `measure` regimes only log, and a missed bound is re-measured once).

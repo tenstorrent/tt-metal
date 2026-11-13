@@ -40,6 +40,7 @@ from ttnn.operations.examples.trid_double_issue import trid_double_issue, VARIAN
 
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import read_kernel_ns
 
 TILE = 32
 _DTYPES = {"bfloat8_b": ttnn.bfloat8_b, "bfloat16": ttnn.bfloat16, "float32": ttnn.float32}
@@ -61,8 +62,6 @@ DTYPE = _DTYPES[DTYPE_NAME]
 N_WARMUP = 5
 N_PROFILE_ITERS = int(os.environ.get("TDI_TRIALS", "10"))
 
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
-
 
 def _make_input(device, dtype=DTYPE):
     torch.manual_seed(0)
@@ -72,35 +71,15 @@ def _make_input(device, dtype=DTYPE):
     )
 
 
-def _read_kernel_ns(device):
-    """Sum of on-device kernel duration over programs dispatched since the last read.
-
-    ReadDeviceProfiler finishes the queue before reading and *consumes* the window,
-    so a flush-read then a work-read brackets exactly the ops run in between.
-    """
-    ttnn.ReadDeviceProfiler(device)
-    per_chip = ttnn.get_latest_programs_perf_data()
-    total, found = 0.0, False
-    for programs in (per_chip or {}).values():
-        for program in programs:
-            results = getattr(program, "program_analyses_results", None) or {}
-            entry = results.get(_DURATION_KEY)
-            if entry is None:
-                continue
-            total += float(entry.duration)
-            found = True
-    return total if found else None
-
-
 def _measure_ns(device, run_fn):
     """Average ns/op: warm up, flush, run N, read, divide by N."""
     for _ in range(N_WARMUP):
         run_fn()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # flush the warmup window
+    read_kernel_ns(device)  # flush the warmup window (ReadDeviceProfiler consumes the window)
     for _ in range(N_PROFILE_ITERS):
         run_fn()
-    total_ns = _read_kernel_ns(device)
+    total_ns = read_kernel_ns(device)
     return total_ns / N_PROFILE_ITERS if total_ns is not None else None
 
 

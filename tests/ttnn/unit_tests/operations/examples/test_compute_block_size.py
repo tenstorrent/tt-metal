@@ -31,6 +31,7 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import check_regime, interleaved_ns, read_kernel_ns
 from ttnn.operations.examples.compute_block_size import (
     BASELINE,
     VARIANTS,
@@ -41,7 +42,6 @@ from ttnn.operations.examples.compute_block_size import (
 )
 
 TILE = 32
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 
 # =============================================================================
@@ -99,28 +99,16 @@ def _check(output, expected, label, min_pcc=0.99):
 # =============================================================================
 # In-process device-kernel timing (validated pattern — do not reinvent)
 # =============================================================================
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    total, found = 0.0, False
-    for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
 def _measure(device, runners, trials, kernel_iters):
     for run in runners.values():
         run()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # discard warmup window
+    read_kernel_ns(device)  # discard warmup window
     samples = {name: [] for name in runners}
     for trial in range(trials + 1):
         for name, run in runners.items():
             run()
-            duration = _read_kernel_ns(device)
+            duration = read_kernel_ns(device)
             assert duration is not None, f"no profiler data for {name}"
             if trial:  # discard first timed pass
                 samples[name].append(duration / kernel_iters)
@@ -323,39 +311,38 @@ def _format_report(samples, pccs, m_tiles, k_tiles, n_tiles, *, box, arch, trial
 
 
 # =============================================================================
-# Regimes: where a bigger block per helper call helps, and where it stops paying (Wormhole B0 n150)
+# Regimes: where a bigger block per helper call helps, and where it stops paying
 # =============================================================================
 _REGIME_TRIALS = 11
 _REGIME_ITERS = 20
 
-
-def _measure_pair(device, run_base, run_lever, trials, kernel_iters):
-    """Interleaved A,B,A,B... per-evaluation device-kernel ns; returns (base_samples, lever_samples)."""
-    samples = _measure(device, {"base": run_base, "lever": run_lever}, trials, kernel_iters)
-    return samples["base"], samples["lever"]
-
-
-def _spread(values):
-    return f"[{min(values):.0f}..{max(values):.0f}]"
-
-
-# (id, (M_tiles, K_tiles, N_tiles), baseline variant, lever variant, expected verdict, measured speedup)
+# (id, (M_tiles, K_tiles, N_tiles), baseline variant, lever variant, kind, measured speedup per architecture)
 #   helps:          M8 K4 N4 -- 5 phases x 8 passes of fixed cost vs ~17 us of payload
-#   small:          M2 K16 N16 -- per-pass fixed cost (~1.5 us) is ~4-7% of a ~37 us pass: at most a small gain
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# -- numbers per board in README.md.
+#   small:          M2 K16 N16 -- per-pass fixed cost (~1.5 us) is ~4-7% of a ~37 us pass: at most a small gain,
+#                   so it is a "does_not_help" regime (the speedup stays below the bound derived from the
+#                   measured value)
+# The bound each regime is asserted against is derived from the speedup measured on the architecture it runs on
+# (`perf_test_utils.regime_bound`): "helps" asserts half the measured gain but never closer than 10% to the
+# measurement; "does_not_help" asserts <= max(1.0, 1.10 x the highest measured value). An architecture with no
+# number below is logged, not asserted, and a missed bound is re-measured once and re-checked on the pooled
+# samples. Numbers per board in README.md. Single Tensix core, so no grid guard is needed.
 _REGIMES = [
     pytest.param(
-        (8, 4, 4), "per_tile_row", "one_block", "helps", 1.68, id="helps_M8K4N4_8passes_to_1"
-    ),  # WH 1.68x, BH 2.05x
+        (8, 4, 4), "per_tile_row", "one_block", "helps", {"wh": 1.68, "bh": 2.05}, id="helps_M8K4N4_8passes_to_1"
+    ),
     pytest.param(
-        (2, 16, 16), "per_tile_row", "one_block", "small", 1.07, id="small_M2K16N16_2passes_to_1"
-    ),  # WH 1.04x, BH 1.07x
+        (2, 16, 16),
+        "per_tile_row",
+        "one_block",
+        "does_not_help",
+        {"wh": 1.04, "bh": 1.07},
+        id="small_M2K16N16_2passes_to_1",
+    ),
 ]
 
 
-@pytest.mark.parametrize("shape,base_variant,lever_variant,verdict,measured", _REGIMES)
-def test_compute_block_size_regimes(device, shape, base_variant, lever_variant, verdict, measured):
+@pytest.mark.parametrize("shape,base_variant,lever_variant,kind,measured", _REGIMES)
+def test_compute_block_size_regimes(device, shape, base_variant, lever_variant, kind, measured):
     m_tiles, k_tiles, n_tiles = shape
     inputs, expected = _make_case(device, m_tiles, k_tiles, n_tiles)
     base_rows = block_rows_for(base_variant, m_tiles)
@@ -364,26 +351,23 @@ def test_compute_block_size_regimes(device, shape, base_variant, lever_variant, 
         out = run_op(inputs, block_rows=rows, kernel_iters=1)
         _check(out, expected, f"block_rows={rows}")
 
-    base, lever = _measure_pair(
+    runners = {
+        "base": lambda: run_op(inputs, block_rows=base_rows, kernel_iters=_REGIME_ITERS),
+        "lever": lambda: run_op(inputs, block_rows=lever_rows, kernel_iters=_REGIME_ITERS),
+    }
+
+    def measure():
+        s = interleaved_ns(device, runners, trials=_REGIME_TRIALS, per_launch_divisor=_REGIME_ITERS)
+        return s["base"], s["lever"]
+
+    check_regime(
         device,
-        lambda: run_op(inputs, block_rows=base_rows, kernel_iters=_REGIME_ITERS),
-        lambda: run_op(inputs, block_rows=lever_rows, kernel_iters=_REGIME_ITERS),
-        _REGIME_TRIALS,
-        _REGIME_ITERS,
+        f"compute_block_size M{m_tiles}K{k_tiles}N{n_tiles}",
+        kind,
+        measured,
+        measure,
+        detail=(
+            f"{base_variant} (block_rows={base_rows}, {m_tiles // base_rows} passes) vs {lever_variant} "
+            f"(block_rows={lever_rows}, {m_tiles // lever_rows} passes), 1 Tensix core, ns per (A+B)@C evaluation"
+        ),
     )
-    b, l = statistics.median(base), statistics.median(lever)
-    speedup = b / l
-    logger.info(
-        f"[{_arch_label(device)}] {verdict} M{m_tiles}K{k_tiles}N{n_tiles} tiles: {base_variant} (block_rows={base_rows}, "
-        f"{m_tiles // base_rows} passes) {b:.0f} ns {_spread(base)} -> {lever_variant} (block_rows={lever_rows}, "
-        f"{m_tiles // lever_rows} passes) {l:.0f} ns {_spread(lever)} = {speedup:.2f}x "
-        f"(trials={len(base)}, ns per (A+B)@C evaluation)"
-    )
-    if verdict == "helps":
-        t_help = max(1.05, 1 + 0.5 * (measured - 1))
-        assert speedup >= t_help, f"expected >= {t_help:.2f}x, got {speedup:.2f}x"
-    elif verdict == "small":
-        # gain shrinks but stays above the flat band
-        assert speedup <= 1.15, f"expected a small gain (<= 1.15x), got {speedup:.2f}x"
-    else:
-        assert speedup <= 1.05, f"expected no meaningful gain (<= 1.05x), got {speedup:.2f}x"

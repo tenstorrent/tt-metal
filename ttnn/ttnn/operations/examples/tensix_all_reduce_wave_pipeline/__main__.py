@@ -52,6 +52,7 @@ def main():
         WP_WAVES=",".join(str(w) for w in args.waves),
         WP_TRIALS=str(args.trials),
         WP_KERNEL_ITERS=str(args.kernel_iters),
+        WP_SWEEPS="1",  # the measured test is a sweep: skipped unless this is set
     )
     for name, value in (("WP_GROUP_SIZE", args.group_size), ("WP_NUM_GROUPS", args.num_groups)):
         if value is not None:

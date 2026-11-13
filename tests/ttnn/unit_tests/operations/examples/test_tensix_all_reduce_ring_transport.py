@@ -18,14 +18,13 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import check_regime, interleaved_ns, require_grid
 from ttnn.operations.examples.tensix_all_reduce_ring_transport import (
     VARIANTS,
     build_group_layout,
     create_sharded_memory_config,
     ring_transport,
 )
-
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 
 def _selected_variants():
@@ -78,33 +77,9 @@ def _run_checked(tt_input, expected, variant, group_shape, num_groups, num_tiles
     return output
 
 
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    total = 0.0
-    found = False
-    for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
 def _measure(device, runners, trials, kernel_iters):
-    for run in runners.values():
-        run()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
-    samples = {variant: [] for variant in runners}
-    for trial in range(trials + 1):
-        for variant, run in runners.items():
-            run()
-            duration = _read_kernel_ns(device)
-            assert duration is not None
-            if trial:
-                samples[variant].append(duration / kernel_iters)
-    return samples
+    """{variant: [ns per kernel iteration, ...]}; warm-up and per-launch timing follow `interleaved_ns`."""
+    return interleaved_ns(device, runners, trials=trials, per_launch_divisor=kernel_iters)
 
 
 def _format_report(results, *, box, arch, trials, kernel_iters):
@@ -189,23 +164,30 @@ def test_tensix_all_reduce_ring_transport_device_perf(device):
         Path(report_path).write_text(report)
 
 
-# (id, group_shape, num_groups, num_tiles, kind, threshold). Baseline = payload_ring_noc1, lever = payload_ring (NoC0).
-# Thresholds: helps -> T_help = max(1.05, 1 + 0.5 * (measured - 1)); does_not_help -> <= 1.05.
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# - numbers per board in README.md.
+# (id, group_shape, num_groups, num_tiles, kind, measured). Baseline = payload_ring_noc1, lever = payload_ring (NoC0).
+# The bound is derived from the per-arch measured speedup by `perf_test_utils.regime_bound` (helps: half the
+# measured gain, never closer than the noise margin; does_not_help: at most the measured value plus the noise
+# margin, never below 1.0). An architecture without a measured number is logged, not asserted; a missed bound
+# is re-measured once and the samples are pooled. `measure` regimes flip between boards and only log - numbers
+# per board in README.md. Both cases place (group rows x group columns) = 1x8 x 8 groups and 2x8 x 4 groups, so
+# they need a grid of at least 8 columns x 8 rows of Tensix cores.
 _REGIMES = [
-    ("helps_1x8_line_x8groups_6tiles", (1, 8), 8, 6, "helps", 2.47),  # WH 6.04x, BH 3.94x
-    ("does_not_help_2x8_serpentine_x4groups_6tiles", (2, 8), 4, 6, "does_not_help", 1.05),  # WH 1.03x, BH 1.01x
+    ("helps_1x8_line_x8groups_6tiles", (1, 8), 8, 6, "helps", {"wh": 6.04, "bh": 3.94}),
+    ("does_not_help_2x8_serpentine_x4groups_6tiles", (2, 8), 4, 6, "does_not_help", {"wh": 1.03, "bh": 1.01}),
 ]
 
 
 @pytest.mark.parametrize(
-    "group_shape, num_groups, num_tiles, kind, threshold",
+    "group_shape, num_groups, num_tiles, kind, measured",
     [r[1:] for r in _REGIMES],
     ids=[r[0] for r in _REGIMES],
 )
-def test_tensix_all_reduce_ring_transport_regimes(device, group_shape, num_groups, num_tiles, kind, threshold):
-    """Interleaved A/B of the ring on NoC1 (baseline) vs NoC0 (lever); median of 11 retained trials."""
+def test_tensix_all_reduce_ring_transport_regimes(device, group_shape, num_groups, num_tiles, kind, measured, request):
+    """Interleaved A/B of the ring on NoC1 (baseline) vs NoC0 (lever)."""
+    rows, cols = group_shape
+    # `build_group_layout` tiles groups over the grid: grid.x // cols groups across, grid.y // rows down. Both
+    # regimes (1x8 x 8 groups, 2x8 x 4 groups) place one group across and eight rows' worth down.
+    require_grid(device, 8, 8, what=f"{num_groups} groups of {rows}x{cols} Tensix cores")
     baseline, lever = "payload_ring_noc1", "payload_ring"
     trials, kernel_iters = 11, 20
     tt_input, expected = _make_input(device, group_shape, num_groups, num_tiles)
@@ -222,17 +204,16 @@ def test_tensix_all_reduce_ring_transport_regimes(device, group_shape, num_group
         )
         for variant in (baseline, lever)
     }
-    samples = _measure(device, runners, trials, kernel_iters)
-    base_ns = statistics.median(samples[baseline])
-    lever_ns = statistics.median(samples[lever])
-    speedup = base_ns / lever_ns
-    logger.info(
-        f"REGIME {kind} group={group_shape[0]}x{group_shape[1]} groups={num_groups} tiles/core={num_tiles} "
-        f"{baseline}={base_ns:.1f}ns [{min(samples[baseline]):.1f}-{max(samples[baseline]):.1f}] "
-        f"{lever}={lever_ns:.1f}ns [{min(samples[lever]):.1f}-{max(samples[lever]):.1f}] "
-        f"speedup={speedup:.3f}x trials={trials} arch={device.arch()}"
+
+    def measure():
+        samples = _measure(device, runners, trials, kernel_iters)
+        return samples[baseline], samples[lever]
+
+    check_regime(
+        device,
+        request.node.callspec.id,
+        kind,
+        measured,
+        measure,
+        detail=f"{num_groups} groups of {rows}x{cols} Tensix cores, {num_tiles} tiles per Tensix core",
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"expected >= {threshold}x, got {speedup:.3f}x"
-    else:
-        assert speedup <= threshold, f"expected <= {threshold}x, got {speedup:.3f}x"

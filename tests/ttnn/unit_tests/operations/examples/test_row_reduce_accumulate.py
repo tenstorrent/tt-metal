@@ -32,6 +32,7 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import check_regime, interleaved_ns, read_kernel_ns
 from ttnn.operations.examples.row_reduce_accumulate import (
     BASELINE,
     METHODS,
@@ -42,7 +43,6 @@ from ttnn.operations.examples.row_reduce_accumulate import (
 )
 
 TILE = 32
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 _DEFAULT_WIDTHS_ELEMS = (32, 64, 128, 256, 512, 1024)
 
@@ -119,28 +119,16 @@ def _check(output, golden, precision, label):
 # =============================================================================
 # In-process device-kernel timing (validated pattern — do not reinvent)
 # =============================================================================
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    total, found = 0.0, False
-    for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
 def _measure(device, runners, trials, kernel_iters):
     for run in runners.values():
         run()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # discard warmup window
+    read_kernel_ns(device)  # discard warmup window
     samples = {key: [] for key in runners}
     for trial in range(trials + 1):
         for key, run in runners.items():
             run()
-            duration = _read_kernel_ns(device)
+            duration = read_kernel_ns(device)
             assert duration is not None, f"no profiler data for {key}"
             if trial:  # discard first timed pass
                 samples[key].append(duration / kernel_iters)
@@ -397,48 +385,59 @@ def _format_report(
 # =============================================================================
 # Regimes: where dest_accum_pairs helps vs does not, vs the single reduce_fold
 # =============================================================================
-# (id, row width in tiles, precision, kind, threshold)
-#   helps:          assert speedup (reduce_fold_ns / dest_accum_pairs_ns) >= threshold
-#   does_not_help:  assert speedup <= threshold
+# (id, row width in tiles, precision, kind, measured speedup per arch)
+#   speedup = reduce_fold_ns / dest_accum_pairs_ns (baseline `reduce_fold`, lever `dest_accum_pairs`; 1 Tensix
+#   core, input sharded in L1, `positive` distribution, HiFi4, 200 in-kernel iters, ns per in-kernel iter).
+#   measured = {"wh": Wormhole B0 n150, "bh": Blackhole p150b}, from README.md "When it helps".
+# The bound is derived per arch from the number measured on THAT arch by `perf_test_utils.regime_bound`
+# (helps: about half the measured gain, at least the noise margin below it; does_not_help: at most the
+# measured value plus the noise margin, never below 1.0x). An arch with no measured number is logged, not
+# asserted; a missed bound gets one confirmation pass (pooled samples) before it fails. `measure` regimes
+# only log: their verdict differs between boards.
 _REGIME_TRIALS = 11
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only
-# log -- numbers per board in README.md.
+_REGIME_KERNEL_ITERS = 200
 _REGIMES = [
-    ("helps_bf16_32t", 32, "bf16-fp32", "helps", 1.17),  # WH 1.34x, BH 1.97x
-    ("helps_fp32_32t", 32, "fp32-fp32", "helps", 1.25),  # WH 1.57x, BH 1.77x
-    ("not_bf16_1t", 1, "bf16-fp32", "does_not_help", 1.0),  # WH 0.52x, BH 0.58x
-    ("not_bf16_2t", 2, "bf16-fp32", "does_not_help", 1.0),  # WH 0.60x, BH 0.70x
-    ("measure_bf16_8t", 8, "bf16-fp32", "measure", None),  # WH 0.87x, BH 1.06x -- verdict differs
+    ("helps_bf16_32t", 32, "bf16-fp32", "helps", {"wh": 1.34, "bh": 1.97}),
+    ("helps_fp32_32t", 32, "fp32-fp32", "helps", {"wh": 1.57, "bh": 1.77}),
+    ("not_bf16_1t", 1, "bf16-fp32", "does_not_help", {"wh": 0.52, "bh": 0.58}),
+    ("not_bf16_2t", 2, "bf16-fp32", "does_not_help", {"wh": 0.60, "bh": 0.70}),
+    ("measure_bf16_8t", 8, "bf16-fp32", "measure", {"wh": 0.87, "bh": 1.06}),  # verdict differs by arch
 ]
 
 
 @pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
 def test_row_reduce_accumulate_regimes(device, regime):
-    name, width_tiles, precision, kind, threshold = regime
+    name, width_tiles, precision, kind, measured = regime
     input_dtype, _ = split_precision(precision)
     x_dev, golden = _make_input(device, width_tiles, input_dtype, "positive")
-    kernel_iters = 200
     lever = "dest_accum_pairs"
 
     def runner(method):
         return lambda: run_op(
-            x_dev, method=method, precision=precision, width_tiles=width_tiles, kernel_iters=kernel_iters
+            x_dev, method=method, precision=precision, width_tiles=width_tiles, kernel_iters=_REGIME_KERNEL_ITERS
         )
 
     for method in (BASELINE, lever):
         out = run_op(x_dev, method=method, precision=precision, width_tiles=width_tiles, kernel_iters=1)
         _check(out, golden, precision, f"{method}/{precision} W={width_tiles}t")
 
-    samples = _measure(device, {BASELINE: runner(BASELINE), lever: runner(lever)}, _REGIME_TRIALS, kernel_iters)
-    base, fast = statistics.median(samples[BASELINE]), statistics.median(samples[lever])
-    speedup = base / fast
-    logger.info(
-        f"[{_arch_label(device)}] {name}: width={width_tiles} tiles precision={precision} {BASELINE}={base:.0f} ns "
-        f"(min {min(samples[BASELINE]):.0f}, max {max(samples[BASELINE]):.0f}) {lever}={fast:.0f} ns "
-        f"(min {min(samples[lever]):.0f}, max {max(samples[lever]):.0f}) speedup={speedup:.2f}x trials={_REGIME_TRIALS}"
+    def measure():
+        samples = interleaved_ns(
+            device,
+            {BASELINE: runner(BASELINE), lever: runner(lever)},
+            trials=_REGIME_TRIALS,
+            per_launch_divisor=_REGIME_KERNEL_ITERS,
+        )
+        return samples[BASELINE], samples[lever]
+
+    check_regime(
+        device,
+        name,
+        kind,
+        measured,
+        measure,
+        detail=(
+            f"row width={width_tiles} tiles precision={precision}, 1 Tensix core, "
+            f"ns per in-kernel iter (of {_REGIME_KERNEL_ITERS})"
+        ),
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"{name}: speedup {speedup:.2f}x < {threshold}"
-    elif kind == "does_not_help":
-        assert speedup <= threshold, f"{name}: speedup {speedup:.2f}x > {threshold}"
-    # kind == "measure": correctness is checked above, the speedup is only logged

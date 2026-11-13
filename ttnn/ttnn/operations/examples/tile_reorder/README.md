@@ -61,4 +61,8 @@ median of 12 trials × 3 launches.
   `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64` ([`report.md`](report.md)).
 
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_tile_reorder.py::test_tile_reorder_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board, shape sized to one tile-row per Tensix core of the attached grid). Each regime carries
+the speedup measured per architecture; the bound is derived from the number measured on the attached
+architecture by `perf_test_utils.regime_bound` (helps: at least the lower of half the measured gain and the
+measured number less a 10% noise margin; does not help: at most the measured high plus the margin), a missed
+bound is re-measured once, an architecture with no measured number only logs, and `measure` regimes only log.

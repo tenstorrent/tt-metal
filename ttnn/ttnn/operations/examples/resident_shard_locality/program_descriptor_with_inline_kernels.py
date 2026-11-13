@@ -16,10 +16,10 @@ changes is which Tensix core works on which sticks, and where the sticks come fr
                           per stick, one barrier per unit) and writes the untilized sticks back
                           to their owners the same way.
     variant="local"       the work split IS the shard spec: every Tensix core copies its own
-                          shard's sticks with local NoC reads into a 2-chunk-deep staging CB,
-                          tilizes, untilizes and copies the sticks back into its own output
-                          shard. A shard height that is not a multiple of 32 sticks pads the
-                          last tile-row locally, a shard width that is not a multiple of 32
+                          shard's sticks with local NoC reads into a 2-chunk-deep staging
+                          circular buffer (CB), tilizes, untilizes and copies the sticks back
+                          into its own output shard. A shard height that is not a multiple of
+                          32 sticks pads the last tile-row locally, a shard width that is not a multiple of 32
                           elements pads the last tile-column locally (padding is never written
                           back). A wide stick is cut into column chunks of <= MAX_CHUNK_TILES
                           tiles and only the current chunk is staged, so per-Tensix-core L1 is
@@ -43,11 +43,11 @@ import math
 import ttnn
 
 TILE = 32
-MAX_CHUNK_TILES = 32  # widest column chunk (tiles) staged at once; bounds per-core L1 to 6 x 32 tiles
+MAX_CHUNK_TILES = 32  # widest column chunk (tiles) staged at once; bounds per-Tensix-core L1 to 6 x 32 tiles
 CB_IN, CB_TILED, CB_OUT = 0, 1, 16
 
 VARIANTS = ("resplit", "local", "local_alias")
-LAYOUTS = ("height", "block")
+MEMORY_LAYOUTS = ("height", "block")  # TensorMemoryLayout::HEIGHT_SHARDED / BLOCK_SHARDED
 DTYPES = ("bfloat16", "float32")
 
 
@@ -293,13 +293,15 @@ void kernel_main() {
 # ---------------------------------------------------------------------------------------
 
 
-def shard_grid_cores(device, layout, cores):
+def shard_grid_cores(device, memory_layout, cores):
     """Tensix cores of the shard grid in shard order (ROW_MAJOR orientation).
 
-    layout="height": `cores` is a count; filled row-major across the compute grid.
-    layout="block":  `cores` is (rows, cols); a rectangle at the grid origin."""
+    memory_layout="height" (TensorMemoryLayout::HEIGHT_SHARDED): `cores` is a count of Tensix cores,
+    filled row-major across the compute grid.
+    memory_layout="block" (TensorMemoryLayout::BLOCK_SHARDED): `cores` is (rows, cols); a rectangle at
+    the grid origin."""
     grid = device.compute_with_storage_grid_size()
-    if layout == "height":
+    if memory_layout == "height":
         if not 1 <= cores <= grid.x * grid.y:
             raise ValueError(f"resident_shard_locality: {cores} Tensix cores do not fit the {grid.x}x{grid.y} grid")
         return [ttnn.CoreCoord(k % grid.x, k // grid.x) for k in range(cores)]
@@ -309,29 +311,30 @@ def shard_grid_cores(device, layout, cores):
     return [ttnn.CoreCoord(c, r) for r in range(rows) for c in range(cols)]
 
 
-def _core_range_set(device, layout, cores):
+def _core_range_set(device, memory_layout, cores):
     grid = device.compute_with_storage_grid_size()
-    if layout == "height":
+    if memory_layout == "height":
         return ttnn.num_cores_to_corerangeset(cores, grid, True)
     rows, cols = cores
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, rows - 1))])
 
 
-def sharded_memory_config(device, layout, cores, shard_rows, shard_width):
-    """L1 HEIGHT_SHARDED (cores = count) or BLOCK_SHARDED (cores = (rows, cols)) memory config."""
-    memory_layout = {
+def sharded_memory_config(device, memory_layout, cores, shard_rows, shard_width):
+    """L1 memory config: memory_layout "height" = TensorMemoryLayout::HEIGHT_SHARDED (cores = a count of
+    Tensix cores) or "block" = TensorMemoryLayout::BLOCK_SHARDED (cores = (rows, cols))."""
+    tensor_memory_layout = {
         "height": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         "block": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    }[layout]
+    }[memory_layout]
     spec = ttnn.ShardSpec(
-        _core_range_set(device, layout, cores), [shard_rows, shard_width], ttnn.ShardOrientation.ROW_MAJOR
+        _core_range_set(device, memory_layout, cores), [shard_rows, shard_width], ttnn.ShardOrientation.ROW_MAJOR
     )
-    return ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, spec)
+    return ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, spec)
 
 
-def tensor_shape(layout, cores, shard_rows, shard_width):
-    """Logical [sticks, elements] of the whole tensor."""
-    if layout == "height":
+def tensor_shape(memory_layout, cores, shard_rows, shard_width):
+    """Logical [sticks, elements] of the whole tensor ("height" / "block" as in `MEMORY_LAYOUTS`)."""
+    if memory_layout == "height":
         return [cores * shard_rows, shard_width]
     rows, cols = cores
     return [rows * shard_rows, cols * shard_width]

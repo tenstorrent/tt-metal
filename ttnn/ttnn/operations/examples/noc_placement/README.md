@@ -225,7 +225,8 @@ Tensix core).
   column line's shared links saturate less; the column baseline is ~2.5× faster on BH p150b (97.8 vs 246.8 µs)
   while the row lever is ~1.9× faster. Consistent with the link-width difference, not isolated.
 - **Single Tensix core:** WH B0 n150 loses 6% with reads on NoC0 at (0,0); BH p150b does not (1.02× on the 12×10
-  board, 1.06× on the 13×10 board — so `noc_flat_1core_block16` asserts ≤ 1.08×). The DRAM cores sit in different
+  board, 1.06× on the 13×10 board — so `noc_flat_1core_block16` records the BH p150b range 1.02–1.056× and its
+  bound is derived from the high end). The DRAM cores sit in different
   NoC columns (WH 0 and 5, BH 0 and 9), so the one-core route differs; not investigated.
 - **Second BH p150b board (13×10 = 130 Tensix cores):** the line regimes keep their verdicts with different sizes —
   placement 1.80× (12×10 board 2.24×), NoC 1.97× (2.45×), latency-bound placement 1.00×.
@@ -262,7 +263,13 @@ likewise flat when latency-bound (`block=1`: 1.04× at 2 Tensix cores, 1.07× at
   `swap_columns` change, CHIP_FREQ 1350 MHz.
 
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board). Each regime carries the speedup measured per architecture; the bound is derived from
+the number measured on the attached architecture by `perf_test_utils.regime_bound` (helps: at least the lower of
+half the measured gain and the measured number less a 10% noise margin, logged instead when that falls below
+1.02×; does not help: at most the measured high plus the margin), a missed bound is re-measured once, and an
+architecture with no measured number only logs — so the full-grid, write-split and column-swap regimes
+(BH p150b only) log on Wormhole. A regime with a fixed Tensix-core count skips on a grid that lacks it (a line of
+8 Tensix cores needs an 8×8 grid; `swap3_helps_grid65_64mb` needs 65 Tensix cores).
 
 ## Measure your own shapes/params
 ```bash
@@ -294,15 +301,17 @@ python -m ttnn.operations.examples.noc_placement --report   # rewrites noc_place
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_correctness
 # device kernel duration for the 12-cell read/write × NoC × placement matrix
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_device_perf
-# helps / does-not-help regimes (asserted speedups)
+# helps / does-not-help regimes (speedups asserted against bounds derived from the per-arch measured number)
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_regimes
 # write split: bitwise identity copy on every split / pairing, then the measured sweep (section 3's table)
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_write_split_correctness
-scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_write_split_perf
+NP_SWEEPS=1 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_write_split_perf
 # column swap: bitwise identity copy for N in {1,3,6,all} x both anchors, then the measured sweep (section 4's table)
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_swap_columns_correctness
-scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_swap_columns_perf
+NP_SWEEPS=1 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_swap_columns_perf
 ```
+The two measurement sweeps (`*_write_split_perf`, `*_swap_columns_perf`) only log a table and are skipped unless
+`NP_SWEEPS=1` or `EXAMPLES_SWEEPS=1`; the CLI's `--write-split` / `--swap-columns` set it.
 
 ## Code
 `noc_placement.py` (op; `_ordered_cores()` placements incl. `grid`, `_dm_config()` NoC + `NOC_MODE`,

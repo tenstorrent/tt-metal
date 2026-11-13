@@ -31,6 +31,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import check_regime, interleaved_ns
 from ttnn.operations.examples.sfpu_tile_scope import (
     ABLATION,
     BASELINE,
@@ -316,22 +317,18 @@ def _format_report(perf, funcs, variants, *, box, arch, clock, reps, trials):
 # Regimes: where scoping the SFPU to row 0 (r_iter2) helps vs does not, vs the whole tile (rc)
 # =============================================================================
 # The lever only removes SFPU math cycles. It shows in the MATH-thread zone (reps SFPU calls per launch) but
-# is DILUTED in whole-op `DEVICE KERNEL DURATION [ns]` (reps=1: one SFPU call per tile, unpack/copy/pack/CB handshake
-# and launch floor stay), and a scope change that keeps the SAME vector count (r vs c: 16 vectors each) gains nothing.
+# is DILUTED in whole-op `DEVICE KERNEL DURATION [ns]` (reps=1: one SFPU call per tile, unpack/copy/pack/circular-buffer
+# handshake and launch floor stay), and a scope change that keeps the SAME vector count (r vs c: 16 vectors each)
+# gains nothing.
+#
+# Two metrics are sampled: "math_zone" is the profiler ZONE duration of the MATH RISC-V processor (TRISC_1) parsed from
+# the device CSV (this file's own sampling code); "whole_op" is DEVICE KERNEL DURATION through
+# `perf_test_utils.interleaved_ns`. Either way the samples go through `perf_test_utils.check_regime`: the bound is
+# derived from the speedup measured on the architecture the test runs on (`regime_bound`): "helps" asserts half the
+# measured gain but never closer than 10% to the measurement; "does_not_help" asserts <= max(1.0, 1.10 x the highest
+# measured value). An architecture with no number is logged, not asserted, and a missed bound is re-measured once
+# and re-checked on the pooled samples. Numbers per board in README.md. One Tensix core, so no grid guard is needed.
 _REGIME_TRIALS = 11
-_KERNEL_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
-
-
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    total, found = 0.0, False
-    for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_KERNEL_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
 
 
 def _interleaved_math_zone_ns(device, runners, reps, trials):
@@ -351,67 +348,95 @@ def _interleaved_math_zone_ns(device, runners, reps, trials):
     return samples
 
 
-def _interleaved_kernel_ns(device, runners, trials):
-    """Whole-op DEVICE KERNEL DURATION [ns], interleaved. {key: [ns per launch]}."""
-    for run in runners.values():
-        run()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
-    samples = {k: [] for k in runners}
-    for trial in range(trials + 1):
-        for key, run in runners.items():
-            run()
-            ns = _read_kernel_ns(device)
-            assert ns is not None, f"no profiler data for {key}"
-            if trial:
-                samples[key].append(ns)
-    return samples
-
-
-# (id, func, metric, reps, baseline variant, lever variant, kind, threshold). speedup = baseline_ns / lever_ns.
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only
-# log -- numbers per board in README.md.
+# (id, func, metric, reps, baseline variant, lever variant, kind, measured speedup per architecture).
+# speedup = baseline_ns / lever_ns.
 _REGIMES = [
-    # WH 7.30x, BH 7.30x
-    ("helps_rsqrt_math_zone_rc_to_r_iter2", "rsqrt", "math_zone", 2000, "rc", "r_iter2", "helps", 4.1),
-    # WH 6.69x, BH 5.46x
-    ("helps_recip_math_zone_rc_to_r_iter2", "recip", "math_zone", 2000, "rc", "r_iter2", "helps", 3.23),
-    # WH 2.22x, BH 2.27x
-    ("diluted_rsqrt_whole_op_reps1_rc_to_r_iter2", "rsqrt", "whole_op", 1, "rc", "r_iter2", "helps", 1.6),
-    # WH 1.61x, BH 1.38x
-    ("diluted_recip_whole_op_reps1_rc_to_r_iter2", "recip", "whole_op", 1, "rc", "r_iter2", "helps", 1.19),
-    # WH 1.00x, BH 1.00x
-    ("not_rsqrt_math_zone_c_to_r_same_16_vectors", "rsqrt", "math_zone", 2000, "c", "r", "does_not_help", 1.05),
-    # WH 1.00x, BH 1.00x
-    ("not_recip_math_zone_c_to_r_same_16_vectors", "recip", "math_zone", 2000, "c", "r", "does_not_help", 1.05),
+    (
+        "helps_rsqrt_math_zone_rc_to_r_iter2",
+        "rsqrt",
+        "math_zone",
+        2000,
+        "rc",
+        "r_iter2",
+        "helps",
+        {"wh": 7.30, "bh": 7.30},
+    ),
+    (
+        "helps_recip_math_zone_rc_to_r_iter2",
+        "recip",
+        "math_zone",
+        2000,
+        "rc",
+        "r_iter2",
+        "helps",
+        {"wh": 6.69, "bh": 5.46},
+    ),
+    (
+        "diluted_rsqrt_whole_op_reps1_rc_to_r_iter2",
+        "rsqrt",
+        "whole_op",
+        1,
+        "rc",
+        "r_iter2",
+        "helps",
+        {"wh": 2.22, "bh": 2.27},
+    ),
+    (
+        "diluted_recip_whole_op_reps1_rc_to_r_iter2",
+        "recip",
+        "whole_op",
+        1,
+        "rc",
+        "r_iter2",
+        "helps",
+        {"wh": 1.61, "bh": 1.38},
+    ),
+    (
+        "not_rsqrt_math_zone_c_to_r_same_16_vectors",
+        "rsqrt",
+        "math_zone",
+        2000,
+        "c",
+        "r",
+        "does_not_help",
+        {"wh": 1.00, "bh": 1.00},
+    ),
+    (
+        "not_recip_math_zone_c_to_r_same_16_vectors",
+        "recip",
+        "math_zone",
+        2000,
+        "c",
+        "r",
+        "does_not_help",
+        {"wh": 1.00, "bh": 1.00},
+    ),
 ]
 
 
 @pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
 def test_sfpu_tile_scope_regimes(device, regime):
-    name, func, metric, reps, base_v, lever_v, kind, threshold = regime
+    name, func, metric, reps, base_v, lever_v, kind, measured = regime
     x_dev, golden_in = _make_input(device)
     for variant in (base_v, lever_v):
         out = run_op(x_dev, variant=variant, func=func, reps=1)
         _check(out, golden_in, func, variant, f"{func}/{variant}")
 
     runners = {v: (lambda v=v: run_op(x_dev, variant=v, func=func, reps=reps)) for v in (base_v, lever_v)}
-    if metric == "math_zone":
-        samples = _interleaved_math_zone_ns(device, runners, reps, _REGIME_TRIALS)
-        unit = "ns per SFPU call (TRISC_1 math zone)"
-    else:
-        samples = _interleaved_kernel_ns(device, runners, _REGIME_TRIALS)
-        unit = "ns per launch (DEVICE KERNEL DURATION)"
-    base, lever = statistics.median(samples[base_v]), statistics.median(samples[lever_v])
-    speedup = base / lever
-    logger.info(
-        f"[{_arch_label(device)}] {name}: func={func} reps={reps} metric={unit} {base_v}={base:.1f} "
-        f"(min {min(samples[base_v]):.1f}, max {max(samples[base_v]):.1f}) {lever_v}={lever:.1f} "
-        f"(min {min(samples[lever_v]):.1f}, max {max(samples[lever_v]):.1f}) speedup={speedup:.2f}x "
-        f"trials={_REGIME_TRIALS}"
+
+    def measure():
+        if metric == "math_zone":
+            samples = _interleaved_math_zone_ns(device, runners, reps, _REGIME_TRIALS)
+        else:
+            samples = interleaved_ns(device, runners, trials=_REGIME_TRIALS)
+        return samples[base_v], samples[lever_v]
+
+    unit = "ns per SFPU call (TRISC_1 math zone)" if metric == "math_zone" else "ns per launch (DEVICE KERNEL DURATION)"
+    check_regime(
+        device,
+        name,
+        kind,
+        measured,
+        measure,
+        detail=f"func={func} reps={reps} {base_v} vs {lever_v}, 1 Tensix core, {unit}",
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"{name}: speedup {speedup:.2f}x < {threshold}"
-    elif kind == "does_not_help":
-        assert speedup <= threshold, f"{name}: speedup {speedup:.2f}x > {threshold}"
-    # kind == "measure": correctness is checked above, the speedup is only logged

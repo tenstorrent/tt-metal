@@ -13,6 +13,12 @@ ttnn/ttnn/operations/examples/shared_input_reuse/README.md.
         tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_correctness
     scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_device_perf
+
+test_shared_input_reuse_device_perf only logs its table unless SIR_REPORT names a Markdown file to write.
+The resident-window sweep is an opt-in measurement sweep:
+
+    SIR_SWEEPS=1 scripts/run_safe_pytest.sh --run-all \\
+        tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_window_sweep
 """
 
 import os
@@ -38,6 +44,13 @@ from ttnn.operations.examples.shared_input_reuse.resident_window import (
 )
 
 from loguru import logger
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import (
+    check_regime,
+    interleaved_ns,
+    read_kernel_ns,
+    require_cores,
+    sweep_gate,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 TILE = 32
@@ -51,12 +64,10 @@ NUM_CHUNKS = int(os.environ.get("SIR_CHUNKS", "19"))
 N_WARMUP = 3
 N_PROFILE_ITERS = int(os.environ.get("SIR_TRIALS", "10"))
 _INNER = 5
-REPORT_PATH = os.environ.get(
-    "SIR_REPORT",
-    str(Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/shared_input_reuse/report.md"),
-)
+# test_shared_input_reuse_device_perf writes its Markdown report only when SIR_REPORT names a path (the CLI's
+# --report); by default it only logs, so a plain run never rewrites the committed report.md.
+REPORT_PATH = os.environ.get("SIR_REPORT", "")
 PCC = 0.99
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 
 def _num_cores(device):
@@ -85,31 +96,16 @@ def _make_output(device, n):
     )
 
 
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    per_chip = ttnn.get_latest_programs_perf_data()
-    total, found = 0.0, False
-    for programs in (per_chip or {}).values():
-        for program in programs:
-            results = getattr(program, "program_analyses_results", None) or {}
-            entry = results.get(_DURATION_KEY)
-            if entry is None:
-                continue
-            total += float(entry.duration)
-            found = True
-    return total if found else None
-
-
 def _measure_ns(device, run_fn):
     for _ in range(N_WARMUP):
         run_fn()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
+    read_kernel_ns(device)
     samples = []
     for _ in range(N_PROFILE_ITERS):
         for _ in range(_INNER):
             run_fn()
-        total = _read_kernel_ns(device)
+        total = read_kernel_ns(device)
         if total is None:
             return None, None
         samples.append(total / _INNER)
@@ -222,6 +218,8 @@ def test_shared_input_reuse_device_perf(device):
         f"| per_core_dram | {bm:.1f} | {bs:.1f} | 1.00x |",
         f"| mcast | {mm:.1f} | {msd:.1f} | {ratio:.2f}x |",
     ]
+    if not REPORT_PATH:
+        return
     try:
         Path(REPORT_PATH).write_text("\n".join(md) + "\n")
         logger.info(f"[shared_input_reuse] wrote {REPORT_PATH}")
@@ -229,60 +227,70 @@ def test_shared_input_reuse_device_perf(device):
         logger.warning(f"[shared_input_reuse] could not write report: {e}")
 
 
-def _measure_interleaved_ns(device, run_fns, trials=N_PROFILE_ITERS):
-    """Median/min/max ns per op for each callable, with the windows interleaved A,B,A,B,... so
-    slow drift on the shared device hits every variant equally."""
-    for fn in run_fns.values():
-        for _ in range(N_WARMUP):
-            fn()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
-    samples = {k: [] for k in run_fns}
-    for _ in range(trials):
-        for k, fn in run_fns.items():
-            for _ in range(_INNER):
-                fn()
-            total = _read_kernel_ns(device)
-            assert total is not None, f"profiler produced no data for {k}"
-            samples[k].append(total / _INNER)
-    return {k: (statistics.median(v), min(v), max(v)) for k, v in samples.items()}
-
+# Regimes: interleaved A,B,A,B... trials per variant (each trial = _INNER launches), verdict from
+# `perf_test_utils.check_regime`.
+_REGIME_TRIALS = max(7, N_PROFILE_ITERS)
 
 # Streamed shared input: ("stream", chunk_rows, d_cols, num_chunks). All shapes are bf16 tiles; the worker
-# rectangle is 2 x grid_x Tensix cores (16 on Wormhole B0 n150, 24 on Blackhole p150b), injector at (0,0).
+# rectangle is 2 x grid_x Tensix cores (16 on Wormhole B0 n150, 24 or 26 on Blackhole p150b), injector at (0,0),
+# so these regimes build on any grid.
 #   helps:          64-tile chunks (131072 B per multicast), 1216 tiles total
 #   measure:        16-tile chunks, same 1216 tiles: loses on WH B0, wins on BH, so only logged
 #   measure:        8-tile chunks (16384 B per multicast): WH B0 0.82x, BH p150b 24 Tensix cores 0.96x, but
 #                   1.51x on a BH p150b whose 2 x 13 = 26-Tensix-core baseline is slower, so only logged
 #   does_not_help:  1-tile chunks (2048 B per multicast, d_cols = 1), SAME 1216 tiles total
 # Resident window: ("window", num_cores, window_tiles, tile_rows_per_core, chunk_tiles, lever). num_cores None =
-# the whole compute grid (130 Tensix cores on BH p150b). The baseline is always `per_core`; r = window bytes /
-# x bytes per Tensix core = 1 / tile_rows_per_core.
+# the whole compute grid (130 Tensix cores on BH p150b); a fixed count skips on a grid with fewer Tensix cores.
+# The baseline is always `per_core`; r = window bytes / x bytes per Tensix core = 1 / tile_rows_per_core.
 #   helps:          full grid, 128-tile (256 KB) window, 2 tile-rows of x per Tensix core (r = 0.5)
 #   does_not_help:  full grid, 8-tile (16 KB) window, 8 tile-rows per Tensix core (r = 0.125)
 #   does_not_help:  32 Tensix cores, 128-tile window, 8 tile-rows per Tensix core (r = 0.125)
 #   does_not_help:  lockstep_mcast with 1-tile chunks (a handshake per tile), where oneshot_mcast helps
-# Thresholds hold on every measured board (stream: WH B0 n150, BH p150b; window: BH p150b only); `measure`
-# regimes flip between boards and only log -- numbers per board in README.md.
+# The last field is the speedup (baseline ns / lever ns) measured per architecture, from the comment beside
+# the regime, README.md and report.md; a (low, high) pair spans the boards / runs measured (BH: P150, P100a and
+# two p150b grids for the streamed regimes; the regime run and the sweep row for the window regimes). The bound
+# each regime is asserted against is derived from the number for the architecture it runs on
+# (`perf_test_utils.regime_bound`): "helps" asserts half the measured gain but never closer than 10% to the
+# measurement; "does_not_help" asserts <= max(1.0, 1.10 x the highest measured value). An architecture with no
+# number (Wormhole for every window regime) is logged, not asserted; `measure` regimes always only log. A missed
+# bound is re-measured once and re-checked on the pooled samples.
 _REGIME_CASES = [
-    pytest.param(("stream", 16, 4, 19), "helps", 1.17, id="helps_chunk64tiles_1216tiles"),  # WH 1.34x, BH 1.93x
-    pytest.param(("stream", 4, 4, 76), "measure", None, id="measure_chunk16tiles_1216tiles"),  # WH 0.93x, BH 1.32x
     pytest.param(
-        ("stream", 2, 4, 152), "measure", None, id="measure_chunk8tiles_1216tiles"
+        ("stream", 16, 4, 19), "helps", {"wh": (1.32, 1.34), "bh": (1.71, 2.27)}, id="helps_chunk64tiles_1216tiles"
+    ),  # WH 1.34x, BH 1.93x
+    pytest.param(
+        ("stream", 4, 4, 76), "measure", {"wh": 0.93, "bh": (1.32, 2.03)}, id="measure_chunk16tiles_1216tiles"
+    ),  # WH 0.93x, BH 1.32x
+    pytest.param(
+        ("stream", 2, 4, 152), "measure", {"wh": 0.82, "bh": (0.96, 1.51)}, id="measure_chunk8tiles_1216tiles"
     ),  # WH 0.82x, BH 0.96x / 1.51x
     pytest.param(
-        ("stream", 1, 1, 1216), "does_not_help", 1.0, id="does_not_help_chunk1tile_1216tiles"
+        ("stream", 1, 1, 1216), "does_not_help", {"wh": 0.70, "bh": 0.64}, id="does_not_help_chunk1tile_1216tiles"
     ),  # WH 0.70x, BH 0.64x
-    pytest.param(("window", None, 128, 2, 32, "oneshot_mcast"), "helps", 1.10, id="window_helps_fullgrid_w128_r050"),
     pytest.param(
-        ("window", None, 8, 8, 32, "oneshot_mcast"), "does_not_help", 1.05, id="window_does_not_help_fullgrid_w8_r0125"
-    ),
+        ("window", None, 128, 2, 32, "oneshot_mcast"),
+        "helps",
+        {"bh": (1.19, 1.22)},
+        id="window_helps_fullgrid_w128_r050",
+    ),  # BH 1.20x (regime), 1.21x [1.19-1.22] (sweep)
     pytest.param(
-        ("window", 32, 128, 8, 32, "oneshot_mcast"), "does_not_help", 1.05, id="window_does_not_help_32cores_w128_r0125"
-    ),
+        ("window", None, 8, 8, 32, "oneshot_mcast"),
+        "does_not_help",
+        {"bh": (0.99, 1.00)},
+        id="window_does_not_help_fullgrid_w8_r0125",
+    ),  # BH 1.00x (regime), 0.99x (sweep)
     pytest.param(
-        ("window", None, 32, 2, 1, "lockstep_mcast"), "does_not_help", 1.05, id="window_does_not_help_lockstep_chunk1"
-    ),
+        ("window", 32, 128, 8, 32, "oneshot_mcast"),
+        "does_not_help",
+        {"bh": (0.96, 1.00)},
+        id="window_does_not_help_32cores_w128_r0125",
+    ),  # BH 1.00x (regime), 0.96x (sweep)
+    pytest.param(
+        ("window", None, 32, 2, 1, "lockstep_mcast"),
+        "does_not_help",
+        {"bh": 0.88},
+        id="window_does_not_help_lockstep_chunk1",
+    ),  # BH 0.88x
 ]
 
 
@@ -295,7 +303,7 @@ def _stream_regime(device, chunk_rows, d_cols, num_chunks):
     )
     tt_out = _make_output(device, n)
 
-    # Correctness: both variants must deliver identical per-core sums.
+    # Correctness: both variants must deliver identical per-Tensix-core sums.
     outs = {}
     fns = {}
     for variant in VARIANTS:
@@ -304,16 +312,17 @@ def _stream_regime(device, chunk_rows, d_cols, num_chunks):
         outs[variant] = ttnn.to_torch(fns[variant]() or tt_out).to(torch.float32)
     assert_with_pcc(outs["per_core_dram"], outs["mcast"], 0.9999)
 
-    res = _measure_interleaved_ns(device, fns)
     chunk_tiles = chunk_rows * d_cols
     desc = (
         f"{n} Tensix cores, {num_chunks * chunk_tiles} tiles total in {num_chunks} chunks of {chunk_tiles} tiles "
         f"({chunk_tiles * 2048} B/chunk)"
     )
-    return res, "per_core_dram", "mcast", desc
+    return fns, "per_core_dram", "mcast", desc
 
 
 def _window_regime(device, num_cores, window_tiles, tile_rows_per_core, chunk_tiles, lever):
+    if num_cores is not None:
+        require_cores(device, num_cores, what=f"a {num_cores}-Tensix-core window regime")
     cols, rows_grid = window_rectangle(device, num_cores)
     n = cols * rows_grid
     rows = n * tile_rows_per_core * TILE
@@ -321,47 +330,48 @@ def _window_regime(device, num_cores, window_tiles, tile_rows_per_core, chunk_ti
     fns = _window_fns(device, tt_x, tt_w, tt_out, ["per_core", lever], num_cores, chunk_tiles)
     for fn in fns.values():
         _check_window(fn, tt_out, expected)
-    res = _measure_interleaved_ns(device, fns)
     xbytes = rows * window_tiles * TILE * 2
     desc = (
         f"{n} Tensix cores ({cols}x{rows_grid}), window {window_tiles} tiles ({window_tiles * 2048} B) in "
         f"{chunk_tiles}-tile chunks, x [{rows}, {window_tiles * TILE}] = {xbytes / 2**20:.1f} MiB "
         f"({tile_rows_per_core} tile-rows per Tensix core, r = {1 / tile_rows_per_core:.3f})"
     )
-    return res, "per_core", lever, desc
+    return fns, "per_core", lever, desc
 
 
-@pytest.mark.parametrize("case,regime,threshold", _REGIME_CASES)
-def test_shared_input_reuse_regimes(device, case, regime, threshold):
+@pytest.mark.parametrize("case,kind,measured", _REGIME_CASES)
+def test_shared_input_reuse_regimes(request, device, case, kind, measured):
     """When reading a shared input once and multicasting it pays, and when it does not.
 
     Streamed input (same total stream, different chunk size): the per-chunk mcast handshake (wait for all
     receivers' acks, then broadcast) has a fixed cost per chunk. With few large chunks it is amortized and the
-    DRAM-read saving wins; with many small chunks the handshake dominates and `mcast` loses to per-core reads.
+    DRAM-read saving wins; with many small chunks the handshake dominates and `mcast` loses to per-Tensix-core
+    reads.
 
     Resident window (x * w, every Tensix core streams its own rows and needs all of w): a one-shot multicast of
     w removes (N - 1) copies of the window from DRAM. It pays when the window is a large share of each core's
     own x bytes (r >= 0.5) and not when it is small (r <= 0.125), whatever the Tensix-core count; a per-chunk
     handshake (lockstep, 1-tile chunks) costs more than the reads it saves.
-    Asserts: helps -> speedup >= threshold; does_not_help -> speedup <= threshold; measure -> logged only.
+    Asserts against a bound derived from the speedup measured on this architecture (`check_regime`);
+    `measure` regimes and architectures with no measured number are logged only.
     """
     if case[0] == "stream":
-        res, base_name, lever, desc = _stream_regime(device, *case[1:])
+        fns, base_name, lever, desc = _stream_regime(device, *case[1:])
     else:
-        res, base_name, lever, desc = _window_regime(device, *case[1:])
-    base, mc = res[base_name][0], res[lever][0]
-    speedup = base / mc
-    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
-    logger.info(
-        f"[{arch}] [shared_input_reuse regimes] {regime}: {desc} | "
-        f"{base_name} {base:.0f} ns [{res[base_name][1]:.0f}-{res[base_name][2]:.0f}]  "
-        f"{lever} {mc:.0f} ns [{res[lever][1]:.0f}-{res[lever][2]:.0f}]  speedup {speedup:.2f}x  "
-        f"trials={N_PROFILE_ITERS}x{_INNER}"
+        fns, base_name, lever, desc = _window_regime(device, *case[1:])
+
+    def measure():
+        samples = interleaved_ns(device, fns, trials=_REGIME_TRIALS, launches=_INNER, warmup=N_WARMUP)
+        return samples[base_name], samples[lever]
+
+    check_regime(
+        device,
+        request.node.callspec.id,
+        kind,
+        measured,
+        measure,
+        detail=f"{desc} | {base_name} vs {lever}, {_INNER} launches per trial",
     )
-    if regime == "helps":
-        assert speedup >= threshold, f"expected {lever} speedup >= {threshold:.2f}x, got {speedup:.2f}x"
-    elif regime == "does_not_help":
-        assert speedup <= threshold, f"expected {lever} speedup <= {threshold:.2f}x (no gain), got {speedup:.2f}x"
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -418,6 +428,8 @@ def test_shared_input_reuse_window_correctness(
     device, variant, num_cores, window_tiles, tile_rows_per_core, chunk_tiles
 ):
     """Every variant computes x * w exactly as torch does, on every Tensix core, including partial chunks."""
+    if num_cores is not None:
+        require_cores(device, num_cores, what=f"window correctness on {num_cores} Tensix cores")
     cols, rows_grid = window_rectangle(device, num_cores)
     n = cols * rows_grid
     rows = (tile_rows_per_core * n + 1) * TILE  # +1 tile-row: an uneven split
@@ -433,7 +445,7 @@ def _env_list(name, default):
 
 def _measure_window_case(device, num_cores, window_tiles, stream_bytes, variants, chunk, trials, repeats):
     """Median ns per variant over `repeats` DRAM placements (a pad tensor shifts x/w/out by a different number
-    of pages each time; the A/B windows are interleaved within each placement). Returns
+    of pages, one 2048-byte tile each, every time; the A/B windows are interleaved within each placement). Returns
     ({variant: median ns}, {variant: (min, max) speedup vs variants[0] over placements}, rows)."""
     cols, rows_grid = window_rectangle(device, num_cores)
     rows = _window_rows(stream_bytes, window_tiles, cols * rows_grid)
@@ -446,7 +458,8 @@ def _measure_window_case(device, num_cores, window_tiles, stream_bytes, variants
         fns = _window_fns(device, tt_x, tt_w, tt_out, variants, num_cores, chunk)
         for fn in fns.values():
             _check_window(fn, tt_out, expected)  # correctness gate for every variant at every point
-        per_rep.append({k: v[0] for k, v in _measure_interleaved_ns(device, fns, trials=trials).items()})
+        samples = interleaved_ns(device, fns, trials=trials, launches=_INNER, warmup=N_WARMUP)
+        per_rep.append({k: statistics.median(v) for k, v in samples.items()})
         for t in (tt_x, tt_w, tt_out, pad):
             ttnn.deallocate(t)
     med = {v: statistics.median(r[v] for r in per_rep) for v in variants}
@@ -457,9 +470,27 @@ def _measure_window_case(device, num_cores, window_tiles, stream_bytes, variants
     return med, spread, rows
 
 
+def _rectangle_fits(device, num_cores):
+    try:
+        window_rectangle(device, num_cores)
+    except ValueError:
+        return False
+    return True
+
+
+@sweep_gate("SIR_SWEEPS")
 def test_shared_input_reuse_window_sweep(device):
-    """Log-only sweep: Tensix cores x window tiles x stream bytes (env SIR_WIN_*; the CLI's --window mode)."""
+    """Log-only sweep: Tensix cores x window tiles x stream bytes (env SIR_WIN_*; the CLI's --window mode).
+
+    A measurement sweep: skipped unless SIR_SWEEPS=1 (the CLI's --window sets it) or EXAMPLES_SWEEPS=1.
+    Tensix-core counts that do not form a rectangle on this compute grid are left out (and logged)."""
     cores_list = _env_list("SIR_WIN_CORES", "16,32,64,full")
+    too_big = [c for c in cores_list if not _rectangle_fits(device, c)]
+    if too_big:
+        logger.warning(
+            f"[shared_input_reuse] window sweep: skipping Tensix-core counts {too_big} (do not fit the grid)"
+        )
+    cores_list = [c for c in cores_list if c not in too_big]
     windows = _env_list("SIR_WIN_TILES", "1,8,32,128,256")
     streams = [int(float(v) * 2**20) for v in os.environ.get("SIR_WIN_STREAM_MB", "16,64").split(",")]
     variants = os.environ.get("SIR_WIN_VARIANTS", ",".join(WINDOW_VARIANTS)).split(",")
@@ -470,7 +501,7 @@ def test_shared_input_reuse_window_sweep(device):
     lines = [
         "",
         f"=== shared_input_reuse resident-window sweep  box={socket.gethostname()}  arch={arch}  chunk={chunk} tiles  "
-        f"median of {repeats} DRAM placements x {trials}x{_INNER} launches ===",
+        f"median of {repeats} DRAM placements x {trials}x{_INNER} launches  (cores = Tensix cores) ===",
         f"    {'cores':>5} {'window':>16} {'x MB':>6} {'rows':>8}  "
         + "  ".join(f"{v:>15}" for v in variants)
         + "   speedup vs "

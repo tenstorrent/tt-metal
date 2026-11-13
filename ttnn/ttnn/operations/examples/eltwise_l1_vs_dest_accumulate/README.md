@@ -91,7 +91,9 @@ tile per step and no independent math to hide the accumulator handling, the diff
 clearest; they shrink when heavy per-step math overlaps the unpack/add.
 
 ## Run the predefined sweep (regenerates `report.md`)
+The test writes a report only when `ELDA_REPORT` names a path (the CLI sets it from `--report PATH`):
 ```bash
+ELDA_REPORT=ttnn/ttnn/operations/examples/eltwise_l1_vs_dest_accumulate/report.md \
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_eltwise_l1_vs_dest_accumulate.py::test_eltwise_l1_vs_dest_accumulate_device_perf
 ```
 Correctness (all three variants compute the identical fp32 sum):
@@ -134,7 +136,7 @@ spread 23653..23791 / 5735..5808 and 366..368 / 365..373 ns), 2026-10-12; step s
 step sweeps on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`). The
 illustrative bh-qb-11 table above (5.09× / 10.59× at 64 steps) is an older Blackhole run, kept.
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_eltwise_l1_vs_dest_accumulate.py::test_eltwise_l1_vs_dest_accumulate_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each regime is asserted against a bound derived from the speedup measured on that architecture by `perf_test_utils.regime_bound`, an architecture with no measured number logs only, and a missed bound is re-measured once).
 
 ## Syntax — summing one stream with `DestAccumulation` (moved here from `master.md`)
 

@@ -6,6 +6,7 @@
     python -m ttnn.operations.examples.matmul_output_subblock [--mt 16] [--nt 16]
                                                               [--kt-sweep 1,2,4,8]
                                                               [--iters 50] [--trials 10]
+                                                              [--report PATH]
 
 Runs the device-perf test through scripts/run_safe_pytest.sh (device lock, in-process
 profiler, post-run reset) and prints the output-subblock x Kt table (+ a FMAs-removed
@@ -29,6 +30,7 @@ def main():
     ap.add_argument("--kt-sweep", default="1,2,4,8", help="comma list of contraction depths Kt. Default 1,2,4,8.")
     ap.add_argument("--iters", type=int, default=50, help="in-kernel repeat (steady-state). Default 50.")
     ap.add_argument("--trials", type=int, default=10, help="profiled rounds (median). Default 10.")
+    ap.add_argument("--report", help="also write the markdown report to PATH (nothing is written by default)")
     args = ap.parse_args()
 
     env = dict(
@@ -39,6 +41,8 @@ def main():
         MOS_ITERS=str(args.iters),
         MOS_TRIALS=str(args.trials),
     )
+    if args.report:
+        env["MOS_REPORT"] = args.report
     cmd = ["scripts/run_safe_pytest.sh", "--run-all", _TEST]
     print(f"[matmul_output_subblock] M={args.mt}t N={args.nt}t Kt-sweep={args.kt_sweep} iters={args.iters}")
     print(f"[matmul_output_subblock] {' '.join(cmd)}")

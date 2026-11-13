@@ -10,7 +10,6 @@ os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
 os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
 os.environ.setdefault("TT_METAL_LOGGER_LEVEL", "error")
 
-import socket
 import statistics
 from pathlib import Path
 
@@ -19,13 +18,20 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import (
+    arch_label,
+    check_regime,
+    interleaved_ns,
+    require_grid,
+    stamp,
+    sweep_gate,
+)
 from ttnn.operations.examples.tensix_all_reduce_wave_pipeline import (
     create_sharded_memory_config,
     row_all_reduce,
     wave_plan,
 )
 
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 TILE = 32
 
 # (case, rows, width_tiles): tile-rows per Tensix core and tiles per tile-row per Tensix core.
@@ -42,8 +48,13 @@ def _int(name, default):
 
 
 def _group(device):
+    """(group_size, num_groups): a group is one grid row of Tensix cores, one group per grid row. The
+    default is up to 8 x 8 Tensix cores, clamped to the grid; an explicit WP_GROUP_SIZE / WP_NUM_GROUPS
+    that the grid cannot hold skips the test."""
     grid = device.compute_with_storage_grid_size()
-    return _int("WP_GROUP_SIZE", min(8, grid.x)), _int("WP_NUM_GROUPS", min(8, grid.y))
+    group_size, num_groups = _int("WP_GROUP_SIZE", min(8, grid.x)), _int("WP_NUM_GROUPS", min(8, grid.y))
+    require_grid(device, group_size, num_groups, what=f"{num_groups} groups of {group_size} Tensix cores")
+    return group_size, num_groups
 
 
 def _cases():
@@ -120,47 +131,18 @@ def _check_all(tt_input, expected, methods, group_size, num_groups, rows, width_
             assert torch.equal(out, reference), f"{label} differs from one_shot"
 
 
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    per_chip = ttnn.get_latest_programs_perf_data() or {}
-    total, found = 0.0, False
-    for programs in per_chip.values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
 def _measure(device, runners, trials, kernel_iters):
-    """{label: [ns per all-reduce, ...]}; the first launch of each runner (JIT) is discarded."""
-    for run in runners.values():
-        run()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
-    samples = {label: [] for label in runners}
-    for _ in range(trials):
-        for label, run in runners.items():
-            run()
-            duration = _read_kernel_ns(device)
-            assert duration is not None, f"device profiler produced no duration for {label}"
-            samples[label].append(duration / kernel_iters)
-    return samples
+    """{label: [ns per all-reduce, ...]}; warm-up and per-launch timing follow `interleaved_ns`."""
+    return interleaved_ns(device, runners, trials=trials, per_launch_divisor=kernel_iters)
 
 
-def _arch_label(device):
-    arch = str(device.arch()).rsplit(".", 1)[-1]
-    return {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(arch, arch)
-
-
-def _format_report(results, *, box, arch, group_size, num_groups, trials, kernel_iters):
+def _format_report(results, *, stamp_line, arch, group_size, num_groups, trials, kernel_iters):
     cores = group_size * num_groups
     lines = [
         "# Row all-reduce: one-shot vs wave-pipelined exchange",
         "",
-        f"box={box}  arch={arch}  N={trials} (median)  kernel-iters={kernel_iters}  "
-        f"group={group_size} Tensix cores along a grid row  groups={num_groups}  cores={cores}",
+        f"{stamp_line}  arch={arch}  N={trials} (median)  kernel-iters={kernel_iters}  "
+        f"group={group_size} Tensix cores along a grid row  groups={num_groups}  Tensix cores={cores}",
         "",
         "| Case | Tile-rows x tiles per Tensix core | Method | Tiles per wave | ns per all-reduce | vs one_shot |",
         "|---|---:|---|---:|---:|---:|",
@@ -187,6 +169,7 @@ def test_tensix_all_reduce_wave_pipeline_correctness(device):
         logger.info(f"PASS {case} rows={rows} width_tiles={width_tiles} methods={[m[0] for m in methods]}")
 
 
+@sweep_gate("WP_SWEEPS")
 def test_tensix_all_reduce_wave_pipeline_device_perf(device):
     """Correctness-gate every method, then measure kernel duration; perf never fails a test."""
     group_size, num_groups = _group(device)
@@ -210,8 +193,8 @@ def test_tensix_all_reduce_wave_pipeline_device_perf(device):
 
     report = _format_report(
         results,
-        box=socket.gethostname(),
-        arch=_arch_label(device),
+        stamp_line=stamp(device),
+        arch=arch_label(device),
         group_size=group_size,
         num_groups=num_groups,
         trials=trials,
@@ -222,21 +205,24 @@ def test_tensix_all_reduce_wave_pipeline_device_perf(device):
         Path(path).write_text(report)
 
 
-# (id, rows, width_tiles, waves, kind, threshold): baseline one_shot vs the lever at `waves`.
-# helps -> speedup >= max(1.05, 1 + half the measured gain); does_not_help -> speedup <= 1.05.
+# (id, rows, width_tiles, waves, kind, measured): baseline one_shot vs the lever at `waves`.
+# The bound is derived from the per-arch measured speedup by `perf_test_utils.regime_bound` (helps: half
+# the measured gain, never closer than the noise margin; does_not_help: at most the measured value plus
+# the noise margin, and never below 1.0). An architecture without a measured number is logged, not
+# asserted. A missed bound is re-measured once and the samples are pooled.
 _REGIMES = [
-    ("helps_tall_32x4_4waves", 32, 4, 4, "helps", 1.17),  # BH p150b 1.34x
-    ("does_not_help_short_8x1_4waves", 8, 1, 4, "does_not_help", 1.05),  # BH p150b 0.92x (2 tiles per wave)
+    ("helps_tall_32x4_4waves", 32, 4, 4, "helps", {"bh": 1.34}),  # BH p150b 1.34x
+    ("does_not_help_short_8x1_4waves", 8, 1, 4, "does_not_help", {"bh": 0.92}),  # BH p150b 0.92x (2 tiles per wave)
 ]
 
 
 @pytest.mark.parametrize(
-    "rows, width_tiles, waves, kind, threshold",
+    "rows, width_tiles, waves, kind, measured",
     [r[1:] for r in _REGIMES],
     ids=[r[0] for r in _REGIMES],
 )
-def test_tensix_all_reduce_wave_pipeline_regimes(device, rows, width_tiles, waves, kind, threshold):
-    """Interleaved A/B of one_shot vs `waves` waves; median of 5 trials."""
+def test_tensix_all_reduce_wave_pipeline_regimes(device, rows, width_tiles, waves, kind, measured, request):
+    """Interleaved A/B of one_shot vs `waves` waves."""
     group_size, num_groups = _group(device)
     methods = [("one_shot", "one_shot", 1), (f"waves={waves}", "waves", waves)]
     tt_input, expected = _make_input(device, group_size, num_groups, rows, width_tiles)
@@ -245,15 +231,16 @@ def test_tensix_all_reduce_wave_pipeline_regimes(device, rows, width_tiles, wave
         label: (lambda variant=variant, w=waves_: _run(tt_input, variant, w, group_size, num_groups, rows, width_tiles))
         for label, variant, waves_ in methods
     }
-    samples = _measure(device, runners, 5, 1)
-    base = statistics.median(samples["one_shot"])
-    lever = statistics.median(samples[f"waves={waves}"])
-    speedup = base / lever
-    logger.info(
-        f"REGIME {kind} rows={rows} width_tiles={width_tiles} waves={waves} one_shot={base:.0f}ns "
-        f"waves={lever:.0f}ns speedup={speedup:.3f}x arch={_arch_label(device)}"
+
+    def measure():
+        samples = interleaved_ns(device, runners, trials=7)
+        return samples["one_shot"], samples[f"waves={waves}"]
+
+    check_regime(
+        device,
+        request.node.callspec.id,
+        kind,
+        measured,
+        measure,
+        detail=f"{rows} tile-rows x {width_tiles} tiles per Tensix core, {num_groups} groups of {group_size} Tensix cores",
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"expected >= {threshold}x, got {speedup:.3f}x"
-    else:
-        assert speedup <= threshold, f"expected <= {threshold}x, got {speedup:.3f}x"

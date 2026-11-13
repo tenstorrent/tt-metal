@@ -6,13 +6,13 @@
 // Drains each page from the reader->writer CB and writes it back to the same
 // interleaved page index (an identity copy). Runs on the NoC the reader does not
 // use, so its writes overlap the reader's reads. Like the reader, this kernel never
-// changes between placements — placement only moves the physical core that runs it.
+// changes between placements — placement only moves the physical Tensix core that runs it.
 //
-// write_split (compile-time): 0 = every page is written on this kernel's NoC.
+// write_split (compile-time): 0 = every output page (one tile) is written on this kernel's NoC.
 // k >= 1 = every k-th page is written on the OTHER NoC (the reader's), so 1/k of the
 // write stream moves NoC; reads are untouched. Issuing on both NoCs from one RISC-V
 // needs NOC_MODE::DM_DYNAMIC_NOC (the host sets it). The barrier then has to cover
-// both NoCs before the CB pages are released. With write_split=0 the split code
+// both NoCs before the circular-buffer pages are released. With write_split=0 the split code
 // compiles out, so the baseline kernel is the plain single-NoC writer.
 
 #include "api/dataflow/dataflow_api.h"
@@ -44,7 +44,7 @@ void kernel_main() {
                 if constexpr (write_split == 0) {
                     noc_async_write(l1_read_addr + i * page_bytes, out_acc.get_noc_addr(page), page_bytes);
                 } else if ((p + i) % write_split == write_split - 1) {
-                    // every write_split-th page (by this core's local page count) takes the other NoC;
+                    // every write_split-th page (by this Tensix core's local page count) takes the other NoC;
                     // each call names its NoC as a compile-time constant, so neither path pays for a
                     // runtime NoC index
                     noc_async_write(

@@ -129,8 +129,8 @@ def _resolve_num_cores(device, num_cores, placement):
 def dram_adjacent_columns(device, anchor="first"):
     """Logical worker-grid columns ordered nearest-DRAM first (the order swap_columns consumes).
 
-    Queried from the device, not hard-coded: the device names, per DRAM bank, the logical worker core
-    closest to that bank; the columns of those cores are the DRAM-adjacent columns ("anchors").
+    Queried from the device, not hard-coded: the device names, per DRAM bank, the logical worker Tensix
+    core closest to that bank; the columns of those Tensix cores are the DRAM-adjacent columns ("anchors").
     anchor="first": rank by distance from the column next to bank 0 only; "every": by distance from
     the nearest anchor column. Ties go to the lower column index."""
     if anchor not in SWAP_ANCHORS:
@@ -252,7 +252,7 @@ def _copy(
     in_addr, out_addr = input_tensor.buffer_address(), output_tensor.buffer_address()
     page_range = {(c.x, c.y): a for c, a in zip(cores, assignment)}
 
-    # swap_columns: split the cores into the usual-pairing group and the swapped group (same kernels,
+    # swap_columns: split the Tensix cores into the usual-pairing group and the swapped group (same kernels,
     # same per-core page ranges; only the NoC each kernel issues on differs between the groups)
     swapped = _swapped_columns(device, swap_columns, swap_anchor) if swap_columns else set()
     groups = [(noc, [c for c in cores if c.x not in swapped]), (_OTHER[noc], [c for c in cores if c.x in swapped])]
