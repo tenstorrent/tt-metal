@@ -43,7 +43,7 @@ def tr(md, name, fn, reps=10):
     print(
         "RES "
         + json.dumps(
-            {"layer": L, "kv": KVFMT, "v1": V1, "pos": P, "stage": name, "traced_us": round(min(ts) * 1e6, 1)}
+            {"layer": L, "kv": KVFMT, "v1": V1, "pos": P, "n": 512, "stage": name, "traced_us": round(min(ts) * 1e6, 1)}
         ),
         flush=True,
     )

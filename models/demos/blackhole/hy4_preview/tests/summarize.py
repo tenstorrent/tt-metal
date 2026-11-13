@@ -12,7 +12,8 @@ for f in sorted(glob.glob(f"{D}/run_m_*.log")):
         if line.startswith("RES "):
             r = json.loads(line[4:])
             r["tag"] = tag
-            rows.append(r)
+            if "mode" in r:
+                rows.append(r)
 
 
 def key(r):
@@ -42,4 +43,32 @@ for r in sorted(
     k = (r["layer"], r["kv"], r["v1"], r["users"], r["pos"])
     print(
         f"| {r['layer']} | {r['kv']} | {'split(v1)' if r['v1'] else 'stock(v0)'} | {r['users']} | {r['pos']} | {r['row']} | {r['pcc']} | {r['max_abs']} | {r.get('idx_overlap','-')} | {lat.get(k,'')} |"
+    )
+
+
+print("\n## compact table (worst case over the chunks / positions / rows of each cell)\n")
+print(
+    "| layer (index source) | mode | KV | kernel | users | min PCC out | max abs diff | min idx overlap | traced ms / layer |"
+)
+print("|---|---|---|---|---|---|---|---|---|")
+agg = {}
+for r in rows:
+    if "pcc" not in r or "wbfp8" in r["tag"]:
+        continue
+    k = (r["layer"], r["mode"], r["kv"], r.get("users", 1), r.get("v1", False))
+    a = agg.setdefault(k, {"min": 9, "maxabs": 0, "ovl": 9, "lat": []})
+    a["min"] = min(a["min"], r["pcc"])
+    a["maxabs"] = max(a["maxabs"], r["max_abs"])
+    if "idx_overlap" in r:
+        a["ovl"] = min(a["ovl"], r["idx_overlap"])
+for r in rows:
+    if "traced_ms" in r and "wbfp8" not in r["tag"]:
+        k = (r["layer"], r["mode"], r["kv"], r.get("users", 1), r.get("v1", False))
+        agg[k]["lat"].append((r.get("pos", r.get("p0")), r["traced_ms"]))
+names = {0: "0 (full, dense MLP)", 1: "1 (full)", 2: "2 (shared, ids from layer 1)"}
+for k, a in sorted(agg.items()):
+    L, mode, kv, users, v1 = k
+    lat = ", ".join(f"{('pos ' if mode == 'decode' else 'p0 ')}{p}: {t}" for p, t in a["lat"])
+    print(
+        f"| {names[L]} | {mode} | {kv} | {'split v1' if v1 else 'stock v0'} | {users} | {a['min']} | {a['maxabs']} | {a['ovl'] if a['ovl'] < 9 else '-'} | {lat} |"
     )
