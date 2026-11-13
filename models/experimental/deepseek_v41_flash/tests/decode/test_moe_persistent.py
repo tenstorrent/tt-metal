@@ -489,7 +489,9 @@ def test_moe_persistent_tp12_perf(mesh_device):
     ``MOE_PERF_WARMUP`` / ``MOE_PERF_STEPS`` override the step counts, e.g. to keep a device-profiler capture
     (``TT_METAL_STREAMING_PROFILER=1``) small. ``MOE_PERF_PERSISTENT_ONLY=1`` skips the one-shot runs: the
     one-shot and persistent builds of a kernel share its profiler zone ids, so a capture holding both
-    misnames zones.
+    misnames zones. ``MOE_PERF_FUSE_HC=1`` makes every persistent request carry hyper-connection streams, post and
+    comb, as the decoder layer's do, so the requesters run the fused HC post step (needs the server's ``fuse_hc``);
+    ``tools/moe_requester_zones.py`` then times the requests from the requesters' side.
     """
     moe_mesh, request_meshes, config, socket_core, request_core = _setup(mesh_device)
     _, moes = _load_layers(moe_mesh, config)
@@ -497,6 +499,7 @@ def test_moe_persistent_tp12_perf(mesh_device):
     warmup = int(os.environ.get("MOE_PERF_WARMUP", 20))
     steps = int(os.environ.get("MOE_PERF_STEPS", 270))
     persistent_only = os.environ.get("MOE_PERF_PERSISTENT_ONLY") == "1"
+    fuse_hc = os.environ.get("MOE_PERF_FUSE_HC") == "1"
     order = [STEPS[i % len(STEPS)] for i in range(warmup + steps)]
     torch.manual_seed(0)
     rows = torch.randn(len(order), hidden).to(torch.bfloat16)
@@ -576,6 +579,32 @@ def test_moe_persistent_tp12_perf(mesh_device):
         )
         mismatched = []
         name = f"persistent, {num_requesters} requester{'s' if num_requesters > 1 else ''}"
+        # Each requester's hyper-connection inputs, reused by every one of its requests (MOE_PERF_FUSE_HC=1).
+        hc_inputs = {}
+        if fuse_hc:
+            assert moe_op.fuse_hc, "MOE_PERF_FUSE_HC=1 needs the server's fuse_hc (DEEPSEEK_V41_MOE_FUSE_HC)"
+            name += ", HC post fused"
+            for j, mesh in enumerate(meshes):
+                rep = ttnn.ReplicateTensorToMesh(mesh)
+                streams = torch.randn(1, 1, HC_STREAMS, hidden).to(torch.bfloat16)
+                post = (2 * torch.rand(1, 1, HC_STREAMS, 1)).to(torch.bfloat16)
+                comb = torch.softmax(torch.randn(1, 1, HC_STREAMS, HC_STREAMS), dim=-1).to(torch.bfloat16)
+                hc_inputs[j] = dict(
+                    streams=ttnn.from_torch(
+                        streams,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=mesh,
+                        memory_config=moe_op.streams_memory_config(mesh, HC_STREAMS),
+                        mesh_mapper=rep,
+                    ),
+                    post=ttnn.from_torch(
+                        post, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+                    ),
+                    comb=ttnn.from_torch(
+                        comb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+                    ),
+                )
         try:
             # Row i comes from requester i % num_requesters, a round of requests in flight at once. The MoE
             # takes the requesters' turns in that order, so every run here has to be a prefix of it: the eager
@@ -587,7 +616,9 @@ def test_moe_persistent_tp12_perf(mesh_device):
                 pending = []
                 for i in range(first, min(first + num_requesters, len(order))):
                     moe_op.upload(i % num_requesters, rows[i])
-                    pending.append(moe_op.request(i % num_requesters, order[i]))
+                    pending.append(
+                        moe_op.request(i % num_requesters, order[i], **hc_inputs.get(i % num_requesters, {}))
+                    )
                 for out in pending:
                     eager_outs.append(ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1))
                     ttnn.deallocate(out)
@@ -607,7 +638,7 @@ def test_moe_persistent_tp12_perf(mesh_device):
                 inputs[j, layer] = moe_op.request_input(j)
                 moe_op.upload(j, rows[first], inputs[j, layer])
                 tids[j, layer] = ttnn.begin_trace_capture(meshes[j], cq_id=0)
-                trace_outs[j, layer] = moe_op.request(j, layer, inputs[j, layer])
+                trace_outs[j, layer] = moe_op.request(j, layer, inputs[j, layer], **hc_inputs.get(j, {}))
                 ttnn.end_trace_capture(meshes[j], tids[j, layer], cq_id=0)
             for mesh in meshes:
                 ttnn.synchronize_device(mesh)
@@ -634,6 +665,9 @@ def test_moe_persistent_tp12_perf(mesh_device):
                 ttnn.release_trace(meshes[key[0]], tids[key])
             for t in list(trace_outs.values()) + list(inputs.values()):
                 ttnn.deallocate(t)
+            for tensors in hc_inputs.values():
+                for t in tensors.values():
+                    ttnn.deallocate(t)
         finally:
             moe_op.stop()
         assert not mismatched, f"{name}: traced (requester, layer, chip) outputs {mismatched} differ from eager"

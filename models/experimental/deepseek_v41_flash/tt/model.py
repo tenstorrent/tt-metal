@@ -199,6 +199,17 @@ class SessionSnapshot:
     entries: dict[int, tuple[torch.Tensor, torch.Tensor]]
     engram: Optional[torch.Tensor]
 
+
+@dataclass(eq=False)
+class DeviceParkedSnapshot:
+    """One session's slot-local state plus detached page-table rows, while its KV cache blocks remain in device RAM."""
+
+    pos: int
+    rings: dict[int, torch.Tensor]
+    windows: dict[int, tuple[torch.Tensor, torch.Tensor]]
+    rows: dict[str, list[int]]
+    engram: Optional[torch.Tensor]
+
     @property
     def nbytes(self) -> int:
         tensors = [*self.rings.values()]
@@ -395,6 +406,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         n = config.num_hidden_layers if max_layers is None else min(max_layers, config.num_hidden_layers)
         self.num_layers = n
+        self._kv_source_of = {
+            li: max(s for s in config.kv_source_layer_ids if s <= li) for li in range(n) if config.compress_ratios[li]
+        }
         if pipeline_group_size is None:
             pipeline_group_size = max(0, system_config.pipeline.group_size)
         if layer_submesh_ids is None:
@@ -442,6 +456,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             (src, dst): self._create_socket_pair(self.submeshes[src], self.submeshes[dst])
             for src, dst in self.pipeline_edges
         }
+        self._stage_by_ids = {tuple(sm.get_device_ids()): idx for idx, sm in enumerate(self.submeshes)}
+        self._migration_sockets: dict[tuple[int, int], tuple] = {}
         # V4.1 has 40 layers, so an 8-stage mesh has no idle row left for a DSpark tap.
         self.mtp_submesh = None
         self._mtp_sender = None
@@ -491,6 +507,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     )
                 rows_stages.add(stage)
                 self._prefill_engram_sockets[li] = open_rows_sockets(self.submeshes[stage], rows_page_bytes(config))
+        if self.pipeline_stages > 1 and ttnn.get_fabric_config() != ttnn.FabricConfig.DISABLED:
+            self._init_migration_sockets(n)
         self.image_sockets: Optional[ImageSockets] = None
         if vision_stage is not None:
             if not image_rows:
@@ -1615,6 +1633,112 @@ class DeepSeekV41Model(DeepSeekV4Model):
             self._engram_lookup.import_history(slot, snapshot.engram)
         self._session_pos[sid] = pos
 
+    def evict_session_to_device_park(self, sid: int) -> DeviceParkedSnapshot:
+        """Evict ``sid`` from its slot and page table without freeing its KV cache blocks from device RAM."""
+        paged = self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        self._wait_replays_dispatched()
+        pos, slot, w = self._session_pos[sid], self._slot_of[sid], self.sliding_window
+
+        def slot_rows(t: ttnn.Tensor, start: int, n: int) -> torch.Tensor:
+            part = ttnn.slice(t, [0, 0, start, 0], [1, 1, start + n, t.shape[3]])
+            rows = _replica_rows(part)
+            if part.buffer_address() != t.buffer_address():
+                ttnn.deallocate(part)
+            return rows
+
+        rings, windows = {}, {}
+        for sm in self.submeshes_io:
+            for li in sm["layers"]:
+                scache = sm["scaches"][li]
+                rings[li] = slot_rows(scache.kv, slot * w, w)
+                src = self._kv_source_of.get(li)
+                if li == src and scache.win_kv is not None:
+                    win_rows = _WIN_SLOT_ROWS if self._slotted else scache.win_kv.shape[2]
+                    windows[li] = tuple(
+                        slot_rows(t, slot * win_rows, win_rows) for t in (scache.win_kv, scache.win_gate)
+                    )
+        engram = self._engram_lookup.export_history(slot, pos) if self._engram_lookup is not None else None
+        rows = paged.detach_session_rows(sid)
+        self._covered_to.pop(sid, None)
+        self._session_pos[sid] = 0
+        self._spec_dirty.discard(slot)
+        self._write_page_tables()
+        return DeviceParkedSnapshot(pos, rings, windows, rows, engram)
+
+    def reload_session_from_device_park(self, sid: int, snapshot: DeviceParkedSnapshot) -> None:
+        """Reload a :class:`DeviceParkedSnapshot` into ``sid`` (which must be at position 0)."""
+        paged = self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        if self._session_pos[sid]:
+            raise ValueError(f"session {sid} is at {self._session_pos[sid]}: reload into a session at position 0")
+        self._wait_replays_dispatched()
+        paged.attach_session_rows(sid, snapshot.rows)
+        self._write_page_tables()
+        slot, w = self._slot_of[sid], self.sliding_window
+        for sm in self.submeshes_io:
+            device = sm["device"]
+            mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
+
+            def write_rows(dst: ttnn.Tensor, rows: torch.Tensor, start: int) -> None:
+                if rows.shape[0] == dst.shape[2]:
+                    host_to_device(rows.reshape(tuple(dst.shape)).float(), dst)
+                    return
+                src_rows = ttnn.from_torch(
+                    rows.reshape(1, 1, *rows.shape).float(),
+                    dtype=dst.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                )
+                ttnn.fill_cache(dst, src_rows, 0, update_idx=start)
+                ttnn.deallocate(src_rows)
+
+            for li in sm["layers"]:
+                scache = sm["scaches"][li]
+                write_rows(scache.kv, snapshot.rings[li], slot * w)
+                src = self._kv_source_of.get(li)
+                if li == src and scache.win_kv is not None:
+                    for dst, rows in zip((scache.win_kv, scache.win_gate), snapshot.windows[li]):
+                        write_rows(dst, rows, slot * rows.shape[0])
+        for sm in self.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+        if snapshot.engram is not None and self._engram_lookup is not None:
+            self._engram_lookup.import_history(slot, snapshot.engram)
+        self._session_pos[sid] = snapshot.pos
+
+    def free_device_park(self, snapshot: DeviceParkedSnapshot) -> None:
+        """Free the KV cache blocks held by a :class:`DeviceParkedSnapshot`."""
+        self._require_paged().free_detached_rows(snapshot.rows)
+
+    def export_device_park(self, snapshot: DeviceParkedSnapshot) -> SessionSnapshot:
+        """Gather a :class:`DeviceParkedSnapshot`'s paged KV blocks to host RAM as a :class:`SessionSnapshot`
+        and free its device KV blocks."""
+        self._require_paged()
+        self._wait_replays_dispatched()
+        pos = snapshot.pos
+        entries = {}
+        for sm in self.submeshes_io:
+            for li in sm["layers"]:
+                scache = sm["scaches"][li]
+                src = self._kv_source_of.get(li)
+                if src is None or src in entries or scache.comp_kv is None:
+                    continue
+                ratio = int(self.config.compress_ratios[src])
+                if pos // ratio == 0:
+                    continue
+                group = self._paged_ratios[ratio].layer_type
+                page_row = snapshot.rows[group]
+                kv, keys = self._gather_paged_entries_from_rows(scache, group, page_row, pos // ratio)
+                entries[src] = (_replica_rows(kv), _replica_rows(keys))
+                ttnn.deallocate(kv)
+                ttnn.deallocate(keys)
+        self.free_device_park(snapshot)
+        return SessionSnapshot(pos, snapshot.rings, snapshot.windows, entries, snapshot.engram)
+
     # -- replay: every posted step is bound to the session resident when it was posted -- #
     def _has_image_token(self, token_id) -> bool:
         """Whether the step's tokens include an image-span row (an id past the vocabulary)."""
@@ -2073,6 +2197,106 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.prefill_model.keep_decode_prefetcher = bool(self._prefetch_buffers_by_device)
         return self.prefill_model
 
+    def _init_migration_sockets(self, n: int) -> None:
+        """Open directed L1-handshake sockets for on-device TT-Fabric KV cache migration across stages."""
+        edges: set[tuple[int, int]] = set()
+        kv_layers = max((i for i in self.config.kv_source_layer_ids if i < n), default=-1) + 1
+        prefill_ids = (
+            self.prefill_layer_submesh_ids if self.prefill_layer_submesh_ids is not None else self.layer_submesh_ids
+        )
+        for li in range(kv_layers):
+            p_stage, d_stage = prefill_ids[li], self.layer_submesh_ids[li]
+            if p_stage != d_stage:
+                edges.add((p_stage, d_stage))
+                edges.add((d_stage, p_stage))
+        for src in self.config.kv_source_layer_ids:
+            if src >= n:
+                continue
+            p_stage = prefill_ids[src]
+            for chain in self._migration_chains(src, p_stage, n):
+                for u, v in zip(chain, chain[1:]):
+                    edges.add((u, v))
+                    edges.add((v, u))
+            d_stages = {
+                self.layer_submesh_ids[li]
+                for li in range(n)
+                if self._kv_source_of.get(li) == src and li in self.config.index_source_layer_ids
+            }
+            for d_stage in d_stages:
+                if d_stage != p_stage:
+                    edges.add((d_stage, p_stage))
+                    edges.add((p_stage, d_stage))
+
+        if not edges:
+            return
+        grid = self.submeshes[0].compute_with_storage_grid_size()
+        reserved = {(0, y) for y in range(min(7, grid.y))} | {(grid.x - 1, grid.y - 1)}
+        candidates = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in reserved]
+        used_per_stage: dict[int, set[tuple[int, int]]] = {s: set() for s in range(self.num_submeshes)}
+
+        def alloc_cores(stage: int, count: int) -> list[ttnn.CoreCoord]:
+            used = used_per_stage[stage]
+            picked = []
+            for xy in candidates:
+                if xy not in used:
+                    used.add(xy)
+                    picked.append(ttnn.CoreCoord(*xy))
+                    if len(picked) == count:
+                        return picked
+            raise RuntimeError(f"stage {stage}: ran out of cores for migration sockets")
+
+        sock_mem = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 128)
+        for src_stage, dst_stage in sorted(edges):
+            src_sm, dst_sm = self.submeshes[src_stage], self.submeshes[dst_stage]
+            src_fn = src_sm.get_fabric_node_id(ttnn.MeshCoordinate(0, 0))
+            dst_fn = dst_sm.get_fabric_node_id(ttnn.MeshCoordinate(0, 0))
+            fwd_links = ttnn.get_forwarding_link_indices(self.device, src_fn, dst_fn)
+            rev_links = ttnn.get_forwarding_link_indices(self.device, dst_fn, src_fn)
+            n_links = min(len(fwd_links), len(rev_links))
+            if not n_links:
+                continue
+            conns_per_chip = min(2, n_links)
+            s_cores = alloc_cores(src_stage, conns_per_chip)
+            r_cores = alloc_cores(dst_stage, conns_per_chip)
+            connections = [
+                ttnn.SocketConnection(ttnn.MeshCoreCoord(coord, sc), ttnn.MeshCoreCoord(coord, rc))
+                for coord in ttnn.MeshCoordinateRange(src_sm.shape)
+                for sc, rc in zip(s_cores, r_cores)
+            ]
+            self._migration_sockets[(src_stage, dst_stage)] = ttnn.create_socket_pair(
+                src_sm, dst_sm, ttnn.SocketConfig(connections, sock_mem)
+            )
+        if self._migration_sockets:
+            logger.info(f"opened {len(self._migration_sockets)} TT-Fabric KV migration socket pair(s)")
+
+    def _migration_chains(self, src: int, p_stage: int, n: Optional[int] = None) -> list[list[int]]:
+        """Chain hops from ``p_stage`` across every decode stage holding ``src``'s paged KV pools."""
+        limit = self.num_layers if n is None else n
+        d_stages = sorted(
+            {
+                self.layer_submesh_ids[li]
+                for li in range(limit)
+                if self._kv_source_of.get(li) == src and li in self.config.index_source_layer_ids
+            }
+        )
+        targets = [s for s in d_stages if s != p_stage]
+        chains = []
+        below = sorted((s for s in targets if s < p_stage), reverse=True)
+        above = sorted(s for s in targets if s > p_stage)
+        if below:
+            chains.append([p_stage, *below])
+        if above:
+            chains.append([p_stage, *above])
+        return chains
+
+    def _fabric_send_recv(self, tensor: ttnn.Tensor, src_stage: int, dst_stage: int) -> ttnn.Tensor:
+        """Copy replicated ``tensor`` from ``src_stage`` to ``dst_stage`` over TT-Fabric without host round-trip."""
+        sender, receiver = self._migration_sockets[(src_stage, dst_stage)]
+        dst = ttnn.allocate_tensor_on_device(tensor.spec, self.submeshes[dst_stage])
+        ttnn.experimental.recv_direct_async(dst, receiver)
+        ttnn.experimental.send_direct_async(tensor, sender)
+        return dst
+
     def commit_prefill_state(
         self,
         states: list[PrefillAttentionState],
@@ -2090,23 +2314,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``start // rate`` on, and the session is not rewound. A bounded replay may end at ``start`` itself, and
         then rewrites only the rings.
 
-        For a prompt of ``T`` tokens (a multiple of ``sliding_window``, so ring slot ``j`` holds token
-        ``T - W + j``, and of every compress ratio, so no compressor window is half full):
-
-        * every layer: ``kv_tail`` -> the session's slot of its ring ``kv`` (through the host when
-          ``prefill_layer_submesh_ids`` put the prefill layer on another stage);
-        * every stage holding a group's ``comp_kv`` (it has an index source of the group): the kv source's
-          ``compressed_kv`` -> ``comp_kv`` and ``idx_keys`` -> ``idx_key_cache``, each logical block into the
-          physical block the session's page-table row maps it to. A source on another stage is copied over
-          through the host.
-
-        ``win_kv`` / ``win_gate``, ``sel_kv`` / ``sel_tile`` and the carried rows need nothing: the next step
-        writes them before it reads them. The caches are written in place, so captured traces stay valid.
-
-        A KV-only prefill (``build_prefill(kv_only=True)``) has states for the layers up to the last kv source
-        only. The rings of the layers after them are zeroed: once the ring is full, decode reads every row, so the
-        rows must not hold another session's keys. The caller replays the last ``sliding_window`` prompt tokens
-        through decode, which writes those rings again.
+        Cross-stage transfers run directly over TT-Fabric when migration sockets are open, falling back to
+        host copies otherwise.
         """
         note = progress or (lambda message: None)
         if bias_slots:
@@ -2137,24 +2346,57 @@ class DeepSeekV41Model(DeepSeekV4Model):
             )
         self.ensure_session_capacity(total - 1, session_id)
         ring_row = self._slot_of[session_id] * self.sliding_window
+
+        # 1. Batch-pack remote kv_tail ring transfers per (src_stage, dst_stage) edge over TT-Fabric.
+        sm_by_stage = {sm["index"]: sm for sm in self.submeshes_io}
+        remote_rings_by_edge: dict[tuple[int, int], list[int]] = {}
+        for sm in self.submeshes_io:
+            d_stage = sm["index"]
+            for li in sm["layers"]:
+                if li < len(states):
+                    kv_tail = states[li].kv_tail
+                    src_stage = self._stage_by_ids.get(tuple(kv_tail.device().get_device_ids()))
+                    if src_stage is not None and src_stage != d_stage:
+                        if self.prefill_layer_submesh_ids is None:
+                            raise RuntimeError(f"prefill layer {li}'s state is not on its decode submesh")
+                        remote_rings_by_edge.setdefault((src_stage, d_stage), []).append(li)
+
+        transferred_rings: dict[int, tuple[ttnn.Tensor, bool]] = {}  # li -> (tensor on dst, owned)
+        packed_ring_bufs: list[ttnn.Tensor] = []
+        for (src_stage, dst_stage), layers_on_edge in remote_rings_by_edge.items():
+            if (src_stage, dst_stage) in self._migration_sockets:
+                if len(layers_on_edge) == 1:
+                    li = layers_on_edge[0]
+                    moved = self._fabric_send_recv(states[li].kv_tail, src_stage, dst_stage)
+                    transferred_rings[li] = (moved, True)
+                else:
+                    packed = ttnn.concat([states[li].kv_tail for li in layers_on_edge], dim=2)
+                    recv_packed = self._fabric_send_recv(packed, src_stage, dst_stage)
+                    packed_ring_bufs.extend((packed, recv_packed))
+                    for k, li in enumerate(layers_on_edge):
+                        lo = k * self.sliding_window
+                        sl = ttnn.slice(
+                            recv_packed, [0, 0, lo, 0], [1, 1, lo + self.sliding_window, recv_packed.shape[3]]
+                        )
+                        transferred_rings[li] = (sl, sl.buffer_address() != recv_packed.buffer_address())
+            else:
+                dst_device = sm_by_stage[dst_stage]["device"]
+                for li in layers_on_edge:
+                    moved = self._on_stage(states[li].kv_tail, dst_device)
+                    transferred_rings[li] = (moved, moved is not states[li].kv_tail)
+
         for sm in self.submeshes_io:
             device = sm["device"]
-            committed = set()
-            zero_rings = {}  # head dim -> a zero [1, 1, W, Dh] ring for the layers without a state
+            zero_rings = {}
             for li in sm["layers"]:
                 scache = sm["scaches"][li]
                 if li < len(states):
-                    state = states[li]
-                    kv_tail = state.kv_tail
-                    if list(kv_tail.device().get_device_ids()) != list(device.get_device_ids()):
-                        if self.prefill_layer_submesh_ids is None:
-                            raise RuntimeError(f"prefill layer {li}'s state is not on its decode submesh")
-                        kv_tail = self._on_stage(kv_tail, device)
+                    kv_tail, owned = transferred_rings.get(li, (states[li].kv_tail, False))
                     note(f"commit layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
                     ring = ttnn.to_layout(kv_tail, ttnn.TILE_LAYOUT)
                     ttnn.fill_cache(scache.kv, ring, 0, update_idx=ring_row)
                     ttnn.deallocate(ring)
-                    if kv_tail is not state.kv_tail:
+                    if owned:
                         ttnn.deallocate(kv_tail)
                 else:
                     note(f"zero the ring of layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
@@ -2169,24 +2411,101 @@ class DeepSeekV41Model(DeepSeekV4Model):
                             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
                         )
                     ttnn.fill_cache(scache.kv, zero_rings[dh], 0, update_idx=ring_row)
-                src = self._kv_source_of.get(li)
-                if src is None or src in committed or scache.comp_kv is None:
-                    continue
-                committed.add(src)
-                source = states[src]
-                if source.num_entries != total // self.config.compress_ratios[src]:
-                    raise ValueError(f"kv source {src} holds {source.num_entries} entries for {total} tokens")
-                entries = self._on_stage(source.compressed_kv, device)
-                keys = self._on_stage(source.idx_keys, device)
-                ratio = int(self.config.compress_ratios[src])
-                self._commit_paged_entries(
-                    scache, self._paged_ratios[ratio].layer_type, session_id, entries, keys, start // ratio
-                )
-                for copy, original in ((entries, source.compressed_kv), (keys, source.idx_keys)):
-                    if copy is not original:
-                        ttnn.deallocate(copy)
             for zeros in zero_rings.values():
                 ttnn.deallocate(zeros)
+        for buf in packed_ring_bufs:
+            ttnn.deallocate(buf)
+
+        # 2. Commit paged KV sources: local stages directly, remote stages chunked & chained over TT-Fabric.
+        def pool_scache_of(stage_idx: int, src: int):
+            sm = sm_by_stage[stage_idx]
+            return next(
+                (
+                    sm["scaches"][li]
+                    for li in sm["layers"]
+                    if self._kv_source_of.get(li) == src and sm["scaches"][li].comp_kv is not None
+                ),
+                None,
+            )
+
+        chunk_blocks = 512  # 32,768 entries (~40 MiB/chunk) keeps DRAM bounded even for 1M-token prompts
+        for src in kv_sources:
+            source = states[src]
+            ratio = int(self.config.compress_ratios[src])
+            if source.num_entries != total // ratio:
+                raise ValueError(f"kv source {src} holds {source.num_entries} entries for {total} tokens")
+            group = self._paged_ratios[ratio].layer_type
+            p_stage = self._stage_by_ids.get(tuple(source.compressed_kv.device().get_device_ids()))
+            local_scache = pool_scache_of(p_stage, src) if p_stage is not None else None
+            if local_scache is not None:
+                self._commit_paged_entries(
+                    local_scache, group, session_id, source.compressed_kv, source.idx_keys, start // ratio
+                )
+            chains = self._migration_chains(src, p_stage) if p_stage is not None else []
+            if not chains:
+                continue
+            can_fabric = all((u, v) in self._migration_sockets for chain in chains for u, v in zip(chain, chain[1:]))
+            if not can_fabric:
+                for chain in chains:
+                    for dst_stage in chain[1:]:
+                        dst_scache = pool_scache_of(dst_stage, src)
+                        if dst_scache is None:
+                            continue
+                        entries = self._on_stage(source.compressed_kv, sm_by_stage[dst_stage]["device"])
+                        keys = self._on_stage(source.idx_keys, sm_by_stage[dst_stage]["device"])
+                        self._commit_paged_entries(dst_scache, group, session_id, entries, keys, start // ratio)
+                        if entries is not source.compressed_kv:
+                            ttnn.deallocate(entries)
+                        if keys is not source.idx_keys:
+                            ttnn.deallocate(keys)
+                continue
+
+            block = CSA_INDEX_BLOCK_SIZE
+            n = source.num_entries
+            total_blocks = -(-n // block)
+            lo_block = (start // ratio) // block
+            if lo_block >= total_blocks:
+                continue
+            dh, key_dim = source.compressed_kv.shape[3], source.idx_keys.shape[3]
+            step_entries = chunk_blocks * block
+            prev_wave: dict[int, list[ttnn.Tensor]] = {}
+            for b0 in range(lo_block, total_blocks, chunk_blocks):
+                e0 = b0 * block
+                e1 = min(n, e0 + step_entries)
+                if e0 == 0 and e1 == n:
+                    c_kv, c_keys, slice_owned = source.compressed_kv, source.idx_keys, False
+                else:
+                    c_kv = ttnn.slice(source.compressed_kv, [0, 0, e0, 0], [1, 1, e1, dh])
+                    c_keys = ttnn.slice(source.idx_keys, [0, 0, e0, 0], [1, 1, e1, key_dim])
+                    slice_owned = True
+                if prev_wave:
+                    for st in prev_wave:
+                        ttnn.synchronize_device(self.submeshes[st])
+                    for bufs in prev_wave.values():
+                        for buf in bufs:
+                            ttnn.deallocate(buf)
+                    prev_wave = {}
+                for chain in chains:
+                    cur_kv, cur_keys, cur_stage = c_kv, c_keys, chain[0]
+                    for hop_idx, next_stage in enumerate(chain[1:], start=1):
+                        next_kv = self._fabric_send_recv(cur_kv, cur_stage, next_stage)
+                        next_keys = self._fabric_send_recv(cur_keys, cur_stage, next_stage)
+                        dst_scache = pool_scache_of(next_stage, src)
+                        if dst_scache is not None:
+                            self._commit_paged_entries(
+                                dst_scache, group, session_id, next_kv, next_keys, e0, entry_offset=e0
+                            )
+                        if hop_idx > 1 or slice_owned:
+                            prev_wave.setdefault(cur_stage, []).extend((cur_kv, cur_keys))
+                        cur_kv, cur_keys, cur_stage = next_kv, next_keys, next_stage
+                    prev_wave.setdefault(cur_stage, []).extend((cur_kv, cur_keys))
+            if prev_wave:
+                for st in prev_wave:
+                    ttnn.synchronize_device(self.submeshes[st])
+                for bufs in prev_wave.values():
+                    for buf in bufs:
+                        ttnn.deallocate(buf)
+
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
         self._session_pos[session_id] = total
@@ -2201,37 +2520,46 @@ class DeepSeekV41Model(DeepSeekV4Model):
         entries: ttnn.Tensor,
         keys: ttnn.Tensor,
         first_entry: int = 0,
+        entry_offset: int = 0,
     ) -> None:
-        """Compressed entries (ROW_MAJOR ``[1, 1, n, Dh]``) into ``scache.comp_kv`` and their index keys
-        (ROW_MAJOR ``[1, 1, n, index_head_dim]``) into ``scache.idx_key_cache``, entry ``w`` at row
-        ``w % 64`` of the physical block session ``session_id``'s row of ``group`` maps logical block
-        ``w // 64`` to. Blocks before the one holding ``first_entry`` are left as they are.
-
-        ``comp_kv`` is ROW_MAJOR, which ``fill_cache`` does not take, so each run of consecutive physical
-        blocks is one ``slice_write``; the tiled keys go one block per ``fill_cache``.
+        """Compressed entries (ROW_MAJOR ``[1, 1, n_chunk, Dh]`` starting at ``entry_offset``) into
+        ``scache.comp_kv`` and their index keys (ROW_MAJOR ``[1, 1, n_chunk, index_head_dim]``) into
+        ``scache.idx_key_cache``, entry ``w`` at row ``w % 64`` of the physical block session ``session_id``'s
+        row of ``group`` maps logical block ``w // 64`` to. Blocks before the one holding ``first_entry`` are
+        left as they are.
         """
-        n = keys.shape[2]
-        if entries.shape[2] != n:
-            raise ValueError(f"{n} index keys for {entries.shape[2]} compressed entries")
+        n_chunk = keys.shape[2]
+        if entries.shape[2] != n_chunk:
+            raise ValueError(f"{n_chunk} index keys for {entries.shape[2]} compressed entries")
         block = CSA_INDEX_BLOCK_SIZE
-        blocks = -(-n // block)
-        lo = first_entry // block
+        if entry_offset % block:
+            raise ValueError(f"entry_offset {entry_offset} must be a multiple of block size {block}")
+        base_block = entry_offset // block
+        total_n = entry_offset + n_chunk
+        blocks = -(-total_n // block)
+        lo = max(first_entry, entry_offset) // block
         if lo >= blocks:
             return
         paged = self._require_paged()
         page_row = paged.page_row(session_id, group)[0].tolist()
         if ZERO_BLOCK in page_row[lo:blocks]:
-            raise RuntimeError(f"{group}: {n} entries reach an unmapped block; capacity was not ensured")
+            raise RuntimeError(f"{group}: {total_n} entries reach an unmapped block; capacity was not ensured")
         if any(refs > 1 for refs in paged.block_refs(session_id, group)[lo:blocks]):
             raise RuntimeError(f"{group}: session {session_id}'s entries from {first_entry} reach a shared block")
         device = scache.idx_key_cache.device()
         dh, key_dim = entries.shape[3], keys.shape[3]
-        if lo:
-            entries = ttnn.slice(entries, [0, 0, lo * block, 0], [1, 1, n, dh])
-            keys = ttnn.slice(keys, [0, 0, lo * block, 0], [1, 1, n, key_dim])
+        rel_start = (lo - base_block) * block
+        sliced = rel_start > 0
+        if sliced:
+            entries = ttnn.slice(entries, [0, 0, rel_start, 0], [1, 1, n_chunk, dh])
+            keys = ttnn.slice(keys, [0, 0, rel_start, 0], [1, 1, n_chunk, key_dim])
 
-        stacked = self._stack_rows([entries], (blocks - lo) * block, dh, device)
-        kv_blocks = ttnn.reshape(stacked, [blocks - lo, 1, block, dh])
+        need_rows = (blocks - lo) * block
+        if entries.shape[2] == need_rows:
+            kv_src, kv_owned = entries, False
+        else:
+            kv_src, kv_owned = self._stack_rows([entries], need_rows, dh, device), True
+        kv_blocks = ttnn.reshape(kv_src, [blocks - lo, 1, block, dh])
         start = lo
         while start < blocks:
             end = start + 1
@@ -2242,23 +2570,43 @@ class DeepSeekV41Model(DeepSeekV4Model):
             ttnn.experimental.slice_write(
                 run, scache.comp_kv, [first, 0, 0, 0], [first + end - start, 1, block, dh], [1, 1, 1, 1]
             )
-            if run.buffer_address() != kv_blocks.buffer_address():  # a slice of every block is kv_blocks itself
+            if run.buffer_address() != kv_blocks.buffer_address():
                 ttnn.deallocate(run)
             start = end
-        ttnn.deallocate(stacked)
+        if kv_blocks.buffer_address() != kv_src.buffer_address():
+            ttnn.deallocate(kv_blocks)
+        if kv_owned:
+            ttnn.deallocate(kv_src)
 
-        keys_rm = self._stack_rows([keys], (blocks - lo) * block, key_dim, device)
+        if keys.shape[2] == need_rows:
+            keys_rm, keys_owned = keys, False
+        else:
+            keys_rm, keys_owned = self._stack_rows([keys], need_rows, key_dim, device), True
         keys_tiled = ttnn.to_layout(keys_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(keys_rm)
-        for logical in range(lo, blocks):
-            rows = ttnn.slice(
-                keys_tiled, [0, 0, (logical - lo) * block, 0], [1, 1, (logical - lo + 1) * block, key_dim]
+        if keys_owned:
+            ttnn.deallocate(keys_rm)
+
+        if lo == 0:
+            ttnn.experimental.paged_fill_cache(
+                scache.idx_key_cache, keys_tiled, scache.idx_page_table, batch_idx=self._slot_of[session_id]
             )
-            ttnn.fill_cache(scache.idx_key_cache, rows, page_row[logical])
-            if rows.buffer_address() != keys_tiled.buffer_address():  # a slice of the one block is keys_tiled
-                ttnn.deallocate(rows)
+        else:
+            pt_slice = page_row[lo:blocks]
+            pad_len = (-(-len(pt_slice) // 8)) * 8
+            if len(pt_slice) < pad_len:
+                pt_slice = pt_slice + [0] * (pad_len - len(pt_slice))
+            pt_tensor = ttnn.from_torch(
+                torch.tensor([pt_slice], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
+            )
+            ttnn.experimental.paged_fill_cache(scache.idx_key_cache, keys_tiled, pt_tensor, batch_idx=0)
+            ttnn.deallocate(pt_tensor)
         ttnn.deallocate(keys_tiled)
-        if lo:
+        if sliced:
             ttnn.deallocate(entries)
             ttnn.deallocate(keys)
 
@@ -2266,11 +2614,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """The inverse of :meth:`_commit_paged_entries`: session ``session_id``'s first ``n`` compressed entries
         and index keys out of ``scache.comp_kv`` / ``scache.idx_key_cache``, as new bf16 ROW_MAJOR
         ``[1, 1, n, Dh]`` / ``[1, 1, n, index_head_dim]`` tensors (one slice per run of consecutive blocks)."""
+        page_row = self._require_paged().page_row(session_id, group)[0].tolist()
+        return self._gather_paged_entries_from_rows(scache, group, page_row, n)
+
+    def _gather_paged_entries_from_rows(
+        self, scache, group: str, page_row: list[int], n: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         block = CSA_INDEX_BLOCK_SIZE
         blocks = -(-n // block)
-        page_row = self._require_paged().page_row(session_id, group)[0].tolist()
         if ZERO_BLOCK in page_row[:blocks]:
-            raise RuntimeError(f"{group}: session {session_id}'s first {n} entries reach an unmapped block")
+            raise RuntimeError(f"{group}: first {n} entries reach an unmapped block")
         dh, key_dim = scache.comp_kv.shape[3], scache.idx_key_cache.shape[3]
         kv_runs, key_runs = [], []
         start = 0
@@ -2342,6 +2695,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             return self._gather_paged_entries(pools_of(sm, src), group, session_id, pos // ratio)
 
         sources = {}  # kv source -> its (entries, keys) on its own stage
+        deferred_free: list[ttnn.Tensor] = []
         for sm in self.submeshes_io:
             for li in sm["layers"]:
                 if li not in traced.buffers:  # past a kv-only prefill model's last layer
@@ -2355,7 +2709,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     if self.prefill_layer_submesh_ids is not None:
                         moved = self._on_stage(tail, traced.model.layer_devices[li])
                         if moved is not tail:
-                            ttnn.deallocate(tail)
+                            deferred_free.append(tail)
                         tail = moved
                     # The prefill tail is the last sliding_window rows of the layer's window buffer.
                     window = traced.buffers[li].window
@@ -2383,15 +2737,25 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 local = entries_of(sm, src) if pools_of(sm, src) is not None else None
                 for dst, rows, remote in zip(mirror, local or (None, None), sources[src]):
                     write_rows(dst, rows if rows is not None else self._on_stage(remote, stage.device))
+        for sm in self.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+        for t in deferred_free:
+            ttnn.deallocate(t)
         for entries, keys in sources.values():
             ttnn.deallocate(entries)
             ttnn.deallocate(keys)
 
-    @staticmethod
-    def _on_stage(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
-        """A replicated bf16 ROW_MAJOR ``tensor`` on ``device``: itself when it is there, else a copy through the host."""
-        if list(tensor.device().get_device_ids()) == list(device.get_device_ids()):
+    def _on_stage(self, tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
+        """A replicated bf16 ROW_MAJOR ``tensor`` on ``device``: itself when it is there, over TT-Fabric when a
+        migration socket connects the two stages, else a copy through the host."""
+        src_ids = tuple(tensor.device().get_device_ids())
+        dst_ids = tuple(device.get_device_ids())
+        if src_ids == dst_ids:
             return tensor
+        src_stage = self._stage_by_ids.get(src_ids)
+        dst_stage = self._stage_by_ids.get(dst_ids)
+        if src_stage is not None and dst_stage is not None and (src_stage, dst_stage) in self._migration_sockets:
+            return self._fabric_send_recv(tensor, src_stage, dst_stage)
         return ttnn.from_torch(
             ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]),
             dtype=ttnn.bfloat16,
