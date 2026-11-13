@@ -1293,7 +1293,11 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     if is_agmm:
         sp_axis = cfg["sp_axis"]
         tp_axis = cfg["tp_axis"]
-        sp_size = cfg["mesh_shape"][sp_axis]
+        # M is the per-device row count (SHAPES). The op runs on the cluster-axis submesh (open_mesh), whose extent
+        # along the SP axis is 1, so the input is sharded over the submesh's SP extent, not the full mesh's: with the
+        # full mesh's SP size every device would hold sp_size x M rows (8x the model's M on 4x8), and the gather buffer
+        # below ([M, K]) would be too small for them.
+        sp_size = mesh_shape[sp_axis]
         full_M = M * sp_size
 
         tt_input = ttnn.from_torch(
