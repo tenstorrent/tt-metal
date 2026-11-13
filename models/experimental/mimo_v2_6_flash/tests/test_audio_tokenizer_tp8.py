@@ -31,8 +31,8 @@ from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAM
 from models.experimental.mimo_v2_6_flash.tests.perf.audio_codes_margin import margins
 from models.experimental.mimo_v2_6_flash.tests.test_audio_reference_host import (
     audio_model_path,
-    clips_dir,
     load_wav_24k,
+    require_clips,
     vllm_processor_or_none,
 )
 from models.experimental.mimo_v2_6_flash.tt.audio.patch import TtAudioPatchEncoder
@@ -42,6 +42,24 @@ CLIPS = ("speech_5s", "speech_30s", "speech_65s", "speech_120s", "speech_300s")
 PCC = 0.998  # sanity bound; the gate's 0.999 is missed by ~1e-4 on some clips (logged)
 GATE_PCC = 0.999
 MAX_CHANGED = 0.08  # sanity bound on the changed code frames (measured 3.5-5 %)
+# Edge lengths, cut from the clips' mels (name -> (clip, first mel frame, frames)): fewer mel frames than one LLM
+# token's 16 (and than 10); one 25 Hz frame; and a last segment after a full 6000-frame one whose 50 Hz row count is
+# odd, so its last pooled frame repeats a row. A few code frames say nothing as a fraction, so these are held to the
+# lengths and the hidden states (HIDDEN_PCC), and their code / embedding differences are logged.
+EDGE_CLIPS = {
+    "edge_7_frames": ("speech_5s", 100, 7),
+    "edge_3_frames": ("speech_5s", 200, 3),
+    "edge_odd_last_segment": ("speech_65s", 0, 6000 + 37),
+}
+HIDDEN_PCC = 0.99
+
+
+def edge_mels(mels):
+    out = {}
+    for name, (clip, start, frames) in EDGE_CLIPS.items():
+        assert mels[clip].shape[0] >= start + frames, (name, mels[clip].shape)
+        out[name] = mels[clip][start : start + frames].clone()
+    return out
 
 
 def cache_dir(path, what):
@@ -62,11 +80,9 @@ def host():
     p32 = ref.AudioPatchEncoder(weights, cfg, torch.float32)
     p16 = ref.AudioPatchEncoder(weights, cfg, torch.bfloat16)
     clips = {}
-    for c in CLIPS:
-        wav = os.path.join(clips_dir(), f"{c}.wav")
-        if not os.path.exists(wav):
-            continue
-        mel = ref.log_mel_spectrogram(load_wav_24k(wav, proc[1]), cfg)
+    mels = {c: ref.log_mel_spectrogram(load_wav_24k(wav, proc[1]), cfg) for c, wav in require_clips(CLIPS).items()}
+    mels.update(edge_mels(mels))
+    for c, mel in mels.items():
         lens = torch.tensor(ref.segment_lengths(mel.shape[0], cfg.segment_size))
         with torch.inference_mode():
             h, _ = enc.features(mel, lens)
@@ -116,14 +132,17 @@ def test_audio_tokenizer_tp8(mesh_device, host):
             h = tok.hidden(c["mel"])
             lat.append(time.perf_counter() - t)
         assert torch.equal(h, tok.hidden(c["mel"])), f"{clip}: run to run"
+        assert h.shape == c["hidden"].shape, (clip, h.shape, c["hidden"].shape)
         codes = tok.quantizer.quantize(h).t().contiguous()
+        assert codes.shape == c["codes"].shape == (ref.num_codes(c["mel"].shape[0], cfg), 20), (clip, codes.shape)
         t = time.perf_counter()
         emb = patch.embed_audio_codes(codes)
         t_patch = time.perf_counter() - t
         changed = (codes != c["codes"]).any(1)
         m = c["margins"][changed]
+        assert emb.shape == c["emb32"].shape, (clip, emb.shape, c["emb32"].shape)
         p32, p16 = pcc(emb.float(), c["emb32"]), pcc(emb.float(), c["emb16"].float())
-        rows.append((clip, changed.float().mean().item(), p32))
+        rows.append((clip, changed.float().mean().item(), p32, pcc(h, c["hidden"])))
         if p32 < GATE_PCC:
             logger.warning(f"{clip}: embeddings PCC {p32:.5f} < the gate's {GATE_PCC}")
         logger.info(
@@ -135,6 +154,10 @@ def test_audio_tokenizer_tp8(mesh_device, host):
         )
     assert mesh_device.num_program_cache_entries() == programs, "a call compiled programs warm() did not"
     assert dram_allocated(mesh_device) == dram2, "a call left device tensors allocated"
-    for clip, frac, p in rows:
+    assert {clip for clip, *_ in rows} == set(CLIPS) | set(EDGE_CLIPS)  # none dropped out
+    for clip, frac, p, p_hidden in rows:
+        assert p_hidden >= HIDDEN_PCC, (clip, p_hidden)
+        if clip in EDGE_CLIPS:
+            continue
         assert p >= PCC, (clip, p)
         assert frac <= MAX_CHANGED, (clip, frac)

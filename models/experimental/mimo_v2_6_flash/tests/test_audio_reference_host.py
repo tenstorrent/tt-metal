@@ -56,6 +56,17 @@ def clips_dir():
     return path
 
 
+def require_clips(names):
+    """{name: path of its .wav} for every one of ``names``; skips when any is missing. A device test that quietly
+    left out the clips it did not find passed on speech_5s alone, without its multi-segment (65 / 120 / 300 s) cases."""
+    root = clips_dir()
+    paths = {name: os.path.join(root, f"{name}.wav") for name in names}
+    missing = [name for name, path in paths.items() if not os.path.exists(path)]
+    if missing:
+        pytest.skip(f"speech clips {missing} not found in {root} (reference/make_audio_clips.py; set MIMO_AUDIO_CLIPS)")
+    return paths
+
+
 def vllm_processor_or_none():
     """vLLM's MiMoVLProcessor (only its audio path is used) and vLLM's resampler, or None without vllm / torchaudio."""
     try:

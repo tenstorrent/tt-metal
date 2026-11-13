@@ -422,6 +422,36 @@ class EmbeddingCache:
         return len(self.entries)
 
 
+class RecentSet:
+    """A set that keeps its ``capacity`` most recently added members (the oldest go first)."""
+
+    def __init__(self, capacity=65536):
+        self.capacity = capacity
+        self.members = collections.OrderedDict()
+
+    def add(self, member):
+        self.members.pop(member, None)
+        self.members[member] = None
+        while len(self.members) > self.capacity:
+            self.members.popitem(last=False)
+
+    def update(self, members):
+        for member in members:
+            self.add(member)
+
+    def discard(self, member):
+        self.members.pop(member, None)
+
+    def __contains__(self, member):
+        return member in self.members
+
+    def __len__(self):
+        return len(self.members)
+
+    def __iter__(self):
+        return iter(self.members)
+
+
 class ItemEncoder:
     """Embeddings of a row's items through the cache, encoding a miss with ``backend`` (what chunk_embeds'
     ``embeddings_of`` takes). Last resort only: an item that cannot be encoded logs an ERROR (every time, with its
@@ -431,7 +461,9 @@ class ItemEncoder:
     def __init__(self, backend, cache=None):
         self.backend = backend
         self.cache = cache if cache is not None else EmbeddingCache()
-        self.failed = set()
+        # Identifiers whose last encode failed: an item leaves it when it encodes (a failure is of that pass, e.g. a
+        # fragmented DRAM, not of the item), and it holds the most recent ones only.
+        self.failed = RecentSet()
         self.failures = 0
 
     def __call__(self, item, context=""):
@@ -441,7 +473,8 @@ class ItemEncoder:
         try:
             emb = encode_item(self.backend, item)
         except Exception as e:  # noqa: BLE001 - any encoder failure must not kill the engine
-            self.failed.add(item.identifier or id(item))
+            if item.identifier is not None:
+                self.failed.add(item.identifier)
             self.failures += 1
             logger.error(
                 f"MiMo multimodal: ENCODER FAILURE #{self.failures}{context}: {item.modality} item "
@@ -449,6 +482,7 @@ class ItemEncoder:
                 f"stand in, so this request's answer is degraded: {type(e).__name__}: {e}"
             )
             return None
+        self.failed.discard(item.identifier)
         self.cache.put(item.identifier, emb)
         return emb
 

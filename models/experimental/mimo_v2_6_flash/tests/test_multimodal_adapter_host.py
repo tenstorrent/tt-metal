@@ -260,3 +260,93 @@ def test_items_straddling_chunks_and_slot_reuse(monkeypatch):
     # Slot 1 takes a text request too: nothing holds the image any more.
     a.prefill_forward(tokens[:1], [0], [100], None, None, empty_slots=[1], mm_items=[None])
     assert "img4" not in a.mm_cache
+
+
+def test_an_item_that_encodes_again_is_no_longer_failed(monkeypatch):
+    """One failed encoder pass (a fragmented DRAM, say) does not fail the item's requests for the life of the engine:
+    while only the failure is known, a request whose cached prefix covers the item is failed (that KV is placeholder);
+    once a request encodes the item and computes its positions itself, the mark is gone and prefix hits on it are
+    served."""
+    monkeypatch.setattr(gv, "MM_STRICT", True)
+    a, replica = adapter(monkeypatch)
+    backend = a.mm_encoders[0].backend
+    good, state = backend.embed_image, {"fail": 1}
+
+    def flaky(pixel_values, grid_thw):
+        if state["fail"]:
+            state["fail"] -= 1
+            raise RuntimeError("out of memory")
+        return good(pixel_values, grid_thw)
+
+    backend.embed_image = flaky
+    tokens = torch.zeros(1, 400, dtype=torch.int32)
+    kw = dict(empty_slots=[0], mm_items=[[image(1, 10)]])
+    a.prefill_forward(tokens, [0], [200], None, None, **kw)
+    assert list(a.take_prefill_errors()) == [0] and "img1" in a.mm_failed_ids
+    a.prefill_forward(tokens, [128], [400], None, None, **kw)  # a prefix hit over the failed item
+    assert list(a.take_prefill_errors()) == [0] and "img1" in a.mm_failed_ids
+    a.prefill_forward(tokens, [0], [200], None, None, **kw)  # recomputed from the start: the encoder works again
+    assert a.take_prefill_errors() == {} and "img1" not in a.mm_failed_ids and "img1" not in a.mm_encoders[0].failed
+    a.prefill_forward(tokens, [128], [400], None, None, **kw)  # the prefix now holds the item's real KV
+    assert a.take_prefill_errors() == {}
+    # A failure keeps only the recent identifiers, and never an object id.
+    recent = gv.mm.RecentSet(capacity=3)
+    recent.update("abcd")
+    recent.add("b")
+    assert list(recent) == ["c", "d", "b"] and "a" not in recent and len(recent) == 3
+
+
+def test_programs_an_encoder_compiles_are_recaptured_around_before_any_pass(monkeypatch):
+    """An encoder that compiles programs while serving (an input size first seen) puts their buffers where the
+    replica's traces write on replay: the traces are captured again before this step's passes (and their replays),
+    not only after them, and once."""
+    events = []
+
+    class Compiling(TracedReplica):
+        def __init__(self):
+            super().__init__()
+            self.programs = 10
+            self.decode_trace = object()
+            self.mesh_device = SimpleNamespace(num_program_cache_entries=lambda: self.programs)
+            for name in (
+                "release_spec_traces",
+                "release_decode_trace",
+                "release_prefill_chunk_traces",
+                "recapture_prefill_batch_traces",
+                "capture_prefill_chunk_traces",
+            ):
+                setattr(self, name, lambda: None)
+
+        def capture_decode_trace(self):
+            events.append("recapture")
+
+        def set_vllm_page_tables(self, rows):
+            events.append("page tables")
+
+        def prefill_enqueue_batch(self, chunks, layers=None):
+            events.append("pass")
+            return super().prefill_enqueue_batch(chunks, layers)
+
+        def prefill_enqueue(self, *args, **kwargs):
+            events.append("pass")
+            return super().prefill_enqueue(*args, **kwargs)
+
+    a, replica = adapter(monkeypatch, replica=Compiling())
+    backend = a.mm_encoders[0].backend
+    good = backend.embed_image
+
+    def compiling(pixel_values, grid_thw):
+        events.append("encode")
+        replica.programs += 3  # a pass size the ViT had not compiled
+        return good(pixel_values, grid_thw)
+
+    backend.embed_image = compiling
+    tokens = torch.zeros(2, 300, dtype=torch.int32)
+    before = a.decode_recaptures
+    a.prefill_forward(tokens, [0, 0], [200, 200], None, None, empty_slots=[0, 1], mm_items=[[image(1, 10)], None])
+    assert events[:2] == ["encode", "recapture"] and "pass" in events[2:], events
+    assert events.count("recapture") == 1 and a.decode_recaptures == before + 1  # not again after the passes
+    # The cached image compiles nothing: no recapture.
+    events.clear()
+    a.prefill_forward(tokens, [0, 0], [200, 200], None, None, empty_slots=[0, 1], mm_items=[[image(1, 10)], None])
+    assert "recapture" not in events and "encode" not in events and "pass" in events

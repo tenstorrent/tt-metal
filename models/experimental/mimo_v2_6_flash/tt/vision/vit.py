@@ -38,6 +38,7 @@ every program a call runs is one of the ``len(ROW_BUCKETS)`` sets that ``warm()`
 than the largest bucket (only if the processor allows images over 32768 patches) falls back to a shape of its own.
 """
 
+import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -68,8 +69,57 @@ MAX_SEQS_PER_PASS = CU_ENTRIES - 2
 # time against the eager pass's ~40 us of enqueue per op (~1000 ops: the whole small-image latency).
 TRACE_MAX_ROWS = 4096
 TRACE_BUCKETS = tuple(b for b in ROW_BUCKETS if b <= TRACE_MAX_ROWS)
-# Pass geometries whose host input tensors (PassInputs.host) stay cached, least recently used out first.
+# Pass geometries whose host input tensors (PassInputs.host) stay cached, least recently used out first: at most
+# this many, and at most HOST_INPUT_CACHE_BYTES of them (MIMO_VIT_HOST_CACHE_MB, default 128). One geometry is
+# ~0.7 KB a row per device copy (11 MB at 16384 rows, 21 MB at 32768: the band mask, cos, sin, index tensors), so 64
+# large ones (many image sizes / video lengths) were 0.7-1.3 GB of host RAM per row engine, and more where a
+# replicated host tensor keeps a copy per device. The byte bound counts one copy.
 HOST_INPUT_CACHE = 64
+HOST_INPUT_CACHE_BYTES = int(float(os.environ.get("MIMO_VIT_HOST_CACHE_MB", "128")) * 2**20)
+_DTYPE_BYTES = {ttnn.bfloat16: 2, ttnn.uint16: 2, ttnn.uint8: 1}  # every other dtype used here is 4 bytes
+
+
+def host_input_bytes(host):
+    """Bytes of one copy of a pass's host inputs ({name: host tensor}): elements times element size."""
+    total = 0
+    for t in host.values():
+        elements = 1
+        for d in tuple(t.shape):
+            elements *= int(d)
+        total += elements * _DTYPE_BYTES.get(t.dtype, 4)
+    return total
+
+
+class HostInputCache:
+    """Pass geometry -> PassInputs.host, least recently used out first, bounded by entries and by bytes
+    (``host_input_bytes``). The entry just used always stays, whatever its size."""
+
+    def __init__(self, max_entries=HOST_INPUT_CACHE, max_bytes=None, size_of=host_input_bytes):
+        self.max_entries = max_entries
+        self.max_bytes = HOST_INPUT_CACHE_BYTES if max_bytes is None else max_bytes
+        self.size_of = size_of
+        self.entries = OrderedDict()  # key -> (host, bytes)
+        self.bytes = 0
+
+    def __len__(self):
+        return len(self.entries)
+
+    def get(self, key, make):
+        """The cached inputs of ``key``, made with ``make()`` on a miss."""
+        entry = self.entries.get(key)
+        if entry is not None:
+            self.entries.move_to_end(key)
+            return entry[0]
+        host = make()
+        size = self.size_of(host)
+        self.entries[key] = (host, size)
+        self.bytes += size
+        while len(self.entries) > 1 and (len(self.entries) > self.max_entries or self.bytes > self.max_bytes):
+            _, (_, dropped) = self.entries.popitem(last=False)
+            self.bytes -= dropped
+        return host
+
+
 # The column-parallel linears (QKV, MLP gate / up) of passes up to this many rows take a 2D-multicast program config
 # (1.4-1.7x faster than the auto config at 1024 / 4096 rows); larger passes keep the auto config (within 10% there,
 # and the per-core blocks outgrow L1).
@@ -655,7 +705,7 @@ class TtMiMoVisionTransformer:
             TtVisionBlock(self.plan, cfg, i, sd, cache_dir, weight_dtype, numerics, self.mm_config, self.attn_config)
             for i in range(cfg.depth)
         ]
-        self._host_cache = OrderedDict()  # (grids, rows) -> PassInputs.host(...), least recently used first
+        self._host_cache = HostInputCache()  # (grids, rows) -> PassInputs.host(...)
         self._traces = {}  # rows -> PassTrace (prepare_traces)
 
     @classmethod
@@ -697,15 +747,7 @@ class TtMiMoVisionTransformer:
     def _host_inputs(self, geo):
         """PassInputs.host for ``geo``, cached per pass geometry (they never depend on the pixels)."""
         key = (tuple(geo.grids), geo.rows)
-        host = self._host_cache.get(key)
-        if host is None:
-            host = PassInputs.host(self.plan, self.cfg, geo)
-            self._host_cache[key] = host
-            while len(self._host_cache) > HOST_INPUT_CACHE:
-                self._host_cache.popitem(last=False)
-        else:
-            self._host_cache.move_to_end(key)
-        return host
+        return self._host_cache.get(key, lambda: PassInputs.host(self.plan, self.cfg, geo))
 
     def _host_pixels(self, pixel_values, geo):
         """Pixel rows [geo.n .. geo.rows, patch_dim] -> host bf16 [1, 1, rows, patch_dim] row-major tensor, rows
@@ -847,6 +889,10 @@ class TtMiMoVisionTransformer:
             self._trace_body(self._traces[rows])
         ttnn.synchronize_device(mesh)
         return persistent
+
+    def prepared_traces(self):
+        """The buckets whose persistent trace buffers are allocated (prepare_traces)."""
+        return tuple(self._traces)
 
     def _trace_body(self, traced):
         out = self._pass(traced.pixels, traced.inp, own_inputs=False)

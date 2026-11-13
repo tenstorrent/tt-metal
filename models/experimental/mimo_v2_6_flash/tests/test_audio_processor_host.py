@@ -149,6 +149,23 @@ def test_engine_side_embeddings_unchanged(setup, front):
         logger.info(f"{clip}: codes path == mel path (bf16 patch), and == the HF host backend (fp32 patch)")
 
 
+def test_frontend_patch_needs_the_frontend_tokenizer(expect_error):
+    """MIMO_AUDIO_PATCH=frontend with the device tokenizer (the default) would send the mel and leave the engine to
+    run its host patch encoder: refused at startup instead. ``test_front_end_emits_embeds`` below runs the valid
+    combination (it sets the tokenizer to the front end)."""
+    from models.experimental.mimo_v2_6_flash.tt.audio.host_backend import check_audio_places
+
+    with expect_error(ValueError, "MIMO_AUDIO_PATCH=frontend needs MIMO_AUDIO_TOKENIZER=frontend"):
+        check_audio_places("frontend", "device")
+    for patch, tokenizer in (
+        ("frontend", "frontend"),
+        ("device", "device"),
+        ("engine", "device"),
+        ("device", "frontend"),
+    ):
+        check_audio_places(patch, tokenizer)
+
+
 def test_front_end_emits_embeds(setup, front, front_embeds):
     """The front end's patch encoder gives what the engine's gives from the same codes, and the engine uploads it."""
     from models.experimental.mimo_v2_6_flash.tt import multimodal as mm

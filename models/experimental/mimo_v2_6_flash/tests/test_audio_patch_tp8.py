@@ -29,14 +29,17 @@ from models.experimental.mimo_v2_6_flash.reference import audio as ref
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, pcc
 from models.experimental.mimo_v2_6_flash.tests.test_audio_reference_host import (
     audio_model_path,
-    clips_dir,
     load_wav_24k,
+    require_clips,
     vllm_processor_or_none,
 )
 from models.experimental.mimo_v2_6_flash.tt.audio.host_backend import HostAudioBackend
 from models.experimental.mimo_v2_6_flash.tt.audio.patch import GROUP_BUCKETS, TtAudioPatchEncoder, padded_groups
 
 CLIPS = ("speech_5s", "speech_30s", "speech_120s", "speech_300s")
+# Edge lengths, cut from speech_5s's codes (name -> code frames): one code frame (a group that is three quarters
+# padding), and counts that are not a multiple of the group size (4), one of them below one group.
+EDGE_CODES = {"edge_1_code": 1, "edge_3_codes": 3, "edge_5_codes": 5}
 PCC = 0.999
 
 
@@ -49,7 +52,6 @@ def host():
     """Codes per clip (fp32 tokenizer encoder) and the host patch encoders' embeddings (bf16 as served, fp32)."""
     torch.set_num_threads(min(16, torch.get_num_threads()))
     path = audio_model_path()
-    root = clips_dir()
     proc = vllm_processor_or_none()
     if proc is None:
         pytest.skip("vllm or torchaudio not importable (the clips are resampled with vLLM's resampler)")
@@ -57,12 +59,12 @@ def host():
     tok = HostAudioBackend(path, num_threads=16, weights=weights)
     patch32 = ref.AudioPatchEncoder(weights, tok.cfg, torch.float32)
     clips = {}
-    for c in CLIPS:
-        wav = os.path.join(root, f"{c}.wav")
-        if not os.path.exists(wav):
-            continue
-        mel = ref.log_mel_spectrogram(load_wav_24k(wav, proc[1]), tok.cfg)
-        codes = tok.codes(mel)
+    all_codes = {}
+    for c, wav in require_clips(CLIPS).items():  # skips when one is missing: no case drops out quietly
+        all_codes[c] = tok.codes(ref.log_mel_spectrogram(load_wav_24k(wav, proc[1]), tok.cfg))
+    for name, n in EDGE_CODES.items():
+        all_codes[name] = all_codes["speech_5s"][20 : 20 + n].clone()
+    for c, codes in all_codes.items():
         clips[c] = {
             "codes": codes,
             "bf16": tok.embed_audio_codes(codes),
@@ -135,5 +137,6 @@ def test_audio_patch_tp8(mesh_device, host, monkeypatch):
     assert g < rows // cfg.group_size and padded_groups(g) in GROUP_BUCKETS
     assert torch.equal(a, b), "padding rows leak into the real rows"
     logger.info(f"speech_30s: {g} groups padded to {rows // cfg.group_size}: garbage padding changes nothing")
+    assert set(scores) == set(CLIPS) | set(EDGE_CODES)  # none dropped out
     for clip, (p16, p32) in scores.items():
         assert p16 >= PCC and p32 >= PCC, (clip, p16, p32)

@@ -134,3 +134,72 @@ def test_passes_cap_the_number_of_frames():
     assert frames == [MAX_SEQS_PER_PASS, MAX_SEQS_PER_PASS, 600 - 2 * MAX_SEQS_PER_PASS]
     for _, _, sub in passes:
         assert len(PassGeometry.build(sub).cu_window_seqlens()) == CU_ENTRIES
+
+
+def test_host_input_cache_is_bounded_by_bytes():
+    """The cached host inputs of the pass geometries stay under a byte budget, not only an entry count: 64 large
+    geometries (many image sizes / video lengths) were 0.7-1.3 GB of host RAM per row engine."""
+    import ttnn
+    from models.experimental.mimo_v2_6_flash.tt.vision import vit
+
+    class Host:
+        def __init__(self, shape, dtype):
+            self.shape, self.dtype = shape, dtype
+
+    inputs = {"cos": Host((1, 1, 1024, 80), ttnn.bfloat16), "to_col": Host((1, 1024), ttnn.uint32)}
+    assert vit.host_input_bytes(inputs) == 1024 * 80 * 2 + 1024 * 4
+    made = []
+
+    def make(size):
+        def build():
+            made.append(size)
+            return size
+
+        return build
+
+    cache = vit.HostInputCache(max_entries=4, max_bytes=100, size_of=lambda host: host)
+    for key in "abc":
+        assert cache.get(key, make(30)) == 30
+    assert len(cache) == 3 and cache.bytes == 90
+    cache.get("a", make(30))  # a hit: nothing made, "a" is now the most recent
+    assert made == [30, 30, 30]
+    cache.get("d", make(30))  # 120 bytes: the least recently used ("b") goes
+    assert list(cache.entries) == ["c", "a", "d"] and cache.bytes == 90
+    cache.get("big", make(500))  # larger than the budget: it stays alone (the pass that asked for it needs it)
+    assert list(cache.entries) == ["big"] and cache.bytes == 500
+    cache.get("e", make(10))
+    assert list(cache.entries) == ["e"] and cache.bytes == 10
+    small = vit.HostInputCache(max_entries=2, max_bytes=10**9, size_of=lambda host: host)
+    for key in "abc":
+        small.get(key, make(1))
+    assert list(small.entries) == ["b", "c"]  # the entry bound still holds
+    assert vit.HostInputCache().max_bytes == vit.HOST_INPUT_CACHE_BYTES == 128 << 20
+
+
+def test_capture_traces_needs_the_buffers_warm_allocates(expect_error):
+    """capture_traces() runs after the LLM captured its traces; the persistent buffers of the traced buckets must
+    exist by then (warm() allocates them before), so it refuses to allocate them itself."""
+    from models.experimental.mimo_v2_6_flash.tt.vision.encoder import MiMoVisionEncoder
+
+    class Vit:
+        def __init__(self, prepared):
+            self.prepared, self.calls = prepared, []
+
+        def prepared_traces(self):
+            return self.prepared
+
+        def prepare_traces(self, buckets):
+            self.calls.append(("prepare", buckets))
+
+        def capture_traces(self):
+            self.calls.append("capture")
+            return {rows: 0 for rows in self.prepared}
+
+    enc = object.__new__(MiMoVisionEncoder)
+    enc.trace_buckets = (1024, 2048)
+    enc.vit = Vit(prepared=(1024,))
+    with expect_error(RuntimeError, r"before warm\(\): the traced buckets \[2048\]"):
+        enc.capture_traces()
+    assert enc.vit.calls == []  # nothing allocated, nothing captured
+    enc.vit = Vit(prepared=(1024, 2048))
+    assert enc.capture_traces() == {1024: 0, 2048: 0} and enc.vit.calls == ["capture"]

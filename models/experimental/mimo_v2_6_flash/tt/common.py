@@ -410,13 +410,52 @@ def l1_program_budget(device):
     return min(max(top - base, 0), view.total_bytes_per_bank)
 
 
+# MIMO_MM_L1_GUARD (default 1): the budget of a linear shape is never more than the L1 free at that shape's first call
+# (``shape_l1_budget``). The fixed budgets were checked on a Blackhole 1x8 row with MTP (text replica) and with the
+# multimodal encoders; a configuration that keeps more L1 (DFlash, another decode-user count, a future op) could have
+# less free than the budget assumes, and blocks sized past the free L1 fail when the program is built (circular
+# buffers clash with L1 buffers), where ttnn's auto-config, sizing to the free L1, ran. In the checked configurations
+# the free L1 is above the budget and nothing changes.
+MM_L1_GUARD = os.environ.get("MIMO_MM_L1_GUARD", "1") == "1"
+_shape_budgets = {}
+
+
+def shape_l1_budget(x, w):
+    """The L1 budget the config of ``x @ w`` is computed against: MM_L1_BUDGET, or the L1 free now when that is less
+    (what ttnn's auto-config would size to). Decided at the shape's first call and kept, so the shape's program stays
+    one program whatever holds L1 later (the reason for a fixed budget), and logged when it is not the fixed budget."""
+    key = (tuple(x.padded_shape), tuple(w.padded_shape), MM_L1_BUDGET)
+    budget = _shape_budgets.get(key)
+    if budget is None:
+        budget = MM_L1_BUDGET
+        if MM_L1_GUARD:
+            try:
+                free = l1_program_budget(x.device())
+            except Exception:  # noqa: BLE001 - no memory view (a host test's stand-in device): the fixed budget
+                free = None
+            if free is not None and free < budget:
+                from loguru import logger
+
+                logger.warning(
+                    f"MiMo matmul config: {key[0]} @ {key[1]}: {free} bytes of L1 are free, less than the fixed "
+                    f"budget {budget} (MIMO_MM_L1_BUDGET); this shape's config is sized to {free} instead"
+                )
+                budget = free
+        _shape_budgets[key] = budget
+    return budget
+
+
 def dram_linear(x, w, *, dtype, memory_config, compute_kernel_config):
     """ttnn.linear(x, w) of DRAM-interleaved operands with the program config auto-config picks with MM_L1_BUDGET of
-    L1 (``auto_dram_matmul_config``), so its program does not depend on what holds L1 when it runs."""
+    L1 (``auto_dram_matmul_config``), so its program does not depend on what holds L1 when it runs; never with more
+    than the L1 free at the shape's first call (``shape_l1_budget``)."""
     kwargs = dict(dtype=dtype, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
     config = auto_dram_matmul_config(x, w, compute_kernel_config, dtype)
     if config is None:
         return ttnn.linear(x, w, **kwargs)
+    budget = shape_l1_budget(x, w)
+    if budget != MM_L1_BUDGET:
+        config = auto_dram_matmul_config(x, w, compute_kernel_config, dtype, budget)
     if MM_CONFIG_CHECK:
         return _checked_linear(x, w, config, kwargs)
     return ttnn.linear(x, w, program_config=config, **kwargs)

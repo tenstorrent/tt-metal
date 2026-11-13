@@ -348,6 +348,7 @@ class PassInputs:
 
     def build_masks(self):
         """{windowed: additive mask [1, 1, rows, rows]}: MASK_NEG above the diagonal, and below the window."""
+        self.free_masks()  # a pass that failed before freeing its masks: not two sets of them in DRAM
         neg = ttnn.full(
             (1, 1, self.rows, self.rows),
             MASK_NEG,
@@ -492,12 +493,23 @@ class TtAudioTokenizerEncoder:
         """fp32 mel [L, 128] of one segment -> host fp32 [pooled_length, d]: the reference's ``features`` rows.
         ``trace``: a list that collects the 50 Hz stream after the convolutions and after each layer (host fp32,
         ``n50`` rows), for tests."""
+        sp = self.segment_plan(mel.shape[0], max_len)
+        inp = self._pass_inputs(sp["rows"])
+        inp.build_masks()
+        try:
+            return self._segment_hidden(mel, sp, inp, trace)
+        finally:
+            # Also when an op of the pass fails (device out of memory next to the LLM's traces): the two
+            # [rows, rows] fp32 masks (75 MB at 3072 rows) belong to ``inp``, which outlives the pass, so nothing
+            # else would free them before this row count's next item. The pass's own temporaries are locals and go
+            # with its frame.
+            inp.free_masks()
+
+    def _segment_hidden(self, mel, sp, inp, trace):
+        """``segment_hidden`` with the segment's plan and its pass inputs (masks built)."""
         ops, cfg = self.ops, self.cfg
         L = mel.shape[0]
-        sp = self.segment_plan(L, max_len)
         rows = sp["rows"]
-        inp = self._pass_inputs(rows)
-        inp.build_masks()
         kw = dict(dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # conv1 (k 3, padding 1) on 2 * rows mel frames: im2col on the host, split into bf16 parts there.
         m = torch.zeros(2 * rows + 2, mel.shape[1])

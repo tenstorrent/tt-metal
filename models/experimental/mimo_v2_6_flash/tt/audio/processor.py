@@ -49,7 +49,10 @@ MIMO_AUDIO_PATCH says where the patch encoder (codes -> LLM embeddings) runs; th
   [n_tokens, 4096], bit for bit what the engine's host patch encoder makes from the codes, and the engine only
   uploads it: the engine's row no longer waits for the host patch encoder, the item's processing here takes ~10 %
   longer. The processor cache and the engine transfer then hold 8 KiB per token instead of 80 B of codes per 25 Hz
-  frame (a 30 s clip: 1.5 MB).
+  frame (a 30 s clip: 1.5 MB). It needs MIMO_AUDIO_TOKENIZER=frontend: the patch encoder here takes the codes of the
+  tokenizer encoder here. With the device tokenizer (the default) the codes only exist on the engine's row, so the
+  combination is refused at startup (``check_audio_places``), in the API server and in the engine; before that
+  check it was accepted and silently ran the engine's host patch encoder, what ``frontend`` is there to avoid.
 
 MIMO_AUDIO_TOKENIZER=device (the default) runs the tokenizer encoder on the engine's row too (tt/audio/tokenizer.py;
 the API server and the engine read it): the item then reaches the engine as ``audio_mel_bits``, the fp32 mel as int32
@@ -79,7 +82,7 @@ from vllm.model_executor.models.mimo_v2_omni import MiMoV2OmniMultiModalProcesso
 from vllm.multimodal.inputs import MultiModalFieldConfig
 
 from ...reference import audio as ref
-from .host_backend import HostAudioBackend
+from .host_backend import HostAudioBackend, check_audio_places
 
 FRONTEND_THREADS = int(os.environ.get("MIMO_AUDIO_FRONTEND_THREADS", "8"))
 PATCH_PLACES = ("device", "frontend", "engine")
@@ -91,6 +94,7 @@ TOKENIZER_WHERE = os.environ.get("MIMO_AUDIO_TOKENIZER", "device")
 if TOKENIZER_WHERE not in ("frontend", "device"):
     raise ValueError(f"MIMO_AUDIO_TOKENIZER={TOKENIZER_WHERE!r}: frontend or device")
 DEVICE_TOKENIZER = TOKENIZER_WHERE == "device"
+check_audio_places(PATCH_WHERE, TOKENIZER_WHERE)
 _tokenizers = {}
 _tokenizers_lock = threading.Lock()
 

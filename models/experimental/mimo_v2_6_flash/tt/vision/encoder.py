@@ -98,8 +98,18 @@ class MiMoVisionEncoder:
 
     def capture_traces(self):
         """Capture the traced buckets' passes (after warm(), once the LLM's traces are captured). Returns {rows: trace
-        region bytes per chip}."""
-        self.vit.prepare_traces(self.trace_buckets)
+        region bytes per chip}.
+
+        ``warm()`` must have run, before the LLM captured its traces: it allocates the traced buckets' persistent
+        pixel / input / output buffers. Allocating them here instead, after the LLM's captures, would put them where
+        an LLM trace replay writes its temporaries, and the vision inputs and outputs would be overwritten under a
+        running pass. So this refuses rather than allocate."""
+        missing = [rows for rows in self.trace_buckets if rows not in self.vit.prepared_traces()]
+        if missing:
+            raise RuntimeError(
+                f"MiMoVisionEncoder.capture_traces() before warm(): the traced buckets {missing} have no persistent "
+                "buffers yet, and they must be allocated before the LLM captures its traces (call warm() first)"
+            )
         return self.vit.capture_traces()
 
     def trace_info(self):

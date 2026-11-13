@@ -33,6 +33,19 @@ from models.experimental.mimo_v2_6_flash.reference import audio as ref
 CPU_SDPA_KV_BLOCK = 512
 
 
+def check_audio_places(patch, tokenizer):
+    """Refuse MIMO_AUDIO_PATCH=frontend with MIMO_AUDIO_TOKENIZER=device. The front end's patch encoder takes the
+    codes of the front end's tokenizer encoder; with the device tokenizer the item leaves the front end as a mel, the
+    front end's patch encoder never runs, and the engine (which builds its device patch encoder only for
+    MIMO_AUDIO_PATCH=device) would run the host patch encoder on its row without a word. Called at import by the
+    front end (tt/audio/processor.py) and the engine (tt/generator_vllm.py), which read the same two variables."""
+    if patch == "frontend" and tokenizer == "device":
+        raise ValueError(
+            "MIMO_AUDIO_PATCH=frontend needs MIMO_AUDIO_TOKENIZER=frontend: the front end's patch encoder takes the "
+            "front end's codes. With MIMO_AUDIO_TOKENIZER=device (the default) set MIMO_AUDIO_PATCH to device or engine"
+        )
+
+
 class CausalAudioTokenizerEncoder(ref.AudioTokenizerEncoder):
     """The reference encoder with cheaper attention, bit-identical hidden states (checked on 5 s to 600 s of speech,
     tests/test_audio_host_backend_host.py):

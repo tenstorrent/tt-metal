@@ -98,3 +98,38 @@ def test_other_operands_keep_auto_config():
     assert auto_dram_matmul_config(x, w, ckc, ttnn.bfloat16) is None
     x = Tensor((1, 1, 32, 4096), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     assert auto_dram_matmul_config(x, w, ckc, ttnn.bfloat16) is None
+
+
+def test_a_shape_never_assumes_more_l1_than_is_free(monkeypatch):
+    """The fixed budget was checked on the text replica with MTP and on the multimodal one; a configuration that
+    keeps more L1 gets the config of the L1 actually free at the shape's first call (as ttnn's auto-config would
+    size it), decided once per shape. With the budget free, nothing changes."""
+    monkeypatch.delenv("MIMO_MM_L1_BUDGET", raising=False)
+    monkeypatch.setattr(common, "MM_L1_BUDGET", 1228800)
+    monkeypatch.setattr(common, "_shape_budgets", {})
+    used, free = [], {"now": 1468992}
+    monkeypatch.setattr(common, "l1_program_budget", lambda device: free["now"])
+    monkeypatch.setattr(ttnn, "linear", lambda x, w, program_config=None, **kw: used.append(program_config))
+    ckc = compute_config(ttnn.MathFidelity.HiFi2)
+    kw = dict(dtype=ttnn.bfloat16, memory_config=DRAM, compute_kernel_config=ckc)
+
+    def run(m):
+        common.dram_linear(Tensor((1, 1, m, 1536), ttnn.bfloat16), Tensor((1536, 4096), ttnn.bfloat8_b), **kw)
+        return used[-1].in0_block_w
+
+    assert run(4096) == 4  # the text replica's config
+    free["now"] = 1081344  # something else now holds L1
+    assert run(4096) == 4  # this shape's program was decided at its first call
+    assert run(3840) == 2  # a shape first seen now is sized to what is free, as auto-config would
+    free["now"] = 1468992
+    assert run(3840) == 2 and run(3584) == 4
+    assert common._shape_budgets[((1, 1, 3840, 1536), (1536, 4096), 1228800)] == 1081344
+
+    monkeypatch.setattr(common, "MM_L1_GUARD", False)
+    monkeypatch.setattr(common, "_shape_budgets", {})
+    free["now"] = 1025024
+    assert run(4096) == 4  # MIMO_MM_L1_GUARD=0: the fixed budget whatever is free
+    monkeypatch.setattr(common, "MM_L1_GUARD", True)
+    monkeypatch.setattr(common, "_shape_budgets", {})
+    monkeypatch.setattr(common, "l1_program_budget", lambda device: 1 / 0)  # no memory view: the fixed budget
+    assert run(4096) == 4

@@ -949,6 +949,20 @@ class MiMoV2ForCausalLM:
             # The MTP history: a chunk starting where the slot's last one ended continues its request.
             continues[i] = start > 0 and self.prefill_ends[lane].get(slot) == start
             self.prefill_ends[lane][slot] = int(ends[i])
+        # Every row's multimodal rows first (the encoders run on the device and the host waits for their rows), so
+        # the passes then go to the device back to back. They also run before anything else of this step reaches
+        # the device (page tables, MTP resets, passes): an encoder can compile programs while serving (an input size
+        # first seen), whose program-cache buffers lie where this replica's traces write their temporaries on
+        # replay. Then the traces are captured again right here, around the new buffers, with the device as the
+        # last step left it, and before the pass order below asks which chunks have a trace. Recapturing only
+        # after the passes (as the end of this method does for programs the passes compile) would let this step's
+        # batch / chunk replays write over the encoder's programs first, and a later recapture does not repair them.
+        programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
+        t_embeds = time.perf_counter()
+        row_embeds = {p[0]: self._row_embeds(p[0], p[1], p[3], p[4]) for p in placed}
+        embeds_s = time.perf_counter() - t_embeds
+        if self._recapture_after_new_programs(programs, "multimodal encoder"):
+            programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
         for lane, rows_of_lane in enumerate(table_rows):
             if rows_of_lane:
                 self.models[lane].set_vllm_page_tables(rows_of_lane)
@@ -1003,11 +1017,6 @@ class MiMoV2ForCausalLM:
         order = [passes[k] for k in range(max(map(len, by_lane))) for passes in by_lane if k < len(passes)]
         # Nothing chains onto a verify a prefill followed (the plugin builds the next decode from host state).
         self._tip = None
-        programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
-        t_embeds = time.perf_counter()
-        # Every row's multimodal rows first (the encoders run on the device and the host waits for their rows), so
-        # the passes then go to the device back to back.
-        row_embeds = {p[0]: self._row_embeds(p[0], p[1], p[3], p[4]) for p in placed}
         t0 = time.perf_counter()
         pending = []
         for rows_of_pass in order:
@@ -1046,7 +1055,7 @@ class MiMoV2ForCausalLM:
             logger.info(
                 f"MiMo vLLM timing: prefill {rows} rows in {len(pending)} passes "
                 f"{[[p[4] - p[3] for p in rows_of] for rows_of, _, _ in pending]}"
-                + (f" ({mm} with multimodal rows, embeds {1e3 * (t0 - t_embeds):.0f} ms)" if mm else "")
+                + (f" ({mm} with multimodal rows, embeds {1e3 * embeds_s:.0f} ms)" if mm else "")
                 + f": enqueue {1e3 * (t1 - t0):.0f} ms, total {1e3 * (time.perf_counter() - t0):.0f} ms"
                 + (
                     f", {sum(1 for *_, h in pending if isinstance(h, dict) and h.get('persistent'))} replayed"
@@ -1157,12 +1166,15 @@ class MiMoV2ForCausalLM:
         (None, None)."""
         return None, None
 
-    def _recapture_after_new_programs(self, programs):
+    def _recapture_after_new_programs(self, programs, what="prefill"):
         """``programs``: each replica's program-cache size before the prefill. A prefill that compiled new programs
         (a chunk length or offset first seen while serving) put their program-cache buffers in memory the replica's
         decode trace may write on replay (tech_reports/.../TraceCorrectness.md, unsafe allocations), so that replica's
         traces are captured again, around them. Every slot is idle during the decode capture and the prefill batches
-        capture on zero fill tables, so no request's KV is written."""
+        capture on zero fill tables, so no request's KV is written. Returns the number of replicas recaptured.
+        ``what`` names in the log what compiled them: the passes (at the end of prefill_forward) or the multimodal
+        encoders (before the step's passes, so none of its replays runs over their programs)."""
+        recaptured = 0
         for lane, model in enumerate(self.models):
             if model.decode_trace is None or model.mesh_device.num_program_cache_entries() == programs[lane]:
                 continue
@@ -1181,10 +1193,12 @@ class MiMoV2ForCausalLM:
                 model.capture_spec_traces()
             model.capture_prefill_chunk_traces()  # optional, so last: if they no longer fit they are dropped
             self.decode_recaptures += 1
+            recaptured += 1
             logger.info(
-                f"MiMo vLLM: replica {lane} decode trace recaptured after {new} new prefill programs "
+                f"MiMo vLLM: replica {lane} decode trace recaptured after {new} new {what} programs "
                 f"({self.decode_recaptures} recaptures so far)"
             )
+        return recaptured
 
     # ------------------------------------------------------------------ decode
     def decode_forward(
@@ -2774,6 +2788,10 @@ def audio_device_patch(model_path, mesh_device):
 # LibriSpeech WER / degenerate outputs equal to the host's in the serving A/B, see tt/audio/processor.py) or
 # ``frontend`` (fp32 on the API server's CPU, codes bit-identical to the reference).
 AUDIO_TOKENIZER = os.environ.get("MIMO_AUDIO_TOKENIZER", "device")
+if "audio" in MM_MODALITIES:
+    from .audio.host_backend import check_audio_places
+
+    check_audio_places(AUDIO_PATCH, AUDIO_TOKENIZER)
 
 
 def audio_device_tokenizer(model_path, mesh_device):
@@ -2922,13 +2940,17 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         # cache's LRU budget bounds the rest).
         self.mm_slot_items = {}
         self.mm_failures = 0  # rows that could not be served (encoder failure, or a cached failed item)
-        self.mm_failed_ids = set()  # items that failed to encode: a cached prefix holding one holds placeholder KV
+        # Items that failed to encode: a cached prefix (APC) holding one holds placeholder KV. An item leaves it when
+        # a request encodes it and computes its positions itself (``_row_embeds``): that request found no cached
+        # block over the item, so the placeholder blocks are gone and the ones it writes are good. The most recent
+        # identifiers only (mm.RecentSet): one failed pass must not fail an item's requests until the engine restarts.
+        self.mm_failed_ids = mm.RecentSet()
         self.prefill_errors = {}
         self.mm_eos = int(getattr(hf_config, "eos_token_id", None) or 151645)
         self.vision_encoders = [getattr(b, "vision", None) for b in backends]
         self.audio_patches = [getattr(b, "device_patch", None) for b in backends]
         self.audio_tokenizers = [getattr(b, "device_tokenizer", None) for b in backends]
-        self._row_mm = self._row_slots = None
+        self._row_mm = self._row_slots = self._row_starts = None
         if any(e is not None for e in self.vision_encoders + self.audio_patches + self.audio_tokenizers):
             # Encoders that keep L1 on the device: the prefill linears' blocks must fit next to it (common.dram_linear).
             set_mm_l1_budget(MM_ENCODER_L1_BUDGET)
@@ -2998,11 +3020,11 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
             bad = [it.identifier for it in row_items if it.identifier in self.mm_failed_ids and it.offset < starts[row]]
             if bad:
                 self._fail_row(row, f"its cached prefix holds item {bad[0]}, which failed to encode")
-        self._row_mm, self._row_slots = items, slots
+        self._row_mm, self._row_slots, self._row_starts = items, slots, starts
         try:
             logits = super().prefill_forward(tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs)
         finally:
-            self._row_mm = self._row_slots = None
+            self._row_mm = self._row_slots = self._row_starts = None
         if MM_STRICT and self.prefill_errors:
             # Never a plausible answer from placeholder embeddings: the row's first token ends the turn.
             for row in self.prefill_errors:
@@ -3050,9 +3072,20 @@ class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if Suppor
         except Exception as e:  # noqa: BLE001 - see _rows_items
             embeds = rows = None
             logger.error(f"MiMo vLLM: multimodal rows{where} not merged: {type(e).__name__}: {e}")
+        in_chunk = [it for it in mm.items_overlapping(self._row_mm[row], start, end) if it.identifier is not None]
         if embeds is None or encoder.failures > failures:
             self.mm_failed_ids.update(it.identifier for it in self._row_mm[row] if it.identifier in encoder.failed)
+            if embeds is None:  # the chunk's rows were not merged: every item of it stands as placeholders
+                self.mm_failed_ids.update(it.identifier for it in in_chunk)
             self._fail_row(row, f"a multimodal item of chunk [{start}, {end}) failed to encode")
+        elif len(self.mm_failed_ids):
+            # Encoded and merged. An item that failed before and whose positions this request computes itself (its
+            # prefill starts at or before the item: no cached block covers it) is good again from here on.
+            row_start = int(self._row_starts[row]) if self._row_starts is not None else start
+            for it in in_chunk:
+                if it.identifier in self.mm_failed_ids and it.offset >= row_start and row not in self.prefill_errors:
+                    self.mm_failed_ids.discard(it.identifier)
+                    logger.info(f"MiMo vLLM: item {it.identifier} encodes again{where}; no longer marked as failed")
         if embeds is None:
             return None, None
         logger.info(
