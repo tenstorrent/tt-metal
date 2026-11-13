@@ -121,7 +121,7 @@ def _fake_ttnn(made: list):
     return SimpleNamespace(empty=empty, reshape=reshape, Shape=tuple, TILE_LAYOUT="TILE")
 
 
-def test_dsa_pool_borrows_the_kda_pool(monkeypatch):
+def test_dsa_pool_borrows_the_kda_pool(monkeypatch, expect_error):
     """GLM53_DSA_POOL_BORROW (mk_stack.AllocPool.lend_from, the B 16 x 1 M L1 diet): the DSA pool and its hand-off child
     take the KDA stacks' pool tensors of the same key before they allocate; each lent tensor goes to ONE borrower (s1
     never shares a buffer with an MLA / MoE intermediate); the lender's lists and counts are untouched; a narrow
@@ -175,7 +175,7 @@ def test_dsa_pool_borrows_the_kda_pool(monkeypatch):
     with kda2:  # the dense KDA stack: the bf16 trio
         k2 = [req(kda2, (1, 1, 16, 4096), BF) for _ in range(3)]
     dsa2.lend_from(kda2)
-    kda2.lend_from(dsa2, child=False)
+    kda2.lend_from(dsa2, child=False, alias=False)
     with dsa2:  # the first DSA layer: 4 bf16 (3 lent + its own), its MoE keys (router / latent: DSA-only so far)
         d2 = [req(dsa2, (1, 1, 16, 4096), BF) for _ in range(4)]
         d_lat = req(dsa2, (1, 1, 16, 512), FP)
@@ -197,3 +197,61 @@ def test_dsa_pool_borrows_the_kda_pool(monkeypatch):
     with dsa2.child():  # the DSA child (s1) borrows the KDA pool's, never a DSA tensor lent to it
         s1b = req(dsa2.child(), (1, 1, 16, 512), FP)
     assert s1b is not d_lat and len(made) == n2 + 3
+    # ... in full-width builds only (alias=False): a narrow (alias) KDA build never takes a DSA tensor -- its prefix picks
+    # stay the ones it makes without the borrow
+    kda2.alias = dsa2.alias = True
+    with dsa2:
+        d_pad = req(dsa2, (1, 4, 1, 1), FP)  # a padded key only the DSA side has (leading dims: no prefix view): real
+    with kda2:
+        k_pad = req(kda2, (1, 4, 1, 1), FP)
+    assert k_pad.base is not d_pad.base, "an alias build of the KDA pool borrows nothing"
+
+    # prefix-pin conflicts (GLM53_STACK_PREFIX_REDO, AllocPool._conflict): prefix_slots pins one base per (key, request
+    # index, shape) pool-wide, and two programs deciding those requests in different orders met a pinned base already
+    # handed ("prefix base (1, 1, 16, 512) already handed in this build", the B 16 x 1 M narrow sparse KDA build) -- or a
+    # real slot already handed as another request's prefix base (the mirror). Decided once per conflict and replayed.
+    def scenario(redo: bool):
+        monkeypatch.setenv("GLM53_STACK_PREFIX_REDO", "1" if redo else "0")
+        made.clear()
+        p = MS.AllocPool()
+        with p:  # full width: one 256- and one 512-column fp32 tensor
+            t256, t512 = req(p, (1, 1, 16, 256), FP), req(p, (1, 1, 16, 512), FP)
+        p.alias = True
+        dense = lambda: [req(p, (1, 1, 1, 256), FP).base for _ in range(2)]  # noqa: E731 (the 2nd pins t512)
+        sparse = lambda: [req(p, (1, 1, 1, 512), FP).base] + [req(p, (1, 1, 1, 256), FP).base for _ in range(2)]  # noqa
+        with p:
+            d1 = dense()
+        assert d1 == [t256, t512]
+        with p:  # the sparse build pins t512 to its own first request, then meets the dense pins
+            s1 = sparse()
+        with p:
+            s2 = sparse()
+        with p:
+            d2 = dense()
+        return t256, t512, d1, s1, s2, d2
+
+    with expect_error(RuntimeError, "prefix base \\(1, 1, 16, 512\\) already handed in this build"):
+        scenario(redo=False)
+    t256, t512, d1, s1, s2, d2 = scenario(redo=True)
+    assert s1 == s2 and d2 == d1, "every build of one program gets the same buffers (the pick is replayed)"
+    assert len(set(map(id, s1))) == 3 and s1[0] is t512 and s1[1] is t256 and s1[2] not in (t256, t512)
+    assert len(made) == 3, "one tensor of its own for the conflicted request (no prefix base left)"
+
+    def mirror(redo: bool):
+        monkeypatch.setenv("GLM53_STACK_PREFIX_REDO", "1" if redo else "0")
+        made.clear()
+        p = MS.AllocPool()
+        p.alias = True
+        with p:  # a narrow build allocates a real (1, 1, 32, 512) (no wider base to view)
+            c = req(p, (1, 1, 1, 512), FP)
+        with p:  # another program: a 256-column request first takes it as its prefix base, then its own key's slot
+            r = [req(p, (1, 1, 1, 256), FP).base, req(p, (1, 1, 1, 512), FP).base]
+        with p:
+            r2 = [req(p, (1, 1, 1, 256), FP).base, req(p, (1, 1, 1, 512), FP).base]
+        return c, r, r2
+
+    with expect_error(RuntimeError, "a prefix-aliased tensor \\(1, 1, 32, 512\\) requested again by its own key"):
+        mirror(redo=False)
+    c, r, r2 = mirror(redo=True)
+    assert r == r2 and r[0] is c.base and r[1] is not c.base and len(made) == 2
+    monkeypatch.delenv("GLM53_STACK_PREFIX_REDO")

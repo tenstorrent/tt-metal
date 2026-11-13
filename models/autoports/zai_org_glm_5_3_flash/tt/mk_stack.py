@@ -88,13 +88,16 @@ class AllocPool:
         self.prefixed = set()  # ... of them, the bases handed as a prefix view (a later key match on one = a collision)
         self.real = {}  # per key: the real tensors this build has taken (a prefix-served request takes none)
         self.prefix_slots, self.prefix_base = {}, {}  # (key, request index, shape) -> its prefix view's key -> base
+        # GLM53_STACK_PREFIX_REDO (default 1; _conflict): (request, the held tensor) -> its decision once more
+        self.redo = {}
         # lend_from (GLM53_DSA_POOL_BORROW): another pool whose tensors this one takes before allocating its own, and
         # the claims set (tensor ids) it shares with every other borrower of that lender (its child included)
         self.lender, self.claims = None, None
         # GLM53_KDA_POOL_BORROW (two pools lending to each other): the ids of the tensors this pool FAMILY (it + its
         # child) allocated itself -- a tensor never comes back to its own family through the other pool's lists (it
-        # would serve two requests of one build); lend_child: lend_from reaches the child too (the DSA side's s1)
-        self.fam, self.lend_child = set(), True
+        # would serve two requests of one build); lend_child: lend_from reaches the child too (the DSA side's s1);
+        # lend_alias: the alias (narrow-width / verify) builds borrow too (the DSA side's; the KDA side's never does)
+        self.fam, self.lend_child, self.lend_alias = set(), True, True
 
     def child(self) -> "AllocPool":
         """a separate pool (the layers' persistent hand-off buffers: never aliased with a build's intermediates)"""
@@ -106,7 +109,7 @@ class AllocPool:
         self._child.alias = self.alias
         return self._child
 
-    def lend_from(self, lender: "AllocPool", claims: set | None = None, child: bool = True) -> None:
+    def lend_from(self, lender: "AllocPool", claims: set | None = None, child: bool = True, alias: bool = True) -> None:
         """GLM53_DSA_POOL_BORROW (stack_model._dsa_pools): a request this pool has no tensor of its own for takes an
         UNCLAIMED tensor of the same key from `lender`'s lists before it allocates. Sound when the two pools' programs
         never overlap in time and every tensor of both is a pure build intermediate (written before it is read inside
@@ -115,11 +118,16 @@ class AllocPool:
         bases) is never touched; `claims` (shared with this pool's child) hands each lent tensor to ONE borrower, so the
         MLA -> MoE hand-off s1 (the child's) never shares a buffer with an MLA / MoE intermediate. child=False
         (GLM53_KDA_POOL_BORROW, the KDA stacks' pool borrowing the DSA pool's): the child -- the KDA stacks' persistent
-        hand-offs, state across programs -- never borrows."""
+        hand-offs, state across programs -- never borrows. alias=False (the same KDA side): only the full-width builds
+        borrow, each borrowed tensor taking exactly the list slot the pool would have allocated (same key, shape and
+        position) -- the alias builds' prefix views (_prefix_alias / prefix_slots: request -> base, fixed across builds)
+        then see the lists they see without the borrow (a borrow in an alias build would append a real tensor under a
+        padded key where the pool serves a prefix view, and move later prefix picks). The prefix-pin conflicts of the
+        narrow builds (mmtp6_g4k3_1m_128_nn) do not depend on the borrow: _conflict."""
         assert lender is not self
         self.lender = lender
         self.claims = claims if claims is not None else set()
-        self.lend_child = bool(child)
+        self.lend_child, self.lend_alias = bool(child), bool(alias)
         if child and self._child is not None and self._child.lender is None:
             self._child.lend_from(lender, self.claims)
 
@@ -179,10 +187,14 @@ class AllocPool:
         self.counts[k] = i + 1
         pk = (k, i, want)
         if pk in self.prefix_slots:  # this request was served by a prefix view in an earlier build: the same one
-            return self._take_prefix(self.prefix_slots[pk])
+            vk = self.prefix_slots[pk]
+            if id(self.prefix_base[vk]) in self.used and os.environ.get("GLM53_STACK_PREFIX_REDO", "1") == "1":
+                return self._conflict(pk, self.prefix_base[vk], want, pad, k, shape, a, kw)
+            return self._take_prefix(vk)
         lst = self.lists.setdefault(k, [])
         j = self.real.get(k, 0)  # the request's index among this key's REAL tensors (prefix-served ones skip it)
-        b = self._borrow(k) if j == len(lst) else None  # a lender's tensor of this padded key first (no new L1)
+        # a lender's tensor of this padded key first (no new L1; lend_alias: the DSA side only)
+        b = self._borrow(k) if j == len(lst) and self.lend_alias else None
         if b is not None:
             lst.append(b)
         if j == len(lst):  # nothing of this padded shape left to alias
@@ -193,6 +205,10 @@ class AllocPool:
             lst.append(self._own(self.orig(pad if pad != want else shape, *a, **kw)))  # a tensor of its own
         self.real[k] = j + 1
         base = lst[j]
+        if (
+            id(base) in self.prefixed and os.environ.get("GLM53_STACK_PREFIX_REDO", "1") == "1"
+        ):  # (the mirror conflict: this slot's tensor is another's prefix base)
+            return self._conflict(pk, base, want, pad, k, shape, a, kw)
         self._take(base)
         if tuple(int(v) for v in base.shape) == want:
             return base
@@ -200,6 +216,41 @@ class AllocPool:
         if vk not in self.views:
             self.views[vk] = ttnn.reshape(base, ttnn.Shape(list(want)), ttnn.Shape(list(base.padded_shape)))
         return self.views[vk]
+
+    def _conflict(self, pk, held, want, pad, k, shape, a, kw):
+        """the tensor pk is pinned to -- its prefix base (prefix_slots, fixed by the build that first met pk) or its real
+        list slot -- is already handed in this build, as another request's own tensor or prefix base: a build of ANOTHER
+        program (the other stack kind, a width, the verify) decided those requests in another order, and the pins are
+        pool-wide ("prefix base (1, 1, 16, 512) already handed in this build": the B 16 x 1 M narrow sparse KDA build,
+        mmtp6_g4k3_1m_128_nn; (1, 1, 8, 512) on B 8, 2026-11-08; "a prefix-aliased tensor .. requested again by its own
+        key" the mirror case). Every build of ONE program meets the same conflict at the same request (identical requests
+        -> identical handed set), so pk is decided once per (pk, held tensor) and replayed: another prefix view
+        (_prefix_alias skips this build's handed tensors) or, with none, a tensor of its own kept OUTSIDE the lists
+        (their keys / shapes -- what later prefix picks read -- stay as they are). Never one buffer twice in a build.
+        GLM53_STACK_PREFIX_REDO=0: the RuntimeErrors as before."""
+        ck = (pk, id(held))
+        while True:  # (a replayed pick this build holds too -- a third program's order: the next pick down the chain)
+            hit = self.redo.get(ck)
+            if hit is None:
+                nvk = self._prefix_alias(want, pad, k)
+                hit = ("prefix", nvk) if nvk is not None else ("own", self._own(self.orig(
+                    pad if pad != want else shape, *a, **kw)))  # fmt: skip
+                self.redo[ck] = hit
+                break
+            got = self.prefix_base[hit[1]] if hit[0] == "prefix" else hit[1]
+            if id(got) not in self.used:
+                break
+            ck = (ck, id(got))
+        if hit[0] == "prefix":
+            return self._take_prefix(hit[1])
+        base = hit[1]
+        self._take(base)
+        if tuple(int(v) for v in base.shape) == want:
+            return base
+        rk = ("redo", id(base), want)
+        if rk not in self.views:
+            self.views[rk] = ttnn.reshape(base, ttnn.Shape(list(want)), ttnn.Shape(list(base.padded_shape)))
+        return self.views[rk]
 
     def _take_prefix(self, vk):
         base = self.prefix_base[vk]

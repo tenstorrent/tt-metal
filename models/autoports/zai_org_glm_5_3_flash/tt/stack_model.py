@@ -1019,9 +1019,12 @@ class StackBackend(ModelBackend):
             # mmtp5_g4k3_1m_128_nn census). The verify stacks of the speculative step build in these same two pools.
             # Only keys the KDA pool requests itself enter its lists (its prefix-alias picks see the keys / shapes they
             # see without it: the 2026-11-08 trap was DSA-only keys in its lists); the family guard (AllocPool.fam) keeps
-            # a tensor from coming back to its own pool through the other's lists
+            # a tensor from coming back to its own pool through the other's lists. Full-width builds only (alias=False):
+            # the narrow / verify (alias) builds keep the prefix-view picks they make without the borrow. (The narrow
+            # sparse KDA build's "prefix base (1, 1, 16, 512) already handed" (mmtp6_g4k3_1m_128_nn) is a pool-wide
+            # prefix-pin conflict between program orders, with or without the borrow: AllocPool._conflict)
             if os.environ.get("GLM53_KDA_POOL_BORROW", "0") == "1" and kv.extra.get("pool") is not None:
-                kv.extra["pool"].lend_from(kv.extra["dsa_pool"], child=False)
+                kv.extra["pool"].lend_from(kv.extra["dsa_pool"], child=False, alias=False)
         kv.extra["dsa_pool"].alias = kv.extra["pool"].alias
         return kv.extra["dsa_pool"]
 
