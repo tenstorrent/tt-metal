@@ -262,7 +262,7 @@ TEST(CommandListBinderTest, RecordsBindingsWithOneEncodingPerMetalParam) {
     binder.param("scale", encode_float32_bits).runtime(kReader, "address").common_runtime(kReader, "value");
     binder.param("scale", encode_uint16_low, "scale_u16")
         .runtime(kWriter, "address", std::vector<m2::NodeCoord>{{1, 0}});
-    const CmdListBindings bindings = std::move(binder).finish();
+    const CmdListBindings bindings = binder.finish();
 
     ASSERT_EQ(bindings.tensors.size(), 2u);
     EXPECT_EQ(bindings.tensors[1].program_spec_param_name, m2::TensorParamName{"dst"});
@@ -450,7 +450,7 @@ struct FanOutDeviceOperation {
             binder.param("value").common_runtime(m2::KernelSpecName{"writer_a"}, "value");
             binder.param("value", encode_uint16_pair, "value_u16_pair")
                 .common_runtime(m2::KernelSpecName{"writer_b"}, "value");
-            return std::move(binder).finish();
+            return binder.finish();
         }
     };
     using program_factory_t = std::variant<Factory>;

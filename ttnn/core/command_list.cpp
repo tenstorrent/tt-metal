@@ -405,7 +405,7 @@ CmdListBinder::Param& CmdListBinder::Param::common_runtime(
     return *this;
 }
 
-CmdListBindings CmdListBinder::finish() && { return std::move(bindings_); }
+CmdListBindings CmdListBinder::finish() { return std::move(bindings_); }
 
 const metal::KernelSpec& CmdListBinder::kernel_spec(const metal::KernelSpecName& kernel_name) const {
     const auto it = std::find_if(spec_.kernels.begin(), spec_.kernels.end(), [&](const auto& kernel) {

@@ -674,7 +674,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::map_cmd_list_pa
         binder.param(/*invoke_name=*/"scale", /*encode=*/ttnn::command_list::encode_float32_bits)
             .runtime(/*kernel_name=*/KernelSpecName{"reader"}, /*arg_name=*/"pre_scale");
     }
-    return std::move(binder).finish();
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim
