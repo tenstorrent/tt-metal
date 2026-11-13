@@ -161,6 +161,10 @@ def test_all_reduce_async_one_shot_chain_in_trace(mesh_device):
         x = x0
         for i in range(CHAIN):
             y = _ar(mesh_device, inps[i], buf, sems[i % 2], mem, one_shot, residual=x)
+            if not one_shot:
+                # The default mode does not order a device's next write into a peer's buffer after that peer's
+                # reduction of the previous call; the reference waits for each call instead.
+                ttnn.synchronize_device(mesh_device)
             if x is not x0:
                 ttnn.deallocate(x)
             x = y
