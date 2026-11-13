@@ -15,7 +15,7 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
 
@@ -35,7 +35,7 @@ using test_helpers::ProgramSpecTestQuasar;
 TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBSucceeds) {
     // Positive baseline: borrowed-memory DFB whose TensorParameter is L1-resident and large enough.
     ProgramSpec spec = MakeBorrowedDFBProgramSpec();
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNonL1TensorParameterFails) {
@@ -43,7 +43,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNonL1TensorParameterFails) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpec("borrowed_tensor", tt::tt_metal::BufferType::DRAM);
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not L1-resident")));
 }
 
@@ -51,7 +51,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBPerNodeTensorParameterFails) 
     ProgramSpec spec = MakeBorrowedDFBProgramSpec();
     spec.tensor_parameters = {MakePerNodeTensorParameter("borrowed_tensor", /*num_cores=*/1)};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("which is per-node allocated")));
 }
 
@@ -65,7 +65,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBOversizedFails) {
         "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/2);
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("is larger than the per-bank allocation of its borrowed TensorParameter")));
 }
@@ -86,7 +86,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBShardLargerThanWholeTensorSuc
         /*num_cores=*/1,
         tt::tt_metal::Layout::ROW_MAJOR)};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBLargerThanShardStillFails) {
@@ -102,7 +102,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBLargerThanShardStillFails) {
         tt::tt_metal::Layout::ROW_MAJOR)};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("is larger than the per-bank allocation of its borrowed TensorParameter")));
 }
@@ -129,7 +129,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNdShardLargerThanWholeTensorS
             allocator->get_num_banks(tt::tt_metal::BufferType::L1)),
         tensor_spec.compute_packed_buffer_size_bytes());
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExactFitAtZeroOffset) {
@@ -220,7 +220,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBMissingOccupiedNode) {
     spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "DFB 'dfb' allocates from SRAMArenaParameter 'arena', which does not cover every occupied node.")));
 }
@@ -243,7 +243,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBExceedsCapacity) {
     }};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
             "DFB 'dfb' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' per_bank_size {}.",
             0,
@@ -269,7 +269,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBOffsetCausesOverrun) {
     }};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
             "DFB 'dfb' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' per_bank_size {}.",
             alignment,
@@ -296,7 +296,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBMisalignedOffset) {
     }};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             fmt::format("DFB 'dfb' allocation offset 1 must be a multiple of L1 alignment {}.", alignment))));
 }

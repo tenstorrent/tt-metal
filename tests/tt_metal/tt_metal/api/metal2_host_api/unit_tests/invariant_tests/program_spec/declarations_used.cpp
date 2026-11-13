@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -41,7 +41,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_KernelNotInAnyWorkUnitSpecFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel1"})};  // Only kernel1
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'kernel2' is not referenced by any WorkUnitSpec")));
 }
@@ -63,7 +63,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithNoBindingsFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("DFB 'orphan_dfb' is defined but not bound by any kernel")));
 }
@@ -77,7 +77,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnboundScratchpadFails) {
     // No kernel binds it.
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("declared but not bound")));
 }
 
@@ -88,7 +88,7 @@ TEST_F(ProgramSpecTestGen1, CPU_UnboundTensorParameterFails) {
     spec.tensor_parameters = {MakeMinimalTensorParameter("orphan_tensor")};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("TensorParameter 'orphan_tensor' is defined but not bound by any kernel")));
 }
@@ -105,7 +105,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBBackingParameterNeedNotBeKern
         /*dfb_entry_size=*/16,
         /*dfb_num_entries=*/2,
         /*bind_backing_to_kernel=*/false);
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SemaphoresSucceed) {
@@ -116,7 +116,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SemaphoresSucceed) {
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

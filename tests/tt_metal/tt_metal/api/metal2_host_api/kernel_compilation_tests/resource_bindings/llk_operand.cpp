@@ -14,7 +14,7 @@
 #include <utility>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -35,7 +35,7 @@ TEST_F(ProgramSpecTestQuasar, DFBCustomTileCompiles) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.dataflow_buffers[0].tile_format_metadata = Tile{{8, 32}};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -60,7 +60,7 @@ void kernel_main() {
 }
 )"};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
 }
 
@@ -76,7 +76,7 @@ void kernel_main() {
 }
 )"};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
 }
 
@@ -97,7 +97,7 @@ void kernel_main() {
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_ANY_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, ScratchpadFormatAloneSucceeds) {
@@ -129,7 +129,7 @@ void kernel_main() {
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, ScratchpadFormatAndTileSucceeds) {
@@ -162,7 +162,7 @@ void kernel_main() {
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, ScratchpadCustomFaceTileSucceeds) {
@@ -195,7 +195,7 @@ void kernel_main() {
     spec.kernels[1].scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, DFBDefaultTileCompiles) {
@@ -221,7 +221,7 @@ void kernel_main() {
 }
 )"};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, DFBFaceGeometryCompiles) {
@@ -248,7 +248,7 @@ void kernel_main() {
 }
 )"};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 // An L1-sharded tensor whose page tile is exactly `tile_shape`, so LLKOperandFrom sees a
@@ -277,7 +277,7 @@ void kernel_main() {
 }
 )"};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("data_format_metadata_not_set")));
 }
 
@@ -321,7 +321,7 @@ void kernel_main() {
     static_assert(get_num_faces_c_dim(tensor::b) == 1);
 }
 )"};
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, L1TensorDefaultCompiles) {
@@ -349,7 +349,7 @@ void kernel_main() {
 }
 )"};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, L1Tensor16x32Compiles) {
@@ -377,7 +377,7 @@ void kernel_main() {
 }
 )"};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, L1Tensor32x16Compiles) {
@@ -405,7 +405,7 @@ void kernel_main() {
 }
 )"};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 // Tile getters remain usable without data-format metadata. A DFB bound to a compute kernel must
@@ -434,7 +434,7 @@ void kernel_main() {
 }
 )"};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(LLKOperandInterop, MetadataGettersDistinguishBindings) {
@@ -483,7 +483,7 @@ void kernel_main() {
 }
 )"};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

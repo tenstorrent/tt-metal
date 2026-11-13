@@ -9,7 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -40,7 +40,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBUndeclaredName) {
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"missing"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("DFB 'dfb' allocates from unknown SRAMArenaParameter 'missing'.")));
 }
@@ -64,7 +64,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadUndeclaredName) {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'scratch' allocates from unknown SRAMArenaParameter 'missing'.")));
 }
@@ -76,7 +76,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedLockstepParameterFails) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"unused"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("SRAMArenaParameter 'unused' is not used by any DFB or scratchpad")));
 }
@@ -90,7 +90,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedRangeLockstepParameterFails) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"unused"}, .properties = properties}};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("SRAMArenaParameter 'unused' is not used by any DFB or scratchpad")));
 }
@@ -103,7 +103,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUsedOnlyByDFBSucceeds) {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
     spec.dataflow_buffers[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedParameterBesideUsedParameterFails) {
@@ -116,7 +116,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedParameterBesideUsedParameterFai
     spec.dataflow_buffers[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"used"}};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("SRAMArenaParameter 'unused' is not used by any DFB or scratchpad")));
 }
@@ -131,7 +131,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnboundScratchpadFails) {
     spec.scratchpads[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'orphan_scratch' is declared but not bound by any kernel.")));
 }

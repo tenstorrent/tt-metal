@@ -98,7 +98,7 @@ static void run_a1_pipeline(distributed::MeshDevice& mesh_device, A1Transform tr
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -118,7 +118,7 @@ static void run_a1_pipeline(distributed::MeshDevice& mesh_device, A1Transform tr
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Stimulus
     const uint32_t total_bytes = entry_size * num_entries;
@@ -201,7 +201,7 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -220,7 +220,7 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     const uint32_t total_words = entry_size * total_tiles / sizeof(uint32_t);
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, total_words);
@@ -366,7 +366,7 @@ static void run_implicit_write_availability_guard(distributed::MeshDevice& mesh_
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     const uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, sizeof(uint32_t));
     std::vector<uint32_t> sentinel{kGuardSentinel};
@@ -379,7 +379,7 @@ static void run_implicit_write_availability_guard(distributed::MeshDevice& mesh_
         {.kernel = GUARD_CONSUMER},
     };
     params.tensor_args = {{GUARD_TENSOR, std::cref(out_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -454,7 +454,7 @@ static void run_implicit_read_availability_guard(distributed::MeshDevice& mesh_d
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     const uint32_t result_l1_addr = top_of_l1_scratch_addr(mesh_device, sizeof(uint32_t));
     std::vector<uint32_t> sentinel{kGuardSentinel};
@@ -467,7 +467,7 @@ static void run_implicit_read_availability_guard(distributed::MeshDevice& mesh_d
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}})},
     };
     params.tensor_args = {{GUARD_TENSOR, std::cref(in_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
@@ -576,7 +576,7 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -595,7 +595,7 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     auto input = create_random_vector_of_bfloat16(kPushTiles * kEntrySize, 1.0f, 0xD1D1);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
@@ -797,7 +797,7 @@ TEST_F(UnitMeshFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
         .work_units = {decoy_wu, shared_wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -826,7 +826,7 @@ TEST_F(UnitMeshFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     auto input = create_constant_vector_of_bfloat16(2 * entries_per_core * entry_size, 1.0f);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
@@ -1130,7 +1130,7 @@ static void run_a1_threaded_pipeline(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1150,7 +1150,7 @@ static void run_a1_threaded_pipeline(
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     auto input = create_random_vector_of_bfloat16(entry_size * total_tiles, 2.0f, 0xA1A1);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);

@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -56,7 +56,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeConfigUnpackToDestModeReferencesUnbound
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'consumer' unpack_modes entry references DFB 'nonexistent_dfb', "
                                  "which the kernel does not bind")));
@@ -75,7 +75,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ConsumerUnpackToDestBelow32BitWithoutEnableFails
         }
     }
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("leads to worse performance")));
 }
 
@@ -91,13 +91,13 @@ TEST_F(ProgramSpecTestQuasar, CPU_ConsumerUnpackToDestBelow32BitWithoutEnableSuc
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithoutUnpackToDestModeEntrySucceeds) {
     // Non-FP32 DFBs default to Default; omitting an entry is the expected idiom.
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b (non-FP32)
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithExplicitDefaultUnpackToDestModeSucceeds) {
@@ -109,7 +109,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithExplicitDefaultUnpackToDestModeS
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
@@ -125,7 +125,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
@@ -145,7 +145,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_FP32ConsumerWithFp32DestAccEnAndNoEntryFails) 
     // Compute kernel intentionally has no unpack_modes entry.
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "Compute kernel 'compute_kernel' consumes FP32 DFB 'dfb_0' with enable_32_bit_dest=true, but "
             "provides no unpack_modes entry for this DFB")));
@@ -161,7 +161,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_FP32ConsumerWithoutFp32DestAccEnDoesNotRequire
         }
     }
     // enable_32_bit_dest stays at its default (false). No unpack_modes entry.
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_FP32ProducerOnlyBindingDoesNotRequireEntry) {
@@ -189,7 +189,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_FP32ProducerOnlyBindingDoesNotRequireEntry) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "consumer_dm"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestFp32OnProducerBindingSucceeds) {
@@ -218,7 +218,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestFp32OnProducerBindingSucceeds) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "consumer_dm"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestFp32WithoutFp32DestAccEnFails) {
@@ -238,7 +238,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestFp32WithoutFp32DestAccEnFails) {
         }
     }
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("A 32-bit datum cannot be unpacked into a 16-bit Dest register")));
 }
@@ -258,7 +258,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_FP32DFBWithDefaultUnpackToDestModeSucceeds) {
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ValidUnpackToDestModeSucceeds) {
@@ -279,7 +279,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ValidUnpackToDestModeSucceeds) {
         }
     }
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ComputeConfigMathFidelitySucceeds) {
@@ -295,7 +295,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeConfigMathFidelitySucceeds) {
         }
     }
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

@@ -8,7 +8,8 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <cstdint>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -50,7 +51,7 @@ bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_by
     };
     WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     ProgramSpec spec{.name = "cache_write_perf", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -63,7 +64,7 @@ bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_by
              {"num_iterations", NUM_ITERATIONS},
              {"test_id", QUASAR_CACHE_WRITE_TEST_ID}}),
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());

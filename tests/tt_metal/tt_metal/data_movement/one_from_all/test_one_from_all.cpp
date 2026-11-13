@@ -5,7 +5,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
@@ -137,7 +137,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneFromAllConfig& test_c
         }},
     };
 
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs gatherer_run_params{.kernel = gatherer_spec.unique_id};
@@ -151,7 +151,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneFromAllConfig& test_c
     gatherer_run_params.advanced_options.runtime_varargs.emplace(
         test_config.master_core_coord, subordinate_phys_coords);
     run_params.kernel_run_args.push_back(gatherer_run_params);
-    SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SetProgramRunArgs with KernelRunArgs: kernel/node coverage, vararg counts, repeated calls,
+// Program::set_run_args with KernelRunArgs: kernel/node coverage, vararg counts, repeated calls,
 // and kernels that may be omitted.
 
 #include <gtest/gtest.h>
@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
@@ -75,7 +75,7 @@ inline ProgramSpec MakeGen1SpecWithRTAs(const NodeCoord& /*node*/, size_t num_pe
 TEST_F(ProgramRunArgsTestQuasar, CPU_UnknownKernelNameFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -88,7 +88,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UnknownKernelNameFails) {
     });
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'nonexistent_kernel' has no RTA schema registered")));
 }
@@ -97,7 +97,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_InvalidNodeForKernelFails) {
     NodeCoord node{0, 0};
     NodeCoord wrong_node{1, 1};  // Kernel doesn't run on this node
     ProgramSpec spec = MakeSpecWithRTAs(node, 2, 0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -111,7 +111,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_InvalidNodeForKernelFails) {
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' is setting runtime_varargs for node")));
 }
@@ -119,13 +119,13 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_InvalidNodeForKernelFails) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_WrongRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Provide wrong count (2 instead of 3)
     auto params = MakeRunArgsForMinimalSpec(node, {1, 2}, {});
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("expects 3 vararg runtime args, but 2 were provided")));
 }
@@ -133,13 +133,13 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_WrongRuntimeArgsCountFails) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_WrongCommonRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Provide wrong common args count (3 instead of 2)
     auto params = MakeRunArgsForMinimalSpec(node, {}, {1, 2, 3});
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("expects 2 vararg common runtime args, but 3 were provided")));
 }
@@ -150,14 +150,14 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_EmptySchemaKernelOmittedFromRunArgsSucceeds
     NodeCoord node{0, 0};
     // Both kernels have empty RTA/CRTA schemas — neither has anything to supply per enqueue.
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Only provide params for dm_kernel; omit compute_kernel.
     // Since compute_kernel's schema is empty, this should succeed.
     ProgramRunArgs params;
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, {}, {}));
 
-    EXPECT_NO_THROW({ SetProgramRunArgs(program, params); });
+    EXPECT_NO_THROW({ program.set_run_args(params); });
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_NonEmptySchemaKernelMissingFromRunArgsFails) {
@@ -169,7 +169,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_NonEmptySchemaKernelMissingFromRunArgsFails
         /*dm_common_rtas=*/0,
         /*compute_per_node_rtas=*/2,
         /*compute_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Only provide params for dm_kernel; omit compute_kernel.
     // Since compute_kernel has declared RTAs, this should fail.
@@ -177,7 +177,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_NonEmptySchemaKernelMissingFromRunArgsFails
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "Kernel 'compute_kernel' is registered in the Program with a non-empty RTA/CRTA schema "
             "but has no runtime parameters specified in ProgramRunArgs")));
@@ -186,7 +186,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_NonEmptySchemaKernelMissingFromRunArgsFails
 TEST_F(ProgramRunArgsTestQuasar, CPU_MissingNodeRTAsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Don't provide the per-node RTAs (empty runtime_varargs)
     ProgramRunArgs params;
@@ -201,7 +201,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MissingNodeRTAsFails) {
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' is missing vararg runtime args for node")));
 }
@@ -209,7 +209,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MissingNodeRTAsFails) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_DuplicateKernelParamsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     // Push dm_kernel twice — should trigger duplicate detection.
@@ -218,48 +218,48 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_DuplicateKernelParamsFails) {
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate kernel 'dm_kernel'")));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_ZeroRTAs) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_PerNodeRTAsOnly) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {100, 200, 300}, {});
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_CommonRTAsOnly) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {10, 20});
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_BothRTATypes) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {100, 200, 300}, {10, 20});
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_BothKernelsWithRTAs) {
@@ -270,7 +270,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_BothKernelsWithRTAs) {
         /*dm_common_rtas=*/1,
         /*compute_per_node_rtas=*/3,
         /*compute_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(
         node,
@@ -279,44 +279,44 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_BothKernelsWithRTAs) {
         /*compute_per_node_args=*/{100, 200, 300},
         /*compute_common_args=*/{50, 60});
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsTwice_SameValuesSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/1);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {100, 200}, {10});
 
     // First call
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
     // Second call with same values
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsTwice_DifferentValuesSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/1);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params1 = MakeRunArgsForMinimalSpec(node, {100, 200}, {10});
     auto params2 = MakeRunArgsForMinimalSpec(node, {300, 400}, {20});  // Different values
 
     // First call
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params1));
+    EXPECT_NO_THROW(program.set_run_args(params1));
     // Second call with different values (same counts)
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params2));
+    EXPECT_NO_THROW(program.set_run_args(params2));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsTwice_ChangingCommonRTACountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // First call with 2 common RTAs (matches schema)
     auto params1 = MakeRunArgsForMinimalSpec(node, {}, {10, 20});
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params1));
+    EXPECT_NO_THROW(program.set_run_args(params1));
 
     // Change the schema expectation - this is tricky because the schema is fixed
     // The implementation checks against the schema, not the previous call.
@@ -327,7 +327,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsTwice_ChangingCommonRTACountFails
     // Let's verify that passing wrong count still fails (schema validation)
     auto params2 = MakeRunArgsForMinimalSpec(node, {}, {10, 20, 30});  // 3 instead of 2
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params2); },
+        [&] { program.set_run_args(params2); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("expects 2 vararg common runtime args, but 3 were provided")));
 }
@@ -335,12 +335,12 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsTwice_ChangingCommonRTACountFails
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsMultipleTimes_Succeeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
-    // Call SetProgramRunArgs multiple times with varying values
+    // Call Program::set_run_args multiple times with varying values
     for (uint32_t i = 0; i < 5; i++) {
         auto params = MakeRunArgsForMinimalSpec(node, {i * 10, i * 20}, {i * 100, i * 200});
-        EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+        EXPECT_NO_THROW(program.set_run_args(params));
     }
 }
 
@@ -372,7 +372,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_MultiNodeKernel) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Create run params with per-node RTAs for both nodes
     ProgramRunArgs params;
@@ -393,7 +393,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsSucceeds_MultiNodeKernel) {
             },
     });
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_MultiNode_MissingOneNodeFails) {
@@ -422,7 +422,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MultiNode_MissingOneNodeFails) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Only provide RTAs for node0, missing node1
     ProgramRunArgs params;
@@ -444,30 +444,30 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MultiNode_MissingOneNodeFails) {
     });
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'producer' is missing vararg runtime args for node")));
 }
 
 // A kernel can legitimately declare no RTAs / CRTAs / CTAs of any kind (named or vararg).
-// Verify the whole MakeProgramFromSpec + SetProgramRunArgs pipeline handles this case
+// Verify the whole Program constructor + Program::set_run_args pipeline handles this case
 // cleanly — no missing-schema TT_FATALs, no empty-buffer write attempts, no validation errors.
 TEST_F(ProgramRunArgsTestQuasar, CPU_AllEmptySchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     // spec.kernels already default to empty runtime_arg_values / common_runtime_arg_values /
     // compile_time_args, num_runtime_varargs = 0, num_common_runtime_varargs = 0,
     // num_runtime_varargs_per_node = nullopt.
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"dm_kernel"}});
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"compute_kernel"}});
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 // Regression: a kernel that binds a tensor but declares no scalar args (no named/vararg RTAs or
-// CRTAs) may be omitted from kernel_run_args. SetProgramRunArgs must still validate, and must write
+// CRTAs) may be omitted from kernel_run_args. Program::set_run_args must still validate, and must write
 // the binding's base address into that kernel's CRTA buffer via its second pass — the binding
 // address is per-enqueue state that has to reach the device whether or not the user supplies an
 // (otherwise-empty) kernel_run_args entry.
@@ -479,7 +479,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BindingOnlyKernelOmittedFromRunArgsSucceeds
     spec.tensor_parameters = {MakeMinimalTensorParameter(tensor_param)};
     BindTensorParameterToKernel(spec.kernels[0], tensor_param, "in_ta");  // kernels[0] == dm_kernel
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Supply the bound tensor via tensor_args, but provide NO kernel_run_args entry for the binding
     // kernel (the whole point of the relaxation — pre-fix this aborted in ValidateProgramRunArgs).
@@ -487,19 +487,19 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BindingOnlyKernelOmittedFromRunArgsSucceeds
     ProgramRunArgs params;
     params.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor}}};
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 
     // The second pass must have allocated the kernel's CRTA buffer and written the binding address.
     // MakeMinimalTensorParameter is non-sharded, so the binding is a single address word at offset 0.
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     ASSERT_FALSE(kernel->common_runtime_args().empty())
-        << "binding-only kernel's CRTA buffer should have been allocated by SetProgramRunArgs";
+        << "binding-only kernel's CRTA buffer should have been allocated by Program::set_run_args";
     EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor.address()))
         << "binding base address should be written even though the kernel was omitted from kernel_run_args";
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_BindingOnlyKernelOmittedFromRunArgsReSetSucceeds) {
-    // Regression: SetProgramRunArgs must be re-callable on a program whose binding-only kernel is
+    // Regression: Program::set_run_args must be re-callable on a program whose binding-only kernel is
     // omitted from kernel_run_args. The first call allocates the kernel's CRTA buffer in the second
     // pass; a second call must patch it in place — set_common_runtime_args fatals if called twice, so
     // the second pass has to use the same first-time/patch logic as the main loop.
@@ -508,12 +508,12 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BindingOnlyKernelOmittedFromRunArgsReSetSuc
     spec.tensor_parameters = {MakeMinimalTensorParameter(tensor_param)};
     BindTensorParameterToKernel(spec.kernels[0], tensor_param, "in_ta");  // kernels[0] == dm_kernel
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs params1;
     params1.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor1}}};
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params1));
+    EXPECT_NO_THROW(program.set_run_args(params1));
 
     // Second enqueue with a different tensor: must not re-allocate (no fatal), and the binding
     // address must update in place.
@@ -522,43 +522,43 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BindingOnlyKernelOmittedFromRunArgsReSetSuc
         << "test pre-condition: two live allocations should have distinct addresses";
     ProgramRunArgs params2;
     params2.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor2}}};
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params2));
+    EXPECT_NO_THROW(program.set_run_args(params2));
 
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor2.address()))
-        << "second SetProgramRunArgs should patch the binding address in place to the new tensor";
+        << "second Program::set_run_args should patch the binding address in place to the new tensor";
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgsSucceeds_ZeroRTAs) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeGen1SpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgsSucceeds_PerNodeAndCommonRTAs) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeGen1SpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/2);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {100, 200, 300}, {10, 20});
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_WrongRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeGen1SpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Provide wrong count (2 instead of 3)
     auto params = MakeRunArgsForMinimalSpec(node, {1, 2}, {});
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("expects 3 vararg runtime args, but 2 were provided")));
 }

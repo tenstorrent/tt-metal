@@ -142,7 +142,7 @@ inline WorkUnitSpec MakeMinimalWorkUnit(std::string name, const Nodes& nodes, co
 
 // Helper to create a minimal valid TensorParameter.
 // Default layout: BFLOAT16, ROW_MAJOR, interleaved, shape {1, 32}. Hardware-agnostic;
-// works on any mock device (alignment + virtualized cores resolved by MakeProgramFromSpec).
+// works on any mock device (alignment + virtualized cores resolved by the Program constructor).
 // buffer_type defaults to DRAM; pass BufferType::L1 for an SRAM-resident parameter.
 inline TensorParameter MakeMinimalTensorParameter(std::string name, BufferType buffer_type = BufferType::DRAM) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);

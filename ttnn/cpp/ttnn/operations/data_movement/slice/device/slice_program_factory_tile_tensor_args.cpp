@@ -9,7 +9,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 
 #include <optional>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <span>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -289,8 +289,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
 SliceTileTensorArgsProgramFactory::cached_program_t SliceTileTensorArgsProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     auto artifacts = create_program_artifacts(args, tensor_args, output);
-    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
-    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+    tt::tt_metal::Program program(*tensor_args.input.device(), artifacts.spec);
+    program.set_run_args(artifacts.run_params);
     // Geometry is keyed; start/end values remain device-side controls. Retain owned scalar maps,
     // not non-owning references to the tensors used on the cache miss.
     artifacts.run_params.tensor_args.clear();
@@ -306,8 +306,7 @@ void SliceTileTensorArgsProgramFactory::override_runtime_arguments(
         {OUTPUT, output.mesh_tensor()},
         {START_TENSOR, tensor_args.start_tensor.value().mesh_tensor()},
         {END_TENSOR, tensor_args.end_tensor.value().mesh_tensor()}};
-    tt::tt_metal::experimental::UpdateProgramRunArgs(
-        cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
+    cached_program.program.update_run_args(run_args, !ttnn::CONFIG.get<"validate_program_args">());
     run_args.tensor_args.clear();
 }
 

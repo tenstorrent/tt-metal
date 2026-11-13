@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -50,8 +50,8 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceMemberPartitionAffectsKerne
         return spec;
     };
 
-    Program prog_left = MakeProgramFromSpec(*mesh_device_, make_spec({"a", "bc"}));
-    Program prog_right = MakeProgramFromSpec(*mesh_device_, make_spec({"ab", "c"}));
+    Program prog_left(*mesh_device_, make_spec({"a", "bc"}));
+    Program prog_right(*mesh_device_, make_spec({"ab", "c"}));
 
     auto hash_left = prog_left.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     auto hash_right = prog_right.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
@@ -68,7 +68,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DifferentCompileTimeVarargsProducesDifferentKern
         spec.name = "cta_varargs_hash";
         spec.kernels = {dm_kernel};
         spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
-        return MakeProgramFromSpec(*mesh_device_, spec);
+        return Program(*mesh_device_, spec);
     };
 
     Program prog_a = make_program({0x11112222u, 0x33334444u});
@@ -87,7 +87,7 @@ TEST_F(ProgramSpecTestGen1, CPU_IdenticalCompileTimeVarargsProducesIdenticalKern
         spec.name = "cta_varargs_hash_ident";
         spec.kernels = {dm_kernel};
         spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
-        return MakeProgramFromSpec(*mesh_device_, spec);
+        return Program(*mesh_device_, spec);
     };
 
     Program prog_a = make_program();
@@ -107,8 +107,8 @@ TEST_F(ProgramSpecTestGen1, CPU_DifferentCompileTimeVarargCountProducesDifferent
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    Program prog_a = MakeProgramFromSpec(*mesh_device_, spec);
-    Program prog_b = MakeProgramFromSpec(*mesh_device_, spec);
+    Program prog_a(*mesh_device_, spec);
+    Program prog_b(*mesh_device_, spec);
     auto kernel_a = prog_a.impl().get_kernel_by_spec_name("dm_kernel");
     auto kernel_b = prog_b.impl().get_kernel_by_spec_name("dm_kernel");
     ASSERT_EQ(kernel_a->get_compile_time_vararg_count(), 2u);

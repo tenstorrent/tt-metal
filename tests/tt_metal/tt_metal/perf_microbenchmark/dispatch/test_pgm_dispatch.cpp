@@ -27,7 +27,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -461,8 +462,8 @@ bool initialize_program(
         total_kg.start_coord.x = total_kg.end_coord.x;
     }
 
-    program = m2::experimental::MakeProgramFromSpec(*mesh_device, spec);
-    m2::experimental::SetProgramRunArgs(program, run_args);
+    program = m2::Program(*mesh_device, spec);
+    program.set_run_args(run_args);
     return true;
 }
 

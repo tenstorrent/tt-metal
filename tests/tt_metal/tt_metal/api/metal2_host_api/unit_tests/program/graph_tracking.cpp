@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/distributed.hpp>
 
@@ -101,7 +101,7 @@ public:
 TEST_F(ProgramRunArgsTestQuasar, CPU_TrackProgramCollapsesAliasedDataflowBuffers) {
     // Equal totals (512*8 == 1024*4) so the assertion holds whichever member becomes primary.
     ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Guards against passing vacuously if aliasing silently failed to apply.
     auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
@@ -122,7 +122,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_TrackProgramCollapsesAliasedDataflowBuffers
 TEST_F(ProgramRunArgsTestQuasar, CPU_TrackProgramFlagsBorrowedDataflowBuffer) {
     // entry_size 16 * num_entries 2 = 32 bytes.
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto processor = std::make_shared<RecordingGraphProcessor>();
     {
@@ -143,7 +143,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_TrackProgramReportsKernelScratchpads) {
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
     spec.kernels[0].scratchpad_bindings = {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto processor = std::make_shared<RecordingGraphProcessor>();
     {
@@ -161,7 +161,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_TrackProgramReportsKernelScratchpads) {
 // addresses. Reporting here too would double-count them.
 TEST_F(ProgramRunArgsTestQuasar, CPU_TrackProgramSkipsDataflowBuffersWhenProgramIsNotHooked) {
     ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto processor = std::make_shared<RecordingGraphProcessor>();
     {

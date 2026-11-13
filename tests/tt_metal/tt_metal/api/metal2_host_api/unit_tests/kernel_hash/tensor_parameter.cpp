@@ -8,7 +8,7 @@
 #include <gmock/gmock.h>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -45,8 +45,8 @@ TEST_F(ProgramSpecTestGen1, CPU_DifferentTensorSpecProducesDifferentKernelHash) 
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
         return spec;
     };
-    Program prog_dram = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::BufferType::DRAM));
-    Program prog_l1 = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::BufferType::L1));
+    Program prog_dram(*mesh_device_, make_spec(tt::tt_metal::BufferType::DRAM));
+    Program prog_l1(*mesh_device_, make_spec(tt::tt_metal::BufferType::L1));
 
     auto hash_dram = prog_dram.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     auto hash_l1 = prog_l1.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
@@ -63,8 +63,8 @@ TEST_F(ProgramSpecTestGen1, CPU_IdenticalTensorSpecProducesIdenticalKernelHash) 
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
         return spec;
     };
-    Program prog_a = MakeProgramFromSpec(*mesh_device_, make_spec());
-    Program prog_b = MakeProgramFromSpec(*mesh_device_, make_spec());
+    Program prog_a(*mesh_device_, make_spec());
+    Program prog_b(*mesh_device_, make_spec());
 
     auto hash_a = prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     auto hash_b = prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();

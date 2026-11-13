@@ -1072,7 +1072,7 @@ void CommandListBuilderImpl::add(
             const auto* footprint = program_impl.get_bound_tensor_footprint(param_name);
             TT_FATAL(
                 footprint != nullptr,
-                "TensorParameter '{}' has no bound tensor. Call SetProgramRunArgs before recording the workload",
+                "TensorParameter '{}' has no bound tensor. Call Program::set_run_args before recording the workload",
                 param_name);
             region_slot_of.emplace(std::pair{&program_impl, param_name}, tensor_regions.size() + new_regions.size());
             new_regions.push_back(*footprint);

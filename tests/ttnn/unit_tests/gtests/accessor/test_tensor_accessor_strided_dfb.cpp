@@ -24,7 +24,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
@@ -178,7 +178,7 @@ void run_strided_dfb_copy_test(
     // -----------------------------------------------------------------------
     // Create Program and set runtime args
     // -----------------------------------------------------------------------
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {
@@ -197,7 +197,7 @@ void run_strided_dfb_copy_test(
                 },
         },
     };
-    SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
 
     // -----------------------------------------------------------------------
     // Dispatch and verify

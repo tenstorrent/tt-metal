@@ -39,7 +39,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -336,7 +337,7 @@ void RunTestOnCore(
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+        program = tt_metal::Program(*mesh_device, spec);
         if (is_quasar) {
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
@@ -570,7 +571,7 @@ void RunTestOnCore(
                  {"invalid_txn_id", invalid_txn_id},
                  {"use_dram_bank_dst", use_dram_bank_dst}}),
         }};
-        tt_metal::experimental::SetProgramRunArgs(program, params);
+        program.set_run_args(params);
     }
     workload.add_program(device_range, std::move(program));
 

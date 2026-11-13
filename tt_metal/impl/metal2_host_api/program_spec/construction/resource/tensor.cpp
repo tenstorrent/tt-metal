@@ -224,7 +224,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 //  4. Record the resulting CRTA buffer layout (the three section sizes) on the output, so
 //     the headergen and runtime can consult it directly instead of re-summing the bindings.
 //
-// (SetProgramRunArgs will fill the address slots and runtime field slots at enqueue
+// (Program::set_run_args will fill the address slots and runtime field slots at enqueue
 // time, extracting info from the TensorArgs.)
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
@@ -287,7 +287,7 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
     //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
     //     CTA buffer, after any user CTA-vararg prefix (KernelAdvancedOptions::compile_time_varargs).
     //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
-    //     the kernel's user-named CRTAs and filled by SetProgramRunArgs from the
+    //     the kernel's user-named CRTAs and filled by Program::set_run_args from the
     //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
     //     field (currently: dynamic_tensor_shape, sharded only) carry additional CRTA words
     //     immediately after the address slot, also filled at enqueue time.

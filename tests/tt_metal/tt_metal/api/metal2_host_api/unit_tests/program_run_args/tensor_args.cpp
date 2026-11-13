@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ProgramRunArgs::tensor_args in SetProgramRunArgs: completeness, TensorSpec matching (strict and
+// ProgramRunArgs::tensor_args in Program::set_run_args: completeness, TensorSpec matching (strict and
 // relaxed), and the runtime tensor shape written into CRTAs.
 
 #include <gtest/gtest.h>
@@ -13,7 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
@@ -42,13 +42,13 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MissingTensorArgFails) {
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Run params with no tensor_args entries.
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "TensorParameter 'input_tensor' is declared in the Program but has no TensorArgument entry")));
 }
@@ -60,7 +60,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UnknownTensorParameterInRunArgsFails) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
 
@@ -71,7 +71,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UnknownTensorParameterInRunArgsFails) {
     };
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("TensorArgument references unknown TensorParameter 'ghost_tensor'")));
 }
@@ -85,7 +85,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_TensorSpecMismatchFails) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
     auto memory_config =
@@ -100,7 +100,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_TensorSpecMismatchFails) {
     };
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "TensorArgument for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
 }
@@ -113,21 +113,21 @@ TEST_F(ProgramRunArgsTestGen1, CPU_PerNodeTensorParameterWithLockstepTensorFails
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakePerNodeTensorParameter("input_tensor", /*num_cores=*/1)};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     // Identical to the parameter except for the allocation mode.
     MeshTensor tensor = MeshTensor::allocate_on_device(
         *mesh_device_, MakePerNodeTensorParameter("input_tensor", /*num_cores=*/1, /*per_node=*/false).spec);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {{TensorParamName{"input_tensor"}, TensorArgument{tensor}}};
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "TensorArgument for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_TensorBindingOnlyKernelOmittedFromRunArgsSucceeds) {
     // A kernel with tensor bindings but an empty RTA/CRTA schema may be omitted from
-    // kernel_run_args: SetProgramRunArgs fills its binding-section CRTAs (base addresses, dynamic
+    // kernel_run_args: Program::set_run_args fills its binding-section CRTAs (base addresses, dynamic
     // accessor fields) in a second pass over all binding-bearing kernels, so the binding address
     // still reaches the device. (Gen1 counterpart of the Quasar BindingOnlyKernelOmitted... test.)
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -137,7 +137,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_TensorBindingOnlyKernelOmittedFromRunArgsSucc
     // varargs, so the binding is its only per-enqueue state — and no longer forces a run-args entry.
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Supply the bound tensor but no kernel_run_args entry for the binding kernel.
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
@@ -146,7 +146,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_TensorBindingOnlyKernelOmittedFromRunArgsSucc
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
     EXPECT_EQ(ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor.address()))
         << "binding address should be written even though the kernel was omitted from kernel_run_args";
 }
@@ -158,8 +158,8 @@ TEST_F(ProgramRunArgsTestGen1, CPU_TensorBindingOnlyKernelOmittedFromRunArgsSucc
 //   - validation: tensor_layout must still match exactly; logical_shape may vary per-dim
 //     but rank must be preserved.
 //   - CRTA contents: for sharded TPs, the runtime tensor's shape-in-pages is written into
-//     CRTAs immediately after the binding's address slot, on both SetProgramRunArgs
-//     and UpdateTensorArgs.
+//     CRTAs immediately after the binding's address slot, on both Program::set_run_args
+//     and Program::update_tensor_args.
 
 TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_InterleavedAcceptsDifferentShape) {
     // Declared shape {1, 32}; runtime tensor with shape {1, 64} is accepted because
@@ -171,7 +171,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_InterleavedAcceptsDifferen
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Different shape, same layout.
     auto wrong_spec_layout = binding.spec.tensor_layout();
@@ -182,7 +182,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_InterleavedAcceptsDifferen
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_DTypeMismatchStillFails) {
@@ -194,7 +194,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_DTypeMismatchStillFails) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Different dtype (UINT32 instead of BFLOAT16).
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
@@ -209,7 +209,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_DTypeMismatchStillFails) {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor_layout does not match the binding's declared layout")));
 }
@@ -223,7 +223,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_RankMismatchFails) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Rank-3 tensor with same layout.
     auto wrong_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32}, binding.spec.tensor_layout());
@@ -234,7 +234,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_RankMismatchFails) {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("logical_shape rank (3) differs from the declared rank (2)")));
 }
@@ -253,7 +253,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxLogicalRank_RankMismatchAccepted) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Rank-3 tensor with same layout -- rejected without relax_logical_rank.
     auto runtime_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32}, binding.spec.tensor_layout());
@@ -264,7 +264,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxLogicalRank_RankMismatchAccepted) {
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 // Read the runtime field CRTA words (immediately after the address slot) for a tensor binding.
@@ -306,7 +306,7 @@ inline std::vector<uint32_t> ExpectedShapeInPagesFromSpec(const tt::tt_metal::Te
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedSetWritesShapeIntoCRTAs) {
-    // Sharded + dynamic_tensor_shape: SetProgramRunArgs must write the actual runtime
+    // Sharded + dynamic_tensor_shape: Program::set_run_args must write the actual runtime
     // tensor's tensor_shape_in_pages into the CRTA section that follows the binding's address.
     // Layout: HEIGHT_SHARDED with shard_shape {32, 32} on 2 cores → 2 shards along height.
     NodeCoord node{0, 0};
@@ -317,14 +317,14 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedSetWritesShapeIntoC
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // BDS flattens shape per its sharding scheme; derive expected value from BDS directly
     // (source of truth — same path the runtime uses to populate the CRTA slots).
@@ -333,7 +333,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedSetWritesShapeIntoC
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedUpdateRefreshesShape) {
-    // Sharded + dynamic_tensor_shape: UpdateTensorArgs must refresh BOTH the address slot and
+    // Sharded + dynamic_tensor_shape: Program::update_tensor_args must refresh BOTH the address slot and
     // the runtime shape slots when bound to a tensor of different shape (but same layout).
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -343,7 +343,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedUpdateRefreshesShap
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // First Set: tensor of declared shape (2 shards along height).
     MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, binding.spec);
@@ -351,7 +351,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedUpdateRefreshesShap
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor1}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     ASSERT_EQ(
         ReadBindingShapeFromCRTA(program, "dm_kernel", "input_tensor"), ExpectedShapeInPagesFromSpec(binding.spec));
 
@@ -361,7 +361,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedUpdateRefreshesShap
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"input_tensor"}, TensorArgument{tensor2}},
     };
-    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
+    EXPECT_NO_THROW(program.update_tensor_args(tensor_args));
 
     EXPECT_EQ(
         ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor2.address()));
@@ -397,7 +397,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_AcceptsDifferentLogicalS
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Runtime tensor: smaller logical shape that pads up to the same padded_shape (one tile).
     auto runtime_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 20, 20}, layout);
@@ -409,7 +409,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_AcceptsDifferentLogicalS
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_PaddedShapeMismatchFails) {
@@ -429,7 +429,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_PaddedShapeMismatchFails
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Runtime tensor: logical shape that pads up to a DIFFERENT padded_shape (two tiles wide).
     auto runtime_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 33}, layout);
@@ -442,7 +442,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_PaddedShapeMismatchFails
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("padded_shape does not match the binding's declared padded_shape")));
 }
@@ -457,7 +457,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_DTypeMismatchStillFails)
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
     auto memory_config =
@@ -471,7 +471,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_DTypeMismatchStillFails)
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor_layout does not match the binding's declared layout")));
 }
@@ -487,7 +487,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_DynamicWinsWhenBothSet) 
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Different logical shape; for ROW_MAJOR this also gives a different padded_shape, which
     // dynamic accepts but padded_only alone would not.
@@ -498,7 +498,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_DynamicWinsWhenBothSet) 
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 // ============================================================================
@@ -539,7 +539,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_AlignmentMismatchFails) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor =
         MeshTensor::allocate_on_device(*mesh_device_, MakeOverpaddedTileSpec(binding.spec.logical_shape()));
@@ -549,7 +549,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_AlignmentMismatchFails) {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "TensorLayout has Alignment([64, 64]) where the binding declares Alignment([32, 32])")));
 }
@@ -564,7 +564,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_AlignmentMismatchA
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor =
         MeshTensor::allocate_on_device(*mesh_device_, MakeOverpaddedTileSpec(binding.spec.logical_shape()));
@@ -573,7 +573,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_AlignmentMismatchA
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 // ...and so is a tensor whose alignment pads an UPPER dimension ({1, 1, 30, 30} -> {1, 2, 32, 32}).
@@ -585,7 +585,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_UpperDimAlignmentA
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto runtime_spec =
         MakeOverpaddedTileSpec(binding.spec.logical_shape(), tt::tt_metal::Alignment{64, 64, 32, 32});
@@ -596,7 +596,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_UpperDimAlignmentA
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 // With the alignment relaxed, a rejection on another term must be reported as that term. This tensor
@@ -609,7 +609,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_RankMismatchReport
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor =
         MeshTensor::allocate_on_device(*mesh_device_, MakeOverpaddedTileSpec(tt::tt_metal::Shape{1, 30, 30}));
@@ -619,7 +619,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_RankMismatchReport
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("logical_shape rank (3) differs from the declared rank (4)")));
 }

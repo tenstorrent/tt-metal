@@ -21,7 +21,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -126,8 +127,8 @@ protected:
             .kernels = kernel_specs,
             .work_units = {main_wu},
         };
-        program = experimental::MakeProgramFromSpec(this->device(), spec);
-        experimental::SetProgramRunArgs(program, params);
+        program = Program(this->device(), spec);
+        program.set_run_args(params);
 
         workload.add_program(device_range, std::move(program));
         RunProgram(devices_.front(), workload);

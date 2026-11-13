@@ -21,7 +21,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "common/mesh_dispatch_fixture.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -117,8 +118,8 @@ protected:
 
         WorkUnitSpec main_wu{.name = "main", .kernels = kernel_names, .target_nodes = core};
         ProgramSpec spec{.name = "noc_atomic_ops", .kernels = kernel_specs, .work_units = {main_wu}};
-        program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
-        experimental::SetProgramRunArgs(program, params);
+        program = Program(*mesh_device_, spec);
+        program.set_run_args(params);
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device_, workload);
 

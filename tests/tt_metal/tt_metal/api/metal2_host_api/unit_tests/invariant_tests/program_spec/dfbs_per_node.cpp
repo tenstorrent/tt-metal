@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -57,7 +57,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultipleDFBsSucceeds) {
     spec.dataflow_buffers = {dfb1, dfb2};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_TooManyDFBsFailsValidation) {
@@ -86,7 +86,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_TooManyDFBsFailsValidation) {
 
     const std::string expected_substr = "places " + std::to_string(too_many) + " DataflowBufferSpecs on node (0, 0)";
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected_substr)));
 }
 
@@ -114,7 +114,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TooManyDFBsOnSameNodeFails) {
 
     const std::string expected_substr = "places " + std::to_string(too_many) + " DataflowBufferSpecs on node (0, 0)";
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected_substr)));
 }
 
@@ -148,7 +148,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
         spec.work_units.push_back(MakeMinimalWorkUnit("wu_" + std::to_string(i), node, {pname, cname}));
     }
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const std::string dname = "dfb_" + std::to_string(i);
         EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(dname))->device_slot, 0u)

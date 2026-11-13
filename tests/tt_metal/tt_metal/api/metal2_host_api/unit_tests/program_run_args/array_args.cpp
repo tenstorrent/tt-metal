@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Array args through SetProgramRunArgs, UpdateProgramRunArgs and MergeProgramRunArgs: which values are
+// Array args through Program::set_run_args, Program::update_run_args and MergeProgramRunArgs: which values are
 // accepted, and where they land in the kernel's arg buffers.
 
 #include <gtest/gtest.h>
@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "impl/kernels/kernel.hpp"
@@ -93,16 +93,16 @@ void ExpectArgsWithBase(const Program& program, uint32_t base) {
 }
 
 // ============================================================================
-// SetProgramRunArgs: layout
+// Program::set_run_args: layout
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestGen1, CPU_ArraysFollowScalarsInNamedSection) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
 
-    SetProgramRunArgs(program, WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));  // first call: allocates
+    program.set_run_args(WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));  // first call: allocates
     ExpectArgsWithBase(program, 0);
 
-    SetProgramRunArgs(program, WrapKernelRunArgs(MakeArrayKernelRunArgs(1000)));  // fast path: in place
+    program.set_run_args(WrapKernelRunArgs(MakeArrayKernelRunArgs(1000)));  // fast path: in place
     ExpectArgsWithBase(program, 1000);
 }
 
@@ -114,11 +114,11 @@ TEST_F(ProgramRunArgsTestGen1, CPU_ArrayOnlyKernelSerializesArrays) {
     spec.name = "array_only";
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", kNodeA, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs::KernelRunArgs args{.kernel = KernelSpecName{"dm_kernel"}};
     args.runtime_array_arg_values["x"][kNodeA] = {5, 6};
-    SetProgramRunArgs(program, WrapKernelRunArgs(args));
+    program.set_run_args(WrapKernelRunArgs(args));
     EXPECT_THAT(RtaWords(program, kNodeA), ::testing::ElementsAre(5u, 6u));
 }
 
@@ -129,87 +129,87 @@ TEST_F(ProgramRunArgsTestGen1, CPU_ArrayValuesSerializeAsUint32Conversion) {
     spec.name = "array_conversion";
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", kNodeA, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const std::size_t wide = 12;
     ProgramRunArgs::KernelRunArgs args{.kernel = KernelSpecName{"dm_kernel"}};
     args.common_runtime_array_arg_values["d"] = {-1, wide, true};
-    SetProgramRunArgs(program, WrapKernelRunArgs(args));
+    program.set_run_args(WrapKernelRunArgs(args));
     EXPECT_THAT(CrtaWords(program), ::testing::ElementsAre(0xFFFFFFFFu, 12u, 1u));
 }
 
 // ============================================================================
-// SetProgramRunArgs: validation
+// Program::set_run_args: validation
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestGen1, CPU_WrongLengthRtaArrayFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
     auto args = MakeArrayKernelRunArgs(0);
     args.runtime_array_arg_values["x"][kNodeB] = {1, 2};
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(args)); },
+        [&] { program.set_run_args(WrapKernelRunArgs(args)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("RTA array 'x' expects 3 elements, but 2 were provided")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_WrongLengthCrtaArrayFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
     auto args = MakeArrayKernelRunArgs(0);
     args.common_runtime_array_arg_values["d"] = {1, 2, 3};
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(args)); },
+        [&] { program.set_run_args(WrapKernelRunArgs(args)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("CRTA array 'd' expects 2 elements, but 3 were provided")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_RtaArrayMissingOnNodeFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
     auto args = MakeArrayKernelRunArgs(0);
     args.runtime_array_arg_values["y"].erase(kNodeB);
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(args)); },
+        [&] { program.set_run_args(WrapKernelRunArgs(args)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("node 1-0 expects 2 RTA arrays, but 1 were provided")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_CrtaArrayMissingFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
     auto args = MakeArrayKernelRunArgs(0);
     args.common_runtime_array_arg_values.erase("d");
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(args)); },
+        [&] { program.set_run_args(WrapKernelRunArgs(args)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is missing CRTA array 'd'")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_UndeclaredArraysFail) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
 
     auto rta_args = MakeArrayKernelRunArgs(0);
     rta_args.runtime_array_arg_values["z"][kNodeA] = {1};
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(rta_args)); },
+        [&] { program.set_run_args(WrapKernelRunArgs(rta_args)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("sets RTA array 'z' which is not declared in the schema")));
 
     auto crta_args = MakeArrayKernelRunArgs(0);
     crta_args.common_runtime_array_arg_values["z"] = {1};
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(crta_args)); },
+        [&] { program.set_run_args(WrapKernelRunArgs(crta_args)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("sets CRTA array 'z' which is not declared in the schema")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_RtaArrayOnForeignNodeFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
     auto args = MakeArrayKernelRunArgs(0);
     args.runtime_array_arg_values["x"][NodeCoord{5, 5}] = {1, 2, 3};
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(args)); },
+        [&] { program.set_run_args(WrapKernelRunArgs(args)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "is setting runtime_array_arg_values for node 5-5, but the kernel does not run on that node")));
 }
@@ -222,10 +222,10 @@ TEST_F(ProgramRunArgsTestGen1, CPU_ArrayOnlyKernelMayNotOmitKernelRunArgs) {
     spec.name = "array_only_omitted";
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", kNodeA, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, ProgramRunArgs{}); },
+        [&] { program.set_run_args(ProgramRunArgs{}); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("non-empty RTA/CRTA schema but has no runtime parameters")));
 }
@@ -233,41 +233,41 @@ TEST_F(ProgramRunArgsTestGen1, CPU_ArrayOnlyKernelMayNotOmitKernelRunArgs) {
 TEST_F(ProgramRunArgsTestGen1, CPU_WrongLengthArrayFailsEvenWithoutValidation) {
     // The length check is kept under skip_validation: a wrong-length value would otherwise overrun into
     // the neighbouring args. Checked on the first-call path, the in-place fast path, and the CRTA buffer.
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
     auto long_rta = MakeArrayKernelRunArgs(0);
     long_rta.runtime_array_arg_values["x"][kNodeA] = {1, 2, 3, 4};
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_rta), /*skip_validation=*/true); },
+        [&] { program.set_run_args(WrapKernelRunArgs(long_rta), /*skip_validation=*/true); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' array 'x' expects 3 elements, but 4 were provided")));
 
-    SetProgramRunArgs(program, WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
+    program.set_run_args(WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_rta), /*skip_validation=*/true); },
+        [&] { program.set_run_args(WrapKernelRunArgs(long_rta), /*skip_validation=*/true); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' array 'x' expects 3 elements, but 4 were provided")));
 
     auto long_crta = MakeArrayKernelRunArgs(0);
     long_crta.common_runtime_array_arg_values["d"] = {1, 2, 3};
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, WrapKernelRunArgs(long_crta), /*skip_validation=*/true); },
+        [&] { program.set_run_args(WrapKernelRunArgs(long_crta), /*skip_validation=*/true); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' array 'd' expects 2 elements, but 3 were provided")));
 }
 
 // ============================================================================
-// UpdateProgramRunArgs
+// Program::update_run_args
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateReplacesWholeArraysAndKeepsTheRest) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
-    SetProgramRunArgs(program, WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
+    program.set_run_args(WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
 
     // Replace "y" on kNodeB only, and "d".
     ProgramRunArgs::KernelRunArgs update{.kernel = KernelSpecName{"dm_kernel"}};
     update.runtime_array_arg_values["y"][kNodeB] = {900, 901};
     update.common_runtime_array_arg_values["d"] = {960, 961};
-    UpdateProgramRunArgs(program, WrapKernelRunArgs(update));
+    program.update_run_args(WrapKernelRunArgs(update));
 
     using ::testing::ElementsAre;
     EXPECT_THAT(RtaWords(program, kNodeA), ElementsAre(1u, 10u, 11u, 12u, 30u, 31u));
@@ -276,36 +276,36 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateReplacesWholeArraysAndKeepsTheRest) {
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateWithWrongLengthArrayFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
-    SetProgramRunArgs(program, WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
+    program.set_run_args(WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
 
     ProgramRunArgs::KernelRunArgs rta_update{.kernel = KernelSpecName{"dm_kernel"}};
     rta_update.runtime_array_arg_values["x"][kNodeA] = {1};
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, WrapKernelRunArgs(rta_update)); },
+        [&] { program.update_run_args(WrapKernelRunArgs(rta_update)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("RTA array 'x' expects 3 elements, but 1 were provided")));
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, WrapKernelRunArgs(rta_update), /*skip_validation=*/true); },
+        [&] { program.update_run_args(WrapKernelRunArgs(rta_update), /*skip_validation=*/true); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'dm_kernel' array 'x' expects 3 elements, but 1 were provided")));
 
     ProgramRunArgs::KernelRunArgs crta_update{.kernel = KernelSpecName{"dm_kernel"}};
     crta_update.common_runtime_array_arg_values["d"] = {1};
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, WrapKernelRunArgs(crta_update)); },
+        [&] { program.update_run_args(WrapKernelRunArgs(crta_update)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("CRTA array 'd' expects 2 elements, but 1 were provided")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateWithUndeclaredArrayFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
-    SetProgramRunArgs(program, WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
+    program.set_run_args(WrapKernelRunArgs(MakeArrayKernelRunArgs(0)));
 
     ProgramRunArgs::KernelRunArgs update{.kernel = KernelSpecName{"dm_kernel"}};
     update.runtime_array_arg_values["z"][kNodeA] = {1};
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, WrapKernelRunArgs(update)); },
+        [&] { program.update_run_args(WrapKernelRunArgs(update)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("sets RTA array 'z' which is not declared in the schema")));
 }
@@ -331,8 +331,8 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MergeUnionsDisjointArrays) {
     const ProgramRunArgs rest[] = {WrapKernelRunArgs(arrays)};
     ProgramRunArgs merged = MergeProgramRunArgs(WrapKernelRunArgs(scalars), rest);
 
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeArrayRunArgsSpec());
-    SetProgramRunArgs(program, merged);
+    Program program(*mesh_device_, MakeArrayRunArgsSpec());
+    program.set_run_args(merged);
     ExpectArgsWithBase(program, 0);
 }
 

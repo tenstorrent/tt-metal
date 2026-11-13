@@ -56,12 +56,12 @@ struct ProgramRunArgs {
         // Arguments are keyed by argument name and then by node:
         //   runtime_arg_values[name][node] = value.
         //
-        // When calling SetProgramRunArgs:
+        // When calling Program::set_run_args:
         //  Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
         //  set, for every node the kernel runs on.
         //  Missing arguments or superfluous arguments will trigger validation errors.
         //
-        // When calling UpdateProgramRunArgs (arbitrary partial args update):
+        // When calling Program::update_run_args (arbitrary partial args update):
         //  Any subset of Program arguments may be supplied; any omitted ones retain their prior value.
         //  A supplied runtime argument may target any subset of the kernel's nodes.
         //
@@ -73,11 +73,11 @@ struct ProgramRunArgs {
 
         // Common runtime argument values (broadcast to every node).
         //
-        // When calling SetProgramRunArgs:
+        // When calling Program::set_run_args:
         //  Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names
         //  must be set.
         //
-        // When calling UpdateProgramRunArgs (arbitrary partial update):
+        // When calling Program::update_run_args (arbitrary partial update):
         //  Any subset of common runtime arguments may be supplied; omitted ones retain their prior value.
         //
         using CommonRuntimeArgValues = Table<std::string, ArgValue>;
@@ -88,11 +88,11 @@ struct ProgramRunArgs {
         //   runtime_array_arg_values[name][node] = {v0, v1, ...};
         // Each value must have exactly the length declared in the array's ArrayArgDecl.
         //
-        // When calling SetProgramRunArgs:
+        // When calling Program::set_run_args:
         //  Every array in this kernel's RuntimeArgSchema::runtime_array_args must be set,
         //  for every node the kernel runs on.
         //
-        // When calling UpdateProgramRunArgs (arbitrary partial args update):
+        // When calling Program::update_run_args (arbitrary partial args update):
         //  Any subset of arrays may be supplied, for any subset of the kernel's nodes.
         //  A supplied value replaces the whole array on that node (there is no per-element update).
         using RuntimeArrayArgValues = Table<std::string, Table<NodeCoord, ArrayArgValue>>;
@@ -101,10 +101,10 @@ struct ProgramRunArgs {
         // Common runtime array argument values (broadcast to every node).
         // Each value must have exactly the length declared in the array's ArrayArgDecl.
         //
-        // When calling SetProgramRunArgs:
+        // When calling Program::set_run_args:
         //  Every array in this kernel's RuntimeArgSchema::common_runtime_array_args must be set.
         //
-        // When calling UpdateProgramRunArgs (arbitrary partial update):
+        // When calling Program::update_run_args (arbitrary partial update):
         //  Any subset of common runtime arrays may be supplied; a supplied value replaces the whole array.
         using CommonRuntimeArrayArgValues = Table<std::string, ArrayArgValue>;
         CommonRuntimeArrayArgValues common_runtime_array_arg_values;
@@ -114,9 +114,9 @@ struct ProgramRunArgs {
         // positional vararg values.
         experimental::AdvancedKernelRunArgs advanced_options;
     };
-    // For SetProgramRunArgs, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
+    // For Program::set_run_args, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
     //  (except for kernels that have no runtime or common runtime arguments, scalar or array).
-    // For UpdateProgramRunArgs, any kernel may be omitted (its arguments retain their prior values).
+    // For Program::update_run_args, any kernel may be omitted (its arguments retain their prior values).
     Group<KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////
@@ -128,12 +128,12 @@ struct ProgramRunArgs {
     using TensorArgument = std::variant<std::reference_wrapper<const MeshTensor>>;
 
     // A TensorArgument must be specified:
-    //  For EVERY TensorParameter in the ProgramSpec, when calling SetProgramRunArgs.
-    //  For any SUBSET of TensorParameters, when calling UpdateProgramRunArgs. (For advanced users only.)
+    //  For EVERY TensorParameter in the ProgramSpec, when calling Program::set_run_args.
+    //  For any SUBSET of TensorParameters, when calling Program::update_run_args. (For advanced users only.)
     //
     // CAUTION: MeshTensor is an RAII object. The user is responsible for ensuring that the MeshTensor
     //          object remains alive until the last Program execution that uses it has completed on the
-    //          device. Use extreme caution if you use UpdateProgramRunArgs with an incomplete set of
+    //          device. Use extreme caution if you use Program::update_run_args with an incomplete set of
     //          TensorArguments. A stale binding to a destroyed MeshTensor will produce undefined behavior.
     //
     // The argument's TensorSpec MUST match the TensorParameter's TensorSpec (shape, layout, data type).
@@ -156,7 +156,7 @@ struct ProgramRunArgs {
         // NOTE: Certain DFBs take their backing SRAM address from the user-managed object
         // in the following cases:
         //  - Borrowed from a TensorParameter: if you update the DFB's size from an
-        //    UpdateProgramRunArgs call (i.e. partial args update; advanced users only),
+        //    Program::update_run_args call (i.e. partial args update; advanced users only),
         //    you must ALSO supply its backing tensor_arg.
         //  - Custom allocation from an SRAMArenaParameter: the DFB may be resized without re-supplying
         //    its SRAMArena. The allocation offset plus the resized DFB's storage must still fit

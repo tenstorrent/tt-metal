@@ -25,7 +25,8 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -130,8 +131,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    Program program(*mesh_device, spec);
+    program.set_run_args(params);
     workload.add_program(device_range, std::move(program));
 
     // Run the program

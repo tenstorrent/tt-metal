@@ -241,8 +241,8 @@ private:
  * @brief Replays @p command_list on @p cq.
  * @p cq must match the device and queue used to build the list.
  *
- * A tensor range is the DRAM footprint of a tensor bound to a recorded program, recorded when SetProgramRunArgs() or
- * UpdateProgramRunArgs() binds it, or when CommandList::update_args() patches it.
+ * A tensor range is the DRAM footprint of a tensor bound to a recorded program, recorded when Program::set_run_args()
+ * or Program::update_run_args() binds it, or when CommandList::update_args() patches it.
  *
  * @param cq                    Command queue to replay on.
  * @param command_list          Command list to replay.

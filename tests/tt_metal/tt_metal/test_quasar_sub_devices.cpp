@@ -9,7 +9,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -83,12 +84,12 @@ distributed::MeshWorkload create_l1_write_workload(
             .hw_config = DataMovementHardwareConfig{}}},
         .work_units = {WorkUnitSpec{.name = "writer_" + id, .kernels = {kernel_name}, .target_nodes = target_nodes}},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     ProgramRunArgs::KernelRunArgs kernel_args{.kernel = kernel_name, .common_runtime_arg_values = {{"value", value}}};
     for (const auto& [node, address] : node_addresses) {
         AddRuntimeArgsForNode(kernel_args.runtime_arg_values, node, {{"address", address}});
     }
-    tt_metal::experimental::SetProgramRunArgs(program, ProgramRunArgs{.kernel_run_args = {kernel_args}});
+    program.set_run_args(ProgramRunArgs{.kernel_run_args = {kernel_args}});
 
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
@@ -135,18 +136,16 @@ SyncWorkloads create_sync_workloads(
         .work_units = {WorkUnitSpec{
             .name = "waiter", .kernels = {waiter_kernel}, .target_nodes = NodeCoord(waiter_node)}},
     };
-    Program waiter_program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, waiter_spec);
-    tt_metal::experimental::SetProgramRunArgs(
-        waiter_program,
-        ProgramRunArgs{
-            .kernel_run_args = {ProgramRunArgs::KernelRunArgs{
-                .kernel = waiter_kernel,
-                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
-                    NodeCoord(waiter_node),
-                    {{"sem_addr", semaphore.address()},
-                     {"num_inc", incrementer_nodes.num_cores()},
-                     {"sync_core_x", syncer_physical.x},
-                     {"sync_core_y", syncer_physical.y}})}}});
+    Program waiter_program(*mesh_device, waiter_spec);
+    waiter_program.set_run_args(ProgramRunArgs{
+        .kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+            .kernel = waiter_kernel,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                NodeCoord(waiter_node),
+                {{"sem_addr", semaphore.address()},
+                 {"num_inc", incrementer_nodes.num_cores()},
+                 {"sync_core_x", syncer_physical.x},
+                 {"sync_core_y", syncer_physical.y}})}}});
 
     const KernelSpecName syncer_kernel{"quasar_sub_device_syncer"};
     ProgramSpec syncer_spec{
@@ -160,14 +159,12 @@ SyncWorkloads create_sync_workloads(
         .work_units = {WorkUnitSpec{
             .name = "syncer", .kernels = {syncer_kernel}, .target_nodes = NodeCoord(syncer_node)}},
     };
-    Program syncer_program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, syncer_spec);
-    tt_metal::experimental::SetProgramRunArgs(
-        syncer_program,
-        ProgramRunArgs{
-            .kernel_run_args = {ProgramRunArgs::KernelRunArgs{
-                .kernel = syncer_kernel,
-                .runtime_arg_values =
-                    MakeRuntimeArgsForSingleNode(NodeCoord(syncer_node), {{"sem_addr", semaphore.address()}})}}});
+    Program syncer_program(*mesh_device, syncer_spec);
+    syncer_program.set_run_args(ProgramRunArgs{
+        .kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+            .kernel = syncer_kernel,
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(NodeCoord(syncer_node), {{"sem_addr", semaphore.address()}})}}});
 
     const KernelSpecName incrementer_kernel{"quasar_sub_device_incrementer"};
     ProgramSpec incrementer_spec{
@@ -181,7 +178,7 @@ SyncWorkloads create_sync_workloads(
         .work_units = {WorkUnitSpec{
             .name = "incrementer", .kernels = {incrementer_kernel}, .target_nodes = incrementer_nodes}},
     };
-    Program incrementer_program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, incrementer_spec);
+    Program incrementer_program(*mesh_device, incrementer_spec);
     ProgramRunArgs::KernelRunArgs incrementer_args{.kernel = incrementer_kernel};
     for (const auto& node : node_range_to_nodes(incrementer_nodes)) {
         AddRuntimeArgsForNode(
@@ -191,8 +188,7 @@ SyncWorkloads create_sync_workloads(
              {"waiter_core_x", waiter_physical.x},
              {"waiter_core_y", waiter_physical.y}});
     }
-    tt_metal::experimental::SetProgramRunArgs(
-        incrementer_program, ProgramRunArgs{.kernel_run_args = {std::move(incrementer_args)}});
+    incrementer_program.set_run_args(ProgramRunArgs{.kernel_run_args = {std::move(incrementer_args)}});
 
     const distributed::MeshCoordinateRange device_range(mesh_device->shape());
     SyncWorkloads result{.semaphore = std::move(semaphore)};

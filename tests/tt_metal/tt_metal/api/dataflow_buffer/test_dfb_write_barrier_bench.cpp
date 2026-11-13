@@ -86,7 +86,7 @@ BenchResult run_bench(distributed::MeshDevice& mesh_device, const BenchParams& p
         .kernels = kernels,
         .work_units = {WorkUnitSpec{.name = "main", .kernels = wu_kernels, .target_nodes = crs}},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     // The streamer writes to a different half of the destination than the measurer would, but the
     // contents never matter here, so both share one source and one destination.
@@ -107,7 +107,7 @@ BenchResult run_bench(distributed::MeshDevice& mesh_device, const BenchParams& p
         run_args.kernel_run_args.push_back(
             ProgramRunArgs::KernelRunArgs{.kernel = STREAMER, .runtime_arg_values = args});
     }
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     const uint32_t result_addr = static_cast<uint32_t>(result_buffer->address());
     std::vector<uint32_t> zeros(NUM_RESULT_WORDS, 0u);

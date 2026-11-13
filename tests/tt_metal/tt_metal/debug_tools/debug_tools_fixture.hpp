@@ -24,7 +24,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <filesystem>
@@ -463,10 +463,10 @@ public:
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
 
-        // MakeProgramFromSpec compiles eagerly, so the ELF exists on disk once it returns and a
+        // The Program constructor compiles eagerly, so the ELF exists on disk once it returns and a
         // build failure surfaces here as a throw (which the compilation-failure tests rely on).
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
-        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        Program program(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
         program.impl().compile(mesh_device.get());
@@ -490,7 +490,7 @@ public:
         const std::string& kernel_path,
         ttsl::Span<const uint32_t> runtime_args = {}) {
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
-        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        Program program(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
         distributed::MeshWorkload workload;
@@ -539,7 +539,7 @@ private:
         };
     }
 
-    // SetProgramRunArgs requires an entry for every kernel that declares runtime args and rejects
+    // Program::set_run_args requires an entry for every kernel that declares runtime args and rejects
     // entries for kernels that declare none, so this is a no-op when the kernel takes no arguments.
     static void SetSingleDmPrintArgs(Program& program, ttsl::Span<const uint32_t> runtime_args) {
         if (runtime_args.empty()) {
@@ -551,7 +551,7 @@ private:
 
         ProgramRunArgs run_args;
         run_args.kernel_run_args.push_back(std::move(kernel_run_args));
-        experimental::SetProgramRunArgs(program, run_args);
+        program.set_run_args(run_args);
     }
 };
 

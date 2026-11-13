@@ -5,7 +5,7 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -275,8 +275,8 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
             // compute kernel covering all 4 Tensix engines × 4 TRISCs = 16 baby-RISCs.
             const auto topology = GetQuasarNodeTopology();
             auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, topology.user_dm_threads, topology.compute_engines);
-            Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
-            tt_metal::experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+            Program program(*mesh_device, spec);
+            program.set_run_args(MakeIterationArgs(spec, iterations_count));
             workload.add_program(device_range, std::move(program));
 
             risc_count_per_iter = static_cast<int>(topology.user_dm_threads + topology.compute_processors());
@@ -443,8 +443,8 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscs) {
 
         const auto topology = GetQuasarNodeTopology();
         auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, topology.user_dm_threads, /*compute_engines=*/0);
-        Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
-        tt_metal::experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+        Program program(*mesh_device, spec);
+        program.set_run_args(MakeIterationArgs(spec, iterations_count));
         workload.add_program(device_range, std::move(program));
 
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
@@ -490,8 +490,8 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentBabyRiscs) {
 
         const auto topology = GetQuasarNodeTopology();
         auto spec = MakeQuasarPrintSpec(kPrintIterationsKernel, /*dm_threads=*/0, topology.compute_engines);
-        Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
-        tt_metal::experimental::SetProgramRunArgs(program, MakeIterationArgs(spec, iterations_count));
+        Program program(*mesh_device, spec);
+        program.set_run_args(MakeIterationArgs(spec, iterations_count));
         workload.add_program(device_range, std::move(program));
 
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
@@ -656,7 +656,7 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
         auto spec = MakeComputePrintSpec("tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp");
-        workload.add_program(device_range, tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec));
+        workload.add_program(device_range, tt_metal::Program(*mesh_device, spec));
 
         RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();

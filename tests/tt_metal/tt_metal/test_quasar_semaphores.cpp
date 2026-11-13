@@ -7,7 +7,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "hal.hpp"
@@ -139,7 +140,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
         .semaphores = {sem0_spec, sem1_spec},
         .work_units = {main_wu},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -163,7 +164,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                  {"dram_bank_id", 0u}}),
         },
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -344,7 +345,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .semaphores = {sem_core_0_spec, sem_cross_spec, sem0_core_1_spec, sem1_core_1_spec},
         .work_units = {wu_core_0, wu_core_1},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -380,7 +381,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                  {"dram_bank_id", 0u}}),
         },
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -584,8 +585,8 @@ static void run_snake_chain(
     distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
-    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    Program program(mesh_device, spec);
+    program.set_run_args(params);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -721,8 +722,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     }
     params.kernel_run_args = {kra};
     distributed::MeshWorkload workload;
-    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    Program program(this->device(), spec);
+    program.set_run_args(params);
     workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, true);
 
@@ -816,8 +817,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
     }
     params.kernel_run_args = {kr, kw};
     distributed::MeshWorkload workload;
-    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    Program program(this->device(), spec);
+    program.set_run_args(params);
     workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, true);
 
@@ -932,7 +933,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     spec.kernels.push_back(bk);
     spec.work_units.push_back(WorkUnitSpec{.name = "wu", .kernels = {BK}, .target_nodes = all_nodes});
 
-    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     ProgramRunArgs::KernelRunArgs kra{.kernel = BK};
@@ -950,7 +951,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
         }
     }
     params.kernel_run_args = {kra};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(this->device().shape());

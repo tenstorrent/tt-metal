@@ -11,7 +11,7 @@
 #include <string>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
@@ -31,12 +31,12 @@ using test_helpers::ProgramRunArgsTestQuasar;
 // These tests cover the runtime attach path for DataflowBuffers that borrow their L1 storage
 // from a TensorParameter (DataflowBufferSpec::borrowed_from). The flow:
 //
-//   1. MakeProgramFromSpec    → DFB added with config.borrows_memory = true; groups not yet
+//   1. Program constructor    → DFB added with config.borrows_memory = true; groups not yet
 //                                created; no L1 allocated.
 //   2. finalize_dataflow_buffer_configs (would normally run inside the dispatch pipeline at
 //                                first enqueue) populates per-DFB `groups[].l1_by_core`
 //                                entries with placeholder addr = 0.
-//   3. SetProgramRunArgs / UpdateTensorArgs → AttachBorrowedDFBBuffers resolves the
+//   3. Program::set_run_args / Program::update_tensor_args → AttachBorrowedDFBBuffers resolves the
 //                                bound MeshTensor, extracts its reference-buffer address, and
 //                                calls dfb->set_borrowed_memory_base_addr(addr), which
 //                                overwrites every `groups[].l1_by_core` entry (and any
@@ -70,10 +70,10 @@ inline uint32_t PeekBorrowedDFBAddress(Program& program, const std::string& dfb_
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_BorrowedDFB_BorrowsFlagPropagatesToConfig) {
-    // MakeProgramFromSpec should set config.borrows_memory = true on the device-side DFB
+    // The Program constructor should set config.borrows_memory = true on the device-side DFB
     // config when (and only when) DataflowBufferSpec::borrowed_from is set.
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
     const auto dfb = program.impl().get_dataflow_buffer(dfb_id);
@@ -81,33 +81,33 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BorrowedDFB_BorrowsFlagPropagatesToConfig) 
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_BorrowedDFB_AttachWritesTensorAddressToDFB) {
-    // After SetProgramRunArgs, the bound MeshTensor's address should appear in the
+    // After Program::set_run_args, the bound MeshTensor's address should appear in the
     // DFB's per-core L1 base address tables (overwriting Almeet's 0 placeholder).
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Populate groups[].l1_by_core with placeholder addr = 0. (Normally invoked inside the
     // dispatch pipeline at first enqueue; we don't enqueue in unit tests.)
     program.impl().finalize_dataflow_buffer_configs();
     ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), 0u) << "DFB base addr before attach should be the placeholder 0";
 
-    // Allocate the borrowed tensor and attach via SetProgramRunArgs.
+    // Allocate the borrowed tensor and attach via Program::set_run_args.
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs params = MakeBorrowedDFBRunArgs();
     params.tensor_args = {
         {TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor.address()))
         << "DFB base addr should match the borrowed MeshTensor's address after attach";
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
-    // The cache-hit path: UpdateTensorArgs should re-attach the borrowed Buffer, refreshing
+    // The cache-hit path: Program::update_tensor_args should re-attach the borrowed Buffer, refreshing
     // the DFB's base address to the new MeshTensor's address.
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
@@ -115,7 +115,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BorrowedDFB_UpdateTensorArgsRefreshesAddres
     params.tensor_args = {
         {TensorParamName{"borrowed_tensor"}, TensorArgument{tensor1}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor1.address()));
 
     MeshTensor tensor2 = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
@@ -125,9 +125,9 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BorrowedDFB_UpdateTensorArgsRefreshesAddres
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"borrowed_tensor"}, TensorArgument{tensor2}},
     };
-    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
+    EXPECT_NO_THROW(program.update_tensor_args(tensor_args));
     EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor2.address()))
-        << "DFB base addr should refresh to the new MeshTensor's address after UpdateTensorArgs";
+        << "DFB base addr should refresh to the new MeshTensor's address after Program::update_tensor_args";
 }
 
 // Guard: resizing a borrowed-memory DFB on the partial-update path without supplying its backing
@@ -135,19 +135,19 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BorrowedDFB_UpdateTensorArgsRefreshesAddres
 // against the new size, and a grown DFB could silently overflow its borrowed buffer at execution.
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBWithoutTensorFails) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
-    SetProgramRunArgs(program, setup);
+    program.set_run_args(setup);
 
     // Partial update resizes the borrowed DFB but omits its backing tensor.
     ProgramRunArgs upd;
     upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, upd); },
+        [&] { program.update_run_args(upd); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("its backing TensorParameter 'borrowed_tensor' was not supplied")));
 }
@@ -155,27 +155,27 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBWit
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_NonResizingBorrowedDFBOverrideNeedsNoTensor) {
     // A partial update may list a borrowed DFB without resizing it and without supplying its backing tensor.
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
-    SetProgramRunArgs(program, setup);
+    program.set_run_args(setup);
 
     ProgramRunArgs upd;
     upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}});
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_NO_THROW(program.update_run_args(upd));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_SetProgramRunArgs_ResizingBorrowedDFBWithoutTensorReportsMissingTensorArgument) {
     // A full argument set that resizes a borrowed DFB but omits its backing tensor reports the missing TensorArgument.
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params = MakeBorrowedDFBRunArgs();
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "TensorParameter 'borrowed_tensor' is declared in the Program but has no TensorArgument entry")));
 }
@@ -184,20 +184,20 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_SetProgramRunArgs_ResizingBorrowedDFBWithou
 // size (48 B) still fits the 64 B backing.
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBWithTensorSucceeds) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
-    SetProgramRunArgs(program, setup);
+    program.set_run_args(setup);
 
     // num_entries must stay divisible by this DFB's txn/producer/tc divisor (2 here); 4 grows the DFB
     // to 16 * 4 = 64 B, which still fits the 64 B backing exactly.
     ProgramRunArgs upd;
     upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
     upd.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_NO_THROW(program.update_run_args(upd));
 
     auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"));
     EXPECT_EQ(dfb->config.num_entries, 4u);
@@ -207,19 +207,19 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBWit
 // check on the partial path (16 * 64 = 1024 B >> the 64 B backing) — the overflow the guard keeps checkable.
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_ResizingBorrowedDFBBeyondBackingFails) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
     ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
     setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
-    SetProgramRunArgs(program, setup);
+    program.set_run_args(setup);
 
     ProgramRunArgs upd;
     upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 64});
     upd.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, upd); },
+        [&] { program.update_run_args(upd); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
 }
 

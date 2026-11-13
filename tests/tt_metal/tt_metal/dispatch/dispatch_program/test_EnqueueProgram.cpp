@@ -43,7 +43,7 @@
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "buffer_types.hpp"
@@ -522,7 +522,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
                 .target_nodes = cr_set,
             }},
         };
-        program = MakeProgramFromSpec(*mesh_device, spec);
+        program = Program(*mesh_device, spec);
 
         ProgramRunArgs run_args;
         for (const auto& [name, args] :
@@ -537,7 +537,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
             }
             run_args.kernel_run_args.push_back(std::move(kernel_run_args));
         }
-        SetProgramRunArgs(program, run_args);
+        program.set_run_args(run_args);
     } else {
         for (const CoreRange& core_range : program_config.cr_set.ranges()) {
             for (const CoreCoord& core_coord : core_range) {
@@ -704,7 +704,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             .kernels = kernel_specs,
             .work_units = work_units,
         };
-        program = MakeProgramFromSpec(*mesh_device, spec);
+        program = Program(*mesh_device, spec);
     } else {
         kernels = {
             CreateKernel(
@@ -765,9 +765,9 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
                 }
             }
             if (iter == 0) {
-                SetProgramRunArgs(program_, run_args);
+                program_.set_run_args(run_args);
             } else {
-                UpdateProgramRunArgs(program_, run_args);
+                program_.update_run_args(run_args);
             }
         } else {
             for (const CoreCoord& core_coord : core_range_0) {
@@ -1034,7 +1034,7 @@ bool test_increment_runtime_args_sanity(
             .kernels = kernel_specs,
             .work_units = work_units,
         };
-        program = MakeProgramFromSpec(*mesh_device, spec);
+        program = Program(*mesh_device, spec);
 
         ProgramRunArgs run_args;
         for (size_t i = 0; i < kernel_specs.size(); i++) {
@@ -1047,7 +1047,7 @@ bool test_increment_runtime_args_sanity(
             kernel_run_args.advanced_options.common_runtime_varargs = common_runtime_args;
             run_args.kernel_run_args.push_back(std::move(kernel_run_args));
         }
-        SetProgramRunArgs(program, run_args);
+        program.set_run_args(run_args);
     } else {
         auto configured_kernels = create_increment_kernels(
             mesh_device.get(), program, program_configs, processor, num_unique_rt_args, num_common_rt_args);
@@ -1150,7 +1150,7 @@ Program make_gen2_program(
         }},
     };
 
-    return MakeProgramFromSpec(mesh_device, spec);
+    return Program(mesh_device, spec);
 }
 
 // Quasar's grid is smaller than {2, 2}-{6, 6} and starts at logical y = 1, so take the cores from the device.
@@ -2312,7 +2312,7 @@ Program make_gen2_random_program(
             .target_nodes = cr_set,
         }},
     };
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_args;
     for (const KernelPlan& plan : plans) {
@@ -2329,7 +2329,7 @@ Program make_gen2_random_program(
         run_args.kernel_run_args.push_back(std::move(kernel_run_args));
     }
     if (!run_args.kernel_run_args.empty()) {
-        SetProgramRunArgs(program, run_args);
+        program.set_run_args(run_args);
     }
     return program;
 }

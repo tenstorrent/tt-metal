@@ -8,7 +8,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
@@ -221,7 +221,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
         sender_named_args["num_vc"] = (uint32_t)test_config.num_virtual_channels;
     }
 
-    // Metal 2.0 host path (non-semaphore variants only): MakeProgramFromSpec + WorkUnitSpec
+    // Metal 2.0 host path (non-semaphore variants only): Program constructor + WorkUnitSpec
     // + ProgramRunArgs. Sweep-varying params use named runtime args; unicast subordinate
     // coords remain varargs (truly variadic count).
     // Semaphore-based _2_0 tests are not currently enabled by any test entry point, so the
@@ -271,7 +271,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
             }},
         };
 
-        program = MakeProgramFromSpec(mesh_device, spec);
+        program = Program(mesh_device, spec);
 
         ProgramRunArgs run_params;
         ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
@@ -288,7 +288,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
             }
         }
         run_params.kernel_run_args.push_back(sender_run_params);
-        SetProgramRunArgs(program, run_params);
+        program.set_run_args(run_params);
     } else {
         DataMovementProcessor data_movement_processor = DataMovementProcessor::RISCV_0;
         sender_kernel = CreateKernel(
@@ -323,7 +323,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
         SetRuntimeArgs(program, receiver_kernel, sub_logical_core_set, {});
     }
 
-    // Runtime Arguments (legacy paths only; Metal 2.0 already set varargs via SetProgramRunArgs)
+    // Runtime Arguments (legacy paths only; Metal 2.0 already set varargs via Program::set_run_args)
     if (!metal_2_0_active) {
         vector<uint32_t> sender_runtime_args = {};
 

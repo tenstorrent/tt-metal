@@ -37,7 +37,8 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-umd/types/arch.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "single_core_compute_runners.hpp"
 
@@ -604,7 +605,7 @@ bool single_core_binary(
 
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, Program(*mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
     ProgramRunArgs params;
@@ -635,7 +636,7 @@ bool single_core_binary(
                  {"acc_to_dst", 0u}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<std::uint32_t> first_result;
     for (std::uint32_t run = 0; run < num_runs; ++run) {

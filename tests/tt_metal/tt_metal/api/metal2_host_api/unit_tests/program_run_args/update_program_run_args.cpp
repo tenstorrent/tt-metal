@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// UpdateProgramRunArgs: arbitrary partial updates; omitted arguments keep their previous values.
+// Program::update_run_args: arbitrary partial updates; omitted arguments keep their previous values.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -37,7 +37,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedCRTA) {
     NodeCoord node{0, 0};
     // Declaration order: keep @ slot 0 (omitted from the update), change @ slot 1 (supplied).
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -45,7 +45,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedCRTA) {
         .common_runtime_arg_values = {{"keep", 10}, {"change", 20}},
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Supply only "change"; omit "keep" and the all-empty compute_kernel.
     ProgramRunArgs upd;
@@ -53,7 +53,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedCRTA) {
         .kernel = KernelSpecName{"dm_kernel"},
         .common_runtime_arg_values = {{"change", 99}},
     });
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_NO_THROW(program.update_run_args(upd));
 
     const auto* crta = program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data().data();
     EXPECT_EQ(crta[0], 10u) << "omitted 'keep' must retain its value across a partial update";
@@ -63,7 +63,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedCRTA) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedPerNodeRTA) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"keep", "change"}, {});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -71,14 +71,14 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedPerNodeR
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"keep", 1}, {"change", 2}}),
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     ProgramRunArgs upd;
     upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"change", 99}}),
     });
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_NO_THROW(program.update_run_args(upd));
 
     const auto& rta = program.impl().get_kernel_by_spec_name("dm_kernel")->runtime_args(node);
     ASSERT_GE(rta.size(), 2u);
@@ -91,7 +91,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedPerNodeR
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_UndeclaredCRTANameFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs full;
     full.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -99,7 +99,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_UndeclaredCRTANameFail
         .common_runtime_arg_values = {{"keep", 10}, {"change", 20}},
     });
     full.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-    SetProgramRunArgs(program, full);
+    program.set_run_args(full);
 
     // Supplying a name that the schema never declared is still an error, even on the partial path.
     ProgramRunArgs upd;
@@ -108,7 +108,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_UndeclaredCRTANameFail
         .common_runtime_arg_values = {{"bogus", 11}},
     });
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, upd); },
+        [&] { program.update_run_args(upd); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not declared in the schema")));
 }
 
@@ -117,7 +117,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_UndeclaredCRTANameFail
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_BeforeSetFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"keep", "change"});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs upd;
     upd.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -125,7 +125,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_BeforeSetFails) {
         .common_runtime_arg_values = {{"change", 99}},
     });
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, upd); },
+        [&] { program.update_run_args(upd); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CRTA buffer not allocated")));
 }
 
@@ -134,7 +134,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_BeforeSetFails) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_OmittingKernelRetainsArgs) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"change"});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs full;
     full.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -142,11 +142,11 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_OmittingKernelRetainsA
         .common_runtime_arg_values = {{"change", 20}},
     });
     full.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-    SetProgramRunArgs(program, full);
+    program.set_run_args(full);
 
     // Omit every kernel: an arbitrary partial update may leave all args untouched.
     ProgramRunArgs upd;
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_NO_THROW(program.update_run_args(upd));
     EXPECT_EQ(program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data().data()[0], 20u)
         << "an omitted kernel's args are retained";
 }
@@ -179,7 +179,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedVarargsA
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Full set: named RTA + per-node varargs on both nodes + common varargs.
     KernelRunArgs::RuntimeArgValues named;
@@ -199,7 +199,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedVarargsA
         .kernel = KernelSpecName{"consumer"},
         .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node0, {}}, {node1, {}}}},
     });
-    SetProgramRunArgs(program, full);
+    program.set_run_args(full);
 
     // Partial update: change ONLY the named RTA on node0. Every vararg section (both nodes' per-node,
     // and the common section) and node1's named RTA are omitted -> all must be retained.
@@ -210,7 +210,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedVarargsA
         .kernel = KernelSpecName{"producer"},
         .runtime_arg_values = upd_named,
     });
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_NO_THROW(program.update_run_args(upd));
 
     auto prod = program.impl().get_kernel_by_spec_name("producer");
     // Per-node RTA buffer layout: [named "addr" @ slot 0][vararg0 @ 1][vararg1 @ 2].
@@ -232,22 +232,22 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedVarargsA
 
 // --- DFB size overrides on the fast path (mock fixture: inspects config, no enqueue) ---
 
-// UpdateProgramRunArgs applies a DFB size override, mirroring the SetProgramRunArgs path.
+// Program::update_run_args applies a DFB size override, mirroring the Program::set_run_args path.
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_AppliesDFBSizeOverride) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // A full set must precede any partial update.
-    SetProgramRunArgs(program, MakeRunArgsForMinimalSpec(node, {}, {}));
+    program.set_run_args(MakeRunArgsForMinimalSpec(node, {}, {}));
 
     ProgramRunArgs upd;
     upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_NO_THROW(program.update_run_args(upd));
 
     auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
     EXPECT_EQ(dfb->config.entry_size, 1024u);  // unchanged
-    EXPECT_EQ(dfb->config.num_entries, 4u);    // overridden via UpdateProgramRunArgs
+    EXPECT_EQ(dfb->config.num_entries, 4u);    // overridden via Program::update_run_args
 }
 
 // DFB size overrides are stateful: a DFB not re-specified in a later update keeps its current
@@ -255,16 +255,16 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_AppliesDFBSizeOverride
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsDFBSizeOverrideWhenUnspecified) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Establish an override (the spec default num_entries is 2).
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // A subsequent update that omits the DFB must not reset it to the spec default.
     ProgramRunArgs upd;
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+    EXPECT_NO_THROW(program.update_run_args(upd));
 
     auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
     EXPECT_EQ(dfb->config.num_entries, 4u) << "override must persist across an update that omits it";

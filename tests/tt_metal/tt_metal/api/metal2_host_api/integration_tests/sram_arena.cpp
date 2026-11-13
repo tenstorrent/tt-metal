@@ -22,7 +22,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
@@ -180,8 +180,7 @@ protected:
             SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = alignment};
         spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
         spec.work_units = {MakeMinimalWorkUnit("work", nodes, {"writer"})};
-        workload.add_program(
-            distributed::MeshCoordinateRange(mesh_device->shape()), MakeProgramFromSpec(*mesh_device, spec));
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), Program(*mesh_device, spec));
         initial.emplace(
             std::visit([&](const auto& props) { return SRAMArena::allocate(*mesh_device, props); }, properties));
         replacement.emplace(
@@ -241,9 +240,9 @@ protected:
 
 TEST_P(SRAMArenaScratchpadUpdates, FullResetRebindsScratchpad) {
     // A full argument reset moves scratchpad writes to the replacement reservation.
-    SetProgramRunArgs(program(), Args(*initial));
+    program().set_run_args(Args(*initial));
     Enqueue();
-    SetProgramRunArgs(program(), Args(*replacement, kScratchPattern + kNodePatternStride));
+    program().set_run_args(Args(*replacement, kScratchPattern + kNodePatternStride));
     Enqueue();
     EXPECT_EQ(ReportedAddress(), Base(*replacement) + alignment);
     EXPECT_EQ(ReadReservation(*replacement), ExpectedReservation(kScratchPattern + kNodePatternStride));
@@ -252,11 +251,11 @@ TEST_P(SRAMArenaScratchpadUpdates, FullResetRebindsScratchpad) {
 
 TEST_P(SRAMArenaScratchpadUpdates, PartialUpdateRebindsScratchpad) {
     // An allocation-only update moves scratchpad writes without resupplying kernel arguments.
-    SetProgramRunArgs(program(), Args(*initial));
+    program().set_run_args(Args(*initial));
     Enqueue();
     ProgramRunArgs update;
     update.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(*replacement)}};
-    UpdateProgramRunArgs(program(), update);
+    program().update_run_args(update);
     Enqueue();
     EXPECT_EQ(ReportedAddress(), Base(*replacement) + alignment);
     EXPECT_EQ(ReadReservation(*replacement), ExpectedReservation(kScratchPattern));
@@ -265,11 +264,11 @@ TEST_P(SRAMArenaScratchpadUpdates, PartialUpdateRebindsScratchpad) {
 
 TEST_P(SRAMArenaScratchpadUpdates, PartialUpdateRetainsOmittedAllocation) {
     // Updating a kernel argument preserves the omitted scratchpad allocation binding.
-    SetProgramRunArgs(program(), Args(*initial));
+    program().set_run_args(Args(*initial));
     Enqueue();
     ProgramRunArgs update;
     update.kernel_run_args = Args(*initial, kScratchPattern + kNodePatternStride).kernel_run_args;
-    UpdateProgramRunArgs(program(), update);
+    program().update_run_args(update);
     Enqueue();
     EXPECT_EQ(ReportedAddress(), Base(*initial) + alignment);
     EXPECT_EQ(ReadReservation(*initial), ExpectedReservation(kScratchPattern + kNodePatternStride));
@@ -342,7 +341,7 @@ protected:
             {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
         spec.work_units = {MakeMinimalWorkUnit("work", nodes, {"producer", "consumer"})};
         fixture_workload.add_program(
-            distributed::MeshCoordinateRange(mesh_device->shape()), MakeProgramFromSpec(*mesh_device, spec));
+            distributed::MeshCoordinateRange(mesh_device->shape()), Program(*mesh_device, spec));
         fixture_initial.emplace(
             std::visit([&](const auto& props) { return SRAMArena::allocate(*mesh_device, props); }, properties));
         fixture_replacement.emplace(
@@ -421,10 +420,10 @@ protected:
 
 TEST_P(SRAMArenaDFBUpdates, FullResetRebindsDFB) {
     // A full reset moves DFB transfers to the replacement reservation and preserves the first reservation.
-    SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
+    fixture_program().set_run_args(Args(*fixture_initial, kDFBPattern));
     Enqueue();
     const uint32_t next_seed = kDFBPattern + kNodePatternStride;
-    SetProgramRunArgs(fixture_program(), Args(*fixture_replacement, next_seed));
+    fixture_program().set_run_args(Args(*fixture_replacement, next_seed));
     Enqueue();
     EXPECT_EQ(ReadTensor(*fixture_report), ExpectedReport(Base(*fixture_replacement) + fixture_offset));
     EXPECT_EQ(ReadTensor(*fixture_output), Pattern(kDFBDepth * fixture_entry_size, next_seed));
@@ -434,11 +433,11 @@ TEST_P(SRAMArenaDFBUpdates, FullResetRebindsDFB) {
 
 TEST_P(SRAMArenaDFBUpdates, PartialUpdateRebindsDFB) {
     // An allocation-only update moves DFB transfers without supplying tensor or kernel arguments again.
-    SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
+    fixture_program().set_run_args(Args(*fixture_initial, kDFBPattern));
     Enqueue();
     ProgramRunArgs update;
     update.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(*fixture_replacement)}};
-    UpdateProgramRunArgs(fixture_program(), update);
+    fixture_program().update_run_args(update);
     Enqueue();
     EXPECT_EQ(ReadTensor(*fixture_report), ExpectedReport(Base(*fixture_replacement) + fixture_offset));
     EXPECT_EQ(ReadTensor(*fixture_output), Pattern(kDFBDepth * fixture_entry_size, kDFBPattern));
@@ -448,12 +447,12 @@ TEST_P(SRAMArenaDFBUpdates, PartialUpdateRebindsDFB) {
 
 TEST_P(SRAMArenaDFBUpdates, PartialUpdateRetainsOmittedAllocation) {
     // Updating kernel arguments keeps DFB transfers in the previously supplied reservation.
-    SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
+    fixture_program().set_run_args(Args(*fixture_initial, kDFBPattern));
     Enqueue();
     const uint32_t next_seed = kDFBPattern + kNodePatternStride;
     ProgramRunArgs update;
     update.kernel_run_args = Args(*fixture_initial, next_seed).kernel_run_args;
-    UpdateProgramRunArgs(fixture_program(), update);
+    fixture_program().update_run_args(update);
     Enqueue();
     EXPECT_EQ(ReadTensor(*fixture_report), ExpectedReport(Base(*fixture_initial) + fixture_offset));
     EXPECT_EQ(ReadTensor(*fixture_output), Pattern(kDFBDepth * fixture_entry_size, next_seed));
@@ -491,7 +490,7 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadDefaultOffset) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -505,7 +504,7 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadDefaultOffset) {
     args.kernel_run_args = {
         {.kernel = KernelSpecName{"writer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"scratch_seed", kScratchPattern}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     auto expected_arena = initial_arena;
@@ -542,7 +541,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBDefaultOffset) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"producer", "consumer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -560,7 +559,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBDefaultOffset) {
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"dfb_seed", kDFBPattern}})},
         {.kernel = KernelSpecName{"consumer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"output_page_start", 0u}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     EXPECT_EQ(cq.enqueue_read_tensor(output).to_vector<uint32_t>(), Pattern(dfb_bytes, kDFBPattern))
@@ -595,7 +594,7 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadNonzeroOffset) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -609,7 +608,7 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadNonzeroOffset) {
     args.kernel_run_args = {
         {.kernel = KernelSpecName{"writer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"scratch_seed", kScratchPattern}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     auto expected_arena = initial_arena;
@@ -646,7 +645,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBNonzeroOffset) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"producer", "consumer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -664,7 +663,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBNonzeroOffset) {
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"dfb_seed", kDFBPattern}})},
         {.kernel = KernelSpecName{"consumer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"output_page_start", 0u}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     EXPECT_EQ(cq.enqueue_read_tensor(output).to_vector<uint32_t>(), Pattern(dfb_bytes, kDFBPattern))
@@ -710,7 +709,7 @@ TEST_F(SRAMArenaRangeLockstep, BorrowingAcrossNodes) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"producer", "consumer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -733,7 +732,7 @@ TEST_F(SRAMArenaRangeLockstep, BorrowingAcrossNodes) {
         consumer_args.runtime_arg_values["output_page_start"][nodes[i]] = i * kDFBDepth;
     }
     args.kernel_run_args = {producer_args, consumer_args};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     const auto output_words = cq.enqueue_read_tensor(output).to_vector<uint32_t>();
@@ -790,7 +789,7 @@ TEST_F(SRAMArenaRangeLockstep, SharedByScratchpadAndDFB) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"producer", "consumer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<RangeLockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -809,7 +808,7 @@ TEST_F(SRAMArenaRangeLockstep, SharedByScratchpadAndDFB) {
              NodeCoord{0, 0}, {{"dfb_seed", kDFBPattern}, {"scratch_seed", kScratchPattern}})},
         {.kernel = KernelSpecName{"consumer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"output_page_start", 0u}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     EXPECT_EQ(cq.enqueue_read_tensor(output).to_vector<uint32_t>(), Pattern(dfb_bytes, kDFBPattern))
@@ -847,7 +846,7 @@ TEST_F(SRAMArenaLockstep, ScratchpadDefaultOffset) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -861,7 +860,7 @@ TEST_F(SRAMArenaLockstep, ScratchpadDefaultOffset) {
     args.kernel_run_args = {
         {.kernel = KernelSpecName{"writer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"scratch_seed", kScratchPattern}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     auto expected_arena = initial_arena;
@@ -897,7 +896,7 @@ TEST_F(SRAMArenaLockstep, DFBDefaultOffset) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"producer", "consumer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -915,7 +914,7 @@ TEST_F(SRAMArenaLockstep, DFBDefaultOffset) {
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"dfb_seed", kDFBPattern}})},
         {.kernel = KernelSpecName{"consumer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"output_page_start", 0u}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     EXPECT_EQ(cq.enqueue_read_tensor(output).to_vector<uint32_t>(), Pattern(dfb_bytes, kDFBPattern))
@@ -949,7 +948,7 @@ TEST_F(SRAMArenaLockstep, ScratchpadNonzeroOffset) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -963,7 +962,7 @@ TEST_F(SRAMArenaLockstep, ScratchpadNonzeroOffset) {
     args.kernel_run_args = {
         {.kernel = KernelSpecName{"writer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"scratch_seed", kScratchPattern}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     auto expected_arena = initial_arena;
@@ -999,7 +998,7 @@ TEST_F(SRAMArenaLockstep, DFBNonzeroOffset) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"producer", "consumer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -1017,7 +1016,7 @@ TEST_F(SRAMArenaLockstep, DFBNonzeroOffset) {
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"dfb_seed", kDFBPattern}})},
         {.kernel = KernelSpecName{"consumer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"output_page_start", 0u}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     EXPECT_EQ(cq.enqueue_read_tensor(output).to_vector<uint32_t>(), Pattern(dfb_bytes, kDFBPattern))
@@ -1062,7 +1061,7 @@ TEST_F(SRAMArenaLockstep, BorrowingAcrossNodes) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"producer", "consumer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -1085,7 +1084,7 @@ TEST_F(SRAMArenaLockstep, BorrowingAcrossNodes) {
         consumer_args.runtime_arg_values["output_page_start"][nodes[i]] = i * kDFBDepth;
     }
     args.kernel_run_args = {producer_args, consumer_args};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     const auto output_words = cq.enqueue_read_tensor(output).to_vector<uint32_t>();
@@ -1141,7 +1140,7 @@ TEST_F(SRAMArenaLockstep, SharedByScratchpadAndDFB) {
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"producer", "consumer"})};
 
     // Construct the program before supplying its reservation.
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     auto arena = SRAMArena::allocate(*mesh_device, properties);
     const auto base = static_cast<uint32_t>(std::get<LockstepSRAMArena>(arena.impl().layout).addr);
     auto report = CreateSentinelTensor(*mesh_device, report_spec);
@@ -1160,7 +1159,7 @@ TEST_F(SRAMArenaLockstep, SharedByScratchpadAndDFB) {
              NodeCoord{0, 0}, {{"dfb_seed", kDFBPattern}, {"scratch_seed", kScratchPattern}})},
         {.kernel = KernelSpecName{"consumer"},
          .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"output_page_start", 0u}})}};
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     Execute(*mesh_device, std::move(program));
 
     EXPECT_EQ(cq.enqueue_read_tensor(output).to_vector<uint32_t>(), Pattern(dfb_bytes, kDFBPattern))

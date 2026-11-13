@@ -8,7 +8,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/specification/semaphore_spec.hpp>
@@ -167,7 +167,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const MulticastAtomicConfig& t
             },
     };
 
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
@@ -187,7 +187,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const MulticastAtomicConfig& t
     ProgramRunArgs::KernelRunArgs receiver_run_params{.kernel = receiver_spec.unique_id};
     run_params.kernel_run_args.push_back(receiver_run_params);
 
-    SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
 
     // Assign unique runtime ID
     log_info(LogTest, "Running Test ID: {}, Runtime ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

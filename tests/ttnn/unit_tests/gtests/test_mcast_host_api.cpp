@@ -12,7 +12,7 @@
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "distributed/mesh_device_impl.hpp"
@@ -547,7 +547,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
         .work_units = {{.name = "mixed", .kernels = {targets.front()}, .target_nodes = receivers}}};
     m2::ProgramRunArgs args;
     channel.attach(spec, args, "channel", targets);
-    auto workload = m2::experimental::MakeMeshWorkloadFromSpec(device, spec);
+    m2::distributed::MeshWorkload workload(device, spec);
     auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         auto invocation = args;
@@ -562,7 +562,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
             tt::tt_metal::detail::WriteToDeviceL1(physical, core, report_addr, zero);
         }
         for (auto& [region, program] : workload.get_programs()) {
-            m2::experimental::SetProgramRunArgs(program, invocation);
+            program.set_run_args(invocation);
         }
         EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
         for (const auto& core : corerange_to_cores(receivers)) {

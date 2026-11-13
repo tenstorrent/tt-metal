@@ -50,7 +50,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/tile.hpp>
 #include <tt-umd/types/arch.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -2000,7 +2001,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         &mesh_device);
 
     // Every parametrization of these tests uses a single-core CoreRangeSet of {0, 0};
-    // MakeProgramFromSpec models the kernel set per single-core WorkUnit.
+    // The Program constructor models the kernel set per single-core WorkUnit.
     TT_FATAL(
         test_config.cores.ranges().size() == 1,
         "sfpu test expects a single CoreRange (got {})",
@@ -2158,7 +2159,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -2180,7 +2181,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, packed_input, /*blocking=*/true);
     LaunchProgram(mesh_device, std::move(program));
@@ -2678,8 +2679,8 @@ std::vector<uint32_t> sfpu_quasar_run(
     const ProgramRunArgs& params,
     const std::vector<std::pair<std::shared_ptr<distributed::MeshBuffer>, const std::vector<uint32_t>*>>& inputs,
     const std::shared_ptr<distributed::MeshBuffer>& out_buf) {
-    auto program = experimental::MakeProgramFromSpec(mesh_device, spec);
-    experimental::SetProgramRunArgs(program, params);
+    Program program(mesh_device, spec);
+    program.set_run_args(params);
     for (const auto& [buf, data] : inputs) {
         slow_dispatch::WriteToBuffer(*buf, *data);
     }

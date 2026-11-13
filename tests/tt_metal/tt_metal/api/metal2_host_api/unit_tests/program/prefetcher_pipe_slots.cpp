@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// PrefetcherPipe slot reservation, relay DFB creation and pipe accessor tokens in MakeProgramFromSpec.
+// PrefetcherPipe slot reservation, relay DFB creation and pipe accessor tokens in Program construction.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
@@ -33,7 +33,7 @@ using test_helpers::relay_dfb_name;
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MakeProgramReservesOneSlotPerAccessorGroup) {
     // Sender accessor + receiver accessor -> two slots. No pipe is bound; the slot carries the
     // geometry the kernels compile against.
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec(/*receiver_threads=*/2));
+    Program program(*mesh_device_, MakeFullPipeSpec(/*receiver_threads=*/2));
     const auto& impl = program.impl();
     ASSERT_EQ(impl.num_prefetcher_pipe_slots(), 2u);
 
@@ -75,7 +75,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MakeProgramReservesOneSlotPerAccessorGr
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MakeProgramCreatesRelayDFBWithoutAddress) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec());
+    Program program(*mesh_device_, MakeFullPipeSpec());
     const auto& impl = program.impl();
     const uint32_t relay_id = impl.get_dfb_handle(relay_dfb_name.get());
     auto relay = impl.get_dataflow_buffer(relay_id);
@@ -87,7 +87,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MakeProgramCreatesRelayDFBWithoutAddres
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_KernelsGetOnePipeAccessorTokenPerBinding) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec());
+    Program program(*mesh_device_, MakeFullPipeSpec());
     const auto& impl = program.impl();
     std::vector<uint8_t> slot_ids;
     for (const char* name : {"sender", "receiver"}) {

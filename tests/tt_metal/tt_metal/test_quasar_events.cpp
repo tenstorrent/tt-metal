@@ -9,7 +9,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_event.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include <cstdint>
@@ -46,14 +47,14 @@ distributed::MeshWorkload make_l1_write_workload(
     WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     ProgramSpec spec{
         .name = std::string("l1_write_") + kernel_id, .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     wl.add_program(device_range, std::move(program));
     return wl;
 }

@@ -97,11 +97,11 @@ static void run_intra_tensix_dfb_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE}};
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
 
     const uint32_t total_size = num_entries * entry_size;
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
@@ -219,7 +219,7 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -239,7 +239,7 @@ TEST_F(UnitMeshFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Positive bf16 inputs → double-relu identity.
     const uint32_t total_bytes = entry_size * num_entries;
@@ -333,13 +333,13 @@ static void run_intra_tensix_dfb_program_2_0(
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
     // pattern in main's run_intra_tensix_dfb_program).
     ProgramRunArgs params;
     params.kernel_run_args = {{.kernel = COMPUTE}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // DFB is the first L1 allocation in the program → lands at the base L1
     // allocator address. Same trick the legacy intra test uses.
@@ -442,7 +442,7 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
         }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -451,7 +451,7 @@ TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
              MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Finalize before launch so the counters each DFB owns are known while the pre-launch snapshot is taken.
     program.impl().finalize_dataflow_buffer_configs();
@@ -666,7 +666,7 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
@@ -684,7 +684,7 @@ TEST_F(UnitMeshFixture, TensixIntraIsolatesOverlayTCs) {
 
     ProgramRunArgs params;
     params.kernel_run_args = {{.kernel = COMPUTE}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Kernel only exercises TC push/pop credits; L1 payload is untouched.
     std::vector<uint32_t> scratch_zero(scratch_words, 0);
@@ -848,7 +848,7 @@ TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto intra_dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB));
@@ -861,7 +861,7 @@ TEST_F(UnitMeshFixture, TensixIntraRemapperTeardownDoesNotAliasOverlay) {
 
     ProgramRunArgs params;
     params.kernel_run_args = {{.kernel = COMPUTE}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<uint32_t> scratch_zero(1, 0);
     slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), scratch_l1_addr, scratch_zero);

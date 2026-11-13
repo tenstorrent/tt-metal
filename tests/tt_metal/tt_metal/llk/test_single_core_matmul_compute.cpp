@@ -27,7 +27,8 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -864,7 +865,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         .work_units = {wu},
     };
 
-    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, Program(*mesh_device, spec));
     auto& program_ = workload.get_programs().at(device_range);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -935,7 +936,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                 node, {{"dst_addr", out_dram_addr}, {"bank_id", 0u}, {"num_tiles", M * N}}),
         },
     };
-    experimental::SetProgramRunArgs(program_, run_args);
+    program_.set_run_args(run_args);
 
     auto blocking = is_quasar;
     distributed::EnqueueMeshWorkload(cq, workload, blocking);
@@ -1157,7 +1158,7 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
         .work_units = {wu},
     };
 
-    Program built_program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program built_program(*mesh_device, spec);
     workload.add_program(device_range, std::move(built_program));
     auto& program_run = workload.get_programs().at(device_range);
 
@@ -1184,7 +1185,7 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program_run, params);
+    program_run.set_run_args(params);
 
     // make_operand_stimulus emits face-major tile order, which is the DRAM page order the reader
     // streams and the order make_matmul_golden indexes, so no tilize/untilize round trip is needed.

@@ -23,7 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -529,7 +529,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     if (p.producer_type == M2PorCType::DM) {
@@ -574,7 +574,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     if (out_tensor) {
         params.tensor_args.insert({OUT_TENSOR, std::cref(*out_tensor)});
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Stimulus
     const uint32_t total_words = p.entry_size * entries_per_core / sizeof(uint32_t);
@@ -896,7 +896,7 @@ inline void run_a1_blocked_pipeline(
             },
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -913,7 +913,7 @@ inline void run_a1_blocked_pipeline(
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1B1);
@@ -1024,7 +1024,7 @@ inline void run_tensix_blocked_out_pipeline(
              {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1039,7 +1039,7 @@ inline void run_tensix_blocked_out_pipeline(
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xB10C);
@@ -1174,7 +1174,7 @@ inline void run_a1_fanout_blocked_pipeline(
              {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1189,7 +1189,7 @@ inline void run_a1_fanout_blocked_pipeline(
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1C1);

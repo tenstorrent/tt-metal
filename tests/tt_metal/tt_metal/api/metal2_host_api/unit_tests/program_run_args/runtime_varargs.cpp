@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SetProgramRunArgs with vararg-only RTAs, including per-node vararg count overrides.
+// Program::set_run_args with vararg-only RTAs, including per-node vararg count overrides.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -47,7 +47,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyMultiNodeDifferingCountsSucceeds)
     kernel.advanced_options.num_runtime_varargs_per_node = NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -57,7 +57,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyMultiNodeDifferingCountsSucceeds)
                 .runtime_varargs = {{node_a, {10, 20}}, {node_b, {100, 200, 300, 400, 500}}},
             },
     });
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_VarargPerNodeOverrideMixedEntryTypesSucceeds) {
@@ -81,7 +81,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargPerNodeOverrideMixedEntryTypesSucceed
     kernel.advanced_options.num_runtime_varargs_per_node = NumVarargsPerNode{{ab, 3}, {node_c, 5}};
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -91,7 +91,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargPerNodeOverrideMixedEntryTypesSucceed
                 .runtime_varargs = {{node_a, {1, 2, 3}}, {node_b, {10, 20, 30}}, {node_c, {100, 200, 300, 400, 500}}},
             },
     });
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_VarargScalarDefaultWithSparseOverrideSucceeds) {
@@ -114,7 +114,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargScalarDefaultWithSparseOverrideSuccee
     };
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -129,7 +129,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargScalarDefaultWithSparseOverrideSuccee
                     },
             },
     });
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_VarargSparseOverrideZeroErasesScalarDefault) {
@@ -150,7 +150,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargSparseOverrideZeroErasesScalarDefault
     };
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // node_b is treated as having no varargs — run-params needs no entry for it.
     ProgramRunArgs params;
@@ -161,7 +161,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargSparseOverrideZeroErasesScalarDefault
                 .runtime_varargs = {{node_a, {1, 2, 3}}},
             },
     });
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyAcrossMultipleKernelsSucceeds) {
@@ -171,16 +171,16 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyAcrossMultipleKernelsSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 1};
     spec.kernels[1].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 2, .num_common_runtime_varargs = 2};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, {1, 2, 3}, {99}));
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {7, 8}, {42, 43}));
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyRTAsMissingNodeCoverageFails) {
-    // If the schema declares varargs for a node, SetProgramRunArgs must insist on
+    // If the schema declares varargs for a node, Program::set_run_args must insist on
     // values for that node. Regression canary for per-node coverage in the vararg path.
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};
@@ -192,7 +192,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyRTAsMissingNodeCoverageFails) {
     kernel.advanced_options.num_runtime_varargs = 2;  // uniform across both nodes
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -203,7 +203,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyRTAsMissingNodeCoverageFails) {
             },
     });
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("missing vararg runtime args for node")));
 }
 
@@ -214,7 +214,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyUnknownNodeFails) {
     NodeCoord wrong_node{3, 3};
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].advanced_options.num_runtime_varargs = 1;
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -226,7 +226,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyUnknownNodeFails) {
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the kernel does not run on that node")));
 }
 

@@ -18,7 +18,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include "hostdev/device_print_common.h"
 #include "impl/context/metal_context.hpp"
@@ -81,11 +82,11 @@ protected:
         }
         WorkUnitSpec main_wu{.name = "main", .kernels = {name}, .target_nodes = core};
         ProgramSpec spec{.name = "quasar_print_lock", .kernels = {kernel_spec}, .work_units = {main_wu}};
-        Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        Program program(*mesh_device_, spec);
         ProgramRunArgs params;
         params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = name, .runtime_arg_values = MakeRuntimeArgsForSingleNode(core, args)});
-        tt_metal::experimental::SetProgramRunArgs(program, params);
+        program.set_run_args(params);
 
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord{0, 0};

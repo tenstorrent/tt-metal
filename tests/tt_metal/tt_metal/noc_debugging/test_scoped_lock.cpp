@@ -18,7 +18,7 @@
 #include "impl/context/metal_context.hpp"
 
 // Metal 2.0 host API (DFB tests)
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
@@ -614,7 +614,7 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
             {WorkUnitSpec{.name = "locker_wu", .kernels = {LOCKER}, .target_nodes = locker_core},
              WorkUnitSpec{.name = "writer_wu", .kernels = {WRITER}, .target_nodes = writer_core}},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs run_args;
     ProgramRunArgs::KernelRunArgs locker_params{};
@@ -637,7 +637,7 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
          {"inbox", 0u},  // 0 -> take target_addr directly; the host picks the address here
          {"target_addr", write_target_addr}});
     run_args.kernel_run_args = {locker_params, writer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
@@ -940,7 +940,7 @@ void run_dfb_scoped_lock_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs run_args;
     ProgramRunArgs::KernelRunArgs producer_params{};
@@ -958,7 +958,7 @@ void run_dfb_scoped_lock_test(
     ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {producer_params, consumer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1063,7 +1063,7 @@ void run_dfb_region_cleared_between_launches_test(
     WorkUnitSpec writer_wu{.name = "main", .kernels = {WRITER}, .target_nodes = core};
     ProgramSpec writer_program_spec{.name = "dfb_free_l1_write", .kernels = {writer_spec}, .work_units = {writer_wu}};
 
-    Program writer_program = experimental::MakeProgramFromSpec(*mesh_device, writer_program_spec);
+    Program writer_program(*mesh_device, writer_program_spec);
     ProgramRunArgs writer_run_args;
     ProgramRunArgs::KernelRunArgs writer_params{};
     writer_params.kernel = WRITER;
@@ -1075,7 +1075,7 @@ void run_dfb_region_cleared_between_launches_test(
          {"self_noc_y", static_cast<uint32_t>(virtual_core.y)},
          {"target_addr", ring_base}});
     writer_run_args.kernel_run_args = {writer_params};
-    experimental::SetProgramRunArgs(writer_program, writer_run_args);
+    writer_program.set_run_args(writer_run_args);
 
     distributed::MeshWorkload writer_workload;
     const auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1191,7 +1191,7 @@ void run_dfb_scoped_lock_xcore_test(
         .work_units = {wu_locker, wu_writer},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs run_args;
     ProgramRunArgs::KernelRunArgs locker_params{};
@@ -1215,7 +1215,7 @@ void run_dfb_scoped_lock_xcore_test(
     ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {locker_params, consumer_params, writer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1330,7 +1330,7 @@ void run_dfb_mcast_loopback_unlocked_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs run_args;
     ProgramRunArgs::KernelRunArgs producer_params{};
@@ -1347,7 +1347,7 @@ void run_dfb_mcast_loopback_unlocked_test(
     ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;
     run_args.kernel_run_args = {producer_params, consumer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1493,7 +1493,7 @@ void run_dfb_mcast_xcore_locked_test(
         .work_units = {wu_locker, wu_writer},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs run_args;
     ProgramRunArgs::KernelRunArgs locker_params{};
@@ -1521,7 +1521,7 @@ void run_dfb_mcast_xcore_locked_test(
     ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {locker_params, consumer_params, writer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);

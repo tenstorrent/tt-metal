@@ -17,7 +17,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::unit_tests::llk::single_node_dfb {
@@ -119,7 +120,7 @@ inline std::vector<std::uint32_t> run(distributed::MeshDevice& mesh_device, cons
     wu.kernels.push_back(COMPUTE);
     spec.work_units = {wu};
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     auto& cq = mesh_device.mesh_command_queue();
     ProgramRunArgs params;
@@ -146,7 +147,7 @@ inline std::vector<std::uint32_t> run(distributed::MeshDevice& mesh_device, cons
              {"dram_page_stride", out_tile_size}}),
     });
     params.kernel_run_args.push_back({.kernel = COMPUTE});
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 

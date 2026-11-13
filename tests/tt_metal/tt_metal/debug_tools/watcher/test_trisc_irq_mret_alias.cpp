@@ -13,7 +13,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "debug_tools_fixture.hpp"
@@ -48,14 +49,14 @@ void RunTriscIrqMretAliasTest(
     };
     WorkUnitSpec work_unit{.name = "main", .kernels = {kernel}, .target_nodes = node};
     ProgramSpec spec{.name = "trisc_irq_mret_alias", .kernels = {kernel_spec}, .work_units = {work_unit}};
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = kernel,
         .runtime_arg_values =
             MakeRuntimeArgsForSingleNode(node, {{"scratch", scratch}, {"scratch_bytes", scratch_bytes}}),
     }};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     fixture->RunProgramExpectingWatcherError(mesh_device, workload);

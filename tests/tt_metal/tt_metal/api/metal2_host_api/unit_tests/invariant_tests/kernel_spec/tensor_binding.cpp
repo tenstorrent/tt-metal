@@ -11,7 +11,7 @@
 #include <string>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -40,7 +40,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateTensorAccessorNameWithinKernelFails) {
     BindTensorParameterToKernel(spec.kernels[0], "output_tensor", "same_accessor");
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("has duplicate tensor accessor_name 'same_accessor'")));
 }
@@ -55,7 +55,7 @@ TEST_F(ProgramSpecTestGen1, CPU_InvalidTensorAccessorNameFails) {
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "has-dash");  // not a valid identifier
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor accessor_name 'has-dash' must be a valid C++ identifier")));
 
@@ -64,7 +64,7 @@ TEST_F(ProgramSpecTestGen1, CPU_InvalidTensorAccessorNameFails) {
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", std::string(MAX_ACCESSOR_NAME_LENGTH + 1, 'a'));
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be at most")));
 }
 
@@ -77,7 +77,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_TensorBindingOnComputeKernelIsAccepted) {
     spec.tensor_parameters = {MakeMinimalTensorParameter("t")};
     BindTensorParameterToKernel(spec.kernels[1], "t", "t_acc");  // kernels[1] == compute_kernel
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
@@ -98,7 +98,7 @@ TEST_F(ProgramSpecTestGen1, CPU_AccessorNamesAcrossCategoriesAreSeparateNamespac
         SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "input_dfb"}};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_dfb");
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_PerNodeTensorBindingOnNodeWithoutShardFails) {
@@ -108,7 +108,7 @@ TEST_F(ProgramSpecTestGen1, CPU_PerNodeTensorBindingOnNodeWithoutShardFails) {
     BindTensorParameterToKernel(spec.kernels[0], "per_node", "per_node");
     spec.work_units = {MakeMinimalWorkUnit("work_unit", NodeRange{{0, 0}, {1, 0}}, {"dm_kernel", "compute_kernel"})};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "Kernel 'dm_kernel' runs on node 1-0, where per-node TensorParameter 'per_node' has no shard")));
 }

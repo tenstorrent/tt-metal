@@ -3141,7 +3141,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
                 "Aliased DFB {} was not overridden in alias group with "
                 "primary DFB {}. Aliased DFBs must have the same total size (entry_size * num_entries): when "
                 "one member is resized, every member of the group must be overridden to the same new total size "
-                "in one SetProgramRunArgs call.",
+                "in one Program::set_run_args call.",
                 member_id,
                 primary_id);
             if (!agreed_total.has_value()) {
@@ -3152,7 +3152,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
                 "Aliased DFBs in the alias group (primary DFB {}) have different total sizes ({} vs {} bytes) "
                 "after the requested override. Aliased DFBs must have the same total size (entry_size * "
                 "num_entries): every member of the group must be overridden to the same new total size in one "
-                "SetProgramRunArgs call.",
+                "Program::set_run_args call.",
                 primary_id,
                 agreed_total.value(),
                 it->second);

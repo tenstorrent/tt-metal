@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -76,7 +76,7 @@ TEST_F(ProgramSpecHybridAllocatorHWTest, PerNodeTensorBindingLocalTensorAccessor
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/local_tensor_accessor_compute.cpp";
     compute.runtime_arg_schema = {.runtime_arg_names = {"report_addr"}};
     BindTensorParameterToKernel(compute, "local_t", "local_t");
-    Program program = MakeProgramFromSpec(
+    Program program(
         *mesh_device,
         ProgramSpec{
             .name = "per_node_local_tensor_accessor",
@@ -95,15 +95,13 @@ TEST_F(ProgramSpecHybridAllocatorHWTest, PerNodeTensorBindingLocalTensorAccessor
         slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
         AddRuntimeArgsForNode(runtime_arg_values, node, {{"report_addr", kReportAddr}});
     }
-    SetProgramRunArgs(
-        program,
-        ProgramRunArgs{
-            .kernel_run_args = {{
-                .kernel = KernelSpecName{"compute"},
-                .runtime_arg_values = std::move(runtime_arg_values),
-            }},
-            .tensor_args = {{TensorParamName{"local_t"}, TensorArgument{local.tensor}}},
-        });
+    program.set_run_args(ProgramRunArgs{
+        .kernel_run_args = {{
+            .kernel = KernelSpecName{"compute"},
+            .runtime_arg_values = std::move(runtime_arg_values),
+        }},
+        .tensor_args = {{TensorParamName{"local_t"}, TensorArgument{local.tensor}}},
+    });
     LaunchProgram(*mesh_device, std::move(program));
     for (const NodeCoord& node : {node0, node1}) {
         std::vector<uint32_t> reported;
@@ -153,7 +151,7 @@ void kernel_main() {
     distributed::MeshWorkload workload;
     workload.add_program(
         device_range,
-        MakeProgramFromSpec(
+        Program(
             *mesh_device,
             ProgramSpec{
                 .name = "per_node_arg_updates",
@@ -198,27 +196,22 @@ void kernel_main() {
     for (const NodeCoord& node : {node0, node1}) {
         ASSERT_NE(per_node_a.address(node), ShardAddress(per_node_b, node)) << "Test precondition";
     }
-    SetProgramRunArgs(
-        program,
-        ProgramRunArgs{
-            .kernel_run_args = {kernel_run_args(0x1000, /*with_varargs=*/true)},
-            .tensor_args =
-                {{TensorParamName{"per_node"}, TensorArgument{per_node_a.tensor}},
-                 {TensorParamName{"plain"}, TensorArgument{plain}}},
-        });
-    run_and_check("SetProgramRunArgs", per_node_a.tensor, 0x1000);
-    UpdateTensorArgs(
-        program,
+    program.set_run_args(ProgramRunArgs{
+        .kernel_run_args = {kernel_run_args(0x1000, /*with_varargs=*/true)},
+        .tensor_args =
+            {{TensorParamName{"per_node"}, TensorArgument{per_node_a.tensor}},
+             {TensorParamName{"plain"}, TensorArgument{plain}}},
+    });
+    run_and_check("Program::set_run_args", per_node_a.tensor, 0x1000);
+    program.update_tensor_args(
         {{TensorParamName{"per_node"}, TensorArgument{per_node_b}}, {TensorParamName{"plain"}, TensorArgument{plain}}});
-    run_and_check("UpdateTensorArgs", per_node_b, 0x1000);
+    run_and_check("Program::update_tensor_args", per_node_b, 0x1000);
     // Omits the ordinary tensor and the varargs, which must keep their values.
-    UpdateProgramRunArgs(
-        program,
-        ProgramRunArgs{
-            .kernel_run_args = {kernel_run_args(0x2000, /*with_varargs=*/false)},
-            .tensor_args = {{TensorParamName{"per_node"}, TensorArgument{per_node_a.tensor}}},
-        });
-    run_and_check("partial UpdateProgramRunArgs", per_node_a.tensor, 0x2000);
+    program.update_run_args(ProgramRunArgs{
+        .kernel_run_args = {kernel_run_args(0x2000, /*with_varargs=*/false)},
+        .tensor_args = {{TensorParamName{"per_node"}, TensorArgument{per_node_a.tensor}}},
+    });
+    run_and_check("partial Program::update_run_args", per_node_a.tensor, 0x2000);
 }
 
 }  // namespace

@@ -144,7 +144,7 @@ using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindi
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
-// TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
+// TensorParameter name so Program::set_run_args can fill the binding's base-address slot
 // (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
 struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
@@ -177,7 +177,7 @@ struct TensorBindingHandle {
 //  - The base address is allocated at Program-compile time or supplied through an SRAMArena
 //    argument, and is passed to the kernel as an implicit CRTA.
 //  - Since the address is persistent across enqueues, we store it on the Kernel object rather
-//    than rely on the statefulness of the CRTA buffer. (The invariant of SetProgramRunArgs is that
+//    than rely on the statefulness of the CRTA buffer. (The invariant of Program::set_run_args is that
 //    the CRTA and RTA buffers are completely overwritten when it's called.)
 //  - It is possible for DFB size overrides to be applied between enqueues. If this happens, the
 //    allocated scratchpad addresses will update between enqueues as well.
@@ -456,8 +456,8 @@ public:
 
     // Resolve query_buf_rw's raw slots to bound objects (TensorParameter name + bound buffer address).
     // Non-const: reads the kernel's CRTA (where the runtime wrote the bound addresses), so the addresses are those
-    // of the last SetProgramRunArgs / UpdateTensorArgs -- call after the final run-args update for the enqueue being
-    // analyzed, and after the binary is compiled. A slot that can't be resolved marks the result opaque.
+    // of the last Program::set_run_args / Program::update_tensor_args -- call after the final run-args update for the
+    // enqueue being analyzed, and after the binary is compiled. A slot that can't be resolved marks the result opaque.
     // `program` is the one this kernel belongs to: it holds the address each borrowed-memory DFB is bound to.
     ResolvedBufRw resolve_buf_rw(const IDevice& device, const detail::ProgramImpl& program);
 

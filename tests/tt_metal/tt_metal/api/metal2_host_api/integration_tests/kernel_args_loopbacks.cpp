@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -121,7 +121,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // Vararg values picked so both kernels' XOR sums equal the same non-trivial S.
     // The kernels fold this into the first word of each DFB entry; S ^ S = 0, so data
@@ -160,7 +160,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
                 },
         },
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<uint32_t> input_data(total_bytes / sizeof(uint32_t));
     for (size_t i = 0; i < input_data.size(); i++) {
@@ -216,7 +216,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     spec.kernels = {compute};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // Pick non-trivial bits so a wrong-offset read is unlikely to coincidentally
     // produce the same XOR. The compute kernel's sum is:
@@ -242,7 +242,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
                 .common_runtime_varargs = {kCommonVararg0},
             },
     }};
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<uint32_t> zero_report(1, 0u);
     slow_dispatch::WriteToL1(*mesh_device, node, report_addr, zero_report);
@@ -314,7 +314,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -329,7 +329,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
         },
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<uint32_t> input_data(total_bytes / sizeof(uint32_t));
     for (size_t i = 0; i < input_data.size(); i++) {
@@ -381,7 +381,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     spec.kernels = {compute};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // sum = magic ^ entry_size ^ input_offset ^ num_tiles. Solve input_offset for a known target.
     constexpr uint32_t kTargetXorSum = 0xDEADBEEFu;
@@ -395,7 +395,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
             MakeRuntimeArgsForSingleNode(node, {{"input_offset", kInputOffset}, {"report_addr", report_addr}}),
         .common_runtime_arg_values = {{"num_tiles", num_tiles}},
     }};
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<uint32_t> zero_report(1, 0u);
     slow_dispatch::WriteToL1(*mesh_device, node, report_addr, zero_report);
@@ -414,7 +414,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 
 // The common-runtime-arg (CRTA) buffer is laid out in four sections, in order:
 //     [ named CRTAs | tensor bindings | scratchpads | common varargs ]
-// Both the host (SetProgramRunArgs full assembly + UpdateProgramRunArgs in-place patch) and the
+// Both the host (Program::set_run_args full assembly + Program::update_run_args in-place patch) and the
 // device-side generated header compute each section's offset independently, so a boundary miscomputed
 // on either side silently cross-contaminates regions — the classic sneaky offset bug. This generalizes
 // the "A1" regression (which carried only a scratchpad + one vararg): here ONE kernel carries ALL FOUR
@@ -435,9 +435,9 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 // read surfaces as a known value).
 //
 // Two phases:
-//   SET    — SetProgramRunArgs installs all four sections; verify every region reads its own value
+//   SET    — Program::set_run_args installs all four sections; verify every region reads its own value
 //            (the full-assembly offset math for all four sections, binding two words wide).
-//   UPDATE — UpdateProgramRunArgs patches the named CRTAs + common varargs to NEW sentinels; verify the
+//   UPDATE — Program::update_run_args patches the named CRTAs + common varargs to NEW sentinels; verify the
 //            new values land AND the tensor-binding + scratchpad slots are untouched. The vararg base
 //            here is named + tensor-binding(2 words) + scratchpad section words — the A1 sum, now with a
 //            MULTI-WORD binding in the middle (River's original had named=0, binding=0).
@@ -574,7 +574,7 @@ void kernel_main() {
 
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, Program(*mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
     // Consumer's per-node RTAs (re-supplied on every set/update in this test).
@@ -607,7 +607,7 @@ void kernel_main() {
         consumer_args(),
     };
     set_params.tensor_args = {{TensorParamName{"io"}, TensorArgument{io_tensor}}};
-    SetProgramRunArgs(program, set_params);
+    program.set_run_args(set_params);
 
     std::vector<uint32_t> s = launch_and_read();
     const uint32_t scratch_base = s[3];
@@ -637,7 +637,7 @@ void kernel_main() {
         },
         consumer_args(),
     };
-    UpdateProgramRunArgs(program, upd_params);
+    program.update_run_args(upd_params);
 
     std::vector<uint32_t> u = launch_and_read();
     EXPECT_EQ(u[0], kNamed0Upd) << "partial update: named CRTA 0 landed at the wrong offset";
@@ -664,8 +664,8 @@ void kernel_main() {
 // reads each scratchpad back at its allocated address.
 //
 // Two phases:
-//   SET    — SetProgramRunArgs installs everything; every slot must read its own value.
-//   UPDATE — UpdateProgramRunArgs replaces x and d whole; the new values must land and the scalars and
+//   SET    — Program::set_run_args installs everything; every slot must read its own value.
+//   UPDATE — Program::update_run_args replaces x and d whole; the new values must land and the scalars and
 //            varargs around them must be untouched.
 
 constexpr const char* kArrayArgsReadbackSource = R"(
@@ -734,10 +734,10 @@ TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
 
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, Program(*mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
-    // A kernel's report scratchpad, allocated by MakeProgramFromSpec.
+    // A kernel's report scratchpad, allocated by the Program constructor.
     auto report_address = [&](const Reader& reader) {
         return program.impl()
             .get_kernel_by_spec_name(reader.name)
@@ -774,7 +774,7 @@ TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
         };
         set_params.kernel_run_args.push_back(std::move(args));
     }
-    SetProgramRunArgs(program, set_params);
+    program.set_run_args(set_params);
     launch();
     for (const Reader& reader : readers) {
         const uint32_t t = reader.tag;
@@ -803,7 +803,7 @@ TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
         args.common_runtime_array_arg_values["d"] = {reader.tag + 0x210, reader.tag + 0x211};
         upd_params.kernel_run_args.push_back(std::move(args));
     }
-    UpdateProgramRunArgs(program, upd_params);
+    program.update_run_args(upd_params);
     launch();
     for (const Reader& reader : readers) {
         const uint32_t t = reader.tag;

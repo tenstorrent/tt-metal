@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -85,7 +85,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ArrayArgsCompileInDataMovementKernel) {
     dm_kernel.source = KernelSpec::SourceCode{kArrayArgsKernelSource};
     DeclareArrayArgs(dm_kernel);
 
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSingleKernelSpec(dm_kernel));
+    Program program(*mesh_device_, MakeSingleKernelSpec(dm_kernel));
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -94,7 +94,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ArrayArgsCompileInComputeKernel) {
     compute_kernel.source = KernelSpec::SourceCode{kArrayArgsKernelSource};
     DeclareArrayArgs(compute_kernel);
 
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSingleKernelSpec(compute_kernel));
+    Program program(*mesh_device_, MakeSingleKernelSpec(compute_kernel));
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -109,8 +109,8 @@ void kernel_main() {
 )"};
     dm_kernel.compile_time_array_args = {{"page_sizes", {64, 128, 256}}};
 
-    // MakeProgramFromSpec compiles; the out-of-range index must fail that build.
-    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, MakeSingleKernelSpec(dm_kernel)));
+    // The Program constructor compiles; the out-of-range index must fail that build.
+    EXPECT_ANY_THROW(Program(*mesh_device_, MakeSingleKernelSpec(dm_kernel)));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_TtKernelWithArrayArgsFails) {
@@ -125,7 +125,7 @@ TT_KERNEL void entry(uint32_t count) { (void)count; }
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, MakeSingleKernelSpec(dm_kernel)); },
+        [&] { Program(*mesh_device_, MakeSingleKernelSpec(dm_kernel)); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("belongs to a kernel that declares array arguments")));
 }

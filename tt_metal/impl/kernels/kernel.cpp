@@ -962,7 +962,7 @@ void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& bindin
     // Patch the allocated address into the kernel's CRTA buffer if it exists.
     // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
     // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-    // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+    // (legacy order: Program::set_run_args first), Program::set_run_args copies
     // handle.allocated_address into the scratchpad section when it builds the buffer.
     // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
     //

@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -52,7 +52,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultiBindingFlagOnGen2Fails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
 }
 
@@ -78,7 +78,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBWithBorrowedTensorFails) {
     spec.dataflow_buffers[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("sets both borrowed_from and allocation_override")));
 }

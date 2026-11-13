@@ -30,7 +30,7 @@ struct DataMovementHardwareConfig {
     // Optional and unset by default. Each config applies only to the architecture named in
     // its header, and is ignored on any other.
     // NOTE: The target architecture is selected at program construction time.
-    //       See MakeProgramFromSpec for more details.
+    //       See Program(MeshDevice&, const ProgramSpec&) for more details.
 
     // ---- TT-1.x.x specific (Wormhole, Blackhole) ----
     //

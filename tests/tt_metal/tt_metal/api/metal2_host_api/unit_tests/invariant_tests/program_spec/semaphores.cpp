@@ -10,7 +10,7 @@
 #include <stdexcept>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -30,7 +30,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_SemaphoreSharedByComputeAndDMIsRejected) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_ANY_THROW(Program(*mesh_device_, spec));
 }
 
 // Only one Tensix hardware semaphore is free on Blackhole, so every compute semaphore resolves to it; a
@@ -41,7 +41,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_SecondComputeBoundSemaphoreIsRejected) {
     BindSemaphoreToKernels(spec, "compute_sem_b", {"compute_kernel"});
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("at most one compute semaphore")));
 }
 
@@ -52,7 +52,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreWithNonzeroInitialValu
     BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
     spec.semaphores.back().advanced_options.initial_value = 1;
 
-    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_ANY_THROW(Program(*mesh_device_, spec));
 }
 
 // The capacity (max_value) is the 4-bit hardware Max register: 1..15 on a compute semaphore, meaningless
@@ -62,7 +62,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreMaxValueInRangeSucceed
     BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
     spec.semaphores.back().advanced_options.max_value = 15;
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreMaxValueAbove15IsRejected) {
@@ -71,7 +71,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreMaxValueAbove15IsRejec
     spec.semaphores.back().advanced_options.max_value = 16;
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("capacity is at most 15")));
 }
 
@@ -81,7 +81,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_MaxValueOnDMBoundSemaphoreIsRejected) {
     spec.semaphores.back().advanced_options.max_value = 4;
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not bound by a compute kernel")));
 }
 

@@ -89,7 +89,7 @@ static void run_single_dfb_multicore_2_0(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -106,7 +106,7 @@ static void run_single_dfb_multicore_2_0(
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 1000000, 2 * num_entries * entry_size / sizeof(uint32_t));
@@ -201,7 +201,7 @@ static void run_concurrent_dfbs_program_2_0(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     for (const auto& name : kernel_names) {
@@ -211,7 +211,7 @@ static void run_concurrent_dfbs_program_2_0(
         {TensorParamName{"in_tensor"}, std::cref(in_tensor)},
         {TensorParamName{"out_tensor"}, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 1000000, total_entries * entry_size / sizeof(uint32_t));
@@ -338,7 +338,7 @@ static void run_sequential_4_dfbs_2_0(
         }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     // Kernels with no runtime args still need a KernelRunArgs entry so the
@@ -352,7 +352,7 @@ static void run_sequential_4_dfbs_2_0(
         params.tensor_args.insert({TensorParamName{SRC_NAMES[i]}, std::cref(in_tensors[i])});
         params.tensor_args.insert({TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<std::vector<uint32_t>> inputs(4);
     for (uint32_t i = 0; i < 4; ++i) {
@@ -520,7 +520,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S) {
         }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     // Producer has no runtime args but still needs a KernelRunArgs entry to be
@@ -535,7 +535,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S) {
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         params.tensor_args.insert({TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Pre-fill each DFB's L1 ring directly via uniform_alloc_addr after manual
     // finalize+allocate. No borrowed_from / ring tensor needed; the compute
@@ -620,7 +620,7 @@ TEST_F(UnitMeshFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
         }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     // Identical HW config across the 4 cores → must collapse into 1 DfbGroup.
@@ -705,7 +705,7 @@ TEST_F(UnitMeshAnyDispatchFixture, IdleCoreStaleLaunchSlot_DMDM) {
             },
         .work_units = {WorkUnitSpec{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = core_a}},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -720,7 +720,7 @@ TEST_F(UnitMeshAnyDispatchFixture, IdleCoreStaleLaunchSlot_DMDM) {
         {IN_TENSOR, std::cref(in_tensor)},
         {OUT_TENSOR, std::cref(out_tensor)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, num_entries * entry_size / 4);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);

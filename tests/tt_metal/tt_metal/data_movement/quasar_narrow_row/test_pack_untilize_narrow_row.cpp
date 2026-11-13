@@ -32,7 +32,8 @@
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "kernels/narrow_row_engine_mode.hpp"
 
 namespace tt::tt_metal {
@@ -293,7 +294,7 @@ bool run_narrow_row(
         .dataflow_buffers = {src_dfb_spec, pad_dfb_spec},
         .work_units = {{.name = "main", .kernels = {READER, COMPUTE, COMPACT}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -317,7 +318,7 @@ bool run_narrow_row(
                  {"num_channels", cfg.num_channels}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());

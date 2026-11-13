@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -105,7 +105,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // -------------------------------------------------------
     // Create Program
     // -------------------------------------------------------
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // -------------------------------------------------------
     // Set runtime args
@@ -139,7 +139,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
                 },
         },
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // -------------------------------------------------------
     // Fill input buffer with known data
@@ -227,7 +227,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .target_nodes = node,
     };
 
-    // The ProgramSpec aggregates everything and is consumed by `MakeProgramFromSpec`.
+    // The ProgramSpec aggregates everything and is consumed by the `Program` constructor.
     ProgramSpec spec{
         .name = "semaphore_accessor_loopback",
         .kernels = {producer, consumer},
@@ -235,7 +235,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .work_units = std::vector<WorkUnitSpec>{work_unit},
     };
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     LaunchProgram(*mesh_device, std::move(program));
     // If we got here, both kernels resolved their sem accessors to the same ID.
 }
@@ -245,7 +245,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 // ============================================================================
 //
 // Proves that the Metal 2.0 TensorAccessor binding feature works end-to-end on real WH/BH:
-//   1. Spec → MakeProgramFromSpec resolves the binding's TensorSpec into a correct CTA payload
+//   1. Spec → the Program constructor resolves the binding's TensorSpec into a correct CTA payload
 //      (page size, args_config, bank coords, alignment).
 //   2. Each binding's slot in the kernel's TensorBinding address section is filled with
 //      MeshTensor::address() at enqueue.
@@ -321,7 +321,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // -------------------------------------------------------
     // Create Program
     // -------------------------------------------------------
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // -------------------------------------------------------
     // Set runtime args
@@ -347,7 +347,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
         {TensorParamName{"input_tensor"}, TensorArgument{input_tensor}},
         {TensorParamName{"output_tensor"}, TensorArgument{output_tensor}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // -------------------------------------------------------
     // Fill input tensor with known data
@@ -420,7 +420,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     spec.tensor_parameters = {tensor_param};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -430,7 +430,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     params.tensor_args = {
         {TensorParamName{"local_t"}, TensorArgument{local_tensor}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<uint32_t> zero_report(kNumReportWords, 0u);
     slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);

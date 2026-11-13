@@ -8,7 +8,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -91,7 +92,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -99,7 +100,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
               << std::endl;
 
@@ -213,7 +214,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     const NodeRange all_nodes(NodeCoord{0, 0}, NodeCoord{grid.x - 1, grid.y - 1});
     WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = all_nodes};
     ProgramSpec spec{.name = "full_grid_l1a", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // Give each node its own value through its per-node runtime args.
     ProgramRunArgs params;
@@ -225,7 +226,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
         }
     }
     params.kernel_run_args = {kra};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -301,7 +302,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
     const NodeRange all_nodes(NodeCoord{0, 0}, NodeCoord{grid.x - 1, grid.y - 1});
     WorkUnitSpec main_wu{.name = "main", .kernels = {COMPUTE_KERNEL}, .target_nodes = all_nodes};
     ProgramSpec spec{.name = "full_grid_compute", .kernels = {compute_kernel_spec}, .work_units = {main_wu}};
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     ProgramRunArgs::KernelRunArgs kra{.kernel = COMPUTE_KERNEL};
@@ -311,7 +312,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
         }
     }
     params.kernel_run_args = {kra};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -390,7 +391,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
     };
     WorkUnitSpec wu{.name = "main", .kernels = {MCAST}, .target_nodes = src_node};
     ProgramSpec spec{.name = "grid_mcast_fanout", .kernels = {mcast_spec}, .work_units = {wu}};
-    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -404,7 +405,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
              {"mcast_x_end", static_cast<uint32_t>(p_hi.x)},
              {"mcast_y_end", static_cast<uint32_t>(p_hi.y)},
              {"num_dests", num_dests}})}};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

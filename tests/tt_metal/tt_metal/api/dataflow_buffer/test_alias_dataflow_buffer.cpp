@@ -23,7 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -257,7 +257,7 @@ void run_alias_dfb_program(
         entry_size_b, num_entries_b,
         num_producers, num_consumers);
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     auto rtas = [&](uint32_t epc_a, uint32_t epc_b) {
         return MakeRuntimeArgsForSingleNode(
@@ -287,7 +287,7 @@ void run_alias_dfb_program(
         {TensorParamName{"out_tensor_a"}, TensorArgument{out_a}},
         {TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
     };
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
 
     // Generate random inputs.
     const uint32_t words_a = num_entries_a * entry_size_a / sizeof(uint32_t);
@@ -479,7 +479,7 @@ TEST_F(UnitMeshFixture, AliasDFBAddressEquality1Sx1S) {
     [[maybe_unused]] auto [spec, in_a, in_b, out_a, out_b] =
         make_alias_dfb_program_spec(this->device(), node, 512, 8, 256, 16, 1, 1);
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
@@ -605,7 +605,7 @@ TEST_F(UnitMeshFixture, AliasDFBDisjointHalvesDataFlow) {
     left.spec.work_units.push_back(right.spec.work_units[0]);
 
     // Point tensor_parameters specs at the right-half MeshTensors' layouts (already set from right).
-    Program program = experimental::MakeProgramFromSpec(this->device(), left.spec);
+    Program program(this->device(), left.spec);
 
     const bool is_quasar = this->device().arch() == ARCH::QUASAR;
     // Each half has two aliased DFBs that conflict with each other → slots 0 and 1, reused across halves.
@@ -642,7 +642,7 @@ TEST_F(UnitMeshFixture, AliasDFBDisjointHalvesDataFlow) {
         {TensorParamName{"out_tensor_c"}, TensorArgument{right.out_a}},
         {TensorParamName{"out_tensor_d"}, TensorArgument{right.out_b}},
     };
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
 
     const uint32_t words_a = kEntriesA * kEntryA / sizeof(uint32_t);
     const uint32_t words_b = kEntriesB * kEntryB / sizeof(uint32_t);
@@ -818,7 +818,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
     auto [spec, in_a, in_b, out_a, out_b, ring] =
         make_alias_borrowed_dfb_program_spec(this->device(), node, kEntrySize, kNumEntries);
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
@@ -853,7 +853,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
         {TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
         {TensorParamName{"ring_tensor"}, TensorArgument{ring}},
     };
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
 
     const uint32_t id_borrowed = program.impl().get_dfb_handle("dfb_borrowed");
     const uint32_t id_alias    = program.impl().get_dfb_handle("dfb_alias");
@@ -881,7 +881,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     auto [spec, in_a, in_b, out_a, out_b, ring] =
         make_alias_borrowed_dfb_program_spec(this->device(), node, kEntrySize, kNumEntries);
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     auto rtas = [&]() {
         return MakeRuntimeArgsForSingleNode(
@@ -911,7 +911,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         {TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
         {TensorParamName{"ring_tensor"}, TensorArgument{ring}},
     };
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
 
     const uint32_t words = kNumEntries * kEntrySize / sizeof(uint32_t);
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words);
@@ -947,7 +947,7 @@ TEST_F(UnitMeshFixture, BorrowedMemoryDFBBufRw) {
 
     auto [spec, in_a, in_b, out_a, out_b, ring] =
         make_alias_borrowed_dfb_program_spec(this->device(), node, kEntrySize, kNumEntries);
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     auto rtas = [&]() {
         return MakeRuntimeArgsForSingleNode(
             node,
@@ -970,7 +970,7 @@ TEST_F(UnitMeshFixture, BorrowedMemoryDFBBufRw) {
         {TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
         {TensorParamName{"ring_tensor"}, TensorArgument{ring}},
     };
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
     if (this->device().arch() == ARCH::QUASAR) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -1055,10 +1055,10 @@ TEST_F(UnitMeshFixture, BorrowedMemorySelfLoopDFBBufRw) {
         .tensor_parameters = {{.unique_id = TensorParamName{"ring_tensor"}, .spec = ring.tensor_spec()}},
         .work_units = {WorkUnitSpec{.name = "wu", .kernels = {KernelSpecName{"loop"}}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     ProgramRunArgs run_params;
     run_params.tensor_args = {{TensorParamName{"ring_tensor"}, TensorArgument{ring}}};
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
     distributed::MeshWorkload wl = LaunchProgram(this->device(), std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(this->device().shape())].impl();

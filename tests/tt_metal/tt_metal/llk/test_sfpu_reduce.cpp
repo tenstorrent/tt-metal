@@ -28,7 +28,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-umd/types/arch.hpp>
@@ -431,7 +432,7 @@ void run_single_core_sfpu_reduce(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     const auto seed = static_cast<std::uint32_t>(std::chrono::system_clock::now().time_since_epoch().count());
     const std::vector<double> input = generate_stimulus(config, rows, cols, seed);
@@ -469,7 +470,7 @@ void run_single_core_sfpu_reduce(
                  {"num_tiles", num_tiles},
                  {"dram_page_stride", dst_page_stride}})},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     LaunchProgram(*mesh_device, std::move(program));
 

@@ -15,7 +15,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "debug_tools_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -173,7 +174,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .kernels = {dm_spec, compute_spec},
             .work_units = {wu},
         };
-        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        Program program(*mesh_device, spec);
 
         distributed::MeshWorkload workload;
         workload.add_program(device_range, std::move(program));
@@ -196,7 +197,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
     }
 
     // Part B: Accessing unset RTAs on a subset of cores should trigger assert.
-    // Uses the legacy host API because Metal 2.0's SetProgramRunArgs validates that every
+    // Uses the legacy host API because Metal 2.0's Program::set_run_args validates that every
     // targeted node has its varargs bound and rejects partial bindings up front — i.e. it
     // structurally prevents the bug class this sub-test exercises. The legacy dispatcher instead
     // writes a 0xBEEF#### sentinel on unbound cores, which the device interprets as
@@ -304,7 +305,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         .kernels = {dm_spec},
         .work_units = {wu},
     };
-    program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    program = Program(*mesh_device, spec);
 
     // Note: Quasar uses only core_range1; gen1 also covers core_range2 with a different RTA payload.
     auto set_metal2_runtime_args = [&](Program& prog) {
@@ -325,7 +326,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         }
         krp.kernel = DM_KERNEL_NAME;
         params.kernel_run_args = {krp};
-        experimental::SetProgramRunArgs(prog, params);
+        prog.set_run_args(params);
     };
 
     set_metal2_runtime_args(program);
@@ -445,7 +446,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         .kernels = {kspec},
         .work_units = {wu},
     };
-    program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    program = Program(*mesh_device, spec);
 
     ProgramRunArgs params_m2;
     ProgramRunArgs::KernelRunArgs krp{};
@@ -458,7 +459,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     }
     krp.kernel = OOB_KERNEL_NAME;
     params_m2.kernel_run_args = {krp};
-    experimental::SetProgramRunArgs(program, params_m2);
+    program.set_run_args(params_m2);
 
     workload.add_program(device_range, std::move(program));
     RunProgramExpectingWatcherError(mesh_device, workload);
@@ -504,7 +505,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         .kernels = {dm_spec},
         .work_units = {wu},
     };
-    program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    program = Program(*mesh_device, spec);
 
     ProgramRunArgs params;
     ProgramRunArgs::KernelRunArgs krp{};
@@ -513,7 +514,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     }
     krp.kernel = MULTI_DM_KERNEL_NAME;
     params.kernel_run_args = {krp};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
 
