@@ -63,6 +63,7 @@ inline void _llk_sync_wait_(Idx... sem_index)
 {
     static_assert(sizeof...(Idx) > 0, "at least one semaphore index required");
     static_assert((std::is_integral_v<Idx> && ...), "semaphore indices must be integral");
+    static_assert(Condition == p_stall::STALL_ON_ZERO || Condition == p_stall::STALL_ON_MAX, "SEMWAIT condition must be STALL_ON_ZERO or STALL_ON_MAX");
     TT_SEMWAIT(StallRes, Condition, 0, (semaphore::t6_sem(sem_index) | ...));
 }
 
