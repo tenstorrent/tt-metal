@@ -145,10 +145,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Match each k-tile's one SrcA+SrcB post and CT_DIM-1 SrcA-only reuses.
             for (std::uint32_t k = 0; k < LOOP_FACTOR * num_calls * kt_per_call; ++k)
             {
-                _perf_unpack_loop_set_valid<true /* set_a */, true /* set_b */>(1 /* iterations */);
+                _perf_unpack_stream_set_valid<true /* set_a */, true /* set_b */, PERF_RUN_TYPE>(1 /* iterations */);
                 if constexpr (CT_DIM > 1)
                 {
-                    _perf_unpack_loop_set_valid<true /* set_a */, false /* set_b */>(CT_DIM - 1 /* iterations */);
+                    _perf_unpack_stream_set_valid<true /* set_a */, false /* set_b */, PERF_RUN_TYPE>(CT_DIM - 1 /* iterations */);
                 }
             }
         }
@@ -213,16 +213,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             // Math clears SrcA on the first CT_DIM-1 tiles and SrcA+SrcB on the last.
             for (std::uint32_t k = 0; k < LOOP_FACTOR * num_calls * kt_per_call; ++k)
             {
                 if constexpr (CT_DIM > 1)
                 {
-                    _perf_math_loop_clear_valid<true /* clear_a */, false /* clear_b */>(CT_DIM - 1 /* iterations */);
+                    _perf_math_stream_clear_valid<true /* clear_a */, false /* clear_b */, PERF_RUN_TYPE>(CT_DIM - 1 /* iterations */);
                 }
-                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(1 /* iterations */);
+                _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(1 /* iterations */);
             }
         }
         else
