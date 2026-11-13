@@ -213,8 +213,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxFp4ToFloat16bFp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);

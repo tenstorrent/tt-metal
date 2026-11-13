@@ -141,7 +141,8 @@ inline auto _typecast_narrow_to_int8_(sfpi::vInt value) {
 // sequence (load to fp32 for floats, to sign-mag int32 for ints; store sfpmem mode sets the output):
 //   float->float : narrow via convert<fp16> (-> fp16), else store the loaded fp32 as-is.
 //   float->int   : convert<vSMag> fp32 -> sign-mag int32, then narrow to 8-bit / 16-bit if needed.
-//   int->float   : convert<vFloat> int32 -> fp32, then narrow via convert<fp16> for an fp16 dst.
+//   int->float   : convert<vFloat> int32 -> fp32, then narrow via convert<fp16> for an fp16 dst (an Int32 source
+//                  keeps fp32 in its 32-bit Dest and the packer narrows).
 //   int->int     : narrow to 8-bit if needed, else the store sfpmem mode widens/narrows.
 template <DataFormat SRC_FMT, DataFormat DST_FMT>
 inline void _calculate_typecast_arith_sfp_rows_() {
@@ -175,10 +176,17 @@ inline void _calculate_typecast_arith_sfp_rows_() {
     } else if constexpr (!src_float && dst_float) {
         sfpi::vSMag int_value = _typecast_load_<sfpi::vSMag, SRC_FMT>();
         sfpi::vFloat float_value = sfpi::convert<sfpi::vFloat>(int_value, sfpi::RoundMode::NearestEven);
-        if constexpr (_typecast_is_fp16_<DST_FMT>()) {
-            float_value = _typecast_narrow_to_fp16_<DST_FMT>(float_value);
+        if constexpr (SRC_FMT == DataFormat::Int32 && _typecast_is_fp16_<DST_FMT>()) {
+            // An Int32 source forces a 32-bit Dest, which the packer reads as Float32 for any float output.
+            // Keep fp32 in Dest and let the packer narrow to fp16, the same handoff as the Float32 -> Float16_b
+            // no-op. Narrowing and storing F16b into a 32-bit Dest does not match the packer's fp32 view.
+            _typecast_store_<DataFormat::Float32>(float_value);
+        } else {
+            if constexpr (_typecast_is_fp16_<DST_FMT>()) {
+                float_value = _typecast_narrow_to_fp16_<DST_FMT>(float_value);
+            }
+            _typecast_store_<DST_FMT>(float_value);
         }
-        _typecast_store_<DST_FMT>(float_value);
     } else {
         // 8-bit dst rounds-and-narrows; a 16-bit dst is narrowed by the store sfpmem mode.
         sfpi::vInt value = _typecast_load_<sfpi::vInt, SRC_FMT>();
