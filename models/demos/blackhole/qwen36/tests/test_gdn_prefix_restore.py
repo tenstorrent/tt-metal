@@ -373,3 +373,69 @@ def test_checkpoint_inside_the_last_chunk_compiles_nothing_after_warmup(
         mesh_device.set_program_cache_misses_allowed(True)
     after = mesh_device.num_program_cache_entries()
     assert after == before, f"{after - before} program(s) compiled after warmup"
+
+
+@torch.no_grad()
+@_parametrize
+def test_traced_masked_prefill_matches_the_eager_forward(mesh_device, kv_bf8, monkeypatch, reset_seeds, ensure_gc):
+    """After the vLLM prefill warmup, the partial last chunk of every prefill replays a captured masked-bucket trace
+    (Qwen36Model.record_prefill_traces_masked). Its logits, end state and checkpoint equal those of the eager
+    masked-bucket forward bit for bit: prompts up to one chunk (a whole 1024-token bucket among them), the tail of a
+    longer prompt, a checkpoint inside the last chunk (also a whole last chunk), and a row resumed from a checkpoint.
+    The traced pass compiles no program."""
+    run = Run(mesh_device, monkeypatch, kv_bf8)
+    run.gen.warmup_model_prefill(run.kv, False)
+    run.gen.warmup_model_prefill(run.kv, True)
+    assert run.model._masked_traces_recorded
+    bs = run.bs
+    n_cols = lambda T: -(-T // bs)
+    long_prompt = _prompts(1, 4096, seed=81)
+    resumed = torch.cat([long_prompt[:, : (1999 // bs) * bs], _prompts(1, 700, seed=82)], dim=1)
+
+    def prefills():
+        """[(label, logits, destination blocks, checkpoint blocks or None)] of every case, on the same blocks in each
+        pass. The states are read afterwards: the reads may compile programs of their own."""
+        run.next_block = 1
+        out = []
+        for label, T in (("short", 100), ("one chunk", 1500), ("whole bucket", 1024), ("tail", 2148)):
+            dest = run.blocks(3)
+            out.append((label, run.prefill([_row(long_prompt, 0, T, run.blocks(n_cols(T)), dest)]), dest, None))
+        for label, T in (("checkpoint in the chunk", 2000), ("whole last chunk", 4096)):
+            p = (T - 1) // bs * bs
+            if p % run.model.prefill_chunk_size == 0:
+                continue  # on a chunk boundary: two segments, no checkpoint inside a forward
+            pages, dest, ckpt = run.blocks(n_cols(T)), run.blocks(3), run.blocks(3)
+            out.append((label, run.prefill([_row(long_prompt, 0, T, pages, dest, checkpoint=(p, ckpt))]), dest, ckpt))
+            if T == 2000:
+                end = p + 700
+                hit = run.blocks(3)
+                hit_pages = pages[: p // bs] + run.blocks(n_cols(end) - p // bs)
+                logits = run.prefill([_row(resumed, p, end, hit_pages, hit, start_blocks=ckpt)])
+                out.append(("resumed from the checkpoint", logits, hit, None))
+        return out
+
+    def states(cases):
+        return [
+            (label, logits, run.state(dest), None if ckpt is None else run.state(ckpt))
+            for label, logits, dest, ckpt in cases
+        ]
+
+    ttnn.synchronize_device(mesh_device)
+    before = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        traced = prefills()
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    assert mesh_device.num_program_cache_entries() == before, "the traced prefills compiled a program"
+    traced = states(traced)
+    run.model.release_prefill_traces_masked()
+    eager = states(prefills())
+    assert [c[0] for c in traced] == [c[0] for c in eager]
+    for (label, logits, state, ckpt), (_, logits_e, state_e, ckpt_e) in zip(traced, eager):
+        assert torch.equal(logits, logits_e), f"{label}: traced logits differ from the eager forward's"
+        run.assert_same_state(state, state_e, f"{label}: end state, traced vs eager")
+        if ckpt is not None:
+            run.assert_same_state(ckpt, ckpt_e, f"{label}: checkpoint, traced vs eager")
+        logger.info(f"{label}: traced == eager")
