@@ -516,7 +516,8 @@ void py_module_types(nb::module_& mod) {
                const std::string& fabric_link_group,
                const std::optional<D2DStageGateConfig>& stage_gate,
                const nb::list& extra_tensors,
-               bool relay) {
+               bool relay,
+               bool reserve_links_for_later_service) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -530,6 +531,7 @@ void py_module_types(nb::module_& mod) {
                     stage_gate,
                     make_extra_tensors(*receiver_mesh, extra_tensors),
                     relay);
+                cfg.reserve_links_for_later_service = reserve_links_for_later_service;
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
                     .receiver_rank = Rank{receiver_rank},
@@ -551,6 +553,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("stage_gate") = nb::none(),
             nb::arg("extra_tensors") = nb::list(),
             nb::arg("relay") = false,
+            nb::arg("reserve_links_for_later_service") = true,
             R"doc(
                 Build the RECEIVER endpoint in this (receiver-rank) process. Must be called
                 on the rank equal to `receiver_rank`; the matching `create_sender` runs in
@@ -560,6 +563,11 @@ void py_module_types(nb::module_& mod) {
                 `extra_tensors` is a list of (global_spec, mapper) pairs carried on the same
                 socket after the primary tensor, one DRAM-interleaved backing tensor each, any dtype/layout.
                 Both endpoints must pass the same list.
+
+                `reserve_links_for_later_service` (relay mode): whether this process builds another
+                D2D service on this mesh after the receiver, e.g. a middle pipeline stage's outbound
+                sender. Then the entry relays leave one fabric link per direction free for it. A terminal
+                stage passes False so its entry relays use every link.
 
                 Returns:
                     D2DStreamServiceReceiver
