@@ -11,19 +11,19 @@
 // persistent_moe_request with the hyper-connection post step fused, on one stream-collapse core: this core's
 // part of the row is its columns of the width-sharded streams, and its new streams are
 //     new[h] = post[h] * x + sum_g comb[g, h] * old[g],     x = the sum of the op's chips' partials of the part
-// (compute/moe_partials_hcpost.cpp). This kernel
+// (compute/moe_partials_hcpost.cpp, which views each part as one 32x32 tile through part_bytes pages). This kernel
 //   1. reads post and comb (one 32x32 bf16 tile each; post[h] is element (h, 0), comb[g, h] element (g, h), all
-//      in face 0) and makes a tile of each value, every element that value (comb's bf16, post's fp32): cb_post tile h,
-//      cb_comb tile g * num_streams + h;
+//      in face 0) and stages each value as element 0 of its own scalar page -- the compute broadcasts that
+//      element: cb_post page h, cb_comb page g * num_streams + h;
 //   2. copies this core's shard of the old streams (num_streams rows of part_bytes) into cb_s;
 //   3. once every chip's flag is set, publishes the partials slots (cb_slots, over the partials shard);
 //   4. writes the new streams (cb_out, row h at h * part_bytes) into this core's shard of the output, and clears
 //      the flags: the next request, which is the next time the op sends here, comes after this op has finished.
 //
 // Compile-time args:
-//   0: num_slots (the op's chips)   1: tiles (per row of a part)   2: num_streams   3: part_bytes
+//   0: num_slots (the op's chips)   1: tiles (per row of a part: 1)   2: num_streams   3: part_bytes
 //   4: cb_slots   5: cb_s   6: cb_post   7: cb_comb   8: cb_out   9: cb_tmp (post's and comb's face-0 heads)
-//   10: comb tile bytes (bf16)   11: post tile bytes (fp32)   12+: TensorAccessorArgs(post), then
+//   10: comb scalar page bytes   11: post scalar page bytes   12+: TensorAccessorArgs(post), then
 //   TensorAccessorArgs(comb)
 //
 // Runtime args:
@@ -33,24 +33,8 @@
 namespace {
 constexpr uint32_t kFaceHeadBytes = 128;  // face 0's first 4 rows of 16 bf16: every (r < 4, c < 16) element
 
-// A bf16 tile of `bytes` bytes, every element `value`: the compute's elementwise multiply then needs no broadcast.
-template <uint32_t bytes>
-FORCE_INLINE void fill_tile(uint32_t l1, uint16_t value) {
-    const uint32_t pair = (static_cast<uint32_t>(value) << 16) | value;
-    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
-    for (uint32_t i = 0; i < bytes / 4u; ++i) {
-        words[i] = pair;
-    }
-}
-
-// An fp32 tile of `bytes` bytes, every element the bf16 `value` widened.
-template <uint32_t bytes>
-FORCE_INLINE void fill_tile_fp32(uint32_t l1, uint16_t value) {
-    const uint32_t word = static_cast<uint32_t>(value) << 16;
-    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
-    for (uint32_t i = 0; i < bytes / 4u; ++i) {
-        words[i] = word;
-    }
+FORCE_INLINE void put_scalar(uint32_t l1, uint16_t value) {
+    *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1) = value;
 }
 }  // namespace
 
@@ -96,15 +80,14 @@ void kernel_main() {
     const uint32_t comb_l1 = get_write_ptr(cb_comb);
     for (uint32_t g = 0; g < streams; ++g) {
         for (uint32_t h = 0; h < streams; ++h) {
-            fill_tile<scalar_tile_bytes>(
-                comb_l1 + (g * streams + h) * scalar_tile_bytes, head[kFaceHeadBytes / 2u + g * 16u + h]);
+            put_scalar(comb_l1 + (g * streams + h) * scalar_tile_bytes, head[kFaceHeadBytes / 2u + g * 16u + h]);
         }
     }
     cb_push_back(cb_comb, streams * streams);
     cb_reserve_back(cb_post, streams);
     const uint32_t post_l1 = get_write_ptr(cb_post);
     for (uint32_t h = 0; h < streams; ++h) {
-        fill_tile_fp32<post_tile_bytes>(post_l1 + h * post_tile_bytes, head[h * 16u]);
+        put_scalar(post_l1 + h * post_tile_bytes, head[h * 16u]);
     }
     cb_push_back(cb_post, streams);
 
