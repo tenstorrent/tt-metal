@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""all_gather_minimal_matmul_async on a Blackhole Galaxy (8 x 4) over a 2D fabric (TorusXY).
+"""all_gather_minimal_matmul_async on a Blackhole Galaxy (8 x 4) over a 2D fabric.
 
-The activation's K is gathered along one ring (the TP ring of 4 or the SP ring of 8) and multiplied by that axis'
-weight shard. Each case runs the op back to back on one gathered buffer and one set of semaphores, as a model's layers
+The activation's K is gathered along one axis (the TP axis of 4 or the SP axis of 8) and multiplied by that axis'
+weight shard: as a Ring where the fabric wraps the axis, as a Linear line where it does not. Each case runs the op back to back on one gathered buffer and one set of semaphores, as a model's layers
 do, and checks every call on every device.
 """
 
@@ -25,7 +25,20 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-def _run(mesh_device, *, gather_axis, rows_per_device, K, n_per_device, M_block, K_block, N_block, subblock_h, subblock_w):
+def _run(
+    mesh_device,
+    *,
+    topology=ttnn.Topology.Ring,
+    gather_axis,
+    rows_per_device,
+    K,
+    n_per_device,
+    M_block,
+    K_block,
+    N_block,
+    subblock_h,
+    subblock_w,
+):
     other_axis = 1 - gather_axis
     ring, others = mesh_device.shape[gather_axis], mesh_device.shape[other_axis]
     full_grid = mesh_device.compute_with_storage_grid_size()
@@ -97,7 +110,7 @@ def _run(mesh_device, *, gather_axis, rows_per_device, K, n_per_device, M_block,
             multi_device_global_semaphore=counters,
             barrier_semaphore=barrier,
             persistent_output_buffer=gathered,
-            topology=ttnn.Topology.Ring,
+            topology=topology,
             cluster_axis=gather_axis,
             num_links=NUM_LINKS,
             num_workers_per_link=grid.y // NUM_LINKS,
@@ -155,21 +168,61 @@ _CASES = [
 ]
 
 
+def _galaxy(fabric_config, id):
+    params = {
+        "fabric_config": fabric_config,
+        "fabric_router_config": create_fabric_router_config(7168),
+        "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    }
+    return pytest.param((8, 4), params, id=id)
+
+
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-                "fabric_router_config": create_fabric_router_config(7168),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            id="SP8xTP4-torus-xy",
-        )
-    ],
-    indirect=True,
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "SP8xTP4-torus-xy")], indirect=True
 )
 @pytest.mark.parametrize("case", _CASES)
 def test_all_gather_minimal_matmul_fabric2d(mesh_device, case):
     _run(mesh_device, **case)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "SP8xTP4-torus-xy")], indirect=True
+)
+def test_all_gather_minimal_matmul_fabric2d_linear_on_a_wrapped_axis(mesh_device, expect_error):
+    # Torus XY wraps the TP axis: its line's far end is one hop the other way round, so Linear is refused there.
+    with expect_error(RuntimeError, "this axis wraps, so use Ring"):
+        _run(mesh_device, **dict(_KDA, topology=ttnn.Topology.Linear, K=1024))
+
+
+_LINEAR = dict(_KDA, topology=ttnn.Topology.Linear)
+
+# A Linear line: each device sends its blocks to the previous one and the first device to the last, along the line.
+_LINEAR_TP_CASES = [
+    pytest.param(_LINEAR, id="kda_input_projection"),
+    pytest.param(dict(_LINEAR, rows_per_device=1280), id="two_m_blocks"),
+    pytest.param(dict(_LINEAR, K=1024), id="one_k_block_per_device"),
+    # 36 K tiles per device in 8-tile blocks: a 4-tile tail block per device (Linear only).
+    pytest.param(dict(_LINEAR, K=4 * 36 * 32), id="k_tail_block"),
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        # The TP axis (1) is not wrapped on Torus Y, nor on a plain 2D mesh.
+        _galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_Y, "SP8xTP4-torus-y"),
+        _galaxy(ttnn.FabricConfig.FABRIC_2D, "SP8xTP4-mesh"),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("case", _LINEAR_TP_CASES)
+def test_all_gather_minimal_matmul_fabric2d_linear_tp(mesh_device, case):
+    _run(mesh_device, **case)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_X, "SP8xTP4-torus-x")], indirect=True
+)
+def test_all_gather_minimal_matmul_fabric2d_linear_sp(mesh_device):
+    # The SP axis (0) of 8 as a line: Torus X does not wrap it.
+    _run(mesh_device, **dict(_LINEAR, gather_axis=0, rows_per_device=320, n_per_device=11 * 20 * 32, N_block=20))
