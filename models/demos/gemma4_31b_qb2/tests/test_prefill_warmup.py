@@ -79,6 +79,6 @@ def test_warmup_prefills_every_32_token_length_once_and_retires_the_traces():
     generator.prefill_forward = lambda tokens, **kw: events.append(
         (int(tokens.shape[1]), kw["prompt_lens"], kw["slots"])
     )
-    generator._retire_traces = lambda: events.append("retire")
+    generator._retire_traces = lambda **kwargs: events.append("retire")
     generator.warm_prefill_shapes(None, None, 128)
     assert events == [(n, [n], [0]) for n in (32, 64, 96, 128)] + ["retire"]

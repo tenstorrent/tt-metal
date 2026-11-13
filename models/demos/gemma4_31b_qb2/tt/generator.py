@@ -49,6 +49,9 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
+        # Persistent inputs of each decode entry, kept when the traces are retired: only the traces are recaptured, one at a
+        # time, and capturing one trace allocates no persistent tensor that could land on another trace's memory.
+        self.entries = {}
         # Draft columns of a speculative decode, each with its own cache update (see Decoder.decode_forward).
         self.update_columns = 1
         self.counters = {
@@ -476,7 +479,7 @@ class Gemma4Generator:
             # that a captured decode trace may overlap, so the traces are rebuilt. A signature the program cache
             # already holds creates none: warm_prefill_shapes compiles every length class before serving, and
             # the decode trace then survives the prefills of an agent loop.
-            self._retire_traces()
+            self._retire_traces(keep_entries=True)
         if return_device:
             return outputs
         width = max(prompt_lens) if return_all_logits else 1
@@ -535,7 +538,7 @@ class Gemma4Generator:
         for length in range(32, max_tokens + 1, 32):
             tokens = torch.ones(1, length, dtype=torch.int32)
             self.prefill_forward(tokens, page_table=page_table, kv_cache=state, prompt_lens=[length], slots=[0])
-        self._retire_traces()
+        self._retire_traces(keep_entries=True)
         logger.info("Warmed {} prefill lengths up to {} tokens", pages, max_tokens)
 
     def _entry(self, state):
@@ -549,8 +552,11 @@ class Gemma4Generator:
                     "Captured cache/table tensors were replaced; retire traces before replacing backing storage"
                 )
             return self.traces[key]
-        self._retire_traces()
-        entry = self._new_entry(state)
+        entry = self.entries.get(key)
+        if entry is None:
+            # Persistent tensors must not be allocated while a trace is captured: they could land on its intermediates.
+            self._retire_traces(keep_entries=True)
+            entry = self.entries[key] = self._new_entry(state)
         self._warm_entry(entry, state)
         self._capture_entry(entry, state)
         self.traces[key] = entry
@@ -562,8 +568,9 @@ class Gemma4Generator:
         Every entry's persistent inputs are allocated before any trace is captured, so no persistent tensor can land
         on memory that a captured trace reuses for intermediates.
         """
-        self._retire_traces()
-        entries = [self._new_entry(state) for state in states]
+        self._retire_traces(keep_entries=True)
+        entries = [self.entries.get(id(state)) or self._new_entry(state) for state in states]
+        self.entries.update({id(state): entry for state, entry in zip(states, entries)})
         for entry, state in zip(entries, states):
             self._warm_entry(entry, state)
         for entry, state in zip(entries, states):
@@ -830,7 +837,7 @@ class Gemma4Generator:
             )
         self.configure_sampling()
 
-    def _retire_traces(self):
+    def _retire_traces(self, *, keep_entries=False):
         if self.traces:
             ttnn.synchronize_device(self.mesh)
             self.counters["synchronizations"] += 1
@@ -838,6 +845,8 @@ class Gemma4Generator:
             for name in ("model_trace", "sampling_trace"):
                 ttnn.release_trace(self.mesh, entry[name])
         self.traces.clear()
+        if not keep_entries:
+            self.entries.clear()
 
     def close(self):
         self._retire_traces()
