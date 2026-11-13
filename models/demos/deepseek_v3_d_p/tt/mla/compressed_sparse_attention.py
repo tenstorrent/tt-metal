@@ -41,15 +41,21 @@ sparsity, which is what the mask route never was."""
 
 from __future__ import annotations
 
+import functools
+
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, csa_slab_align, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtCsaIndexer
 from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import (
     TtV4AttentionBase,
     alloc_compressed_cache,
+    attention_cache_complete,
+    build_attention_weights_cache,
     check_shared_cache,
+    compressor_kwargs,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
@@ -340,8 +346,13 @@ class TtCSA(TtV4AttentionBase):
         # Entries per chip, since the cache is SP-sharded over the block-cyclic sequence blocks.
         index_entries_local = index_seq_len // rate // self.sp_factor
 
-        self._indexer = TtCsaIndexer.from_reference(
-            self._indexer_reference,
+        # No reference indexer means the layer was built from the weight cache, which the indexer reads too.
+        make_indexer = (
+            TtCsaIndexer.from_cache
+            if self._indexer_reference is None
+            else functools.partial(TtCsaIndexer.from_reference, self._indexer_reference)
+        )
+        self._indexer = make_indexer(
             config=settings["config"],
             mesh_device=self.device,
             sp_axis=self.sp_axis,
@@ -415,6 +426,105 @@ class TtCSA(TtV4AttentionBase):
         self._index_source = upload(source)
         self._index_perm = (upload(compacted), upload(later))
 
+    @staticmethod
+    def _indexer_settings_for(
+        device,
+        config,
+        layer_idx,
+        weight_cache_path,
+        default_compute_kernel_config,
+        hifi4_fp32_compute_kernel_config,
+        slot_num,
+        layer_num,
+        cache_layer_idx,
+    ) -> dict:
+        return {
+            "config": config,
+            "layer_idx": layer_idx,
+            "slot_num": slot_num,
+            "layer_num": layer_num,
+            **({} if cache_layer_idx is None else {"cache_layer_idx": cache_layer_idx}),
+            "weight_cache_path": weight_cache_path,
+            "default_compute_kernel_config": default_compute_kernel_config
+            or _compute_kernel_config(device, fp32=False),
+            "hifi4_fp32_compute_kernel_config": hifi4_fp32_compute_kernel_config
+            or _compute_kernel_config(device, fp32=True),
+        }
+
+    @classmethod
+    def from_cache(
+        cls,
+        device,
+        config,
+        *,
+        layer_idx: int,
+        weight_cache_path,
+        cache_name_prefix: str,
+        default_compute_kernel_config=None,
+        hifi4_fp32_compute_kernel_config=None,
+        slot_num: int = 1,
+        layer_num: int = 1,
+        cache_layer_idx: int | None = None,
+        **kwargs,
+    ) -> "TtCSA":
+        """Build from the weight cache alone: no torch module, so nothing of this layer's weights is read from the
+        checkpoint. ``layer_idx`` is the GLOBAL layer, which names the indexer's files. A missing file raises."""
+        kwargs = {**kwargs, "weight_cache_path": weight_cache_path, "cache_name_prefix": cache_name_prefix}
+        compressor = TtCSACompressor.from_cache(device, config, **compressor_kwargs(kwargs))
+        return cls(
+            device,
+            compressor=compressor,
+            indexer_reference=None,
+            indexer_settings=cls._indexer_settings_for(
+                device,
+                config,
+                layer_idx,
+                weight_cache_path,
+                default_compute_kernel_config,
+                hifi4_fp32_compute_kernel_config,
+                slot_num,
+                layer_num,
+                cache_layer_idx,
+            ),
+            rotary_emb=DeepseekV4RotaryEmbedding(config),
+            num_heads=config.num_attention_heads,
+            head_dim=config.head_dim,
+            rope_head_dim=config.qk_rope_head_dim,
+            sliding_window=config.sliding_window,
+            o_groups=config.o_groups,
+            rms_norm_eps=config.rms_norm_eps,
+            **kwargs,
+        )
+
+    @staticmethod
+    def build_ttnn_cache(
+        reference, config, mesh_device, cache_path, cache_name_prefix: str, *, layer_idx: int, **kwargs
+    ) -> None:
+        """Write this layer's attention, compressor and indexer weights to the cache without putting any of them on
+        the device (``kwargs``: sp_axis, tp_axis, dtype, weights_dtype, memory_config, which must match the layer's)."""
+        build_attention_weights_cache(reference, config, mesh_device, cache_path, cache_name_prefix, **kwargs)
+        TtCSACompressor.build_ttnn_cache(
+            reference.compressor, config, mesh_device, cache_path, f"{cache_name_prefix}.compressor", **kwargs
+        )
+        TtCsaIndexer.build_ttnn_cache(
+            TtCsaIndexer.host_weights(reference.compressor.indexer),
+            cache_path,
+            mesh_device,
+            config,
+            layer_idx,
+            sp_axis=kwargs.get("sp_axis", 0),
+            tp_axis=kwargs.get("tp_axis", 1),
+        )
+
+    @staticmethod
+    def check_cache_complete(cache_path, cache_name_prefix: str, layer_idx: int) -> bool:
+        """True iff the attention, compressor and indexer weights are all cached. Needs ``init_checker`` first."""
+        return (
+            attention_cache_complete(cache_path, cache_name_prefix)
+            and TtCSACompressor.check_cache_complete(cache_path, f"{cache_name_prefix}.compressor")
+            and TtCsaIndexer.check_cache_complete(cache_path, f"layer_{layer_idx}.mla")
+        )
+
     @classmethod
     def from_reference(
         cls,
@@ -429,34 +539,37 @@ class TtCSA(TtV4AttentionBase):
         slot_num: int = 1,
         layer_num: int = 1,
         cache_layer_idx: int | None = None,
+        cache_name_prefix: str | None = None,
         **kwargs,
     ) -> "TtCSA":
         """``slot_num`` / ``layer_num`` / ``cache_layer_idx`` describe this layer's place in the index key
-        cache; see ``_resolve_indexer_settings``. The 1x1 default is a private per-layer cache."""
+        cache; see ``_resolve_indexer_settings``. The 1x1 default is a private per-layer cache.
+
+        ``weight_cache_path`` always caches the indexer's weights (under ``layer_{layer_idx}.mla``); with a
+        ``cache_name_prefix`` as well, the attention's and the compressor's go under it."""
+        if weight_cache_path is not None and cache_name_prefix is not None:
+            kwargs = {**kwargs, "weight_cache_path": weight_cache_path, "cache_name_prefix": cache_name_prefix}
         assert reference.compressor is not None and hasattr(
             reference.compressor, "indexer"
         ), "TtCSA needs a compressed_sparse_attention layer, whose compressor owns the indexer"
-        # Forward the mesh/CCL config so the compressor rides the same SP/TP axes as the block.
-        compressor_keys = ("sp_axis", "tp_axis", "topology", "dtype", "weights_dtype", "memory_config")
-        compressor = TtCSACompressor.from_reference(
-            device, reference.compressor, config, **{k: kwargs[k] for k in compressor_keys if k in kwargs}
-        )
+        # Forward the mesh/CCL config (and the weight cache, under <prefix>.compressor) so the compressor rides
+        # the same SP/TP axes as the block.
+        compressor = TtCSACompressor.from_reference(device, reference.compressor, config, **compressor_kwargs(kwargs))
         return cls(
             device,
             compressor=compressor,
             indexer_reference=reference.compressor.indexer,
-            indexer_settings={
-                "config": config,
-                "layer_idx": layer_idx,
-                "slot_num": slot_num,
-                "layer_num": layer_num,
-                **({} if cache_layer_idx is None else {"cache_layer_idx": cache_layer_idx}),
-                "weight_cache_path": weight_cache_path,
-                "default_compute_kernel_config": default_compute_kernel_config
-                or _compute_kernel_config(device, fp32=False),
-                "hifi4_fp32_compute_kernel_config": hifi4_fp32_compute_kernel_config
-                or _compute_kernel_config(device, fp32=True),
-            },
+            indexer_settings=cls._indexer_settings_for(
+                device,
+                config,
+                layer_idx,
+                weight_cache_path,
+                default_compute_kernel_config,
+                hifi4_fp32_compute_kernel_config,
+                slot_num,
+                layer_num,
+                cache_layer_idx,
+            ),
             q_a_proj_weight=reference.q_a_proj.weight,
             q_a_norm_weight=reference.q_a_norm.weight,
             q_b_proj_weight=reference.q_b_proj.weight,

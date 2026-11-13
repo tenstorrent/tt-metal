@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 
 import ttnn
@@ -12,6 +14,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.weight_cache import from_torch_cached
 
 
 def rope_table_tokens(max_seq_len: int, chunk_tokens: int) -> int:
@@ -104,35 +107,87 @@ class TtCompressorUtils:
         dtype,
         weights_dtype,
         memory_config,
+        weight_cache_path: Path | None = None,
+        cache_name_prefix: str | None = None,
     ):
         self.device = device
         self.rotary_emb = rotary_emb
         self.dtype = dtype
         self.weights_dtype = weights_dtype
         self.memory_config = memory_config
+        # Where this module's weights are cached, as ``<weight_cache_path>/<cache_name_prefix>.<name>``. Only
+        # uploads that name themselves (``cache_name=``) touch it; constants and state never do.
+        self.weight_cache_path = Path(weight_cache_path) if weight_cache_path is not None else None
+        self.cache_name_prefix = cache_name_prefix
         self.is_mesh = hasattr(device, "shape")
         self.sp_axis, self.tp_axis = sp_axis, tp_axis
         self.sp_factor = device.shape[sp_axis] if self.is_mesh else 1
         self.tp_factor = device.shape[tp_axis] if self.is_mesh else 1
 
-    def to_tt_linear_weight(self, weight: torch.Tensor, tp_shard_dim: int | None = None):
-        torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
+    def cache_file(self, cache_name: str | None) -> str | None:
+        """The cache file stem for a weight, or None when this module caches nothing (as_tensor appends the
+        dtype and layout)."""
+        if cache_name is None or self.weight_cache_path is None:
+            return None
+        return str(self.weight_cache_path / f"{self.cache_prefix_dot}{cache_name}")
+
+    @property
+    def cache_prefix_dot(self) -> str:
+        return f"{self.cache_name_prefix}." if self.cache_name_prefix else ""
+
+    def to_tt_linear_weight(
+        self, weight: torch.Tensor | None, tp_shard_dim: int | None = None, cache_name=None, on_device=True
+    ):
+        """A linear weight in the device's [in, out] layout. ``weight=None`` reads the cache instead."""
+        torch_weight = None
+        if weight is not None:
+            torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
         return self.from_torch(
-            torch_weight, mesh_mapper=self.mesh_mapper(tp_dim=tp_shard_dim), dtype=self.weights_dtype
+            torch_weight,
+            mesh_mapper=self.mesh_mapper(tp_dim=tp_shard_dim),
+            dtype=self.weights_dtype,
+            cache_name=cache_name,
+            on_device=on_device,
         )
 
-    def from_torch(self, x: torch.Tensor, mesh_mapper=None, dtype=None, layout=ttnn.TILE_LAYOUT, on_device=True):
-        """Convert a host tensor, replicating it across a mesh by default."""
+    def from_torch(
+        self,
+        x: torch.Tensor | None,
+        mesh_mapper=None,
+        dtype=None,
+        layout=ttnn.TILE_LAYOUT,
+        on_device=True,
+        cache_name: str | None = None,
+    ):
+        """Convert a host tensor, replicating it across a mesh by default.
+
+        With ``cache_name`` and a configured cache the tensor goes through ``ttnn.as_tensor``: a miss converts
+        ``x`` and writes the file, a hit loads it. ``x=None`` is the cache-only form (no torch weight at all):
+        it loads the file and RAISES if there is none, so it can never convert, or write out, a placeholder."""
         if self.is_mesh and mesh_mapper is None:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
-        tiled = on_device and layout == ttnn.TILE_LAYOUT
-        return ttnn.from_torch(
+        dtype = dtype or self.dtype
+        cache_file = self.cache_file(cache_name)
+        if cache_file is None:
+            if x is None:
+                raise ValueError("no torch weight and no weight cache to read it from")
+            tiled = on_device and layout == ttnn.TILE_LAYOUT
+            return ttnn.from_torch(
+                x,
+                device=self.device if on_device else None,
+                dtype=dtype,
+                layout=layout,
+                memory_config=self.memory_config if tiled else None,
+                mesh_mapper=mesh_mapper,
+            )
+        return from_torch_cached(
             x,
-            device=self.device if on_device else None,
-            dtype=dtype or self.dtype,
+            dtype=dtype,
             layout=layout,
-            memory_config=self.memory_config if tiled else None,
+            device=self.device if on_device else None,
+            memory_config=self.memory_config,
             mesh_mapper=mesh_mapper,
+            cache_file=cache_file,
         )
 
     def mesh_mapper(self, sp_dim: int | None = None, tp_dim: int | None = None):
@@ -198,6 +253,52 @@ class TtCompressorUtils:
         return tuple(out)
 
 
+#: Cache names of a compressor's weights (``<prefix>.<name>``): one list for the upload, the build and the check.
+COMPRESSOR_WEIGHT_CACHE_NAMES = ("wkv", "wgate", "position_bias", "kv_norm")
+
+
+def compressor_cache_complete(cache_path, cache_name_prefix: str) -> bool:
+    """True iff every compressor weight's tensorbin exists. Needs ``init_checker(cache_path)`` first."""
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
+    return all(
+        pattern_exists(f"{cache_name_prefix}.{name}_dtype*.tensorbin", "V4Compressor")
+        for name in COMPRESSOR_WEIGHT_CACHE_NAMES
+    )
+
+
+def upload_compression_weights(
+    ops,
+    *,
+    compress_rate: int,
+    head_dim: int,
+    projection_dim: int,
+    kv_proj_weight,
+    gate_proj_weight,
+    position_bias,
+    kv_norm_weight,
+    on_device: bool = True,
+) -> dict:
+    """A compressor's weights on device (host-only with ``on_device=False``), from the reference module's tensors
+    or ALL None to read them from ``ops``' weight cache."""
+
+    def host(weight, fn):
+        return None if weight is None else fn(weight.detach())
+
+    return {
+        "wkv": ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2, cache_name="wkv", on_device=on_device),
+        "wgate": ops.to_tt_linear_weight(gate_proj_weight, tp_shard_dim=2, cache_name="wgate", on_device=on_device),
+        "position_bias": ops.from_torch(
+            host(position_bias, lambda w: w.reshape(1, 1, compress_rate, projection_dim)),
+            cache_name="position_bias",
+            on_device=on_device,
+        ),
+        "kv_norm_weight": ops.from_torch(
+            host(kv_norm_weight, lambda w: w.reshape(1, 1, 1, head_dim)), cache_name="kv_norm", on_device=on_device
+        ),
+    }
+
+
 class TtCompressorBase(LightweightModule):
     """Common device, mesh, and input setup for TT compressor implementations."""
 
@@ -212,6 +313,8 @@ class TtCompressorBase(LightweightModule):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        weight_cache_path=None,
+        cache_name_prefix: str | None = None,
     ):
         self.device = device
         self.dtype = dtype
@@ -236,6 +339,8 @@ class TtCompressorBase(LightweightModule):
             dtype=dtype,
             weights_dtype=weights_dtype,
             memory_config=memory_config,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=cache_name_prefix,
         )
         self._mask_consts = None  # built by alloc_tables, and only when the caller wants a mask block
 
@@ -252,18 +357,26 @@ class TtCompressorBase(LightweightModule):
     def _init_compression_weights(
         self,
         *,
-        kv_proj_weight: torch.Tensor,
-        gate_proj_weight: torch.Tensor,
-        position_bias: torch.Tensor,
-        kv_norm_weight: torch.Tensor,
+        kv_proj_weight: torch.Tensor | None,
+        gate_proj_weight: torch.Tensor | None,
+        position_bias: torch.Tensor | None,
+        kv_norm_weight: torch.Tensor | None,
         projection_dim: int,
     ):
-        self.wkv = self.ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
-        self.wgate = self.ops.to_tt_linear_weight(gate_proj_weight, tp_shard_dim=2)
-        self.position_bias = self.ops.from_torch(
-            position_bias.detach().reshape(1, 1, self.compress_rate, projection_dim)
+        weights = upload_compression_weights(
+            self.ops,
+            compress_rate=self.compress_rate,
+            head_dim=self.head_dim,
+            projection_dim=projection_dim,
+            kv_proj_weight=kv_proj_weight,
+            gate_proj_weight=gate_proj_weight,
+            position_bias=position_bias,
+            kv_norm_weight=kv_norm_weight,
         )
-        self.kv_norm_weight = self.ops.from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
+        self.wkv = weights["wkv"]
+        self.wgate = weights["wgate"]
+        self.position_bias = weights["position_bias"]
+        self.kv_norm_weight = weights["kv_norm_weight"]
         self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
         self._entry_rope = None
         self._entry_index = None
@@ -383,10 +496,10 @@ class TtHCACompressor(TtCompressorBase):
         self,
         device,
         *,
-        kv_proj_weight: torch.Tensor,
-        gate_proj_weight: torch.Tensor,
-        position_bias: torch.Tensor,
-        kv_norm_weight: torch.Tensor,
+        kv_proj_weight: torch.Tensor | None = None,
+        gate_proj_weight: torch.Tensor | None = None,
+        position_bias: torch.Tensor | None = None,
+        kv_norm_weight: torch.Tensor | None = None,
         head_dim: int,
         compress_rate: int,
         rope_head_dim: int,
@@ -398,6 +511,8 @@ class TtHCACompressor(TtCompressorBase):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        weight_cache_path=None,
+        cache_name_prefix: str | None = None,
     ):
         super().__init__(
             device,
@@ -408,6 +523,8 @@ class TtHCACompressor(TtCompressorBase):
             dtype=dtype,
             weights_dtype=weights_dtype,
             memory_config=memory_config,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=cache_name_prefix,
         )
         self.head_dim = int(head_dim)
         self.compress_rate = int(compress_rate)
@@ -451,6 +568,66 @@ class TtHCACompressor(TtCompressorBase):
             rms_norm_eps=config.rms_norm_eps,
             **kwargs,
         )
+
+    @classmethod
+    def from_cache(cls, device, config, **kwargs) -> "TtHCACompressor":
+        """Build from the weight cache alone (``weight_cache_path`` and ``cache_name_prefix`` in ``kwargs``): no
+        torch module, and a missing file raises."""
+        from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
+
+        return cls(
+            device,
+            head_dim=config.head_dim,
+            compress_rate=config.compress_rates["heavily_compressed_attention"],
+            rope_head_dim=config.qk_rope_head_dim,
+            rotary_emb=DeepseekV4RotaryEmbedding(config),
+            rms_norm_eps=config.rms_norm_eps,
+            **kwargs,
+        )
+
+    @staticmethod
+    def build_ttnn_cache(
+        reference,
+        config,
+        mesh_device,
+        cache_path,
+        cache_name_prefix: str,
+        *,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> None:
+        """Write this compressor's weights to the cache without putting any of them on the device. The dtypes must
+        be the ones it will be built with: they are part of the file name."""
+        ops = TtCompressorUtils(
+            mesh_device,
+            rotary_emb=None,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            dtype=dtype,
+            weights_dtype=weights_dtype,
+            memory_config=memory_config,
+            weight_cache_path=cache_path,
+            cache_name_prefix=cache_name_prefix,
+        )
+        upload_compression_weights(
+            ops,
+            compress_rate=config.compress_rates["heavily_compressed_attention"],
+            head_dim=config.head_dim,
+            projection_dim=config.head_dim,
+            kv_proj_weight=reference.kv_proj.weight,
+            gate_proj_weight=reference.gate_proj.weight,
+            position_bias=reference.position_bias,
+            kv_norm_weight=reference.kv_norm.weight,
+            on_device=False,
+        )
+
+    @staticmethod
+    def check_cache_complete(cache_path, cache_name_prefix: str) -> bool:
+        """True iff every compressor weight is cached. Needs ``init_checker(cache_path)`` first."""
+        return compressor_cache_complete(cache_path, cache_name_prefix)
 
     def forward(
         self,
@@ -508,10 +685,10 @@ class TtCSACompressor(TtCompressorBase):
         self,
         device,
         *,
-        kv_proj_weight: torch.Tensor,
-        gate_proj_weight: torch.Tensor,
-        position_bias: torch.Tensor,
-        kv_norm_weight: torch.Tensor,
+        kv_proj_weight: torch.Tensor | None = None,
+        gate_proj_weight: torch.Tensor | None = None,
+        position_bias: torch.Tensor | None = None,
+        kv_norm_weight: torch.Tensor | None = None,
         head_dim: int,
         compress_rate: int,
         rope_head_dim: int,
@@ -524,6 +701,8 @@ class TtCSACompressor(TtCompressorBase):
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         preloaded_weights: dict[str, ttnn.Tensor] | None = None,
+        weight_cache_path=None,
+        cache_name_prefix: str | None = None,
     ):
         super().__init__(
             device,
@@ -534,6 +713,8 @@ class TtCSACompressor(TtCompressorBase):
             dtype=dtype,
             weights_dtype=weights_dtype,
             memory_config=memory_config,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=cache_name_prefix,
         )
         self.head_dim = int(head_dim)
         self.compress_rate = int(compress_rate)
@@ -618,6 +799,66 @@ class TtCSACompressor(TtCompressorBase):
             rms_norm_eps=config.rms_norm_eps,
             **kwargs,
         )
+
+    @classmethod
+    def from_cache(cls, device, config, **kwargs) -> "TtCSACompressor":
+        """Build from the weight cache alone (``weight_cache_path`` and ``cache_name_prefix`` in ``kwargs``): no
+        torch module, and a missing file raises."""
+        from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
+
+        return cls(
+            device,
+            head_dim=config.head_dim,
+            compress_rate=config.compress_rates["compressed_sparse_attention"],
+            rope_head_dim=config.qk_rope_head_dim,
+            rotary_emb=DeepseekV4RotaryEmbedding(config),
+            rms_norm_eps=config.rms_norm_eps,
+            **kwargs,
+        )
+
+    @staticmethod
+    def build_ttnn_cache(
+        reference,
+        config,
+        mesh_device,
+        cache_path,
+        cache_name_prefix: str,
+        *,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> None:
+        """Write this compressor's weights to the cache without putting any of them on the device. The dtypes must
+        be the ones it will be built with: they are part of the file name."""
+        ops = TtCompressorUtils(
+            mesh_device,
+            rotary_emb=None,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            dtype=dtype,
+            weights_dtype=weights_dtype,
+            memory_config=memory_config,
+            weight_cache_path=cache_path,
+            cache_name_prefix=cache_name_prefix,
+        )
+        upload_compression_weights(
+            ops,
+            compress_rate=config.compress_rates["compressed_sparse_attention"],
+            head_dim=config.head_dim,
+            projection_dim=2 * config.head_dim,
+            kv_proj_weight=reference.kv_proj.weight,
+            gate_proj_weight=reference.gate_proj.weight,
+            position_bias=reference.position_bias,
+            kv_norm_weight=reference.kv_norm.weight,
+            on_device=False,
+        )
+
+    @staticmethod
+    def check_cache_complete(cache_path, cache_name_prefix: str) -> bool:
+        """True iff every compressor weight is cached. Needs ``init_checker(cache_path)`` first."""
+        return compressor_cache_complete(cache_path, cache_name_prefix)
 
     def forward(
         self,

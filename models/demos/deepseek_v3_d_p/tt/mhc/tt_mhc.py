@@ -33,6 +33,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.weight_cache import from_torch_cached
 
 W = 32  # one tile wide; the packed Sinkhorn state requires n*n <= W
 
@@ -121,6 +122,68 @@ def _upload(device, t, shape, dtype):
     return ttnn.from_torch(t.contiguous().reshape(shape), layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
 
+#: Cache names of the mHC weights (``<prefix>.<name>``); one list for the upload, the build and the check.
+WRAP_CACHE_NAMES = ("fn_T", "consts")
+HEAD_CACHE_NAMES = ("fn_T", "base", "scale")
+
+
+def mhc_cache_complete(cache_path, cache_name_prefix: str, names) -> bool:
+    """True iff every named mHC tensorbin exists. Needs ``init_checker(cache_path)`` first."""
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
+    return all(pattern_exists(f"{cache_name_prefix}.{name}_dtype*.tensorbin", "V4mHC") for name in names)
+
+
+def _cached_upload(device, t, shape, dtype, cache_file, *, mesh_mapper=None, on_device=True):
+    """``_upload`` through the weight cache: ``t=None`` reads it, a name-less call is the plain upload."""
+    if cache_file is None:
+        return _upload(device if on_device else None, t, shape, dtype)
+    return from_torch_cached(
+        None if t is None else t.contiguous().reshape(shape),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device if on_device else None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+        cache_file=cache_file,
+    )
+
+
+def _upload_fn_T(device, cfg, fn, dtype, tp_factor, cache_file, on_device):
+    """The transposed projection, TP-sharded in the 3D (stream, hidden, out) form so fn's rows land in the order x
+    is split across chips: each chip's own hidden slice of every stream, not one whole stream. ``fn=None`` reads
+    the cache."""
+    n = cfg.n
+    dev = device if on_device else None
+    if tp_factor > 1:
+        assert (
+            cfg.dim % tp_factor == 0
+        ), f"the mHC projection splits hidden {cfg.dim} across the TP axis, which the factor {tp_factor} does not divide"
+        if fn is not None:
+            assert fn.shape[1] == n * cfg.dim, f"fn is {tuple(fn.shape)}, expected [*, {n * cfg.dim}]"
+        src = None if fn is None else fn.t().contiguous().reshape(1, n, cfg.dim, fn.shape[0])
+        mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=(None, 2))
+        if cache_file is None:
+            fn_T = ttnn.from_torch(src, layout=ttnn.TILE_LAYOUT, device=dev, dtype=dtype, mesh_mapper=mapper)
+        else:
+            fn_T = from_torch_cached(
+                src,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+                cache_file=cache_file,
+            )
+        if on_device:
+            shape = fn_T.shape
+            fn_T = ttnn.reshape(fn_T, [1, 1, shape[1] * shape[2], shape[3]])
+        return fn_T
+    t = None if fn is None else fn.t()
+    shape = None if fn is None else (1, 1, fn.shape[1], fn.shape[0])
+    return _cached_upload(device, t, shape, dtype, cache_file, on_device=on_device)
+
+
 def _streams(x, n):
     """The n per-stream slices of a packed [1,1,T,n*C] tensor."""
     T, C = x.shape[-2], x.shape[-1] // n
@@ -170,6 +233,55 @@ def mhc_expand(h, n: int):
     return ttnn.repeat(h, [1, 1, 1, n])
 
 
+def _cache_files(weight_cache_path, cache_name_prefix):
+    """``name -> cache file stem`` for a module caching under ``<path>/<prefix>.<name>``, or None (no cache)."""
+    if weight_cache_path is None:
+        return None
+    from pathlib import Path
+
+    return lambda name: str(Path(weight_cache_path) / f"{cache_name_prefix}.{name}")
+
+
+def _wrap_weights(device, cfg, fn, base, scale, dtype, tp_factor, cache_files, on_device=True):
+    """``(fn_T, consts)`` of one TtMHCWrap, from the reference tensors or (all None) from the cache."""
+    fn_T = _upload_fn_T(device, cfg, fn, dtype, tp_factor, cache_files and cache_files("fn_T"), on_device)
+    consts = _cached_upload(
+        device,
+        None if scale is None else build_consts(cfg, scale, base),
+        (8, W, W),
+        dtype,
+        cache_files and cache_files("consts"),
+        on_device=on_device,
+    )
+    return fn_T, consts
+
+
+def _head_weights(device, cfg, fn, base, scale, dtype, tp_factor, cache_files, on_device=True):
+    """``(fn_T, base, a)`` of one TtMHCHead, from the reference tensors or (all None) from the cache. ``a`` is the
+    host scalar ``scale[0]``, kept in the cache as a one-element tensor."""
+    fn_T = _upload_fn_T(device, cfg, fn, dtype, tp_factor, cache_files and cache_files("fn_T"), on_device)
+    base_t = _cached_upload(
+        device,
+        base,
+        None if base is None else (1, 1, 1, cfg.n),
+        dtype,
+        cache_files and cache_files("base"),
+        on_device=on_device,
+    )
+    if cache_files is None:
+        return fn_T, base_t, float(scale[0])
+    scale_t = from_torch_cached(
+        None if scale is None else scale.detach().float().reshape(-1),
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=None,
+        memory_config=None,
+        mesh_mapper=None,
+        cache_file=cache_files("scale"),
+    )
+    return fn_T, base_t, float(ttnn.to_torch(scale_t).reshape(-1)[0])
+
+
 class TtMHCWrap(LightweightModule):
     """One mHC-wrapped sublayer. DeepSeek-V4 has two per transformer block -- one around
     attention, one around the MoE FFN -- each with independent parameters.
@@ -185,14 +297,18 @@ class TtMHCWrap(LightweightModule):
         self,
         device,
         cfg,
-        fn: torch.Tensor,
-        base: torch.Tensor,
-        scale: torch.Tensor,
+        fn: torch.Tensor | None,
+        base: torch.Tensor | None,
+        scale: torch.Tensor | None,
         dtype=ttnn.float32,
         tp_axis: int | None = None,
         num_links: int | None = None,
         topology=ttnn.Topology.Linear,
+        weight_cache_path=None,
+        cache_name_prefix: str | None = None,
     ):
+        """``fn``, ``base`` and ``scale`` are the reference module's, or all ``None`` to read the weights from the
+        cache at ``<weight_cache_path>/<cache_name_prefix>.*`` (``from_cache``)."""
         # the fused parametrization op is fp32-only; reject here rather than fail deep in hc_pre
         assert dtype == ttnn.float32, f"TtMHCWrap is fp32-only (fused op requires FLOAT32), got {dtype}"
         self.device = device
@@ -211,26 +327,38 @@ class TtMHCWrap(LightweightModule):
         self.tp_factor = device.shape[tp_axis] if tp_axis is not None else 1
         self.tt_ccl = get_tt_ccl(device) if self.tp_factor > 1 else None
         # transposed so mixes = xnorm @ fn_T, matching the reference F.linear(xf, fn).
-        # Sharded in the 3D (stream, hidden, out) form so fn's rows land in the order x is split
-        # across chips: each chip's own hidden slice of every stream, not one whole stream.
-        if self.tp_factor > 1:
-            assert cfg.dim % self.tp_factor == 0, (
-                f"the mHC projection splits hidden {cfg.dim} across the TP axis, which the factor "
-                f"{self.tp_factor} does not divide"
-            )
-            assert fn.shape[1] == self.n * cfg.dim, f"fn is {tuple(fn.shape)}, expected [*, {self.n * cfg.dim}]"
-            mix_hc, local = fn.shape[0], cfg.dim // self.tp_factor
-            self.fn_T = ttnn.from_torch(
-                fn.t().contiguous().reshape(1, self.n, cfg.dim, mix_hc),
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                dtype=dtype,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=(None, 2)),
-            )
-            self.fn_T = ttnn.reshape(self.fn_T, [1, 1, self.n * local, mix_hc])
-        else:
-            self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
-        self.consts = _upload(device, build_consts(cfg, scale, base), (8, W, W), dtype)
+        self.fn_T, self.consts = _wrap_weights(
+            device, cfg, fn, base, scale, dtype, self.tp_factor, _cache_files(weight_cache_path, cache_name_prefix)
+        )
+
+    @classmethod
+    def from_cache(cls, device, cfg, **kwargs):
+        """Build from the weight cache alone (``weight_cache_path`` and ``cache_name_prefix`` in ``kwargs``): no
+        torch tensors, and a missing file raises."""
+        return cls(device, cfg, None, None, None, **kwargs)
+
+    @staticmethod
+    def build_ttnn_cache(
+        fn, base, scale, cfg, mesh_device, cache_path, cache_name_prefix, dtype=ttnn.float32, tp_axis=None
+    ):
+        """Write the weights to the cache without putting any of them on the device."""
+        tp_factor = mesh_device.shape[tp_axis] if tp_axis is not None else 1
+        _wrap_weights(
+            mesh_device,
+            cfg,
+            fn,
+            base,
+            scale,
+            dtype,
+            tp_factor,
+            _cache_files(cache_path, cache_name_prefix),
+            on_device=False,
+        )
+
+    @staticmethod
+    def check_cache_complete(cache_path, cache_name_prefix: str) -> bool:
+        """True iff the weights are all cached. Needs ``init_checker(cache_path)`` first."""
+        return mhc_cache_complete(cache_path, cache_name_prefix, WRAP_CACHE_NAMES)
 
     def _tp_sum(self, t):
         """Sum ``t`` across the TP axis, leaving the result on every chip."""
@@ -312,21 +440,24 @@ class TtMHCHead(LightweightModule):
         self,
         device,
         cfg,
-        fn: torch.Tensor,
-        base: torch.Tensor,
-        scale: torch.Tensor,
+        fn: torch.Tensor | None,
+        base: torch.Tensor | None,
+        scale: torch.Tensor | None,
         dtype=ttnn.float32,
         tp_axis: int | None = None,
         num_links: int | None = None,
         topology=ttnn.Topology.Linear,
+        weight_cache_path=None,
+        cache_name_prefix: str | None = None,
     ):
+        """``fn``, ``base`` and ``scale`` are the reference module's, or all ``None`` to read the weights from the
+        cache at ``<weight_cache_path>/<cache_name_prefix>.*`` (``from_cache``)."""
         self.device = device
         self.cfg = cfg
         self.n = cfg.n
         self.eps = float(cfg.eps)
         self.norm_eps = float(cfg.norm_eps)
         self.ckc = _compute_kernel_config()
-        self.a = float(scale[0])
         # Same TP contract as TtMHCWrap: fn_T is sharded along mesh axis 1 in the order x is split.
         assert tp_axis in (None, 1), f"tp_axis must be None or 1 (fn_T is sharded along mesh axis 1), got {tp_axis}"
         self.tp_axis = tp_axis
@@ -334,24 +465,38 @@ class TtMHCHead(LightweightModule):
         self.topology = topology
         self.tp_factor = device.shape[tp_axis] if tp_axis is not None else 1
         self.tt_ccl = get_tt_ccl(device) if self.tp_factor > 1 else None
-        if self.tp_factor > 1:
-            assert cfg.dim % self.tp_factor == 0, (
-                f"the mHC head splits hidden {cfg.dim} across the TP axis, which the factor "
-                f"{self.tp_factor} does not divide"
-            )
-            assert fn.shape[1] == self.n * cfg.dim, f"fn is {tuple(fn.shape)}, expected [*, {self.n * cfg.dim}]"
-            local = cfg.dim // self.tp_factor
-            self.fn_T = ttnn.from_torch(
-                fn.t().contiguous().reshape(1, self.n, cfg.dim, fn.shape[0]),
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                dtype=dtype,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=(None, 2)),
-            )
-            self.fn_T = ttnn.reshape(self.fn_T, [1, 1, self.n * local, fn.shape[0]])
-        else:
-            self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
-        self.base = _upload(device, base, (1, 1, 1, cfg.n), dtype)
+        self.fn_T, self.base, self.a = _head_weights(
+            device, cfg, fn, base, scale, dtype, self.tp_factor, _cache_files(weight_cache_path, cache_name_prefix)
+        )
+
+    @classmethod
+    def from_cache(cls, device, cfg, **kwargs):
+        """Build from the weight cache alone (``weight_cache_path`` and ``cache_name_prefix`` in ``kwargs``): no
+        torch tensors, and a missing file raises."""
+        return cls(device, cfg, None, None, None, **kwargs)
+
+    @staticmethod
+    def build_ttnn_cache(
+        fn, base, scale, cfg, mesh_device, cache_path, cache_name_prefix, dtype=ttnn.float32, tp_axis=None
+    ):
+        """Write the weights to the cache without putting any of them on the device."""
+        tp_factor = mesh_device.shape[tp_axis] if tp_axis is not None else 1
+        _head_weights(
+            mesh_device,
+            cfg,
+            fn,
+            base,
+            scale,
+            dtype,
+            tp_factor,
+            _cache_files(cache_path, cache_name_prefix),
+            on_device=False,
+        )
+
+    @staticmethod
+    def check_cache_complete(cache_path, cache_name_prefix: str) -> bool:
+        """True iff the weights are all cached. Needs ``init_checker(cache_path)`` first."""
+        return mhc_cache_complete(cache_path, cache_name_prefix, HEAD_CACHE_NAMES)
 
     def _tp_sum(self, t):
         """Sum ``t`` across the TP axis, leaving the result on every chip."""

@@ -148,12 +148,47 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
 
     config = v4_hf_config(model_config, last, max_seq_len=SEQ_CACHE)
     n, hidden = config.hc_mult, config.hidden_size
-    # None unless the variant's cache env var is set. When set, the norms and the MoE (gate, routed and shared
-    # experts) write their ttnn tensors here on a miss and load them on a hit, keyed by this checkpoint.
+    # None unless the variant's cache env var is set. When set, this does what the other models' tests do: check
+    # whether the weight cache is complete, build it layer by layer from the checkpoint (host-only, no device copy)
+    # if it is not, and build the model from the cache either way. A run that finds the cache therefore reads none
+    # of the checkpoint's weights (a hash layer's expert table apart), and a run that does not writes it for the next.
     weight_cache_path = _ADAPTER[model_config]().weight_cache_path(tuple(mesh_device.shape), checkpoint)
+    experts_per_chip = model_config.NUM_ROUTED_EXPERTS // mesh_device.get_num_devices()
+    rank = dict(first_layer_idx=first, is_first_rank=is_first, is_last_rank=is_last)
+
+    def cache_complete() -> bool:
+        return weight_cache_path is not None and TtV4Transformer.check_cache_complete(
+            weight_cache_path, count, experts_per_chip, model_cfg=model_config, **rank
+        )
+
     t0 = time.monotonic()
-    state_dict = v4_model_from_checkpoint(config, checkpoint, load_embed=is_first, load_tail=is_last)
-    state_dict["layers"] = V4CheckpointLayers(config, checkpoint, first, count)
+    layers = V4CheckpointLayers(config, checkpoint, first, count)
+
+    def model_weights() -> dict:
+        return v4_model_from_checkpoint(config, checkpoint, load_embed=is_first, load_tail=is_last)
+
+    if weight_cache_path is None:
+        state_dict = {**model_weights(), "layers": layers}
+    else:
+        complete = cache_complete()
+        logger.info(
+            f"weight cache {weight_cache_path}: {'complete, building from it' if complete else 'incomplete, building it'}"
+        )
+        if not complete:
+            TtV4Transformer.build_ttnn_cache(
+                mesh_device=mesh_device,
+                config=config,
+                model_cfg=model_config,
+                state_dict={**model_weights(), "layers": layers},
+                num_layers=count,
+                cache_path=weight_cache_path,
+                **rank,
+            )
+            # Never build from a cache this run just wrote and still cannot vouch for: the embedding and the
+            # head would be read back as empty placeholders.
+            assert cache_complete(), f"the weight cache build left {weight_cache_path} incomplete"
+            logger.info(f"weight cache built in {(time.monotonic() - t0) / 60:.1f} min")
+        state_dict = {"layers": layers}  # the model-level weights come from the cache too
     model = TtV4Transformer(
         mesh_device,
         config,

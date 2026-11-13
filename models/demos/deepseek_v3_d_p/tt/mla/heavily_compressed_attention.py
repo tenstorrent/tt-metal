@@ -13,11 +13,15 @@ from __future__ import annotations
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtHCACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import (
     TtV4AttentionBase,
     alloc_compressed_cache,
+    attention_cache_complete,
+    build_attention_weights_cache,
     check_shared_cache,
+    compressor_kwargs,
 )
 
 
@@ -170,11 +174,9 @@ class TtHCA(TtV4AttentionBase):
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtHCA":
-        # Forward the mesh/CCL config so the compressor rides the same SP/TP axes as the block.
-        compressor_keys = ("sp_axis", "tp_axis", "topology", "dtype", "weights_dtype", "memory_config")
-        compressor = TtHCACompressor.from_reference(
-            device, reference.compressor, config, **{k: kwargs[k] for k in compressor_keys if k in kwargs}
-        )
+        # Forward the mesh/CCL config (and the weight cache, under <prefix>.compressor) so the compressor rides
+        # the same SP/TP axes as the block.
+        compressor = TtHCACompressor.from_reference(device, reference.compressor, config, **compressor_kwargs(kwargs))
         return cls(
             device,
             compressor=compressor,
@@ -194,6 +196,40 @@ class TtHCA(TtV4AttentionBase):
             o_groups=config.o_groups,
             rms_norm_eps=config.rms_norm_eps,
             **kwargs,
+        )
+
+    @classmethod
+    def from_cache(cls, device, config, **kwargs) -> "TtHCA":
+        """Build from the weight cache alone (``weight_cache_path`` and ``cache_name_prefix`` in ``kwargs``): no
+        torch module, and a missing file raises."""
+        compressor = TtHCACompressor.from_cache(device, config, **compressor_kwargs(kwargs))
+        return cls(
+            device,
+            compressor=compressor,
+            rotary_emb=DeepseekV4RotaryEmbedding(config),
+            num_heads=config.num_attention_heads,
+            head_dim=config.head_dim,
+            rope_head_dim=config.qk_rope_head_dim,
+            sliding_window=config.sliding_window,
+            o_groups=config.o_groups,
+            rms_norm_eps=config.rms_norm_eps,
+            **kwargs,
+        )
+
+    @staticmethod
+    def build_ttnn_cache(reference, config, mesh_device, cache_path, cache_name_prefix: str, **kwargs) -> None:
+        """Write this layer's attention and compressor weights to the cache without putting any of them on the
+        device (``kwargs``: sp_axis, tp_axis, dtype, weights_dtype, memory_config, which must match the layer's)."""
+        build_attention_weights_cache(reference, config, mesh_device, cache_path, cache_name_prefix, **kwargs)
+        TtHCACompressor.build_ttnn_cache(
+            reference.compressor, config, mesh_device, cache_path, f"{cache_name_prefix}.compressor", **kwargs
+        )
+
+    @staticmethod
+    def check_cache_complete(cache_path, cache_name_prefix: str) -> bool:
+        """True iff the attention and compressor weights are all cached. Needs ``init_checker(cache_path)`` first."""
+        return attention_cache_complete(cache_path, cache_name_prefix) and TtHCACompressor.check_cache_complete(
+            cache_path, f"{cache_name_prefix}.compressor"
         )
 
     def _write_compressed(self, state, new_entries, n_new):
