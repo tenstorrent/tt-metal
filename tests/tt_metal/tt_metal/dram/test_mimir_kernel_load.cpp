@@ -29,7 +29,7 @@
 
 namespace tt::tt_metal::mimir_test::kernel_load {
 
-constexpr const char* kNullKernelPath = "tests/tt_metal/tt_metal/test_kernels/cce/cce_null.cpp";
+constexpr const char* kNullKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
 constexpr const char* kEchoKernelPath = "tests/tt_metal/tt_metal/test_kernels/cce/cce_args_echo.cpp";
 
 constexpr uint32_t kEchoCtMarkerBase = 0xC0DE0000;
