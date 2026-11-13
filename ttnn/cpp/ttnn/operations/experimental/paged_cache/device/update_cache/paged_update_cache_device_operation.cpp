@@ -39,6 +39,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "Operands to update_cache need to be allocated in buffers on device!");
 
     const bool rm_width_sharded_cache = is_rm_width_sharded_l1_cache(cache_tensor);
+    const bool rm_paged_cache = is_rm_interleaved_paged_cache(cache_tensor, page_table);
 
     // Layout and data type validation
     TT_FATAL(
@@ -80,6 +81,26 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             shard_width_bytes % 16 == 0,
             "WIDTH_SHARDED cache shard width in bytes ({}) must be 16-byte aligned for NoC writes",
             shard_width_bytes);
+    } else if (rm_paged_cache) {
+        TT_FATAL(
+            input_tensor.layout() == Layout::ROW_MAJOR,
+            "ROW_MAJOR paged cache requires ROW_MAJOR input (no untilize/tilize on this path)");
+        TT_FATAL(
+            cache_tensor.dtype() == input_tensor.dtype(),
+            "ROW_MAJOR paged cache dtype ({}) must match input dtype ({})",
+            cache_tensor.dtype(),
+            input_tensor.dtype());
+        TT_FATAL(
+            cache_tensor.padded_shape()[1] == 1,
+            "ROW_MAJOR paged cache must have one kv head, got {}",
+            cache_tensor.padded_shape()[1]);
+        TT_FATAL(update_idxs_tensor.has_value(), "ROW_MAJOR paged cache requires update_idxs_tensor");
+        TT_FATAL(!operation_attributes.share_cache, "share_cache is not supported with ROW_MAJOR paged cache");
+        TT_FATAL(
+            !operation_attributes.block_size_override.has_value() &&
+                !operation_attributes.num_kv_heads_override.has_value() &&
+                !operation_attributes.cache_position_modulo.has_value(),
+            "Paged-mode overrides are not supported with ROW_MAJOR paged cache");
     } else {
         TT_FATAL(cache_tensor.layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
         TT_FATAL(
@@ -343,11 +364,14 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
     // (compute_update_cache_offsets: tile row update_idx / TILE_HEIGHT, row offset within that tile),
     // with no bound of its own and no skip sentinel, so a position past the end of the sequence would
     // land in the next user's rows or past the end of the cache buffer. Paged mode needs the index
-    // tensor, so the list only occurs in non-paged mode, where cache dim -2 is the sequence length.
+    // tensor, so the list only occurs in non-paged mode, where cache dim -2 is the sequence length (a
+    // ROW_MAJOR width-sharded cache instead takes positions as linear rows of the whole packed cache).
     // Positions in update_idxs_tensor live on the device and cannot be checked here. This runs on every
     // program-cache hit too: compute_program_hash excludes the positions.
     if (!paged_cache) {
-        const uint32_t cache_seq_len = cache_tensor.padded_shape()[-2];
+        const uint32_t cache_seq_len = rm_width_sharded_cache
+                                           ? cache_tensor.physical_volume() / cache_tensor.padded_shape()[-1]
+                                           : cache_tensor.padded_shape()[-2];
         for (size_t i = 0; i < operation_attributes.update_idxs.size(); ++i) {
             TT_FATAL(
                 operation_attributes.update_idxs[i] < cache_seq_len,

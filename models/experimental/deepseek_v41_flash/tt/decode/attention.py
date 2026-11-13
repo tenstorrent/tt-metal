@@ -100,6 +100,9 @@ DECODE_LAYOUTS = {
 # A layer that does not select runs one-row steps' q, kv and ring write as one ``attention_qkv_decode``
 # (``DEEPSEEK_V41_FUSED_QKV=0``: q_a, q_b, kv, their RoPE and the ring write as separate ops).
 _FUSED_QKV = os.environ.get("DEEPSEEK_V41_FUSED_QKV", "1") not in ("0", "", "false", "False")
+# Up to ``index_topk`` entries the select keeps every entry, so a one-row step's select copies the session's
+# entries out of ``dense_kv`` instead of scoring them (``DEEPSEEK_V41_DENSE_SELECT=0``: always score).
+DENSE_SELECT = os.environ.get("DEEPSEEK_V41_DENSE_SELECT", "1") not in ("0", "", "false", "False")
 # attention_qkv_decode's core roles on the 12x10 grid: the tokens replica covers it, q_a's 40 and kv's 16
 # cores hold one output tile and one [K, 32] weight slab each.
 _FUSED_QKV_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))})
@@ -376,6 +379,12 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
     compressed-KV row and index key the kv source wrote this step, carried to stages that select
     from the group without holding its source. They are ``None`` where no such stage exists.
 
+    ``dense_kv`` (TILE DRAM ``[1, 1, N * index_topk, Dh]``, beside ``comp_kv``) holds each session's first
+    ``index_topk`` compressed entries in entry order, session slot ``s`` at rows ``[s * index_topk, (s + 1) *
+    index_topk)``. While a group has at most ``index_topk`` entries the select keeps all of them, so a dense
+    select (:meth:`DeepSeekV41Attention.decode` with ``dense``) copies the slot's rows into ``sel_tile``
+    instead of scoring. Every step that writes an entry below ``index_topk`` writes it here too.
+
     Under speculative decode a ratio > 1 kv source's ``win_kv`` / ``win_gate`` are deeper than the ratio
     (``[1, 1, rows, Dh]``, row ``pos % rows``): a rejected draft's row then lands in a slot of its own, and
     the next group's pool reads the row before it through ``win_prev`` (see :meth:`DeepSeekV41Attention.decode`).
@@ -420,6 +429,7 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         "ring_view",
         "win_view_kv",
         "win_view_gate",
+        "dense_kv",
     )
 
     def __init__(
@@ -437,9 +447,11 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         ring_view=None,
         win_view_kv=None,
         win_view_gate=None,
+        dense_kv=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.dense_kv = dense_kv
         self.sel_tile = sel_tile
         self.sel_kv_rows = sel_kv_rows
         self.sel_tile_rows = sel_tile_rows
@@ -1102,6 +1114,23 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         if k.buffer_address() != received.buffer_address():
             ttnn.deallocate(k)
 
+    def _write_entries(self, row, scache, entry, dense_entry, page_row=None, comp_kv=True) -> None:
+        """Write the RoPE'd compressed rows ``row`` ``[1, 1, n, Dh]`` into ``dense_kv`` rows ``dense_entry``
+        ``[n]`` (``-1`` skips a row) and, with ``comp_kv``, into ``comp_kv`` at logical entries ``entry``
+        ``[n]`` (through row ``page_row`` of ``idx_page_table``): a dense select's part of the select op."""
+        rows = _rows_on_one_core(row)
+        if comp_kv:
+            ttnn.experimental.paged_update_cache(
+                scache.comp_kv,
+                rows,
+                update_idxs_tensor=entry,
+                page_table=scache.idx_page_table,
+                page_table_row_tensor=page_row,
+            )
+        ttnn.experimental.paged_update_cache(scache.dense_kv, rows, update_idxs_tensor=dense_entry)
+        if rows.buffer_address() != row.buffer_address():
+            ttnn.deallocate(rows)
+
     def decode(
         self,
         hidden: ttnn.Tensor,
@@ -1130,6 +1159,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         win_offset: ttnn.Tensor | None = None,
         ring_rows: ttnn.Tensor | None = None,
         pool_rows: tuple = (),
+        dense: bool = False,
+        dense_entry: ttnn.Tensor | None = None,
+        dense_offset: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """One decode step: ``hidden`` ``[B, S, 1, D]`` -> the block's output, same shape.
 
@@ -1162,6 +1194,13 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ``win_offset`` are the first rows of its slot in ``kv`` and in ``win_kv`` / ``win_gate``.
         ``sliding_pos`` and ``win_slot`` already include those offsets, and ``entry`` stays the
         session's logical row.
+
+        ``dense`` (one row, with ``select``, while the group has at most ``index_topk`` entries) selects every
+        entry: the closed group's row goes into ``comp_kv`` and ``dense_kv``, and ``sel_tile``'s selected rows are
+        copied from the session's ``dense_kv`` rows (from row ``dense_offset``, INT32 ``[1]``; row 0 when ``None``)
+        instead of scored. ``dense_entry`` (INT32, one per ``entry``, or per ``received_entry``) is the ``dense_kv``
+        row of each entry this step writes: the slot's first row plus the entry, ``-1`` from ``index_topk`` on.
+        Without it no step writes ``dense_kv``.
         """
         b, s, _, d = hidden.shape
         assert (
@@ -1231,10 +1270,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             if s == 1:
                 _update_cache_at(scache.kv, kv, sliding_pos)
                 ttnn.deallocate(kv)
+        assert not dense or (select and s == 1 and not candidates), "a dense select is a one-row, one-level select"
         if select:
-            # The select runs on the whole grid; keep q out of its L1 until SDPA.
-            q_l1 = q.memory_config()
-            q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+            if not dense:
+                # The select runs on the whole grid; keep q out of its L1 until SDPA.
+                q_l1 = q.memory_config()
+                q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
             row = None
             if latent is not None:
                 self._write_index_key(latent, cos_win, sin_win, scache, entry, page_row, multi_row=s > 1)
@@ -1247,28 +1288,42 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             elif received_entry is not None:
                 self._write_received_key(scache, received_entry, page_row, multi_row=s > 1)
                 row, entry = (scache.new_kv_row if s == 1 else scache.new_kv_rows), received_entry
-            self.indexer.select_kv(
-                tokens,
-                q_a,
-                cos,
-                sin,
-                scache,
-                index_pos,
-                new_row=row,
-                new_row_index=entry,
-                candidates=candidates,
-                build_pool=build_pool,
-                page_row=page_row,
-                split_keys=split_keys,
-            )
+            assert not dense or row is None or dense_entry is not None, "a dense select writes its row's comp_kv entry"
+            if row is not None and dense_entry is not None:
+                # The select op writes new_row into comp_kv itself.
+                self._write_entries(row, scache, entry, dense_entry, page_row, comp_kv=dense)
+            if dense:
+                ttnn.fill_cache(
+                    scache.sel_tile,
+                    scache.dense_kv,
+                    0,
+                    update_idx=self.window,
+                    input_row_offset_tensor=dense_offset,
+                    num_input_rows=self.index_topk if dense_offset is not None else 0,
+                )
+            else:
+                self.indexer.select_kv(
+                    tokens,
+                    q_a,
+                    cos,
+                    sin,
+                    scache,
+                    index_pos,
+                    new_row=row,
+                    new_row_index=entry,
+                    candidates=candidates,
+                    build_pool=build_pool,
+                    page_row=page_row,
+                    split_keys=split_keys,
+                )
             if latent is not None:
                 ttnn.deallocate(row)
-            if s == 1:
-                ttnn.tilize(scache.sel_kv, output_tensor=scache.sel_tile)
-                q = ttnn.to_memory_config(q, q_l1)
-            else:
+            if s > 1:
                 # _attend reshards the rows one per core from DRAM.
                 ttnn.tilize(scache.sel_kv_rows, output_tensor=scache.sel_tile_rows)
+            elif not dense:
+                ttnn.tilize(scache.sel_kv, output_tensor=scache.sel_tile)
+                q = ttnn.to_memory_config(q, q_l1)
         if q_a is not None:
             ttnn.deallocate(q_a)
         ttnn.deallocate(tokens)
@@ -1303,7 +1358,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         for the ``n`` groups the rows close. ``cos`` / ``sin`` / ``neg_sin`` are TILE ``[1, 1, 1, Rd]`` for one
         row and ROW_MAJOR ``[1, 1, T, Rd]`` (one row per position) otherwise. One row bounds SDPA with
         ``sdpa_lengths`` ``[1, 2]`` instead of ``sdpa_cur_pos`` / ``mask``. ``rows > 1`` also gives
-        ``ring_rows`` (:meth:`_write_causal_rows`) and ``pool_rows``, the rows that close a group.
+        ``ring_rows`` (:meth:`_write_causal_rows`) and ``pool_rows``, the rows that close a group. An index source
+        selects ``dense`` while one row's group has at most ``index_topk`` entries, and gets ``dense_entry`` (session
+        slot 0) while a closing group's entry is below ``index_topk``.
         """
         device, window, r = self.device, self.window, self.compress_ratio
         multi = rows > 1
@@ -1354,8 +1411,14 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 cos_win, sin_win = make_rope_table(cos_half[starts], sin_half[starts])
                 kw["cos_win"], kw["sin_win"] = to_device(cos_win), to_device(sin_win)
                 kw["entry"] = int32_rows([positions[j] // r for j in closing])
+        if DENSE_SELECT and self.is_index_source:
+            # Also for an index source receiving its group's rows (``received_entry``) from another stage.
+            below = [p // r if p // r < self.index_topk else -1 for p in positions if (p + 1) % r == 0]
+            if below and max(below) >= 0:
+                kw["dense_entry"] = int32_rows(below)
         if self.is_index_source and counts[-1] > 0:
             kw["select"] = True
+            kw["dense"] = DENSE_SELECT and not multi and counts[0] <= self.index_topk
             # A row with no key yet still selects one; its mask hides the result.
             kw["index_pos"] = int32_rows([_SELECT_KV_RATE * max(n, 1) - 1 for n in counts])
             indexer = self.indexer
@@ -1488,6 +1551,7 @@ def build_decode_caches(device, config, layers, max_seq: int, verify_rows: int =
                     ),
                     sel_kv=zeros((1, 1, window + config.index_topk, dh), ttnn.ROW_MAJOR_LAYOUT),
                     sel_tile=zeros((1, 1, window + config.index_topk, dh), ttnn.TILE_LAYOUT),
+                    dense_kv=zeros((1, 1, config.index_topk, dh), ttnn.TILE_LAYOUT),
                 )
                 if verify_rows > 1:
                     rows = verify_rows * (window + config.index_topk)

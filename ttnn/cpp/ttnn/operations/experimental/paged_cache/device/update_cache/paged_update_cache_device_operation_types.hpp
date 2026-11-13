@@ -79,4 +79,11 @@ inline bool is_rm_width_sharded_l1_cache(const Tensor& cache) {
            memory_config.buffer_type() == tt::tt_metal::BufferType::L1;
 }
 
+// A row-major interleaved block pool ``[num_blocks, 1, block_size, head_dim]``: each row is one page, so a
+// paged write copies the input row straight into its page with no untilize / tilize.
+inline bool is_rm_interleaved_paged_cache(const Tensor& cache, const std::optional<Tensor>& page_table) {
+    return cache.layout() == ttnn::Layout::ROW_MAJOR && page_table.has_value() &&
+           cache.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED;
+}
+
 }  // namespace ttnn::experimental::prim

@@ -322,10 +322,154 @@ ttnn::device_operation::ProgramArtifacts build_rm_width_sharded_update_artifacts
     };
 }
 
+ProgramRunArgs rm_paged_update_run_args(const PagedUpdateCacheInputs& tensor_args) {
+    const auto cores = update_cache_cores(tensor_args);
+
+    KernelRunArgs writer_run_args{.kernel = UC_WRITER};
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, cores.at(i), {{"my_batch_idx", i}});
+    }
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {std::move(writer_run_args)};
+    params.tensor_args = paged_update_cache_tensor_args(tensor_args);
+    return params;
+}
+
+// Writer-only path for a row-major interleaved paged cache: one cache row is one page, so each input row is
+// a single NoC write to the page its position maps to through the page table.
+ttnn::device_operation::ProgramArtifacts build_rm_paged_update_artifacts(
+    const PagedUpdateCacheParams& operation_attributes, const PagedUpdateCacheInputs& tensor_args) {
+    const auto& cache_tensor = tensor_args.cache_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& update_idxs_tensor = tensor_args.update_idxs_tensor.value();
+    const auto& page_table = tensor_args.page_table.value();
+    const auto& page_table_row_tensor = tensor_args.page_table_row_tensor;
+
+    const uint32_t rows_per_user = paged_update_cache_rows_per_user(operation_attributes, tensor_args);
+    const CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
+
+    const tt::DataFormat input_dfb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
+
+    const tt::DataFormat index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.dtype());
+    const uint32_t index_stick_size = update_idxs_tensor.buffer()->aligned_page_size();
+
+    const tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table.dtype());
+    const uint32_t page_table_stick_size = page_table.padded_shape()[-1] * page_table.element_size();
+    const uint32_t page_table_row_page_bytes =
+        page_table_row_tensor.has_value() ? page_table_row_tensor->buffer()->aligned_page_size() : 0;
+
+    Group<DataflowBufferSpec> dataflow_buffers = {
+        DataflowBufferSpec{
+            .unique_id = UC_INPUT_SHARD,
+            .entry_size = input_page_size,
+            .num_entries = 1,
+            .data_format_metadata = input_dfb_data_format,
+            .borrowed_from = UC_INPUT,
+        },
+        DataflowBufferSpec{
+            .unique_id = UC_INDEX,
+            .entry_size = std::max(tt::tile_size(index_data_format), index_stick_size),
+            .num_entries = 1,
+            .data_format_metadata = index_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = UC_PAGE_TABLE,
+            // The page_table_row page lands here before the row itself.
+            .entry_size = std::max(page_table_stick_size, page_table_row_page_bytes),
+            .num_entries = 1,
+            .data_format_metadata = page_table_data_format,
+        },
+    };
+
+    // The single DM kernel produces and consumes each buffer (a DFB self-loop, as in the width-sharded path).
+    Group<DFBBinding> writer_dfb_bindings = {
+        DFBBinding{
+            .dfb_spec_name = UC_INPUT_SHARD, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{
+            .dfb_spec_name = UC_INPUT_SHARD, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{.dfb_spec_name = UC_INDEX, .accessor_name = "index", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{.dfb_spec_name = UC_INDEX, .accessor_name = "index", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{
+            .dfb_spec_name = UC_PAGE_TABLE, .accessor_name = "page_table", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{
+            .dfb_spec_name = UC_PAGE_TABLE, .accessor_name = "page_table", .endpoint_type = DFBEndpointType::CONSUMER},
+    };
+    Group<TensorBinding> writer_tensor_bindings = {
+        TensorBinding{.tensor_parameter_name = UC_CACHE, .accessor_name = "cache"},
+        TensorBinding{.tensor_parameter_name = UC_INDEX_T, .accessor_name = "index"},
+        TensorBinding{.tensor_parameter_name = UC_PAGE_TABLE_T, .accessor_name = "page_table"},
+    };
+    KernelSpec::CompilerOptions::Defines writer_defines;
+    if (page_table_row_tensor.has_value()) {
+        writer_defines.emplace("PAGE_TABLE_ROW_TENSOR", "1");
+        writer_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = UC_PAGE_TABLE_ROW_T, .accessor_name = "page_table_row"});
+    }
+
+    KernelSpec writer{
+        .unique_id = UC_WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+            "writer_update_cache_rm_paged.cpp",
+        .compiler_options = {.defines = std::move(writer_defines)},
+        .dfb_bindings = std::move(writer_dfb_bindings),
+        .tensor_bindings = std::move(writer_tensor_bindings),
+        .compile_time_args =
+            {
+                {"row_bytes", input_tensor.padded_shape()[-1] * input_tensor.element_size()},
+                {"input_row_stride", input_page_size},
+                {"block_size", cache_tensor.padded_shape()[2]},
+                {"max_blocks_per_seq", page_table.padded_shape()[1]},
+                {"index_stick_size_B", index_stick_size},
+                {"page_table_stick_size", page_table_stick_size},
+                {"page_table_row_page_bytes", page_table_row_page_bytes},
+                {"num_rows", rows_per_user},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"my_batch_idx"}},
+        .hw_config = create_writer_datamovement_config(),
+    };
+
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = UC_CACHE, .spec = cache_tensor.tensor_spec()},
+        TensorParameter{.unique_id = UC_INPUT, .spec = input_tensor.tensor_spec()},
+        TensorParameter{.unique_id = UC_INDEX_T, .spec = update_idxs_tensor.tensor_spec()},
+        TensorParameter{.unique_id = UC_PAGE_TABLE_T, .spec = page_table.tensor_spec()},
+    };
+    if (page_table_row_tensor.has_value()) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = UC_PAGE_TABLE_ROW_T, .spec = page_table_row_tensor->tensor_spec()});
+    }
+
+    ProgramSpec spec{
+        .name = "paged_update_cache_rm_paged",
+        .kernels = {std::move(writer)},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {UC_WRITER},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = rm_paged_update_run_args(tensor_args),
+    };
+}
+
 ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     const PagedUpdateCacheParams& operation_attributes, const PagedUpdateCacheInputs& tensor_args) {
     if (is_rm_width_sharded_l1_cache(tensor_args.cache_tensor)) {
         return build_rm_width_sharded_update_artifacts(operation_attributes, tensor_args);
+    }
+    if (is_rm_interleaved_paged_cache(tensor_args.cache_tensor, tensor_args.page_table)) {
+        return build_rm_paged_update_artifacts(operation_attributes, tensor_args);
     }
 
     const auto& cache_tensor = tensor_args.cache_tensor;
@@ -879,6 +1023,9 @@ ProgramRunArgs paged_update_cache_run_args(
     const PagedUpdateCacheParams& operation_attributes, const PagedUpdateCacheInputs& tensor_args) {
     if (is_rm_width_sharded_l1_cache(tensor_args.cache_tensor)) {
         return rm_width_sharded_update_run_args(operation_attributes, tensor_args);
+    }
+    if (is_rm_interleaved_paged_cache(tensor_args.cache_tensor, tensor_args.page_table)) {
+        return rm_paged_update_run_args(tensor_args);
     }
 
     ProgramRunArgs params;

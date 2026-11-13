@@ -82,3 +82,48 @@ def test_width_sharded_all_reduce(mesh_device, logical_shape, num_cores):
     assert got.shape[0] == ring_size
     for device_id in range(ring_size):
         assert_with_pcc(expected, got[device_id], pcc=0.999)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "l1_small_size": 8192}],
+    indirect=True,
+)
+def test_width_sharded_all_reduce_dsv41_ob(mesh_device):
+    """V4.1 o_b shape [1, 1, 1, 5120] on 80 cores with num_links=2 and L1_SMALL ping-pong."""
+    mesh_shape = tuple(mesh_device.shape)
+    if mesh_shape[1] < 2:
+        pytest.skip(f"need a line of at least 2 devices, got mesh {mesh_shape}")
+    cluster_axis = 1
+    ring_size = mesh_shape[1]
+    logical_shape = (1, 1, 1, 5120)
+    mem_config = _width_sharded_l1_config(mesh_device, 1, 5120, 80)
+
+    for step in range(4):
+        torch.manual_seed(step)
+        torch_per_device = torch.randn((ring_size, *logical_shape), dtype=torch.bfloat16)
+        expected = torch_per_device.float().sum(dim=0).to(torch.bfloat16)
+
+        tt_input = ttnn.from_torch(
+            torch_per_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            memory_config=mem_config,
+        )
+
+        tt_output = ttnn.experimental.deepseek.width_sharded_all_reduce(
+            tt_input,
+            cluster_axis=cluster_axis,
+            num_links=2,
+            topology=ttnn.Topology.Linear,
+        )
+
+        got = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        for device_id in range(ring_size):
+            assert_with_pcc(expected, got[device_id], pcc=0.999)
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(tt_output)
