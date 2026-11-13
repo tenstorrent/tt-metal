@@ -68,7 +68,7 @@ bool SingleHostContext::is_revoked() { return false; }
 
 void SingleHostContext::abort(int error_code) const { std::exit(error_code); }
 
-void SingleHostContext::barrier() const { return; }
+void SingleHostContext::barrier() const {}
 
 void SingleHostContext::send(
     ttsl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
