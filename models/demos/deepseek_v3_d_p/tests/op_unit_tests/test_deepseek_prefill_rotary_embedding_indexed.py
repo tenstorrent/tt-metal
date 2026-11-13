@@ -23,7 +23,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import rotate_half
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # RoPE is applied to the qk_rope_head_dim slice (64) in MLA. The op is dtype-agnostic; we use a
 # self-consistent Meta-style cos/sin so the test validates the per-device indexing/offset logic
@@ -635,6 +635,7 @@ def test_indexer_deepseek_rope_fallback(mesh_device, subshard):
     perm = interleaved_perm_matrix(64).to(torch.bfloat16)
     indexer = SimpleNamespace(
         sp_axis=0,
+        _index_rope_dim=64,
         index_args=SimpleNamespace(index_head_dim=width),
         _rope_perm=upload(perm, ttnn.ReplicateTensorToMesh(mesh_device)),
         hifi4_fp32_compute_kernel_config=ttnn.init_device_compute_kernel_config(

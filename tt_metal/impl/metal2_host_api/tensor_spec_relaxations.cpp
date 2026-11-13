@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -14,7 +14,7 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/reflection.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // File-local helpers. A NAMED namespace rather than an anonymous one: these translation units are
 // built as a unity build, where two anonymous namespaces merge into one and same-named entities
@@ -242,4 +242,4 @@ bool tensorspecs_match_with_relaxation(
     return true;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

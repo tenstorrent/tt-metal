@@ -14,7 +14,7 @@
 
 #include "impl/metal2_host_api/helpers.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -181,4 +181,4 @@ SemaphoreHandles RegisterSemaphores(
     return SemaphoreHandles{.id = std::move(semaphore_name_to_id), .scope = std::move(semaphore_name_to_scope)};
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

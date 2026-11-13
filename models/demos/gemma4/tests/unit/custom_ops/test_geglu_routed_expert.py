@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.gemma4.custom_ops.geglu_routed_expert import GegluRoutedExpert
 from models.demos.gemma4.custom_ops.geglu_routed_expert.op import GegluRoutedExpert
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 MESHES = [
     pytest.param((1, 1), {"fabric_config": ttnn.FabricConfig.DISABLED}, id="1x1"),

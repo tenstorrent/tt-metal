@@ -12,7 +12,7 @@ from models.experimental.SSD512.common import (
     synchronize_device,
 )
 from models.common.utility_functions import comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
