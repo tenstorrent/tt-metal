@@ -18,7 +18,7 @@
 #   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
 #   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile [--no-py-zones]] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
 #
 # Wrapper flags below are position-independent: they may appear before or after the test path and
 # may be interleaved with pytest args. Everything the wrapper does not recognize (the test path,
@@ -37,6 +37,8 @@
 #                    wrapper masks pytest's exit code, so a profiled run is reported
 #                    PASS as long as profiling completed, regardless of the underlying
 #                    test result. Hangs are still detected and still reset the device.
+#   --no-py-zones    With --profile: skip Tracy's host zone per Python call (tracy -p).
+#                    Same per-op CSV and device log, shorter run.
 #   --sim-workers N  Sim only: pytest-xdist worker count. Each worker dlopens
 #                    its own libttsim (no shared device state). Default is 16.
 #                    Pass 1 to serialize (e.g. when DPRINT ordering matters or
@@ -178,6 +180,7 @@ PYTEST_STDOUT_LOG="/tmp/safe-pytest-stdout-$$.log"
 DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
+TRACY_PY_ZONES=true
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
 # Precompile runs INSIDE the real pytest session (tests/plugins/up_front_collect.py with
@@ -224,6 +227,10 @@ while [[ $# -gt 0 ]]; do
         --profile)
             # Run the real pytest under the Tracy device profiler (see PYTEST_CMD below).
             PROFILE_MODE=true
+            shift
+            ;;
+        --no-py-zones)
+            TRACY_PY_ZONES=false
             shift
             ;;
         --sim-workers)
@@ -645,8 +652,32 @@ emit_missing_ttexalens_warning() {
 # --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
+#
+# Warm path (SAFE_PYTEST_WARM=1, hardware only): fork pytest from a server that has already imported
+# pytest/torch/numpy/pandas instead of starting a fresh interpreter. See
+# scripts/safe_pytest_warm.py for what the child inherits and the failure model. Under --profile, tracy's
+# inner workload is forked too (TT_TRACY_CHILD_PYTHON).
+WARM_MODE=false
+if [[ "${SAFE_PYTEST_WARM:-0}" == "1" && "$SIM_MODE" == false ]]; then
+    WARM_MODE=true
+fi
+WARM_CLIENT=(python3 "$REPO_DIR/scripts/safe_pytest_warm.py" run)
+# --no-py-zones adds tracy's -p: no host zone per Python call. The ops CSV and
+# profile_log_device.csv come from the C++ instrumentation and do not change.
+TRACY_FLAGS=(-r)
+if [[ "$TRACY_PY_ZONES" == false ]]; then
+    TRACY_FLAGS=(-r -p)
+fi
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest)
+    if [[ "$WARM_MODE" == true ]]; then
+        # tracy starts its workload through a shell: quote the launcher, and set it for tracy only.
+        printf -v _warm_launcher '%q ' "${WARM_CLIENT[@]}"
+        PYTEST_CMD=(env "TT_TRACY_CHILD_PYTHON=${_warm_launcher% }" "${WARM_CLIENT[@]}" -m tracy "${TRACY_FLAGS[@]}" -m pytest)
+    else
+        PYTEST_CMD=(python -m tracy "${TRACY_FLAGS[@]}" -m pytest)
+    fi
+elif [[ "$WARM_MODE" == true ]]; then
+    PYTEST_CMD=("${WARM_CLIENT[@]}" --pytest)
 else
     PYTEST_CMD=(pytest)
 fi
