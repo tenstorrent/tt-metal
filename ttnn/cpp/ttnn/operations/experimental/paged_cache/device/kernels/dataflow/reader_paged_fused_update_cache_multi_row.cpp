@@ -25,6 +25,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/tile_constants.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -66,7 +67,7 @@ void kernel_main() {
     constexpr auto num_passes = get_arg(args::num_passes);
 
     constexpr uint32_t head_offset_t = Wt * St;
-    constexpr uint32_t TILE_HEIGHT = 32;
+    using tt::constants::TILE_HEIGHT;
     constexpr uint32_t NO_PASS = 0xFFFFFFFFu;
 
     DataflowBuffer dfb_input(dfb::input);
