@@ -10,8 +10,8 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/types.hpp"
 
@@ -46,8 +46,8 @@ void prepare_generic_op(
 // hold the values of one call. Arguments are named and tensors are bound by name. Experimental while its API may still
 // change. See tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for examples.
 
-using tt::tt_metal::experimental::ProgramRunArgs;
-using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::ProgramRunArgs;
+using tt::tt_metal::ProgramSpec;
 
 // Fixed: a ProgramSpec per mesh coordinate range. The ranges must stay inside the mesh and must not overlap, and every
 // device in a range must hold every tensor.

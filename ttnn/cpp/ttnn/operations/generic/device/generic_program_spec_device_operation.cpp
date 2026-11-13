@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -28,7 +28,7 @@
 
 namespace ttnn::operations::generic {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace {
 
@@ -67,7 +67,7 @@ std::unordered_set<m2::NodeCoord> nodes_of_kernel(const m2::ProgramSpec& spec, c
 
 // A kernel's runtime vararg count on a node: num_runtime_varargs, unless the deprecated per-node counts name the
 // node.
-uint32_t runtime_vararg_count(const m2::KernelAdvancedOptions& options, const m2::NodeCoord& node) {
+uint32_t runtime_vararg_count(const m2::experimental::KernelAdvancedOptions& options, const m2::NodeCoord& node) {
     for (const auto& [nodes, count] : options.num_runtime_varargs_per_node) {
         if (nodes_contain(nodes, node)) {
             return count;
@@ -288,7 +288,8 @@ void check_prefetcher_pipe_args(const m2::ProgramSpec& spec, const m2::ProgramRu
     }
     for (const auto& [name, pipe] : pipes) {
         TT_FATAL(
-            std::ranges::find(parameters, name, &m2::PrefetcherPipeParameter::unique_id) != parameters.end(),
+            std::ranges::find(parameters, name, &m2::experimental::PrefetcherPipeParameter::unique_id) !=
+                parameters.end(),
             "generic_op: run_args.advanced_options.prefetcher_pipe_args has a pipe for '{}', which the ProgramSpec "
             "does not declare",
             name);
@@ -540,8 +541,7 @@ GenericProgramSpecDeviceOperation::ProgramFactory::create_mesh_workload_artifact
     return artifacts;
 }
 
-tt::tt_metal::experimental::ProgramRunArgs
-GenericProgramSpecDeviceOperation::ProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs GenericProgramSpecDeviceOperation::ProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/,
@@ -599,8 +599,8 @@ ttnn::MeshCoordinateRangeSet tensor_ranges(const GenericProgramSpecOperation::te
 // The ProgramSpec form runs its program on the tensors' ranges, as a MeshProgramSpec with those ranges would, so the
 // two forms key, check and run alike. The programs point at the caller's spec and run args instead of copying them.
 GenericProgramSpecOperation::operation_attributes_t program_spec_attributes(
-    const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args,
     const GenericProgramSpecOperation::tensor_args_t& tensor_args) {
     GenericProgramSpecOperation::operation_attributes_t attributes;
     const auto ranges = tensor_ranges(tensor_args);
@@ -634,8 +634,8 @@ GenericProgramSpecOperation::operation_attributes_t with_prefetcher_pipes(
 
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
-    const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args) {
     const auto tensor_args = make_program_spec_tensor_args(io_tensors);
     return ttnn::device_operation::launch<GenericProgramSpecOperation>(
         with_prefetcher_pipes(program_spec_attributes(spec, run_args, tensor_args)), tensor_args);
@@ -643,8 +643,8 @@ Tensor generic_op(
 
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
-    const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args) {
     const auto tensor_args = make_program_spec_tensor_args(io_tensors);
     ttnn::device_operation::prepare<GenericProgramSpecOperation>(
         with_prefetcher_pipes(program_spec_attributes(spec, run_args, tensor_args)), tensor_args);

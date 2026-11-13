@@ -20,8 +20,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -44,7 +44,7 @@
 namespace ttnn::operations::generic::test {
 namespace {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
 using tt::tt_metal::MeshDevice1x2Fixture;
@@ -295,7 +295,7 @@ CoreCoord pipe_sender() { return CoreCoord{0, 0}; }
 
 CoreRangeSet pipe_receivers() { return CoreRangeSet(CoreRange(CoreCoord{1, 0})); }
 
-m2::PrefetcherPipeSpaceConfig make_pipe_space_config() {
+m2::experimental::PrefetcherPipeSpaceConfig make_pipe_space_config() {
     return {
         .sender_cores = CoreRangeSet(CoreRange(pipe_sender())),
         .receiver_domain = pipe_receivers(),
@@ -306,8 +306,8 @@ m2::PrefetcherPipeSpaceConfig make_pipe_space_config() {
 
 // A program whose one kernel, on the sender core, binds PrefetcherPipe parameter "pipe" and sends nothing, with run
 // args that give the parameter this pipe.
-Program make_pipe_sender_program(m2::PrefetcherPipe& pipe) {
-    const m2::PrefetcherPipeParamName pipe_name{"pipe"};
+Program make_pipe_sender_program(m2::experimental::PrefetcherPipe& pipe) {
+    const m2::experimental::PrefetcherPipeParamName pipe_name{"pipe"};
     m2::KernelSpec sender_kernel{
         .unique_id = m2::KernelSpecName{"sender"},
         .source = m2::KernelSpec::SourceCode{.code = "void kernel_main() {}"},
@@ -327,7 +327,8 @@ Program make_pipe_sender_program(m2::PrefetcherPipe& pipe) {
                         .ring_size = kPipeRingSize,
                         .entry_size = 256}}}},
     };
-    program.run_args.advanced_options.prefetcher_pipe_args.emplace(pipe_name, m2::PrefetcherPipeArgument{pipe});
+    program.run_args.advanced_options.prefetcher_pipe_args.emplace(
+        pipe_name, m2::experimental::PrefetcherPipeArgument{pipe});
     return program;
 }
 
@@ -398,12 +399,13 @@ TEST(GenericOpProgramSpecHash, VarargCountsChangeHash) {
 TEST(GenericOpProgramSpecHash, PrefetcherPipeParameterNamesChangeHash) {
     auto spec = make_hash_spec();
     spec.advanced_options.prefetcher_pipe_parameters = {
-        {.unique_id = m2::PrefetcherPipeParamName{"pipe"},
+        {.unique_id = m2::experimental::PrefetcherPipeParamName{"pipe"},
          .receivers = CoreCoord{0, 1},
          .ring_size = 4,
          .entry_size = 256}};
     const auto base = ttnn::experimental::compute_program_spec_hash(spec);
-    spec.advanced_options.prefetcher_pipe_parameters[0].unique_id = m2::PrefetcherPipeParamName{"other_pipe"};
+    spec.advanced_options.prefetcher_pipe_parameters[0].unique_id =
+        m2::experimental::PrefetcherPipeParamName{"other_pipe"};
     EXPECT_NE(ttnn::experimental::compute_program_spec_hash(spec), base);
 }
 
@@ -944,9 +946,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecMatmul) {
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallRejectsADifferentPrefetcherPipe) {
     // A space must outlive its pipes, and a pipe every program bound to it: the cleanup empties the program cache
     // before the pipes go.
-    auto space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto space = m2::experimental::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
     auto pipe = space.create_pipe(pipe_sender(), pipe_receivers());
-    auto other_space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto other_space = m2::experimental::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
     auto other_pipe = other_space.create_pipe(pipe_sender(), pipe_receivers());
     const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
     const Tensor output = make_unused_output(this->device_);
@@ -966,8 +968,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallRejectsADifferent
 // A pipe re-carved in its space after the bound pipe is destroyed has the same addresses and geometry, so it can take
 // the bound pipe's place: a later call with it reuses the cached program, which ttnn's framework rebinds to it.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallTakesAPipeReCarvedInPlace) {
-    auto space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
-    std::optional<m2::PrefetcherPipe> pipe = space.create_pipe(pipe_sender(), pipe_receivers());
+    auto space = m2::experimental::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    std::optional<m2::experimental::PrefetcherPipe> pipe = space.create_pipe(pipe_sender(), pipe_receivers());
     const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
     const Tensor output = make_unused_output(this->device_);
 
@@ -993,7 +995,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecLaterCallTakesAPipeReCarve
 // Every call checks that the run args give a pipe for each PrefetcherPipe parameter the spec declares, and for no other
 // name, before Metal sees them: a first call, and a later call with validate_program_args on or off.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksThePipesOfEveryCall) {
-    auto space = m2::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
+    auto space = m2::experimental::CreatePrefetcherPipeSpace(*this->device_, make_pipe_space_config());
     auto pipe = space.create_pipe(pipe_sender(), pipe_receivers());
     const auto clear_program_cache = ttsl::make_cleanup([this] { this->device_->clear_program_cache(); });
     const Tensor output = make_unused_output(this->device_);
@@ -1003,7 +1005,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksThePipesOfEveryCall)
     no_pipe.advanced_options.prefetcher_pipe_args.clear();
     auto extra_pipe = program.run_args;
     extra_pipe.advanced_options.prefetcher_pipe_args.emplace(
-        m2::PrefetcherPipeParamName{"other"}, m2::PrefetcherPipeArgument{pipe});
+        m2::experimental::PrefetcherPipeParamName{"other"}, m2::experimental::PrefetcherPipeArgument{pipe});
     const auto expect_both_rejected = [&] {
         EXPECT_THAT(
             [&] { ttnn::experimental::generic_op({output}, program.spec, no_pipe); },

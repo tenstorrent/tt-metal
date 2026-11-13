@@ -9,8 +9,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "generic_op_device_operation_types.hpp"
@@ -29,8 +29,8 @@ struct GenericProgramSpecDeviceOperation {
         // objects, which outlive the call.
         struct Program {
             ttnn::MeshCoordinateRange range;
-            std::reference_wrapper<const tt::tt_metal::experimental::ProgramSpec> spec;
-            std::reference_wrapper<const tt::tt_metal::experimental::ProgramRunArgs> run_args;
+            std::reference_wrapper<const tt::tt_metal::ProgramSpec> spec;
+            std::reference_wrapper<const tt::tt_metal::ProgramRunArgs> run_args;
         };
         std::vector<Program> programs;
         // The run args' PrefetcherPipes, which ttnn's framework rebinds on a cache hit. The ttnn::prim overloads fill
@@ -53,7 +53,7 @@ struct GenericProgramSpecDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
@@ -70,7 +70,7 @@ struct GenericProgramSpecDeviceOperation {
 
 // Hash of everything in a ProgramSpec that changes the compiled program. generic_op keys its program cache on it,
 // combined with each program's mesh range.
-ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::experimental::ProgramSpec& spec);
+ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::ProgramSpec& spec);
 
 }  // namespace ttnn::operations::generic
 
@@ -80,13 +80,13 @@ namespace ttnn::prim {
 // MeshProgramSpec with those ranges, so the two forms share cache entries.
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
-    const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args);
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args);
 
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
-    const tt::tt_metal::experimental::ProgramSpec& spec,
-    const tt::tt_metal::experimental::ProgramRunArgs& run_args);
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args);
 
 // The MeshProgramSpec form: a program for each range.
 Tensor generic_op(
