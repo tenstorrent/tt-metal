@@ -50,6 +50,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3.tt.residual import use_sharded_residual
 from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
+from models.demos.minimax_m3.utils.profiler_utils import COARSE, zone
 
 # Cache keys for the SHARDED embed table. Distinct from the old replicated "model.embed_tokens.weight",
 # and — critically — neither key is a prefix of the other: weight_cache_is_complete matches by startswith,
@@ -208,7 +209,8 @@ class TtParallelEmbedding(LightweightModule):
         local = ttnn.minimum(ttnn.maximum(local, 0.0), float(self.vocab_local + 1))  # clamp -> sentinels
         local_idx = ttnn.reshape(ttnn.typecast(local, ttnn.uint32), [1, 1, s_total])
 
-        emb = ttnn.embedding(local_idx, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
+        with zone("token_embed", COARSE):
+            emb = ttnn.embedding(local_idx, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
         if len(emb.shape) == 3:
             emb = ttnn.unsqueeze_to_4D(emb)  # [1,1,s_total,emb_dim/tp]
 
@@ -221,10 +223,12 @@ class TtParallelEmbedding(LightweightModule):
         # PREFILL_PREFETCH_MEDIA the host's fetch overlaps the all-gather and the lookup.
         media = media_fn() if media_fn is not None else None
         if media is not None:
-            gathered = ttnn.embedding(media.lookup, media.table, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
-            if len(gathered.shape) == 3:
-                gathered = ttnn.unsqueeze_to_4D(gathered)
-            emb = ttnn.where(media.is_img, gathered, emb)
+            with zone("media_gather", COARSE):
+                gathered = ttnn.embedding(media.lookup, media.table, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
+                if len(gathered.shape) == 3:
+                    gathered = ttnn.unsqueeze_to_4D(gathered)
+            with zone("media_where", COARSE):
+                emb = ttnn.where(media.is_img, gathered, emb)
 
         # 3) SP reduce-scatter on the seq dim: sum across vocab shards (each token resolved by exactly one
         #    SP row) AND scatter seq back to per-row shards -> [1,1,s_local,emb_dim/tp].
