@@ -20,7 +20,6 @@ HIDDEN = 3072
 HEADS = 24
 HEAD_DIM = 128
 MLP_RATIO = 3
-SDPA_Q_CHUNK_MAX = 128
 
 
 class Flux3KleinTransformerBlock(Module):
@@ -58,6 +57,8 @@ class Flux3KleinTransformerBlock(Module):
             per_head_norm=True,
             is_fsdp=is_fsdp,
             shard_prompt=False,
+            ring_sdpa_q_chunk_max=128,
+            ring_sdpa_exp_approx=True,
         )
         self.attn.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -65,14 +66,6 @@ class Flux3KleinTransformerBlock(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        self.attn.ring_sdpa_exp_approx = True
-        self.attn.ring_sdpa_chunk_size_map = {
-            key: {length: (min(q, SDPA_Q_CHUNK_MAX), k) for length, (q, k) in table.items()}
-            for key, table in Attention.ring_sdpa_chunk_size_map.items()
-        }
-        self.attn.default_ring_sdpa_chunk_size = {
-            length: (min(q, SDPA_Q_CHUNK_MAX), k) for length, (q, k) in Attention.default_ring_sdpa_chunk_size.items()
-        }
 
         self.norm = DistributedLayerNorm(
             HIDDEN,

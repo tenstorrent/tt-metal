@@ -69,7 +69,6 @@ class Attention(Module):
         },
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
-    ring_sdpa_exp_approx: bool = False
 
     def __init__(
         self,
@@ -95,6 +94,9 @@ class Attention(Module):
         per_head_norm: bool = False,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        ring_sdpa_q_chunk_max: int | None = None,
+        ring_sdpa_k_chunk_max: int | None = None,
+        ring_sdpa_exp_approx: bool = False,
     ) -> None:
         super().__init__()
 
@@ -104,6 +106,9 @@ class Attention(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.shard_prompt = shard_prompt
+        self.ring_sdpa_q_chunk_max = ring_sdpa_q_chunk_max
+        self.ring_sdpa_k_chunk_max = ring_sdpa_k_chunk_max
+        self.ring_sdpa_exp_approx = ring_sdpa_exp_approx
         self.padding_config = padding_config
         self.use_spatial_weights_for_prompt = use_spatial_weights_for_prompt
         # True = per-head RMS (head_dim divisor, stats stay local); False = global RMS over
@@ -273,11 +278,16 @@ class Attention(Module):
                     f"No ring SDPA chunk size found for resolution {per_device_seq_len}, using default {ring_chunk_size[-1]}"
                 )
                 ring_chunk_size = ring_chunk_size[-1]
+            q_chunk_size, k_chunk_size = ring_chunk_size
+            if self.ring_sdpa_q_chunk_max is not None:
+                q_chunk_size = min(q_chunk_size, self.ring_sdpa_q_chunk_max)
+            if self.ring_sdpa_k_chunk_max is not None:
+                k_chunk_size = min(k_chunk_size, self.ring_sdpa_k_chunk_max)
 
             self.ring_sdpa_program_config[per_device_seq_len] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
-                q_chunk_size=ring_chunk_size[0],
-                k_chunk_size=ring_chunk_size[1],
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
                 exp_approx_mode=self.ring_sdpa_exp_approx,
             )
         return self.ring_sdpa_program_config[per_device_seq_len]
