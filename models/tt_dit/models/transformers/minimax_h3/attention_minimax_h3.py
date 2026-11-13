@@ -23,7 +23,7 @@ from ....utils.tensor import bf16_tensor
 from . import lofi
 from .agmm_config import agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
-from .mmrs_config import has_row_parallel_mmrs_config
+from .mmrs_config import has_row_parallel_mmrs_config, mmrs_blocking_override
 from .sol_prepass import BLOCK as SOL_BLOCK
 from .sol_prepass import SolGeometry, SolPrepass, sink_block_mask
 from .sol_prepass_fused import SolPrepassFused
@@ -1178,6 +1178,7 @@ class MiniMaxH3Attention(Module):
                     compute_kernel_config=lofi.compute_config("to_out", self.mm_compute_kernel_config),
                     dtype=ttnn.bfloat16,
                     use_persistent_buffer=self.use_persistent_ccl_buffers,
+                    mmrs_config=mmrs_blocking_override(m, k, self.hidden_size, core_grid),
                     **map_kwargs,
                 )
         if addcmul_gate_tile_row_map is not None:

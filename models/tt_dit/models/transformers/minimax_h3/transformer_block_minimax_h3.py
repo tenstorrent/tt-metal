@@ -23,7 +23,7 @@ from ....utils.tensor import bf16_tensor
 from . import ff_bf8, lofi
 from .agmm_config import agmm_kwargs, agmm_pins
 from .attention_minimax_h3 import MiniMaxH3Attention
-from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
+from .mmrs_config import has_mmrs_config, mmrs_blocking_override, pinned_mmrs_config, register_mmrs_config
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
 # Mirrors `MINIMAX_H3_MODALITY_NUM` in the reference; padding rows (-1) are clamped to 0.
@@ -514,6 +514,7 @@ class MiniMaxH3TransformerBlock(Module):
         #
         # The dynamic-length path resolved its one blocking at construction and skips the M-keyed gate.
         fused = self._mmrs_pin is not None
+        mmrs_config = self._mmrs_pin
         if not fused and self.tp_factor > 1 and self.ccl_manager.topology == ttnn.Topology.Ring:
             ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
             # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
@@ -525,6 +526,7 @@ class MiniMaxH3TransformerBlock(Module):
                 # M is only known here (it tracks the packed sequence length), so the blocking is
                 # registered at the point of use rather than at construction. Idempotent and cheap.
                 register_mmrs_config(*ff2_shape, core_grid)
+                mmrs_config = mmrs_blocking_override(*ff2_shape, core_grid)
         if fused:
             _log_gate_map_once(to_out=attn_gate_map is not None, ff2=gate_map_on)
             return self.ff.forward_fused_addcmul(
@@ -536,7 +538,7 @@ class MiniMaxH3TransformerBlock(Module):
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 force_transpose=False,
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
-                mmrs_config=self._mmrs_pin,
+                mmrs_config=mmrs_config,
                 **self._ff1_kwargs(normed),
                 **({"addcmul_b_tile_row_map": tile_map} if gate_map_on else {}),
                 **({"addcmul_b_col_offset_tiles": _GATE_MLP * h_tiles} if gate_map_on and s2l else {}),

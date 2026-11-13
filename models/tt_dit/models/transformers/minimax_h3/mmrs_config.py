@@ -42,6 +42,9 @@ at every duration.
 
 from __future__ import annotations
 
+import math
+import os
+
 import ttnn
 
 from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, resolves_fused_mmrs_config
@@ -143,3 +146,66 @@ def has_row_parallel_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoo
     if not (k == _TO_OUT_K and n == _N and m % _TILE == 0):
         return False
     return resolves_fused_mmrs_config(m, k, n, core_grid)
+
+
+# Optional blocking overrides of the fused MM + RS on the legacy (length-keyed) path, default off. The reduce-scatter
+# sends each output tile around the ring in the direction its position in the chunk picks (worker stride over the M
+# block x N chunk), so a different M_block, N_block or matmul grid changes the order in which the TP partials of a
+# tile are summed: these are a reassociation, not bit-identical, and stay behind a switch.
+#   MINIMAX_H3_FF2_MMRS_BLOCKING      ff2    (K 3584): "1" = 12x8, M 10, K 4, N 7, subblock 2x1 (N 7 splits 14 columns
+#                                     per core evenly; K_block as the rule pick)
+#   MINIMAX_H3_TO_OUT_MMRS_BLOCKING   to_out (K 1792): "1" = 12x7 (one more reduce-scatter row), M 6, K 2, N 8, 2x2
+#                                     (the rule pick's blocking)
+# or an explicit "M,K,N,sub_h,sub_w,grid_y" (matmul grid 12 x grid_y) for in-model A/B. Unset, "" or "0": the rule pick.
+# An override that would leave a core a single M block (no window rotation) is not applied at that M.
+_MMRS_PRESETS = {
+    "MINIMAX_H3_FF2_MMRS_BLOCKING": (10, 4, 7, 2, 1, 8),
+    "MINIMAX_H3_TO_OUT_MMRS_BLOCKING": (6, 2, 8, 2, 2, 7),
+}
+
+
+def _mmrs_override_env(name: str) -> tuple[int, ...] | None:
+    value = os.environ.get(name, "0").strip()
+    if value in ("", "0"):
+        return None
+    if value == "1":
+        return _MMRS_PRESETS[name]
+    try:
+        blocking = tuple(int(v) for v in value.split(","))
+    except ValueError:
+        blocking = ()
+    if len(blocking) != 6 or min(blocking) < 1:
+        raise ValueError(f"{name}={value!r}: expected 0, 1 or M,K,N,sub_h,sub_w,grid_y (positive integers)")
+    m_block, _, n_block, sub_h, sub_w, _ = blocking
+    if m_block % sub_h or n_block % sub_w:
+        raise ValueError(f"{name}={value!r}: the subblock must divide M_block and N_block")
+    return blocking
+
+
+_MMRS_OVERRIDES = {
+    _K: _mmrs_override_env("MINIMAX_H3_FF2_MMRS_BLOCKING"),
+    _TO_OUT_K: _mmrs_override_env("MINIMAX_H3_TO_OUT_MMRS_BLOCKING"),
+}
+_MMRS_OVERRIDE_LOGGED: set[tuple[int, int]] = set()
+
+
+def mmrs_blocking_override(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> FusedMMRSConfig | None:
+    """The switched-on blocking for ff2 / to_out's fused MM + RS at this shape, else None (the caller keeps the table /
+    rule pick). Only for a shape the fused path already serves (has_mmrs_config / has_row_parallel_mmrs_config)."""
+    blocking = _MMRS_OVERRIDES.get(k) if n == _N and core_grid == _DEVICE_GRID else None
+    if blocking is None:
+        return None
+    m_block, k_block, n_block, sub_h, sub_w, grid_y = blocking
+    if (k // _TILE) % k_block or not 1 <= grid_y < core_grid.y:
+        raise ValueError(f"MMRS blocking override {blocking} does not fit K={k} on a {core_grid} device grid")
+    rows_per_core = math.ceil(math.ceil(m / _TILE) / grid_y)
+    if rows_per_core <= m_block:
+        return None
+    if (m, k) not in _MMRS_OVERRIDE_LOGGED:
+        _MMRS_OVERRIDE_LOGGED.add((m, k))
+        print(
+            f"[mmrs] blocking override for (M, K, N)=({m}, {k}, {n}): grid {core_grid.x}x{grid_y}, "
+            f"blocks {m_block, k_block, n_block}, subblock {sub_h}x{sub_w}",
+            flush=True,
+        )
+    return FusedMMRSConfig(ttnn.CoreCoord(core_grid.x, grid_y), m_block, k_block, n_block, sub_h, sub_w, None, 1)
