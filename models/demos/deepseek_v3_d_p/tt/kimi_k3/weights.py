@@ -233,6 +233,14 @@ def load_routed_expert_weights(checkpoint_dir: Path, layer_idx: int, num_experts
 # marker path carries the checkpoint identity and the mesh geometry, so a different checkpoint, mesh
 # or TP axis simply misses and rebuilds instead of loading someone else's tensors.
 
+_CACHE_ENV = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
+
+# On the Weka scratch share, under the vendor prefix like every other model cache there and
+# alongside Kimi-K2.7's `Kimi-K2_7-Code-Cache/`. This is a DEFAULT rather than a requirement: the
+# point of a cache is that every run benefits without anyone remembering an environment variable,
+# and `$TT_KIMI_K3_PREFILL_TTNN_CACHE` still relocates it (or disables it, if set empty).
+_DEFAULT_CACHE = Path("/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill")
+
 
 def _checkpoint_identity(checkpoint_dir: Path) -> str:
     """A short stable id for a checkpoint, from its index rather than its 5.5 TB of tensors."""
@@ -244,27 +252,21 @@ def _checkpoint_identity(checkpoint_dir: Path) -> str:
     return digest.hexdigest()[:16]
 
 
-def cache_root(
-    checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int, adapter: type | None = None
-) -> Path | None:
-    """Where this (model, checkpoint, mesh, tp_axis) keeps its tensorbins, or None if caching is off.
+def cache_root(checkpoint_dir: Path, mesh_shape: tuple[int, int], tp_axis: int) -> Path | None:
+    """Where this (checkpoint, mesh, tp_axis) keeps its tensorbins, or None if caching is off.
 
-    `adapter` names the model variant (default `KimiK3Adapter`; `KimiK31Adapter` for K3.1). Defaults to its
-    `ttnn_cache_default` on the models share so runs pick it up with no configuration; set its
-    `ttnn_cache_env` (`$TT_KIMI_K3_PREFILL_TTNN_CACHE` for K3) to relocate it, or to the empty string to
-    disable caching. A None return is always safe to pass straight through as `weight_cache_path`.
+    Defaults to the models share so runs pick it up with no configuration; set
+    `$TT_KIMI_K3_PREFILL_TTNN_CACHE` to relocate it, or to the empty string to disable caching. A
+    None return is always safe to pass straight through as `weight_cache_path`.
     """
-    if adapter is None:
-        from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter as adapter
-
-    override = os.getenv(adapter.ttnn_cache_env)
+    override = os.getenv(_CACHE_ENV)
     if override == "":
         return None  # explicitly empty disables caching, for a run that must build from weights
-    root = Path(override) if override else Path(adapter.ttnn_cache_default)
+    root = Path(override) if override else _DEFAULT_CACHE
     rows, columns = mesh_shape
     path = (
         root
-        / f"{adapter.name}_bh_{rows * columns}dev"
+        / f"kimi_k3_bh_{rows * columns}dev"
         / _checkpoint_identity(checkpoint_dir)
         / f"mesh{rows}x{columns}.tpaxis{tp_axis}"
     )
