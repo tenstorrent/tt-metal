@@ -171,6 +171,19 @@ def _unpack_bfp_b(
     return torch.from_numpy(values.reshape(-1)).to(dtype)
 
 
+def unpack_bfp8(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):
+    """BFP8 with the 5 bit exponent (bias 15) to a float16 tensor."""
+    return _unpack_bfp_b(
+        bfp8_block,
+        magnitude_bits=7,
+        sfpu=sfpu,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        exp_bias=15,
+        dtype=torch.float16,
+    )
+
+
 def unpack_bfp8_b(bfp8_block, sfpu=False, num_faces=4, face_r_dim=16):
     return _unpack_bfp_b(
         bfp8_block,
@@ -666,6 +679,18 @@ def unpack_res_tiles(
         elements_per_tile_needed = output_format.num_bytes_per_tile(
             num_faces * face_r_dim * FACE_C_DIM
         )
+        bfp_mantissa_bits = {
+            DataFormat.Bfp8_b: 8,
+            DataFormat.Bfp8: 8,
+            DataFormat.Bfp4_b: 4,
+            DataFormat.Bfp2_b: 2,
+        }.get(output_format)
+        if bfp_mantissa_bits is not None and num_faces * face_r_dim < MIN_BFP_EXPONENTS:
+            # a partial block float tile keeps 16 exponent bytes before its mantissas
+            elements_per_tile_needed = (
+                MIN_BFP_EXPONENTS
+                + num_faces * face_r_dim * FACE_C_DIM * bfp_mantissa_bits // 8
+            )
     else:
         # Dense tile path: extract the entire tile.
         # This is necessary because calculate_tile_size_bytes accounts for
@@ -677,7 +702,9 @@ def unpack_res_tiles(
     if total_elements_needed > len(packed_list):
         raise IndexError("Buffer access out of bounds")
 
-    if output_format == DataFormat.Bfp8_b:
+    if output_format == DataFormat.Bfp8:
+        unpack_func = unpack_fp16 if sfpu else unpack_bfp8
+    elif output_format == DataFormat.Bfp8_b:
         unpack_func = unpack_bfp16 if sfpu else unpack_bfp8_b
     elif output_format == DataFormat.Bfp8:
         unpack_func = unpack_bfp8

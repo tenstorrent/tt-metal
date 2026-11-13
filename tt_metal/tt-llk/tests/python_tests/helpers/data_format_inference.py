@@ -423,6 +423,15 @@ def infer_pack_in(
         # Otherwise use the unpacker output (Tf32 or 16-bit) as packer input
         return unpack_out
 
+    # Bfp8 (5 bit exponent) operands sit in a 16-bit DEST as Float16: a Float16_b output needs Float16 as the packer input, since the packer converts Float16 to
+    # Float16_b but not a block float input format (a Bfp8 packer input reads the 16-bit datums as Bfp8 and returns garbage)
+    if (
+        unpack_out == DataFormat.Bfp8
+        and output_format == DataFormat.Float16_b
+        and is_fp32_dest_acc_en == DestAccumulation.No
+    ):
+        return DataFormat.Float16
+
     # Float16_A in L1 to Bfp8_B without float32 datums in dest reg requires Bfp8_A as packer input for conversion to desired output format
     if (
         unpack_out == DataFormat.Float16
@@ -469,6 +478,15 @@ def infer_pack_in(
         )
     ):
         return DataFormat.Float16_b
+    # The same for A-exponent block float to a Float16 or Float32 output: production packs from Float16 (its conditional DEST format).
+    if (
+        pack_src_from_output
+        and is_fp32_dest_acc_en == DestAccumulation.No
+        and not unpacking_to_dest
+        and unpack_out in (DataFormat.Bfp8, DataFormat.Bfp4, DataFormat.Bfp2)
+        and (output_format == DataFormat.Float16 or output_format == DataFormat.Float32)
+    ):
+        return DataFormat.Float16
 
     # Default:
     # With float32 dest reg datums, packer gasket can do any conversion thus packer input can be the desired output format

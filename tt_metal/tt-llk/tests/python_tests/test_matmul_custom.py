@@ -28,6 +28,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     MATH_FIDELITY,
     NUM_FACES,
+    PACK_SRC_FROM_OUTPUT,
     THROTTLE_LEVEL,
     TILE_COUNT,
 )
@@ -122,6 +123,7 @@ def _run_matmul_custom(
         templates=[
             MATH_FIDELITY(math_fidelity),
             THROTTLE_LEVEL(throttle_level),
+            PACK_SRC_FROM_OUTPUT(),
             DEST_SYNC(dest_sync),
         ],
         runtimes=[

@@ -80,7 +80,7 @@ inline void _llk_math_top32_rm_(const std::uint32_t dst_index, const std::uint32
 {
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
-        math_unpack_to_dest_math_ready();
+        math_unpack_to_dest_math_ready_risc_ack();
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 

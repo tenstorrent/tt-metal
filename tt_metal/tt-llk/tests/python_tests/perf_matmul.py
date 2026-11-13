@@ -32,11 +32,21 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_FORM_KEYS,
+    MATMUL_K_LOOP,
     MATMUL_PACK_BLOCK,
+    MATMUL_PHASE_ELIDE,
+    MATMUL_REUSE_DIR,
+    MATMUL_ROW_END_FOLD,
+    MATMUL_ROW_MOP,
+    MATMUL_STREAM_NARROW,
+    MATMUL_STREAM_Z,
+    MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
+    matmul_two_row_off,
 )
 
 # Cold start, functional-max inner dim, and reuse/bandwidth.
@@ -133,6 +143,14 @@ def test_perf_matmul(
     # Cap L1 stimuli so K=32 dest-fill Float32 does not overflow Tensix L1.
     # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
+    two_row_off = matmul_two_row_off(
+        formats,
+        dest_sync,
+        dims.kt_dim,
+        k_loop=MATMUL_K_LOOP.for_block(
+            formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim
+        ),
+    )
 
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
@@ -140,8 +158,65 @@ def test_perf_matmul(
         run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, 0),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
+            *MATMUL_STREAM_NARROW.for_block(
+                formats,
+                dest_acc,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
+                math_fidelity=math_fidelity,
+            ),
+            *MATMUL_REUSE_DIR.for_block(
+                formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync, two_row_off
+            ),
+            *MATMUL_STREAM_Z.for_block(
+                formats,
+                dest_acc,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
+                math_fidelity=math_fidelity,
+                kt_dim=dims.kt_dim,
+                two_row_off=two_row_off,
+            ),
+            *MATMUL_UNPACK_TTSYNC.for_block(
+                formats,
+                dest_acc,
+                math_fidelity,
+                dims.ct_dim,
+                dims.rt_dim,
+                dims.kt_dim,
+                dest_sync,
+                two_row_off,
+            ),
+            *MATMUL_K_LOOP.for_block(
+                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim
+            ),
+            *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
+            *MATMUL_ROW_MOP.for_block(
+                formats,
+                dest_acc,
+                math_fidelity,
+                dest_sync,
+                dims.ct_dim,
+                dims.rt_dim,
+                dims.kt_dim,
+                two_row_off=two_row_off,
+            ),
+            *MATMUL_FORM_KEYS.for_block(
+                formats,
+                dims.kt_dim,
+                dims.ct_dim,
+                dims.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=dest_sync,
+                dest_acc=dest_acc,
+                unfuse_one_tile=True,
+                two_row_off=two_row_off,
+            ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(
                     formats,

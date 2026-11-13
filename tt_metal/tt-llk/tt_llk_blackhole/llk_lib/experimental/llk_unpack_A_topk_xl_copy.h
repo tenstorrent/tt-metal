@@ -81,7 +81,7 @@ inline void _llk_unpack_topk_xl_copy_(
             TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         }
         set_dst_write_addr(unp_cfg_context, unpack_dst_format);
-        wait_for_dest_available();
+        wait_for_dest_available_unpack_to_dest_max();
     }
 
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
