@@ -458,7 +458,7 @@ class Vocoder(Module):
         self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None
     ) -> torch.Tensor:
         """``(B, T+t_pad, C_in)`` on device -> ``(B, C_out, T_out)`` torch."""
-        key = (trace_key, tuple(x_dev.shape), x_dev.get_dtype(), t_pad)
+        key = (trace_key, tuple(x_dev.shape), x_dev.get_dtype(), t_pad, id(self.mesh_device))
         manager = self.ccl_manager
         if traced:
             prepared = self._prepared_audio_ccl.get(key)

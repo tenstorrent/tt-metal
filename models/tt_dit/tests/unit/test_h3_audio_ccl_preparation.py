@@ -70,6 +70,7 @@ def vocoder(m, native):
     cls = type("Vocoder", (), methods("models/audio_vae/vocoder_ltx.py", "Vocoder", names, {}))
     obj = cls()
     obj.ccl_manager = m
+    obj.mesh_device = m.mesh_device
     obj._prepared_audio_ccl = {}
     obj._tpad_mask_cache = {}
     obj.calls = []
@@ -131,6 +132,25 @@ class PreparationTest(unittest.TestCase):
         syncs = native.syncs
         p._capture_audio(True)
         self.assertEqual(native.syncs, syncs)
+        def fail_warm(*args):
+            raise RuntimeError("warm failed")
+        p._warm_denoise_buckets = fail_warm
+        with self.assertRaisesRegex(RuntimeError, "warm failed"):
+            p.warmup()
+        self.assertTrue(p.trace_audio)
+        self.assertFalse(p._warming_audio_trace)
+
+    def test_untraced_nonpersistent_policy_still_releases_buffers(self):
+        ns = methods("pipelines/minimax_h3/pipeline_minimax_h3.py", "MiniMaxH3Pipeline", {"_audio_ccl_transient"}, {})
+        for trace, warming, persistent in [(False, False, False), (True, False, False),
+                                            (False, True, False), (False, False, True)]:
+            native = Native()
+            m = manager(native)
+            p = SimpleNamespace(audio_ccl_manager=m, trace_audio=trace,
+                                _warming_audio_trace=warming, use_persistent_ccl_buffers=persistent)
+            with ns["_audio_ccl_transient"](p):
+                np_buffer(m)
+            self.assertEqual(bool(m._ping_pong_buffer_cache), trace or warming or persistent)
 
     def test_recorded_buffers_are_instance_and_shape_bound(self):
         native = Native()
@@ -146,19 +166,23 @@ class PreparationTest(unittest.TestCase):
         a.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
 
     def test_removed_replaced_or_foreign_manager_rejected_before_capture(self):
-        for mutation in ("removed", "replaced", "manager"):
+        for mutation in ("removed", "replaced", "element", "manager", "mesh"):
             with self.subTest(mutation=mutation):
                 native = Native()
                 m = manager(native)
                 v = vocoder(m, native)
                 x = tensor()
                 v.forward_device_BTC(x, t_pad=0, trace_key="a")
-                if mutation == "manager":
+                if mutation == "mesh":
+                    v.mesh_device = object()
+                elif mutation == "manager":
                     v.ccl_manager = manager(native)
                 else:
                     k = next(iter(m._ping_pong_buffer_cache))
                     if mutation == "removed":
                         m._ping_pong_buffer_cache.pop(k)
+                    elif mutation == "element":
+                        m._ping_pong_buffer_cache[k][0] = object()
                     else:
                         m._ping_pong_buffer_cache[k] = [object(), object()]
                 syncs = native.syncs
@@ -183,7 +207,7 @@ class PreparationTest(unittest.TestCase):
         v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
 
     def test_failed_or_interrupted_warm_does_not_prepare(self):
-        for error in (RuntimeError("collective failed"), KeyboardInterrupt()):
+        for error in (RuntimeError("collective failed"), KeyboardInterrupt(), SystemExit(37), GeneratorExit()):
             native = Native()
             m = manager(native)
             v = vocoder(m, native)

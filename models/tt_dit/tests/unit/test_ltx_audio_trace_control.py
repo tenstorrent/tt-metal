@@ -443,9 +443,11 @@ class AudioTraceControlTest(unittest.TestCase):
                         )["release_trace"]
                         for module in (a.mel_decoder, voc.vocoder, voc.bwe_generator):
                             module._tpad_mask_cache = {}
+                        voc.vocoder._prepared_audio_ccl = {}
                         voc.mel_stft = SimpleNamespace(stft_fn=SimpleNamespace(_window_indices={}))
                         caches = (
                             voc.vocoder._tpad_mask_cache,
+                            voc.vocoder._prepared_audio_ccl,
                             voc.bwe_generator._tpad_mask_cache,
                             voc.mel_stft.stft_fn._window_indices,
                         )
