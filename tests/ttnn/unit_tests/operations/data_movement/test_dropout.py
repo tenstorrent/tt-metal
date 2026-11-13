@@ -186,3 +186,85 @@ def test_dropout_mask_differs_across_cores(device, use_per_device_seed):
     device.clear_program_cache()
     assert torch.equal(hit_new_seed, run(4321)), "a cache hit with a new seed must match a fresh build"
     device.disable_and_clear_program_cache()
+
+
+def _dropout_masks(output, mesh_device, num_tiles):
+    """Each device's [num_tiles, 1024] zero mask, in row-major mesh order."""
+    shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output)]
+    assert len(shards) == mesh_device.get_num_devices()
+    return [(shard.float().reshape(num_tiles, 32 * 32) == 0) for shard in shards]
+
+
+# num_tiles = 1: one core, only compute group 1. num_tiles = grid + 3: every core, and a second compute group (the
+# cores with one more tile), each with its own compute kernel.
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4"), pytest.param((8, 4), id="8x4")], indirect=True)
+@pytest.mark.parametrize("tiles", ["one", "two_groups"])
+def test_dropout_per_device_seed_on_mesh(mesh_device, tiles):
+    """use_per_device_seed on a mesh: one program for the mesh with the device seed offset set per device. Every device and
+    every core draws its own mask; a new seed on the same cache entry changes every device's masks; a fixed seed
+    reproduces them on a hit; use_per_device_seed=False draws the same mask on every device."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_tiles = 1 if tiles == "one" else grid.x * grid.y + 3
+    tensor = ttnn.from_torch(
+        torch.ones((1, 1, num_tiles * 32, 32)),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    def run(seed, use_per_device_seed=True):
+        out = ttnn.experimental.dropout(
+            tensor, probability=0.5, scale=2.0, seed=seed, use_per_device_seed=use_per_device_seed
+        )
+        return _dropout_masks(out, mesh_device, num_tiles)
+
+    mesh_device.clear_program_cache()
+    miss = run(1234)
+    hit_same_seed = run(1234)
+    hit_new_seed = run(4321)
+    assert mesh_device.num_program_cache_entries() == 1, "a new seed must reuse the cached program"
+    num_devices = len(miss)
+    for d in range(num_devices):
+        assert torch.equal(miss[d], hit_same_seed[d]), f"device {d}: a fixed seed must reproduce the mask on a hit"
+        assert not torch.equal(miss[d], hit_new_seed[d]), f"device {d}: a new seed must change the mask"
+        ratio = miss[d].float().mean().item()
+        assert 0.3 < ratio < 0.7, f"device {d}: dropped fraction {ratio}"
+        for e in range(d + 1, num_devices):
+            assert not torch.equal(miss[d], miss[e]), f"devices {d} and {e} share a mask"
+    # Every tile's mask is distinct on every device: in particular every core's first tile (cores of both compute
+    # groups), so every core draws its own mask.
+    for d in range(num_devices):
+        distinct = {mask.numpy().tobytes() for mask in miss[d]}
+        assert len(distinct) == num_tiles, f"device {d}: {num_tiles - len(distinct)} tiles repeat another's mask"
+
+    same = run(1234, use_per_device_seed=False)
+    for d in range(1, num_devices):
+        assert torch.equal(same[0], same[d]), f"use_per_device_seed=False: device {d} differs from device 0"
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+def test_dropout_per_device_seed_trace(mesh_device):
+    """A traced per-device-seed dropout replays the masks of its capture, after a later call with another seed."""
+    num_tiles = 4
+    tensor = ttnn.from_torch(
+        torch.ones((1, 1, num_tiles * 32, 32)),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    eager = ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=77)
+    expected = _dropout_masks(eager, mesh_device, num_tiles)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    traced = ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=77)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    ttnn.experimental.dropout(tensor, probability=0.5, scale=2.0, seed=99)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    replayed = _dropout_masks(traced, mesh_device, num_tiles)
+    ttnn.release_trace(mesh_device, trace_id)
+    for d, (want, got) in enumerate(zip(expected, replayed)):
+        assert torch.equal(want, got), f"device {d}: the trace must replay its capture's mask"

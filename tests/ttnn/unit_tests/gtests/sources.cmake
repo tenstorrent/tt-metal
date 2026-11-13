@@ -29,6 +29,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_generic_op_hashing.cpp
     test_per_device_program_merge.cpp
     test_spec_per_device_run_args.cpp
+    test_dropout_per_device.cpp
     test_graph_add.cpp
     test_graph_basic.cpp
     test_levelized_graph.cpp

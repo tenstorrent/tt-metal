@@ -18,10 +18,8 @@ struct DropoutProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output);
 
-    // Re-derives ALL per-dispatch state (seed, src/dst tensor bindings, per-core tile counts/offsets)
-    // on every cache hit -- applied to the cached program in place, no spec rebuild. seed is
-    // hash-excluded (per-device offset applied when use_per_device_seed); supersedes the framework's
-    // tensor-binding refresh, so both tensor bindings are re-supplied here.
+    // Cache hit: fresh src/dst tensor bindings and the call's seed (hash-excluded). The per-core args derive from the
+    // input spec and the compute grid, fixed for a cache entry, so they keep their cache-miss values.
     static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const DropoutParams& operation_attributes,
         const DropoutInputs& tensor_args,
@@ -29,22 +27,21 @@ struct DropoutProgramFactory {
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
+// use_per_device_seed: every device draws its own mask. The devices' programs differ only in the compute kernels'
+// common `device_seed_offset`, so each range runs one program with the offset set per device (per-device run args, see
+// MeshWorkloadSpecFactoryAdapter).
 struct DropoutMeshWorkloadFactory {
-    // Dropout generates N different programs, but they differ only in the per-device seed set as a runtime argument.
-    // TODO: when heterogeneous runtime arguments are supported, create a single program for all devices, and only
-    // override the runtime arguments for each device. In addition, use `CachedMeshWorkload` instead of
-    // `AdaptedCachedMeshWorkload`, as only a single `shared_variables_t` is needed.
+    static constexpr bool uses_per_device_run_args = true;
+
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const DropoutParams& args,
         const DropoutInputs& tensor_args,
         Tensor& output,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-    // Delegates to DropoutProgramFactory: both factories emit the same per-core layout, so one
-    // implementation keeps the cache-hit patch from drifting between them. Called once per range;
-    // create_mesh_workload_artifacts emits one single-coordinate range per device, so the range's
-    // start coordinate is the device whose seed is re-derived.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    // Called once per range: the single-device hit args, plus device_seed_offset = 0 in the base and each device's
+    // offset.
+    static ttnn::device_operation::RangeRunArgs override_runtime_arguments(
         const DropoutParams& operation_attributes,
         const DropoutInputs& tensor_args,
         Tensor& tensor_return_value,
