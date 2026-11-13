@@ -237,7 +237,7 @@ def test_matmul(device):
                     runtime_arg_names=["output_tile_start_id", "num_output_tiles"],
                     common_runtime_arg_names=["Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "bcast_B", "MtNt"],
                 ),
-                hw_config=E.create_reader_datamovement_config(disable_dfb_implicit_sync_for_all=True),
+                hw_config=E.create_reader_datamovement_config(),
             ),
             E.KernelSpec(
                 unique_id="writer",
@@ -245,7 +245,7 @@ def test_matmul(device):
                 dfb_bindings=[E.consumer_of("out", "out")],
                 tensor_bindings=[E.TensorBinding(tensor_parameter_name="output", accessor_name="output")],
                 runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_pages", "start_id"]),
-                hw_config=E.create_writer_datamovement_config(disable_dfb_implicit_sync_for_all=True),
+                hw_config=E.create_writer_datamovement_config(),
             ),
         ]
         + [
@@ -307,7 +307,7 @@ def test_matmul(device):
 
 
 def exp_program(input_tensor, output_tensor, compute_threads=1):
-    """(spec, run_args) for output = exp(input), as in the design doc's example.
+    """(spec, run_args) for output = exp(input), with the tiles split over the cores.
 
     With compute_threads > 1 (Quasar only), each compute thread takes every compute_threads-th tile of its core.
     """
@@ -325,7 +325,7 @@ def exp_program(input_tensor, output_tensor, compute_threads=1):
                 dfb_bindings=[E.producer_of("in", "in")],
                 tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="src")],
                 runtime_arg_schema=dm_schema,
-                hw_config=E.create_reader_datamovement_config(disable_dfb_implicit_sync_for_all=True),
+                hw_config=E.create_reader_datamovement_config(),
             ),
             E.KernelSpec(
                 unique_id="writer",
@@ -333,7 +333,7 @@ def exp_program(input_tensor, output_tensor, compute_threads=1):
                 dfb_bindings=[E.consumer_of("out", "out")],
                 tensor_bindings=[E.TensorBinding(tensor_parameter_name="output", accessor_name="dst")],
                 runtime_arg_schema=dm_schema,
-                hw_config=E.create_writer_datamovement_config(disable_dfb_implicit_sync_for_all=True),
+                hw_config=E.create_writer_datamovement_config(),
             ),
             E.KernelSpec(
                 unique_id="compute",
@@ -381,7 +381,7 @@ def exp_inputs(device, num_tiles):
     return torch_input, input_tensor, ttnn.allocate_tensor_on_device(input_tensor.spec, device)
 
 
-def test_exp_from_the_design_example(device, expect_error):
+def test_the_exp_program(device, expect_error):
     torch_input, input_tensor, output_tensor = exp_inputs(device, 8)
     spec, run_args = exp_program(input_tensor, output_tensor)
     result = E.generic_op([input_tensor, output_tensor], spec, run_args)
@@ -1212,6 +1212,12 @@ def test_a_mesh_run_args_keeps_its_tensor_owners(device, expect_error):
         del mesh_run_args._tensor_args
     with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '__dict__' is read-only"):
         mesh_run_args.__dict__ = {}
+    with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '_tensor_args' is read-only"):
+        mesh_run_args._tensor_args = []
+    with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '__dict__' is read-only"):
+        del mesh_run_args.__dict__
+    with expect_error(AttributeError, "'MeshProgramRunArgs' object has no attribute 'program'"):
+        mesh_run_args.program = []
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
 
 

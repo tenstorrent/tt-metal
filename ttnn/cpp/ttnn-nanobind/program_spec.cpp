@@ -224,8 +224,8 @@ nb::dict copy_tensor_args(const nb::dict& tensor_args) {
     return copy;
 }
 
-// The attribute in which a Python ProgramRunArgs holds its tensor_args dict. The C++ object refers to the tensors'
-// MeshTensors, so the dict keeps them alive.
+// The attribute in which a Python ProgramRunArgs holds its tensor_args dict, and a MeshProgramRunArgs a list of those
+// dicts, one per program. The C++ objects refer to the tensors' MeshTensors, so the dicts keep them alive.
 constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
 
 // Another value, or none, in the attribute that holds the tensors, or in the instance dict that holds it, would leave

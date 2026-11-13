@@ -644,7 +644,8 @@ from ttnn._ttnn.operations import command_list as _command_list
 experimental.CommandListBuilder = _command_list.CommandListBuilder
 experimental.CommandList = _command_list.CommandList
 
-# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use, for ttnn.experimental.generic_op.
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use, and generic_op's MeshProgramSpec and
+# MeshProgramRunArgs, for ttnn.experimental.generic_op.
 # Experimental-only surface.
 from ttnn._ttnn import program_spec as _program_spec
 

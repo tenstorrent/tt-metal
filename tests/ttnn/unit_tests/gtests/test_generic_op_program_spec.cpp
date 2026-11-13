@@ -59,8 +59,8 @@ struct Program {
     m2::ProgramRunArgs run_args;
 };
 
-// output = exp(input) with the tiles split over the cores, as in the design doc's example. With aliased_buffer, a
-// second DFB, in_view, shares in's memory; the kernels never use it.
+// output = exp(input) with the tiles split over the cores. With aliased_buffer, a second DFB, in_view, shares in's
+// memory; the kernels never use it.
 Program make_exp_program(const Tensor& input, const Tensor& output, bool aliased_buffer = false) {
     const uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     const auto [num_cores, cores, group_1, group_2, tiles_1, tiles_2] =
@@ -73,7 +73,7 @@ Program make_exp_program(const Tensor& input, const Tensor& output, bool aliased
         .dfb_bindings = {m2::ProducerOf(m2::DFBSpecName{"in"}, "in")},
         .tensor_bindings = {{.tensor_parameter_name = m2::TensorParamName{"input"}, .accessor_name = "src"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     const m2::KernelSpec writer{
         .unique_id = m2::KernelSpecName{"writer"},
@@ -81,7 +81,7 @@ Program make_exp_program(const Tensor& input, const Tensor& output, bool aliased
         .dfb_bindings = {m2::ConsumerOf(m2::DFBSpecName{"out"}, "out")},
         .tensor_bindings = {{.tensor_parameter_name = m2::TensorParamName{"output"}, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     m2::KernelSpec compute{
         .unique_id = m2::KernelSpecName{"compute"},
