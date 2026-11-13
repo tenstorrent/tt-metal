@@ -28,6 +28,9 @@ def record_to_mcq_sample(record: dict) -> MCQSample:
         record["Incorrect Answer 2"],
         record["Incorrect Answer 3"],
     ]
+    # A seeded generator on purpose: the permutation must be the same on every run, machine and endpoint, or the
+    # runs are not comparable (module docstring). Nothing secret or security-relevant is derived from it, and the
+    # system's unseedable source (secrets / SystemRandom) cannot give a reproducible shuffle.
     seed = int.from_bytes(hashlib.sha256(record["Question"].encode("utf-8")).digest()[:8], "big")
     random.Random(seed).shuffle(options)
     return MCQSample(

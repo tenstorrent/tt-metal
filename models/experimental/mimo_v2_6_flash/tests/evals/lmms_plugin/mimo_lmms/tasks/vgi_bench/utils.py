@@ -13,6 +13,8 @@ scores the same replies with the last "Answer:" line instead (same fallback), to
 import os
 import re
 
+from mimo_lmms.failures import request_failed
+
 LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
 # 'Answer: c', 'Answer - (C)', 'Answer: **d**' ...
@@ -72,6 +74,8 @@ def vgi_doc_to_text(doc, lmms_eval_specific_kwargs=None):
 def vgi_process_results(doc, results):
     text = results[0] or ""
     n = len(doc["answers"])
+    if request_failed(text):  # never through the parser: the first standalone letter of an error body is an answer
+        return {"vgi_accuracy": 0.0, "vgi_accuracy_last_answer_line": 0.0}
     return {
         "vgi_accuracy": float(parse_answer(text, n) == doc["correct_answer"]),
         "vgi_accuracy_last_answer_line": float(parse_answer_last_line(text, n) == doc["correct_answer"]),

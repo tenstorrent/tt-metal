@@ -15,7 +15,9 @@
 # Resume: rerun the same command; finished requests come from each step's journal. A full set with failed requests is
 # rerun up to RESUME_PASSES (2) more times, which resends only the failed ones. A step whose smoke has failed
 # requests stops the suite (rc 3) on target vllm (a broken server should not burn the full sets); on openrouter the
-# failures are recorded and the suite goes on (rerunning retries them). Default benches, in order:
+# failures are recorded and the suite goes on (rerunning retries them). A full step whose run_eval.sh still exits
+# non-zero on its last pass has no summary.json (an earlier pass's is kept as summary.json.prev) and the suite ends
+# with rc 4 after the other benches. Default benches, in order:
 #   ocrbench mmau_mini librispeech_clean videomme_short mmmu_pro_aa
 # Env: as run_eval.sh; SUITE_PYTHON (python with httpx + pytest for --conformance, default the eval venv's).
 
@@ -85,6 +87,11 @@ run_step() {  # $1 bench, $2 step name, $3 limit or "", returns run_eval.sh's rc
     [ -n "$PROVIDER" ] && args+=(--provider "$PROVIDER")
     [ -n "$RETRIES" ] && args+=(--max-retries "$RETRIES")
     [ -n "$limit" ] && args+=(--limit "$limit")
+    # What an earlier pass or run left: a pass that dies before its results step must not be read through them (a
+    # stale journal.stats.json with failed=0 ended the resume loop, a stale summary.json was reported as the score).
+    for f in summary.json journal.stats.json; do
+        [ -f "$out/$f" ] && mv -f "$out/$f" "$out/$f.prev"
+    done
     log "start $bench $step -> $out"
     t0=$(date +%s)
     bash "$HERE/run_eval.sh" "${args[@]}" >> "$out/stdout.log" 2>&1
@@ -118,6 +125,7 @@ if [ "$CONFORMANCE" = 1 ]; then
     log "end conformance rc=$rc: $(tail -n 1 "$out/pytest.log")"
 fi
 
+FAILED_STEPS=""
 for bench in $BENCHES; do
     if [ "$PHASE" != full ]; then
         run_step "$bench" "smoke$SMOKE" "$SMOKE"
@@ -130,11 +138,26 @@ for bench in $BENCHES; do
     fi
     [ "$PHASE" = smoke ] && continue
     # Failed requests are not journaled: up to RESUME_PASSES reruns resend only those (the rest come from the journal).
+    # A pass that exits non-zero (lmms-eval died, e.g. on a missing video) has no results of its own: it is run again
+    # (it resumes from the journal), and if the last pass still fails the step is reported failed, not done.
     for pass in $(seq 0 "${RESUME_PASSES:-2}"); do
         run_step "$bench" full ""
+        rc=$?
+        if [ "$rc" != 0 ]; then
+            log "$bench full: run_eval.sh exited $rc on pass $pass; no summary of this pass"
+            continue
+        fi
         nfail=$(failed_requests "$DIR/$bench/full")
         [ "$nfail" = 0 ] && break
         log "$bench full: $nfail failed requests after pass $pass"
     done
+    if [ "$rc" != 0 ]; then
+        log "$bench full: FAILED (run_eval.sh exited $rc on its last pass); it has no summary.json"
+        FAILED_STEPS="$FAILED_STEPS $bench"
+    fi
 done
+if [ -n "$FAILED_STEPS" ]; then
+    log "suite done, with failed steps:$FAILED_STEPS"
+    exit 4
+fi
 log "suite done"

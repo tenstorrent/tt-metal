@@ -23,7 +23,17 @@ Resume: every successful response is appended (fsync) to `journal` (JSONL), keye
 rerun retries them. 4xx answers other than 408 / 429 are not retried (the request itself is bad), except OpenRouter's
 relayed provider errors ("Provider returned error": transient under load, accepted on a resend); 5xx, 408, 429 and
 connection errors are retried `max_retries` times with backoff. A request that fails for good returns
-"[MIMO_REQUEST_FAILED <status>] ..." as its text (scored wrong) and is counted in `<journal>.stats.json`.
+"[MIMO_REQUEST_FAILED <status>] ..." as its text and is counted in `<journal>.stats.json`. That text is scored wrong
+without going through answer extraction (mimo_lmms/failures.py; the plugin's tasks check for it, compare_runs.py
+does for lmms-eval's own tasks).
+
+The journal is one endpoint's: every record carries the endpoint it came from (target and base URL), and a journal
+is resumed only from the records of the endpoint being run (records of an older journal without the field are
+taken as they are; `journal_any_endpoint=True` takes all). A dry run keeps its "A" answers in
+`<journal>.dryrun-journal.jsonl`, never in the journal, so a real run into the same directory resumes nothing from
+it. `<journal>.keys.json` lists the request keys of the last run (answered from the journal or sent), which is what
+compare_runs.py counts: a journal also holds the answers of earlier runs with other settings (temperature,
+thinking, token limit), under other keys.
 
 Raw log: every request that reaches the network is also appended (fsync) to `<journal>.raw.jsonl`, one record per
 request after its last attempt, kept forever (never rewritten, also for failures): the request body with each media
@@ -58,6 +68,12 @@ from tqdm import tqdm
 
 from lmms_eval.api.instance import GenerationResult, TokenCounts
 from lmms_eval.api.model import lmms
+
+from ..failures import failed_text
+
+# Retry jitter only spreads resends in time (nothing is derived from it); the OS source, so no seeded generator
+# stands where a security scanner, or a later use, would take it for one.
+_JITTER = random.SystemRandom()
 
 OPENROUTER_PART_TYPES = {"text", "image_url", "input_audio", "video_url", "input_video"}
 OPENROUTER_IMAGE_MIME = {"image/png", "image/jpeg", "image/webp", "image/gif"}
@@ -244,6 +260,7 @@ class OpenRouterChat(lmms):
         dry_run=False,
         retry_cap_s=120,
         raw_log=True,
+        journal_any_endpoint=False,
         **kwargs,
     ):
         super().__init__()
@@ -273,6 +290,11 @@ class OpenRouterChat(lmms):
         os.makedirs(os.path.dirname(os.path.abspath(self.journal)), exist_ok=True)
         self.video_cache = os.path.splitext(self.journal)[0] + "_video_cache"
         self.raw_log = os.path.splitext(self.journal)[0] + ".raw.jsonl" if _truthy(raw_log) else None
+        # The responses a rerun resumes from (module docstring): the journal, of this endpoint; a dry run's own file.
+        self.endpoint = "dry-run" if self.dry_run else f"{target}|{(base_url or '').rstrip('/')}"
+        self.journal_any_endpoint = _truthy(journal_any_endpoint)
+        self.responses = os.path.splitext(self.journal)[0] + ".dryrun-journal.jsonl" if self.dry_run else self.journal
+        self._run_keys = set()
         self._lock = threading.Lock()
         self._transcode_locks = {}  # one lock per cached transcode: Video-MME asks 3 questions per video concurrently
         self._done = self._load_journal()
@@ -301,21 +323,29 @@ class OpenRouterChat(lmms):
     # ------------------------------------------------------------------------------------------------ journal
 
     def _load_journal(self):
-        done = {}
-        if os.path.exists(self.journal):
-            with open(self.journal) as f:
+        done, other = {}, 0
+        if os.path.exists(self.responses):
+            with open(self.responses) as f:
                 for line in f:
                     try:
                         rec = json.loads(line)
                     except ValueError:
                         continue  # a torn last line from a killed run
+                    if not self.journal_any_endpoint and rec.get("endpoint", self.endpoint) != self.endpoint:
+                        other += 1  # another endpoint's answer to the same request
+                        continue
                     done[rec["key"]] = rec
-            eval_logger.info(f"mimo_openrouter: {len(done)} responses in journal {self.journal}")
+            eval_logger.info(f"mimo_openrouter: {len(done)} responses in journal {self.responses}")
+            if other:
+                eval_logger.warning(
+                    f"mimo_openrouter: {other} journaled responses of another endpoint than {self.endpoint} are not "
+                    "resumed from (journal_any_endpoint=True takes them)"
+                )
         return done
 
     def _append_journal(self, rec, path=None):
         with self._lock:
-            with open(path or self.journal, "a") as f:
+            with open(path or self.responses, "a") as f:
                 f.write(json.dumps(rec) + "\n")
                 f.flush()
                 os.fsync(f.fileno())
@@ -376,6 +406,11 @@ class OpenRouterChat(lmms):
         # A per-process / per-thread temporary name: other processes (another endpoint's run sharing the cache)
         # may encode the same video at the same time; the last os.replace wins with identical bytes.
         tmp = f"{out}.{os.getpid()}.{threading.get_ident()}.tmp.mp4"
+        # No shell: every argument reaches ffmpeg as it is. The input is an absolute path of an existing file (never
+        # read as an option or a protocol URL), from the benchmark's local dataset.
+        path = os.path.abspath(path)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"video to transcode is not a file: {path}")
         # Same resolution and frame rate, H.264 at a quality setting, the audio track kept: OpenRouter's providers
         # (Xiaomi) feed a video's audio to the model, and some benchmarks ask what was said.
         cmd = [
@@ -489,7 +524,7 @@ class OpenRouterChat(lmms):
 
     def _backoff(self, attempt, retry_after=None):
         """Full-jitter exponential backoff, at least the server's Retry-After."""
-        wait = random.uniform(0, min(self.retry_cap_s, 5 * 2**attempt))
+        wait = _JITTER.uniform(0, min(self.retry_cap_s, 5 * 2**attempt))
         try:
             wait = max(wait, min(self.retry_cap_s, float(retry_after)))
         except (TypeError, ValueError):
@@ -580,7 +615,7 @@ class OpenRouterChat(lmms):
                     self.stats["retried"] += 1
                 self._backoff(attempt, retry_after)
         return dict(
-            text=f"[MIMO_REQUEST_FAILED {status}] {last}",
+            text=failed_text(status, last),
             usage={},
             finish=None,
             status=status,
@@ -606,6 +641,7 @@ class OpenRouterChat(lmms):
             key = self._key(task, split, doc_id, req)
             with self._lock:
                 self.stats["requests"] += 1
+                self._run_keys.add(key)
                 rec = self._done.get(key)
             if rec is not None:
                 with self._lock:
@@ -638,6 +674,7 @@ class OpenRouterChat(lmms):
             if status == 200:
                 rec = {"key": key, "task": task, "doc_id": doc_id, "text": text, "usage": usage, "finish": finish}
                 rec["latency_s"] = round(latency, 3)
+                rec["endpoint"] = self.endpoint
                 self._append_journal(rec)
                 with self._lock:
                     self._done[key] = rec
@@ -672,6 +709,8 @@ class OpenRouterChat(lmms):
         path = os.path.splitext(self.journal)[0] + ".stats.json"
         with open(path, "w") as f:
             json.dump(stats, f, indent=1)
+        with open(os.path.splitext(self.journal)[0] + ".keys.json", "w") as f:  # the last run's requests
+            json.dump({"endpoint": self.endpoint, "dry_run": self.dry_run, "keys": sorted(self._run_keys)}, f)
         self._append_journal(stats, os.path.splitext(self.journal)[0] + ".stats.jsonl")
         eval_logger.info(f"mimo_openrouter stats: {stats}")
 
