@@ -1966,8 +1966,8 @@
   budget_type: unit
 
 - name: VAD v2 unit tests
-  cmd: TT_METAL_WATCHER=30 pytest --timeout 600 models/experimental/vadv2/tests/pcc/test_tt_vad.py
-  model: vadv2
+  cmd: TT_METAL_WATCHER=30 pytest --timeout 600 models/experimental/vadv1/tests/pcc/test_tt_vad.py
+  model: vadv1
   model_family: VAD
   skus:
     wh_n150_civ2:

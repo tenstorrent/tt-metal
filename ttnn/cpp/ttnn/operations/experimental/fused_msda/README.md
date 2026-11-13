@@ -29,7 +29,7 @@ with `N = B * num_heads` already folded by the caller.
 
 Consumers therefore still pay, per call, for:
 
-* a per-level Python loop (`models/experimental/vadv2/tt/tt_utils.py:119`,
+* a per-level Python loop (`models/experimental/vadv1/tt/tt_utils.py:119`,
   `models/experimental/uniad/tt/ttnn_utils.py:238`),
 * `split` / `permute` / `reshape` of `value` into `(B*H, H_l, W_l, D)` per level,
 * `permute` / `reshape` of the grid and the attention weights per level,
@@ -144,7 +144,7 @@ nothing. The two forms build separate programs; pass at most one.
 ### 2.3 Output shape
 
 `(B, Q, H*D)` ROW_MAJOR bf16 — chosen, not accidental. Every consumer in this
-repo (BEVFormer, UniAD, VADv2) wants `(bs, num_queries, embed_dims)` immediately
+repo (BEVFormer, UniAD, VADv1) wants `(bs, num_queries, embed_dims)` immediately
 after MSDA. The writer places each head's `D` values at byte offset `h * D * 2`
 inside query `(b, q)`'s output page, so the head concatenation costs nothing and
 no post-op `reshape`/`permute` is needed.
@@ -462,7 +462,7 @@ Surveyed in this repo:
 | Where | `reference_points` | Mapping |
 | --- | --- | --- |
 | `models/experimental/uniad/tt/ttnn_deformable_attention.py:134` | `(B, Q, L, 2)` | `ref[b,q,l] + off/[W_l,H_l]` |
-| `models/experimental/vadv2/tt/tt_deformable_attention.py:137` | `(B, Q, L, 2)` | `ref[b,q,l] + off`, with `1/[W,H]` already folded into the Linear |
+| `models/experimental/vadv1/tt/tt_deformable_attention.py:137` | `(B, Q, L, 2)` | `ref[b,q,l] + off`, with `1/[W,H]` already folded into the Linear |
 | `models/experimental/bevformer/reference/ms_deformable_attention.py:234` | `(B, Q, Z, 2)` | points grouped `(P//Z, Z)`; `ref[b,q,z] + off/[W_l,H_l]` |
 | `models/experimental/uniad/tt/ttnn_deformable_attention.py:141` | `(B, Q, L, 4)` | `ref_xy + off/P * ref_wh * 0.5` |
 
@@ -470,7 +470,7 @@ So there is **no single reference-point convention**, which is exactly why V1
 must not depend on one. V2 supports two modes and rejects the rest loudly:
 
 * `reference_mode="level"` — `R == L`, `r(l, p) = l`. DINO-family decoders
-  (UniAD, VADv2), and BEVFormer temporal self-attention with an ego shift, whose
+  (UniAD, VADv1), and BEVFormer temporal self-attention with an ego shift, whose
   BEV maps are levels with their own reference points.
 * `reference_mode="pillar"` — `R == Z`, `P % Z == 0`, `r(l, p) = p % Z`.
   BEVFormer spatial cross-attention, and temporal self-attention without a
