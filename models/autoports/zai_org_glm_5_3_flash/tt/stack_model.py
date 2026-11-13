@@ -1282,6 +1282,11 @@ class StackBackend(ModelBackend):
     def _write_sampler_params(self, override: Optional[dict] = None) -> None:
         """the params page: row r = (k, p, 1 / temperature, flags bit 0 = draw); greedy rows (k = 1 or temperature
         0) keep the argmax. override: {row: (k, p, temperature)} on top of the generator's params (a prefill)"""
+        self._write_page(self.head.samp_par, self._sampler_page(override))
+
+    def _sampler_page(self, override: Optional[dict] = None) -> torch.Tensor:
+        """the params page's value [32, 4] (_write_sampler_params; the sampled speculative verify copies its users' rows,
+        tt/spec_mtp.py SpecMTP.set_sampling)"""
         import struct
 
         page = torch.zeros(32, 4, dtype=torch.int64)
@@ -1294,7 +1299,7 @@ class StackBackend(ModelBackend):
             page[r, 1] = struct.unpack("<I", struct.pack("<f", p if draw else 1.0))[0]
             page[r, 2] = struct.unpack("<I", struct.pack("<f", 1.0 / temp if draw else 1.0))[0]
             page[r, 3] = int(draw)
-        self._write_page(self.head.samp_par, page)
+        return page
 
     def _write_page(self, t, page: torch.Tensor) -> None:
         repl = ttnn.ReplicateTensorToMesh(self.mesh) if self.tp > 1 else None

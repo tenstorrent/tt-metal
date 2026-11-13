@@ -206,3 +206,45 @@ Device work, in order (each lands behind its own capability, so the adapter turn
 Adapter (this branch): spec_multi_gate (one host-tested rule for both modes), the two capability probes (False until
 the backend sets ``samples`` / ``partial`` on its spec step), the GLM53_SPEC_SAMPLED refusal over a greedy verify
 head, and `_spec_active` (the entered subset) for `_fused_rows`.
+
+### 8b. The sampled verify and partial groups as built (2026-11-13, opt-in)
+
+**Sampled verify (`GLM53_SPEC_SAMPLED=1`).** `head_clone(sample=True)` gives the verify head the base head's device
+sampler (`kernels/head/topk_select.cpp` TOPK_SAMPLE over the same top-K candidates as the plain sampled decode) with
+its own params and RNG pages. `SpecMTP.set_sampling({slot: L})`, called by `spec_enter` before the bootstrap, writes
+them: every verify row of user u (`u (K + 1) + j`; single-user: row j) carries its slot's plain params row
+(`StackBackend._sampler_page`) and a stream of its own, `generator.spec_verify_row_state(plain RNG row, j, L)`. That
+stream is distinct per column, so the K + 1 draws of a step are independent. It is distinct per entry because L grows,
+so a re-entry never replays a stream, and it is deterministic for a seeded request. The verify is called with
+`pos=None`, so every row draws once per step. Rows of inactive groups and rows past the groups stay greedy (flag 0).
+SpecCtl's ACCEPT is unchanged: it accepts draft j while column j - 1's draw equals it and emits the bonus as column
+n's draw. The MTP drafts stay greedy (a point mass q = delta(d)), so this walk is exact rejection sampling:
+- **Accept:** draft j is accepted with probability p(d_j) = min(1, p / q).
+- **Reject:** a rejection emits a draw of p conditioned on != d_j, which is the normalised residual (p - q)+.
+- **Result:** every emitted token is a draw of the target's transformed conditional at the true prefix.
+
+The host check (`test_spec_multi_refusals_and_room`) simulates the walk on a toy target with K 2. It compares the joint
+law of the first two emitted tokens against plain sampling (TV < 0.02 at N 60 K). The plugin needs only the ids
+(`spec_ids_are_sampled`), not draft probabilities. `spec_samples()` is True when the knob is on, the backend has a device
+sampler (`StackBackend(sample=True)`, `DEVICE_TOP_K > 1`) and the drafter is MTP.
+
+**Partial groups (`GLM53_SPEC_PARTIAL=1`, with `GLM53_SPEC_MULTI`).** `spec_ctl.cpp` SPEC_PARTIAL (SPEC_REV 5) treats
+a group as inactive when its base position is < 0: at BOOT the plain cur_pos row, at ACCEPT the pos_v row. For an
+inactive group:
+- every row's positions stay -1: verify, catch-up and chain (no KV / DSA writes, MoE live rows off);
+- no token or ring write;
+- its record is n 0, c -1;
+- GATHER skips it.
+
+`SpecMTP.set_active(groups)` writes the verify KDA masks, so an inactive group's rows keep their states bit-identical;
+a prefilling joiner's slot is untouched. `spec_enter(slots=subset)` takes any non-empty subset of the bases equal to
+the live slots. An inactive base's plain position is -1, and its page-table row is written but never read.
+`spec_step` / collect / leave work on the entered subset; records are mapped by slot and inactive ones skipped.
+A membership change leaves and re-enters (the adapter's `_propose_multi`), which costs one slot-op pass and one
+bootstrap replay. `spec_partial_groups()` is True with the knob.
+
+**Not covered yet.**
+- **No device run:** nothing of 8b has run on device (chain_smtp_2.sh).
+- **Seeded reproducibility:** a seeded request's sampled stream depends on when its group enters (L), so it is
+  reproducible for a given schedule but not across schedules, as vLLM's spec decode generally.
+- **Penalised rows:** they stay plain (the plugin's rule), so a penalised user anywhere declines the step for every user.

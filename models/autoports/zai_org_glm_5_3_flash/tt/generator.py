@@ -663,6 +663,83 @@ def spec_multi_groups(env=os.environ) -> int:
     return G
 
 
+def spec_sampled_verify(env=os.environ) -> bool:
+    """GLM53_SPEC_SAMPLED=1 (default off): the speculative step's verify head DRAWS every candidate column from the device
+    sampler (kernels/head/topk_select.cpp TOPK_SAMPLE, the plain served head's) under its user's own top-k / top-p /
+    temperature and an RNG stream of the column's own (spec_verify_row_state). The MTP layer's drafts stay greedy (a
+    point mass q = delta(d_j)), so the walk "draft j accepted while column j - 1's draw equals it, else that draw is
+    emitted and the walk stops; all accepted: column K's draw" is exact rejection sampling (accept with probability
+    p(d_j) = min(1, p / q); a rejection emits a draw of p conditioned on != d_j = the residual (p - q)+): every emitted
+    token is a draw of the target's sampled conditional at the true prefix -- the same distribution as the plain
+    sampled decode (the same sampler transform over the same device top-K candidates). Needs the backend's device
+    sampler (StackBackend(sample=True), DEVICE_TOP_K > 1); the served adapter declares spec_ids_are_sampled with it."""
+    return env.get("GLM53_SPEC_SAMPLED", "0") == "1"
+
+
+def spec_partial(env=os.environ) -> bool:
+    """GLM53_SPEC_PARTIAL=1 (default off; GLM53_SPEC_MULTI only): the multi-user step serves any non-empty subset of
+    its G group bases. An inactive group (its base without a live request: plain position -1 at the bootstrap) keeps
+    every verify / MTP row inactive (positions -1: kernels/spec/spec_ctl.cpp SPEC_PARTIAL; KDA masks 0:
+    spec_verify_masks) and records c = -1 (the host skips it); a change of the subset leaves and re-enters (the served
+    adapter's _propose_multi). Off: the fixed-G step (every group live), every kernel unchanged."""
+    return spec_multi_groups(env) > 0 and env.get("GLM53_SPEC_PARTIAL", "0") == "1"
+
+
+_M64 = (1 << 64) - 1
+
+
+def xoshiro_state(seed: int) -> list:
+    """xoshiro128** state of a 64-bit seed (splitmix64 -> 4 x 32 bits; never all zero): StackBackend._rng_state"""
+    x, out = int(seed) & _M64, []
+    for _ in range(2):
+        x = (x + 0x9E3779B97F4A7C15) & _M64
+        z = x
+        z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _M64
+        z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _M64
+        z ^= z >> 31
+        out += [z & 0xFFFFFFFF, z >> 32]
+    return out if any(out) else [1, 0, 0, 0]
+
+
+def spec_verify_row_state(base, j: int, L: int) -> list:
+    """the xoshiro128** state of verify column j for a user entering speculation at cache length L whose plain sampler
+    row holds `base` (4 x uint32): a fold of (base, j, L) through splitmix64 -- a stream per column (the K + 1 draws of
+    a step independent), per entry (L grows: a re-entry never replays a stream), deterministic for a seeded request"""
+    x = 0xCBF29CE484222325
+    for w in list(base)[:4]:
+        x = ((x ^ (int(w) & 0xFFFFFFFF)) * 0x100000001B3) & _M64
+    x ^= ((int(j) + 1) * 0x9E3779B97F4A7C15) & _M64
+    x = (x + ((int(L) & _M64) * 0xD1B54A32D192ED03)) & _M64
+    return xoshiro_state(x)
+
+
+def spec_sampler_pages(K: int, groups: int, slots, params_rows, rng_rows, Ls: dict):
+    """the sampled verify head's sampler pages ([32, 4] int64 of uint32 words, kernels/head/topk_select.cpp): verify row
+    u (K + 1) + j (the single-user step: row j) = slot s_u's params row (the plain head's page: k, p, 1 / temperature,
+    flags) and spec_verify_row_state(its plain RNG row, j, L[s_u]); users not in Ls (inactive groups) and the rows past
+    the groups stay greedy (zeros: no draw)"""
+    g, par, rng = int(K) + 1, torch.zeros(32, 4, dtype=torch.int64), torch.zeros(32, 4, dtype=torch.int64)
+    slots = tuple(int(s) for s in slots)  # (the single-user step: (0,))
+    for u, s in enumerate(slots):
+        if s not in Ls:
+            continue
+        base = [int(v) for v in torch.as_tensor(rng_rows[s]).reshape(-1)[:4].tolist()]
+        for j in range(g):
+            r = u * g + j
+            par[r] = torch.as_tensor(params_rows[s]).reshape(-1)[:4].to(torch.int64)
+            rng[r] = torch.tensor(spec_verify_row_state(base, j, int(Ls[s])), dtype=torch.int64)
+    return par, rng
+
+
+def spec_verify_masks(K: int, groups: int, wv: int, active) -> torch.Tensor:
+    """the verify launch's KDA row masks [1, 1, wv, 1]: rows u (K + 1) .. u (K + 1) + K of the active groups 1, every
+    other row 0 (an inactive group's KDA states stay bit-identical, as the plain decode's idle rows)"""
+    g, m = int(K) + 1, torch.zeros(1, 1, int(wv), 1)
+    for u in active:
+        m[:, :, int(u) * g : int(u) * g + g] = 1
+    return m
+
+
 def spec_widths(K: int, chunk: int, widths=(), groups: int = 0) -> dict:
     """the speculative step's row counts on a backend with decode chunk `chunk` and extra decode widths `widths` (its
     narrow + native widths) -- pure, so StackBackend sizes the sparse_dsa layers' fabric row counts before SpecMTP exists:
@@ -2397,7 +2474,10 @@ class Glm53Generator(_ReadinessGenerator):
         sp = getattr(self.backend, "spec", None)
         if sp is not None and self.spec_groups():  # GLM53_SPEC_MULTI: every user's next step fits
             lim = self._spec_limit(b)
-            return all(int(b.slots[s].seq_len) + 2 * int(sp.K) + 1 <= lim for s in self.spec_slots())
+            bases = self.spec_slots()
+            if getattr(sp, "partial", False):  # GLM53_SPEC_PARTIAL: the live bases only (an empty one holds no request)
+                bases = [s for s in bases if b.slots[s].active and not b.slots[s].finished]
+            return all(int(b.slots[s].seq_len) + 2 * int(sp.K) + 1 <= lim for s in bases)
         return sp is not None and int(b.slots[0].seq_len) + 2 * int(sp.K) + 1 <= self._spec_limit(b)
 
     def spec_enter(self, kv_cache, slot: int = 0, slots: Optional[Sequence[int]] = None):
@@ -2435,6 +2515,8 @@ class Glm53Generator(_ReadinessGenerator):
         # L + K are covered (the check above), so the OwnerBlockMap has mapped them; a rollback releases no block
         row = b.pt_shadow[0] if b.obm is None else b.phys[0]
         sp.set_page_table(row)
+        if getattr(sp, "samples", False):  # GLM53_SPEC_SAMPLED: the verify head's sampler pages for this user
+            sp.set_sampling({0: L})
         sp.enter(row)
         rec = sp.read()
         if rec["c"] != L - 1 and _MOCK_DEVICE:
@@ -2454,15 +2536,22 @@ class Glm53Generator(_ReadinessGenerator):
         single-user checks (context, the drafter's cache, page coverage); the next inputs resident in the base rows,
         plain positions = the cache lengths; the bootstrap drafts every group -> {slot: drafts}"""
         bases = list(self.spec_slots())
-        slots = bases if slots is None else [int(s) for s in slots]
-        if slots != bases:
+        partial = bool(getattr(sp, "partial", False))
+        slots = bases if slots is None else sorted(int(s) for s in slots)
+        if partial:  # GLM53_SPEC_PARTIAL: any non-empty subset of the bases
+            if not slots or not set(slots) <= set(bases):
+                raise ValueError(f"speculative step (GLM53_SPEC_PARTIAL): the users sit on a non-empty subset of the "
+                                 f"group bases {bases} (got {slots})")  # fmt: skip
+        elif slots != bases:
             raise ValueError(f"speculative step (GLM53_SPEC_MULTI): the users sit on the group bases {bases} "
                              f"(got {slots})")  # fmt: skip
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
-        if live != bases:
-            raise ValueError(f"speculative step: the group bases {bases} must be exactly the live slots (live {live})")
+        if live != slots:
+            raise ValueError(
+                f"speculative step: the entering bases {slots} must be exactly the live slots (live {live})"
+            )
         K, limit = int(sp.K), self._spec_limit(b)
-        for s in bases:
+        for s in slots:
             L = int(b.slots[s].seq_len)
             if L < 1 or L + K + 1 > limit:
                 raise ValueError(f"speculative step at length {L} (slot {s}): positions up to {L + K} outside "
@@ -2476,17 +2565,23 @@ class Glm53Generator(_ReadinessGenerator):
         if b.obm is not None and os.environ.get("GLM53_SPEC_ON_SHARD", "0") != "1":
             raise NotImplementedError("speculative decode on the sequence-sharded DSA pool (GLM53_DSA_SHARD) needs "
                                       "GLM53_SPEC_ON_SHARD=1")  # fmt: skip
-        self._sync_tokens(b, {s: -1 for s in bases})
-        pos = torch.full((b.max_batch,), -1, dtype=torch.int64)
-        for s in bases:
+        self._sync_tokens(b, {s: -1 for s in slots})
+        pos = torch.full((b.max_batch,), -1, dtype=torch.int64)  # (an inactive base: -1, the kernel skips its group)
+        for s in slots:
             pos[s] = int(b.slots[s].seq_len)
         self._write_positions(b, pos)
-        rows = [self._spec_row(b, s) for s in bases]
+        rows = [self._spec_row(b, s) for s in bases]  # (an inactive group's row is never read: its positions are -1)
+        if hasattr(sp, "set_active"):  # (the KDA masks of the entered groups; a no-op for every group)
+            sp.set_active([bases.index(s) for s in slots])
+        if getattr(sp, "samples", False):  # GLM53_SPEC_SAMPLED: the verify head's sampler pages for these users
+            sp.set_sampling({s: int(b.slots[s].seq_len) for s in slots})
         sp.set_page_tables(rows)
         sp.enter(rows)
         recs = sp.read()
         out, groups = {}, {}
         for s, rec in zip(bases, recs):
+            if s not in slots:  # (an inactive group: record c -1)
+                continue
             L = int(b.slots[s].seq_len)
             if rec["c"] != L - 1 and _MOCK_DEVICE:
                 rec = dict(rec, c=L - 1)  # mock: no kernel ran (zeros)
@@ -2515,7 +2610,7 @@ class Glm53Generator(_ReadinessGenerator):
         if getattr(b, "spec", None) is None:
             raise RuntimeError("spec_step without spec_enter")
         if self.spec_groups():  # GLM53_SPEC_MULTI: page_row = {slot: row} (the users whose rows changed)
-            K, bases = int(sp.K), self.spec_slots()
+            K, bases = int(sp.K), sorted(b.spec["groups"])  # (GLM53_SPEC_PARTIAL: the entered subset)
             L = {s: int(b.slots[s].seq_len) for s in bases}
             if page_row is not None:
                 self._write_page_rows(b, {int(s): r for s, r in page_row.items()},
@@ -2588,12 +2683,13 @@ class Glm53Generator(_ReadinessGenerator):
         """spec_step_collect of GLM53_SPEC_MULTI: per user (group order = the bases) the single-user bookkeeping --
         cache length += n + 1, the bonus = the next input in its base row, its candidate rows hold no token, the plain
         position row not advanced -> {slot: record}"""
-        bases = list(Ls)
-        if len(recs) != len(bases):
-            raise RuntimeError(f"speculative step: {len(recs)} records for the {len(bases)} users")
+        every = list(self.spec_slots())
+        if len(recs) != len(every):
+            raise RuntimeError(f"speculative step: {len(recs)} records for the {len(every)} groups")
+        by_slot = dict(zip(every, recs))  # (GLM53_SPEC_PARTIAL: Ls = the entered subset; the others record c -1)
         K, out, groups = self.spec_k(), {}, {}
-        for s, rec in zip(bases, recs):
-            L = Ls[s]
+        for s in Ls:
+            rec, L = by_slot[s], Ls[s]
             if rec["c"] != L and _MOCK_DEVICE:  # mock: no kernel ran (zeros) -> the bonus only, rejecting draft 1
                 d0 = int(b.spec["groups"][s]["drafts"][0]) if b.spec["groups"].get(s, {}).get("drafts") else -1
                 a = [int(v) for v in rec["a"]]
@@ -2642,10 +2738,13 @@ class Glm53Generator(_ReadinessGenerator):
             return
         self._spec_settle(b)
         if "groups" in b.spec:  # GLM53_SPEC_MULTI: every user's committed row -> its base row, its plain position
+            entered = set(b.spec["groups"])  # (GLM53_SPEC_PARTIAL: the subset; the other groups recorded c -1)
             recs = self.backend.spec.leave()
             b.pos_shadow = self.backend.read(b.io.cur_pos).to(torch.int64).reshape(-1)[: b.max_batch].clone()
             K = self.spec_k()
             for s, rec in zip(self.spec_slots(), recs):
+                if s not in entered:
+                    continue
                 if _MOCK_DEVICE and int(b.pos_shadow[s]) != int(b.slots[s].seq_len):
                     b.pos_shadow[s] = int(b.slots[s].seq_len)  # mock: no kernel ran (zeros)
                     rec = dict(rec, c=int(b.slots[s].seq_len) - int(rec["n"]) - 1)

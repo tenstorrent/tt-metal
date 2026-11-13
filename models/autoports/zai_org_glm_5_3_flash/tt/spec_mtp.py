@@ -35,6 +35,10 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (  # noqa: F401 
     mtp_prefill_span,
     spec_mtp_pt_width,
     spec_multi_groups,
+    spec_partial,
+    spec_sampled_verify,
+    spec_sampler_pages,
+    spec_verify_masks,
     spec_widths,
 )
 from models.autoports.zai_org_glm_5_3_flash.tt.rt_guard import checked
@@ -45,7 +49,7 @@ BF16, FP32 = ttnn.bfloat16, ttnn.float32
 TILE = 32
 HIDDEN = 4096
 KDIR = os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels")
-SPEC_REV = 4  # 4: SPEC_GROUPS ACCEPT addresses user u's ring at slot u (K + 1) of each layer's tensor (R bases, not R x G); 3: ACCEPT moves the DSA rings (mk_mla rev 56); a define on every Stage 17 kernel (a long-lived process caches FILE_PATH binaries by path + args + defines)
+SPEC_REV = 5  # 5: SPEC_PARTIAL (an inactive group: rows -1, record c -1); 4: SPEC_GROUPS ACCEPT addresses user u's ring at slot u (K + 1) of each layer's tensor (R bases, not R x G); 3: ACCEPT moves the DSA rings (mk_mla rev 56); a define on every Stage 17 kernel (a long-lived process caches FILE_PATH binaries by path + args + defines)
 SEM_HEAD, SEM_HN = 0, 4  # kernels/head/head_common.hpp roles (owners: partial-sum all-gather; readers: hcat landed)
 
 
@@ -385,10 +389,12 @@ class SpecCtl:
 
     MODES = dict(accept=1, boot=2, gather=3)
 
-    def __init__(self, mesh, K: int, groups: int = 0):
+    def __init__(self, mesh, K: int, groups: int = 0, partial: bool = False):
         self.mesh, self.K = mesh, K
         # GLM53_SPEC_MULTI: groups = G users (spec_ctl.cpp SPEC_GROUPS; 0 = the single-user kernel, unchanged)
         self.groups = int(groups)
+        # GLM53_SPEC_PARTIAL (spec_ctl.cpp SPEC_PARTIAL): a group whose base position is < 0 stays inactive
+        self.partial = bool(partial) and self.groups > 0
         assert self.groups == 0 or 1 <= self.groups * (K + 1) <= 32, (self.groups, K)
         self.core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
 
@@ -407,6 +413,8 @@ class SpecCtl:
         defs = [("SPEC_MODE", str(self.MODES[mode])), ("SPEC_REV", str(SPEC_REV))]
         if self.groups:
             defs.append(("SPEC_GROUPS", str(self.groups)))
+        if self.partial:
+            defs.append(("SPEC_PARTIAL", "1"))
         scr = 2048 if self.groups else 1024  # (SPEC_GROUPS: the assembled pages past the single-user slots)
         kd = ttnn.KernelDescriptor(
             kernel_source=os.path.join(KDIR, "spec", "spec_ctl.cpp"),
@@ -420,11 +428,13 @@ class SpecCtl:
         ttnn.generic_op(io, checked(ttnn.ProgramDescriptor(kernels=[kd], semaphores=[], cbs=[cb])))
 
 
-def head_clone(base, t: int, *, norm_w=None, view=None):
+def head_clone(base, t: int, *, norm_w=None, view=None, sample: bool = False):
     """an MkHead on the base head's weights / readers / select core / fabric phase (as MkHead.width_view): rows 0..t-1,
     top-1 (greedy, lowest-id tie break), no sampling, NO position advance (call with pos=None), its OWN token / sampled /
     landing pages (DRAM), h / outs = row views of the base's buffers (no new L1); norm_w: another final-norm weight
-    (the MTP head: shared_head.norm)"""
+    (the MTP head: shared_head.norm). sample (GLM53_SPEC_SAMPLED, the verify head): the base head's device sampler
+    (kernels/head/topk_select.cpp TOPK_SAMPLE over its top-K candidates) with the clone's OWN params / RNG pages (DRAM,
+    every row greedy until SpecMTP.set_sampling writes them); pos=None: every row draws once per call"""
     from models.autoports.zai_org_glm_5_3_flash.tt.mk_head import MkHead
 
     assert base.h is not None, "the base head runs (eagerly) before its clones"
@@ -433,8 +443,15 @@ def head_clone(base, t: int, *, norm_w=None, view=None):
     o.t = t
     o.h = view(base.h, t)
     o.outs = [view(x, t) for x in base.outs]
-    o.topk, o.sample, o.samp_par, o.samp_rng, o.probe = 1, False, None, None, None
     mesh = base.device
+    if sample:
+        assert (
+            getattr(base, "sample", False) and int(base.topk) > 1
+        ), "the sampled verify: the base head's device sampler"
+        page = lambda: dram_rows(mesh, torch.zeros(1, 128))  # noqa: E731  ([1, 128] uint32: 32 rows x 4 words)
+        o.topk, o.sample, o.samp_par, o.samp_rng, o.probe = int(base.topk), True, page(), page(), None
+    else:
+        o.topk, o.sample, o.samp_par, o.samp_rng, o.probe = 1, False, None, None, None
     o.topk_out = dram_rows(mesh, torch.zeros(32, 64))
     o.sampled = dram_rows(mesh, torch.zeros(32, 64))
     o.topk_land = None  # allocated by the first (eager) call
@@ -483,6 +500,14 @@ class SpecMTP:
                 os.environ.get("GLM53_SPEC_MTP_PREFILL", "1") != "launch"
             ), "GLM53_SPEC_MULTI: the in-trace MTP-cache fill (the launch-mode prefill indexes one user's rows)"
         self.be, self.kv, self.K, self.w = be, kv, K, (K + 1) * max(1, G)
+        # GLM53_SPEC_SAMPLED (generator.spec_sampled_verify): the verify head draws on device under each user's own
+        # sampler params (head_clone(sample=True), set_sampling); the MTP drafts stay greedy -- exact rejection sampling
+        self.samples = bool(
+            spec_sampled_verify() and drafter == "mtp" and getattr(be.head, "sample", False) and int(be.head.topk) > 1
+        )
+        # GLM53_SPEC_PARTIAL (generator.spec_partial): any non-empty subset of the G groups (set_active before enter)
+        self.partial = bool(G) and spec_partial()
+        self.active = tuple(range(max(1, G)))  # the groups the running speculation serves (indices into slots)
         self.slots = tuple(u * (K + 1) for u in range(max(1, G)))  # the speculating users' generator slots
         self.drafter = drafter
         # GLM53_SPEC_VERIFY_W: the verify's program width wv. Unset: K+1 (the narrow t = K+1 programs). "plain": the lone
@@ -649,7 +674,7 @@ class SpecMTP:
             for t in sorted({cu, ch}):
                 self.eh.buffers(t)
             self.w_mtp = norm_tile(mesh, self.source.host(MTP_L, "shared_head.norm.weight"))
-        self.ctl = SpecCtl(mesh, K, groups=G)
+        self.ctl = SpecCtl(mesh, K, groups=G, partial=self.partial)
         l1_debug("after MkEh / ctl", self.mesh)
         self.df2 = None
         # the positions the speculative step may touch (None: the backend's max_seq_len); the dflash2 drafter's own
@@ -787,7 +812,7 @@ class SpecMTP:
         em.__dict__.update(be.embed.__dict__)
         em.t = self.wv
         self.embed_v = em
-        self.heads = dict(verify=head_clone(be.head, self.wv, view=_rows_view))
+        self.heads = dict(verify=head_clone(be.head, self.wv, view=_rows_view, sample=self.samples))
         if self.drafter != "mtp":
             return
         self.heads.update(
@@ -1285,6 +1310,37 @@ class SpecMTP:
         if int(value.shape[0]) > max(self.slots):
             self.set_page_tables([value[s] for s in self.slots])
 
+    def set_active(self, groups) -> None:
+        """GLM53_SPEC_PARTIAL: the groups (indices into slots) the next entry serves -> the verify launch's KDA row masks
+        (an inactive group's rows 0: its states stay bit-identical); spec_ctl.cpp SPEC_PARTIAL keeps its positions -1
+        (its base's plain position is -1 at the bootstrap) and records c = -1"""
+        act = tuple(sorted({int(u) for u in groups}))
+        G = max(1, self.groups)
+        assert act and all(0 <= u < G for u in act), (act, G)
+        assert self.partial or act == tuple(range(G)), ("a subset of the groups needs GLM53_SPEC_PARTIAL=1", act)
+        if act == self.active:
+            return
+        m = spec_verify_masks(self.K, self.groups, self.wv, act)
+        lb = float(self.be._kda0().lower_bound)
+        for t, v, dt in zip(self.masks_v, (m, m, m * lb), (FP32, BF16, FP32)):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(v, dtype=dt, layout=ttnn.TILE_LAYOUT, mesh_mapper=_repl(self.mesh)), t
+            )
+        self.active = act
+        self.counters["mask_writes"] = self.counters.get("mask_writes", 0) + 1
+
+    def set_sampling(self, Ls: dict) -> None:
+        """GLM53_SPEC_SAMPLED: the verify head's sampler pages for the users entering (Ls = {generator slot: its cache
+        length}): every verify row of user u carries its slot's params row (the plain head's page) and a stream of its
+        own (generator.spec_verify_row_state of the slot's plain RNG row, the column and L); the other rows greedy"""
+        if not self.samples:
+            return
+        be, h = self.be, self.heads["verify"]
+        par, rng = spec_sampler_pages(self.K, self.groups, self.slots, be._sampler_page(), be._read_rng(), Ls)
+        be._write_page(h.samp_par, par)
+        be._write_page(h.samp_rng, rng)
+        self.counters["sampler_writes"] = self.counters.get("sampler_writes", 0) + 1
+
     def enter(self, page_row):
         """start speculating for the user in slot 0 after a plain step / prefill (its committed state in row 0, the next
         input token in token row 0, be.pos[0] = its position): the bootstrap replay drafts d'1..d'K on device.
@@ -1350,6 +1406,8 @@ class SpecMTP:
         if self.groups:  # GLM53_SPEC_MULTI: per user, candidate row u (K + 1) + n_u -> its base row, its plain position
             pos = read_rows(self.mesh, be.pos).reshape(-1)[:32].clone()
             for s, r in zip(self.slots, rec):
+                if r["c"] < 0:  # GLM53_SPEC_PARTIAL: an inactive group (no request) -- nothing committed, no position
+                    continue
                 if r["n"] != 0:
                     be.slot_ops.run(be._state_ops(kv, s, s + r["n"], dsa=False))
                     self.counters["slot_copies"] += 1

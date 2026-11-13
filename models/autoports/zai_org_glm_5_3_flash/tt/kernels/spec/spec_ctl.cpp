@@ -40,6 +40,9 @@
 //   R ring tensors' base addresses (slot 0 = page 0); user u's ring = slot ro = u (K + 1), its group base (the
 //   generator slot = the DSA state slot): pages ro RING_TILES + i of each tensor. SPEC_REV 3 took R x G slot bases
 //   (<= 64): G 8 x the 11 sparse_dsa layers = 88 did not fit (K 1 at 8 users).
+// SPEC_PARTIAL (GLM53_SPEC_PARTIAL, SPEC_REV 5; with SPEC_GROUPS): a group whose base position is < 0 (BOOT: the plain
+//   cur_pos row ro; ACCEPT: pos_v row ro) is inactive -- its rows keep positions -1, no token / ring write, record n 0
+//   and c -1; GATHER skips a record with c < 0. Without the define every group is live (batch 2's fixed G).
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -102,6 +105,18 @@ void kernel_main() {
             u32(s_rec)[w] = 0;
         }
         u32(s_rec)[W_STEPS] = steps;
+#if defined(SPEC_PARTIAL)
+        // GLM53_SPEC_PARTIAL: a group without a live request (BOOT: its base's plain position < 0; ACCEPT: its pos_v
+        // row ro < 0, kept so since the BOOT that found it inactive) -- every row stays inactive (pos_v / mpos_cu /
+        // mpos_ch -1 from the init above), no token write, no ring move; its record: n 0, c -1 (the host skips it)
+        if (i32(s_pos)[ro] < 0) {
+            u32(s_rec)[W_C] = 0xFFFFFFFFu;
+            noc_async_write(s_rec, dram(rec, REC_PAGE, u), REC_PAGE);
+            noc_async_write_barrier();
+            u32(s_sel)[u] = ro;
+            continue;
+        }
+#endif
         uint32_t a[K + 1];
         uint32_t n = 0;
         int32_t c;
@@ -191,6 +206,11 @@ void kernel_main() {
         const uint32_t ro = u * W;
         noc_async_read(dram(rec, REC_PAGE, u), s_rec, REC_PAGE);
         noc_async_read_barrier();
+#if defined(SPEC_PARTIAL)
+        if (static_cast<int32_t>(u32(s_rec)[W_C]) < 0) {  // an inactive group (ACCEPT / BOOT recorded c -1): no drafts
+            continue;
+        }
+#endif
         const uint32_t n = u32(s_rec)[W_N];
         uint32_t d[K];
         noc_async_read(dram(mout, TOK_PAGE, ro + n), s_tok, 64);

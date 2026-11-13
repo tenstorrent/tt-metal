@@ -56,6 +56,11 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     spec_multi_groups,
     spec_multi_k_by_rows,
     spec_multi_plan,
+    spec_partial,
+    spec_sampled_verify,
+    spec_sampler_pages,
+    spec_verify_masks,
+    spec_verify_row_state,
     spec_widths,
 )
 from models.autoports.zai_org_glm_5_3_flash.tt.owner_blocks import OwnerBlockMap
@@ -2236,6 +2241,73 @@ def test_spec_multi_refusals_and_room(monkeypatch):
     monkeypatch.setattr(gvs, "SPEC_SAMPLED", True)
     with expect_error(RuntimeError, "GLM53_SPEC_SAMPLED=1 declares spec_ids_are_sampled"):
         gvs.GLM53StackForCausalLM(gen, mb, 4096, spec=True)
+    # ---- the sampled verify (GLM53_SPEC_SAMPLED) and partial groups (GLM53_SPEC_PARTIAL): their pure pieces
+    assert spec_sampled_verify({}) is False and spec_sampled_verify({"GLM53_SPEC_SAMPLED": "1"}) is True
+    assert spec_partial({"GLM53_SPEC_PARTIAL": "1"}) is False  # (multi-user only)
+    assert spec_partial({"GLM53_SPEC_MULTI": "1", "GLM53_SPEC_PARTIAL": "1"}) is True
+    assert spec_partial({"GLM53_SPEC_MULTI": "1"}) is False
+    # a stream per column, per entry length, per user state; deterministic; never the all-zero xoshiro state
+    base = [0x12345678, 0x9ABCDEF0, 0x0F0F0F0F, 0xF0F0F0F0]
+    st = {(j, L): tuple(spec_verify_row_state(base, j, L)) for j in range(4) for L in (100, 101, 4096)}
+    assert len(set(st.values())) == len(st) and all(any(v) for v in st.values())
+    assert tuple(spec_verify_row_state(base, 2, 101)) == st[(2, 101)]
+    assert tuple(spec_verify_row_state([1, 0, 0, 0], 0, 100)) != st[(0, 100)]
+    # the pages: G 2, K 1 on the bases (0, 2), group 0 inactive -> rows 0, 1 greedy (zeros), rows 2, 3 = slot 2's
+    # params and two distinct streams; the single-user step: rows 0..K of slot 0
+    par_rows = torch.arange(32 * 4, dtype=torch.int64).reshape(32, 4)
+    rng_rows = torch.arange(1000, 1000 + 32 * 4, dtype=torch.int64).reshape(32, 4)
+    par, rng = spec_sampler_pages(1, 2, (0, 2), par_rows, rng_rows, {2: 77})
+    assert par[:2].abs().sum() == 0 and rng[:2].abs().sum() == 0 and par[4:].abs().sum() == 0
+    assert torch.equal(par[2], par_rows[2]) and torch.equal(par[3], par_rows[2])
+    assert rng[2].tolist() == spec_verify_row_state(rng_rows[2].tolist(), 0, 77) != rng[3].tolist()
+    par, rng = spec_sampler_pages(3, 0, (0,), par_rows, rng_rows, {0: 5})
+    assert all(torch.equal(par[j], par_rows[0]) for j in range(4)) and par[4:].abs().sum() == 0
+    assert len({tuple(rng[j].tolist()) for j in range(4)}) == 4
+    # the verify KDA masks of a subset: G 4, K 1 (8 rows), groups 1 and 3 live
+    assert spec_verify_masks(1, 4, 8, [1, 3]).reshape(-1).tolist() == [0, 0, 1, 1, 0, 0, 1, 1]
+    # EXACTNESS of the sampled walk against greedy drafts: a toy target p(. | last token) over V tokens, K = 2 drafts
+    # from another table's argmax; per step the columns draw independently from p(. | prefix, d_1..d_j) and the walk
+    # emits a_0 .. a_n (+ the stop draw); the first two emitted tokens' joint law equals the plain sampled decode's
+    V, N, gen_t = 5, 60000, torch.Generator().manual_seed(7)
+    tgt = torch.softmax(torch.randn(V, V, generator=gen_t) * 1.5, dim=-1)  # p(next | last)
+    drf = torch.randn(V, V, generator=gen_t).argmax(dim=-1)  # the drafter's greedy next token
+    start = 3
+
+    def draw(row):
+        return int(torch.multinomial(row, 1, generator=gen_t))
+
+    spec_pairs, plain_pairs = torch.zeros(V, V), torch.zeros(V, V)
+    for _ in range(N):
+        d1 = int(drf[start])
+        d2 = int(drf[d1])
+        cols = [draw(tgt[start]), draw(tgt[d1]), draw(tgt[d2])]  # column j conditions on prefix + d_1..d_j
+        out = [cols[0]]
+        if cols[0] == d1:
+            out.append(cols[1])  # d1 accepted: column 1 is the draw after it (accepted or the stop draw)
+        else:
+            out.append(draw(tgt[cols[0]]))  # the walk stopped at a_0: the next step samples after it
+        spec_pairs[out[0], out[1]] += 1
+        a = draw(tgt[start])
+        plain_pairs[a, draw(tgt[a])] += 1
+    tv = 0.5 * float((spec_pairs / N - plain_pairs / N).abs().sum())
+    assert tv < 0.02, tv
+    # a greedy (argmax) verify answering sampled rows would NOT be exact: its first token is a point mass
+    assert float(tgt[start].max()) < 0.99
+    # ---- the generator's record mapping under a subset: G 2, K 1, bases (0, 2), only slot 2 entered
+    backend.spec.partial = True
+    b = SimpleNamespace(
+        slots=[SimpleNamespace(seq_len=0, active=False, finished=False) for _ in range(mb)],
+        tok_val=[-1] * mb, dev_ok=torch.zeros(mb, dtype=torch.bool), pos_shadow=torch.zeros(mb, dtype=torch.int64),
+        step=0, spec=dict(groups={2: dict(drafts=[9], bonus=4)}),
+    )  # fmt: skip
+    b.slots[2].seq_len = 10
+    recs = [dict(n=0, c=-1, a=[0, 0], committed=[0], drafts=[0], steps=1),  # group 0: inactive (spec_ctl c -1)
+            dict(n=1, c=10, a=[5, 6], committed=[5, 6], drafts=[7], steps=1)]  # fmt: skip
+    out = gen._spec_apply_groups(b, {2: 10}, recs)
+    assert list(out) == [2] and b.slots[2].seq_len == 12 and b.tok_val[2] == 6 and b.slots[0].seq_len == 0
+    assert b.spec == dict(groups={2: dict(drafts=[7], bonus=6)})
+    with expect_error(RuntimeError, "1 records for the 2 groups"):
+        gen._spec_apply_groups(b, {2: 12}, recs[1:])
     assert "ttnn" not in sys.modules
 
 
