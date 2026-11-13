@@ -69,6 +69,8 @@ class Attention(Module):
         },
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
+    ring_sdpa_exp_approx: bool = False
+    ring_sdpa_concat_heads: bool = False
 
     def __init__(
         self,
@@ -277,7 +279,7 @@ class Attention(Module):
                 compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
                 q_chunk_size=ring_chunk_size[0],
                 k_chunk_size=ring_chunk_size[1],
-                exp_approx_mode=False,  # NOTE: False is more correct
+                exp_approx_mode=self.ring_sdpa_exp_approx,
             )
         return self.ring_sdpa_program_config[per_device_seq_len]
 
@@ -505,6 +507,7 @@ class Attention(Module):
         addcmul_spatial_gate: ttnn.Tensor | None = None,
         addcmul_prompt_residual: ttnn.Tensor | None = None,
         addcmul_prompt_gate: ttnn.Tensor | None = None,
+        precomputed_qkv_flat: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Forward with optional fused to_out + addcmul.
 
@@ -533,13 +536,16 @@ class Attention(Module):
             return out
 
         # Sequence 1 processing Typically spatial or spatial+prompt.
-        q_flat_c, k_flat_c, v_flat_c = self.to_qkv(
-            sequence_1,
-            compute_kernel_config=self.mm_compute_kernel_config,
-            parallel_config=self.parallel_config,
-            core_grid=self.get_core_grid(sequence_1.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
-            use_heuristic_mmcfg=True,
-        )
+        if precomputed_qkv_flat is not None:
+            q_flat_c, k_flat_c, v_flat_c = precomputed_qkv_flat
+        else:
+            q_flat_c, k_flat_c, v_flat_c = self.to_qkv(
+                sequence_1,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=self.parallel_config,
+                core_grid=self.get_core_grid(sequence_1.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
+                use_heuristic_mmcfg=True,
+            )
 
         # Combined RoPE: concat spatial and prompt tensors along the seq dim (dim=2).
         sequence_1_cos, sequence_1_sin = sequence_1_rope
@@ -608,6 +614,12 @@ class Attention(Module):
                 persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(add_k.shape, 2, sp_axis)
                 persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
 
+        # self-attention only: the ring SDPA writes the heads side by side, so concatenate_heads is a reshape
+        concat_out = (
+            self.ring_sdpa_concat_heads
+            and self.parallel_config.sequence_parallel.factor > 1
+            and int(add_q.shape[2]) == 0
+        )
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
@@ -639,6 +651,7 @@ class Attention(Module):
                 ccl_core_grid_offset=(0, self.get_ring_sdpa_core_grid(sequence_1_length)[1]),
                 persistent_output_buffer_joint_k=persistent_joint_k,
                 persistent_output_buffer_joint_v=persistent_joint_v,
+                output_concat_heads=concat_out,
             )
         else:
             assert (
@@ -657,7 +670,10 @@ class Attention(Module):
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
-        spatial = ttnn.transformer.concatenate_heads(spatial)
+        if concat_out:  # [B, 1, N, H * D] -> [B, N, H * D]
+            spatial = ttnn.reshape(spatial, (spatial.shape[0], spatial.shape[2], spatial.shape[3]))
+        else:
+            spatial = ttnn.transformer.concatenate_heads(spatial)
         if self.to_out is not None:
             spatial = self.to_out(
                 x=spatial,
