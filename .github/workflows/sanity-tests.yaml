@@ -217,11 +217,9 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
-  push:
-    branches: ["main"]
   schedule:
-    # Scheduled (cron) runs fire the Blackhole suite (Wormhole + Sim excluded).
-    - cron: "0 */2 * * *"
+    # Scheduled (cron) runs fire all suites.
+    - cron: "0 */4 * * *"
 
 permissions:
   actions: read
@@ -234,14 +232,13 @@ permissions:
 
 run-name: >-
   Sanity tests${{ (github.event_name == 'schedule' && ' (scheduled)')
-  || (github.event_name == 'push' && ' (push)')
   || '' }}${{ inputs.with-retries && ' (with retries)' || '' }}${{
   format(' SKUs[{0}{1}{2}{3}{4}]',
-  (inputs.run-wormhole || github.event_name == 'push') && 'WH' || '',
-  (inputs.run-wormhole || github.event_name == 'push') && (inputs.run-blackhole || github.event_name == 'schedule') && ',' || '',
+  (inputs.run-wormhole || github.event_name == 'schedule') && 'WH' || '',
+  (inputs.run-wormhole || github.event_name == 'schedule') && (inputs.run-blackhole || github.event_name == 'schedule') && ',' || '',
   (inputs.run-blackhole || github.event_name == 'schedule') && 'BH' || '',
-  (inputs.run-wormhole || inputs.run-blackhole || github.event_name == 'push' || github.event_name == 'schedule') && (inputs.run-sim || github.event_name == 'push') && ',' || '',
-  (inputs.run-sim || github.event_name == 'push') && 'Sim' || '') }}
+  (inputs.run-wormhole || inputs.run-blackhole || github.event_name == 'schedule') && (inputs.run-sim || github.event_name == 'schedule') && ',' || '',
+  (inputs.run-sim || github.event_name == 'schedule') && 'Sim' || '') }}
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
