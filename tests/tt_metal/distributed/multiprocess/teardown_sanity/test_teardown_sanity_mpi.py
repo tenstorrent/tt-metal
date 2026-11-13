@@ -61,6 +61,7 @@ def test_ttrun_dead_rank():
     ended(r)
     nonzero(r)
     clean(r)
+    assert "died by signal 9 (SIGKILL)" in r.log, r.log[-2000:]  # tt-run says why, not the stale-cache hint
 
 
 def test_ttrun_hang_timeout():
@@ -102,6 +103,9 @@ def test_ttrun_bad_interface():
     ended(r)
     nonzero(r)
     clean(r)
+    # tt-run names the interface and the ones this host has, instead of the generic stale-cache hint
+    assert "TCP interface 'nosuchif'" in r.log, r.log[-2000:]
+    assert "golden" not in r.log.lower(), r.log[-2000:]
 
 
 def test_scripts_tcp_only():

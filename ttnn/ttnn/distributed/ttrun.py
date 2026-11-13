@@ -244,6 +244,49 @@ def _emit_phase2_troubleshooting_hint(hint: Phase2FailureHint) -> None:
         logger.warning(f"{TT_RUN_PREFIX} {text}")
 
 
+def _tcp_interface_in_mpi_args(mpi_args: Optional[List[str]]) -> Optional[str]:
+    """The interface the ranks' TCP transport is pinned to by ``--mca btl_tcp_if_include <iface>`` in the MPI
+    arguments (what ``--tcp-interface`` becomes, or what a user passed by hand), or None."""
+    args = list(mpi_args or [])
+    for i, a in enumerate(args):
+        if a in ("--mca", "-mca") and i + 2 < len(args) and args[i + 1] == "btl_tcp_if_include":
+            return args[i + 2]
+    return None
+
+
+def explain_phase2_exit(rc: int, mpi_args: Optional[List[str]], hint: Phase2FailureHint) -> None:
+    """One line that says why the job ended, before any generic hint. The launcher's code tells most of it: a
+    rank died by a signal (128 + signal), the wall clock fired (241, already reported by run_launcher), or the
+    ranks never started because the TCP interface they were pinned to does not exist on this host (MPI_Init
+    fails on every rank, exit 14). Only when none of those apply does the generic cache / descriptor hint make
+    sense, so it is logged last and only then."""
+    if rc == PRTE_TIMEOUT_EXIT_CODE:
+        return  # run_launcher has already said the job hit its wall clock
+    if rc > 128:
+        signum = rc - 128
+        try:
+            name = signal.Signals(signum).name
+        except ValueError:
+            name = "unknown signal"
+        logger.error(
+            f"{TT_RUN_PREFIX} the job ended because a rank died by signal {signum} ({name}); the launcher ended the "
+            f"other ranks and tt-run returns {rc}. The rank's own output above says which rank and why."
+        )
+        return
+    iface = _tcp_interface_in_mpi_args(mpi_args)
+    if iface:
+        local = get_local_network_interfaces()
+        if local and iface not in local:
+            logger.error(
+                f"{TT_RUN_PREFIX} the ranks could not start: the TCP interface '{iface}' they are pinned to "
+                f"(--tcp-interface, or --mca btl_tcp_if_include) does not exist on this host; MPI_Init fails on every "
+                f"rank and the launcher returns {rc}. Interfaces on this host: {', '.join(sorted(local))}. Fix the "
+                f"interface name, or drop --tcp-interface to let MPI use any interface except docker0 and lo."
+            )
+            return
+    _emit_phase2_troubleshooting_hint(hint)
+
+
 # Store the original working directory at module load time to preserve it
 # across mpirun process launches (critical for SLURM/sbatch environments)
 ORIGINAL_CWD = Path.cwd().resolve()
@@ -1391,6 +1434,7 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.warning(
             f"{TT_RUN_PREFIX} Network interface '{interface}' not found on local host. "
             f"Available interfaces: {', '.join(sorted(local_interfaces))}. "
+            f"Every rank on this host will fail MPI_Init on it (the job ends with exit 14, not a hang). "
             f"Note: This check only validates the local host; the interface may exist on remote MPI hosts."
         )
     elif verbose:
@@ -2862,7 +2906,7 @@ def legacy_flow(
     try:
         rc = run_launcher(mpi_cmd, cwd=ORIGINAL_CWD)  # run_launcher clears stale /dev/shm as its first step
         if rc != 0:
-            _emit_phase2_troubleshooting_hint(phase2_failure_hint)
+            explain_phase2_exit(rc, effective_mpi_args, phase2_failure_hint)
         sys.exit(rc)
     except OSError as e:
         t = _phase2_troubleshooting_hint_text(phase2_failure_hint)

@@ -1399,6 +1399,50 @@ class TestJobOwnership:
         assert rc != 0
         assert time.time() - t0 < 10
 
+    @staticmethod
+    def _logged(fn):
+        """Run fn and return what tt-run logged (loguru, so caplog does not see it)."""
+        from loguru import logger
+
+        lines = []
+        sink = logger.add(lambda m: lines.append(str(m)), level="INFO")
+        try:
+            fn()
+        finally:
+            logger.remove(sink)
+        return "".join(lines)
+
+    def test_explain_phase2_exit_names_a_signal_death_and_skips_the_generic_hint(self):
+        import signal
+
+        from ttnn.distributed.ttrun import PRTE_TIMEOUT_EXIT_CODE, explain_phase2_exit
+
+        # A rank died by a signal: one line names the signal and the code; the cache / descriptor hint is not logged,
+        # because a dead rank is not a stale cache.
+        text = self._logged(lambda: explain_phase2_exit(128 + signal.SIGKILL, [], "legacy"))
+        assert "died by signal 9 (SIGKILL)" in text
+        assert "returns 137" in text
+        assert "golden" not in text.lower()
+        # The wall clock: run_launcher already said so; nothing more is logged.
+        assert self._logged(lambda: explain_phase2_exit(PRTE_TIMEOUT_EXIT_CODE, [], "legacy")) == ""
+
+    def test_explain_phase2_exit_names_a_missing_tcp_interface(self):
+        from ttnn.distributed.ttrun import explain_phase2_exit
+
+        ttrun_module = sys.modules["ttnn.distributed.ttrun"]
+        # The ranks were pinned to an interface this host does not have (a typo in --tcp-interface, or a hand-written
+        # --mca btl_tcp_if_include): MPI_Init fails on every rank and the launcher returns 14. tt-run says which
+        # interface, which ones exist, and what to change, instead of the generic hint.
+        with patch.object(ttrun_module, "get_local_network_interfaces", return_value={"eth0", "lo"}):
+            text = self._logged(lambda: explain_phase2_exit(14, ["--mca", "btl_tcp_if_include", "nosuchif"], "legacy"))
+            assert "TCP interface 'nosuchif'" in text
+            assert "eth0, lo" in text
+            assert "golden" not in text.lower()
+            # The same code with an interface that exists is not an interface problem: the generic hint stays.
+            text = self._logged(lambda: explain_phase2_exit(14, ["--mca", "btl_tcp_if_include", "eth0"], "legacy"))
+            assert "TCP interface" not in text
+            assert "golden" in text.lower()
+
     def test_sweep_removes_a_stale_shm_segment_but_keeps_a_mapped_one(self):
         import mmap
         import socket
