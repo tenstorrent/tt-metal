@@ -147,6 +147,7 @@ DB_SCHEMA = [
     Column("reduce_pool_type", "string", True, "configuration"),
     Column("reinit_mode", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
+    Column("relu_type", "string", True, "configuration"),
     Column("respect_trigger", "bool", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
     Column("row_mop", "bool", True, "configuration"),

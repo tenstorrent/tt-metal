@@ -113,6 +113,7 @@ DB_SCHEMA = [
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
+    Column("relu_type", "string", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
     Column("sfpu_impl", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),

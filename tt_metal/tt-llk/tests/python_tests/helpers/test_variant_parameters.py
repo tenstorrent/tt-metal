@@ -7,6 +7,7 @@ import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
+from typing import Optional
 
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
@@ -29,6 +30,7 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackerReluType,
     PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
@@ -2182,9 +2184,14 @@ class IN_TILE_DIMS(RuntimeParameter):
 
 @dataclass
 class RELU_CONFIG(RuntimeParameter):
-    """Packer ReLU config: packed 32-bit value (mode in low 2 bits, threshold in bits 16–31)."""
+    """Packer ReLU config: packed 32-bit value (mode in low 2 bits, threshold in bits 16–31).
+
+    ``relu_type`` is the mode by name. It is a perf CSV column only (not a kernel parameter):
+    ``relu_config`` mixes the mode with a threshold, so it states the mode on its own.
+    """
 
     relu_config: int = 0
+    relu_type: Optional[PackerReluType] = None
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int RELU_CONFIG = {self.relu_config};"
