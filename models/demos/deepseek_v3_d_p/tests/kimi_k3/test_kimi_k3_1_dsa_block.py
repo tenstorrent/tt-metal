@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     CHUNK,
     build_stack,
     compose,
+    hf_config,
     placements,
     release,
     synthetic_state_dict,
@@ -97,6 +98,8 @@ def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, wind
     state_dict = synthetic_state_dict(first_layer_idx, num_layers)
     logger.info(f"{window}: building the model")
     stack, caches = build_stack(mesh_device, state_dict, first_layer_idx, num_layers, kv_only_last_layer=kv_only)
+    # Every window is a first rank that embeds its own tokens: a stand-in table would map them all to one row.
+    assert stack.embed.vocab_size == hf_config().vocab_size, f"embedding has {stack.embed.vocab_size} rows"
     dsa_layers = [layer for layer in stack.layers if layer.attention.writes_kv]
     assert dsa_layers and all(layer.attention.mla._has_indexer for layer in dsa_layers), "K3.1 layers must be DSA"
     kvpe, index = caches.kvpe, caches.index
