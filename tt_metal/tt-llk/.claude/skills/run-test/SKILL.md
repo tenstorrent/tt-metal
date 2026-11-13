@@ -36,6 +36,7 @@ Examples:
 - `--arch <arch>` — `quasar`, `blackhole`, `wormhole`. Required unless inferable (see below)
 - `--k <expr>` — pytest `-k` filter (applied to both compile-producer and consumer so the two phases stay aligned)
 - `--test-id <id>` — single parametrize ID (single-quotes/brackets safe)
+- `--op <op>` — with `--perf`, keep only SFPU sweep variants for that `MathOperation` name (repeatable; applied to count, compile and consumer)
 - `--maxfail <N>` — stop after N failures
 - `--rerun` — skip compile, simulate only (uses prior compile-producer artifacts)
 - `--compile-only` — compile-producer only, no simulate
@@ -77,7 +78,7 @@ If `--arch` is not provided, infer in this order:
        arch:      {arch}
        command:   {compile|simulate|run|count}
        options:   {whatever applies from --k / --test-id / --maxfail / --no-split / --timeout /
-                   --speed-of-light / --perf / --run-tag / --keep-runs / --consumer-jobs /
+                   --speed-of-light / --perf / --op / --run-tag / --keep-runs / --consumer-jobs /
                    --perf-counters / --dump-perf-counters / --keep-asserts}
    ```
 

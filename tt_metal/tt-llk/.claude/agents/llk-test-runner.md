@@ -24,7 +24,7 @@ The skill passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`, `--speed-of-light`, and the perf options `--perf`, `--run-tag`, `--keep-runs`, `--consumer-jobs`, `--perf-counters`, `--dump-perf-counters`, `--keep-asserts`)
+- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`, `--speed-of-light`, and the perf options `--perf`, `--op`, `--run-tag`, `--keep-runs`, `--consumer-jobs`, `--perf-counters`, `--dump-perf-counters`, `--keep-asserts`)
 
 ## Mandatory Pre-Flight (do this every run)
 
@@ -52,7 +52,7 @@ bash .claude/scripts/run_test.sh <command> \
     --test <test_file> \
     [--maxfail N] [--k EXPR] [--test-id ID] \
     [--no-split] [--timeout SECS] [--speed-of-light] \
-    [--perf [--run-tag TAG] [--keep-runs N] [--consumer-jobs N] \
+    [--perf [--op OP] [--run-tag TAG] [--keep-runs N] [--consumer-jobs N] \
             [--perf-counters] [--dump-perf-counters] [--keep-asserts]]
 ```
 

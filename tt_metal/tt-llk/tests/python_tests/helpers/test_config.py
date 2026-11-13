@@ -1434,9 +1434,8 @@ class TestConfig:
             *src_include_append,
         ]
 
-        # These process-wide switches change every compiled variant. They live
-        # outside ``self.__dict__``, so key them explicitly: CONSUME mode trusts
-        # ``variant_id`` and never rebuilds an ELF.
+        # Process-wide build switches live outside ``self.__dict__``, and CONSUME
+        # mode never rebuilds an ELF, so ``variant_id`` must key them explicitly.
         build_modes = [
             (
                 "llk-asserts-off"

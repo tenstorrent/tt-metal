@@ -25,6 +25,7 @@
 # Optional:
 #   --maxfail  N      Stop after N failures (simulate/run; omit for verification) (default: 10)
 #   --k        EXPR   pytest -k filter expression
+#   --op       OP     SFPU op filter for --perf sweeps (pytest --op; repeatable)
 #   --test-id  ID     Full parametrize ID for a single variant run
 #                     (single-quotes, brackets, commas are safe — no escaping needed)
 #   --port     PORT   Deprecated, ignored
@@ -145,6 +146,7 @@ TEST_FILE=""
 MAXFAIL="10"
 MAXFAIL_SET="false"
 K_FILTER=""
+OP_FILTERS=()
 TEST_ID=""
 TIMEOUT="600"
 JOBS="15"
@@ -174,6 +176,7 @@ while [[ $# -gt 0 ]]; do
     --test)          TEST_FILE="$2";     shift 2 ;;
     --maxfail)       MAXFAIL="$2"; MAXFAIL_SET="true"; shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
+    --op)            OP_FILTERS+=("$2"); shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
     --port)          shift 2 ;;
     --timeout)       TIMEOUT="$2";       shift 2 ;;
@@ -278,9 +281,7 @@ _validate() {
     if [[ -z "$RUN_TAG" ]]; then
       RUN_TAG="local-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     fi
-    # The tag becomes a path under perf_data/runs/, and the report writer prunes
-    # that directory's siblings, so an absolute or ../ tag would delete
-    # unrelated directories.
+    # The report writer prunes this path's siblings, so refuse absolute or ../ tags.
     if [[ ! "$RUN_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
       echo "ERROR: --run-tag must match [A-Za-z0-9][A-Za-z0-9._-]*, got '${RUN_TAG}'" >&2
       exit 4
@@ -303,8 +304,15 @@ _validate() {
     fi
     # A leading zero would otherwise read as octal ("08" is an error).
     CONSUMER_JOBS=$((10#$CONSUMER_JOBS))
-  elif [[ -n "$RUN_TAG$KEEP_RUNS" || "$CONSUMER_JOBS_SET$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
-    echo "ERROR: --run-tag, --keep-runs, --consumer-jobs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
+    local op
+    for op in ${OP_FILTERS+"${OP_FILTERS[@]}"}; do
+      if [[ ! "$op" =~ ^[A-Za-z0-9_]+$ ]]; then
+        echo "ERROR: --op must be an SFPU op name, got '${op}'" >&2
+        exit 4
+      fi
+    done
+  elif [[ -n "$RUN_TAG$KEEP_RUNS${OP_FILTERS[*]}" || "$CONSUMER_JOBS_SET$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
+    echo "ERROR: --op, --run-tag, --keep-runs, --consumer-jobs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
     exit 4
   fi
 }
@@ -312,7 +320,7 @@ _validate() {
 # pytest exit 5 means nothing was collected. Under --perf that is a module or
 # --k with no perf variants, not a hang or a compile failure.
 _no_perf_variants() {
-  echo "ERROR: no perf variants selected in ${TEST_FILE}${K_FILTER:+ with --k '${K_FILTER}'}${TEST_ID:+ (--test-id)}" >&2
+  echo "ERROR: no perf variants selected in ${TEST_FILE}${K_FILTER:+ with --k '${K_FILTER}'}${OP_FILTERS[*]:+ with --op ${OP_FILTERS[*]}}${TEST_ID:+ (--test-id)}" >&2
 }
 
 # pytest selection and report flags shared by every phase of a --perf run, so
@@ -323,12 +331,14 @@ _perf_pytest_args() {
   PERF_PYTEST_ARGS=(-m perf --mode perf)
   [[ "$PERF_COUNTERS" == "true" ]] && PERF_PYTEST_ARGS+=(--enable-perf-counters)
   [[ "$DUMP_PERF_COUNTERS" == "true" ]] && PERF_PYTEST_ARGS+=(--dump-perf-counters)
+  local op
+  for op in ${OP_FILTERS+"${OP_FILTERS[@]}"}; do
+    PERF_PYTEST_ARGS+=(--op "$op")
+  done
   return 0
 }
 
-# Environment for a --perf build. Wormhole and Blackhole perf CI compile without
-# LLK_ASSERT; Quasar perf CI keeps it. The asserts setting is part of the ELF
-# variant hash, so producer and consumer cannot silently share the other kind.
+# --perf build env: asserts off on Wormhole/Blackhole and on for Quasar, as in CI.
 _perf_env_prefix() {
   PERF_ENV=()
   [[ "$PERF" == "true" ]] || return 0

@@ -227,9 +227,8 @@ CURRENT_SHORT="${CURRENT_SHA:0:12}"
 [ "$BASELINE_SHA" != "$CURRENT_SHA" ] ||
     die "both sides resolve to $BASELINE_SHORT -- nothing to compare"
 
-# Each side builds with its own test_config.py. One that predates the
-# TT_LLK_DISABLE_ASSERTS switch always compiles LLK_ASSERT in, so an asserts-off
-# comparison would put assert overhead on that side only.
+# A test_config.py older than TT_LLK_DISABLE_ASSERTS always builds LLK_ASSERT,
+# so an asserts-off comparison would charge assert overhead to that side only.
 if [ "$TT_LLK_DISABLE_ASSERTS" = 1 ]; then
     for sha in "$BASELINE_SHA" "$CURRENT_SHA"; do
         test_config="$(git show "$sha:$LLK_RELPATH/tests/python_tests/helpers/test_config.py" 2>/dev/null || true)"
