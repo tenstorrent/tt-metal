@@ -940,7 +940,7 @@ def shard_r8(pair: int) -> bool:
 
 
 def shard_local_all(pair: int) -> bool:
-    """rev 72 GLM53_DSA_SHARD_LOCAL_ALL (default 0): a sparse token whose chip holds <= 512 closed local pools skips the
+    """rev 72 GLM53_DSA_SHARD_LOCAL_ALL (default 0; on in tt/galaxy_defaults.py): a sparse token whose chip holds <= 512 closed local pools skips the
     local select's radix rounds and tie round on the coordinator and every owner (dsa_shard.hpp LOCAL_ALL, the
     kernels' MLA_DSA_SHARD_LOCAL_ALL; emulated by local_select_all: the records, offsets and header count of
     local_select); the pair / the 2x4 never take it"""

@@ -44,6 +44,11 @@ KNOBS = {
     # over 3 runs (digest e2f3c86090b7); probe B 16 layers 0-3 2925.7 -> 2876.2 us (RS1 wait 287.5 -> 246.9 us, RS2
     # landed 45.2 -> 35.2 us, the root-local marks flat)
     "GLM53_DSA_SHARD_RSNP": "1",
+    # GLM53_DSA_SHARD_LOCAL_ALL (rev 72): a sparse token whose chip holds <= 512 closed local pools (every context < ~64 K
+    # on 32 chips) keeps every local pool without the radix rounds -- the same records, offsets and header (host proof
+    # test_local_all_matches_the_rounds): local select 174 -> 0.7 us per DSA layer at B 1; e2e 4 K x 1 18.6 -> 17.3 ms
+    # (53.7 -> 57.7 tok/s/u), 32 K x 4 21.0 -> 20.6 ms, every user's ids identical (4 K x 1, 32 K x 4, 4 K x 16)
+    "GLM53_DSA_SHARD_LOCAL_ALL": "1",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",
