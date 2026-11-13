@@ -878,13 +878,18 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // [DEBUG scratch] local (non-borrowed) pack-untilize target, same spec as out_cb's RM view, so the
     // compute kernel can pack the reduced DEST into it and DPRINT the result in isolation (remove after).
     if (!return_indices) {
-        // [DEBUG scratch 32x32] FULL-TILE pack target: the default 32x32 tile (four 16x16 faces) so the
-        // pack reads DEST as a full 32x32 tile (not the narrow face_r_dim=1 pool output). Sized for one full
-        // 32-row write: output_shard_width * out_nbytes * TILE_HEIGHT (page = FACE_WIDTH*nbytes face unit).
+        // [DEBUG scratch] pack target for the column-reduced DEST. The reduce writes its result to DEST as a
+        // 1x32 tile, so the pack must read it with a 1x32 tile shape; one page holds the single untilized row
+        // (in_ntiles_c * TILE_WIDTH elements). Always 1x32, even for in_c <= FACE_WIDTH: the input tile is
+        // two faces wide, and pack_untilize has no 1x16 support.
         const uint32_t scratch_npages = params.num_threads_per_cluster;
-        const uint32_t scratch_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        const uint32_t scratch_pagesize = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.nbytes;
         dfbs.push_back(local_dfb(
-            DFB_SCRATCH_0, scratch_pagesize, scratch_npages, params.output_data_format, tt::tt_metal::Tile()));
+            DFB_SCRATCH_0,
+            scratch_pagesize,
+            scratch_npages,
+            params.output_data_format,
+            tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH})));
         // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
         // via NoC. page = output row bytes; npages = output sticks per core. Mirrors DFB_IN_SHARD.
         const uint32_t out_row_bytes = output_shard_shape[1] * params.nbytes;

@@ -270,6 +270,30 @@ void validate_reduce_result(
     EXPECT_TRUE(pass);
 }
 
+// On Quasar a column reduce writes its result to DEST as a 1xN tile, so it must be packed with a 1xN output tile.
+// Packed, one 1xN tile is row 0 of its full output tile (face 0's row, then face 1's). Spread those rows back into
+// the zero-padded tiled layout of result_shape, which is the layout the golden is compared in.
+std::vector<std::uint32_t> expand_col_reduce_rows_to_tiles(
+    const std::vector<std::uint32_t>& packed_rows, const ReduceConfig& test_config) {
+    const std::vector<std::uint32_t>& result_shape = test_config.result_shape;
+    const std::uint32_t NC = result_shape[0] * result_shape[1];
+    const std::uint32_t H = result_shape[2];
+    const std::uint32_t W = result_shape[3];
+    const std::vector<std::uint16_t> rows = u16_from_u32_vector(packed_rows);
+    TT_FATAL(rows.size() == NC * W, "Expected {} reduced elements, got {}", NC * W, rows.size());
+
+    std::vector<std::uint16_t> linear(NC * H * W, 0);
+    for (std::uint32_t nc = 0; nc < NC; nc++) {
+        std::copy_n(rows.begin() + (nc * W), W, linear.begin() + (nc * H * W));
+    }
+    return u32_from_u16_vector(convert_layout<std::uint16_t>(
+        linear,
+        result_shape,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        PhysicalSize{test_config.tile_shape.get_tile_shape()[0], test_config.tile_shape.get_tile_shape()[1]}));
+}
+
 static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
     experimental::KernelSpec::CompilerOptions::Defines reduce_defines;
     reduce_defines.emplace("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
@@ -322,10 +346,15 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
                                                : dims.single_tile_bytes;
     const std::uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
     const std::uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
+    // Quasar packs a column reduce result as a 1xN tile (see expand_col_reduce_rows_to_tiles).
+    const bool pack_1xn_output = mesh_device.arch() == tt::ARCH::QUASAR && test_config.reduce_dim == ReduceDim::H;
+    const tt_metal::Tile output_tile_shape =
+        pack_1xn_output ? tt_metal::Tile({1, dims.tile_W}) : test_config.tile_shape;
+    const std::uint32_t output_tile_bytes = pack_1xn_output ? 2 * dims.tile_W : dims.single_tile_bytes;
     auto in_tensor =
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
-    auto out_tensor = MeshTensor::allocate_on_device(
-        mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
+    auto out_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(output_tile_bytes, num_output_pages));
 
     constexpr std::uint32_t num_buffer_tiles = 32;
     constexpr std::uint32_t num_output_buffer_tiles = 32;
@@ -354,10 +383,10 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
     };
     experimental::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
-        .entry_size = dims.single_tile_bytes,
+        .entry_size = output_tile_bytes,
         .num_entries = num_output_buffer_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .tile_format_metadata = test_config.tile_shape,
+        .tile_format_metadata = output_tile_shape,
     };
 
     // Build reader spec depending on reduce dim
@@ -569,6 +598,9 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 
     std::vector<std::uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
+    if (pack_1xn_output) {
+        result_vec = expand_col_reduce_rows_to_tiles(result_vec, test_config);
+    }
 
     validate_reduce_result(result_vec, dims.num_golden_elements, test_config, src_vec, get_scaler(test_config));
 
@@ -594,7 +626,10 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
     constexpr std::uint32_t num_input_tiles = 1;
     const std::uint32_t mxfp4_tile_bytes = tt::tile_size(tt::DataFormat::MxFp4);
     const std::uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    constexpr std::uint32_t num_output_tiles = 2;  // tile 0: reduce, tile 1: add
+    // The reduce result is packed as a 1x32 tile (see expand_col_reduce_rows_to_tiles) and the add as a full tile,
+    // so each has its own output DFB, writer and tensor.
+    const std::uint32_t bf16_1x32_tile_bytes = 2 * TILE_WIDTH;
+    constexpr std::uint32_t num_output_tiles = 1;
 
     const ReduceConfig reduce_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
@@ -617,17 +652,22 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, num_input_tiles));
     auto scaler_tensor =
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, num_input_tiles));
+    auto reduce_out_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(bf16_1x32_tile_bytes, num_output_tiles));
     auto out_tensor =
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(bf16_tile_bytes, num_output_tiles));
 
     const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
     const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
+    const experimental::DFBSpecName REDUCE_DST_DFB{"reduce_dst_dfb"};
     const experimental::DFBSpecName DST_DFB{"dst_dfb"};
     const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName REDUCE_WRITER{"reduce_writer"};
     const experimental::KernelSpecName WRITER{"writer"};
     const experimental::KernelSpecName COMPUTE{"compute"};
     const experimental::TensorParamName IN_TENSOR{"in_tensor"};
     const experimental::TensorParamName SCALER_TENSOR{"scaler_tensor"};
+    const experimental::TensorParamName REDUCE_OUT_TENSOR{"reduce_out_tensor"};
     const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const experimental::DataflowBufferSpec src0_dfb_spec{
@@ -643,6 +683,13 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::MxFp4,
         .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
+    };
+    const experimental::DataflowBufferSpec reduce_dst_dfb_spec{
+        .unique_id = REDUCE_DST_DFB,
+        .entry_size = bf16_1x32_tile_bytes,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = tt_metal::Tile({1, TILE_WIDTH}),
     };
     const experimental::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
@@ -680,6 +727,15 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
              {.tensor_parameter_name = SCALER_TENSOR, .accessor_name = "scaler_tensor"}},
         .hw_config = dm_hw_config,
     };
+    const experimental::KernelSpec reduce_writer_spec{
+        .unique_id = REDUCE_WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(REDUCE_DST_DFB, "in")},
+        .tensor_bindings = {{.tensor_parameter_name = REDUCE_OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+        .hw_config = dm_hw_config,
+    };
     const experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
@@ -707,6 +763,12 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
+                 .dfb_spec_name = REDUCE_DST_DFB,
+                 .accessor_name = "out_reduce",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
                  .dfb_spec_name = DST_DFB,
                  .accessor_name = "out",
                  .endpoint_type = experimental::DFBEndpointType::PRODUCER,
@@ -722,17 +784,18 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
 
     const experimental::WorkUnitSpec wu{
         .name = "main",
-        .kernels = {READER, WRITER, COMPUTE},
+        .kernels = {READER, REDUCE_WRITER, WRITER, COMPUTE},
         .target_nodes = node,
     };
     const experimental::ProgramSpec spec{
         .name = "single_core_reduce_h_mxfp4_2x_then_add",
-        .kernels = {reader_spec, writer_spec, compute_spec},
-        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .kernels = {reader_spec, reduce_writer_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, reduce_dst_dfb_spec, dst_dfb_spec},
         .tensor_parameters =
             {
                 {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
                 {.unique_id = SCALER_TENSOR, .spec = scaler_tensor.tensor_spec()},
+                {.unique_id = REDUCE_OUT_TENSOR, .spec = reduce_out_tensor.tensor_spec()},
                 {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
             },
         .work_units = {wu},
@@ -743,6 +806,10 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
         experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = REDUCE_WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_output_tiles}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_output_tiles}}),
         },
@@ -751,6 +818,7 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
     params.tensor_args = {
         {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
         {SCALER_TENSOR, experimental::ProgramRunArgs::TensorArgument{scaler_tensor}},
+        {REDUCE_OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{reduce_out_tensor}},
         {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, params);
@@ -781,23 +849,28 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
 
     LaunchProgram(mesh_device, std::move(program));
 
-    std::vector<std::uint32_t> result_vec;
-    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
     const std::uint32_t words_per_tile = TILE_HW / 2;
-    ASSERT_EQ(result_vec.size(), num_output_tiles * words_per_tile);
 
-    // Tile 0: the 2x column reduce, against the same golden the other column reduce tests use.
-    const std::vector<std::uint32_t> reduce_result(result_vec.begin(), result_vec.begin() + words_per_tile);
+    // The 2x column reduce, against the same golden the other column reduce tests use.
+    std::vector<std::uint32_t> reduce_result;
+    slow_dispatch::ReadFromBuffer(reduce_out_tensor.mesh_buffer(), reduce_result);
+    ASSERT_EQ(reduce_result.size(), num_output_tiles * bf16_1x32_tile_bytes / sizeof(std::uint32_t));
     validate_reduce_result(
-        reduce_result, words_per_tile, reduce_config, pack_floats_as_bf16_words(data_quantized), scaler);
+        expand_col_reduce_rows_to_tiles(reduce_result, reduce_config),
+        words_per_tile,
+        reduce_config,
+        pack_floats_as_bf16_words(data_quantized),
+        scaler);
 
-    // Tile 1: data + scaler on the restored Float16_b formats (both inputs tile-major, as is the output).
+    // data + scaler on the restored Float16_b formats (both inputs tile-major, as is the output).
     std::vector<float> add_floats(TILE_HW);
     for (std::uint32_t i = 0; i < TILE_HW; i++) {
         add_floats[i] = data_quantized[i] + scaler_quantized[i];
     }
     const std::vector<std::uint32_t> add_golden = pack_floats_as_bf16_words(add_floats);
-    const std::vector<std::uint32_t> add_result(result_vec.begin() + words_per_tile, result_vec.end());
+    std::vector<std::uint32_t> add_result;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), add_result);
+    ASSERT_EQ(add_result.size(), num_output_tiles * words_per_tile);
     int argfail = -1;
     const bool add_pass = packed_uint32_t_vector_comparison(
         add_result,

@@ -192,7 +192,12 @@ Tensor reduce(
     const bool explicit_tile_request = output_layout == tt::tt_metal::Layout::TILE;
     const bool use_rm_dense_w =
         rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::W && !explicit_tile_request;
-    const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H;
+    // On Quasar the column reduce leaves a 1x32 tile in DEST, and only the H factory's plain tiled
+    // path packs and expands it (see reduce_h_row_output.hpp). So Quasar H reduces skip the dense RM
+    // path, the TILE H-axis split and the fused -MAX(-x) kernel, and take tilize, the unsplit tiled
+    // reduce and the external negate instead.
+    const bool h_tiled_path_only = arch == tt::ARCH::QUASAR;
+    const bool use_rm_dense_h = rm_base_eligible && reduce_dim == tt::tt_metal::ReduceOpDim::H && !h_tiled_path_only;
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 
     // Accurate fp32 SFPU path (the FPU truncates fp32 to tf32 on the way into SrcA/SrcB). Falls back
@@ -340,7 +345,8 @@ Tensor reduce(
             /*row_major_h_dense_path=*/false,
             /*use_sfpu_reduce=*/use_sfpu_reduce);
 
-        if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, output_mem_config, sub_core_grids)) {
+        if (negate && (h_tiled_path_only ||
+                       !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, output_mem_config, sub_core_grids))) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
         }
 
@@ -362,7 +368,8 @@ Tensor reduce(
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-        !ttnn::prim::h_reduce_negate_fits_in_l1(prepared_input, output_mem_config, sub_core_grids)) {
+        (h_tiled_path_only ||
+         !ttnn::prim::h_reduce_negate_fits_in_l1(prepared_input, output_mem_config, sub_core_grids))) {
         return h_reduce_with_external_negate(
             prepared_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
     }
@@ -434,7 +441,7 @@ Tensor reduce(
     const bool split_accumulates =
         reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM;
     if (prepared_input.layout() == tt::tt_metal::Layout::TILE && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-        (split_accumulates || split_selects) && !negate && both_interleaved &&
+        !h_tiled_path_only && (split_accumulates || split_selects) && !negate && both_interleaved &&
         !prepared_input.shard_spec().has_value() && prepared_input.logical_shape().rank() == 4 &&
         (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
