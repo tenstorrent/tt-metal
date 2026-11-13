@@ -52,6 +52,12 @@ std::vector<std::optional<ttnn::Tensor>> chunk_gated_delta_rule_bw(
     const ChunkGatedDeltaRuleBwNeeds& needs) {
     using namespace ops::chunk_gated_delta_rule_bw::device;
 
+    // The architecture comes off q's device, so q has to be on one before the device op validates the rest.
+    TT_FATAL(
+        q.storage_type() == ttnn::StorageType::DEVICE,
+        "chunk_gated_delta_rule_bw: q must be on Device. Storage type: {}",
+        enchantum::to_string(q.storage_type()));
+
     const auto kernel_config = ttnn::init_device_compute_kernel_config(
         q.device()->arch(),
         compute_kernel_config,
