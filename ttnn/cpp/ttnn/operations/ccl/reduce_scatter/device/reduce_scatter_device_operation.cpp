@@ -93,8 +93,9 @@ ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::
 ReduceScatterDeviceOperation::tensor_return_value_t ReduceScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    ttnn::Tensor output_tensor = tensor_args.optional_output_tensor.value_or(
-        create_device_tensor(output_specs.at(1), tensor_args.input_tensor.device()));
+    ttnn::Tensor output_tensor = tensor_args.optional_output_tensor.has_value()
+                                     ? *tensor_args.optional_output_tensor
+                                     : create_device_tensor(output_specs.at(1), tensor_args.input_tensor.device());
     ttnn::Tensor intermediate_tensor = create_device_tensor(output_specs.at(0), tensor_args.input_tensor.device());
     return {intermediate_tensor, output_tensor};
 }
