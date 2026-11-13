@@ -114,8 +114,14 @@ __attribute__((noinline)) int main(void) // not in the naked _start (no stack fr
 
     llk_perf::read_last_zone();
 
-#if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && (defined(MATMUL_UNPACK_TTSYNC) || defined(MATMUL_PRODUCTION))
+#if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_UNPACK_TTSYNC)
     _llk_unpack_AB_matmul_ttsync_restore_();
+#elif defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_PRODUCTION)
+    // as the firmware: only a kernel the rule turns on restores
+    if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en))
+    {
+        _llk_unpack_AB_matmul_ttsync_restore_();
+    }
 #endif
 
 #if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !(defined(TT_METAL_TTSIM) && defined(COVERAGE))

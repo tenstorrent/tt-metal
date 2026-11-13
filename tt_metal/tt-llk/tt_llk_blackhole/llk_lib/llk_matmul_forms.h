@@ -79,6 +79,12 @@ inline bool matmul_call_reuse_a(const std::uint32_t ct_dim, const std::uint32_t 
 // the block holds the 32-bit operand and streams the other, which halves the unpack stream of a block of 4 tiles or more where the held operand
 // is reused (>= 2 rows or columns). The default direction already does it when the 32-bit operand is in0 and ct_dim >= rt_dim, or in1 and
 // ct_dim < rt_dim.
+// The kernels whose plain matmul_block calls run the ttsync unpack: above LoFi, except HiFi4 at full sync with a 32-bit DEST.
+constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest)
+{
+    return fidelity != MathFidelity::LoFi && !(fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest);
+}
+
 constexpr bool matmul_format_is_32bit(const DataFormat f)
 {
     return f == DataFormat::Float32 || f == DataFormat::Tf32;

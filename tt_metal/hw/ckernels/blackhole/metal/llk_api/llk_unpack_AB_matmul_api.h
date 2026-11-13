@@ -12,10 +12,9 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
-// Plain matmul_block calls run the ttsync unpack above LoFi, except HiFi4 at full sync with a 32-bit DEST.
+// matmul_kernel_ttsync of the kernel's JIT inputs
 constexpr bool llk_unpack_AB_matmul_kernel_ttsync() {
-    return MATH_FIDELITY != MathFidelity::LoFi &&
-           !(MATH_FIDELITY == MathFidelity::HiFi4 && DST_SYNC_MODE == DstSync::SyncFull && DST_ACCUM_MODE);
+    return matmul_kernel_ttsync(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE);
 }
 
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul unpack is
