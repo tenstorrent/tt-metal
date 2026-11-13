@@ -526,6 +526,7 @@ MATMUL_STREAM_Z_LOSES = frozenset(
         ("Half", 2, 4, 8, 0, "Float16_b", "Float32"),
         ("Half", 2, 4, 32, 0, "Float16_b", "Bfp4_b"),
         ("Half", 2, 4, 32, 0, "Float16_b", "Float32"),
+        ("Half", 2, 2, 8, 0, "Float16_b", "Tf32"),
     }
 )
 

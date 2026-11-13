@@ -2981,6 +2981,7 @@ constexpr bool matmul_stream_z_loses(
         {false, 2, 4, 3, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Bfp2_b},
         {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},     {false, 2, 4, 8, 0, DataFormat::Float16_b, DataFormat::Float32},
         {false, 2, 4, 32, 0, DataFormat::Float16_b, DataFormat::Bfp4_b},    {false, 2, 4, 32, 0, DataFormat::Float16_b, DataFormat::Float32},
+        {false, 2, 2, 8, 0, DataFormat::Float16_b, DataFormat::Tf32},
     };
     for (const Cell& c : cells)
     {
