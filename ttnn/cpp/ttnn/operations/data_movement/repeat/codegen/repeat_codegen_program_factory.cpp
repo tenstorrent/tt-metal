@@ -44,6 +44,8 @@ constexpr const char* kReaderLastDimRm =
     "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_last_dim_rm.cpp";
 constexpr const char* kReaderHigherDimRm =
     "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_higherdim_rm.cpp";
+constexpr const char* kReaderLastDimRmDoubling =
+    "ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/kernels/reader_repeat_last_dim_rm_doubling.cpp";
 
 // SEQ_REPEAT, see common/kernels/codegen/sequencers.h.
 constexpr uint32_t kSeqRepeat = 1;
@@ -121,10 +123,22 @@ uint32_t spec_aligned_page_bytes(const Tensor& device_tensor, const TensorSpec& 
     return tt::round_up(static_cast<uint32_t>(spec.compute_page_size_bytes()), alignment);
 }
 
-std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(const Tensor& input, const TensorSpec& output_spec) {
+std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(
+    const Tensor& input, const TensorSpec& output_spec, const RepeatCodegenParams& params) {
     const uint32_t slot = rm_slot_bytes(
         static_cast<uint32_t>(input.mesh_buffer().aligned_page_size()), spec_aligned_page_bytes(input, output_spec));
-    return plan_rm_cb(slot, ttnn::operations::data_movement::get_max_l1_space(input));
+    const uint64_t l1_budget = ttnn::operations::data_movement::get_max_l1_space(input);
+    const uint32_t stick_bytes = static_cast<uint32_t>(input.logical_shape()[-1] * input.element_size());
+    const bool doubling =
+        input.device()->arch() == tt::ARCH::WORMHOLE_B0 && input.layout() == ttnn::ROW_MAJOR_LAYOUT &&
+        params.rep_dim == kLastAxis && !input.is_sharded() && !output_spec.memory_config().is_sharded() &&
+        (stick_bytes == 2 || stick_bytes == 4 || stick_bytes == 8) && (stick_bytes * params.num_repeats) % 4 == 0 &&
+        2ull * kLastDimRmDoublingBatch * slot <= l1_budget;
+    if (doubling) {
+        return RepeatRmCbPlan{
+            .slot_bytes = slot, .batch = kLastDimRmDoublingBatch, .depth = 2 * kLastDimRmDoublingBatch};
+    }
+    return plan_rm_cb(slot, l1_budget);
 }
 
 RepeatPageMap derive_page_map(const Tensor& input, uint32_t rep_dim, uint32_t num_repeats) {
@@ -287,7 +301,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         out_aligned == spec_aligned_page_bytes(input, output.tensor_spec()),
         "RepeatCodegen: output aligned page {} does not match its spec",
         out_aligned);
-    const auto cb_plan = rm_cb_plan_for_call(input, output.tensor_spec());
+    const auto cb_plan = rm_cb_plan_for_call(input, output.tensor_spec(), operation_attributes);
     TT_FATAL(cb_plan.has_value(), "RepeatCodegen: a {}-byte row-major CB slot does not fit in free L1", slot_size);
     const uint32_t cb_batch = cb_plan->batch;
     const uint32_t cb_depth = cb_plan->depth;
@@ -311,7 +325,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         reader_ct_args = {
             page_map.stick_size, in_aligned, slot_size, /*cb_id=*/0, operation_attributes.num_repeats, cb_batch};
         TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-        reader_desc.kernel_source = kReaderLastDimRm;
+        reader_desc.kernel_source = cb_batch == kLastDimRmDoublingBatch ? kReaderLastDimRmDoubling : kReaderLastDimRm;
     } else {
         reader_ct_args = {
             in_aligned,
