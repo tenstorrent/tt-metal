@@ -65,7 +65,7 @@ def build_flux3_klein_text_encoder(
     parallel_config: EncoderParallelConfig,
     ccl_manager: CCLManager,
     is_fsdp: bool = True,
-) -> tuple[Qwen3VlTextEncoder, dict]:
+) -> Qwen3VlTextEncoder:
     config = flux3_klein_text_config(snapshot)
     encoder = Qwen3VlTextEncoder(
         vocab_size=config["vocab_size"],
@@ -97,4 +97,4 @@ def build_flux3_klein_text_encoder(
         is_fsdp=is_fsdp,
         get_torch_state_dict=lambda: load_flux3_klein_text_state_dict(snapshot),
     )
-    return encoder, config
+    return encoder

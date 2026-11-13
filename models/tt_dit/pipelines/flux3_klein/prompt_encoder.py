@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 
-from ...encoders.qwen3vl.loader_flux3_klein import SUBFOLDER, flux3_klein_rope_theta
+from ...encoders.qwen3vl.loader_flux3_klein import SUBFOLDER
 from ...encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder
 from ...utils import tensor
 from ...utils.tensor import bf16_tensor
@@ -19,17 +19,13 @@ from .packing import MAX_TEXT_LENGTH, padded_text_length, text_ids
 
 
 class Flux3KleinPromptEncoder:
-    def __init__(
-        self, encoder: Qwen3VlTextEncoder, snapshot: str | os.PathLike, device: ttnn.MeshDevice, *, text_config: dict
-    ) -> None:
+    def __init__(self, encoder: Qwen3VlTextEncoder, snapshot: str | os.PathLike, device: ttnn.MeshDevice) -> None:
         from transformers import AutoProcessor
 
         self._encoder = encoder
         self._device = device
         self._processor = AutoProcessor.from_pretrained(str(Path(snapshot) / SUBFOLDER))
         self._processor.tokenizer.padding_side = "right"
-        self._head_dim = int(text_config["head_dim"])
-        self._rope_theta = flux3_klein_rope_theta(text_config)
 
     def tokenize(self, prompt: str, length: int | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Token ids and attention mask padded to `length` rows (default: the reference's multiple of 80), and the
@@ -48,18 +44,13 @@ class Flux3KleinPromptEncoder:
         """`[L, 20480]` bf16 text tokens, their RoPE ids and the attended length (see `tokenize`)."""
         input_ids, attention_mask, valid = self.tokenize(prompt, length)
 
-        positions = (attention_mask.long().cumsum(-1) - 1).masked_fill(attention_mask == 0, 1).reshape(-1)
-        inv_freq = 1.0 / (
-            self._rope_theta ** (torch.arange(0, self._head_dim, 2, dtype=torch.int64).float() / self._head_dim)
-        )
-        freqs = positions.float()[:, None] * inv_freq[None, :].float()
-        emb = torch.cat((freqs, freqs), dim=-1)
+        cos, sin = self._encoder.create_rope_tensors(1, input_ids.shape[1], attention_mask)
 
         tt_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._device)
         tt_mask = tensor.from_torch(attention_mask.bool(), device=self._device)
         pos_embeds = (
-            bf16_tensor(emb.cos().to(torch.bfloat16)[None, None], device=self._device),
-            bf16_tensor(emb.sin().to(torch.bfloat16)[None, None], device=self._device),
+            bf16_tensor(cos.to(torch.bfloat16), device=self._device),
+            bf16_tensor(sin.to(torch.bfloat16), device=self._device),
         )
         taps = self._encoder.forward(tt_ids, attention_mask=tt_mask, pos_embeds=pos_embeds)
         tokens = ttnn.concat(taps, dim=-1)
