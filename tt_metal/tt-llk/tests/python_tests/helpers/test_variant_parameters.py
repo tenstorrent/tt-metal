@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .format_config import DataFormat
@@ -320,6 +321,26 @@ class SFPU_CLOBBER_LREGS(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return "#define SFPU_CLOBBER_LREGS" if self.clobber_lregs else ""
+
+
+@dataclass
+class SFPLOADMACRO(TemplateParameter):
+    """Whether the SFPLOADMACRO fast paths are compiled in, recorded as a perf CSV column.
+
+    The switch itself is ``TT_METAL_DISABLE_SFPLOADMACRO=1``, which ``TestConfig`` turns into
+    ``-DDISABLE_SFPLOADMACRO`` for every kernel part. This reads the same variable, so a macro-ON
+    and a macro-OFF capture carry different values instead of averaging together; it emits no code
+    of its own.
+    """
+
+    sfploadmacro: str = field(
+        default_factory=lambda: (
+            "Off" if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1" else "On"
+        )
+    )
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass

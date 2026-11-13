@@ -48,6 +48,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPLOADMACRO,
     STABLE_SORT,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -642,6 +643,7 @@ def _build_typecast_config(
         ITERATIONS(iterations),
         FAST_MODE(FastMode.No),
         STABLE_SORT(StableSort.No),
+        SFPLOADMACRO(),
     ]
     runtimes = [
         TILE_COUNT(tile_cnt_A),
