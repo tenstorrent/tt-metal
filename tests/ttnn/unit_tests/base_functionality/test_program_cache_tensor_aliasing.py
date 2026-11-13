@@ -111,3 +111,92 @@ def test_workload_descriptor_cache_hit_after_aliased_inputs_is_rejected(device, 
     device.clear_program_cache()
     ttnn.to_torch(ring_sdpa(q, k, v))
     device.clear_program_cache()
+
+
+def test_program_cache_aliased_out_of_order_tensor_params_sampling(device):
+    """Issue #57248: SpecBindingSupport::resolve_bindings iterates ProgramRunArgs::tensor_args
+    in factory insertion order and claims the first unclaimed matching MeshTensor* in the
+    reflection-ordered io_mesh_tensors list.
+
+    SamplingInputs declares (input_values=0, input_indices=1, k=2, p=3, temp=4), whereas
+    SamplingProgramFactory inserts SAMPLING_TEMP_TENSOR before SAMPLING_K_TENSOR and
+    SAMPLING_P_TENSOR. Priming the program cache with an aliased call (p is temp) binds
+    TEMP -> slot 3 and P -> slot 4; a subsequent cache hit with distinct p=0, temp=1 tensors
+    silently swaps them (supplying p=0 to TEMP and temp=1 to P), returning wrong sampled labels.
+    """
+    host_values = (-torch.arange(64, dtype=torch.float32) / 256).to(torch.bfloat16).repeat(1, 1, 32, 1)
+    host_labels = (1000 + torch.arange(64, dtype=torch.int32)).repeat(1, 1, 32, 1)
+    expected_labels = torch.full((32,), 1000, dtype=torch.int64)
+
+    values = ttnn.from_torch(host_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    labels = ttnn.from_torch(host_labels, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    k = ttnn.from_torch(
+        torch.full((32,), 32, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    ones_a = ttnn.from_torch(
+        torch.ones(32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    ones_b = ttnn.from_torch(
+        torch.ones(32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    p_zero = ttnn.from_torch(
+        torch.zeros(32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    temp_one = ttnn.from_torch(
+        torch.ones(32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    assert ones_a is not ones_b and p_zero is not temp_one
+
+    def reset_cache():
+        ttnn.synchronize_device(device)
+        device.clear_program_cache()
+        device.enable_program_cache()
+        assert device.num_program_cache_entries() == 0
+
+    def run_sampling_call(name, p_tensor, temp_tensor, entries_before):
+        before = device.num_program_cache_entries()
+        assert before == entries_before, f"{name}: expected {entries_before} cache entries before call, got {before}"
+        out = ttnn.sampling(values, labels, k=k, p=p_tensor, temp=temp_tensor)
+        actual = ttnn.to_torch(out).reshape(-1).to(torch.int64)
+        after = device.num_program_cache_entries()
+        assert (
+            actual.numel() == 32 and after == 1
+        ), f"{name}: expected 32 labels and 1 program-cache entry, got numel={actual.numel()}, entries={after}"
+        return actual
+
+    try:
+        # 1. Distinct-primed control: equal-valued but distinct tensors bind TEMP -> 4 and P -> 3.
+        reset_cache()
+        run_sampling_call("distinct_prime", ones_a, ones_b, entries_before=0)
+        distinct_actual = run_sampling_call("distinct_then_normal", p_zero, temp_one, entries_before=1)
+        assert torch.equal(
+            distinct_actual, expected_labels
+        ), f"distinct-input control failed: {(distinct_actual != expected_labels).sum().item()} of 32 labels wrong"
+
+        # 2. Fresh-cache control: p=0, temp=1 on an empty program cache must return the unique argmax (1000).
+        reset_cache()
+        fresh_actual = run_sampling_call("fresh_normal", p_zero, temp_one, entries_before=0)
+        assert torch.equal(
+            fresh_actual, expected_labels
+        ), f"fresh-cache control failed: {(fresh_actual != expected_labels).sum().item()} of 32 labels wrong"
+
+        # 3. Alias-primed repro: priming with one tensor for both p and temp must not reverse their
+        # bound slots when a subsequent cache hit supplies distinct p and temp tensors, and once
+        # disambiguated, both subsequent aliased and distinct hits must keep reusing the 1 entry.
+        reset_cache()
+        run_sampling_call("alias_prime", ones_a, ones_a, entries_before=0)
+        alias_actual = run_sampling_call("alias_then_normal", p_zero, temp_one, entries_before=1)
+        wrong = int((alias_actual != expected_labels).sum().item())
+        assert wrong == 0, (
+            f"normal call after aliased priming returned {wrong} of 32 wrong labels "
+            f"(got {alias_actual.tolist()}, expected all 1000): "
+            "SpecBindingSupport::resolve_bindings swapped p and temp slots"
+        )
+        run_sampling_call("alias_repeat_after_disambiguation", ones_b, ones_b, entries_before=1)
+        post_alias_actual = run_sampling_call("normal_after_re_alias", p_zero, temp_one, entries_before=1)
+        assert torch.equal(
+            post_alias_actual, expected_labels
+        ), f"subsequent normal call failed: {(post_alias_actual != expected_labels).sum().item()} of 32 labels wrong"
+    finally:
+        ttnn.synchronize_device(device)
+        device.clear_program_cache()
