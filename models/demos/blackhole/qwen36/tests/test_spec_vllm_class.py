@@ -57,6 +57,7 @@ from models.demos.blackhole.qwen36.tt.spec_engine import (  # noqa: E402
     spec_memory_costs,
     spec_table_width,
 )
+from models.demos.blackhole.qwen36.tt.spec_step import rope_table_rows  # noqa: E402
 
 K = 3
 MAX_MODEL_LEN = 8192
@@ -465,9 +466,13 @@ def test_spec_plan_accept(hf_config):
     assert plan.drafter_state == "internal"
     assert plan.supports_narrow_decode is True
     tc = hf_config.get_text_config()
-    c = spec_memory_costs(tc, 4, 1, 3, max_seq_len=MAX_LEN, gdn_state_in_blocks=True)
+    c = spec_memory_costs(
+        tc, 4, 1, 3, max_seq_len=MAX_LEN, gdn_state_in_blocks=True, rope_table_rows=rope_table_rows(MAX_LEN)
+    )
     assert plan.extra_bytes_per_seq == int(c["per_seq"]["total"] + c["fixed"]["total"])
     assert c["per_seq"]["gdn_ring"] == 0 and c["per_seq"]["gdn_conv_windows"] == 0 and c["fixed"]["gdn_verify"] > 0
+    # the device RoPE tables: cos and sin, bf16, one rope_dim row per position
+    assert c["fixed"]["rope_tables"] == 2 * rope_table_rows(MAX_LEN) * 64 * 2
     assert plan.extra_bytes_per_token == int(c["per_token"]["total"])
     assert plan.extra_bytes_per_seq > 0 and plan.extra_bytes_per_token > 0
 
@@ -487,7 +492,15 @@ def test_spec_plan_multi_seq(hf_config):
     """K=3 fits the 32-row verify tile up to 8 sequences; 9 is rejected with the supported K list."""
     plan = CLS.spec_plan(_vcfg(hf_config), 8, 3)
     assert isinstance(plan, SpecPlan) and plan.effective_k == 3
-    c = spec_memory_costs(hf_config.get_text_config(), 4, 8, 3, max_seq_len=MAX_LEN, gdn_state_in_blocks=True)
+    c = spec_memory_costs(
+        hf_config.get_text_config(),
+        4,
+        8,
+        3,
+        max_seq_len=MAX_LEN,
+        gdn_state_in_blocks=True,
+        rope_table_rows=rope_table_rows(MAX_LEN),
+    )
     assert plan.extra_bytes_per_seq == math.ceil((c["per_seq"]["total"] + c["fixed"]["total"]) / 8)
     r = CLS.spec_plan(_vcfg(hf_config), 9, 3)
     assert isinstance(r, SpecReject) and "32-row" in r.reason and 3 not in r.supported_k

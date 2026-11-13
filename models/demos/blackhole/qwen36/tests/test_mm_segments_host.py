@@ -237,26 +237,32 @@ def test_each_row_takes_its_own_delta(expect_error):
 
 
 def test_verify_takes_each_users_delta_for_its_rows(monkeypatch):
-    """verify_traced gives user u's delta to all T of its rows; without deltas every row takes rope.rope_delta."""
+    """verify_traced gives user u's delta to the RoPE table rows of all T of its rows; without deltas every row takes
+    rope.rope_delta. The positions stay the KV positions."""
     from unittest.mock import MagicMock
+
+    from models.demos.blackhole.qwen36.tt.spec_step import VERIFY_POSITIONS, VERIFY_ROPE
 
     B, T = 2, 3
     m = qwen36_model.Qwen36Model.__new__(qwen36_model.Qwen36Model)
     m._vfy_trace_id, m._vfy_T, m._vfy_B, m._vfy_kv_grouped = "trace", T, B, False
     m._vfy_pt_host, m.gdn_blocks, m.device, m.vocab_size = torch.zeros(B, 4, dtype=torch.int32), object(), None, 8
-    for name in ("_vfy_token_buf", "_vfy_kvpos_buf", "_vfy_cos_buf", "_vfy_sin_buf", "_vfy_ids_out", "_vfy_rows_out"):
+    for name in ("_vfy_step_buf", "_vfy_ids_out", "_vfy_rows_out"):
         setattr(m, name, MagicMock())
-    seen = []
-    m.args = SimpleNamespace(rope_head_dim=4)  # _verify_cos_sin_torch lays the tables out as [1, 1, R, 4]
-    rope = lambda pos, deltas=None: seen.append((pos.tolist(), deltas)) or (torch.zeros(1, len(pos), 1, 4),) * 2
-    m._rope_tp_cos_sin_decode_torch = rope
+    m.args = SimpleNamespace(rope_head_dim=4, max_seq_len=4096)
+    m.rope = SimpleNamespace(rope_delta=3)
+    staged = []
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: t)
+    monkeypatch.setattr(
+        ttnn, "copy_host_to_device_tensor", lambda h, d: staged.append(h) if d is m._vfy_step_buf else None
+    )
     monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: torch.zeros(B * T))
     m.verify_traced([[1] * T] * B, [10, 40], [0] * B, rope_deltas=[0, -12])
     m.verify_traced([[1] * T] * B, [10, 40], [0] * B)
-    assert seen == [
-        ([10, 11, 12, 40, 41, 42], [0, 0, 0, -12, -12, -12]),
-        ([10, 11, 12, 40, 41, 42], None),
-    ]
+    pos = [10, 11, 12, 40, 41, 42]
+    assert [h[VERIFY_POSITIONS, : B * T].tolist() for h in staged] == [pos, pos]
+    assert staged[0][VERIFY_ROPE, : B * T].tolist() == [10, 11, 12, 28, 29, 30]
+    assert staged[1][VERIFY_ROPE, : B * T].tolist() == [p + 3 for p in pos]
 
 
 def test_drafter_step_takes_each_rows_delta(monkeypatch, expect_error):

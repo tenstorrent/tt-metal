@@ -169,6 +169,7 @@ class VerifySampler:
         self.p = self._device(torch.tensor(idle.p), ttnn.bfloat16)
         self.temp = self._device(torch.tensor(idle.temp), ttnn.bfloat16)
         self.seeds = self._device(torch.tensor(idle.seeds, dtype=torch.int64), ttnn.uint32)
+        self._staged = {}  # name -> host tensor its device buffer holds (stage)
         self.user_ids = self._device(torch.arange(self.rows, dtype=torch.int32), ttnn.uint32)
         self.draws = self._device(torch.zeros(1, 1, 1, self.rows, dtype=torch.int32), ttnn.uint32)
         offsets = torch.arange(self.chunks, dtype=torch.int32).repeat_interleave(SAMPLER_TOP_K) * width
@@ -183,14 +184,20 @@ class VerifySampler:
         return ttnn.to_device(self._host(t, dtype, layout), self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def stage(self, plan):
-        """Host -> device copies of the plan's parameters and seeds (addresses preserved)."""
-        for host, dev, dtype in (
-            (torch.tensor(plan.k, dtype=torch.int32), self.k, ttnn.uint32),
-            (torch.tensor(plan.p), self.p, ttnn.bfloat16),
-            (torch.tensor(plan.temp), self.temp, ttnn.bfloat16),
-            (torch.tensor(plan.seeds, dtype=torch.int64), self.seeds, ttnn.uint32),
+        """Host -> device copies of the plan's parameters and seeds (addresses preserved). A parameter equal to the one
+        staged last is not copied again: top-k, top-p and temperature change only with the rows' requests, the seeds
+        every step."""
+        for name, host, dev, dtype in (
+            ("k", torch.tensor(plan.k, dtype=torch.int32), self.k, ttnn.uint32),
+            ("p", torch.tensor(plan.p), self.p, ttnn.bfloat16),
+            ("temp", torch.tensor(plan.temp), self.temp, ttnn.bfloat16),
+            ("seeds", torch.tensor(plan.seeds, dtype=torch.int64), self.seeds, ttnn.uint32),
         ):
+            held = self._staged.get(name)
+            if held is not None and torch.equal(held, host):
+                continue
             ttnn.copy_host_to_device_tensor(self._host(host, dtype), dev)
+            self._staged[name] = host
 
     def body(self, logits):
         """``logits`` [1, 1, rows, vocab] bfloat16 TILE, replicated. Writes one draw per row into ``draws``."""

@@ -41,6 +41,7 @@ from models.demos.blackhole.qwen36.tt.spec_engine import (
     table_capacity,
     verify_write_table,
 )
+from models.demos.blackhole.qwen36.tt.spec_step import draft_reseed_positions, draft_reseed_tokens
 
 SHAPES = [(1, 12), (2, 8), (4, 4), (8, 4), (3, 5)]
 
@@ -764,7 +765,7 @@ def test_propose_writes_anchor_kv_of_kept_rows(recorded, monkeypatch):
     staged, reseeds = {}, []
     model = types.SimpleNamespace(
         _fit_spec_page_table=lambda pt, nb: torch.as_tensor(pt, dtype=torch.int32),
-        _rope_tp_cos_sin_decode_torch=lambda pos, deltas=None: (None, None),
+        rope_table_rows=lambda: 4096,
     )
     e = _bare_engine(
         B,
@@ -780,16 +781,17 @@ def test_propose_writes_anchor_kv_of_kept_rows(recorded, monkeypatch):
         mesh=None,
         mtp_extra_steps=0,
         _hp_buf=None,
+        _rope_deltas=[0] * B,
     )
-    for name in ("_anchor_sel", "_dr_rs_tok", "_dr_rs_pos", "_dr_rs_pt", "_dr_rs_cos", "_dr_rs_sin", "_dr_tok0"):
+    for name in ("_dr_pack", "_dr_rs_pt", "_mtp_pt"):
         setattr(e, name, name)
-    e._mtp_pt = "_mtp_pt"
-    e._dr_pos = e._dr_cos = e._dr_sin = e._dr_outs = [None] * K
+    e._dr_rs_staged = e._mtp_pt_staged = None
+    e._dr_outs = [None] * K
     e._stage = lambda host, buf, *a: staged.__setitem__(buf, host) if isinstance(buf, str) else None
     e._stage_mtp_tables = e._set_anchor = lambda *a, **k: None
     e._reseed_mtp_batched = lambda ctok, cpos, m, pt: reseeds.append(list(m))
     e._draft = lambda *a: torch.zeros(B, K, dtype=torch.int32)
-    e._id_to_host = lambda t: [0] * B
+    e._read_ids = lambda ts: [[0] * B for _ in ts]
     monkeypatch.setattr(ttnn, "execute_trace", lambda *a, **k: None)
     ctok = torch.tensor([[11, -1, -1], [21, -1, -1], [31, -1, -1]])
     cpos = torch.tensor([[10, -1, -1], [20, -1, -1], [30, -1, -1]])
@@ -799,9 +801,13 @@ def test_propose_writes_anchor_kv_of_kept_rows(recorded, monkeypatch):
         e, ctok, cpos, acc, pt, decline=[True, True, False], cap_blocks=4, keep_kv=[True, False, False]
     )
     if recorded:
-        tok = staged["_dr_rs_tok"].reshape(-1).tolist()
-        rows = list(zip(tok, staged["_dr_rs_pos"].tolist(), staged["_dr_rs_pt"][:, 0].tolist()))
+        pack, T = staged["_dr_pack"], K + 1
+        tok = pack[draft_reseed_tokens(K), : B * T].tolist()
+        rows = list(zip(tok, pack[draft_reseed_positions(K), : B * T].tolist(), staged["_dr_rs_pt"][:, 0].tolist()))
         assert rows[0] == (11, 9, 1), "kept row: pending token at anchor slot p = 9 over its own table"
         assert all(r == (0, 0, 99) for r in rows[1:]), "every other reseed row pads to scratch"
+        assert staged["_mtp_pt"][:2].eq(99).all() and torch.equal(
+            staged["_mtp_pt"][2], pt[2]
+        ), "declined rows draft on scratch"
     else:
         assert reseeds == [[1, 0, 0]]

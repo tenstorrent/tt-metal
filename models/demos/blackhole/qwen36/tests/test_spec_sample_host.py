@@ -213,9 +213,10 @@ def test_a_device_sampled_verify_returns_the_draws_of_its_sampled_rows(engine, e
 
 
 def test_the_model_reads_draws_only_from_a_sampling_trace(expect_error):
-    model = SimpleNamespace(_vfy_trace_id=1, _vfy_T=4, _vfy_B=1, _vfy_sampler=None)
+    model = Qwen36Model.__new__(Qwen36Model)
+    model._vfy_trace_id, model._vfy_T, model._vfy_B, model._vfy_sampler = 1, 4, 1, None
     with expect_error(ValueError, "sample=True"):
-        Qwen36Model.verify_traced(model, [[1, 2, 3, 4]], [0], [0], sample_plan=object())
+        model.verify_traced([[1, 2, 3, 4]], [0], [0], sample_plan=object())
 
 
 def test_a_moved_row_keeps_its_requests_delta_and_sampling(engine):
@@ -254,11 +255,11 @@ def test_a_mixed_verify_reads_shard_argmax_ids_and_device_draws(monkeypatch):
     m = Qwen36Model.__new__(Qwen36Model)
     m._vfy_trace_id, m._vfy_sample_trace_id, m._vfy_T, m._vfy_B, m._vfy_kv_grouped = "verify", "sample", T, B, False
     m._vfy_pt_host, m.gdn_blocks, m.device, m.vocab_size = torch.zeros(B, 4, dtype=torch.int32), object(), None, 64
-    for name in ("_vfy_token_buf", "_vfy_kvpos_buf", "_vfy_cos_buf", "_vfy_sin_buf", "_vfy_rows_out"):
+    for name in ("_vfy_step_buf", "_vfy_rows_out"):
         setattr(m, name, MagicMock())
     m._vfy_ids_out = "ids"
-    m.args = SimpleNamespace(rope_head_dim=4)  # _verify_cos_sin_torch lays the tables out as [1, 1, R, 4]
-    m._rope_tp_cos_sin_decode_torch = lambda pos, deltas=None: (torch.zeros(1, len(pos), 1, 4),) * 2
+    m.args = SimpleNamespace(rope_head_dim=4, max_seq_len=4096)
+    m.rope = SimpleNamespace(rope_delta=0)
     lanes = torch.cat([torch.arange(100, 100 + B * T), torch.zeros(32 - B * T, dtype=torch.int64)]).to(torch.int32)
     staged = []
     m._vfy_sampler = SimpleNamespace(stage=staged.append, read=lambda: torch.arange(500, 500 + B * T))

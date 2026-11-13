@@ -318,6 +318,7 @@ class GdnBlockState:
             k = self._verify_group[i]
             dn.state_blocks.verify = SimpleNamespace(T=T, ctrl=self._verify_ctrl[k], idx=self._verify_idx[k])
         self._verify_refs = []
+        self._verify_staged = {}  # ("ctrl" | "idx", table group) -> the host table its device table holds
         self._verify_order = None  # (mamba_state group names, [table group of each mamba_state group])
 
     def set_verify_blocks(self, mamba_state):
@@ -339,8 +340,7 @@ class GdnBlockState:
                     )
                 order.append(ks.pop())
             self._verify_order = (self._group_names, order)
-        rep = ttnn.ReplicateTensorToMesh(self.mesh)
-        refs = []
+        tables = []
         for g, (_, windows) in enumerate(groups):
             if windows.shape[1] < T:
                 raise ValueError(
@@ -352,24 +352,33 @@ class GdnBlockState:
             n = min(self.bmax, int(windows.shape[0]))
             ctrl, idx = self.layout.verify_tables(starts[:n], windows[:n, :T], self.num_blocks, self.bmax)
             k = self._verify_order[1][g]
-            for host, dev in ((ctrl, self._verify_ctrl[k]), (idx, self._verify_idx[k])):
-                h = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
-                ttnn.copy_host_to_device_tensor(h, dev)
-                refs.append(h)
+            tables += [(("ctrl", k), ctrl, self._verify_ctrl[k]), (("idx", k), idx, self._verify_idx[k])]
+        self._stage_verify_tables(tables)
+
+    def _stage_verify_tables(self, tables):
+        """Copy each (key, host table, device table) whose host table differs from the one staged last under that key: a
+        window index table stays the same while its rows keep their blocks. Only this method writes the device tables.
+        """
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        refs = []
+        for key, host, dev in tables:
+            if key in self._verify_staged and torch.equal(self._verify_staged[key], host):
+                continue
+            h = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+            ttnn.copy_host_to_device_tensor(h, dev)
+            self._verify_staged[key] = host.clone()
+            refs.append(h)
         # The copies may read the host tensors after they return; hold them until the next verify's tables.
         self._verify_refs = refs
 
     def clear_verify_blocks(self):
         """Point every verify row at the null block 0 (warmup and trace capture)."""
-        rep = ttnn.ReplicateTensorToMesh(self.mesh)
         ctrl, idx = self.layout.verify_tables([], torch.zeros(0, self.verify_tokens), self.num_blocks, self.bmax)
-        refs = []
-        for dev_ctrl, dev_idx in zip(self._verify_ctrl, self._verify_idx):
-            for host, dev in ((ctrl, dev_ctrl), (idx, dev_idx)):
-                h = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
-                ttnn.copy_host_to_device_tensor(h, dev)
-                refs.append(h)
-        self._verify_refs = refs
+        self._verify_staged.clear()
+        tables = []
+        for k, (dev_ctrl, dev_idx) in enumerate(zip(self._verify_ctrl, self._verify_idx)):
+            tables += [(("ctrl", k), ctrl, dev_ctrl), (("idx", k), idx, dev_idx)]
+        self._stage_verify_tables(tables)
 
     def _views(self, k, v):
         lay, n = self.layout, self.num_blocks

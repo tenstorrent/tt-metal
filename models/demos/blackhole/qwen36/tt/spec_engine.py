@@ -18,6 +18,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import torch
 from loguru import logger
@@ -25,7 +26,30 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
-from models.demos.blackhole.qwen36.tt.spec_sample import sampling_plan
+from models.demos.blackhole.qwen36.tt.spec_accept import StepAccept
+from models.demos.blackhole.qwen36.tt.spec_sample import sampling_plan, with_draws
+from models.demos.blackhole.qwen36.tt.spec_step import (
+    DRAFT_PENDING,
+    STEP_DECLINED,
+    STEP_DRAWN,
+    STEP_KEEP,
+    STEP_NUM_VALID,
+    STEP_P0,
+    STEP_ROPE_BASE,
+    VERIFY_STEP_ROWS,
+    draft_anchor,
+    draft_reseed_positions,
+    draft_reseed_rope,
+    draft_reseed_tokens,
+    draft_step_rope,
+    draft_step_row,
+    drafter_pack,
+    drafter_pack_rows,
+    pack_width,
+    reseed_real_rows,
+    reseed_table,
+    rope_rows,
+)
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -33,6 +57,8 @@ EAGER_RESEED_PROMPT_LEN = 131072
 MAX_SPEC_ROWS = ttnn.TILE_SIZE
 # Prompt lengths warmed in prepare: exact bucket lengths take the no-mask prefill path, the others the masked one.
 _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 2248, 2448, 2948, 3948, 4096)
+# MTPBlockEngine logs its one-enqueue counts at every this many verifies.
+ONE_ENQUEUE_LOG_EVERY = 1000
 # Runner contract: token id for unused tail columns of a returned block.
 PLACEHOLDER_TOKEN_ID = -1
 SPEC_MODES = ("argmax_ids", "logits")
@@ -301,6 +327,7 @@ def spec_memory_costs(
     num_layers=None,
     mask_buckets=None,
     gdn_state_in_blocks=False,
+    rope_table_rows=None,
 ):
     """PER-DEVICE bytes of the MTP spec-decode state beyond plain decode. Pure: HF text config + tp only.
 
@@ -314,6 +341,8 @@ def spec_memory_costs(
     ``gdn_state_in_blocks`` (MTPBlockEngine): the GDN state is in vLLM's KV cache blocks, so there is no ring and no
     per-user window; ``fixed`` counts instead the verify's per-group ctrl and index tables (gdn_verify), and verify_io
     drops the ring selectors.
+    ``rope_table_rows``: the rows of the device RoPE tables the verify and drafter traces look up
+    (spec_step.rope_table_rows of the model's max_seq_len); ``fixed`` counts them as rope_tables when given.
     Dims follow the model: TILE tensors pad their last two dims to 32; ROW_MAJOR are exact.
     ``fixed`` scales with B only through page tables / selectors / feed rows (all small). Page-table width nb =
     ``nb`` or ceil(max_seq_len / block_size); with neither, page tables count 0. ``num_layers`` overrides
@@ -355,12 +384,10 @@ def spec_memory_costs(
     groups = B * _SPEC_SDPA_GROUPS_PER_USER[T] if T in _SPEC_SDPA_GROUPS_PER_USER else 1
     logits_w = tp * _pad32(vocab // tp) if vocab % tp == 0 else _pad32(vocab)  # vocab-sharded head gathers
     verify_io = (
-        _rm_bytes([1, rows], i32)  # token_buf
-        + _rm_bytes([rows], i32)  # kvpos_buf
+        _rm_bytes([VERIFY_STEP_ROWS, pack_width(rows)], i32)  # step_buf
         + _rm_bytes([rows, nb], i32)
         + _rm_bytes([B, nb], i32)
         + _rm_bytes([groups, nb], i32)  # page tables
-        + 2 * _tile_bytes([1, rows, 1, rope_dim], bf)  # cos, sin
         + (0 if gdn_state_in_blocks else _rm_bytes([B * nv_tp], i32))  # state_idx
         + (0 if gdn_state_in_blocks else _tile_bytes([B, kconv - 1 + T, kconv - 1 + 2 * T], bf))  # conv_sel
         + _tile_bytes([1, 1, rows, logits_w], bf)
@@ -380,6 +407,8 @@ def spec_memory_costs(
         + (_tile_bytes([1, 1, rows, B], bf) + _tile_bytes([1, 1, rows, rows], bf) if B > 1 else 0)  # _join_take/keep
     )
     fixed = {"verify_io": verify_io, "mtp_scratch_block": block_bytes, "engine_buffers": engine}
+    if rope_table_rows is not None:
+        fixed["rope_tables"] = 2 * _rm_bytes([int(rope_table_rows), rope_dim], bf)  # cos, sin
     if gdn_state_in_blocks:
         groups = -(-n_gdn // max(1, L - n_gdn))  # MambaSpec groups: one GDN layer per attention layer slot each
         ctrl_words = -(-(1 + B + 2 * B * nv_tp) // 16) * 16
@@ -479,11 +508,11 @@ class MTPSpecEngine:
         # A/B + safety switch: 1 = run the drafter eagerly even when its trace is recorded
         self.recorded_drafter = os.environ.get("QWEN36_SPEC_EAGER_DRAFTER", "0") != "1"
         self._dr_bufs = []  # persistent drafter-trace inputs (all of the _dr_* tensors below)
-        self._dr_tok0 = None  # [B,1] uint32 pending tokens
-        self._dr_pos, self._dr_cos, self._dr_sin = [], [], []  # per draft step k: [B] int32, [1,B,1,rd] bf16 x2
-        self._dr_rs_tok = (
-            self._dr_rs_pos
-        ) = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None  # reseed rows (B*T)
+        self._dr_pack = None  # [2K+5, W] uint32: the per-step integers (spec_step drafter pack)
+        self._dr_rs_pt = None  # [B*T, nb] int32: the reseed rows' page table (spec_step.reseed_table)
+        self._dr_iota = None  # [1, B*T] float32 TILE 1 .. B*T: the anchor one-hot's column numbers
+        self._dr_rs_staged = None  # host table _dr_rs_pt holds, None when unknown
+        self._mtp_pt_staged = None  # host table _mtp_pt holds, None when unknown
         self._dr_trace = None  # trace id: anchor gather + batched reseed + K draft steps
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
         self._last_pt = None  # fitted host page table of the most recent verify
@@ -538,9 +567,19 @@ class MTPSpecEngine:
 
     def _stage_mtp_tables(self, pt):
         """Re-stage the persistent MTP page tables from the fitted host table [B, nb]."""
-        self._stage(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage_table(pt, "_mtp_pt", "_mtp_pt_staged")
         for u in range(self.B):
             self._stage(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _stage_table(self, host, buf, mirror):
+        """Copy the int32 table ``host`` into the persistent buffer named ``buf`` unless the host mirror named ``mirror``
+        says the buffer already holds it."""
+        host = torch.as_tensor(host).to(torch.int32)
+        held = getattr(self, mirror)
+        if held is not None and torch.equal(held, host):
+            return
+        self._stage(host, getattr(self, buf), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        setattr(self, mirror, host.clone())
 
     def _check_scratch(self, pt):
         assert int(pt.max()) < self._scratch_block, (
@@ -749,9 +788,13 @@ class MTPSpecEngine:
                     logger.info(f"[spec_engine] drafter trace captured (anchor + reseed + {self.K} draft steps)")
                 else:
                     logger.info("[spec_engine] drafter runs eagerly (QWEN36_SPEC_EAGER_DRAFTER=1)")
+                self._capture_step()
         finally:
             self.mesh.set_program_cache_misses_allowed(True)
         self.captured = True
+
+    def _capture_step(self):
+        """Traces captured after the drafter's, inside capture_decode's scope (MTPBlockEngine's step trace)."""
 
     def shutdown(self):
         """Release the traces and every persistent engine buffer; a later prepare starts over."""
@@ -770,8 +813,8 @@ class MTPSpecEngine:
         for t in (*self._dr_outs, *self._dr_bufs):
             ttnn.deallocate(t)
         self._dr_outs, self._dr_bufs = [], []
-        self._dr_tok0 = self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None
-        self._dr_pos, self._dr_cos, self._dr_sin = [], [], []
+        self._dr_pack = self._dr_rs_pt = self._dr_iota = None
+        self._dr_rs_staged = self._mtp_pt_staged = None
         bufs = [
             *self._last_hidden,
             *self._last_sel.values(),
@@ -816,13 +859,10 @@ class MTPSpecEngine:
             )
         per_seq["drafter_hidden"] = sum(nbytes(t) for t in self._last_hidden)
         vfy = (
-            "token_buf",
-            "kvpos_buf",
+            "step_buf",
             "kvpt_buf",
             "kvpt_users",
             "kvpt1_buf",
-            "cos_buf",
-            "sin_buf",
             "state_idx",
             "conv_sel",
             "logits_out",
@@ -850,6 +890,8 @@ class MTPSpecEngine:
                 )
             ),
         }
+        if getattr(m, "_rope_rm", None) is not None:
+            fixed["rope_tables"] = sum(nbytes(t) for t in m._rope_rm)
         per_token = {"mtp_kv": kv_bytes // (n_blocks * int(att.paged_k.shape[-2]))}
         for d in (per_seq, fixed, per_token):
             d["total"] = sum(d.values())
@@ -1165,11 +1207,15 @@ class MTPSpecEngine:
         slot_remap=None,
         mamba_state=None,
         sampling=None,
+        one_enqueue=True,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); slot_remap is applied after
         validation. ``mamba_state``: the GDN state blocks of the step (MTPBlockEngine only). ``sampling``: the step's
         device sampling parameters (the plugin's ``sampling_params``, one entry per row) or None; a row they sample
-        returns the device sampler's draws in place of its argmax ids (spec_sample). Returns VerifyResult."""
+        returns the device sampler's draws in place of its argmax ids (spec_sample). ``one_enqueue``: an argmax_ids
+        verify may also run the device acceptance and the drafter (MTPBlockEngine); a narrow decode step, which the
+        runner follows with a propose over positions it derives from its own request state, passes False.
+        Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
@@ -1206,8 +1252,15 @@ class MTPSpecEngine:
             num_valid_drafts=num_valid_drafts,
             **({} if mamba_state is None else {"mamba_state": mamba_state}),
             **({} if plan is None else {"sample_plan": plan}),
+            **(
+                {"one_enqueue": True} if one_enqueue and spec_mode == "argmax_ids" and self._one_enqueue_ready() else {}
+            ),
         )
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
+
+    def _one_enqueue_ready(self):
+        """Whether a verify can also run the device acceptance and the drafter (MTPBlockEngine once captured)."""
+        return False
 
     def _verify_split(self, tokens, positions, mi_prev, **kw):
         """verify_traced with the readback timed separately (hooks ttnn.get_device_tensors);
@@ -1272,14 +1325,10 @@ class MTPSpecEngine:
         self._check_scratch(pt)
         eager = B == 1 and p[0] > self.eager_reseed_len
         if self.recorded_drafter and self.captured and self._dr_trace is not None and not all(decline) and not eager:
-            dpt = pt
-            if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
-                dpt = pt.clone()
-                dpt[torch.tensor(decline)] = self._scratch_block
-                p = [0 if d else pu for d, pu in zip(decline, p)]
-                pending = [0 if d else t for d, t in zip(decline, pending)]
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-            drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt, m_kv)
+            # declined rows draft at position 0 over an all-scratch table; their ids are discarded
+            self._stage_table(self._draft_table(pt, decline), "_mtp_pt", "_mtp_pt_staged")
+            p0 = [max(pu - mu, 0) for pu, mu in zip(p, m)]  # position of verify column 0; 0 for a padding row
+            drafts = self._propose_recorded(ctok, m, p0, decline, keep, pt)
             if any(decline):
                 drafts[torch.tensor(decline)] = 0
             return drafts
@@ -1293,9 +1342,7 @@ class MTPSpecEngine:
         if all(decline):
             return torch.zeros(B, K, dtype=torch.int32)
         if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
-            dpt = pt.clone()
-            dpt[torch.tensor(decline)] = self._scratch_block
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(self._draft_table(pt, decline), "_mtp_pt", "_mtp_pt_staged")
             p = [0 if d else pu for d, pu in zip(decline, p)]
             pending = [0 if d else t for d, t in zip(decline, pending)]
         drafts = self._draft(pending, self._hp_buf, p)
@@ -1308,6 +1355,25 @@ class MTPSpecEngine:
         """Runner propose contract: committed block [B, 1+K] padded with -1 past accepted_counts; page_table None =
         the table of the last verify. Rows whose
         window would leave the paged KV decline (num_valid 0). Returns DraftResult."""
+        B, K = self.B, self.K
+        q = self._propose_request(
+            num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, hidden
+        )
+        # B > 1 still writes skipped rows' MTP KV (keep_kv): a row re-offered after a release has its full history
+        if q.skip_all and B == 1:  # the runner withholds every row's drafts: no anchor/reseed/drafter work
+            self.skipped_propose_calls += 1
+            self._offered.clear()
+            return DraftResult(torch.zeros(B, K, dtype=torch.int32), torch.zeros(B, dtype=torch.int32))
+        drafts = self.propose(
+            q.ctok, q.cpos, q.acc, q.page_table, decline=q.decline, cap_blocks=q.cap_blocks, keep_kv=q.keep
+        )
+        return self._draft_result(drafts, q.decline)
+
+    def _propose_request(self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, hidden):
+        """propose_draft_tokens' checked inputs and its decisions: committed block ``ctok`` and positions ``cpos``,
+        counts ``acc`` (1 on a padding row), the table and its width, the padding rows, the declined rows (a padding row,
+        a row whose window leaves the paged KV, a row whose drafts the runner withholds), the declined rows that keep
+        their anchor slot's drafter KV, and whether the runner withholds every row's drafts."""
         B, T, K = self.B, self.T, self.K
         if int(num_drafts) != K:
             raise ValueError(f"num_drafts {num_drafts} != engine K {K}")
@@ -1337,18 +1403,25 @@ class MTPSpecEngine:
                 raise ValueError(f"row {u}: committed positions {cpos[u, :c].tolist()} are not consecutive from >= 1")
         _, _, _, p = accepted_plan(ctok, cpos, acc, B, T)
         fit = draft_rows_fit(p, K, table_capacity(cap_blocks, self.block_size))
-        decline = [(not f) or pd for f, pd in zip(fit, pad)]
         skip, skip_all = propose_skip_plan(self._no_draft, B)
-        # B > 1 still writes skipped rows' MTP KV (keep_kv): a row re-offered after a release has its full history
-        if skip_all and B == 1:  # the runner withholds every row's drafts: no anchor/reseed/drafter work
-            self.skipped_propose_calls += 1
-            self._offered.clear()
-            return DraftResult(torch.zeros(B, K, dtype=torch.int32), torch.zeros(B, dtype=torch.int32))
         keep = [s and not pd for s, pd in zip(skip, pad)]
-        decline = [d or s for d, s in zip(decline, skip)]
-        drafts = self.propose(ctok, cpos, acc, page_table, decline=decline, cap_blocks=cap_blocks, keep_kv=keep)
-        num_valid = torch.tensor([0 if d else K for d in decline], dtype=torch.int32)
-        self._offered = {u for u in range(B) if decline[u] is False}
+        decline = [(not f) or pd or s for f, pd, s in zip(fit, pad, skip)]
+        return SimpleNamespace(
+            ctok=ctok,
+            cpos=cpos,
+            acc=acc,
+            page_table=page_table,
+            cap_blocks=cap_blocks,
+            pad=pad,
+            decline=decline,
+            keep=keep,
+            skip_all=skip_all,
+        )
+
+    def _draft_result(self, drafts, decline):
+        """DraftResult of a propose: K drafts on every row that is not declined; those rows are offered."""
+        num_valid = torch.tensor([0 if d else self.K for d in decline], dtype=torch.int32)
+        self._offered = {u for u in range(self.B) if not decline[u]}
         return DraftResult(drafts, num_valid)
 
     # --------------------------------------------------------------------- #
@@ -1380,63 +1453,99 @@ class MTPSpecEngine:
             h = h_next
         if h is not anchor_hidden:
             ttnn.deallocate(h)
-        steps = [self._id_to_host(t) for t in owned_tok[1:]]  # steps[k][u]
+        steps = self._read_ids(owned_tok[1:])  # steps[k][u]
         for t in owned_tok:
             ttnn.deallocate(t)
-        return torch.tensor([[steps[k][u] for k in range(self.K)] for u in range(B)], dtype=torch.int32)
+        return self._drafts_to_host(steps)
 
     # --------------------------------------------------------------------- #
     # Recorded drafter (anchor gather + batched reseed + K draft steps as one trace)
     # --------------------------------------------------------------------- #
     def _alloc_drafter_inputs(self):
-        """Persistent drafter-trace inputs, zero-filled (a padding-only reseed + position-0 drafts: scratch-safe)."""
-        B, K, R, nb, rd = self.B, self.K, self.B * self.T, self.nb, self.args.rope_head_dim
-        al, z, bf, i32 = self._alloc_host_replicated, torch.zeros, ttnn.bfloat16, torch.int32
-        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
-        self._dr_tok0 = al(z(B, 1, dtype=i32), ttnn.uint32, rm)
-        self._dr_pos = [al(z(B, dtype=i32), ttnn.int32, rm) for _ in range(K)]
-        self._dr_cos = [al(z(1, B, 1, rd, dtype=torch.bfloat16), bf, tile) for _ in range(K)]
-        self._dr_sin = [al(z(1, B, 1, rd, dtype=torch.bfloat16), bf, tile) for _ in range(K)]
-        self._dr_rs_tok = al(z(R, 1, dtype=i32), ttnn.uint32, rm)
-        self._dr_rs_pos = al(z(R, dtype=i32), ttnn.int32, rm)
-        self._dr_rs_pt = al(torch.full((R, nb), self._scratch_block, dtype=i32), ttnn.int32, rm)
-        self._dr_rs_cos = al(z(1, R, 1, rd, dtype=torch.bfloat16), bf, tile)
-        self._dr_rs_sin = al(z(1, R, 1, rd, dtype=torch.bfloat16), bf, tile)
-        self._dr_bufs = [
-            self._dr_tok0,
-            *self._dr_pos,
-            *self._dr_cos,
-            *self._dr_sin,
-            self._dr_rs_tok,
-            self._dr_rs_pos,
-            self._dr_rs_pt,
-            self._dr_rs_cos,
-            self._dr_rs_sin,
-        ]
+        """Persistent drafter-trace inputs: the zero pack (a padding-only reseed and position-0 drafts), the reseed table
+        on the scratch block, the anchor one-hot's column numbers, and the RoPE tables the trace looks up."""
+        B, K, R, nb = self.B, self.K, self.B * self.T, self.nb
+        al, rm = self._alloc_host_replicated, ttnn.ROW_MAJOR_LAYOUT
+        self.model.rope_rm_tables()
+        self._dr_pack = al(torch.zeros(drafter_pack_rows(K), pack_width(R), dtype=torch.int32), ttnn.uint32, rm)
+        self._dr_rs_pt = al(torch.full((R, nb), self._scratch_block, dtype=torch.int32), ttnn.int32, rm)
+        self._dr_rs_staged = None
+        iota = torch.arange(1, R + 1, dtype=torch.float32).reshape(1, R)
+        self._dr_iota = al(iota, ttnn.float32, ttnn.TILE_LAYOUT)
+        self._dr_bufs = [self._dr_pack, self._dr_rs_pt, self._dr_iota]
+
+    def _drafter_inputs(self):
+        """The drafter trace's per-step inputs, derived inside the trace from _dr_pack (spec_step layout): tokens as
+        [1, n] uint32 slices, KV positions as [n] int32, RoPE cos and sin looked up by table row, and the anchor one-hot
+        [1,1,B,B*T] bf16, 1.0 at (u, u*T + m[u]). Returns (inputs, owned): every tensor in ``owned`` is freed after the
+        body.
+
+        The one-hot compares column number + 1 (_dr_iota, zero in the tile padding) with anchor + 1 >= 1, so its padding
+        columns are 0 and the anchor matmul stays exact when B*T < 32 and the feed's padding rows hold any value."""
+        B, K, R, pk, model = self.B, self.K, self.B * self.T, self._dr_pack, self.model
+        owned = []
+
+        def seg(row, n):
+            t = ttnn.slice(pk, (row, 0), (row + 1, n))
+            owned.append(t)
+            return t
+
+        def positions(row, n):
+            t = ttnn.reshape(ttnn.typecast(seg(row, n), ttnn.int32), (n,))
+            owned.append(t)
+            return t
+
+        def rope(row, n):
+            cos, sin = model.rope_lookup(seg(row, n), n)
+            owned.extend((cos, sin))
+            return cos, sin
+
+        tiled = ttnn.to_layout(seg(draft_anchor(K), B), ttnn.TILE_LAYOUT)
+        anchor = ttnn.typecast(tiled, ttnn.float32)  # [1, B]
+        anchor_t = ttnn.transpose(anchor, 0, 1)
+        column = ttnn.add(anchor_t, 1.0)  # [B, 1]
+        onehot = ttnn.eq(self._dr_iota, column, dtype=ttnn.bfloat16)  # [B, B*T]
+        anchor_sel = ttnn.reshape(onehot, (1, 1, B, R))
+        owned.extend((tiled, anchor, anchor_t, column, onehot, anchor_sel))
+        rs_cos, rs_sin = rope(draft_reseed_rope(K), R)
+        steps = [rope(draft_step_rope(K, k), B) for k in range(K)]
+        inputs = dict(
+            anchor_sel=anchor_sel,
+            rs_tok=seg(draft_reseed_tokens(K), R),
+            rs_pos=positions(draft_reseed_positions(K), R),
+            rs_cos=rs_cos,
+            rs_sin=rs_sin,
+            tok0=seg(DRAFT_PENDING, B),
+            pos=[positions(draft_step_row(k), B) for k in range(K)],
+            cos=[c for c, _ in steps],
+            sin=[s for _, s in steps],
+        )
+        return inputs, owned
 
     def _drafter_body(self, feed):
-        """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps; every input is a
-        persistent buffer (device-input twin of _set_anchor + _reseed_mtp_batched + _draft). Returns the K ids
-        tensors [1,1,B] uint32 (step k's drafts)."""
+        """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps, over the inputs
+        _drafter_inputs derives from the persistent pack (device-input twin of _set_anchor + _reseed_mtp_batched +
+        _draft). Returns the K ids tensors [1,1,B] uint32 (step k's drafts)."""
         B, mtp = self.B, self.mtp
-        Hp = ttnn.matmul(self._anchor_sel, feed, compute_kernel_config=self._anchor_cc)
+        x, owned = self._drafter_inputs()
+        Hp = ttnn.matmul(x["anchor_sel"], feed, compute_kernel_config=self._anchor_cc)
         ttnn.copy(Hp, self._hp_buf)
         ttnn.deallocate(Hp)
         _, hn = mtp.forward_decode(
             feed,
-            self._dr_rs_tok,
-            self._dr_rs_pos,
-            self._dr_rs_cos,
-            self._dr_rs_sin,
+            x["rs_tok"],
+            x["rs_pos"],
+            x["rs_cos"],
+            x["rs_sin"],
             self._dr_rs_pt,
             need_logits=False,
             alias_kv_write=True,
             spec_n_users=B,
         )
         free_tensors(hn)
-        h, tok, outs = self._hp_buf, self._dr_tok0, []
+        h, tok, outs = self._hp_buf, x["tok0"], []
         for k in range(self.K):
-            logits, hn = mtp.forward_decode(h, tok, self._dr_pos[k], self._dr_cos[k], self._dr_sin[k], self._mtp_pt)
+            logits, hn = mtp.forward_decode(h, tok, x["pos"][k], x["cos"][k], x["sin"][k], self._mtp_pt)
             idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
             tok = ttnn.reshape(idx, (B, 1))
@@ -1445,34 +1554,39 @@ class MTPSpecEngine:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
+        free_tensors(*owned)
         return outs
 
-    def _propose_recorded(self, ctok, cpos, m, pending, p, pt, m_kv=None):
-        """Stage the drafter trace's inputs (host->device copies only; _mtp_pt already staged), replay, read ids.
-        The reseed rows always run (padding-only when every m == 0). ``m_kv``: reseed row counts (default m)."""
-        B, T, K, model = self.B, self.T, self.K, self.model
-        stage, bf, rm, tile = self._stage, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
-        stage(anchor_selector(m, B, T), self._anchor_sel, bf, tile)
-        plan = reseed_row_plan(ctok, cpos, m if m_kv is None else m_kv, B, T)
-        rtok, rpos, rpt = reseed_rows_host(plan, pt, T, self.nb, self._scratch_block)
-        rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos, self._row_rope_deltas(T))
-        stage(rtok, self._dr_rs_tok, ttnn.uint32, rm)
-        stage(rpos, self._dr_rs_pos, ttnn.int32, rm)
-        stage(rpt, self._dr_rs_pt, ttnn.int32, rm)
-        stage(rcos, self._dr_rs_cos, bf, tile)
-        stage(rsin, self._dr_rs_sin, bf, tile)
-        tok0, poss = draft_step_plan(pending, p, K)
-        stage(tok0, self._dr_tok0, ttnn.uint32, rm)
-        for k, pv in enumerate(poss):
-            c, s = model._rope_tp_cos_sin_decode_torch(pv, self._rope_deltas)
-            stage(pv, self._dr_pos[k], ttnn.int32, rm)
-            stage(c, self._dr_cos[k], bf, tile)
-            stage(s, self._dr_sin[k], bf, tile)
+    def _draft_table(self, pt, decline):
+        """The draft steps' MTP table: ``pt`` with every declined row on the scratch block."""
+        if not any(decline):
+            return pt
+        dpt = pt.clone()
+        dpt[torch.tensor([bool(d) for d in decline])] = self._scratch_block
+        return dpt
+
+    def _rope_base(self, p0):
+        """Each user's RoPE table row of position ``p0[u]`` with its M-RoPE delta (spec_step.drafter_pack)."""
+        return rope_rows(p0, self._rope_deltas, self.model.rope_table_rows())
+
+    def _propose_recorded(self, ctok, m, p0, decline, keep, pt):
+        """One copy of the drafter pack (spec_step.drafter_pack of the committed block ``ctok``, the accepted drafts
+        ``m``, the verify column-0 positions ``p0``, ``decline`` and ``keep``), the reseed table when it changed, the
+        replay, and one wait for the draft ids. _mtp_pt is staged by the caller. The reseed rows always run (padding-only
+        when every m == 0). Returns int32 [B, K]."""
+        T, K = self.T, self.K
+        pack = drafter_pack(ctok, m, p0, decline, keep, self._rope_base(p0), K, self.model.rope_table_rows())
+        self._stage(pack, self._dr_pack, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        real = reseed_real_rows(m, decline, keep, T)
+        self._stage_table(reseed_table(pt, real, T, self._scratch_block), "_dr_rs_pt", "_dr_rs_staged")
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
-        steps = [self._id_to_host(t) for t in self._dr_outs]  # steps[k][u]
-        return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
+        return self._drafts_to_host(self._read_ids(self._dr_outs))
+
+    def _drafts_to_host(self, steps):
+        """steps[k][u] -> int32 [B, K]."""
+        return torch.tensor([[steps[k][u] for k in range(self.K)] for u in range(self.B)], dtype=torch.int32)
 
     def _draft_warmup(self, pending, Hp, p):
         """One need_logits=True draft step before capture (compiles head norm, LM head, argmax, mesh_partition)."""
@@ -1482,10 +1596,16 @@ class MTPSpecEngine:
             ttnn.deallocate(t)
         ttnn.synchronize_device(self.mesh)
 
-    def _id_to_host(self, id_tt):
-        """[*, B] uint32 device ids -> B ints, read from the device-0 replica."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0])
-        return [int(v) for v in t.reshape(-1)[: self.B]]
+    def _read_ids(self, id_tts):
+        """[*, B] uint32 device ids of each tensor -> B ints per tensor (_read_device0)."""
+        return [[int(v) for v in t.reshape(-1)[: self.B]] for t in self._read_device0(id_tts)]
+
+    def _read_device0(self, tensors):
+        """Each tensor's device-0 replica as a torch tensor, with one wait: every read is enqueued without blocking,
+        then one synchronize fills them all."""
+        reads = [ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False) for t in tensors]
+        ttnn.synchronize_device(self.mesh)
+        return [ttnn.to_torch(r) for r in reads]
 
     # --------------------------------------------------------------------- #
     # MTP KV maintenance
@@ -1651,7 +1771,13 @@ class MTPBlockEngine(MTPSpecEngine):
     What remains per state slot is the drafter's: the feed row of a prompt's last token (``_last_hidden``), kept from
     the final prefill chunk to the row's first verify, which writes that position's drafter KV with the first
     generated token, and the M-RoPE delta of the slot's request (``_rope_deltas``, 0 for text), which offsets the
-    RoPE positions of the slot's verify rows and drafter rows."""
+    RoPE positions of the slot's verify rows and drafter rows.
+
+    One-enqueue steps: an argmax_ids verify (greedy rows, and device-sampled rows whose ids are draws) whose next propose
+    is decided before the verify (no row whose drafting depends on its count) enqueues the verify trace, the sampler
+    trace, the step trace (spec_accept.StepAccept: the greedy walk and the drafter's inputs on the device) and the
+    drafter trace, then reads the ids, the drafter pack and the drafts with one wait. The next propose_draft_tokens
+    checks that the runner committed what the device accepted and returns those drafts."""
 
     def __init__(self, model, batch_size, draft_len):
         super().__init__(model, batch_size, draft_len)
@@ -1660,6 +1786,13 @@ class MTPBlockEngine(MTPSpecEngine):
             f"MTPBlockEngine needs the GDN verify tables for T = {self.T} (GdnBlockState(verify_tokens=K + 1)), "
             f"got {None if blocks is None else blocks.verify_tokens}"
         )
+        self._accept = None  # spec_accept.StepAccept, once prepared
+        self._acc_trace = None  # the step trace
+        self._acc_pt_staged = None  # host table rows the step trace's pt_rows holds, None when unknown
+        self._step_pending = None  # the one-enqueue verify whose drafts the next propose returns
+        self.one_enqueue_steps = 0  # verifies that ran the device acceptance and the drafter
+        self.verify_steps = 0  # every verify after capture
+        self.one_enqueue_host_proposes = 0  # one-enqueue verifies whose propose drafted again on the host
 
     def prepare_prefill(self, page_table):
         """Allocate the engine buffers and compile the drafter's prompt programs (the drafter KV warm and the last-row
@@ -1698,6 +1831,68 @@ class MTPBlockEngine(MTPSpecEngine):
         self.model.prepare_verify_trace(
             self._prep_pt, self.T, warm_positions=[0] * self.B, sample=self.sample_on_device
         )
+
+    def prepare_decode(self):
+        """The base prepare, then the step trace's buffers and programs (compiled on a stand-in for the verify's ids,
+        before any capture). One-enqueue steps need the recorded drafter and the verify's ids as the fused argmax's
+        lanes; without either, every step stages the drafter from the host."""
+        prepared = self.prepared
+        super().prepare_decode()
+        if prepared:
+            return
+        model = self.model
+        if not (self.recorded_drafter and getattr(model, "_vfy_ids_lanes", False)):
+            logger.info(
+                "[spec_engine] one-enqueue steps off: they need the recorded drafter and the fused verify argmax"
+            )
+            return
+        sampler = getattr(model, "_vfy_sampler", None)
+        self._accept = StepAccept(
+            self.mesh,
+            self.B,
+            self.K,
+            self.nb,
+            model.rope_table_rows(),
+            self._scratch_block,
+            model._vfy_step_buf,
+            self._dr_pack,
+            self._dr_rs_pt,
+            draws=None if sampler is None else sampler.draws,
+        )
+        self._accept.body()
+        ttnn.synchronize_device(self.mesh)
+        self._dr_rs_staged = None  # the warm pass wrote the reseed table
+
+    def _capture_step(self):
+        """The step trace, over the verify trace's ids output (which exists from the verify capture on)."""
+        if self._accept is None or self._dr_trace is None:
+            return
+        self._accept.bind_ids(self.model._vfy_ids_out)
+        self._acc_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        self._accept.body()
+        ttnn.end_trace_capture(self.mesh, self._acc_trace, cq_id=0)
+        ttnn.synchronize_device(self.mesh)
+        logger.info("[spec_engine] step trace captured: one-enqueue steps on (verify, acceptance, drafter, one read)")
+
+    def _one_enqueue_ready(self):
+        return self._acc_trace is not None and not self._timing
+
+    def _log_one_enqueue_counts(self):
+        logger.info(
+            f"[spec_engine] one-enqueue steps: {self.one_enqueue_steps} of {self.verify_steps} verifies; "
+            f"{self.one_enqueue_host_proposes} of them drafted again on the host"
+        )
+
+    def shutdown(self):
+        self._log_one_enqueue_counts()
+        if self._acc_trace is not None:
+            ttnn.release_trace(self.mesh, self._acc_trace)
+            self._acc_trace = None
+        if self._accept is not None:
+            self._accept.release()
+            self._accept = None
+        self._acc_pt_staged = self._step_pending = None
+        super().shutdown()
 
     def capture_decode(self):
         """The base capture, then zero the null block 0: the warm passes wrote GDN state there (every row of a warm
@@ -1759,15 +1954,21 @@ class MTPBlockEngine(MTPSpecEngine):
         num_valid_drafts=None,
         mamba_state=None,
         sample_plan=None,
+        one_enqueue=False,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j, every GDN layer on the blocks of
         ``mamba_state``. A row's first verify after its prompt first writes the drafter KV of the prompt's last
         position. ``accepted_counts`` selects no state. Returns (ids int32 [B, T], logits [B, T, vocab] or None).
         ``sample_plan`` (spec_sample.sampling_plan): each row it samples returns the device sampler's draws instead of
-        its argmax ids."""
+        its argmax ids. ``one_enqueue`` (argmax_ids only): run the step as a one-enqueue step when its next propose is
+        decided before the verify (_one_enqueue_plan)."""
         assert self.captured, "verify before capture"
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
+        self._step_pending = None
+        if self.verify_steps % ONE_ENQUEUE_LOG_EVERY == 0:  # a server's engine is killed without a shutdown
+            self._log_one_enqueue_counts()
+        self.verify_steps += 1
         B, T = self.B, self.T
         tokens = self._ints(tokens, (B, T))
         start_pos = self._ints(start_pos, (B,))
@@ -1809,6 +2010,11 @@ class MTPBlockEngine(MTPSpecEngine):
         )
         if sample_plan is not None:
             kw["sample_plan"] = sample_plan
+        plan = None
+        if one_enqueue and not read_logits and num_valid_drafts is not None:
+            plan = self._one_enqueue_plan(start_pos, active, num_valid_drafts, sample_plan)
+        if plan is not None:
+            return self._verify_one_enqueue(args, kw, plan, sample_plan), None
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
@@ -1816,6 +2022,117 @@ class MTPBlockEngine(MTPSpecEngine):
         self._vfeed = vfeed
         ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
         return ids, (None if lt is None else lt.reshape(B, T, -1))
+
+    def _one_enqueue_plan(self, start_pos, active, num_valid_drafts, sample_plan):
+        """The acceptance rows of a one-enqueue step (spec_step STEP_*) and the propose's decisions it fixes, or None
+        when the step must stage its drafter from the host. Decided as propose_draft_tokens decides after the verify,
+        for every count the row can accept: a padding row, a row whose drafts the runner withholds and a row whose
+        window leaves the paged KV at every count decline; a row that fits at some counts only, a propose that declines
+        every row, a B == 1 propose the runner withholds or one that could take the eager reseed run on the host."""
+        B, K, T = self.B, self.K, self.T
+        nv = [int(n) for n in torch.as_tensor(num_valid_drafts).reshape(B).tolist()]
+        act = [bool(a) for a in active.tolist()]
+        p0 = [int(start_pos[u]) if act[u] else 0 for u in range(B)]
+        capacity = table_capacity(self._last_cap_blocks, self.block_size)
+        skip, skip_all = propose_skip_plan(self._no_draft, B)
+        if skip_all and B == 1:
+            return None
+        declined, keep = [], []
+        for u in range(B):
+            fits = draft_rows_fit([p0[u] + m for m in range(nv[u] + 1)], K, capacity)
+            if act[u] and not skip[u] and any(fits) and not all(fits):
+                return None
+            declined.append(not act[u] or skip[u] or not all(fits))
+            keep.append(skip[u] and act[u])
+        if all(declined) or (B == 1 and p0[0] + nv[0] > self.eager_reseed_len):
+            return None
+        self._check_scratch(self._last_pt)
+        drawn = [bool(sample_plan is not None and sample_plan.sampled[u * T]) for u in range(B)]
+        rows = {
+            STEP_NUM_VALID: nv,
+            STEP_DRAWN: [int(d) for d in drawn],
+            STEP_P0: p0,
+            STEP_ROPE_BASE: self._rope_base(p0).tolist(),
+            STEP_DECLINED: [int(d) for d in declined],
+            STEP_KEEP: [int(k) for k in keep],
+        }
+        return SimpleNamespace(rows=rows, p0=p0, declined=declined, keep=keep)
+
+    def _verify_one_enqueue(self, args, kw, plan, sample_plan):
+        """Stage, enqueue the verify, [sampler], step and drafter traces, and read the ids, the drafter pack and the
+        drafts with one wait. Returns the ids int32 [B, T]; the drafts wait for the next propose_draft_tokens."""
+        B, T, model = self.B, self.T, self.model
+        self._stage_table(self._draft_table(self._last_pt, plan.declined), "_mtp_pt", "_mtp_pt_staged")
+        pt_rows = self._last_pt.repeat_interleave(T, dim=0)
+        if self._acc_pt_staged is None or not torch.equal(self._acc_pt_staged, pt_rows):
+            self._accept.stage_pt_rows(pt_rows)
+            self._acc_pt_staged = pt_rows
+        kw = {k: v for k, v in kw.items() if k != "read_logits"}
+        model.verify_enqueue(*args, accept_rows=plan.rows, **kw)
+        ttnn.execute_trace(self.mesh, self._acc_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        self._dr_rs_staged = None  # the step trace wrote the reseed table
+        draws = [] if sample_plan is None else [model._vfy_sampler.draws]
+        reads = self._read_device0([model._vfy_ids_out, *draws, self._dr_pack, *self._dr_outs])
+        ids = reads[0].reshape(-1)[: B * T].to(torch.int64).reshape(B, T)
+        if sample_plan is not None:
+            ids = with_draws(ids, reads[1], sample_plan)
+        pack = reads[1 + len(draws)].to(torch.int64)
+        drafts = self._drafts_to_host([[int(v) for v in r.reshape(-1)[:B]] for r in reads[2 + len(draws) :]])
+        self._vfeed = model._vfy_rows_out
+        self._step_pending = SimpleNamespace(plan=plan, pack=pack, drafts=drafts, ids=ids)
+        self.one_enqueue_steps += 1
+        return ids.to(torch.int32)
+
+    def propose_draft_tokens(
+        self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
+    ):
+        """After a one-enqueue verify: the drafts the device made, once the runner's commit is the one the device
+        accepted (every live row's count and committed tokens give the drafter pack the device built).
+
+        A runner that commits less than its walk on some row (a prefix of the device's commit: a length or stop cut,
+        which vllm-tt-plugin leaves to the scheduler) gets the base propose instead, as does a propose that decides
+        differently from the verify's plan (another table, other declined rows, positions that do not follow the
+        verify). The base propose's drafter rewrites every drafter KV slot the device's wrote up to the runner's
+        commit plus K - 1; the slots past it are written again before any read. Any other commit raises ValueError: it
+        is not a prefix of the device's greedy walk over the same ids, so the device acceptance is wrong."""
+        step, self._step_pending = self._step_pending, None
+        args = (num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, hidden)
+        if step is None:
+            return super().propose_draft_tokens(*args)
+        q = self._propose_request(*args)
+        plan, B, K = step.plan, self.B, self.K
+        moved = [u for u in range(B) if not q.pad[u] and int(q.cpos[u, 0]) != plan.p0[u] + 1]
+        other_table = page_table is not None and not torch.equal(self._fit(page_table), self._last_pt)
+        if other_table or moved or q.decline != plan.declined or q.keep != plan.keep:
+            logger.warning(
+                f"[spec_engine] propose after a one-enqueue verify decides differently (table changed {other_table}, "
+                f"rows off their verify {moved}, declined {q.decline} vs {plan.declined}); drafting on the host path"
+            )
+            self.one_enqueue_host_proposes += 1
+            return super().propose_draft_tokens(*args)
+        m = (q.acc - 1).tolist()
+        m_dev = (step.pack[draft_anchor(K), :B] - torch.arange(B) * self.T).tolist()
+        live = [u for u in range(B) if not q.pad[u]]
+        cut = [u for u in live if m[u] < m_dev[u]]
+        prefix = all(m[u] <= m_dev[u] and torch.equal(q.ctok[u, : m[u] + 1], step.ids[u, : m[u] + 1]) for u in live)
+        if cut and prefix:
+            self.one_enqueue_host_proposes += 1
+            return super().propose_draft_tokens(*args)
+        want = drafter_pack(
+            q.ctok, m, plan.p0, plan.declined, plan.keep, self._rope_base(plan.p0), K, self.model.rope_table_rows()
+        ).to(torch.int64)
+        if not torch.equal(want, step.pack[: want.shape[0], : want.shape[1]]):
+            raise ValueError(
+                f"the runner committed {[mu + 1 for mu in m]} tokens per row, the device acceptance "
+                f"{[mu + 1 for mu in m_dev]}, and the runner's commit is not a prefix of the device's: the one-enqueue "
+                "drafts continue a wrong commit"
+            )
+        if any(m):
+            self.mtp_extra_steps += 1
+        drafts = step.drafts.clone()
+        drafts[torch.tensor(plan.declined)] = 0
+        return self._draft_result(drafts, plan.declined)
 
 
 def get_spec_engine(model, batch_size, draft_len, engine_cls=MTPSpecEngine):
