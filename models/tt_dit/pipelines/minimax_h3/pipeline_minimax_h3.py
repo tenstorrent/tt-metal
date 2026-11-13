@@ -889,6 +889,12 @@ class MiniMaxH3Pipeline:
         # consecutive waves of the one-tile schedule (dense packing included), so it never adds a wave. The stitch is
         # unchanged and runs per wave. Unset = 1 (one tile per chip per call). Other values raise in the VAE.
         self.vae_strip_units = int(os.environ.get("MINIMAX_H3_VAE_UNITS_PER_DEVICE", "1"))
+        # MINIMAX_H3_VAE_STITCH=neighbor (or gather / strips): the device tile stitch of the yuv420 decode. Unset =
+        # "strips", the VAE's own default (column gather, column blend, strip gather, row blend). "neighbor" is the
+        # gather-free path: each tile cross-fades in place from its up / left neighbours' halos (blend as two
+        # matmuls). Not the same arithmetic as strips: the matmul blend can differ in the last bits, which may flip
+        # single 8-bit output codes. The VAE rejects any other value.
+        self.vae_stitch_exchange = os.environ.get("MINIMAX_H3_VAE_STITCH", "strips")
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -941,10 +947,14 @@ class MiniMaxH3Pipeline:
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
             strip_units_per_device=self.vae_strip_units,
+            stitch_exchange=self.vae_stitch_exchange,
         )
+        if self.vae_stitch_exchange != "strips":
+            self._host_log(f"VAE tile stitch: {self.vae_stitch_exchange} (MINIMAX_H3_VAE_STITCH)")
         if self.vae_strip_units != 1:
             self._host_log(
                 f"VAE strips decode: {self.vae_strip_units} tiles per chip per call (MINIMAX_H3_VAE_UNITS_PER_DEVICE)"
+                + ("" if self.vae_stitch_exchange == "strips" else "; ignored, the stitch is not 'strips'")
             )
         self._vae.load_state(self._read_safetensors("vae"))
 

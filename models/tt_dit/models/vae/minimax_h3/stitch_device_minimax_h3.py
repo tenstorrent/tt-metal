@@ -221,7 +221,11 @@ class NeighborTileBlender:
 
     @staticmethod
     def _band_matrix(pad: int, extent: int, overlap: int) -> torch.Tensor:
-        """``(pad+extent, extent)`` identity with the first ``overlap`` outputs cross-faded from the halo."""
+        """``(pad+extent, extent)`` identity with the first ``overlap`` outputs cross-faded from the halo.
+
+        The ramp weights are rounded to float16 (round to nearest even). The matmuls unpack float32 operands with
+        a 10-bit mantissa, so a float16 weight passes through exactly instead of being truncated there.
+        """
         m = torch.zeros(pad + extent, extent, dtype=torch.float32)
         for k in range(extent):
             if k < overlap:
@@ -229,7 +233,7 @@ class NeighborTileBlender:
                 m[pad + k, k] = k / overlap
             else:
                 m[pad + k, k] = 1.0
-        return m
+        return m.to(torch.float16).float()
 
     def _geometry_weights(
         self,
