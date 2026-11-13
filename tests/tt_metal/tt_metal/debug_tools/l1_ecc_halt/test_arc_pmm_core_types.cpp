@@ -2,18 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Blackhole ARC PMM messages from each kind of core. A core announces an event to ARC by writing a 4-byte message to
-// ARC's PMM message register; the PMM stores the message's low 16 bits in the mailbox word picked by the x/y the
-// message carries, in a 17x12 grid. Tensix cores send their translated NOC0 coordinates, which fall inside that grid.
-// Ethernet and DRAM cores have translated coordinates outside it (x >= 17 or y >= 12), so these tests check:
-// 1. A message carrying the sender's physical (NOC0) coordinates lands in that mailbox word, from ERISC and DRISC.
-// 2. A message carrying the sender's translated coordinates changes no mailbox word.
+// Blackhole ARC PMM messages from each kind of core. A core announces an event record in its L1 to ARC by writing a
+// 4-byte message to ARC's PMM message register; the PMM stores the message's low 16 bits in the mailbox word picked
+// by the x/y the message carries, in a 17x12 grid. Those are the sender's physical (NOC0) coordinates. Ethernet and
+// DRAM cores have translated coordinates outside the grid (x >= 17 or y >= 12), so these tests check:
+// 1. A message carrying the sender's physical coordinates lands in that mailbox word, from Tensix, ERISC and DRISC.
+// 2. A message carrying an ERISC's or DRISC's translated coordinates changes no mailbox word.
+// ARC firmware that handles PMM messages takes the record: it clears the mailbox word and then the record's magic.
+// Without such firmware, both keep what was written. The tests accept either.
 // Each test clears the words it uses, before and after, so it leaves no message behind for ARC firmware.
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -42,15 +46,19 @@ constexpr const char* noc_id_regs_kernel = "tests/tt_metal/tt_metal/test_kernels
 constexpr uint32_t noc_id_bits = 6;
 constexpr uint32_t noc_id_mask = (1u << noc_id_bits) - 1;
 constexpr uint32_t arc_pmm_grid_y = 12;
-// Each core kind sends its own value in the message's record-address field, so a mailbox word shows who wrote it.
+// The records use the halt record's event type, with their own cause so they can't be taken for a halt.
+constexpr uint32_t test_event_cause = 0x7E570001;
+// How long ARC firmware that handles PMM messages may take to take a record.
+constexpr auto arc_take_deadline = std::chrono::seconds(1);
+// Each core kind puts its own value in the record's first data word, so a record shows who wrote it.
 constexpr uint32_t tensix_marker = 0x0A1;
 constexpr uint32_t eth_marker = 0x0E1;
 constexpr uint32_t drisc_marker = 0x0D1;
 
 using KernelConfig = std::variant<DataMovementConfig, EthernetConfig, DramConfig>;
 
-// A core to send from: its logical coordinates and kernel config, and its L1 scratch for the message, at local_addr
-// for the core and read_addr for the host (they differ on DRISC).
+// A core to send from: its logical coordinates and kernel config, and its L1 scratch for the message and the record,
+// at local_addr for the core and read_addr for the host (they differ on DRISC).
 struct Sender {
     std::string name;
     CoreCoord logical;
@@ -126,10 +134,54 @@ protected:
         distributed::Finish(mesh_device_->mesh_command_queue());
     }
 
-    // Runs the send kernel on s with a message carrying msg_xy, and returns the message.
+    // The record sits after the message, at the PMM's record alignment.
+    static uint32_t record_addr(const Sender& s) {
+        constexpr uint32_t a = l1_ecc_halt_record_alignment;
+        return (s.local_addr + sizeof(uint32_t) + a - 1) / a * a;
+    }
+
+    uint32_t read_record_magic(const Sender& s) const {
+        const CoreCoord t = translated(s);
+        uint32_t magic = 0;
+        MetalContext::instance().get_cluster().read_core(
+            &magic, sizeof(magic), tt_cxy_pair(chip_, t.x, t.y), s.read_addr + (record_addr(s) - s.local_addr));
+        return magic;
+    }
+
+    // ARC's tile event header (magic, type, cause), then 3 data words.
+    static std::vector<uint32_t> record_words(const Sender& s, const CoreCoord& msg_xy) {
+        return {
+            l1_ecc_halt_record_magic,
+            l1_ecc_halt_event_type,
+            test_event_cause,
+            s.marker,
+            static_cast<uint32_t>(msg_xy.x),
+            static_cast<uint32_t>(msg_xy.y)};
+    }
+
+    // Whether ARC took s's record: cleared the mailbox word at xy, then the record's magic.
+    bool arc_took_record(const Sender& s, const CoreCoord& xy) const {
+        const auto deadline = std::chrono::steady_clock::now() + arc_take_deadline;
+        do {
+            if (read_slot(xy) == 0 && read_record_magic(s) == 0) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        } while (std::chrono::steady_clock::now() < deadline);
+        return false;
+    }
+
+    // Writes a record into s's L1, runs the send kernel on s with a message announcing it and carrying msg_xy, and
+    // returns the message.
     uint32_t send(const Sender& s, const CoreCoord& msg_xy) {
-        const uint32_t message =
-            arc_pmm_message(msg_xy.x, msg_xy.y, arc_pmm_flag0, s.marker * l1_ecc_halt_record_alignment);
+        const CoreCoord t = translated(s);
+        const std::vector<uint32_t> record = record_words(s, msg_xy);
+        MetalContext::instance().get_cluster().write_core(
+            record.data(),
+            record.size() * sizeof(uint32_t),
+            tt_cxy_pair(chip_, t.x, t.y),
+            s.read_addr + (record_addr(s) - s.local_addr));
+        const uint32_t message = arc_pmm_message(msg_xy.x, msg_xy.y, arc_pmm_flag0, record_addr(s));
         run_kernel(
             s,
             pmm_send_kernel,
@@ -199,49 +251,51 @@ protected:
         clear_slot(p);
         const std::vector<uint32_t> before = snapshot();
         const uint32_t sent = send(s, p) & arc_pmm_mailbox_mask;
+        const bool taken = arc_took_record(s, p);
         const uint32_t word = read_slot(p);
+        const uint32_t magic = read_record_magic(s);
         clear_slot(p);
         log_info(
             tt::LogTest,
-            "{}: translated ({}, {}), physical ({}, {}): mailbox word 0x{:x}, sent 0x{:x}",
+            "{}: translated ({}, {}), physical ({}, {}): mailbox word 0x{:x}, sent 0x{:x}, record magic 0x{:x}: {}",
             s.name,
             t.x,
             t.y,
             p.x,
             p.y,
             word,
-            sent);
-        EXPECT_EQ(word, sent) << s.name << ": message with physical coordinates did not land";
+            sent,
+            magic,
+            taken ? "ARC took the record" : "no ARC handler, the message is still in the mailbox");
+        if (!taken) {
+            EXPECT_EQ(word, sent) << s.name << ": message with physical coordinates did not land";
+            EXPECT_EQ(magic, l1_ecc_halt_record_magic) << s.name << ": record magic changed";
+        }
         std::vector<uint32_t> after = snapshot();
         after[arc_pmm_grid_x * p.y + p.x] = before[arc_pmm_grid_x * p.y + p.x];
         EXPECT_EQ(after, before) << s.name << ": another mailbox word changed";
     }
 
-    // Sends from s with its translated coordinates. Inside the grid (Tensix), the message lands at those coordinates;
-    // outside it, no mailbox word changes.
-    void expect_translated_coords(const Sender& s) {
+    // Sends from s with its translated coordinates, which are outside the grid: no mailbox word changes, and ARC never
+    // sees the record.
+    void expect_translated_coords_change_nothing(const Sender& s) {
         const CoreCoord t = translated(s);
-        const bool inside = in_pmm_grid(t);
-        if (inside) {
-            clear_slot(t);
-        }
+        ASSERT_FALSE(in_pmm_grid(t)) << s.name << " translated (" << t.x << ", " << t.y << ") is inside the PMM grid";
         const std::vector<uint32_t> before = snapshot();
         const uint32_t sent = send(s, t) & arc_pmm_mailbox_mask;
-        std::vector<uint32_t> after = snapshot();
+        // Long enough for ARC firmware to take the record, had the message landed.
+        std::this_thread::sleep_for(arc_take_deadline);
+        const std::vector<uint32_t> after = snapshot();
+        const uint32_t magic = read_record_magic(s);
         log_info(
             tt::LogTest,
-            "{}: translated ({}, {}) {} the PMM grid, sent 0x{:x}",
+            "{}: translated ({}, {}), sent 0x{:x}, record magic 0x{:x}",
             s.name,
             t.x,
             t.y,
-            inside ? "inside" : "outside",
-            sent);
-        if (inside) {
-            const uint32_t word = read_slot(t);
-            clear_slot(t);
-            EXPECT_EQ(word, sent) << s.name << ": message with translated coordinates did not land";
-            after[arc_pmm_grid_x * t.y + t.x] = before[arc_pmm_grid_x * t.y + t.x];
-        }
+            sent,
+            magic);
+        EXPECT_EQ(magic, l1_ecc_halt_record_magic) << s.name << ": ARC took a record announced from outside the grid";
         for (uint32_t i = 0; i < after.size(); i++) {
             if (after[i] != before[i]) {
                 const CoreCoord xy{i % arc_pmm_grid_x, i / arc_pmm_grid_x};
@@ -335,8 +389,8 @@ protected:
     tt_cxy_pair arc_{};
 };
 
-// Baseline: a Tensix kernel's message, with its translated coordinates, lands like the BRISC halt handler's.
-TEST_F(ArcPmmCoreTypeTest, TensixTranslatedCoordsLand) { expect_translated_coords(tensix_sender()); }
+// Baseline: a Tensix kernel's message lands like the BRISC halt handler's.
+TEST_F(ArcPmmCoreTypeTest, TensixPhysicalCoordsLand) { expect_physical_coords_land(tensix_sender()); }
 
 TEST_F(ArcPmmCoreTypeTest, EthPhysicalCoordsLand) {
     const std::vector<Sender> senders = eth_senders();
@@ -360,12 +414,12 @@ TEST_F(ArcPmmCoreTypeTest, EthTranslatedCoordsChangeNoMailboxWord) {
     if (senders.empty()) {
         GTEST_SKIP() << "no ethernet cores";
     }
-    expect_translated_coords(senders.front());
+    expect_translated_coords_change_nothing(senders.front());
 }
 
 TEST_F(ArcPmmCoreTypeTest, DriscTranslatedCoordsChangeNoMailboxWord) {
     skip_without_driscs();
-    expect_translated_coords(drisc_senders().front());
+    expect_translated_coords_change_nothing(drisc_senders().front());
 }
 
 // Can a core find its own physical coordinates for the PMM message? Checks NOC_NODE_ID (expected physical) and
