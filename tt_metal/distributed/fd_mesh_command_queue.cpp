@@ -1236,7 +1236,7 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
         uint16_t channel = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
                                .get_cluster()
                                .get_assigned_channel_for_device(device->id());
-        device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
+        device->sysmem_manager().cq(id_).completion_queue_wait_front(exit_condition_);
 
         if (exit_condition_.load()) {
             return;
@@ -1368,12 +1368,10 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
             program_dispatch::pack_program_command_sequence(
                 program_cmd_seq, stall_first, stall_before_program, true, packed);
             for (auto* device : devices) {
-                auto& manager = device->sysmem_manager();
-                manager.issue_queue_reserve(size, id_);
-                manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
-                manager.issue_queue_push_back(size, id_);
-                manager.fetch_queue_reserve_back(id_);
-                manager.fetch_queue_write(size, id_);
+                SystemMemoryCq& cq = device->sysmem_manager().cq(id_);
+                cq.issue_queue_reserve(size);
+                cq.cq_write(packed.data(), size, cq.issue_queue_write_ptr());
+                cq.publish(size);
             }
             return;
         }
@@ -1529,7 +1527,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
         // Writes device_patches[begin, end) as one fetch-queue entry.
         auto enqueue_patch_batch = [&](size_t begin, size_t end, uint32_t write_bytes, bool append_stall) {
             const uint32_t cmd_sequence_sizeB = write_bytes + (append_stall ? stall_size : 0);
-            void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, id_);
+            void* cmd_region = sysmem_manager.cq(id_).issue_queue_reserve(cmd_sequence_sizeB);
             HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
             for (size_t i = begin; i < end; ++i) {
                 const MeshBufferPatch& patch = device_patches[i].get();
@@ -1542,9 +1540,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
                 // command list before these writes land.
                 command_sequence.add_dispatch_wait_with_prefetch_stall(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
             }
-            sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, id_);
-            sysmem_manager.fetch_queue_reserve_back(id_);
-            sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, id_);
+            sysmem_manager.cq(id_).publish(cmd_sequence_sizeB);
         };
 
         // Pack writes into batches no larger than max_command_size. The last batch also carries the stall.
@@ -1959,9 +1955,9 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
         const uint32_t current_event = last_event_id_;
         for (auto* device : mesh_device_->impl().get_devices()) {
             TT_ASSERT(
-                device->sysmem_manager().get_last_completed_event(id_) == current_event,
+                device->sysmem_manager().cq(id_).last_completed_event() == current_event,
                 "Current event must be equal to last completed event");
-            device->sysmem_manager().reset_events(id_, UINT32_MAX);
+            device->sysmem_manager().cq(id_).reset_events(UINT32_MAX);
         }
         // The next event ID is 0.
         last_event_id_ = UINT32_MAX;

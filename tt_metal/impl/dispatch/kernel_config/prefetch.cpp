@@ -107,7 +107,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
                       channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
                 : get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = device_->sysmem_manager().cq(cq_id_).issue_queue_size();
 
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
@@ -165,7 +165,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
                       channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
                 : get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = device_->sysmem_manager().cq(cq_id_).issue_queue_size();
 
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;

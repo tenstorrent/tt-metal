@@ -804,7 +804,7 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
                 const uint32_t completion_q1_last_event_ptr =
                     mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT, cq_id);
                 // Initialize completion queue write pointer and read pointer copy
-                uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
+                uint32_t issue_queue_size = device->sysmem_manager().cq(cq_id).issue_queue_size();
                 uint32_t completion_queue_start_addr;
                 if (device->sysmem_manager().is_dram_backed()) {
                     completion_queue_start_addr =

@@ -2106,10 +2106,11 @@ void MeshDeviceImpl::quiesce_devices() {
     for (auto& command_queue : mesh_command_queues_) {
         for (auto& device : get_devices()) {
             TT_ASSERT(
-                device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
+                device->sysmem_manager().cq(command_queue->id()).last_completed_event() == 0,
                 "Last completed event is not 0");
             TT_ASSERT(
-                device->sysmem_manager().get_last_issued_event(command_queue->id()) == 0, "Last issued event is not 0");
+                device->sysmem_manager().cq(command_queue->id()).last_issued_event() == 0,
+                "Last issued event is not 0");
         }
     }
 }
