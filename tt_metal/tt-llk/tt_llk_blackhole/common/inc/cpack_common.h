@@ -807,8 +807,36 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     // Read_int8 is what makes an Int8/UInt8 pack read 16-bit Dest datums as 8-bit integers, so a
     // reconfig onto or away from Int8/UInt8 must write it like the full configure does: the RMW
     // covers every dest_rd_ctrl field.
-    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, PCK_DEST_RD_CTRL_Read_32b_data_SHAMT, PCK_DEST_RD_CTRL_FIELDS_MASK>(
-        pack_dest_rd_ctrl_bits<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format));
+    if constexpr (skip == 0)
+    {
+        // Mask 0 (the u2d gate among them) keeps main's branches: the branch-free word costs its serial path a cycle.
+        dest_rd_ctrl_u dest_rd_ctrl;
+        dest_rd_ctrl.val = 0;
+
+        bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
+                             pack_src_format == to_underlying(DataFormat::Float32);
+        bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
+
+        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
+        dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
+
+        if (pack_dst_format == to_underlying(DataFormat::UInt8))
+        {
+            dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
+        }
+        // Round to 10 bit mantissa from fp32 dest
+        if ((is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
+            (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)))
+        {
+            dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
+        }
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, PCK_DEST_RD_CTRL_Read_32b_data_SHAMT, PCK_DEST_RD_CTRL_FIELDS_MASK>(dest_rd_ctrl.val);
+    }
+    else
+    {
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, PCK_DEST_RD_CTRL_Read_32b_data_SHAMT, PCK_DEST_RD_CTRL_FIELDS_MASK>(
+            pack_dest_rd_ctrl_bits<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format));
+    }
 
     if (IS_BFP_FORMAT(pack_output_dst_format))
     {
