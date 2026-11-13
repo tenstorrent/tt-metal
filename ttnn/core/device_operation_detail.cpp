@@ -156,32 +156,10 @@ compute_output_placements_and_shape(
     return {std::move(result_placements), tt::tt_metal::distributed::MeshShape(std::move(result_strides))};
 }
 
-// Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
-static bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
-    MeshCoordinateRangeSet a_set;
-    MeshCoordinateRangeSet b_set;
-
-    for (const auto& coord : a) {
-        a_set.merge(MeshCoordinateRange(coord));
-    }
-    for (const auto& coord : b) {
-        b_set.merge(MeshCoordinateRange(coord));
-    }
-
-    bool is_subset = false;
-    for (const auto& b_range : b_set.ranges()) {
-        is_subset = false;
-        for (const auto& a_range : a_set.ranges()) {
-            if (a_range.contains(b_range)) {
-                is_subset = true;
-                break;
-            }
-        }
-        if (not is_subset) {
-            return is_subset;
-        }
-    }
-    return is_subset;
+bool is_subset_of(std::vector<MeshCoordinate> a, std::vector<MeshCoordinate> b) {
+    std::sort(a.begin(), a.end());
+    std::sort(b.begin(), b.end());
+    return !b.empty() && std::includes(a.begin(), a.end(), b.begin(), b.end());
 }
 
 std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
@@ -219,14 +197,18 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
                 std::back_inserter(tensor_mesh_coords),
                 [](const auto& coord) { return coord; });
             if (tensor_mesh_coords.size() < tensor_coordinates.size()) {
+#ifdef DEBUG  // TT_ASSERT evaluates its condition in Release too; this one runs on every op launch
                 TT_ASSERT(
                     is_subset_of(tensor_coordinates, tensor_mesh_coords),
                     "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
+#endif
                 tensor_coordinates = std::move(tensor_mesh_coords);
             } else {
+#ifdef DEBUG
                 TT_ASSERT(
                     is_subset_of(tensor_mesh_coords, tensor_coordinates),
                     "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
+#endif
             }
         }
     }

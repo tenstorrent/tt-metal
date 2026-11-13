@@ -58,6 +58,12 @@ compute_output_placements_and_shape(
     const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies);
 
 /**
+ * Whether every coordinate in `b` (not empty) is also in `a`.
+ */
+bool is_subset_of(
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> a, std::vector<tt::tt_metal::distributed::MeshCoordinate> b);
+
+/**
  * Non-template implementation of tensor coordinate extraction.
  *
  * Extracts and validates mesh coordinates from a pre-extracted list of input tensors.

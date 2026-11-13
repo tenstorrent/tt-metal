@@ -268,7 +268,38 @@ TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
         "ExampleDeviceOperation");
 }
 
+TEST(LaunchOperationTest, IsSubsetOf) {
+    using ::ttnn::device_operation::detail::is_subset_of;
+    using Coords = std::vector<ttnn::MeshCoordinate>;
+    const Coords row0{{0, 0}, {0, 1}, {0, 2}, {0, 3}};
+    const Coords mesh{{1, 3}, {0, 0}, {1, 0}, {0, 1}, {1, 1}, {0, 2}, {1, 2}, {0, 3}};  // unordered
+    const Coords corner{{0, 0}, {0, 1}, {1, 1}, {1, 2}, {1, 3}};  // not a rectangle
+    EXPECT_TRUE(is_subset_of(mesh, row0));
+    EXPECT_TRUE(is_subset_of(mesh, corner));
+    EXPECT_TRUE(is_subset_of(mesh, mesh));
+    EXPECT_FALSE(is_subset_of(row0, mesh));
+    EXPECT_FALSE(is_subset_of(row0, corner));
+    EXPECT_FALSE(is_subset_of(row0, Coords{{1, 0}}));
+    EXPECT_FALSE(is_subset_of(mesh, Coords{}));
+}
+
 using LaunchOperation2x4Test = tt::tt_metal::MeshDevice2x4Fixture;
+
+TEST_F(LaunchOperation2x4Test, TensorsWithDifferentCoordinateCounts) {
+    using ::ttnn::device_operation::detail::extract_tensor_coordinates_impl;
+    const tt::tt_metal::TensorSpec tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto full_tensor = ttnn::create_device_tensor(tensor_spec, mesh_device_.get());
+    auto uneven_tensor = make_tensor_with_num_shards(2, mesh_device_.get());
+
+    // The op runs on the coordinates every input has, whichever input comes first.
+    EXPECT_THAT(
+        extract_tensor_coordinates_impl({std::cref(full_tensor), std::cref(uneven_tensor)}, mesh_device_.get()),
+        ElementsAre(ttnn::MeshCoordinate{0, 0}, ttnn::MeshCoordinate{0, 1}));
+    EXPECT_THAT(
+        extract_tensor_coordinates_impl({std::cref(uneven_tensor), std::cref(full_tensor)}, mesh_device_.get()),
+        ElementsAre(ttnn::MeshCoordinate{0, 0}, ttnn::MeshCoordinate{0, 1}));
+}
 
 TEST_F(LaunchOperation2x4Test, UniformTensor) {
     const tt::tt_metal::TensorSpec tensor_spec = tt::tt_metal::TensorSpec(
