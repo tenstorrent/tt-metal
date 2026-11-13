@@ -1067,7 +1067,7 @@ def test_minimax_h3_transformer_block_dynamic_length(
 ) -> None:
     """One dynamic-length block serves two lengths from one program set: warm at the capacity length, then
     the shorter one must add no program; PCC against the reference at both."""
-    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+    from tt_py_test_utils_common.utils_for_testing import assert_program_cache_flat
 
     MIN_PCC = 0.9995
 

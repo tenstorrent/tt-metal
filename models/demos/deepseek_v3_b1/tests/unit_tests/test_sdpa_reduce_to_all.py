@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     get_optional_env_int,
     run_trace_benchmark,
 )
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
+from tt_py_test_utils_common.all_gather_validate import validate_test
 
 NUM_DEVICES_4x1 = 4 * 1
 NUM_CORES = 8

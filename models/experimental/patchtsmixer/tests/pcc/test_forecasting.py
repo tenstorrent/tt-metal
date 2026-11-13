@@ -14,7 +14,7 @@ from models.experimental.patchtsmixer.tt.model_processing import (
     preprocess_positional_encoding,
 )
 from models.experimental.patchtsmixer.tt.patchtsmixer import TtPatchTSMixerModelForForecasting
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

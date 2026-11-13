@@ -237,7 +237,7 @@ def kv_cache_pcc_check(
     import torch
 
     from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer

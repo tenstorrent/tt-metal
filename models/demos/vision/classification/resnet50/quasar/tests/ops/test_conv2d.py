@@ -57,7 +57,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # bf16 + MathFidelity.LoFi -> looser PCC (matches the model's batch-1 LoFi config).
 PCC = 0.97
