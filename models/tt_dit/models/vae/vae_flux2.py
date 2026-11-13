@@ -182,8 +182,19 @@ class Flux2VaeDecoder(Module):
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
-        z = self.conv_out.forward(z)
-        return _all_gather_hw(self._ctx, z)
+        # The image stays split over the H and W axes: the host assembles it (see output_concat_dims),
+        # which saves gathering it on the device, at a program per image size.
+        return self.conv_out.forward(z)
+
+    def output_concat_dims(self) -> list[int | None]:
+        """Per mesh axis, the dimension of the [N, H, W, C] output its shards are split along, or None
+        where the output is not split; the concat_dims of fast_device_to_host."""
+        dims: list[int | None] = [None] * len(tuple(self._ctx.device.shape))
+        if self._ctx.h_factor > 1 and self._ctx.h_mesh_axis is not None:
+            dims[self._ctx.h_mesh_axis] = 1
+        if self._ctx.w_factor > 1 and self._ctx.w_mesh_axis is not None:
+            dims[self._ctx.w_mesh_axis] = 2
+        return dims
 
 
 # https://github.com/black-forest-labs/flux2/blob/6bb103559da75b67d75bf77cebba0027ba412ebc/src/flux2/autoencoder.py#L189
