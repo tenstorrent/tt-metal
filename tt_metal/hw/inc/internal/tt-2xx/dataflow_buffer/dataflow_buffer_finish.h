@@ -312,6 +312,7 @@ inline bool __attribute__((noinline)) dfb_dm0_flush_ready_sides(uint32_t& pendin
 // posted == 0. Unpack skips counters another TRISC of this Neo owns.
 FORCE_INLINE void dfb_trisc_kernel_exit() {
     WAYPOINT("AAW");
+    invalidate_l1_cache();  // the participation mask below is read from the host-written DFB config
     const uint32_t dfb_mask =
         dfb_bound_mask(static_cast<uint8_t>(dfb::TENSIX_RISC_OFFSET + ckernel::csr_read<ckernel::CSR::NEO_ID>()));
     for (uint32_t m = dfb_mask; m != 0; m &= m - 1) {
