@@ -121,7 +121,7 @@ struct CmdListBindings {
 //   binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/TensorParamName{"src"});
 //   binder.param(/*invoke_name=*/"scale", /*encode=*/encode_float32_bits)
 //       .runtime(/*kernel_name=*/KernelSpecName{"reader"}, /*arg_name=*/"pre_scale");
-//   return std::move(binder).finish();
+//   return binder.finish();
 class CmdListBinder {
 public:
     CmdListBinder(
@@ -158,7 +158,8 @@ public:
         CmdListEncodeFn encode = encode_uint32,
         std::optional<std::string> metal_cmd_list_param_name = std::nullopt);
 
-    CmdListBindings finish() &&;
+    // Returns the bindings. Call it last: it moves them out of the binder.
+    CmdListBindings finish();
 
 private:
     const tt::tt_metal::experimental::KernelSpec& kernel_spec(
