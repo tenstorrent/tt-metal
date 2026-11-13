@@ -483,3 +483,1295 @@ If a run is killed mid-stall, the session is probably wedged. Use the same rule:
 ## Manual D2D AXI monitor step
 
 The emulator's D2D AXI monitor is a manual debug step. It is a DPI bind (`models/mimir/emu_hdl/axi_mon_d2d_bind.sv`, `top.utf:22`). To use it, relaunch the SiVal server without `--disable-dpi`, which the server command in the repo-root `mimir_setup.md` passes. With DPI on, the SMC AXI monitor also logs every host beat.
+
+## Results on `mimir_1x1`, 2026-11-03
+
+One line per test case, from the gtest XML reports. Time is the case's own time; each invocation also spends about 15 s opening the device. Run against `6ea8f29c6e4` with UMD `f0d497f3` (`kstevens/grendel-emu-additions`), in a Debug build with one fix: `tt_metal/llrt/core_descriptor.cpp` no longer asserts on an empty dispatch core list when the package has no Tensix grid. Without that fix every device open fails in a Debug build. Emulator `models/mimir`, each session after `bringup_mimir_1x1.py`: soc-c-29 (rows 1 and 2a), soc-c-31 (the rest of rows 2b to 3b and the contract tests), soc-c-29 again (rows 17 to 80), soc-c-26 (rows 81 to 106, up to `Cce0_Cfg3`), soc-zebu-03 (`Cce0_Cfg4` to `Cce0_Cfg7`), soc-c-28 (the `Cce1` cases of row 106), and soc-c-29 again (rows 107 to 129).
+
+Changes from the run order:
+- Row 2c ran last in its session, after row 3b and the contract tests, because it leaves CCE1 failing firmware init until the emulator restarts. In the README order, rows 2d and 3 fail on CCE1 after it.
+- `SizeAlignmentMatrix` (row 3b) ran with `timeout 14400`: each CCE takes about 2 h 20 min, past the `timeout 3600` prefix.
+- The rows marked 2x only did not run.
+- Row 106 restarted the emulator twice. A `DirtyLineRace` case that runs out of budget prints the MIM-601 message, which asks for a fresh session because the unfinished iDMA can corrupt later cases. The cases after such a failure were rerun in a new session, and the table shows the rerun. Results did not always repeat: `Cce1_Cfg1` failed after the first such failure and passed in a fresh session, and `Cce1_Cfg3` did the opposite.
+- Rows 75, 76 and 80 were not rerun before row 90: the binary did not change between them.
+
+| Row | Test | Result | Time |
+|---|---|---|---|
+| 1 | `MimirHostDram.ReconnectPersists` | pass | 2.9 s |
+| 1 | `MimirHostDram.HostSideRejections` | fail: A 6-byte write clears the 2 unwritten bytes of its last word: read `0x00001615`, expected `0xFFFF1615`. Chippy zero-fills a partial trailing word (chippy `transport_interface.h:73-78`) | 0.1 s |
+| 1 | `MimirHostTl1.Tl1MapLayout` | pass | 0.1 s |
+| 1 | `MimirHostTl1.BoundaryAndIsolation` | pass | 0.5 s |
+| 1 | `MimirHostTl1.HostSideRejections` | pass | 0.0 s |
+| 1 | `MM0/MimirHostDramView.PatternReadback/View0` | pass | 15 min 36 s |
+| 1 | `MM0/MimirHostDramView.PatternReadback/View1` | pass | 15 min 42 s |
+| 1 | `MM0/MimirHostDramView.BoundaryAndAlias/View0` | fail: Alias walk at view offset `0x2000000` read `0x00000000`, expected the guard `0x6aa18000`; View1 passes | 0.5 s |
+| 1 | `MM0/MimirHostDramView.BoundaryAndAlias/View1` | pass | 0.4 s |
+| 1 | `MM1/MimirHostTl1Cce.PerCceVisibility/Cce0` | pass | 7 min 28 s |
+| 1 | `MM1/MimirHostTl1Cce.PerCceVisibility/Cce1` | pass | 6 min 11 s |
+| 2a | `MimirFwPreflight.FirmwareLoadPreflight` | fail: The 1-byte `fw_shared_globals_ready` write clears the other 3 bytes of its TL1 word on both CCEs (`0x00000019`, expected `0x5a5a5a19`); same chippy partial-word write | 19 s |
+| 2b | `MimirFwLoad.LoadAndReachInitDone` | pass | 20 s |
+| 2b | `MimirFwLoad.ImageManifest` | pass | 4.3 s |
+| 2b | `MimirFwLoad.AllCcesIndependent` | pass | 44 s |
+| 2b | `MM2/MimirFwLaunch.NoOpLaunchCompletes/Cce0` | pass | 5.0 s |
+| 2b | `MM2/MimirFwLaunch.NoOpLaunchCompletes/Cce1` | pass | 5.0 s |
+| 2c | `MimirFwLoadNegative.SkipLoadNeverDone` | fail: With both firmware windows zeroed, the device open succeeds: both CCEs report done (GO signal `0x00`, expected `RUN_MSG_INIT`). In an earlier session only CCE0 reported done, and CCE1 then failed firmware init in every later process until the emulator restarted | 17 s |
+| 2d | `MimirFwReinit.ReloadsOnEveryOpen` | pass | 16 s |
+| 3 | `MimirKernelLoad.SameBinaryAllCcesUnicast` | pass | 9.4 s |
+| 3 | `MM3/MimirKernelLoad.MinimalKernelExecutes/Cce0` | pass | 5.1 s |
+| 3 | `MM3/MimirKernelLoad.MinimalKernelExecutes/Cce1` | pass | 5.4 s |
+| 3 | `MM3/MimirKernelLoad.EachHartAlone/Cce0` | pass | 12 s |
+| 3 | `MM3/MimirKernelLoad.EachHartAlone/Cce1` | pass | 12 s |
+| 3 | `MM3/MimirKernelLoad.ArgsReplaceStale/Cce0` | pass | 9.2 s |
+| 3 | `MM3/MimirKernelLoad.ArgsReplaceStale/Cce1` | pass | 8.9 s |
+| 3 | `MM3/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce0` | pass | 12 s |
+| 3 | `MM3/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce1` | pass | 12 s |
+| 3 | `MM5/MimirLocalTl1.SameChipletControl/Cce0To1` | pass | 13 s |
+| 3 | `MM5/MimirLocalTl1.SameChipletControl/Cce1To0` | pass | 13 s |
+| 3a | `MM8/MimirDmIdma.Copy/OwnTl1` | pass | 9.3 s |
+| 3a | `MM8/MimirDmIdma.Copy/LocalGddr` | pass | 12 s |
+| 3a | `MM8/MimirDmIdma.Copy/LocalGddr1` | pass | 13 s |
+| 3b | `MM4/MimirLocalDram.CceWritesTl1ToDram/Cce0` | pass | 2 min 39 s |
+| 3b | `MM4/MimirLocalDram.CceWritesTl1ToDram/Cce1` | pass | 2 min 38 s |
+| 3b | `MM4/MimirLocalDram.CceReadsDramToTl1/Cce0` | pass | 2 min 36 s |
+| 3b | `MM4/MimirLocalDram.CceReadsDramToTl1/Cce1` | pass | 2 min 38 s |
+| 3b | `MM4/MimirLocalDram.LoopbackChecksIntermediate/Cce0` | pass | 5 min 31 s |
+| 3b | `MM4/MimirLocalDram.LoopbackChecksIntermediate/Cce1` | pass | 5 min 28 s |
+| 3b | `MM4/MimirLocalDram.SizeAlignmentMatrix/Cce0` | pass | 2 h 17 min |
+| 3b | `MM4/MimirLocalDram.SizeAlignmentMatrix/Cce1` | pass | 2 h 21 min |
+| 3b | `MM4/MimirLocalDram.RepeatedAndOverlappingPerHart/Cce0` | pass | 20 min 7 s |
+| 3b | `MM4/MimirLocalDram.RepeatedAndOverlappingPerHart/Cce1` | pass | 20 min 25 s |
+| contract | `MimirEmu.CceSramChannelsDoNotAliasThroughMetalCluster` | pass | 0.0 s |
+| contract | `MimirEmu.RuntimeFirmwareInitializesThroughPublicDeviceApi` | pass | 4.1 s |
+| contract | `MimirEmu.AllCcesCopyLocalMimirBlock` | pass | 16 s |
+| contract | `MimirEmu/AllocatedDramBufferHostLoopback.RoundTrip/Partition0` | pass | 4.1 s |
+| contract | `MimirEmu/AllocatedDramBufferHostLoopback.RoundTrip/Partition1` | pass | 4.1 s |
+| contract | `MimirEmu/DramChannelsDoNotAliasThroughPublicDeviceApi.RoundTrip/Partition0` | pass | 3.9 s |
+| contract | `MimirEmu/DramChannelsDoNotAliasThroughPublicDeviceApi.RoundTrip/Partition1` | pass | 4.0 s |
+| contract | `MimirEmu/CceSramRoundTripThroughUnitMesh.RoundTrip/Cce0` | pass | 4.0 s |
+| contract | `MimirEmu/CceSramRoundTripThroughUnitMesh.RoundTrip/Cce1` | pass | 4.1 s |
+| contract | `MimirEmu/CceSramRoundTripThroughMetalCluster.RoundTrip/Cce0` | pass | 0.0 s |
+| contract | `MimirEmu/CceSramRoundTripThroughMetalCluster.RoundTrip/Cce1` | pass | 0.0 s |
+| contract | `MimirEmu/HartZeroRunsDramKernel.WritesMagic/Cce0` | pass | 4.7 s |
+| contract | `MimirEmu/HartZeroRunsDramKernel.WritesMagic/Cce1` | pass | 5.0 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce0` | pass | 7.2 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce1` | pass | 8.6 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition0` | pass | 5.6 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition1` | pass | 5.3 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition0` | pass | 4.9 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition1` | pass | 4.9 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition0` | pass | 10 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition1` | pass | 10.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition0` | pass | 10.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition1` | pass | 10.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition0` | pass | 12 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition1` | pass | 11 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition0` | pass | 11 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition1` | pass | 12 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce0Partition0` | pass | 6.7 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce0Partition1` | pass | 6.9 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce1Partition0` | pass | 7.1 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce1Partition1` | pass | 6.9 s |
+| contract | `MimirEmu/WritesCrossMimirCceSram.WritesMagic/Cce0` | skip: Configured descriptor does not expose a remote Mimir CCE. | 4.3 s |
+| contract | `MimirEmu/WritesCrossMimirCceSram.WritesMagic/Cce1` | skip: Configured descriptor does not expose a remote Mimir CCE. | 4.0 s |
+| contract | `MimirEmu/PrefetchesLocalGddrToRemoteCceSram.RoundTrip/Cce0` | skip: Configured descriptor does not expose a remote Mimir CCE. | 4.2 s |
+| contract | `MimirEmu/PrefetchesLocalGddrToRemoteCceSram.RoundTrip/Cce1` | skip: Configured descriptor does not expose a remote Mimir CCE. | 4.5 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmu/CopiesEveryMimirBlock.RoundTrip/Cce0` | pass | 5.4 s |
+| contract | `MimirEmu/CopiesEveryMimirBlock.RoundTrip/Cce1` | pass | 4.6 s |
+| 17 | `MimirPrefetcher.MM7GatePreconditionsHold` | pass | 4.5 s |
+| 18 | `MimirPrefetcher.MM7GateUninitializedSenderFails` | pass | 4.5 s |
+| 19 | `MimirPrefetcher.MM7GateStartStopWorks` | pass | 6.7 s |
+| 20 | `MimirPrefetcher.MM7GcbSmokePreconditionsWithReceiverRunning` | pass | 6.0 s |
+| 21 | `MimirPrefetcher.MM7GcbLayoutLocalReceiver` | pass | 4.8 s |
+| 24 | `MimirPrefetcher.MM7GcbLayoutRejectsConflictingReceivers` | pass | 4.5 s |
+| 25 | `MimirPrefetcher.MM7GcbSmokeDiscardDrain` | pass | 7.0 s |
+| 26 | `MimirPrefetcher.MM7GcbSmokeValidatorLocal` | pass | 7.2 s |
+| 27 | `MimirPrefetcher.MM7GcbSmokeValidatorWrongSeed` | pass | 6.8 s |
+| 28 | `MimirPrefetcher.MM7GcbSmokeResize` | pass | 6.6 s |
+| 30 | `MimirPrefetcher.MM7GcbSmokeDrainUntilStopped` | pass | 6.6 s |
+| 31 | `MimirPrefetcher.MM7GcbSmokeStallUntilReleased` | pass | 9.0 s |
+| 32 | `MimirPrefetcher.MM7GcbSmokeDrainTimeout` | pass | 8.8 s |
+| 33 | `MimirPrefetcher.MM7GcbSmokeReceiverWaitTimeout` | pass | 8.2 s |
+| 34 | `MimirPrefetcher.MM7GcbSmokeRelaunchResumes` | pass | 7.9 s |
+| 35 | `MimirPrefetcher.MM7LifecycleStartStop` | pass | 5.7 s |
+| 36 | `MimirPrefetcher.MM7LifecycleStartStopTwice` | pass | 7.6 s |
+| 37 | `MimirPrefetcher.MM7LifecycleBusySenderFailsStart` | pass | 6.1 s |
+| 38 | `MimirPrefetcher.MM7LifecycleQueueRejectsReceiverOnSender` | pass | 7.6 s |
+| 39 | `MimirPrefetcher.MM7LifecycleWaitCq` | pass | 11 s |
+| 40 | `MimirPrefetcher.MM7LifecycleDrainAtStop` | pass | 11 s |
+| 41 | `MimirPrefetcher.MM7T1Local0To1` | pass | 12 s |
+| 49 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/SubChunkLocal0To1` | pass | 14 s |
+| 51 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/BelowStageThirdLocal0To1` | pass | 13 s |
+| 53 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/PartialStageChunkLocal0To1` | pass | 13 s |
+| 54 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AboveStageThirdLocal0To1` | pass | 11 s |
+| 56 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/PageSplitLocal0To1` | pass | 12 s |
+| 57 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AbaLocal0To1` | pass | 14 s |
+| 59 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/WrapAndResizeLocal0To1` | pass | 18 s |
+| 61 | `MM7T3/MimirPrefetcherT3GcbSwitch.Delivers/GcbSwitchLocal0To1` | pass | 13 s |
+| 63 | `MimirPrefetcher.MM7T3FenceLocal0To1` | pass | 14 s |
+| 65 | `MimirPrefetcher.MM7RejectKRowMajorTensor` | pass | 9.0 s |
+| 66 | `MimirPrefetcher.MM7RejectStreamingTensor` | pass | 8.7 s |
+| 67 | `MimirPrefetcher.MM7RejectRangePastTensor` | pass | 10.0 s |
+| 68 | `MimirPrefetcher.MM7RejectRangePastView` | pass | 9.3 s |
+| 72 | `MM8/MimirDmRuntimeArgs.IllegalTooManyRuntimeArgs/Cce0` | pass | 6.2 s |
+| 72 | `MM8/MimirDmRuntimeArgs.IllegallyModifyRuntimeArgs/Cce0` | pass | 6.2 s |
+| 73 | `MM8/MimirDmMeshBufferDram.InterleavedPlacement/mimir_1x1` | pass | 13 s |
+| 73 | `MM8/MimirDmMeshBufferDram.WriteRead/mimir_1x1` | pass | 6.7 s |
+| 73 | `MM8/MimirDmMeshBufferDram.MultipleWriteReadRounds/mimir_1x1` | pass | 29 s |
+| 74 | `MM8/MimirDmIdma.Copy/OwnTl1` | pass | 8.4 s |
+| 74 | `MM8/MimirDmIdma.Copy/MaxPacket` | pass | 16 s |
+| 74 | `MM8/MimirDmIdma.Copy/SiblingTl1` | pass | 15 s |
+| 74 | `MM8/MimirDmIdma.Copy/LocalGddr` | pass | 13 s |
+| 74 | `MM8/MimirDmIdma.Copy/LocalGddr1` | pass | 13 s |
+| 74 | `MM8/MimirDmIdma.Copy/RemoteTl1` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.1 s |
+| 74 | `MM8/MimirDmIdma.Copy/RemoteGddr` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.1 s |
+| 74 | `MM8/MimirDmIdma.Copy/Strided1D` | pass | 8.7 s |
+| 74 | `MM8/MimirDmIdma.Copy/Strided1DLocalGddr` | pass | 8.4 s |
+| 74 | `MM8/MimirDmIdma.Copy/Strided1DSubLine` | pass | 7.6 s |
+| 74 | `MM8/MimirDmIdma.Copy/Strided1DSubLineLocalGddr` | pass | 7.7 s |
+| 74 | `MM8/MimirDmIdma.Copy/RemoteTl1KernelVerified` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.1 s |
+| 75 | `MM8/MimirDmCache.Op/NoFlushNotVisible` | pass | 9.4 s |
+| 75 | `MM8/MimirDmCache.Op/L1FlushLine` | pass | 8.3 s |
+| 75 | `MM8/MimirDmCache.Op/L1FlushFull` | pass | 8.5 s |
+| 75 | `MM8/MimirDmCache.Op/L1InvalidateLine` | pass | 8.3 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushLine` | pass | 8.5 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushRange` | pass | 9.8 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushFull` | pass | 9.5 s |
+| 75 | `MM8/MimirDmCache.Op/L2InvalidateLine` | pass | 8.5 s |
+| 75 | `MM8/MimirDmCache.Op/InvalidateFreshRead` | pass | 8.2 s |
+| 75 | `MM8/MimirDmCache.Op/HartToHartCoherent` | fail: Hart 1 warm read before hart 0 stores returned the old value in 0 of 64 words, expected 64 (`test_mimir_dm_cache.cpp:238`, CCE0, TL1 `0x8b4c0`) | 13 s |
+| 75 | `MM8/MimirDmCache.Op/L2InvalidateFreshRead` | fail: The cached re-read before the L2 invalidate saw 0 of 64 stale words, expected 64 (`test_mimir_dm_cache.cpp:282`, CCE0, TL1 `0x8b4c0`) | 8.3 s |
+| 75 | `MM8/MimirDmCache.Op/L1InvalidateFull` | pass | 8.7 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/Uncached1B` | pass | 48 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/Uncached8B` | pass | 48 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/CachedRangeFlush` | pass | 45 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/CachedFastFlush` | pass | 46 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_SrcOnly` | pass | 5.8 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_DstOnly` | pass | 5.3 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_Both` | pass | 5.2 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_SrcOnly` | pass | 5.4 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_DstOnly` | pass | 5.4 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_Both` | pass | 5.2 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_SrcOnly` | pass | 5.5 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_DstOnly` | pass | 5.5 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_Both` | pass | 5.6 s |
+| 78 | `MM8/MimirDmAddrgen.Pattern/Im2Col_FullImage` | pass | 8.2 s |
+| 78 | `MM8/MimirDmAddrgen.Pattern/Im2Col_Dilation1` | pass | 6.8 s |
+| 79 | `MM8/MimirDmDramUnary.ReaderWriterHandshake/Cce0` | pass | 11 s |
+| 79 | `MM8/MimirDmDramUnary.ReaderWriterHandshake/Cce1` | pass | 10 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/InvalidateOnAcquire` | pass | 7.3 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/FlushOnRelease` | pass | 6.8 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/LockedRangeOnly` | pass | 6.8 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_cache_ops` | pass | 6.3 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_idma_copy` | pass | 5.0 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_amo_ops` | pass | 6.2 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_scoped_lock_producer` | pass | 5.3 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_scoped_lock_consumer` | pass | 5.4 s |
+| 82 | `MM41/MimirCacheProbe.EightHartLaunch/Cce0` | pass | 37 s |
+| 82 | `MM41/MimirCacheProbe.EightHartLaunch/Cce1` | pass | 36 s |
+| 83 | `MM41/MimirCacheProbe.SnoopConfig/Cce0` | pass | 8.7 s |
+| 83 | `MM41/MimirCacheProbe.SnoopConfig/Cce1` | pass | 8.3 s |
+| 84 | `MM42/MimirAtomicProbe.TwoHartAmo/Cce0` | pass | 11 s |
+| 84 | `MM42/MimirAtomicProbe.TwoHartAmo/Cce1` | pass | 10 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushLine/Cce0` | pass | 8.9 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushLine/Cce1` | pass | 9.0 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushFull/Cce0` | pass | 9.6 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushFull/Cce1` | pass | 9.0 s |
+| 91 | `MM41/MimirCacheOps.DirtyEvictionPartialLine/Cce0` | pass | 12 s |
+| 91 | `MM41/MimirCacheOps.DirtyEvictionPartialLine/Cce1` | pass | 12 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce0_WriterReader` | pass | 13 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce0_EightWriters` | pass | 36 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce1_WriterReader` | pass | 14 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce1_EightWriters` | pass | 35 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce0_WriterReader` | pass | 12 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce0_EightWriters` | pass | 35 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce1_WriterReader` | pass | 13 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce1_EightWriters` | pass | 34 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce0_WriterReader` | pass | 12 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce0_EightWriters` | pass | 35 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce1_WriterReader` | pass | 13 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce1_EightWriters` | pass | 35 s |
+| 93 | `MM41/MimirCacheScopedLock.MultiConsumer/Cce0` | pass | 12 s |
+| 93 | `MM41/MimirCacheScopedLock.MultiConsumer/Cce1` | pass | 12 s |
+| 93 | `MM41/MimirCacheScopedLock.RingWrap/Cce0` | pass | 8.0 s |
+| 93 | `MM41/MimirCacheScopedLock.RingWrap/Cce1` | pass | 6.7 s |
+| 95 | `MM41/MimirCacheOps.FlushFenceOrdering/Cce0` | pass | 37 s |
+| 95 | `MM41/MimirCacheOps.FlushFenceOrdering/Cce1` | pass | 40 s |
+| 96 | `MM41/MimirCacheOps.FullInvalidate/Cce0` | pass | 16 s |
+| 96 | `MM41/MimirCacheOps.FullInvalidate/Cce1` | pass | 15 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_Host_SnoopOffInvalidate` | pass | 9.0 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_Host_InvalidateOnly` | pass | 8.8 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_SnoopOffInvalidate` | pass | 14 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_InvalidateOnly` | pass | 12 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteCce_SnoopOffInvalidate` | skip: Descriptor exposes 1 Mimir; the case needs two. | 0.1 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteCce_InvalidateOnly` | skip: Descriptor exposes 1 Mimir; the case needs two. | 0.1 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_Host_SnoopOffInvalidate` | pass | 8.5 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_Host_InvalidateOnly` | pass | 8.2 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_SnoopOffInvalidate` | pass | 12 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_InvalidateOnly` | pass | 12 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_RemoteCce_SnoopOffInvalidate` | skip: Descriptor exposes 1 Mimir; the case needs two. | 0.1 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_RemoteCce_InvalidateOnly` | skip: Descriptor exposes 1 Mimir; the case needs two. | 0.1 s |
+| 98 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_SnoopOn` | pass | 12 s |
+| 98 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_SnoopOn` | pass | 12 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalIdma_SnoopOffInvalidate` | pass | 15 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalIdma_InvalidateOnly` | pass | 15 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalIdma_SnoopOffInvalidate` | pass | 15 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalIdma_InvalidateOnly` | pass | 16 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalGddrIdma_SnoopOffInvalidate` | pass | 17 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalGddrIdma_InvalidateOnly` | pass | 15 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalGddrIdma_SnoopOffInvalidate` | pass | 15 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalGddrIdma_InvalidateOnly` | pass | 15 s |
+| 102 | `MM41/MimirCacheScopedLock.NonSnoopingProducer/Cce0` | fail: Consumer warm reads before the lock returned 3 of 8 old sentinels, the rest other data such as `0xd2000000` (`test_mimir_dm_scoped_lock.cpp:465`); after acquire, 2 of the 4 cached words outside the locked range still held that data (`:471`) | 6.8 s |
+| 102 | `MM41/MimirCacheScopedLock.NonSnoopingProducer/Cce1` | fail: Consumer warm reads before the lock returned 5 of 8 old sentinels (`test_mimir_dm_scoped_lock.cpp:465`); after acquire, 2 of the 4 cached words outside the locked range still held other data (`:471`) | 6.5 s |
+| 103 | `MM41/MimirCacheCoherence.CrossCce/Cce0` | pass | 20 s |
+| 103 | `MM41/MimirCacheCoherence.CrossCce/Cce1` | pass | 21 s |
+| 104 | `MM41/MimirCacheCoherence.CrossCceSnoopOn/Cce0` | pass | 11 s |
+| 104 | `MM41/MimirCacheCoherence.CrossCceSnoopOn/Cce1` | pass | 11 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg6` | pass | 52 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg0` | pass | 52 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg1` | pass | 52 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg2` | pass | 51 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg3` | fail: cfg3 Neighbour_Flush64: the hart budget ran out before it read the external words; the writer iDMA was acked but its data never landed in TL1 (`test_mimir_dm_cache.cpp:1988`, the MIM-601 fresh-session message) | 29 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg4` | pass | 47 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg5` | pass | 47 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg7` | fail: cfg7 Neighbour_Evict: the writer iDMA was acked but its data never landed in TL1 before the hart budget ran out (`test_mimir_dm_cache.cpp:1988`). Failed the same way at the start of a fresh session | 23 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg6` | pass | 51 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg0` | pass | 50 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg1` | pass | 51 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg2` | pass | 51 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg3` | fail: cfg3 Neighbour_Evict: external write lost, 0 of 8 external words kept, all 8 hart words new (`test_mimir_dm_cache.cpp:1998`); Neighbour_Flush64 in the same case kept 8 of 8. It passed in the soc-c-26 session after the first MIM-601 failure | 52 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg4` | pass | 50 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg5` | pass | 52 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg7` | fail: cfg7 Neighbour_Evict: the writer iDMA was acked but its data never landed in TL1 before the hart budget ran out (`test_mimir_dm_cache.cpp:1988`). Failed the same way in two sessions | 23 s |
+| 107 | `MM41/MimirCacheStress.ReuseThrash/Cce0` | pass | 3 min 15 s |
+| 107 | `MM41/MimirCacheStress.ReuseThrash/Cce1` | pass | 3 min 14 s |
+| 108 | `MM41/MimirCacheStress.PerfSweep/Cce0` | pass | 2 min 1 s |
+| 108 | `MM41/MimirCacheStress.PerfSweep/Cce1` | pass | 2 min 2 s |
+| 109 | `MM41/MimirCacheStress.PreloadChurn/Cce0` | fail: Snoop leg (CCE1 iDMA from GDDR view 0 into hot set TL1 `0x8b4c0`): 1024 stale words consumed at the first read, expected 0, and 0 of 4 rounds matched (`test_mimir_dm_cache.cpp:2211`, `:2212`) | 1 min 10 s |
+| 109 | `MM41/MimirCacheStress.PreloadChurn/Cce1` | fail: Snoop leg: 1024 stale words consumed at the first read, expected 0, and 0 of 4 rounds matched (`test_mimir_dm_cache.cpp:2211`, `:2212`) | 1 min 12 s |
+| 110 | `MM42/MimirAtomicLocal.OpMatrix/Cce0` | pass | 9.0 s |
+| 110 | `MM42/MimirAtomicLocal.OpMatrix/Cce1` | pass | 9.3 s |
+| 110 | `MM42/MimirAtomicLocal.Hotspot/Cce0` | pass | 53 s |
+| 110 | `MM42/MimirAtomicLocal.Hotspot/Cce1` | pass | 52 s |
+| 110 | `MM42/MimirAtomicLocal.Distributed/Cce0` | pass | 1 min 10 s |
+| 110 | `MM42/MimirAtomicLocal.Distributed/Cce1` | pass | 1 min 14 s |
+| 110 | `MM42/MimirAtomicLocal.LrScCas/Cce0` | pass | 1 min 49 s |
+| 110 | `MM42/MimirAtomicLocal.LrScCas/Cce1` | pass | 1 min 53 s |
+| 110 | `MM42/MimirAtomicLocal.Wrap/Cce0` | pass | 1 min 43 s |
+| 110 | `MM42/MimirAtomicLocal.Wrap/Cce1` | pass | 1 min 46 s |
+| 110 | `MM42/MimirAtomicLocal.Ordering/Cce0` | pass | 16 s |
+| 110 | `MM42/MimirAtomicLocal.Ordering/Cce1` | pass | 15 s |
+| 110 | `MM42/MimirAtomicLocal.CleanDirtyLine/Cce0` | pass | 23 s |
+| 110 | `MM42/MimirAtomicLocal.CleanDirtyLine/Cce1` | pass | 24 s |
+| 110 | `MM42/MimirAtomicLocal.Storm/Cce0` | pass | 58 s |
+| 110 | `MM42/MimirAtomicLocal.Storm/Cce1` | pass | 54 s |
+| 110 | `MM42/MimirAtomicLocal.NeighbourWriteRace/Cce0` | pass | 26 s |
+| 110 | `MM42/MimirAtomicLocal.NeighbourWriteRace/Cce1` | pass | 26 s |
+| 110 | `MM42/MimirAtomicLocal.Soak/Cce0` | pass | 27 s |
+| 110 | `MM42/MimirAtomicLocal.Soak/Cce1` | pass | 24 s |
+| 111 | `MM42/MimirAtomicItnControl.Cce0ToCce1PlainWrite/Cce0` | pass | 10 s |
+| 111 | `MM42/MimirAtomicItnControl.Cce0ToCce1PlainWrite/Cce1` | pass | 10 s |
+| 112 | `MM42/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/Cce0` | pass | 13 s |
+| 112 | `MM42/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/Cce1` | pass | 13 s |
+| 113 | `MM8/MimirDmIdma.Copy/OwnTl1` | pass | 8.3 s |
+| 113 | `MM8/MimirDmIdma.Copy/MaxPacket` | pass | 15 s |
+| 113 | `MM8/MimirDmIdma.Copy/SiblingTl1` | pass | 12 s |
+| 113 | `MM8/MimirDmIdma.Copy/LocalGddr` | pass | 13 s |
+| 113 | `MM8/MimirDmIdma.Copy/LocalGddr1` | pass | 12 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteTl1` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.1 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteGddr` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.1 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1D` | pass | 8.2 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DLocalGddr` | pass | 8.1 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DSubLine` | pass | 7.5 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DSubLineLocalGddr` | pass | 7.4 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteTl1KernelVerified` | skip: Remote iDMA cases need a 2x descriptor (two Mimirs). | 0.1 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsOwnTl1/Cce0` | pass | 15 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsOwnTl1/Cce1` | pass | 15 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsSiblingTl1/Cce0` | pass | 30 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsSiblingTl1/Cce1` | pass | 26 s |
+| 114 | `MM43/MimirTridIdma.ReuseWrap/Cce0` | pass | 41 s |
+| 114 | `MM43/MimirTridIdma.ReuseWrap/Cce1` | pass | 41 s |
+| 114 | `MM43/MimirTridIdma.DuplicateId/Cce0` | fail: Pending high water stayed at 1 for both trid 9 (to GDDR) and trid 15 (to CCE1 TL1), expected more than 1 (`test_mimir_trid.cpp:907`, `:916`); all 16 commands landed. CCE1 passed | 27 s |
+| 114 | `MM43/MimirTridIdma.DuplicateId/Cce1` | pass | 27 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentReadAfterWrite/Cce0` | pass | 23 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentReadAfterWrite/Cce1` | pass | 23 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentWriteAfterRead/Cce0` | pass | 23 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentWriteAfterRead/Cce1` | pass | 24 s |
+| 115 | `MM43/MimirTridIdma.UniqueIdsLocalGddr/Cce0` | pass | 48 s |
+| 115 | `MM43/MimirTridIdma.UniqueIdsLocalGddr/Cce1` | pass | 47 s |
+| 116 | `MM43/MimirTridIdma.NominalDepth/Cce0` | pass | 26 s |
+| 116 | `MM43/MimirTridIdma.NominalDepth/Cce1` | pass | 26 s |
+| 117 | `MM43/MimirTridIdma.MixedTargets/Cce0` | pass | 12 s |
+| 117 | `MM43/MimirTridIdma.MixedTargets/Cce1` | pass | 12 s |
+| 118 | `MM43/MimirTridIdma.Saturate/Cce0` | pass | 2 min 32 s |
+| 118 | `MM43/MimirTridIdma.Saturate/Cce1` | pass | 2 min 25 s |
+| 119 | `MM43/MimirTridIdma.MultiHart/Cce0` | pass | 1 min 28 s |
+| 119 | `MM43/MimirTridIdma.MultiHart/Cce1` | pass | 1 min 27 s |
+| 120 | `MM43/MimirTridIdma.Fairness/Cce0` | pass | 51 s |
+| 120 | `MM43/MimirTridIdma.Fairness/Cce1` | pass | 50 s |
+| 121 | `MM43/MimirTridIdma.Soak/Cce0` | pass | 1 min 53 s |
+| 121 | `MM43/MimirTridIdma.Soak/Cce1` | pass | 1 min 42 s |
+| 125 | `MM43/MimirTridReset.NoStaleIdAfterReinit/Cce0` | pass | 1 min 20 s |
+| 125 | `MM43/MimirTridReset.NoStaleIdAfterReinit/Cce1` | pass | 1 min 20 s |
+| 126 | `MM42/MimirAccumProbe.FmtOpMatrix/Cce0` | pass | 2 min 5 s |
+| 126 | `MM42/MimirAccumProbe.FmtOpMatrix/Cce1` | pass | 2 min 4 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.SingleHart/Cce0` | pass | 8.1 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.SingleHart/Cce1` | pass | 7.9 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsShared/Cce0` | pass | 31 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsShared/Cce1` | pass | 31 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsDisjoint/Cce0` | pass | 34 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsDisjoint/Cce1` | pass | 32 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.BackToBack/Cce0` | pass | 26 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.BackToBack/Cce1` | pass | 27 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.MixedPathControl/Cce0` | pass | 14 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.MixedPathControl/Cce1` | pass | 14 s |
+| 129 | `MM42/MimirAtomicIdmaAccum.MaxOutstanding/Cce0` | pass | 11 s |
+| 129 | `MM42/MimirAtomicIdmaAccum.MaxOutstanding/Cce1` | pass | 12 s |
+
+### Root causes of the 2026-11-03 failures
+
+From the logs, the source and git history; nothing below was rerun. Cache and snoop behaviour is as observed on the emulator. Paths are in tt-metal unless they name chippy, grendelemulation or the ZeBu Python package (`/proj_soc/zebu/Modules/collateral/venv/26ww33/lib/python3.12/site-packages/zebu`, readable from soc-l-12).
+
+**Stale CCE cache lines from an earlier process** (`NonSnoopingProducer` Cce0 and Cce1, `HartToHartCoherent`, `L2InvalidateFreshRead`, `SkipLoadNeverDone`). Host writes to TL1 are not snooped, and Metal resets only the harts at device open and exit (`ALL_NEO_DMS` and `ALL_DATA_MOVEMENT`, `risc_firmware_initializer.cpp:610`, `:624`), never the uncore. Lines a CCE cached in one process survive into the next, so a cached read that does not first drop them returns an earlier case's data instead of the host seed.
+- `NonSnoopingProducer` (row 102), test bug. Every foreign word in the consumer's warm read is data an earlier case left at TL1 `0x8b4c0`: `0xD2000000 | cce<<16` plus the word index is row 96's wipe value, `0x6a049000` and `0x6a04a000` are row 96's guard (`make_guard(0x49 + cce)`), and `0xaa000a10` is a row 93 `RingWrap` slot. Row 96 ran before row 102 in this session, although row 96 says to run it last. The consumer's warm read (`cce_scoped_lock_consumer.cpp:138`) has no drop before it; the MM41 `cache_ops` modes call `carried_over_words` and `drop_cached_lines` (`cce_cache_ops.cpp:432-444`) first, and all of them passed.
+- `HartToHartCoherent` and `L2InvalidateFreshRead` (row 75), test bug, likely. The warm read (`cce_cache_ops.cpp:1219`) has no drop before it, and the case before each one ends with a cached read of its own values at the same TL1 `0x8b4c0`. The warm-read values are not logged, so where the stale data came from is inferred. `HartToHartCoherent` failed at the warm read (`test_mimir_dm_cache.cpp:238`), before the coherence check, so it is not a finding under the MM-8 follow-up rule.
+- `SkipLoadNeverDone` (row 2c), stale cached firmware, medium-high confidence. Go signal 0 is `RUN_MSG_DONE` (`dev_msgs.h:108`), which only firmware writes (`tt-2xx/drisc.cc:146`). The zeroed window `[0x8080, 0xE080)` does not overlap the mailbox `[0x80, 0x8080)`, and the runtime writes `RUN_MSG_INIT` after the zeroing. Firmware text sits in the cacheable window and nothing invalidates it before the harts are released, so the harts ran firmware that was no longer in TL1. This also fits the earlier session, where CCE1 cached some zeroed lines and then failed firmware init in every later process until the emulator restarted. No earlier pass of row 2c is recorded.
+- Rows 75 and 102 passed on 2026-10-22, 10-23 and 10-26 in the same case order, so the caches were clean between processes then. The test changes since 10-23 do not touch these paths. Candidates, not pinned: the UMD commits between `d7547af48` and `f0d497f3` that moved the CCE reset into UMD (`0be658e8`, `3e3ed611`, `10788d73`, `f4919a31`), the MeshDevice close path, or the emulator image.
+- To confirm: run row 102 in a fresh session before row 96; run 75.9 and 75.10 each right after bring-up; in row 2c, read the zeroed window back after the open (all zeros with a successful open confirms it), and run 2c both right after bring-up and after 2b. Fix: add the record-and-drop before `cce_cache_ops.cpp:1219` and `cce_scoped_lock_consumer.cpp:138`; a nonzero carried-over count also confirms the cause.
+
+**Sub-word host writes** (`MimirHostDram.HostSideRejections`, `MimirFwPreflight.FirmwareLoadPreflight`). The tests expect something the transport does not do. A host write whose size is not a multiple of 4 goes `EmuTTDevice` → `GrendelTTDevice::write_to_device` → `MimirChippyMemoryMap` (UMD `mimir_chippy_memory.cpp:58-68`) → chippy `TransportInterface::_write<uint32_t>` (`transport_interface.h:73-78`), which builds the last word on a zero base, so the unwritten bytes read back 0. `GrendelJtagProtocol` is not on this path; its comment describes the same chippy behaviour. Neither test regressed: 2aeef6e883d (2026-10-30) changed `HostSideRejections` from expecting the zero fill to expecting the bytes kept, and 94024ee1a9c added the neighbour-byte check to the preflight. The runtime's own 1-byte writes store 0, so firmware init is not affected. Fix: a read-modify-write of the last word, in the test or in UMD.
+
+**Timing-dependent assertion** (`MimirTridIdma.DuplicateId/Cce0`), test bug. 6ee2a27c9d0 (2026-10-30) turned the recorded pending high water into `EXPECT_GT(..., 1u)` (`test_mimir_trid.cpp:907`, `:916`). With 512 B commands the gap between issues can exceed the ack latency of about 300 cycles, so the high water is 1 on correct hardware; Cce1 reached 2 with nearly the same latencies. The ~190k data cycles in the log are one `data_landed` pass over 2048 words, not landing latency. Row 118's "cleared on accept" explanation may rest on the same reading; not checked. Fix: `add_repeated` with one shared 8 KiB slot (16 packed 8 KiB slots do not fit). To confirm: record the largest gap between issues in batch mode, as `kModeTridTable` does.
+
+**Snoop-config intermittents** (`DirtyLineRace` Cce0 and Cce1 `Cfg3` and `Cfg7`, `PreloadChurn` Cce0 and Cce1), known. Every `DirtyLineRace` failure has bit 0 (`disable_inline_writes`, `tensix_neo_reg.h:8155-8162`) set, as on 10-23 and 10-26. `Cce0_Cfg3`, `Cce0_Cfg7` and `Cce1_Cfg7` are the known "acked, never visible" mode. `Cce1_Cfg3` is new: the hart's uncached poll saw the external words, but the host found 0 of 8 after the hart's final `flush_l2_cache_line` (`cce_cache_ops.cpp:871`); the hart writing back its stale copy of the line is the likely cause, inferred from the kernel. `PreloadChurn`'s snoop leg is recorded as expected, though the row 99-101 results note says the RTL does not explain it. The `kIdmaSnoopNote` text appended to both tests' failure messages (`test_mimir_dm_cache.cpp:514-516`) blames an iDMA into the CCE's own TL1, but in both tests the writer is the sibling CCE.
+
+**Not known** (`MM0/MimirHostDramView.BoundaryAndAlias/View0`, offset `0x2000000` read 0).
+- Host side ruled out. The write and the read take the same path to chiplet-local `0x802000000` (`tt_cluster.cpp:907-939`; UMD `simulation_chip.cpp:75-94`, `grendel_tt_device.cpp:74-86`, `mimir_chippy_memory.cpp`; chippy `Memory::bulk_write_bytes` and `bulk_read_bytes`), and the transactor carries 56 address bits (grendelemulation `models/mimir/emu_hdl/axi_sim_to_smc.sv:24-27`). `0x2000000` is the CCE0 config base in chippy's local map (`lib/arch/grendel/mimir.h:27`), but nothing on the host drops the GDDR base.
+- The address is valid. Every bring-up programmed tile interleave with the 8 GB realign (`GDDR NoC config: interleave_mode=1, realign_mode=2`), which maps the address to tile 0, slice 0, byte `0x800000` (page 256 of 4096), per the shim model in grendelemulation `models/mimir/tests/mim-573/test_tile_intlv_realign.py:63-75`. No other walk offset maps there. MIM-573 affects only non-power-of-two sizes.
+- Not page exhaustion, which is a fatal emulator error (grendelemulation `models/mimir/tests/test_gddr.py:189-206`), and not an AXI error response: the transactor raises on a non-OKAY response (zebu `axi4m.py:343-367`), the SiVal server then drops the connection (grendelemulation `py/syseng_common/server.py:334-338`) and the test would have aborted. The server logs of these sessions show no AXI failure. So the write and the read both completed OKAY, and the read returned 0.
+- Next: rerun row 1 with DPI on (see Manual D2D AXI monitor step). The SMC AXI monitor logs both beats with their responses, and the slice-0 ddrmon log shows whether the write reached `ddr_model`.
+
+## Results on `mimir_2x_package`, 2026-11-04
+
+Finished: all 481 invocations ran. One line per test case, from the gtest XML reports. Time is the case's own time. The case time includes opening the device; each invocation adds about 0.8 s on top. A case with no report (killed by the time limit, or the emulator stopped) shows the filter it ran and the invocation's wall time. Run against `6ea8f29c6e4` with UMD `f0d497f3` (`kstevens/grendel-emu-additions`), in the same Debug build as the `mimir_1x1` run, with the same `core_descriptor.cpp` fix. Emulator `models/mmk`, each session after `bringup_two_mimir.py`: soc-c-30 (rows 1 to 3a); soc-c-27 (row 3b); soc-c-31 (row 3b); soc-c-27 (row 3b); soc-zebu-01 (rows 3b to 15); soc-c-28 (row 16); soc-c-27 (the contract tests); rv-zebu-08 (rows 17 to 48); soc-zebu-01 (rows 49 to 60); soc-zebu-01 (rows 61 to 62a); soc-zebu-03 (rows 63 to 71); soc-c-24 (row 72); soc-c-24 (row 73); soc-c-29 (row 74); soc-c-24 (row 75); soc-c-28 (row 76); soc-c-24 (rows 77 to 78); soc-zebu-03 (row 79); soc-zebu-03 (row 80); soc-c-27 (row 81); rv-zebu-07 (rows 82 to 83); rv-zebu-08 (row 84); soc-zebu-04 (rows 90 to 91); rv-zebu-07 (row 92); soc-zebu-03 (row 93); soc-c-23 (rows 95 to 96); soc-c-25 (rows 97 to 101); soc-zebu-03 (row 102); soc-c-25 (rows 103 to 105); soc-c-29 (row 106); soc-c-29 (row 106); rv-zebu-08 (row 106); soc-c-24 (row 106); rv-zebu-08 (row 106); soc-c-25 (row 106); soc-c-30 (row 106); soc-c-30 (no case finished yet); soc-c-27 (rows 107 to 109); soc-zebu-02 (row 110); rv-zebu-07 (row 111); soc-zebu-04 (row 112); soc-zebu-04 (row 113); soc-c-30 (rows 114 to 121); soc-c-31 (rows 122 to 123); soc-c-31 (row 124); soc-c-26 (row 125); soc-zebu-02 (row 126); soc-zebu-01 (rows 128 to 129); rv-zebu-08 (row 2c).
+
+Changes from the run order:
+- Row 2c runs last, as on `mimir_1x1`: it leaves CCE1 failing firmware init until the emulator restarts.
+- Each invocation runs with `timeout 7200` instead of `timeout 3600`, because rows cover more views and CCEs on this package and the emulator is slower. Row 1 ran without the `timeout` prefix after a driver change, under an 8 h limit from the driver. Rows 14 to 16 run with `timeout 9900`, because row 12 took 6625 s; row 13 had already started and had its limit lifted to 9900 s while it ran.
+- From row 3b, and from row 72 on, each case runs as its own invocation.
+- `SizeAlignmentMatrix` (row 3b) runs with `timeout 43200` instead of `timeout 3600`: on `mimir_1x1` each CCE took about 2 h 20 min, and host access on `models/mmk` is several times slower.
+- A fresh emulator session, with bring-up, starts before row 3b and before each `SizeAlignmentMatrix` case after the first, so no session reaches the emulator job's 24 h limit inside a `SizeAlignmentMatrix` case. Fresh sessions also start before rows 17 and 81, as the run order asks, and from row 16 on before each switch to a different test suite, so each suite starts from a clean emulator.
+- After a case fails with a kernel timeout code, a host deadline, the MIM-601 message or "Got empty response from server", the emulator restarts, bring-up reruns and the run resumes at the next case. The emulator job has a 24 h limit, so the case running when it ends fails with "Got empty response from server". A case lost that way runs once more in the next session.
+
+| Row | Test | Result | Time |
+|---|---|---|---|
+| 1 | `MimirHostDram.ReconnectPersists` | pass | 12 s |
+| 1 | `MimirHostDram.HostSideRejections` | fail: As on `mimir_1x1`: a 6-byte write clears the 2 unwritten bytes of its last word, read `0x00001615`, expected `0xFFFF1615`. Chippy zero-fills a partial trailing word (chippy `transport_interface.h:73-78`) | 0.2 s |
+| 1 | `MimirHostTl1.Tl1MapLayout` | pass | 0.6 s |
+| 1 | `MimirHostTl1.BoundaryAndIsolation` | pass | 3.0 s |
+| 1 | `MimirHostTl1.HostSideRejections` | pass | 0.2 s |
+| 1 | `MM0/MimirHostDramView.PatternReadback/View0` | pass | 48 min 26 s |
+| 1 | `MM0/MimirHostDramView.PatternReadback/View1` | pass | 50 min 3 s |
+| 1 | `MM0/MimirHostDramView.PatternReadback/View2` | pass | 49 min 45 s |
+| 1 | `MM0/MimirHostDramView.PatternReadback/View3` | pass | 49 min 43 s |
+| 1 | `MM0/MimirHostDramView.BoundaryAndAlias/View0` | fail: As View0 on `mimir_1x1`: the alias walk at view offset `0x2000000` read `0x00000000`, expected the guard `0x6aa18000`. View 2 fails the same way; views 1 and 3 pass, so on both packages it is the first view of each Mimir | 2.1 s |
+| 1 | `MM0/MimirHostDramView.BoundaryAndAlias/View1` | pass | 2.0 s |
+| 1 | `MM0/MimirHostDramView.BoundaryAndAlias/View2` | fail: Same as View0: the alias walk at view offset `0x2000000` read `0x00000000`, expected the guard `0x6aa18000`. View 2 is the first view of Mimir 1 | 2.0 s |
+| 1 | `MM0/MimirHostDramView.BoundaryAndAlias/View3` | pass | 2.0 s |
+| 1 | `MM1/MimirHostTl1Cce.PerCceVisibility/Cce0` | pass | 17 min 56 s |
+| 1 | `MM1/MimirHostTl1Cce.PerCceVisibility/Cce1` | pass | 18 min 3 s |
+| 1 | `MM1/MimirHostTl1Cce.PerCceVisibility/Cce2` | pass | 18 min 28 s |
+| 1 | `MM1/MimirHostTl1Cce.PerCceVisibility/Cce3` | pass | 18 min 9 s |
+| 2a | `MimirFwPreflight.FirmwareLoadPreflight` | fail: As on `mimir_1x1`, now on all four CCEs: the 1-byte `fw_shared_globals_ready` write clears the other 3 bytes of its TL1 word (CCE0 `0x000000cd`, expected `0x5a5a5acd`); the same chippy partial-word write | 1 min 36 s |
+| 2b | `MimirFwLoad.LoadAndReachInitDone` | pass | 1 min 57 s |
+| 2b | `MimirFwLoad.ImageManifest` | pass | 25 s |
+| 2b | `MimirFwLoad.AllCcesIndependent` | pass | 11 min 53 s |
+| 2b | `MM2/MimirFwLaunch.NoOpLaunchCompletes/Cce0` | pass | 28 s |
+| 2b | `MM2/MimirFwLaunch.NoOpLaunchCompletes/Cce1` | pass | 27 s |
+| 2b | `MM2/MimirFwLaunch.NoOpLaunchCompletes/Cce2` | pass | 28 s |
+| 2b | `MM2/MimirFwLaunch.NoOpLaunchCompletes/Cce3` | pass | 28 s |
+| 2d | `MimirFwReinit.ReloadsOnEveryOpen` | pass | 1 min 36 s |
+| 3 | `MimirKernelLoad.SameBinaryAllCcesUnicast` | pass | 54 s |
+| 3 | `MM3/MimirKernelLoad.MinimalKernelExecutes/Cce0` | pass | 28 s |
+| 3 | `MM3/MimirKernelLoad.MinimalKernelExecutes/Cce1` | pass | 28 s |
+| 3 | `MM3/MimirKernelLoad.MinimalKernelExecutes/Cce2` | pass | 28 s |
+| 3 | `MM3/MimirKernelLoad.MinimalKernelExecutes/Cce3` | pass | 28 s |
+| 3 | `MM3/MimirKernelLoad.EachHartAlone/Cce0` | pass | 1 min 6 s |
+| 3 | `MM3/MimirKernelLoad.EachHartAlone/Cce1` | pass | 1 min 3 s |
+| 3 | `MM3/MimirKernelLoad.EachHartAlone/Cce2` | pass | 1 min 4 s |
+| 3 | `MM3/MimirKernelLoad.EachHartAlone/Cce3` | pass | 1 min 4 s |
+| 3 | `MM3/MimirKernelLoad.ArgsReplaceStale/Cce0` | pass | 39 s |
+| 3 | `MM3/MimirKernelLoad.ArgsReplaceStale/Cce1` | pass | 39 s |
+| 3 | `MM3/MimirKernelLoad.ArgsReplaceStale/Cce2` | pass | 39 s |
+| 3 | `MM3/MimirKernelLoad.ArgsReplaceStale/Cce3` | pass | 39 s |
+| 3 | `MM3/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce0` | pass | 1 min 22 s |
+| 3 | `MM3/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce1` | pass | 1 min 8 s |
+| 3 | `MM3/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce2` | pass | 1 min 1 s |
+| 3 | `MM3/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce3` | pass | 1 min 0 s |
+| 3 | `MM5/MimirLocalTl1.SameChipletControl/Cce0To1` | pass | 53 s |
+| 3 | `MM5/MimirLocalTl1.SameChipletControl/Cce1To0` | pass | 52 s |
+| 3 | `MM5/MimirLocalTl1.SameChipletControl/Cce2To3` | pass | 52 s |
+| 3 | `MM5/MimirLocalTl1.SameChipletControl/Cce3To2` | pass | 52 s |
+| 3a | `MM8/MimirDmIdma.Copy/OwnTl1` | pass | 38 s |
+| 3a | `MM8/MimirDmIdma.Copy/LocalGddr` | pass | 50 s |
+| 3a | `MM8/MimirDmIdma.Copy/LocalGddr1` | pass | 50 s |
+| 3b | `MM4/MimirLocalDram.CceWritesTl1ToDram/Cce0` | pass | 8 min 19 s |
+| 3b | `MM4/MimirLocalDram.CceWritesTl1ToDram/Cce1` | pass | 8 min 15 s |
+| 3b | `MM4/MimirLocalDram.CceWritesTl1ToDram/Cce2` | pass | 8 min 21 s |
+| 3b | `MM4/MimirLocalDram.CceWritesTl1ToDram/Cce3` | pass | 8 min 24 s |
+| 3b | `MM4/MimirLocalDram.CceReadsDramToTl1/Cce0` | pass | 8 min 9 s |
+| 3b | `MM4/MimirLocalDram.CceReadsDramToTl1/Cce1` | pass | 8 min 14 s |
+| 3b | `MM4/MimirLocalDram.CceReadsDramToTl1/Cce2` | pass | 8 min 16 s |
+| 3b | `MM4/MimirLocalDram.CceReadsDramToTl1/Cce3` | pass | 8 min 16 s |
+| 3b | `MM4/MimirLocalDram.LoopbackChecksIntermediate/Cce0` | pass | 19 min 4 s |
+| 3b | `MM4/MimirLocalDram.LoopbackChecksIntermediate/Cce1` | pass | 20 min 43 s |
+| 3b | `MM4/MimirLocalDram.LoopbackChecksIntermediate/Cce2` | pass | 16 min 43 s |
+| 3b | `MM4/MimirLocalDram.LoopbackChecksIntermediate/Cce3` | pass | 16 min 58 s |
+| 3b | `MM4/MimirLocalDram.SizeAlignmentMatrix/Cce0` | pass | 7 h 7 min |
+| 3b | `MM4/MimirLocalDram.SizeAlignmentMatrix/Cce1` | pass | 7 h 3 min |
+| 3b | `MM4/MimirLocalDram.SizeAlignmentMatrix/Cce2` | pass | 7 h 4 min |
+| 3b | `MM4/MimirLocalDram.SizeAlignmentMatrix/Cce3` | pass | 7 h 3 min |
+| 3b | `MM4/MimirLocalDram.RepeatedAndOverlappingPerHart/Cce0` | pass | 1 h 1 min |
+| 3b | `MM4/MimirLocalDram.RepeatedAndOverlappingPerHart/Cce1` | pass | 1 h 1 min |
+| 3b | `MM4/MimirLocalDram.RepeatedAndOverlappingPerHart/Cce2` | pass | 1 h 0 min |
+| 3b | `MM4/MimirLocalDram.RepeatedAndOverlappingPerHart/Cce3` | pass | 1 h 1 min |
+| 4 | `MM5Direct/MimirRemoteTl1.WriteRead/M0Cce1ToM1Cce0` | pass | 1 min 41 s |
+| 4 | `MM5Direct/MimirRemoteTl1.WriteRead/M1Cce0ToM0Cce1` | pass | 1 min 40 s |
+| 4 | `MM5Direct/MimirRemoteTl1.HostInitRemoteRead/M0Cce1ToM1Cce0` | pass | 1 min 11 s |
+| 4 | `MM5Direct/MimirRemoteTl1.HostInitRemoteRead/M1Cce0ToM0Cce1` | pass | 1 min 11 s |
+| 4 | `MM5Direct/MimirRemoteTl1.SizeAlignment/M0Cce1ToM1Cce0` | pass | 2 min 36 s |
+| 4 | `MM5Direct/MimirRemoteTl1.SizeAlignment/M1Cce0ToM0Cce1` | pass | 2 min 34 s |
+| 5 | `MimirRemoteTl1Bidir.Concurrent` | pass | 2 min 53 s |
+| 6 | `MM5Routed/MimirRemoteTl1.WriteRead/M0Cce0ToM1Cce0` | pass | 1 min 42 s |
+| 6 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M0Cce0ToM1Cce0` | pass | 1 min 11 s |
+| 6 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M0Cce0ToM1Cce0` | pass | 2 min 35 s |
+| 7 | `MM5Routed/MimirRemoteTl1.WriteRead/M0Cce1ToM1Cce1` | pass | 1 min 42 s |
+| 7 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M0Cce1ToM1Cce1` | pass | 1 min 13 s |
+| 7 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M0Cce1ToM1Cce1` | pass | 2 min 34 s |
+| 8 | `MM5Routed/MimirRemoteTl1.WriteRead/M1Cce0ToM0Cce0` | pass | 1 min 42 s |
+| 8 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M1Cce0ToM0Cce0` | pass | 1 min 11 s |
+| 8 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M1Cce0ToM0Cce0` | pass | 2 min 34 s |
+| 9 | `MM5Routed/MimirRemoteTl1.WriteRead/M1Cce1ToM0Cce1` | pass | 1 min 42 s |
+| 9 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M1Cce1ToM0Cce1` | pass | 1 min 10 s |
+| 9 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M1Cce1ToM0Cce1` | pass | 2 min 35 s |
+| 10 | `MM5Routed/MimirRemoteTl1.WriteRead/M0Cce0ToM1Cce1` | pass | 1 min 41 s |
+| 10 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M0Cce0ToM1Cce1` | pass | 1 min 11 s |
+| 10 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M0Cce0ToM1Cce1` | pass | 4 min 19 s |
+| 11 | `MM5Routed/MimirRemoteTl1.WriteRead/M1Cce1ToM0Cce0` | pass | 1 min 42 s |
+| 11 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M1Cce1ToM0Cce0` | pass | 1 min 10 s |
+| 11 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M1Cce1ToM0Cce0` | pass | 3 min 24 s |
+| 12 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM0Cce1View0` | skip: DRAM view 0 is on the source Mimir, not a remote view. | 0.0 s |
+| 12 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM0Cce1View1` | skip: DRAM view 1 is on the source Mimir, not a remote view. | 0.0 s |
+| 12 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM0Cce1View2` | pass | 7 min 36 s |
+| 12 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM0Cce1View3` | pass | 7 min 36 s |
+| 12 | `MM6/MimirRemoteDram.ReadToTl1/SrcM0Cce1View0` | skip: DRAM view 0 is on the source Mimir, not a remote view. | 0.0 s |
+| 12 | `MM6/MimirRemoteDram.ReadToTl1/SrcM0Cce1View1` | skip: DRAM view 1 is on the source Mimir, not a remote view. | 0.0 s |
+| 12 | `MM6/MimirRemoteDram.ReadToTl1/SrcM0Cce1View2` | pass | 7 min 49 s |
+| 12 | `MM6/MimirRemoteDram.ReadToTl1/SrcM0Cce1View3` | pass | 7 min 47 s |
+| 12 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM0Cce1View0` | skip: DRAM view 0 is on the source Mimir, not a remote view. | 0.0 s |
+| 12 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM0Cce1View1` | skip: DRAM view 1 is on the source Mimir, not a remote view. | 0.0 s |
+| 12 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM0Cce1View2` | pass | 11 min 6 s |
+| 12 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM0Cce1View3` | pass | 11 min 8 s |
+| 12 | `MM6/MimirRemoteDramTrafficMatrix.TrafficMatrix/SrcM0Cce1` | pass | 57 min 21 s |
+| 13 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM1Cce0View0` | pass | 7 min 43 s |
+| 13 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM1Cce0View1` | pass | 7 min 50 s |
+| 13 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM1Cce0View2` | skip: DRAM view 2 is on the source Mimir, not a remote view. | 0.0 s |
+| 13 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM1Cce0View3` | skip: DRAM view 3 is on the source Mimir, not a remote view. | 0.0 s |
+| 13 | `MM6/MimirRemoteDram.ReadToTl1/SrcM1Cce0View0` | pass | 8 min 4 s |
+| 13 | `MM6/MimirRemoteDram.ReadToTl1/SrcM1Cce0View1` | pass | 7 min 51 s |
+| 13 | `MM6/MimirRemoteDram.ReadToTl1/SrcM1Cce0View2` | skip: DRAM view 2 is on the source Mimir, not a remote view. | 0.0 s |
+| 13 | `MM6/MimirRemoteDram.ReadToTl1/SrcM1Cce0View3` | skip: DRAM view 3 is on the source Mimir, not a remote view. | 0.0 s |
+| 13 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM1Cce0View0` | pass | 12 min 4 s |
+| 13 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM1Cce0View1` | pass | 11 min 31 s |
+| 13 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM1Cce0View2` | skip: DRAM view 2 is on the source Mimir, not a remote view. | 0.0 s |
+| 13 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM1Cce0View3` | skip: DRAM view 3 is on the source Mimir, not a remote view. | 0.0 s |
+| 13 | `MM6/MimirRemoteDramTrafficMatrix.TrafficMatrix/SrcM1Cce0` | pass | 1 h 3 min |
+| 14 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM0Cce0View0` | skip: DRAM view 0 is on the source Mimir, not a remote view. | 0.0 s |
+| 14 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM0Cce0View1` | skip: DRAM view 1 is on the source Mimir, not a remote view. | 0.0 s |
+| 14 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM0Cce0View2` | pass | 8 min 21 s |
+| 14 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM0Cce0View3` | pass | 9 min 1 s |
+| 14 | `MM6/MimirRemoteDram.ReadToTl1/SrcM0Cce0View0` | skip: DRAM view 0 is on the source Mimir, not a remote view. | 0.0 s |
+| 14 | `MM6/MimirRemoteDram.ReadToTl1/SrcM0Cce0View1` | skip: DRAM view 1 is on the source Mimir, not a remote view. | 0.0 s |
+| 14 | `MM6/MimirRemoteDram.ReadToTl1/SrcM0Cce0View2` | pass | 8 min 55 s |
+| 14 | `MM6/MimirRemoteDram.ReadToTl1/SrcM0Cce0View3` | pass | 8 min 32 s |
+| 14 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM0Cce0View0` | skip: DRAM view 0 is on the source Mimir, not a remote view. | 0.0 s |
+| 14 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM0Cce0View1` | skip: DRAM view 1 is on the source Mimir, not a remote view. | 0.0 s |
+| 14 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM0Cce0View2` | pass | 12 min 37 s |
+| 14 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM0Cce0View3` | pass | 12 min 5 s |
+| 14 | `MM6/MimirRemoteDramTrafficMatrix.TrafficMatrix/SrcM0Cce0` | pass | 1 h 3 min |
+| 15 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM1Cce1View0` | pass | 8 min 42 s |
+| 15 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM1Cce1View1` | pass | 8 min 4 s |
+| 15 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM1Cce1View2` | skip: DRAM view 2 is on the source Mimir, not a remote view. | 0.0 s |
+| 15 | `MM6/MimirRemoteDram.WriteFromTl1/SrcM1Cce1View3` | skip: DRAM view 3 is on the source Mimir, not a remote view. | 0.0 s |
+| 15 | `MM6/MimirRemoteDram.ReadToTl1/SrcM1Cce1View0` | pass | 9 min 9 s |
+| 15 | `MM6/MimirRemoteDram.ReadToTl1/SrcM1Cce1View1` | pass | 8 min 43 s |
+| 15 | `MM6/MimirRemoteDram.ReadToTl1/SrcM1Cce1View2` | skip: DRAM view 2 is on the source Mimir, not a remote view. | 0.0 s |
+| 15 | `MM6/MimirRemoteDram.ReadToTl1/SrcM1Cce1View3` | skip: DRAM view 3 is on the source Mimir, not a remote view. | 0.0 s |
+| 15 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM1Cce1View0` | pass | 11 min 29 s |
+| 15 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM1Cce1View1` | pass | 11 min 25 s |
+| 15 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM1Cce1View2` | skip: DRAM view 2 is on the source Mimir, not a remote view. | 0.0 s |
+| 15 | `MM6/MimirRemoteDram.Tl1RoundTrip/SrcM1Cce1View3` | skip: DRAM view 3 is on the source Mimir, not a remote view. | 0.0 s |
+| 15 | `MM6/MimirRemoteDramTrafficMatrix.TrafficMatrix/SrcM1Cce1` | pass | 1 h 1 min |
+| 16 | `MimirRemoteMixed.FanOutFanIn` | pass | 2 min 19 s |
+| 16 | `MimirRemoteMixed.Concurrent` | pass | 6 min 7 s |
+| contract | `MimirEmu.CceSramChannelsDoNotAliasThroughMetalCluster` | pass | 0.1 s |
+| contract | `MimirEmu.RuntimeFirmwareInitializesThroughPublicDeviceApi` | pass | 32 s |
+| contract | `MimirEmu.AllCcesCopyLocalMimirBlock` | pass | 1 min 58 s |
+| contract | `MimirEmu/AllocatedDramBufferHostLoopback.RoundTrip/Partition0` | pass | 29 s |
+| contract | `MimirEmu/AllocatedDramBufferHostLoopback.RoundTrip/Partition1` | pass | 29 s |
+| contract | `MimirEmu/AllocatedDramBufferHostLoopback.RoundTrip/Partition2` | pass | 28 s |
+| contract | `MimirEmu/AllocatedDramBufferHostLoopback.RoundTrip/Partition3` | pass | 29 s |
+| contract | `MimirEmu/DramChannelsDoNotAliasThroughPublicDeviceApi.RoundTrip/Partition0` | pass | 28 s |
+| contract | `MimirEmu/DramChannelsDoNotAliasThroughPublicDeviceApi.RoundTrip/Partition1` | pass | 28 s |
+| contract | `MimirEmu/DramChannelsDoNotAliasThroughPublicDeviceApi.RoundTrip/Partition2` | pass | 27 s |
+| contract | `MimirEmu/DramChannelsDoNotAliasThroughPublicDeviceApi.RoundTrip/Partition3` | pass | 28 s |
+| contract | `MimirEmu/CceSramRoundTripThroughUnitMesh.RoundTrip/Cce0` | pass | 27 s |
+| contract | `MimirEmu/CceSramRoundTripThroughUnitMesh.RoundTrip/Cce1` | pass | 27 s |
+| contract | `MimirEmu/CceSramRoundTripThroughUnitMesh.RoundTrip/Cce2` | pass | 27 s |
+| contract | `MimirEmu/CceSramRoundTripThroughUnitMesh.RoundTrip/Cce3` | pass | 27 s |
+| contract | `MimirEmu/CceSramRoundTripThroughMetalCluster.RoundTrip/Cce0` | pass | 0.1 s |
+| contract | `MimirEmu/CceSramRoundTripThroughMetalCluster.RoundTrip/Cce1` | pass | 0.0 s |
+| contract | `MimirEmu/CceSramRoundTripThroughMetalCluster.RoundTrip/Cce2` | pass | 0.0 s |
+| contract | `MimirEmu/CceSramRoundTripThroughMetalCluster.RoundTrip/Cce3` | pass | 0.0 s |
+| contract | `MimirEmu/HartZeroRunsDramKernel.WritesMagic/Cce0` | pass | 29 s |
+| contract | `MimirEmu/HartZeroRunsDramKernel.WritesMagic/Cce1` | pass | 29 s |
+| contract | `MimirEmu/HartZeroRunsDramKernel.WritesMagic/Cce2` | pass | 30 s |
+| contract | `MimirEmu/HartZeroRunsDramKernel.WritesMagic/Cce3` | pass | 29 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce0` | pass | 34 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce1` | pass | 34 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce2` | pass | 32 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce3` | pass | 35 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition0` | pass | 29 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition1` | pass | 29 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition2` | skip: Configured descriptor does not expose CCE 0 partition 2 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition3` | skip: Configured descriptor does not expose CCE 0 partition 3 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition0` | pass | 29 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition1` | pass | 28 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition2` | skip: Configured descriptor does not expose CCE 1 partition 2 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition3` | skip: Configured descriptor does not expose CCE 1 partition 3 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce2Partition0` | skip: Configured descriptor does not expose CCE 2 partition 0 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce2Partition1` | skip: Configured descriptor does not expose CCE 2 partition 1 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce2Partition2` | pass | 29 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce2Partition3` | pass | 29 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce3Partition0` | skip: Configured descriptor does not expose CCE 3 partition 0 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce3Partition1` | skip: Configured descriptor does not expose CCE 3 partition 1 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce3Partition2` | pass | 30 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce3Partition3` | pass | 29 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition0` | pass | 47 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition1` | pass | 47 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition2` | skip: Configured descriptor does not expose CCE 0 partition 2 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition3` | skip: Configured descriptor does not expose CCE 0 partition 3 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition0` | pass | 47 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition1` | pass | 47 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition2` | skip: Configured descriptor does not expose CCE 1 partition 2 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition3` | skip: Configured descriptor does not expose CCE 1 partition 3 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce2Partition0` | skip: Configured descriptor does not expose CCE 2 partition 0 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce2Partition1` | skip: Configured descriptor does not expose CCE 2 partition 1 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce2Partition2` | pass | 47 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce2Partition3` | pass | 46 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce3Partition0` | skip: Configured descriptor does not expose CCE 3 partition 0 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce3Partition1` | skip: Configured descriptor does not expose CCE 3 partition 1 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce3Partition2` | pass | 47 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce3Partition3` | pass | 46 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition0` | pass | 51 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition1` | pass | 51 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition2` | skip: Configured descriptor does not expose CCE 0 partition 2 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition3` | skip: Configured descriptor does not expose CCE 0 partition 3 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition0` | pass | 52 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition1` | pass | 56 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition2` | skip: Configured descriptor does not expose CCE 1 partition 2 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition3` | skip: Configured descriptor does not expose CCE 1 partition 3 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce2Partition0` | skip: Configured descriptor does not expose CCE 2 partition 0 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce2Partition1` | skip: Configured descriptor does not expose CCE 2 partition 1 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce2Partition2` | pass | 53 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce2Partition3` | pass | 54 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce3Partition0` | skip: Configured descriptor does not expose CCE 3 partition 0 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce3Partition1` | skip: Configured descriptor does not expose CCE 3 partition 1 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce3Partition2` | pass | 57 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce3Partition3` | pass | 55 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce0Partition0` | pass | 36 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce0Partition1` | pass | 34 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce0Partition2` | skip: Configured descriptor does not expose CCE 0 partition 2 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce0Partition3` | skip: Configured descriptor does not expose CCE 0 partition 3 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce1Partition0` | pass | 40 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce1Partition1` | pass | 37 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce1Partition2` | skip: Configured descriptor does not expose CCE 1 partition 2 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce1Partition3` | skip: Configured descriptor does not expose CCE 1 partition 3 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce2Partition0` | skip: Configured descriptor does not expose CCE 2 partition 0 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce2Partition1` | skip: Configured descriptor does not expose CCE 2 partition 1 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce2Partition2` | pass | 38 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce2Partition3` | pass | 36 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce3Partition0` | skip: Configured descriptor does not expose CCE 3 partition 0 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce3Partition1` | skip: Configured descriptor does not expose CCE 3 partition 1 as a local partition. | 0.0 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce3Partition2` | pass | 35 s |
+| contract | `MimirEmuSameMimirDirect/AllHartsIdmaWriteGddr.WritesMagic/Cce3Partition3` | pass | 35 s |
+| contract | `MimirEmu/WritesCrossMimirCceSram.WritesMagic/Cce0` | pass | 28 s |
+| contract | `MimirEmu/WritesCrossMimirCceSram.WritesMagic/Cce1` | pass | 28 s |
+| contract | `MimirEmu/WritesCrossMimirCceSram.WritesMagic/Cce2` | pass | 27 s |
+| contract | `MimirEmu/WritesCrossMimirCceSram.WritesMagic/Cce3` | pass | 28 s |
+| contract | `MimirEmu/PrefetchesLocalGddrToRemoteCceSram.RoundTrip/Cce0` | pass | 30 s |
+| contract | `MimirEmu/PrefetchesLocalGddrToRemoteCceSram.RoundTrip/Cce1` | pass | 29 s |
+| contract | `MimirEmu/PrefetchesLocalGddrToRemoteCceSram.RoundTrip/Cce2` | pass | 29 s |
+| contract | `MimirEmu/PrefetchesLocalGddrToRemoteCceSram.RoundTrip/Cce3` | pass | 29 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition2` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition3` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition2` | pass | 28 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce1Partition3` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce2Partition0` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce2Partition1` | pass | 31 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce2Partition2` | skip: Configured descriptor does not expose CCE 2 partition 2 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce2Partition3` | skip: Configured descriptor does not expose CCE 2 partition 3 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce3Partition0` | pass | 28 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce3Partition1` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce3Partition2` | skip: Configured descriptor does not expose CCE 3 partition 2 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithCompileTimeArgs.RoundTrip/Cce3Partition3` | skip: Configured descriptor does not expose CCE 3 partition 3 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition2` | pass | 28 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition3` | pass | 30 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition2` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce1Partition3` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce2Partition0` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce2Partition1` | pass | 28 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce2Partition2` | skip: Configured descriptor does not expose CCE 2 partition 2 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce2Partition3` | skip: Configured descriptor does not expose CCE 2 partition 3 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce3Partition0` | pass | 28 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce3Partition1` | pass | 27 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce3Partition2` | skip: Configured descriptor does not expose CCE 3 partition 2 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrWithRuntimeArgs.RoundTrip/Cce3Partition3` | skip: Configured descriptor does not expose CCE 3 partition 3 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition2` | pass | 33 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition3` | pass | 33 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition2` | pass | 33 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce1Partition3` | pass | 33 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce2Partition0` | pass | 34 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce2Partition1` | pass | 34 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce2Partition2` | skip: Configured descriptor does not expose CCE 2 partition 2 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce2Partition3` | skip: Configured descriptor does not expose CCE 2 partition 3 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce3Partition0` | pass | 33 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce3Partition1` | pass | 33 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce3Partition2` | skip: Configured descriptor does not expose CCE 3 partition 2 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/CopiesGddrLargerThanAlignment.RoundTrip/Cce3Partition3` | skip: Configured descriptor does not expose CCE 3 partition 3 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce0Partition0` | skip: Configured descriptor does not expose CCE 0 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce0Partition1` | skip: Configured descriptor does not expose CCE 0 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce0Partition2` | pass | 31 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce0Partition3` | pass | 34 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce1Partition0` | skip: Configured descriptor does not expose CCE 1 partition 0 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce1Partition1` | skip: Configured descriptor does not expose CCE 1 partition 1 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce1Partition2` | pass | 31 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce1Partition3` | pass | 33 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce2Partition0` | pass | 32 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce2Partition1` | pass | 32 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce2Partition2` | skip: Configured descriptor does not expose CCE 2 partition 2 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce2Partition3` | skip: Configured descriptor does not expose CCE 2 partition 3 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce3Partition0` | pass | 33 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce3Partition1` | pass | 32 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce3Partition2` | skip: Configured descriptor does not expose CCE 3 partition 2 as a remote partition. | 0.0 s |
+| contract | `MimirEmuCrossMimirNoc/AllHartsWriteGddr.WritesMagic/Cce3Partition3` | skip: Configured descriptor does not expose CCE 3 partition 3 as a remote partition. | 0.0 s |
+| contract | `MimirEmu/CopiesEveryMimirBlock.RoundTrip/Cce0` | pass | 29 s |
+| contract | `MimirEmu/CopiesEveryMimirBlock.RoundTrip/Cce1` | pass | 29 s |
+| contract | `MimirEmu/CopiesEveryMimirBlock.RoundTrip/Cce2` | pass | 29 s |
+| contract | `MimirEmu/CopiesEveryMimirBlock.RoundTrip/Cce3` | pass | 29 s |
+| 17 | `MimirPrefetcher.MM7GatePreconditionsHold` | pass | 24 s |
+| 18 | `MimirPrefetcher.MM7GateUninitializedSenderFails` | pass | 24 s |
+| 19 | `MimirPrefetcher.MM7GateStartStopWorks` | pass | 30 s |
+| 20 | `MimirPrefetcher.MM7GcbSmokePreconditionsWithReceiverRunning` | pass | 29 s |
+| 21 | `MimirPrefetcher.MM7GcbLayoutLocalReceiver` | pass | 26 s |
+| 22 | `MimirPrefetcher.MM7GcbLayoutRemoteReceiver` | pass | 26 s |
+| 23 | `MimirPrefetcher.MM7GcbLayoutTwoSenders` | pass | 28 s |
+| 24 | `MimirPrefetcher.MM7GcbLayoutRejectsConflictingReceivers` | pass | 25 s |
+| 25 | `MimirPrefetcher.MM7GcbSmokeDiscardDrain` | pass | 31 s |
+| 26 | `MimirPrefetcher.MM7GcbSmokeValidatorLocal` | pass | 34 s |
+| 27 | `MimirPrefetcher.MM7GcbSmokeValidatorWrongSeed` | pass | 34 s |
+| 28 | `MimirPrefetcher.MM7GcbSmokeResize` | pass | 32 s |
+| 29 | `MimirPrefetcher.MM7GcbSmokeValidatorD2d` | pass | 34 s |
+| 30 | `MimirPrefetcher.MM7GcbSmokeDrainUntilStopped` | pass | 31 s |
+| 31 | `MimirPrefetcher.MM7GcbSmokeStallUntilReleased` | pass | 49 s |
+| 32 | `MimirPrefetcher.MM7GcbSmokeDrainTimeout` | pass | 49 s |
+| 33 | `MimirPrefetcher.MM7GcbSmokeReceiverWaitTimeout` | pass | 45 s |
+| 34 | `MimirPrefetcher.MM7GcbSmokeRelaunchResumes` | pass | 35 s |
+| 35 | `MimirPrefetcher.MM7LifecycleStartStop` | pass | 28 s |
+| 36 | `MimirPrefetcher.MM7LifecycleStartStopTwice` | pass | 34 s |
+| 37 | `MimirPrefetcher.MM7LifecycleBusySenderFailsStart` | pass | 28 s |
+| 38 | `MimirPrefetcher.MM7LifecycleQueueRejectsReceiverOnSender` | pass | 34 s |
+| 39 | `MimirPrefetcher.MM7LifecycleWaitCq` | pass | 33 s |
+| 40 | `MimirPrefetcher.MM7LifecycleDrainAtStop` | pass | 36 s |
+| 41 | `MimirPrefetcher.MM7T1Local0To1` | pass | 49 s |
+| 42 | `MimirPrefetcher.MM7T1Local3To2` | pass | 48 s |
+| 43 | `MimirPrefetcher.MM7T1D2d0To2` | pass | 49 s |
+| 44 | `MimirPrefetcher.MM7T1D2d3To1` | pass | 52 s |
+| 45 | `MimirPrefetcher.MM7T2FanOut0To123` | pass | 1 min 17 s |
+| 46 | `MimirPrefetcher.MM7T2FanOut3To012` | pass | 1 min 19 s |
+| 47 | `MimirPrefetcher.MM7T2TwoSenders01To2` | pass | 60 s |
+| 48 | `MimirPrefetcher.MM7T2TwoSenders02To3` | pass | 1 min 1 s |
+| 49 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/SubChunkLocal0To1` | pass | 1 min 21 s |
+| 50 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/SubChunkD2d0To2` | pass | 1 min 23 s |
+| 51 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/BelowStageThirdLocal0To1` | pass | 1 min 18 s |
+| 52 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/BelowStageThirdD2d0To2` | pass | 1 min 17 s |
+| 53 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/PartialStageChunkLocal0To1` | pass | 1 min 12 s |
+| 54 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AboveStageThirdLocal0To1` | pass | 56 s |
+| 55 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AboveStageThirdD2d0To2` | pass | 1 min 0 s |
+| 56 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/PageSplitLocal0To1` | pass | 1 min 3 s |
+| 57 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AbaLocal0To1` | pass | 1 min 25 s |
+| 58 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AbaD2d0To2` | pass | 1 min 19 s |
+| 59 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/WrapAndResizeLocal0To1` | pass | 1 min 38 s |
+| 60 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/WrapAndResizeD2d0To2` | pass | 1 min 33 s |
+| 61 | `MM7T3/MimirPrefetcherT3GcbSwitch.Delivers/GcbSwitchLocal0To1` | pass | 1 min 1 s |
+| 62 | `MM7T3/MimirPrefetcherT3GcbSwitch.Delivers/GcbSwitchD2d0To2` | pass | 1 min 2 s |
+| 62a | `MM7T3/MimirPrefetcherT3GcbSwitch.Delivers/ReceiverSwitch0To1Then2` | pass | 1 min 3 s |
+| 63 | `MimirPrefetcher.MM7T3FenceLocal0To1` | pass | 45 s |
+| 65 | `MimirPrefetcher.MM7RejectKRowMajorTensor` | pass | 39 s |
+| 66 | `MimirPrefetcher.MM7RejectStreamingTensor` | pass | 38 s |
+| 67 | `MimirPrefetcher.MM7RejectRangePastTensor` | pass | 38 s |
+| 68 | `MimirPrefetcher.MM7RejectRangePastView` | pass | 39 s |
+| 69 | `MimirPrefetcher.MM7T4MismatchD2d2To0` | pass | 54 s |
+| 70 | `MimirPrefetcher.MM7T4CreditTimeoutD2d1To3` | pass | 1 min 29 s |
+| 71 | `MimirPrefetcher.MM7T4DrainTimeoutD2d1To3` | pass | 1 min 12 s |
+| 72 | `MM8/MimirDmRuntimeArgs.IllegalTooManyRuntimeArgs/Cce0` | pass | 32 s |
+| 72 | `MM8/MimirDmRuntimeArgs.IllegallyModifyRuntimeArgs/Cce0` | pass | 29 s |
+| 73 | `MM8/MimirDmMeshBufferDram.InterleavedPlacement/mimir_2x_package` | pass | 1 min 15 s |
+| 73 | `MM8/MimirDmMeshBufferDram.WriteRead/mimir_2x_package` | pass | 35 s |
+| 73 | `MM8/MimirDmMeshBufferDram.MultipleWriteReadRounds/mimir_2x_package` | pass | 1 min 46 s |
+| 74 | `MM8/MimirDmIdma.Copy/OwnTl1` | pass | 39 s |
+| 74 | `MM8/MimirDmIdma.Copy/MaxPacket` | pass | 1 min 0 s |
+| 74 | `MM8/MimirDmIdma.Copy/SiblingTl1` | pass | 52 s |
+| 74 | `MM8/MimirDmIdma.Copy/LocalGddr` | pass | 54 s |
+| 74 | `MM8/MimirDmIdma.Copy/LocalGddr1` | pass | 51 s |
+| 74 | `MM8/MimirDmIdma.Copy/RemoteTl1` | pass | 51 s |
+| 74 | `MM8/MimirDmIdma.Copy/RemoteGddr` | pass | 53 s |
+| 74 | `MM8/MimirDmIdma.Copy/Strided1D` | pass | 39 s |
+| 74 | `MM8/MimirDmIdma.Copy/Strided1DLocalGddr` | pass | 38 s |
+| 74 | `MM8/MimirDmIdma.Copy/Strided1DSubLine` | pass | 37 s |
+| 74 | `MM8/MimirDmIdma.Copy/Strided1DSubLineLocalGddr` | pass | 36 s |
+| 74 | `MM8/MimirDmIdma.Copy/RemoteTl1KernelVerified` | pass | 55 s |
+| 75 | `MM8/MimirDmCache.Op/NoFlushNotVisible` | pass | 40 s |
+| 75 | `MM8/MimirDmCache.Op/L1FlushLine` | pass | 38 s |
+| 75 | `MM8/MimirDmCache.Op/L1FlushFull` | pass | 38 s |
+| 75 | `MM8/MimirDmCache.Op/L1InvalidateLine` | pass | 37 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushLine` | pass | 38 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushRange` | pass | 37 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushFull` | pass | 45 s |
+| 75 | `MM8/MimirDmCache.Op/L2InvalidateLine` | pass | 38 s |
+| 75 | `MM8/MimirDmCache.Op/InvalidateFreshRead` | pass | 38 s |
+| 75 | `MM8/MimirDmCache.Op/HartToHartCoherent` | fail: As on `mimir_1x1`: hart 1's warm read before hart 0's stores returned the old value in 16 of 64 words, expected 64 (`test_mimir_dm_cache.cpp:238`) | 51 s |
+| 75 | `MM8/MimirDmCache.Op/L2InvalidateFreshRead` | fail: As on `mimir_1x1`: the cached re-read before the L2 invalidate saw 0 of 64 stale words, expected 64 (`test_mimir_dm_cache.cpp:282`) | 37 s |
+| 75 | `MM8/MimirDmCache.Op/L1InvalidateFull` | pass | 38 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/Uncached1B` | pass | 3 min 3 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/Uncached8B` | pass | 2 min 38 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/CachedRangeFlush` | pass | 2 min 34 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/CachedFastFlush` | pass | 2 min 40 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_SrcOnly` | pass | 30 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_DstOnly` | pass | 31 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_Both` | pass | 30 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_SrcOnly` | pass | 30 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_DstOnly` | pass | 31 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_Both` | pass | 30 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_SrcOnly` | pass | 30 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_DstOnly` | pass | 31 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_Both` | pass | 31 s |
+| 78 | `MM8/MimirDmAddrgen.Pattern/Im2Col_FullImage` | pass | 32 s |
+| 78 | `MM8/MimirDmAddrgen.Pattern/Im2Col_Dilation1` | pass | 35 s |
+| 79 | `MM8/MimirDmDramUnary.ReaderWriterHandshake/Cce0` | pass | 46 s |
+| 79 | `MM8/MimirDmDramUnary.ReaderWriterHandshake/Cce1` | pass | 45 s |
+| 79 | `MM8/MimirDmDramUnary.ReaderWriterHandshake/Cce2` | pass | 45 s |
+| 79 | `MM8/MimirDmDramUnary.ReaderWriterHandshake/Cce3` | pass | 43 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/InvalidateOnAcquire` | pass | 32 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/FlushOnRelease` | pass | 32 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/LockedRangeOnly` | pass | 32 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_cache_ops` | pass | 27 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_idma_copy` | pass | 28 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_amo_ops` | pass | 30 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_scoped_lock_producer` | pass | 26 s |
+| 81 | `MM41/MimirMm4xCompile.Kernel/cce_scoped_lock_consumer` | pass | 25 s |
+| 82 | `MM41/MimirCacheProbe.EightHartLaunch/Cce0` | pass | 1 min 51 s |
+| 82 | `MM41/MimirCacheProbe.EightHartLaunch/Cce1` | pass | 1 min 53 s |
+| 82 | `MM41/MimirCacheProbe.EightHartLaunch/Cce2` | pass | 1 min 54 s |
+| 82 | `MM41/MimirCacheProbe.EightHartLaunch/Cce3` | pass | 1 min 53 s |
+| 83 | `MM41/MimirCacheProbe.SnoopConfig/Cce0` | pass | 36 s |
+| 83 | `MM41/MimirCacheProbe.SnoopConfig/Cce1` | pass | 36 s |
+| 83 | `MM41/MimirCacheProbe.SnoopConfig/Cce2` | pass | 37 s |
+| 83 | `MM41/MimirCacheProbe.SnoopConfig/Cce3` | pass | 36 s |
+| 84 | `MM42/MimirAtomicProbe.TwoHartAmo/Cce0` | pass | 41 s |
+| 84 | `MM42/MimirAtomicProbe.TwoHartAmo/Cce1` | pass | 41 s |
+| 84 | `MM42/MimirAtomicProbe.TwoHartAmo/Cce2` | pass | 41 s |
+| 84 | `MM42/MimirAtomicProbe.TwoHartAmo/Cce3` | pass | 41 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushLine/Cce0` | pass | 36 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushLine/Cce1` | pass | 36 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushLine/Cce2` | pass | 37 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushLine/Cce3` | pass | 36 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushFull/Cce0` | pass | 35 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushFull/Cce1` | pass | 36 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushFull/Cce2` | pass | 37 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushFull/Cce3` | pass | 37 s |
+| 91 | `MM41/MimirCacheOps.DirtyEvictionPartialLine/Cce0` | pass | 55 s |
+| 91 | `MM41/MimirCacheOps.DirtyEvictionPartialLine/Cce1` | pass | 55 s |
+| 91 | `MM41/MimirCacheOps.DirtyEvictionPartialLine/Cce2` | pass | 54 s |
+| 91 | `MM41/MimirCacheOps.DirtyEvictionPartialLine/Cce3` | pass | 57 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce0_WriterReader` | pass | 49 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce0_EightWriters` | pass | 1 min 55 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce1_WriterReader` | pass | 49 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce1_EightWriters` | pass | 1 min 54 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce2_WriterReader` | pass | 48 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce2_EightWriters` | pass | 1 min 50 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce3_WriterReader` | pass | 50 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce3_EightWriters` | pass | 1 min 55 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce0_WriterReader` | pass | 48 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce0_EightWriters` | pass | 1 min 51 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce1_WriterReader` | pass | 49 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce1_EightWriters` | pass | 1 min 57 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce2_WriterReader` | pass | 48 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce2_EightWriters` | pass | 1 min 53 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce3_WriterReader` | pass | 47 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce3_EightWriters` | pass | 1 min 56 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce0_WriterReader` | pass | 48 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce0_EightWriters` | pass | 1 min 55 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce1_WriterReader` | pass | 48 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce1_EightWriters` | pass | 1 min 52 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce2_WriterReader` | pass | 48 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce2_EightWriters` | pass | 1 min 57 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce3_WriterReader` | pass | 48 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce3_EightWriters` | pass | 1 min 53 s |
+| 93 | `MM41/MimirCacheScopedLock.MultiConsumer/Cce0` | pass | 48 s |
+| 93 | `MM41/MimirCacheScopedLock.MultiConsumer/Cce1` | pass | 48 s |
+| 93 | `MM41/MimirCacheScopedLock.MultiConsumer/Cce2` | pass | 49 s |
+| 93 | `MM41/MimirCacheScopedLock.MultiConsumer/Cce3` | pass | 49 s |
+| 93 | `MM41/MimirCacheScopedLock.RingWrap/Cce0` | pass | 31 s |
+| 93 | `MM41/MimirCacheScopedLock.RingWrap/Cce1` | pass | 32 s |
+| 93 | `MM41/MimirCacheScopedLock.RingWrap/Cce2` | pass | 32 s |
+| 93 | `MM41/MimirCacheScopedLock.RingWrap/Cce3` | pass | 32 s |
+| 95 | `MM41/MimirCacheOps.FlushFenceOrdering/Cce0` | pass | 2 min 49 s |
+| 95 | `MM41/MimirCacheOps.FlushFenceOrdering/Cce1` | pass | 2 min 48 s |
+| 95 | `MM41/MimirCacheOps.FlushFenceOrdering/Cce2` | pass | 2 min 50 s |
+| 95 | `MM41/MimirCacheOps.FlushFenceOrdering/Cce3` | pass | 2 min 46 s |
+| 96 | `MM41/MimirCacheOps.FullInvalidate/Cce0` | pass | 1 min 8 s |
+| 96 | `MM41/MimirCacheOps.FullInvalidate/Cce1` | pass | 1 min 9 s |
+| 96 | `MM41/MimirCacheOps.FullInvalidate/Cce2` | pass | 1 min 8 s |
+| 96 | `MM41/MimirCacheOps.FullInvalidate/Cce3` | pass | 1 min 11 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_Host_SnoopOffInvalidate` | pass | 38 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_Host_InvalidateOnly` | pass | 38 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_SnoopOffInvalidate` | pass | 51 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_InvalidateOnly` | pass | 50 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteCce_SnoopOffInvalidate` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteCce_InvalidateOnly` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_Host_SnoopOffInvalidate` | pass | 37 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_Host_InvalidateOnly` | pass | 37 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_SnoopOffInvalidate` | pass | 49 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_InvalidateOnly` | pass | 47 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_RemoteCce_SnoopOffInvalidate` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_RemoteCce_InvalidateOnly` | pass | 49 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_Host_SnoopOffInvalidate` | pass | 37 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_Host_InvalidateOnly` | pass | 37 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_SiblingSpa_SnoopOffInvalidate` | pass | 49 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_SiblingSpa_InvalidateOnly` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_RemoteCce_SnoopOffInvalidate` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_RemoteCce_InvalidateOnly` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_Host_SnoopOffInvalidate` | pass | 38 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_Host_InvalidateOnly` | pass | 37 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_SiblingSpa_SnoopOffInvalidate` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_SiblingSpa_InvalidateOnly` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_RemoteCce_SnoopOffInvalidate` | pass | 48 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_RemoteCce_InvalidateOnly` | pass | 49 s |
+| 98 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_SnoopOn` | pass | 48 s |
+| 98 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_SiblingSpa_SnoopOn` | pass | 48 s |
+| 98 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_SiblingSpa_SnoopOn` | pass | 49 s |
+| 98 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_SiblingSpa_SnoopOn` | pass | 48 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalIdma_SnoopOffInvalidate` | pass | 1 min 3 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalIdma_InvalidateOnly` | pass | 1 min 6 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalIdma_SnoopOffInvalidate` | pass | 1 min 3 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalIdma_InvalidateOnly` | pass | 1 min 3 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_LocalIdma_SnoopOffInvalidate` | pass | 1 min 3 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_LocalIdma_InvalidateOnly` | pass | 1 min 3 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_LocalIdma_SnoopOffInvalidate` | pass | 1 min 3 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_LocalIdma_InvalidateOnly` | pass | 1 min 6 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalGddrIdma_SnoopOffInvalidate` | pass | 1 min 1 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalGddrIdma_InvalidateOnly` | pass | 1 min 0 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalGddrIdma_SnoopOffInvalidate` | pass | 1 min 1 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_LocalGddrIdma_InvalidateOnly` | pass | 1 min 1 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_LocalGddrIdma_SnoopOffInvalidate` | pass | 1 min 1 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_LocalGddrIdma_InvalidateOnly` | pass | 1 min 1 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_LocalGddrIdma_SnoopOffInvalidate` | pass | 59 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_LocalGddrIdma_InvalidateOnly` | pass | 1 min 1 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteGddrIdma_SnoopOffInvalidate` | pass | 1 min 2 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteGddrIdma_InvalidateOnly` | pass | 1 min 1 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_RemoteGddrIdma_SnoopOffInvalidate` | pass | 1 min 1 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce1_RemoteGddrIdma_InvalidateOnly` | pass | 1 min 0 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_RemoteGddrIdma_SnoopOffInvalidate` | pass | 1 min 0 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce2_RemoteGddrIdma_InvalidateOnly` | pass | 1 min 1 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_RemoteGddrIdma_SnoopOffInvalidate` | pass | 1 min 1 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce3_RemoteGddrIdma_InvalidateOnly` | pass | 1 min 0 s |
+| 102 | `MM41/MimirCacheScopedLock.NonSnoopingProducer/Cce0` | pass | 32 s |
+| 102 | `MM41/MimirCacheScopedLock.NonSnoopingProducer/Cce1` | pass | 32 s |
+| 102 | `MM41/MimirCacheScopedLock.NonSnoopingProducer/Cce2` | pass | 32 s |
+| 102 | `MM41/MimirCacheScopedLock.NonSnoopingProducer/Cce3` | pass | 32 s |
+| 103 | `MM41/MimirCacheCoherence.CrossCce/Cce0` | pass | 1 min 46 s |
+| 103 | `MM41/MimirCacheCoherence.CrossCce/Cce1` | pass | 1 min 22 s |
+| 103 | `MM41/MimirCacheCoherence.CrossCce/Cce2` | pass | 1 min 21 s |
+| 103 | `MM41/MimirCacheCoherence.CrossCce/Cce3` | pass | 1 min 23 s |
+| 104 | `MM41/MimirCacheCoherence.CrossCceSnoopOn/Cce0` | pass | 1 min 6 s |
+| 104 | `MM41/MimirCacheCoherence.CrossCceSnoopOn/Cce1` | pass | 56 s |
+| 104 | `MM41/MimirCacheCoherence.CrossCceSnoopOn/Cce2` | pass | 1 min 3 s |
+| 104 | `MM41/MimirCacheCoherence.CrossCceSnoopOn/Cce3` | pass | 1 min 0 s |
+| 105 | `MM41/MimirCacheCoherence.CrossD2d/Cce0` | pass | 1 min 25 s |
+| 105 | `MM41/MimirCacheCoherence.CrossD2d/Cce1` | pass | 1 min 21 s |
+| 105 | `MM41/MimirCacheCoherence.CrossD2d/Cce2` | pass | 1 min 21 s |
+| 105 | `MM41/MimirCacheCoherence.CrossD2d/Cce3` | pass | 1 min 19 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg6` | pass | 2 min 40 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg0` | pass | 2 min 42 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg1` | pass | 2 min 41 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg2` | pass | 2 min 45 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg3` | fail: As on `mimir_1x1`, a config with bit 0 set: on the `Neighbour_Evict` leg the writer iDMA was acked but its 8 words never became visible in TL1 before the hart budget ran out (MIM-601), so the emulator restarted (`test_mimir_dm_cache.cpp:1988`) | 2 min 5 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg4` | pass | 2 min 42 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg5` | pass | 2 min 45 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg7` | pass | 2 min 45 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg6` | pass | 2 min 43 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg0` | pass | 2 min 43 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg1` | pass | 2 min 46 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg2` | pass | 2 min 46 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg3` | pass | 3 min 0 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg4` | pass | 3 min 5 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg5` | fail: As on `mimir_1x1`, a config with bit 0 set: on the `Neighbour_Evict` leg the writer iDMA was acked but its 8 words never became visible in TL1 before the hart budget ran out (MIM-601), so the emulator restarted (`test_mimir_dm_cache.cpp:1988`) | 2 min 13 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce1_Cfg7` | fail: As on `mimir_1x1`, a config with bit 0 set: on the `Neighbour_Flush64` leg the writer iDMA was acked but its 8 words never became visible in TL1 before the hart budget ran out (MIM-601), so the emulator restarted (`test_mimir_dm_cache.cpp:1988`) | 2 min 24 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce2_Cfg6` | pass | 2 min 54 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce2_Cfg0` | pass | 2 min 54 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce2_Cfg1` | pass | 2 min 55 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce2_Cfg2` | pass | 32 min 15 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce2_Cfg3` | fail: As on `mimir_1x1`, a config with bit 0 set: on the `Neighbour_Flush64` leg the writer iDMA was acked but its 8 words never became visible in TL1 before the hart budget ran out (MIM-601), so the emulator restarted (`test_mimir_dm_cache.cpp:1988`) | 5 min 42 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce2_Cfg4` | pass | 2 min 45 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce2_Cfg5` | pass | 2 min 44 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce2_Cfg7` | pass | 2 min 45 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce3_Cfg6` | pass | 2 min 47 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce3_Cfg0` | pass | 2 min 46 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce3_Cfg1` | pass | 2 min 47 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce3_Cfg2` | pass | 2 min 45 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce3_Cfg3` | fail: As on `mimir_1x1`, a config with bit 0 set: on the `Neighbour_Evict` leg the writer iDMA was acked but its 8 words never became visible in TL1 before the hart budget ran out (MIM-601), so the emulator restarted (`test_mimir_dm_cache.cpp:1988`) | 2 min 6 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce3_Cfg4` | pass | 3 min 7 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce3_Cfg5` | fail: As on `mimir_1x1`, a config with bit 0 set: on the `Neighbour_Flush64` leg the writer iDMA was acked but its 8 words never became visible in TL1 before the hart budget ran out (MIM-601), so the emulator restarted (`test_mimir_dm_cache.cpp:1988`) | 2 min 43 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce3_Cfg7` | fail: As on `mimir_1x1`, a config with bit 0 set: on the `Neighbour_Evict` leg the writer iDMA was acked but its 8 words never became visible in TL1 before the hart budget ran out (MIM-601), so the emulator restarted (`test_mimir_dm_cache.cpp:1988`) | 2 min 15 s |
+| 107 | `MM41/MimirCacheStress.ReuseThrash/Cce0` | pass | 19 min 14 s |
+| 107 | `MM41/MimirCacheStress.ReuseThrash/Cce1` | pass | 18 min 35 s |
+| 107 | `MM41/MimirCacheStress.ReuseThrash/Cce2` | pass | 18 min 28 s |
+| 107 | `MM41/MimirCacheStress.ReuseThrash/Cce3` | pass | 18 min 22 s |
+| 108 | `MM41/MimirCacheStress.PerfSweep/Cce0` | pass | 11 min 6 s |
+| 108 | `MM41/MimirCacheStress.PerfSweep/Cce1` | pass | 11 min 24 s |
+| 108 | `MM41/MimirCacheStress.PerfSweep/Cce2` | pass | 11 min 19 s |
+| 108 | `MM41/MimirCacheStress.PerfSweep/Cce3` | pass | 11 min 4 s |
+| 109 | `MM41/MimirCacheStress.PreloadChurn/Cce0` | fail: As on `mimir_1x1`: snoop leg (CCE1 iDMA from GDDR view 0 into hot set TL1 `0x8b4c0`), 1008 stale words consumed at the first read, expected 0. The iDMA snoop tag applies only to a sibling CCE's iDMA writes into this CCE's TL1 (`test_mimir_dm_cache.cpp:2211`) | 3 min 58 s |
+| 109 | `MM41/MimirCacheStress.PreloadChurn/Cce1` | fail: As on `mimir_1x1`: snoop leg (CCE0 iDMA from GDDR view 1 into hot set TL1 `0x8b4c0`), 1024 stale words consumed at the first read, expected 0. The iDMA snoop tag applies only to a sibling CCE's iDMA writes into this CCE's TL1 (`test_mimir_dm_cache.cpp:2211`) | 3 min 53 s |
+| 109 | `MM41/MimirCacheStress.PreloadChurn/Cce2` | fail: As on `mimir_1x1`: snoop leg (CCE3 iDMA from GDDR view 2 into hot set TL1 `0x8b4c0`), 1008 stale words consumed at the first read, expected 0. The iDMA snoop tag applies only to a sibling CCE's iDMA writes into this CCE's TL1 (`test_mimir_dm_cache.cpp:2211`) | 3 min 49 s |
+| 109 | `MM41/MimirCacheStress.PreloadChurn/Cce3` | fail: As on `mimir_1x1`: snoop leg (CCE2 iDMA from GDDR view 3 into hot set TL1 `0x8b4c0`), 1024 stale words consumed at the first read, expected 0. The iDMA snoop tag applies only to a sibling CCE's iDMA writes into this CCE's TL1 (`test_mimir_dm_cache.cpp:2211`) | 3 min 52 s |
+| 110 | `MM42/MimirAtomicLocal.OpMatrix/Cce0` | pass | 39 s |
+| 110 | `MM42/MimirAtomicLocal.OpMatrix/Cce1` | pass | 39 s |
+| 110 | `MM42/MimirAtomicLocal.OpMatrix/Cce2` | pass | 39 s |
+| 110 | `MM42/MimirAtomicLocal.OpMatrix/Cce3` | pass | 40 s |
+| 110 | `MM42/MimirAtomicLocal.Hotspot/Cce0` | pass | 2 min 56 s |
+| 110 | `MM42/MimirAtomicLocal.Hotspot/Cce1` | pass | 2 min 58 s |
+| 110 | `MM42/MimirAtomicLocal.Hotspot/Cce2` | pass | 3 min 0 s |
+| 110 | `MM42/MimirAtomicLocal.Hotspot/Cce3` | pass | 2 min 58 s |
+| 110 | `MM42/MimirAtomicLocal.Distributed/Cce0` | pass | 3 min 44 s |
+| 110 | `MM42/MimirAtomicLocal.Distributed/Cce1` | pass | 3 min 45 s |
+| 110 | `MM42/MimirAtomicLocal.Distributed/Cce2` | pass | 3 min 43 s |
+| 110 | `MM42/MimirAtomicLocal.Distributed/Cce3` | pass | 3 min 48 s |
+| 110 | `MM42/MimirAtomicLocal.LrScCas/Cce0` | pass | 6 min 2 s |
+| 110 | `MM42/MimirAtomicLocal.LrScCas/Cce1` | pass | 6 min 8 s |
+| 110 | `MM42/MimirAtomicLocal.LrScCas/Cce2` | pass | 6 min 7 s |
+| 110 | `MM42/MimirAtomicLocal.LrScCas/Cce3` | pass | 6 min 7 s |
+| 110 | `MM42/MimirAtomicLocal.Wrap/Cce0` | pass | 5 min 29 s |
+| 110 | `MM42/MimirAtomicLocal.Wrap/Cce1` | pass | 5 min 30 s |
+| 110 | `MM42/MimirAtomicLocal.Wrap/Cce2` | pass | 5 min 26 s |
+| 110 | `MM42/MimirAtomicLocal.Wrap/Cce3` | pass | 5 min 33 s |
+| 110 | `MM42/MimirAtomicLocal.Ordering/Cce0` | pass | 59 s |
+| 110 | `MM42/MimirAtomicLocal.Ordering/Cce1` | pass | 60 s |
+| 110 | `MM42/MimirAtomicLocal.Ordering/Cce2` | pass | 59 s |
+| 110 | `MM42/MimirAtomicLocal.Ordering/Cce3` | pass | 60 s |
+| 110 | `MM42/MimirAtomicLocal.CleanDirtyLine/Cce0` | pass | 1 min 22 s |
+| 110 | `MM42/MimirAtomicLocal.CleanDirtyLine/Cce1` | pass | 1 min 23 s |
+| 110 | `MM42/MimirAtomicLocal.CleanDirtyLine/Cce2` | pass | 1 min 23 s |
+| 110 | `MM42/MimirAtomicLocal.CleanDirtyLine/Cce3` | pass | 1 min 23 s |
+| 110 | `MM42/MimirAtomicLocal.Storm/Cce0` | pass | 2 min 55 s |
+| 110 | `MM42/MimirAtomicLocal.Storm/Cce1` | pass | 2 min 58 s |
+| 110 | `MM42/MimirAtomicLocal.Storm/Cce2` | pass | 3 min 2 s |
+| 110 | `MM42/MimirAtomicLocal.Storm/Cce3` | pass | 2 min 56 s |
+| 110 | `MM42/MimirAtomicLocal.NeighbourWriteRace/Cce0` | pass | 1 min 30 s |
+| 110 | `MM42/MimirAtomicLocal.NeighbourWriteRace/Cce1` | pass | 1 min 33 s |
+| 110 | `MM42/MimirAtomicLocal.NeighbourWriteRace/Cce2` | pass | 1 min 31 s |
+| 110 | `MM42/MimirAtomicLocal.NeighbourWriteRace/Cce3` | pass | 1 min 31 s |
+| 110 | `MM42/MimirAtomicLocal.Soak/Cce0` | pass | 1 min 27 s |
+| 110 | `MM42/MimirAtomicLocal.Soak/Cce1` | pass | 56 s |
+| 110 | `MM42/MimirAtomicLocal.Soak/Cce2` | pass | 1 min 29 s |
+| 110 | `MM42/MimirAtomicLocal.Soak/Cce3` | pass | 60 s |
+| 111 | `MM42/MimirAtomicItnControl.Cce0ToCce1PlainWrite/Cce0` | pass | 41 s |
+| 111 | `MM42/MimirAtomicItnControl.Cce0ToCce1PlainWrite/Cce1` | pass | 42 s |
+| 111 | `MM42/MimirAtomicItnControl.Cce0ToCce1PlainWrite/Cce2` | pass | 41 s |
+| 111 | `MM42/MimirAtomicItnControl.Cce0ToCce1PlainWrite/Cce3` | pass | 41 s |
+| 112 | `MM42/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/Cce0` | pass | 50 s |
+| 112 | `MM42/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/Cce1` | pass | 49 s |
+| 112 | `MM42/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/Cce2` | pass | 50 s |
+| 112 | `MM42/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/Cce3` | pass | 51 s |
+| 113 | `MM8/MimirDmIdma.Copy/OwnTl1` | pass | 38 s |
+| 113 | `MM8/MimirDmIdma.Copy/MaxPacket` | pass | 58 s |
+| 113 | `MM8/MimirDmIdma.Copy/SiblingTl1` | pass | 50 s |
+| 113 | `MM8/MimirDmIdma.Copy/LocalGddr` | pass | 49 s |
+| 113 | `MM8/MimirDmIdma.Copy/LocalGddr1` | pass | 48 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteTl1` | pass | 50 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteGddr` | pass | 49 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1D` | pass | 36 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DLocalGddr` | pass | 36 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DSubLine` | pass | 35 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DSubLineLocalGddr` | pass | 34 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteTl1KernelVerified` | pass | 52 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsOwnTl1/Cce0` | pass | 57 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsOwnTl1/Cce1` | pass | 57 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsOwnTl1/Cce2` | pass | 56 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsOwnTl1/Cce3` | pass | 57 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsSiblingTl1/Cce0` | pass | 1 min 32 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsSiblingTl1/Cce1` | pass | 1 min 32 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsSiblingTl1/Cce2` | pass | 1 min 32 s |
+| 114 | `MM43/MimirTridIdma.UniqueIdsSiblingTl1/Cce3` | pass | 1 min 32 s |
+| 114 | `MM43/MimirTridIdma.ReuseWrap/Cce0` | pass | 2 min 25 s |
+| 114 | `MM43/MimirTridIdma.ReuseWrap/Cce1` | pass | 2 min 26 s |
+| 114 | `MM43/MimirTridIdma.ReuseWrap/Cce2` | pass | 2 min 27 s |
+| 114 | `MM43/MimirTridIdma.ReuseWrap/Cce3` | pass | 2 min 27 s |
+| 114 | `MM43/MimirTridIdma.DuplicateId/Cce0` | fail: As `Cce0` on `mimir_1x1`: pending high water for trid 9 stayed at 1, expected more than 1; all 16 commands landed (`test_mimir_trid.cpp:907`). `Cce3` passed | 1 min 40 s |
+| 114 | `MM43/MimirTridIdma.DuplicateId/Cce1` | fail: As `Cce0` on `mimir_1x1`: pending high water for trid 9 stayed at 1, expected more than 1; all 16 commands landed (`test_mimir_trid.cpp:907`). `Cce3` passed | 1 min 41 s |
+| 114 | `MM43/MimirTridIdma.DuplicateId/Cce2` | fail: As `Cce0` on `mimir_1x1`: pending high water for trid 9 stayed at 1, expected more than 1; all 16 commands landed (`test_mimir_trid.cpp:907`). `Cce3` passed | 1 min 39 s |
+| 114 | `MM43/MimirTridIdma.DuplicateId/Cce3` | pass | 1 min 39 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentReadAfterWrite/Cce0` | pass | 1 min 20 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentReadAfterWrite/Cce1` | pass | 1 min 21 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentReadAfterWrite/Cce2` | pass | 1 min 24 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentReadAfterWrite/Cce3` | pass | 1 min 21 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentWriteAfterRead/Cce0` | pass | 1 min 26 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentWriteAfterRead/Cce1` | pass | 1 min 27 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentWriteAfterRead/Cce2` | pass | 1 min 27 s |
+| 114 | `MM43/MimirTridIdma.BarrierThenDependentWriteAfterRead/Cce3` | pass | 1 min 31 s |
+| 115 | `MM43/MimirTridIdma.UniqueIdsLocalGddr/Cce0` | pass | 2 min 43 s |
+| 115 | `MM43/MimirTridIdma.UniqueIdsLocalGddr/Cce1` | pass | 2 min 44 s |
+| 115 | `MM43/MimirTridIdma.UniqueIdsLocalGddr/Cce2` | pass | 2 min 42 s |
+| 115 | `MM43/MimirTridIdma.UniqueIdsLocalGddr/Cce3` | pass | 2 min 48 s |
+| 116 | `MM43/MimirTridIdma.NominalDepth/Cce0` | pass | 1 min 31 s |
+| 116 | `MM43/MimirTridIdma.NominalDepth/Cce1` | pass | 1 min 31 s |
+| 116 | `MM43/MimirTridIdma.NominalDepth/Cce2` | pass | 1 min 31 s |
+| 116 | `MM43/MimirTridIdma.NominalDepth/Cce3` | pass | 1 min 30 s |
+| 117 | `MM43/MimirTridIdma.MixedTargets/Cce0` | pass | 51 s |
+| 117 | `MM43/MimirTridIdma.MixedTargets/Cce1` | pass | 52 s |
+| 117 | `MM43/MimirTridIdma.MixedTargets/Cce2` | pass | 51 s |
+| 117 | `MM43/MimirTridIdma.MixedTargets/Cce3` | pass | 51 s |
+| 118 | `MM43/MimirTridIdma.Saturate/Cce0` | pass | 12 min 53 s |
+| 118 | `MM43/MimirTridIdma.Saturate/Cce1` | pass | 12 min 58 s |
+| 118 | `MM43/MimirTridIdma.Saturate/Cce2` | pass | 13 min 0 s |
+| 118 | `MM43/MimirTridIdma.Saturate/Cce3` | pass | 12 min 54 s |
+| 119 | `MM43/MimirTridIdma.MultiHart/Cce0` | pass | 4 min 37 s |
+| 119 | `MM43/MimirTridIdma.MultiHart/Cce1` | pass | 4 min 50 s |
+| 119 | `MM43/MimirTridIdma.MultiHart/Cce2` | pass | 4 min 39 s |
+| 119 | `MM43/MimirTridIdma.MultiHart/Cce3` | pass | 4 min 45 s |
+| 120 | `MM43/MimirTridIdma.Fairness/Cce0` | pass | 4 min 5 s |
+| 120 | `MM43/MimirTridIdma.Fairness/Cce1` | pass | 4 min 6 s |
+| 120 | `MM43/MimirTridIdma.Fairness/Cce2` | pass | 4 min 1 s |
+| 120 | `MM43/MimirTridIdma.Fairness/Cce3` | pass | 4 min 2 s |
+| 121 | `MM43/MimirTridIdma.Soak/Cce0` | pass | 5 min 26 s |
+| 121 | `MM43/MimirTridIdma.Soak/Cce1` | pass | 5 min 24 s |
+| 121 | `MM43/MimirTridIdma.Soak/Cce2` | pass | 5 min 26 s |
+| 121 | `MM43/MimirTridIdma.Soak/Cce3` | pass | 5 min 29 s |
+| 122 | `MM43/MimirTridRemote.RemoteTl1/Cce0ToCce2` | pass | 1 min 29 s |
+| 122 | `MM43/MimirTridRemote.RemoteTl1/Cce1ToCce3` | pass | 1 min 30 s |
+| 122 | `MM43/MimirTridRemote.RemoteTl1/Cce2ToCce0` | pass | 1 min 28 s |
+| 122 | `MM43/MimirTridRemote.RemoteTl1/Cce3ToCce1` | pass | 1 min 30 s |
+| 123 | `MM43/MimirTridRemote.RemoteGddr/Cce0ToCce2` | pass | 1 min 30 s |
+| 123 | `MM43/MimirTridRemote.RemoteGddr/Cce1ToCce3` | pass | 1 min 30 s |
+| 123 | `MM43/MimirTridRemote.RemoteGddr/Cce2ToCce0` | pass | 1 min 30 s |
+| 123 | `MM43/MimirTridRemote.RemoteGddr/Cce3ToCce1` | pass | 1 min 31 s |
+| 124 | `MM43/MimirTridConcurrent.WithPrefetcher/Sender0Receiver2Stream1` | pass | 2 min 47 s |
+| 125 | `MM43/MimirTridReset.NoStaleIdAfterReinit/Cce0` | pass | 4 min 28 s |
+| 125 | `MM43/MimirTridReset.NoStaleIdAfterReinit/Cce1` | pass | 4 min 39 s |
+| 125 | `MM43/MimirTridReset.NoStaleIdAfterReinit/Cce2` | pass | 4 min 27 s |
+| 125 | `MM43/MimirTridReset.NoStaleIdAfterReinit/Cce3` | pass | 4 min 32 s |
+| 126 | `MM42/MimirAccumProbe.FmtOpMatrix/Cce0` | pass | 8 min 33 s |
+| 126 | `MM42/MimirAccumProbe.FmtOpMatrix/Cce1` | pass | 8 min 31 s |
+| 126 | `MM42/MimirAccumProbe.FmtOpMatrix/Cce2` | pass | 8 min 37 s |
+| 126 | `MM42/MimirAccumProbe.FmtOpMatrix/Cce3` | pass | 8 min 30 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.SingleHart/Cce0` | pass | 36 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.SingleHart/Cce1` | pass | 35 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.SingleHart/Cce2` | pass | 36 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.SingleHart/Cce3` | pass | 36 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsShared/Cce0` | pass | 1 min 43 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsShared/Cce1` | pass | 1 min 42 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsShared/Cce2` | pass | 1 min 40 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsShared/Cce3` | pass | 1 min 43 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsDisjoint/Cce0` | pass | 1 min 46 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsDisjoint/Cce1` | pass | 1 min 47 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsDisjoint/Cce2` | pass | 1 min 47 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.AllHartsDisjoint/Cce3` | pass | 1 min 47 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.BackToBack/Cce0` | pass | 1 min 30 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.BackToBack/Cce1` | pass | 1 min 31 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.BackToBack/Cce2` | pass | 1 min 29 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.BackToBack/Cce3` | pass | 1 min 31 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.MixedPathControl/Cce0` | pass | 54 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.MixedPathControl/Cce1` | pass | 51 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.MixedPathControl/Cce2` | pass | 50 s |
+| 128 | `MM42/MimirAtomicIdmaAccum.MixedPathControl/Cce3` | pass | 50 s |
+| 129 | `MM42/MimirAtomicIdmaAccum.MaxOutstanding/Cce0` | pass | 45 s |
+| 129 | `MM42/MimirAtomicIdmaAccum.MaxOutstanding/Cce1` | pass | 46 s |
+| 129 | `MM42/MimirAtomicIdmaAccum.MaxOutstanding/Cce2` | pass | 44 s |
+| 129 | `MM42/MimirAtomicIdmaAccum.MaxOutstanding/Cce3` | pass | 44 s |
+| 2c | `MimirFwLoadNegative.SkipLoadNeverDone` | pass | 1 min 51 s |
+
+## Results on `mimir_2x_package`, 2026-11-13
+
+Ended early: the run started and ended on 2026-11-13. It was ended on the owner's request after `MM41/MimirCacheCoherenceRace`, at 21:25 UTC, and the emulator was stopped; it did not finish its plan. It is a rerun of the tests that launch the kernels changed by the CCE kernel cleanups, not a full run. One line per test case. Run against `de3ae9179c8` plus the uncommitted CCE kernel cleanups, in the same Debug build (`build_Debug`). Emulator `models/mmk`, each session after `bringup_two_mimir.py`: soc-c-31, soc-c-24, soc-c-31, soc-zebu-03, soc-c-24, soc-c-23, rv-zebu-07, soc-c-28, rv-zebu-07, rv-zebu-08, soc-zebu-01, soc-c-24, soc-zebu-04. One case per invocation, with `TT_METAL_OPERATION_TIMEOUT_SECONDS=600` and `timeout 7200`. Results, logs and scripts are kept in `/localdev/sagarwal/mimir_reruns_2026-11-13/mimir_2x_package/`.
+
+Scope differences from 2026-11-04:
+- Only CCE 0 (and suites with no per-CCE variants) ran. The CCE 2 chain was queued and did not run; CCE 1 and CCE 3 were never queued.
+- `MM4/MimirLocalDram` (including `SizeAlignmentMatrix`), `MM6/MimirRemoteDram` and `MM6/MimirRemoteDramTrafficMatrix` were not queued.
+- Rows not listed in the table were not rerun.
+- Queued and not run: first chain, 101 cases: `MM41/MimirCacheStress` (3), `MM41/MimirMm4xCompile` (5), `MM41/MimirCacheScopedLock` (3), `MM42/MimirAtomicProbe` (1), `MM42/MimirAtomicLocal` (11), `MM42/MimirAtomicItnControl` (1), `MM42/MimirAccumProbe` (1), `MM42/MimirAtomicIdmaAccum` (6), `MM43/MimirTridIdma` (13), `MM43/MimirTridReset` (1), `MM43/MimirTridConcurrent` (1), `MimirPrefetcher` (40), `MM7T3/MimirPrefetcherT3SingleGcb` (12), `MM7T3/MimirPrefetcherT3GcbSwitch` (3); second chain (CCE 2), 96 cases: `MM3/MimirKernelLoad` (4), `MM8/MimirDmDramUnary` (1), `MM2/MimirFwLaunch` (1), `MimirEmu/AllHartsRunDramKernel` (1), `MM5/MimirLocalTl1` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs` (2), `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment` (2), `MM41/MimirCacheProbe` (2), `MM41/MimirCacheOps` (5), `MM41/MimirCacheSharedL2` (6), `MM41/MimirCacheWriterProbe` (13), `MM41/MimirCacheCoherence` (3), `MM41/MimirCacheCoherenceRace` (8), `MM41/MimirCacheStress` (3), `MM41/MimirCacheScopedLock` (3), `MM42/MimirAtomicProbe` (1), `MM42/MimirAtomicLocal` (11), `MM42/MimirAtomicItnControl` (1), `MM42/MimirAccumProbe` (1), `MM42/MimirAtomicIdmaAccum` (6), `MM43/MimirTridIdma` (13), `MM43/MimirTridRemote` (4), `MM43/MimirTridReset` (1).
+- The emulator restarted with bring-up at every other suite switch until 19:58 UTC and at every third suite switch from then on, always before the prefetcher rows and before row 81, and after any timeout or lost emulator.
+
+Final: 122 cases ran, 120 pass, 2 fail. Results that differ from 2026-11-04: `MM8/MimirDmCache.Op/L2InvalidateFreshRead` (pass, 2026-11-04: fail); `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg1` (fail, 2026-11-04: pass); `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg3` (pass, 2026-11-04: fail).
+
+| Row | Test | Result | Time |
+|---|---|---|---|
+| 2b | `MM2/MimirFwLaunch.NoOpLaunchCompletes/Cce0` | pass | 29 s |
+| 2b | `MimirFwLoad.AllCcesIndependent` | pass | 11 min 51 s |
+| 2d | `MimirFwReinit.ReloadsOnEveryOpen` | pass | 1 min 37 s |
+| 3 | `MM3/MimirKernelLoad.ArgsReplaceStale/Cce0` | pass | 40 s |
+| 3 | `MM3/MimirKernelLoad.EachHartAlone/Cce0` | pass | 1 min 7 s |
+| 3 | `MM3/MimirKernelLoad.FirmwareKeepsRunningAcrossReopen/Cce0` | pass | 1 min 0 s |
+| 3 | `MM3/MimirKernelLoad.MinimalKernelExecutes/Cce0` | pass | 29 s |
+| 3 | `MimirKernelLoad.SameBinaryAllCcesUnicast` | pass | 53 s |
+| 4 | `MM5Direct/MimirRemoteTl1.HostInitRemoteRead/M0Cce1ToM1Cce0` | pass | 1 min 12 s |
+| 4 | `MM5Direct/MimirRemoteTl1.HostInitRemoteRead/M1Cce0ToM0Cce1` | pass | 1 min 11 s |
+| 4 | `MM5Direct/MimirRemoteTl1.SizeAlignment/M0Cce1ToM1Cce0` | pass | 2 min 34 s |
+| 4 | `MM5Direct/MimirRemoteTl1.SizeAlignment/M1Cce0ToM0Cce1` | pass | 2 min 35 s |
+| 4 | `MM5Direct/MimirRemoteTl1.WriteRead/M0Cce1ToM1Cce0` | pass | 1 min 41 s |
+| 4 | `MM5Direct/MimirRemoteTl1.WriteRead/M1Cce0ToM0Cce1` | pass | 1 min 42 s |
+| 5 | `MimirRemoteTl1Bidir.Concurrent` | pass | 2 min 53 s |
+| 6 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M0Cce0ToM1Cce0` | pass | 1 min 11 s |
+| 6 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M0Cce0ToM1Cce0` | pass | 2 min 30 s |
+| 6 | `MM5Routed/MimirRemoteTl1.WriteRead/M0Cce0ToM1Cce0` | pass | 1 min 41 s |
+| 7 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M0Cce1ToM1Cce1` | pass | 1 min 13 s |
+| 7 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M0Cce1ToM1Cce1` | pass | 2 min 31 s |
+| 7 | `MM5Routed/MimirRemoteTl1.WriteRead/M0Cce1ToM1Cce1` | pass | 1 min 41 s |
+| 8 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M1Cce0ToM0Cce0` | pass | 1 min 12 s |
+| 8 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M1Cce0ToM0Cce0` | pass | 2 min 32 s |
+| 8 | `MM5Routed/MimirRemoteTl1.WriteRead/M1Cce0ToM0Cce0` | pass | 1 min 41 s |
+| 9 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M1Cce1ToM0Cce1` | pass | 1 min 10 s |
+| 9 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M1Cce1ToM0Cce1` | pass | 2 min 37 s |
+| 9 | `MM5Routed/MimirRemoteTl1.WriteRead/M1Cce1ToM0Cce1` | pass | 1 min 40 s |
+| 10 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M0Cce0ToM1Cce1` | pass | 1 min 10 s |
+| 10 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M0Cce0ToM1Cce1` | pass | 2 min 35 s |
+| 10 | `MM5Routed/MimirRemoteTl1.WriteRead/M0Cce0ToM1Cce1` | pass | 1 min 42 s |
+| 11 | `MM5Routed/MimirRemoteTl1.HostInitRemoteRead/M1Cce1ToM0Cce0` | pass | 1 min 11 s |
+| 11 | `MM5Routed/MimirRemoteTl1.SizeAlignment/M1Cce1ToM0Cce0` | pass | 2 min 29 s |
+| 11 | `MM5Routed/MimirRemoteTl1.WriteRead/M1Cce1ToM0Cce0` | pass | 1 min 40 s |
+| 16 | `MimirRemoteMixed.Concurrent` | pass | 5 min 34 s |
+| 16 | `MimirRemoteMixed.FanOutFanIn` | pass | 2 min 0 s |
+| contract | `MimirEmu.AllCcesCopyLocalMimirBlock` | pass | 1 min 39 s |
+| contract | `MimirEmu/AllHartsRunDramKernel.WritesMagic/Cce0` | pass | 31 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrLargerThanAlignment.RoundTrip/Cce0Partition0` | pass | 55 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithCompileTimeArgs.RoundTrip/Cce0Partition0` | pass | 27 s |
+| contract | `MimirEmuSameMimirDirect/IdmaCopiesGddrWithRuntimeArgs.RoundTrip/Cce0Partition0` | pass | 50 s |
+| 72 | `MM8/MimirDmRuntimeArgs.IllegalTooManyRuntimeArgs/Cce0` | pass | 30 s |
+| 72 | `MM8/MimirDmRuntimeArgs.IllegallyModifyRuntimeArgs/Cce0` | pass | 27 s |
+| 75 | `MM8/MimirDmCache.Op/HartToHartCoherent` | fail, as on 2026-11-04: consumer warm read before the stores: `consumer[abi::kStatusWarmOld]` was 16, expected 64 (`kCacheWords`) (`test_mimir_dm_cache.cpp:238`) | 49 s |
+| 75 | `MM8/MimirDmCache.Op/InvalidateFreshRead` | pass | 38 s |
+| 75 | `MM8/MimirDmCache.Op/L1FlushFull` | pass | 40 s |
+| 75 | `MM8/MimirDmCache.Op/L1FlushLine` | pass | 38 s |
+| 75 | `MM8/MimirDmCache.Op/L1InvalidateFull` | pass | 37 s |
+| 75 | `MM8/MimirDmCache.Op/L1InvalidateLine` | pass | 38 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushFull` | pass | 46 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushLine` | pass | 37 s |
+| 75 | `MM8/MimirDmCache.Op/L2FlushRange` | pass | 36 s |
+| 75 | `MM8/MimirDmCache.Op/L2InvalidateFreshRead` | pass (2026-11-04: fail) | 37 s |
+| 75 | `MM8/MimirDmCache.Op/L2InvalidateLine` | pass | 37 s |
+| 75 | `MM8/MimirDmCache.Op/NoFlushNotVisible` | pass | 40 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/CachedFastFlush` | pass | 2 min 32 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/CachedRangeFlush` | pass | 2 min 32 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/Uncached1B` | pass | 2 min 50 s |
+| 76 | `MM8/MimirDmCachePerf.WritePath/Uncached8B` | pass | 2 min 31 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_Both` | pass | 28 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_DstOnly` | pass | 29 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Face_SrcOnly` | pass | 28 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_Both` | pass | 27 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_DstOnly` | pass | 28 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided1D_SrcOnly` | pass | 29 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_Both` | pass | 28 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_DstOnly` | pass | 28 s |
+| 77 | `MM8/MimirDmAddrgen.Pattern/Strided2D_SrcOnly` | pass | 28 s |
+| 78 | `MM8/MimirDmAddrgen.Pattern/Im2Col_Dilation1` | pass | 33 s |
+| 78 | `MM8/MimirDmAddrgen.Pattern/Im2Col_FullImage` | pass | 30 s |
+| 79 | `MM8/MimirDmDramUnary.ReaderWriterHandshake/Cce0` | pass | 46 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/FlushOnRelease` | pass | 32 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/InvalidateOnAcquire` | pass | 33 s |
+| 80 | `MM8/MimirDmScopedLockClm.CacheOps/LockedRangeOnly` | pass | 32 s |
+| 82 | `MM41/MimirCacheProbe.EightHartLaunch/Cce0` | pass | 2 min 0 s |
+| 83 | `MM41/MimirCacheProbe.SnoopConfig/Cce0` | pass | 39 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushFull/Cce0` | pass | 41 s |
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushLine/Cce0` | pass | 39 s |
+| 91 | `MM41/MimirCacheOps.DirtyEvictionPartialLine/Cce0` | pass | 57 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce0_EightWriters` | pass | 1 min 56 s |
+| 92 | `MM41/MimirCacheSharedL2.AdjacentLine/Cce0_WriterReader` | pass | 52 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce0_EightWriters` | pass | 2 min 2 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineDiffOffset/Cce0_WriterReader` | pass | 52 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce0_EightWriters` | pass | 2 min 0 s |
+| 92 | `MM41/MimirCacheSharedL2.SameLineSameOffset/Cce0_WriterReader` | pass | 52 s |
+| 95 | `MM41/MimirCacheOps.FlushFenceOrdering/Cce0` | pass | 2 min 48 s |
+| 96 | `MM41/MimirCacheOps.FullInvalidate/Cce0` | pass | 1 min 9 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_Host_InvalidateOnly` | pass | 37 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_Host_SnoopOffInvalidate` | pass | 39 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteCce_InvalidateOnly` | pass | 49 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteCce_SnoopOffInvalidate` | pass | 49 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_InvalidateOnly` | pass | 49 s |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_SnoopOffInvalidate` | pass | 49 s |
+| 98 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_SiblingSpa_SnoopOn` | pass | 49 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalIdma_InvalidateOnly` | pass | 1 min 5 s |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalIdma_SnoopOffInvalidate` | pass | 1 min 5 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalGddrIdma_InvalidateOnly` | pass | 1 min 2 s |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_LocalGddrIdma_SnoopOffInvalidate` | pass | 1 min 1 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteGddrIdma_InvalidateOnly` | pass | 1 min 1 s |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/Cce0_RemoteGddrIdma_SnoopOffInvalidate` | pass | 1 min 4 s |
+| 103 | `MM41/MimirCacheCoherence.CrossCce/Cce0` | pass | 1 min 11 s |
+| 104 | `MM41/MimirCacheCoherence.CrossCceSnoopOn/Cce0` | pass | 47 s |
+| 105 | `MM41/MimirCacheCoherence.CrossD2d/Cce0` | pass | 1 min 12 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg0` | pass | 2 min 39 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg1` | fail: Failed DirtyLineRace on CCE0 cfg1_Neighbour_Flush64: the hart's budget ran out before it read the external words, so the iDMA may still be in flight; the writer's command was acked, so its words were accepted but are not visible in TL1 (kernel code acked flags [vc_space true acked true landed fal...; the same symptom as the intermittent bit-0 config failures in the 2026-10-26 run (MM4x results, row 106); not rerun (2026-11-04: pass) | 2 min 27 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg2` | pass | 2 min 38 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg3` | pass (2026-11-04: fail) | 2 min 35 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg4` | pass | 2 min 35 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg5` | pass | 2 min 33 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg6` | pass | 2 min 41 s |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/Cce0_Cfg7` | pass | 2 min 38 s |
+| 113 | `MM8/MimirDmIdma.Copy/LocalGddr` | pass | 51 s |
+| 113 | `MM8/MimirDmIdma.Copy/LocalGddr1` | pass | 52 s |
+| 113 | `MM8/MimirDmIdma.Copy/MaxPacket` | pass | 1 min 0 s |
+| 113 | `MM8/MimirDmIdma.Copy/OwnTl1` | pass | 40 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteGddr` | pass | 52 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteTl1` | pass | 56 s |
+| 113 | `MM8/MimirDmIdma.Copy/RemoteTl1KernelVerified` | pass | 53 s |
+| 113 | `MM8/MimirDmIdma.Copy/SiblingTl1` | pass | 51 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1D` | pass | 38 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DLocalGddr` | pass | 37 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DSubLine` | pass | 37 s |
+| 113 | `MM8/MimirDmIdma.Copy/Strided1DSubLineLocalGddr` | pass | 35 s |
