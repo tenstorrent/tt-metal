@@ -25,13 +25,13 @@ arms are green upstream and this is a choice rather than a constraint.
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
+from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
 
 # Aliased: the local `attn_res` in this module is the TtAttnRes instance, and the collision is
 # silent until the reference is called and LightweightModule.__call__ looks for a `forward`.
@@ -41,7 +41,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
-from models.demos.deepseek_v3_d_p.tests.kimi_k3 import test_kimi_k3_1_stage as k31_stage
+from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     TRACE_1M,
     TRACE_100K,
@@ -52,7 +52,6 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     resolve_trace,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import compose_activation
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     CACHE_LEN,
     HF_CONFIGS,
@@ -65,7 +64,6 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     token_ids,
     upload_tokens,
 )
-from models.demos.deepseek_v3_d_p.tests.test_prefill_transformer_chunked import LAYER_PCC_THRESHOLD
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -455,27 +453,18 @@ def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
 # KV_CACHE_PCC) against `TRACE_K31`, which records all 93 layers. Two differences, both from what the K3.1
 # trace and weights are:
 #
-# * The stack is the runner's (`test_kimi_k3_1_stage._stage_params`: K3.1 TTNN weight cache, scaled-FP8 kvpe,
-#   bf8 indexer key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model is
-#   too large for one galaxy, so the ladder walks the PP4 stages: L1/L5/L12 are prefixes of stage 0, L24 is
-#   stage 0, and stages 1-3 each start from the previous stage's activation saved by
-#   `test_kimi_k3_1_stage_handoff` (`$K31_HANDOFF_DIR`, the served traced chain on the same prompt); stage 3,
-#   and a prefix (a single-rank stack), builds its last layer whole (`full_last_layer`) so it has a residual
-#   to score. Together: all 93 layers.
-# * The prompt is the handoff test's, the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
+# * The stack is the runner's PP4 rank 0 (`k31_stage.first_stage_params`: K3.1 TTNN weight cache, scaled-FP8
+#   kvpe, bf8 indexer key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model
+#   is too large for one galaxy, so the ladder covers PP4 stage 0: L1/L5/L12 are prefixes of it (a single-rank
+#   stack, which builds its last layer whole so it has a residual to score), L24 is the stage.
+# * The prompt is the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
 #   two chunks, so chunk 1's DSA layers read chunk 0's KV and its KDA layers continue chunk 0's carry. The bar
 #   is held per chunk on prompt rows (chunk 0 [0, 5120), chunk 1 [5120, 8192)), as the chunked K3 test holds it
 #   per chunk; rows past the prompt line up with vLLM's decode steps and are logged, not gated.
 #
 # The bar is K3's, per layer by depth: SHALLOW_LAYER_PCC through layer 11, DEEP_LAYER_PCC through layer 23 (K3's
-# depth-24 bar, set for the second seal), and past depth 24, where K3 has no bar of its own, the package's
-# chunked per-layer bar LAYER_PCC_THRESHOLD (test_prefill_transformer_chunked.py). KV: KV_CACHE_PCC at every DSA
-# layer. Measured at 10K (tt_metal_tracker-ao3i.5.1): worst 0.9966 (layers 0-11), 0.9869 (12-23), 0.9343 past
-# 24. The step at layers 91/92 (0.958 -> 0.934) coincides with ~6.5% of tokens turning massive (|h| up to
-# ~12k-24k against a median ~50) and carrying nearly all the energy, so a pooled PCC there mostly scores those
-# tokens; host logits from the final hidden match the trace's top-1 at all 2049 positions it scored. The
-# device's per-token error split into massive and normal tokens was not measured. Accepted as a metric effect
-# (orchestrator decision, tt_metal_tracker-ao3i.5.1).
+# depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K
+# (tt_metal_tracker-ao3i.5.1): worst 0.9966 (layers 0-11), 0.9869 (12-23).
 #
 # The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
 #
@@ -489,13 +478,12 @@ def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
 #   over the prompt rows at positions >= INDEX_TOPK. Rows before that select every causal key on both sides
 #   (recall 1 by construction, checked) and decode rows are logged. Bar K31_TOPK_RECALL, per golden (below).
 #
-#     K31_HANDOFF_DIR=/path/handoff scripts/run_safe_pytest.sh \
+#     scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L5-torus-xy-8x4]"
 def k31_layer_pcc(layer: int) -> float:
-    """K3's per-layer bar for a model layer (see above)."""
-    if layer < KimiK3Config.ATTN_RES_BLOCK_SIZE:
-        return SHALLOW_LAYER_PCC
-    return DEEP_LAYER_PCC if layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE else LAYER_PCC_THRESHOLD
+    """K3's per-layer bar for a layer of PP4 stage 0 (see above)."""
+    assert layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE, f"layer {layer}: K3 sets no bar past depth 24"
+    return SHALLOW_LAYER_PCC if layer < KimiK3Config.ATTN_RES_BLOCK_SIZE else DEEP_LAYER_PCC
 
 
 # The package's indexer overlap floor (test_ttnn_csa_indexer._assert_topk_overlap). Measured at 10K
@@ -558,17 +546,14 @@ def test_topk_recall_counts_each_trace_key_once():
     assert topk_recall(got, want).tolist() == pytest.approx([2 / 3, 1.0, 0.0, 1.0])
 
 
-# rung -> (golden, PP4 stage, layer count; None = the whole stage). "L24-128k" is K3's long-context check
-# (test_chunked_prefill.py's L24: layers 0-23 over every chunk) on the 128K trace.
+# rung -> (golden, layers of PP4 stage 0). "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
+# layers 0-23 over every chunk) on the 128K trace.
 K31_RUNGS = {
-    "L1": (TRACE_K31, 0, 1),
-    "L5": (TRACE_K31, 0, 5),
-    "L12": (TRACE_K31, 0, 12),
-    "L24": (TRACE_K31, 0, None),
-    "stage1": (TRACE_K31, 1, None),
-    "stage2": (TRACE_K31, 2, None),
-    "stage3": (TRACE_K31, 3, None),
-    "L24-128k": (TRACE_K31_128K, 0, None),
+    "L1": (TRACE_K31, 1),
+    "L5": (TRACE_K31, 5),
+    "L12": (TRACE_K31, 12),
+    "L24": (TRACE_K31, 24),
+    "L24-128k": (TRACE_K31_128K, 24),
 }
 
 
@@ -577,7 +562,7 @@ K31_RUNGS = {
 @pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
 @pytest.mark.parametrize("rung", list(K31_RUNGS))
 def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
-    golden_path, stage, num_layers = K31_RUNGS[rung]
+    golden_path, num_layers = K31_RUNGS[rung]
     trace = resolve_trace(golden_path)
     assert trace is not None, f"no K3.1 golden at {golden_path}"
     chunk = k31_stage.CHUNK
@@ -585,18 +570,9 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     ids = trace.metadata["token_ids"] + trace.metadata["completion_token_ids"]
     prompt_len, real_len = len(trace.metadata["token_ids"]), len(ids)
     num_chunks = -(-real_len // chunk)
-    prompt = ids + [k31_stage.MTP_PAD_TOKEN_ID] * (num_chunks * chunk - real_len)
-    handoff_dir = k31_stage._handoff_dir()
-    hf_config, params = k31_stage._stage_params(
-        stage,
-        1,
-        k31_stage._weight_cache_path(),
-        full_last_layer=True,  # the last rank's last layer whole, so it has a residual to score
-        num_layers=num_layers,
-        max_seq_len=-(-real_len // CACHE_LEN) * CACHE_LEN,
-        use_trace=False,
-    )
-    first, num_layers = params.first_layer_idx, params.num_layers
+    prompt = ids + [MTP_PAD_TOKEN_ID] * (num_chunks * chunk - real_len)
+    hf_config, params = k31_stage.first_stage_params(num_layers, max_seq_len=-(-real_len // CACHE_LEN) * CACHE_LEN)
+    first = params.first_layer_idx
     runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
     kv_caches = k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
@@ -671,27 +647,12 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     runtime.model.forward = tapped
     try:
         for c in range(num_chunks):
-            chunk_input = k31_stage._chunk_input(runtime, mesh_device, handoff_dir, stage, c, prompt)
+            chunk_input = runtime.make_chunk_input(prompt[c * chunk : (c + 1) * chunk])
             out = runtime.prefill_chunk(
                 chunk_input, kv_caches, slot_id=0, actual_start=c * chunk, actual_end=min((c + 1) * chunk, real_len)
             )
             ttnn.synchronize_device(mesh_device)
             logger.info(f"K31 {rung} chunk {c}/{num_chunks} done: layers [{first}, {first + num_layers})")
-            saved = k31_stage._handoff_path(handoff_dir, stage, c)
-            if (
-                out is not None
-                and golden_path == TRACE_K31
-                and num_layers == k31_stage.STAGES[stage][1]
-                and saved.is_file()
-            ):
-                # The traced chain's saved output for the same stage and chunk: says whether stages 1-3,
-                # which start from it, start from what this eager build would have handed them.
-                got = compose_activation(mesh_device, out)
-                want = torch.from_numpy(np.fromfile(saved, dtype=np.int16)).view(torch.bfloat16).reshape(got.shape)
-                logger.info(
-                    f"K31 {rung} chunk {c} output vs traced handoff {saved.name}: equal={torch.equal(got, want)} "
-                    f"pcc={comp_pcc(want.float(), got.float())[1]}"
-                )
             if out is not None:
                 ttnn.deallocate(out)
             score(c, taps)
