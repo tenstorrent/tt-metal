@@ -611,7 +611,7 @@ class Flux2Pipeline:
         image_ids = _prepare_ids(height=latents_height // self._patch_size, width=latents_width // self._patch_size)
         rope_cos, rope_sin = self._pos_embed.forward(image_ids)
 
-        state.latents.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+        state.latents.update(self._to_device(latents, mesh_axes=[None, sp_axis, None]), traced)
 
         # Each device runs the transformer on its shard of the latents followed by its shard of the
         # reference tokens, so the RoPE is arranged the same way. The attention does not depend on
@@ -621,13 +621,13 @@ class Flux2Pipeline:
             reference_rope_cos, reference_rope_sin = self._pos_embed.forward(reference_ids)
             rope_cos = _interleave_shards(rope_cos, reference_rope_cos, sp_factor)
             rope_sin = _interleave_shards(rope_sin, reference_rope_sin, sp_factor)
-            state.reference.update(reference, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+            state.reference.update(self._to_device(reference, mesh_axes=[None, sp_axis, None]), traced)
 
         # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
         # need to reshape per-call. SP sharding is on dim 2 (seq).
         rope_mesh_axes = [None, None, sp_axis, None]
-        state.rope_cos.update(rope_cos[None, None], traced, mesh_axes=rope_mesh_axes, device=self._mesh_device)
-        state.rope_sin.update(rope_sin[None, None], traced, mesh_axes=rope_mesh_axes, device=self._mesh_device)
+        state.rope_cos.update(self._to_device(rope_cos[None, None], mesh_axes=rope_mesh_axes), traced)
+        state.rope_sin.update(self._to_device(rope_sin[None, None], mesh_axes=rope_mesh_axes), traced)
         # The single blocks run on the concatenated [spatial | prompt] sequence and need the matching
         # rope. It is constant across the denoising steps, so concat once here.
         state.combined_rope_cos.update(ttnn.concat([state.rope_cos.data, self.ts.tt_prompt_rope_cos], dim=2), traced)
@@ -732,6 +732,13 @@ class Flux2Pipeline:
             state = _DenoiseState(step_tracer=Tracer(self._step, device=self._mesh_device, clone_prep_inputs=True))
             self._denoise_states[width, height, edit] = state
         return state
+
+    def _to_device(self, x: torch.Tensor, *, mesh_axes: Sequence[int | None]) -> ttnn.Tensor:
+        """Convert a tensor whose size follows the image size to bfloat16 tiles on the host, then move
+        it to the device. Converting on the device, as ttnn.from_torch does when it can, runs a
+        tilize and a typecast whose programs compile at every new size."""
+        host = from_torch(x, device=self._mesh_device, mesh_axes=mesh_axes, on_host=True)
+        return ttnn.to_device(host, self._mesh_device)
 
     def _reference_size(self, *, width: int, height: int) -> tuple[int, int]:
         """The size (width, height) a reference image is encoded at for an output of the given size:
