@@ -156,6 +156,10 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         // faster at 121 packets on the busiest link-direction, 3 as fast or faster from 242.
         constexpr uint64_t line_three_worker_packets = 160;
         workers_per_dir = (is_ring || busiest_link_packets >= line_three_worker_packets) ? 3 : 2;
+        // Not applied: with short packets (packet_cap < max_packet_bytes) a 4th worker is 9-19% faster when it cuts
+        // each worker's slots per iteration (BH Galaxy at 200G, 256 B row segments at 16 MB), but 2-5% slower when it
+        // does not, and up to 36% slower with full packets. It would need packets_per_slot before this choice, and
+        // w + 1 free cores per row so group_by_row still holds.
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
