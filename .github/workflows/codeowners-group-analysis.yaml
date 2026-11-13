@@ -52,11 +52,11 @@ jobs:
        contains(github.event.pull_request.body, '[x] Ping pending code owners') &&
        (github.event.action == 'opened' ||
         github.event.changes.body != null))
-    # Command comments log in to OSPO Vault below, which needs a full runner for the tailnet join.
+    # Command comments log in to OSPO Vault below, which needs our runner for the tailnet join.
     runs-on: >-
       ${{ (github.event_name == 'issue_comment' &&
            (startsWith(github.event.comment.body, '/codeowner') || startsWith(github.event.comment.body, '/ping')))
-          && 'ubuntu-latest' || 'ubuntu-slim' }}
+          && 'tt-ubuntu-2204-light-stable' || 'ubuntu-slim' }}
     # id-token: write lets this job log in to OSPO Vault (GitHub OIDC) for an org-read token.
     permissions:
       contents: read
@@ -977,7 +977,7 @@ jobs:
   post-comment:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
     if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-light-stable
     # id-token: write lets this job log in to OSPO Vault (GitHub OIDC) for a short-lived
     # org-read token. Job-level permissions replace the workflow's, so the rest are restated.
     permissions:

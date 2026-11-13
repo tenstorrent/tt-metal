@@ -86,7 +86,7 @@ jobs:
   notify-slack:
     needs: check-mention
     if: needs.check-mention.outputs.has_mention == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-light-stable
     # id-token: write lets this job log in to OSPO Vault (GitHub OIDC) for an org-read token.
     permissions:
       contents: read
