@@ -67,6 +67,12 @@ constexpr uint32_t kSumTileH = 4;
 constexpr uint32_t kSumTileW = 32;
 constexpr uint32_t kSumTileBytes = kSumTileH * kSumTileW * 2;
 constexpr uint32_t kSumTileBytesFp32 = kSumTileH * kSumTileW * 4;
+// The HC post kernel views each part (a stream-collapse core's columns of one row) as ONE 32x32 bf16 tile through
+// CBs whose pages are part_bytes apart (unpack and pack address tile i at i * page size): every step is elementwise,
+// so the tile's elements past the part are don't-cares, and the FPU runs on whole tiles, as tt-blaze's BcastMulAdd
+// does with its [T, 32] views. post and comb are scalars at element 0 of pages kHcScalarPage apart.
+constexpr uint32_t kHcTileBytes = 32 * 32 * 2;
+constexpr uint32_t kHcScalarPage = 32;
 // Stream counts the HC post kernel reads post and comb for: their (h, g) elements must lie in face 0's first 4 rows.
 constexpr uint32_t kMaxHcStreams = 4;
 
@@ -306,7 +312,30 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
     };
     constexpr uint32_t cb_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_out = tt::CBIndex::c_2;
-    add_cb(cb_in, layout.num_slots * tiles_per_part, tt::DataFormat::Float16_b, attributes.partials.buffer());
+    const TileDescriptor hc_tile(tt::tt_metal::Tile({32, 32}));
+    // A CB of `pages` pages of `page` bytes holding 32x32 bf16 tiles (see kHcTileBytes).
+    auto add_view_cb = [&](uint32_t index, uint32_t pages, uint32_t page, Buffer* buffer = nullptr) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = pages * page,
+            .core_ranges = sum_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = index,
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = page,
+                .tile = hc_tile,
+            }}},
+            .buffer = buffer,
+        });
+    };
+    if (hc_post(tensors)) {
+        TT_FATAL(
+            layout.part_bytes <= kHcTileBytes && layout.part_bytes % 32 == 0,
+            "persistent_moe_request: a {} B part does not fit the HC post step's one-tile view",
+            layout.part_bytes);
+        add_view_cb(cb_in, layout.num_slots, layout.part_bytes, attributes.partials.buffer());
+    } else {
+        add_cb(cb_in, layout.num_slots * tiles_per_part, tt::DataFormat::Float16_b, attributes.partials.buffer());
+    }
 
     KernelDescriptor sum_reader;
     sum_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -320,24 +349,28 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
     if (hc_post(tensors)) {
         // The new streams on each stream-collapse core (see dataflow/moe_partials_hcpost.cpp).
         const auto hc = static_cast<uint32_t>(tensors.streams->logical_shape()[2]);
-        const uint32_t row_tiles = hc * tiles_per_part;
         constexpr uint32_t cb_s = tt::CBIndex::c_3;
         constexpr uint32_t cb_post = tt::CBIndex::c_4;
         constexpr uint32_t cb_comb = tt::CBIndex::c_5;
         constexpr uint32_t cb_mix = tt::CBIndex::c_6;
         constexpr uint32_t cb_x = tt::CBIndex::c_7;
         constexpr uint32_t cb_tmp = tt::CBIndex::c_8;
-        add_cb(cb_out, row_tiles, tt::DataFormat::Float16_b);
-        add_cb(cb_s, row_tiles, tt::DataFormat::Float16_b);
-        add_cb(cb_post, hc, tt::DataFormat::Float32);
-        add_cb(cb_comb, hc * hc, tt::DataFormat::Float16_b);
-        add_cb(cb_mix, row_tiles, tt::DataFormat::Float32);
-        add_cb(cb_x, tiles_per_part, tt::DataFormat::Float32);
+        constexpr uint32_t cb_prod = tt::CBIndex::c_9;
+        // Tiles read or packed through a part_bytes view run past the last page: one spare tile of slack.
+        const uint32_t slack_pages = (kHcTileBytes + layout.part_bytes - 1) / layout.part_bytes;
+        add_view_cb(cb_out, hc + slack_pages, layout.part_bytes);
+        add_view_cb(cb_s, hc + slack_pages, layout.part_bytes);
+        const uint32_t scalar_slack = kHcTileBytes / kHcScalarPage;
+        add_view_cb(cb_post, hc + scalar_slack, kHcScalarPage);
+        add_view_cb(cb_comb, hc * hc + scalar_slack, kHcScalarPage);
+        add_view_cb(cb_mix, hc, kHcTileBytes);
+        add_view_cb(cb_x, 1, kHcTileBytes);
+        add_view_cb(cb_prod, hc, kHcTileBytes);
         add_cb(cb_tmp, 1, tt::DataFormat::Float16_b);  // post's and comb's face-0 heads, 128 B each
 
         std::vector<uint32_t> reader_ct_args = {
             layout.num_slots,
-            tiles_per_part,
+            1,  // tiles per part
             hc,
             layout.part_bytes,
             cb_in,
@@ -346,8 +379,8 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
             cb_comb,
             cb_out,
             cb_tmp,
-            kSumTileBytes,
-            kSumTileBytesFp32};
+            kHcScalarPage,
+            kHcScalarPage};
         TensorAccessorArgs(*tensors.post->buffer()).append_to(reader_ct_args);
         TensorAccessorArgs(*tensors.comb->buffer()).append_to(reader_ct_args);
         sum_reader.kernel_source =
@@ -358,8 +391,8 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
             "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/device/kernels/compute/"
             "moe_partials_hcpost.cpp";
         sum_compute.compile_time_args = {
-            layout.num_slots, tiles_per_part, hc, cb_in, cb_s, cb_post, cb_comb, cb_mix, cb_x, cb_out};
-        sum_compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
+            layout.num_slots, hc, cb_in, cb_s, cb_post, cb_comb, cb_mix, cb_x, cb_out, cb_prod};
+        sum_compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false};
         for (const auto& c : layout.sum_cores) {
             sum_reader.emplace_runtime_args(
                 c,

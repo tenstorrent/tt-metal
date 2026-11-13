@@ -51,8 +51,9 @@ REPLICA_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.Core
 # [32m, 32m + 32)), K-split over the router row's first ROUTER_PARTS cores, which hold each layer's slice in L1.
 ROUTER_PARTS = 10
 # Every layer's router columns stay in L1 while they take at most this much of each core's L1 (an L1 buffer takes its
-# address range on every core of the chip); beyond it -- e.g. all 40 layers, ~0.7 MB -- they go to DRAM.
-ROUTER_L1_BUDGET = int(os.environ.get("DEEPSEEK_V41_MOE_ROUTER_L1_BUDGET", 192 * 1024))
+# address range on every core of the chip); beyond it they go to DRAM. The default holds the whole gate: all 40 layers
+# take 40 * 16 bfloat8_b tiles = 680 KiB of each partial core's L1, which the MoE mesh has room for.
+ROUTER_L1_BUDGET = int(os.environ.get("DEEPSEEK_V41_MOE_ROUTER_L1_BUDGET", 768 * 1024))
 # DEEPSEEK_V41_MOE_FUSE_HC=0: requests return the plain reduced row (2-part reduce next to the request core) and the
 # decoder layer mixes it into the streams itself (FFN_MIX), instead of the request running that post step.
 FUSE_HC = os.environ.get("DEEPSEEK_V41_MOE_FUSE_HC", "1") not in ("0", "", "false", "False")
