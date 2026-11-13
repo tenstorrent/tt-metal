@@ -230,6 +230,8 @@ def fake_spec(seq=128):
 def shared(monkeypatch, tmp_path):
     monkeypatch.setenv(M.RESULTS_ENV, str(tmp_path))
     monkeypatch.setenv(M.TASK_ENV, "T")
+    monkeypatch.delenv(M.RECORD_ENV, raising=False)  # (a gate's run sets it: the metric would go to the gate's task)
+    monkeypatch.delenv(M.SUFFIX_ENV, raising=False)
     Model.loads = 0
     TB.release()
     yield
@@ -400,8 +402,9 @@ def test_segments_with_their_own_switch_go_to_another_process(mk, sandbox):
     assert got["profile"]["rc"] == 0 and got["last"]["rc"] == 0
 
 
-def test_off_by_default_every_run_is_its_own_process(mk, sandbox):
-    sandbox.write_spec(ladder=LADDER_SPEC, target={"seq": 128, "chunk": 32})
+def test_off_every_run_is_its_own_process(mk, sandbox):
+    # (on by default since F259's device check, defaults.yaml tests.one_process: off only when a spec says so)
+    sandbox.write_spec(ladder=LADDER_SPEC, target={"seq": 128, "chunk": 32}, tests={"one_process": False})
     o = mk([pick(ab_mode="quick", ab_positions=[64])], CHANGE)
     calls = []
     o.run_cmd = batch_runner(calls)
@@ -425,3 +428,119 @@ def test_the_device_test_reads_a_plan_or_a_units_command(monkeypatch, tmp_path):
     p = B.write_plan(tmp_path / "p.json", [{"name": "a"}])
     monkeypatch.setenv(B.PLAN_ENV, str(p))
     assert TB.load_plan() == ({"version": 1, "stop_on_fail": False, "entries": [{"name": "a"}]}, p)
+
+
+# ---------------------------------------------------------------- FIX.30: a shared process killed mid-run
+def test_a_shared_process_killed_mid_run_reports_every_unit_as_it_really_ended(sandbox, monkeypatch, tmp_path):
+    """FIX.30 (X.3, 2026-11-13): the shared process was SIGKILLed (OOM) in its first run, and the gate printed the
+    units it never reached as passed (their older PASS records). Every unit's status, everywhere: the summary, the
+    ledger, the delta, the stamp store, and no reuse."""
+    import signal
+
+    from models.demos.common.bringup.core import gate as G
+    from models.demos.common.bringup.core import stamps
+    from models.demos.common.bringup.selftest import test_gate_one_process as TG
+
+    calls = TG._setup(sandbox, monkeypatch, tmp_path)
+    fake = sandbox.repo.parent / "fake_runner.py"
+    kill = (
+        "        if os.environ.get('FAKE_KILL') == e['args'][0].rsplit('/', 1)[-1]:\n"
+        "            out['running'] = e['name']\n"
+        "            Path(str(plan_path) + '.results.json').write_text(json.dumps(out))\n"
+        "            os.kill(os.getpid(), 9)\n"
+    )
+    text = TG.FAKE.replace('        rc = one(e["args"][0])\n', kill + '        rc = one(e["args"][0])\n')
+    assert text != TG.FAKE
+    fake.write_text(text)
+    (sandbox.repo / "src").mkdir()
+    (sandbox.repo / "src/impl.py").write_text("x = 1\n")
+    sandbox.write_spec(tests={"one_process": True})
+    led = sandbox.tasks(TG._gate(f"{TG.LADDER} && {TG.CONTRACT} && {TG.OWN}"))
+    assert run_gate_ok(sandbox, led)  # every unit passed once, on older code
+    units = [u for u, _ in G.gate_units(led.tasks()["A.1"], led.tasks())]
+    assert len(units) == 3  # the ladder (with FIX.25's determinism run), the contract, the model's own test
+    (sandbox.repo / "src/impl.py").write_text("x = 2\n")  # the code under test changes: those passes are stale
+    monkeypatch.setenv("FAKE_KILL", "test_contract.py")
+    calls.write_text("")
+    res = G.run_gate(sandbox.spec, led, "A.1")
+    assert res.verdict == "FAIL" and calls.read_text().startswith("batch ")
+    ladder, contract, own = units
+    log = res.log.read_text()
+    assert f"while running {contract}.0" in log and f"# {own}: {G.NOT_RUN}" in log
+    passed = next(ln for ln in res.lines if ln.startswith("  units passed:"))
+    assert passed == f"  units passed: {ladder}", res.lines  # ran and passed in the process before the kill
+    want = {ladder: "PASS", contract: "FAIL", own: G.NOT_RUN}
+    assert G.unit_states(sandbox.spec, led, "A.1") == want
+    assert led.state()["A.1"]["units"] == want
+    delta = stamps.Delta(sandbox.spec.run_dir(G.run_name(led)), "A.1").all()
+    assert {u: delta[u]["verdict"] for u in units} == want
+    store = stamps.Store(sandbox.spec.run_dir(G.run_name(led)))
+    genv = G.gate_env(sandbox.spec, led, "A.1")
+    sids = {u: sid for u, _, _, sid in G.unit_stamps(sandbox.spec, led.tasks()["A.1"], genv, led.tasks())}
+    assert store.get(own, sids[own])["verdict"] == G.NOT_RUN and not G.reusable(store.get(own, sids[own]), {}, False)
+    # the next gate keeps what passed on this code and runs the rest: never the never-run unit's older pass
+    monkeypatch.delenv("FAKE_KILL")
+    calls.write_text("")
+    res = G.run_gate(sandbox.spec, led, "A.1")
+    assert res.verdict == "PASS", res.summary()
+    assert calls.read_text().split()[1:] == [f"{contract}.0", f"{own}.0"], calls.read_text()
+    assert signal.SIGKILL == 9
+
+
+def run_gate_ok(sandbox, led) -> bool:
+    from models.demos.common.bringup.core.gate import run_gate
+
+    return run_gate(sandbox.spec, led, "A.1").verdict == "PASS"
+
+
+# ---------------------------------------------------------------- FIX.30: host memory (core/hostmem.py)
+MEMINFO = {  # bytes, as /proc/meminfo after the leak (DeepSeek-V4.1 X.3, 2026-11-13 09:45, rounded)
+    "MemTotal": 566 * 1024**3,
+    "MemFree": 3 * 1024**3,
+    "MemAvailable": 4 * 1024**3,
+    "Buffers": 0,
+    "Cached": 2 * 1024**3,
+    "SReclaimable": 1 * 1024**3,
+    "SUnreclaim": 1 * 1024**3,
+    "PageTables": 0,
+    "KernelStack": 0,
+    "Hugetlb": 36 * 1024**3,
+    "SwapTotal": 8 * 1024**3,
+    "SwapFree": 0,
+}
+
+
+def test_host_memory_leaked_is_what_no_process_holds():
+    from models.demos.common.bringup.core import hostmem as H
+
+    procs = {1: {"ppid": 0, "rss": 200 * 1024**3, "anon": 210 * 1024**3, "hwm": 0}}
+    s = H.snapshot(MEMINFO, procs)
+    assert s["used"] == 560.0 and s["anon"] == 210.0 and s["leaked"] == 313.0  # 560 - 210 - 36 - 1
+    ok, line = H.preflight(100.0, s)
+    assert not ok and line.startswith(H.INFRA_TAG) and "100.0 GB" in line and "313.0 GB leaked" in line
+    assert H.preflight(3.0, s)[0]
+    assert H.need_gb({}) == H.FLOOR_GB and H.need_gb({H.NEED_ENV: "120"}) == 120.0
+    assert H.tree(1, {1: {"ppid": 0}, 2: {"ppid": 1}, 3: {"ppid": 2}, 4: {"ppid": 9}}) == [1, 2, 3]
+
+
+def test_a_runs_record_gives_its_configuration_a_need_and_a_group_takes_its_units(tmp_path, monkeypatch):
+    from models.demos.common.bringup.core import gate as G
+    from models.demos.common.bringup.core import hostmem as H
+
+    log = tmp_path / "logs" / "X.log"
+    log.parent.mkdir()
+    a, b = "A=1 scripts/run_safe_pytest.sh x.py", "B=1 scripts/run_safe_pytest.sh y.py"
+    w = tmp_path / "w.json"
+    w.write_text(json.dumps({"start": H.snapshot(), "peak_rss_gb": 90.0, "peak_anon_gb": 60.0, "min_avail_gb": 0.0}))
+    env = dict(os.environ, **G.hostmem_env(log, [a]))
+    assert H.NEED_ENV not in env  # never measured
+    lines, rec = H.report(w, 137, env)
+    assert rec["key"] == G.hostmem_key([a]) and rec["need_gb"] >= 60.0 and "peak RSS 90.0 GB" in lines[0]
+    w.write_text(json.dumps({"start": H.snapshot(), "peak_rss_gb": 30.0, "peak_anon_gb": 20.0, "min_avail_gb": 1e9}))
+    H.report(w, 0, dict(os.environ, **G.hostmem_env(log, [b])))
+    need_a = H.recorded_need(H.records(G.hostmem_file(log)) and G.hostmem_file(log), [G.hostmem_key([a])])
+    assert need_a == round(rec["need_gb"] * H.MARGIN + H.MARGIN_GB, 1)
+    with open(tmp_path / "gate.log", "w") as f:
+        genv = G.hostmem_env(log, [a, b], f)
+    assert genv[H.NEED_ENV] == str(need_a) and genv[H.KEY_ENV].startswith("group:")  # its largest unit's need
+    assert "host memory (FIX.30): available" in (tmp_path / "gate.log").read_text()

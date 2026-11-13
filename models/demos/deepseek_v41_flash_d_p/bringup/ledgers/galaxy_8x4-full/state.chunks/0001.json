@@ -302,7 +302,7 @@
    "model": "claude-opus-5-5",
    "session_id": "ca22d948-d1e9-4435-b2b9-ddf36c797096"
   },
-  "attempt": 1,
+  "attempt": 2,
   "history": [
    {
     "status": "ABORTED",
@@ -315,6 +315,13 @@
     "role": "overseer",
     "status": "RESUMED",
     "t": "2026-10-29T16:50:05"
+   },
+   {
+    "attempt": 2,
+    "from": "RUNNING",
+    "role": "overseer",
+    "status": "RESUMED",
+    "t": "2026-11-13T09:46:08"
    }
   ],
   "role": "overseer",
@@ -1452,6 +1459,80 @@
   "units": {
    "B.1": "PASS",
    "W.1": "PASS"
+  },
+  "waiting": null
+ },
+ "FIX.30": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "049d083bfaf7d361f21b7d39632a85374df34fc2",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "a2ab372e-8f3d-45b0-a25b-f8131e5968b9"
+  },
+  "attempt": 5,
+  "attempts": 1,
+  "duration_s": 4466.0,
+  "history": [
+   {
+    "s": 458.6,
+    "status": "FAIL",
+    "t": "2026-11-13T09:58:49"
+   },
+   {
+    "attempt": 4,
+    "from": "RUNNING",
+    "role": "overseer",
+    "status": "RESUMED",
+    "t": "2026-11-13T16:52:50"
+   },
+   {
+    "reused": [
+     "FIX.30#test_determinism",
+     "FIX.30#test_one_process"
+    ],
+    "s": 4466.0,
+    "status": "PASS",
+    "t": "2026-11-13T18:40:00"
+   }
+  ],
+  "last_run": "2026-11-13T18:39:58",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/FIX.30.log",
+  "rc": 0,
+  "reason": [],
+  "role": "overseer",
+  "stamp": {
+   "reused": [
+    "FIX.30#test_determinism",
+    "FIX.30#test_one_process"
+   ],
+   "units": {
+    "FIX.30#test_determinism": "f8952fdd10e17f26",
+    "FIX.30#test_ladder": "de0fcd084e17453f",
+    "FIX.30#test_one_process": "8dc50546eb4388e7",
+    "FIX.30#test_positions": "8f984706ee02e256",
+    "FIX.30#test_profile": "9cf3501957234fcf"
+   }
+  },
+  "started": "2026-11-13T17:25:32",
+  "status": "PASS",
+  "units": {
+   "FIX.30#test_determinism": "PASS",
+   "FIX.30#test_ladder": "PASS",
+   "FIX.30#test_one_process": "PASS",
+   "FIX.30#test_positions": "PASS",
+   "FIX.30#test_profile": "PASS"
   },
   "waiting": null
  },
@@ -4734,26 +4815,183 @@
    "session_id": "9829b97d-5adf-433c-99fc-f28f360a36ae"
   },
   "attempt": 1,
-  "attempts": 0,
-  "duration_s": 0.0,
+  "attempts": 2,
+  "duration_s": 243.2,
   "full_pending": true,
   "history": [
    {
     "s": 0.0,
     "status": "PASS",
     "t": "2026-11-12T22:46:37"
+   },
+   {
+    "s": 732.5,
+    "status": "FAIL",
+    "t": "2026-11-13T09:32:56"
+   },
+   {
+    "reused": [
+     "P.51#test_ladder"
+    ],
+    "s": 243.2,
+    "status": "FAIL",
+    "t": "2026-11-13T09:45:35"
+   },
+   {
+    "attempt": 1,
+    "from": "RUNNING",
+    "role": "perf",
+    "status": "RESUMED",
+    "t": "2026-11-13T09:48:24"
    }
   ],
-  "last_run": "2026-11-12T22:46:37",
+  "last_run": "2026-11-13T09:45:34",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.51.log",
-  "rc": 0,
-  "reason": [],
+  "rc": 1,
+  "reason": [
+   "  cmd rc=1 (243s), log: /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.51.log",
+   "  reused: same code, not run (F150): P.51#test_ladder",
+   "  units passed: P.51#test_ladder, P.51#test_decoder_skip_decode, P.51#test_contract, P.51#test_adapter_acks",
+   "  units remaining: P.51#test_profile (gate P.51 --continue runs only these)",
+   "  ok       err_layer_L00 = 0.019453533153229677 (need <= 0.0551437399953161 (its noise floor))",
+   "  ok       err_layer_L01 = 0.02907663768318495 (need <= 0.06665619597345913 (its noise floor))",
+   "  ok       err_layer_L02 = 0.03924201167977092 (need <= 0.08248912503469964 (its noise floor))",
+   "  ok       err_layer_L03 = 0.05163515789101514 (need <= 0.09773782530688765 (its noise floor))",
+   "  ok       err_layer_L04 = 0.060757143515829996 (need <= 0.1113528673899045 (its noise floor))",
+   "  ok       err_layer_L05 = 0.07128233103197454 (need <= 0.12938592983654623 (its noise floor))",
+   "  ok       err_layer_L06 = 0.07880664872466715 (need <= 0.14149446502665178 (its noise floor))",
+   "  ok       err_layer_L07 = 0.0818534383251799 (need <= 0.146592455973915 (its noise floor))",
+   "  ok       err_layer_L08 = 0.08249812441077806 (need <= 0.1478385514020157 (its noise floor))",
+   "  ok       err_layer_L09 = 0.08737668739422562 (need <= 0.15723646179685624 (its noise floor))",
+   "  ok       err_layer_L10 = 0.09844846687335189 (need <= 0.17736993375495563 (its noise floor))",
+   "  ok       err_layer_L11 = 0.10529507134180809 (need <= 0.19270649849291885 (its noise floor))",
+   "  ok       err_layer_L12 = 0.111902734532443 (need <= 0.20959822063822736 (its noise floor))",
+   "  ok       err_layer_L13 = 0.10552209907797837 (need <= 0.20025370998683073 (its noise floor))",
+   "  ok       err_layer_L14 = 0.06926690366563779 (need <= 0.13713544072775416 (its noise floor))",
+   "  ok       err_layer_L15 = 0.07463918260045045 (need <= 0.15590498258456184 (its noise floor))",
+   "  ok       err_layer_L16 = 0.10039329013363843 (need <= 0.2049655233626776 (its noise floor))",
+   "  ok       err_layer_L17 = 0.12539070920145406 (need <= 0.2521612842220817 (its noise floor))",
+   "  ok       err_layer_L18 = 0.1422851280292373 (need <= 0.2847409717896747 (its noise floor))",
+   "  ok       err_layer_L19 = 0.12976955458510225 (need <= 0.264265500334562 (its noise floor))",
+   "  ok       err_layer_L20 = 0.12440966016505728 (need <= 0.2518179157376998 (its noise floor))",
+   "  ok       err_layer_L21 = 0.10855365628087542 (need <= 0.2207544545211715 (its noise floor))",
+   "  ok       err_layer_L22 = 0.10590242318261893 (need <= 0.21286630627518344 (its noise floor))",
+   "  ok       err_layer_L23 = 0.10174569131679694 (need <= 0.20453575920143288 (its noise floor))",
+   "  ok       err_layer_L24 = 0.1025989596746552 (need <= 0.2041474057702663 (its noise floor))",
+   "  ok       err_layer_L25 = 0.10579891739744933 (need <= 0.20447148841075674 (its noise floor))",
+   "  ok       err_layer_L26 = 0.09865216827514336 (need <= 0.19044064704791072 (its noise floor))",
+   "  ok       err_layer_L27 = 0.10259933331883517 (need <= 0.1922653413940749 (its noise floor))",
+   "  ok       err_layer_L28 = 0.10265678487167351 (need <= 0.18851451804730945 (its noise floor))",
+   "  ok       err_layer_L29 = 0.10406376385636519 (need <= 0.18907494196734614 (its noise floor))",
+   "  ok       err_layer_L30 = 0.10494183068704595 (need <= 0.18863500936705577 (its noise floor))",
+   "  ok       err_layer_L31 = 0.10113559017205058 (need <= 0.18526235010345032 (its noise floor))",
+   "  ok       err_layer_L32 = 0.10406942181293614 (need <= 0.19242785487430086 (its noise floor))",
+   "  ok       err_layer_L33 = 0.10774775510609233 (need <= 0.20119261631983584 (its noise floor))",
+   "  ok       err_layer_L34 = 0.11046870823936847 (need <= 0.21098126743723067 (its noise floor))",
+   "  ok       err_layer_L35 = 0.10493418445820737 (need <= 0.20075921897658136 (its noise floor))",
+   "  ok       err_layer_L36 = 0.10578379094619228 (need <= 0.20244126560506195 (its noise floor))",
+   "  ok       err_layer_L37 = 0.10965552375442321 (need <= 0.2091577993096755 (its noise floor))",
+   "  ok       err_layer_L38 = 0.11671430456264809 (need <= 0.2202808845481061 (its noise floor))",
+   "  ok       err_layer_L39 = 0.9114824715259059 (need <= 1.5332389450709474 (its noise floor))",
+   "  ok       err_state_candidates_L20 = 0.08118295669555664 (need <= 0.1733701229095459 (its noise floor))",
+   "  ok       err_state_compress_kv_L02 = 0.027514733228762068 (need <= 0.20075149708484336 (its noise floor))",
+   "  ok       err_state_compress_kv_L08 = 0.054624323207063855 (need <= 0.21587475889260005 (its noise floor))",
+   "  ok       err_state_compress_kv_L14 = 0.12815207386650893 (need <= 0.30532079203337104 (its noise floor))",
+   "  ok       err_state_compress_kv_L20 = 0.099037585223834 (need <= 0.2741447254326818 (its noise floor))",
+   "  ok       err_state_compress_partial_L02 = 0.0 (need <= 0.0 (its noise floor))",
+   "  ok       err_state_compress_partial_L08 = 0.0 (need <= 0.0 (its noise floor))",
+   "  ok       err_state_compress_partial_L14 = 0.0 (need <= 0.0 (its noise floor))",
+   "  ok       err_state_engram_tail_L01 = 0.0 (need <= 0.6666666666666665 (its noise floor))",
+   "  ok       err_state_engram_tail_L14 = 0.0 (need <= 0.6666666666666665 (its noise floor))",
+   "  ok       err_state_index_k_L02 = 0.05263116675210995 (need <= 0.23593442246069446 (its noise floor))",
+   "  ok       err_state_index_k_L08 = 0.06066773472426316 (need <= 0.260163928457879 (its noise floor))",
+   "  ok       err_state_index_k_L14 = 0.10154264724628799 (need <= 0.2916131815617287 (its noise floor))",
+   "  ok       err_state_index_k_L20 = 0.08684938830266345 (need <= 0.276140827559956 (its noise floor))",
+   "  ok       err_state_topk_idx_L02 = 0.07980269193649292 (need <= 0.2169281244277954 (its noise floor))",
+   "  ok       err_state_topk_idx_L08 = 0.06989288330078125 (need <= 0.1716247797012329 (its noise floor))",
+   "  ok       err_state_topk_idx_L14 = 0.06720960140228271 (need <= 0.16625595092773438 (its noise floor))",
+   "  ok       err_state_topk_idx_L20 = 0.08754920959472656 (need <= 0.22193527221679688 (its noise floor))",
+   "  ok       err_state_topk_idx_L24 = 0.13445395231246948 (need <= 0.3176414966583252 (its noise floor))",
+   "  ok       err_state_topk_idx_L28 = 0.08298146724700928 (need <= 0.21599578857421875 (its noise floor))",
+   "  ok       err_state_topk_idx_L32 = 0.09376794099807739 (need <= 0.2221672534942627 (its noise floor))",
+   "  ok       err_state_topk_idx_L36 = 0.08639222383499146 (need <= 0.21224212646484375 (its noise floor))",
+   "  ok       err_state_window_kv_L00 = 0.004826944537845898 (need <= 0.05819331164297513 (its noise floor))",
+   "  ok       err_state_window_kv_L01 = 0.019144898046427473 (need <= 0.06937372966112977 (its noise floor))",
+   "  ok       err_state_window_kv_L02 = 0.027948291100286026 (need <= 0.08515713564392334 (its noise floor))",
+   "  ok       err_state_window_kv_L03 = 0.03184442550562584 (need <= 0.08942736636913289 (its noise floor))",
+   "  ok       err_state_window_kv_L04 = 0.03829684539418053 (need <= 0.0923014304034161 (its noise floor))",
+   "  ok       err_state_window_kv_L05 = 0.052802327109074204 (need <= 0.11021417330245141 (its noise floor))",
+   "  ok       err_state_window_kv_L06 = 0.06786371948124656 (need <= 0.1425798420563141 (its noise floor))",
+   "  ok       err_state_window_kv_L07 = 0.07242489018027293 (need <= 0.14137660760924964 (its noise floor))",
+   "  ok       err_state_window_kv_L08 = 0.063640375826452 (need <= 0.12210685577590993 (its noise floor))",
+   "  ok       err_state_window_kv_L09 = 0.08761936802385843 (need <= 0.18930294808582926 (its noise floor))",
+   "  ok       err_state_window_kv_L10 = 0.10018544927038514 (need <= 0.23961382276061371 (its noise floor))",
+   "  ok       err_state_window_kv_L11 = 0.13024883949552754 (need <= 0.2863991519846223 (its noise floor))",
+   "  ok       err_state_window_kv_L12 = 0.12507749821560205 (need <= 0.2600135240427583 (its noise floor))",
+   "  ok       err_state_window_kv_L13 = 0.10252002505127288 (need <= 0.19237407742885346 (its noise floor))",
+   "  ok       err_state_window_kv_L14 = 0.11493635310491183 (need <= 0.20119307475428513 (its noise floor))",
+   "  ok       err_state_window_kv_L15 = 0.13307568662173347 (need <= 0.21658428172825406 (its noise floor))",
+   "  ok       err_state_window_kv_L16 = 0.14548176139386781 (need <= 0.22865016420929943 (its noise floor))",
+   "  ok       err_state_window_kv_L17 = 0.15310775782208108 (need <= 0.25032410469167987 (its noise floor))",
+   "  ok       err_state_window_kv_L18 = 0.17801243915497736 (need <= 0.2760550268617865 (its noise floor))",
+   "  ok       err_state_window_kv_L19 = 0.1660976599782477 (need <= 0.23116182896368456 (its noise floor))",
+   "  ok       err_state_window_kv_L20 = 0.09966211713932718 (need <= 0.1514719096607378 (its noise floor))",
+   "  ok       err_state_window_kv_L21 = 0.09449263019556726 (need <= 0.15558459389459983 (its noise floor))",
+   "  ok       err_state_window_kv_L22 = 0.06931113948645135 (need <= 0.11302042149497714 (its noise floor))",
+   "  ok       err_state_window_kv_L23 = 0.138172918945075 (need <= 0.19909323756140246 (its noise floor))",
+   "  ok       err_state_window_kv_L24 = 0.13206861863671876 (need <= 0.19116657733433673 (its noise floor))",
+   "  ok       err_state_window_kv_L25 = 0.14677211329297868 (need <= 0.19687343021596032 (its noise floor))",
+   "  ok       err_state_window_kv_L26 = 0.12055433892589465 (need <= 0.17032430620376668 (its noise floor))",
+   "  ok       err_state_window_kv_L27 = 0.14596371212495404 (need <= 0.2182182512620854 (its noise floor))",
+   "  ok       err_state_window_kv_L28 = 0.12156101837125302 (need <= 0.1747033327574315 (its noise floor))",
+   "  ok       err_state_window_kv_L29 = 0.10598531299779759 (need <= 0.16003486842761513 (its noise floor))",
+   "  ok       err_state_window_kv_L30 = 0.0957245115866272 (need <= 0.14607159043787502 (its noise floor))",
+   "  ok       err_state_window_kv_L31 = 0.08245319605938743 (need <= 0.14504275677856152 (its noise floor))",
+   "  ok       err_state_window_kv_L32 = 0.10793142451058695 (need <= 0.17885104484292239 (its noise floor))",
+   "  ok       err_state_window_kv_L33 = 0.09212496369108138 (need <= 0.16407603753634342 (its noise floor))",
+   "  ok       err_state_window_kv_L34 = 0.09895235155823816 (need <= 0.24703057583944374 (its noise floor))",
+   "  ok       err_state_window_kv_L35 = 0.10139508549780223 (need <= 0.27064155122119815 (its noise floor))",
+   "  ok       err_state_window_kv_L36 = 0.10967431308906637 (need <= 0.2683498425356359 (its noise floor))",
+   "  ok       err_state_window_kv_L37 = 0.11226798065221148 (need <= 0.25929886092897103 (its noise floor))",
+   "  ok       err_state_window_kv_L38 = 0.12635830674766357 (need <= 0.3194420682910271 (its noise floor))",
+   "  ok       err_state_window_kv_L39 = 0.08937333970562246 (need <= 0.21467723236776087 (its noise floor))",
+   "  ok       err_final_hidden = 0.13210529160805987 (need <= 0.2421856131438472 (its noise floor))",
+   "  ok       top5_overlap = 1.0 (need >= 0.9942857142857142 (its noise floor))",
+   "  MISSING  contract_checks_failed (need == 0)",
+   "  MISSING  acks_early (need == 0)",
+   "  MISSING  served_bytes_differ (need == 0)",
+   "  MISSING  chunk_wall_ms (need > 0)",
+   "  MISSING  determinism_max_abs_diff_decoder_skip (need == 0)",
+   "  MISSING  contract_checks_failed_decoder_skip (need == 0)",
+   "  MISSING  acks_early_decoder_skip (need == 0)",
+   "  MISSING  unwritten_records_changed_decoder_skip (need == 0)",
+   "  MISSING  decode_acks_failures (need == 0)",
+   "  MISSING  device_ms_total (need > 0)",
+   "  ok       determinism_max_abs_diff = 0.0 (need == 0)"
+  ],
   "role": "perf",
-  "stamp": null,
-  "started": "2026-11-12T22:46:37",
-  "status": "PASS",
-  "units": null,
-  "waiting": null
+  "stamp": {
+   "reused": [
+    "P.51#test_ladder"
+   ],
+   "units": {
+    "P.51#test_adapter_acks": "c257839cb26c482e",
+    "P.51#test_contract": "6995c1eefd13a914",
+    "P.51#test_decoder_skip_decode": "ba0739a8ef92cc73",
+    "P.51#test_ladder": "7f98e7ccdee11502",
+    "P.51#test_profile": "15c6c1e502da744a"
+   }
+  },
+  "started": "2026-11-13T09:46:36",
+  "status": "TODO",
+  "units": {
+   "P.51#test_adapter_acks": "PASS",
+   "P.51#test_contract": "PASS",
+   "P.51#test_decoder_skip_decode": "PASS",
+   "P.51#test_ladder": "PASS",
+   "P.51#test_profile": "FAIL"
+  },
+  "waiting": "P.51 was accepted on its quick A/B; its full gate fails now:\nFAIL P.51\n  cmd rc=1 (243s), log: /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.51.log\n  reused: same code, not run (F150): P.51#test_ladder\n  units passed: P.51#test_ladder, P.51#test_decoder_skip_decode, P.51#test_contract, P.51#test_adapter_acks\n  units remaining: P.51#test_profile (gate P.51 --continue runs only these)\n  ok       err_layer_L00 = 0.019453533153229677 (need <= 0.0551437399953161 (its noise floor))\n  ok       err_layer_L01 = 0.02907663768318495 (need <= 0.06665619597345913 (its noise floor))\n  ok       err_layer_L02 = 0.03924201167977092 (need <= 0.08248912503469964 (its noise floor))\n  ok       err_layer_L03 = 0.05163515789101514 (need <= 0.09773782530688765 (its noise floor))\n  ok       err_layer_L04 = 0.060757143515829996 (need <= 0.1113528673899045 (its noise floor))\n  ok       err_layer_L05 = 0.07128233103197454 (need <= 0.12938592983654623 (its noise floor))\n  ok       err_layer_L06 = 0.07880664872466715 (need <= 0.14149446502665178 (its noise floor))\n  ok       err_layer_L07 = 0.0818534383251799 (need <= 0.146592455973915 (its noise floor))\n  ok       err_layer_L08 = 0.08249812441077806 (need <= 0.1478385514020157 (its noise floor))\n  ok       err_layer_L09 = 0.08737668739422562 (need <= 0.15723646179685624 (its noise floor))\n  ok       err_layer_L10 = 0.09844846687335189 (need <= 0.17736993375495563 (its noise floor))\n  ok       err_layer_L11 = 0.10529507134180809 (need <= 0.19270649849291885 (its noise floor))\n  ok       err_layer_L12 = 0.111902734532443 (need <= 0.20959822063822736 (its noise floor))\n  ok       err_layer_L13 = 0.10552209907797837 (need <= 0.20025370998683073 (its noise floor))\n  ok       err_layer_L14 = 0.06926690366563779 (need <= 0.13713544072775416 (its noise floor))\n  ok       err_layer_L15 = 0.07463918260045045 (need <= 0.15590498258456184 (its noise floor))\n  ok       err_layer_L16 = 0.10039329013363843 (need <= 0.2049655233626776 (its noise floor))\n  ok       err_layer_L17 = 0.12539070920145406 (need <= 0.2521612842220817 (its noise floor))\n  ok       err_layer_L18 = 0.1422851280292373 (need <= 0.2847409717896747 (its noise floor))\n  ok       err_layer_L19 = 0.12976955458510225 (need <= 0.264265500334562 (its noise floor))\n  ok       err_layer_L20 = 0.12440966016505728 (need <= 0.2518179157376998 (its noise floor))\n  ok       err_layer_L21 = 0.10855365628087542 (need <= 0.2207544545211715 (its noise floor))\n  ok       err_layer_L22 = 0.10590242318261893 (need <= 0.21286630627518344 (its noise floor))\n  ok       err_layer_L23 = 0.10174569131679694 (need <= 0.20453575920143288 (its noise floor))\n  ok       err_layer_L24 = 0.1025989596746552 (need <= 0.2041474057702663 (its noise floor))\n  ok       err_layer_L25 = 0.10579891739744933 (need <= 0.20447148841075674 (its noise floor))\n  ok       err_layer_L26 = 0.09865216827514336 (need <= 0.19044064704791072 (its noise floor))\n  ok       err_layer_L27 = 0.10259933331883517 (need <= 0.1922653413940749 (its noise floor))\n  ok       err_layer_L28 = 0.10265678487167351 (need <= 0.18851451804730945 (its noise floor))\n  ok       err_layer_L29 = 0.10406376385636519 (need <= 0.18907494196734614 (its noise floor))\n  ok       err_layer_L30 = 0.10494183068704595 (need <= 0.18863500936705577 (its noise floor))\n  ok       err_layer_L31 = 0.10113559017205058 (need <= 0.18526235010345032 (its noise floor))\n  ok       err_layer_L32 = 0.10406942181293614 (need <= 0.19242785487430086 (its noise floor))\n  ok       err_layer_L33 = 0.10774775510609233 (need <= 0.20119261631983584 (its noise floor))\n  ok       err_layer_L34 = 0.11046870823936847 (need <= 0.21098126743723067 (its noise floor))\n  ok       err_layer_L35 = 0.10493418445820737 (need <= 0.20075921897658136 (its noise floor))\n  ok       err_layer_L36 = 0.10578379094619228 (need <= 0.20244126560506195 (its noise floor))\n  ok       err_layer_L37 = 0.10965552375442321 (need <= 0.2091577993096755 (its noise floor))\n  ok       err_layer_L38 = 0.11671430456264809 (need <= 0.2202808845481061 (its noise floor))\n  ok       err_layer_L39 = 0.9114824715259059 (need <= 1.5332389450709474 (its noise floor))\n  ok       err_state_candidates_L20 = 0.08118295669555664 (need <= 0.1733701229095459 (its noise floor))\n  ok       err_state_compress_kv_L02 = 0.027514733228762068 (need <= 0.20075149708484336 (its noise floor))\n  ok       err_state_compress_kv_L08 = 0.054624323207063855 (need <= 0.21587475889260005 (its noise floor))\n  ok       err_state_compress_kv_L14 = 0.12815207386650893 (need <= 0.30532079203337104 (its noise floor))\n  ok       err_state_compress_kv_L20 = 0.099037585223834 (need <= 0.2741447254326818 (its noise floor))\n  ok       err_state_compress_partial_L02 = 0.0 (need <= 0.0 (its noise floor))\n  ok       err_state_compress_partial_L08 = 0.0 (need <= 0.0 (its noise floor))\n  ok       err_state_compress_partial_L14 = 0.0 (need <= 0.0 (its noise floor))\n  ok       err_state_engram_tail_L01 = 0.0 (need <= 0.6666666666666665 (its noise floor))\n  ok       err_state_engram_tail_L14 = 0.0 (need <= 0.6666666666666665 (its noise floor))\n  ok       err_state_index_k_L02 = 0.05263116675210995 (need <= 0.23593442246069446 (its noise floor))\n  ok       err_state_index_k_L08 = 0.06066773472426316 (need <= 0.260163928457879 (its noise floor))\n  ok       err_state_index_k_L14 = 0.10154264724628799 (need <= 0.2916131815617287 (its noise floor))\n  ok       err_state_index_k_L20 = 0.08684938830266345 (need <= 0.276140827559956 (its noise floor))\n  ok       err_state_topk_idx_L02 = 0.07980269193649292 (need <= 0.2169281244277954 (its noise floor))\n  ok       err_state_topk_idx_L08 = 0.06989288330078125 (need <= 0.1716247797012329 (its noise floor))\n  ok       err_state_topk_idx_L14 = 0.06720960140228271 (need <= 0.16625595092773438 (its noise floor))\n  ok       err_state_topk_idx_L20 = 0.08754920959472656 (need <= 0.22193527221679688 (its noise floor))\n  ok       err_state_topk_idx_L24 = 0.13445395231246948 (need <= 0.3176414966583252 (its noise floor))\n  ok       err_state_topk_idx_L28 = 0.08298146724700928 (need <= 0.21599578857421875 (its noise floor))\n  ok       err_state_topk_idx_L32 = 0.09376794099807739 (need <= 0.2221672534942627 (its noise floor))\n  ok       err_state_topk_idx_L36 = 0.08639222383499146 (need <= 0.21224212646484375 (its noise floor))\n  ok       err_state_window_kv_L00 = 0.004826944537845898 (need <= 0.05819331164297513 (its noise floor))\n  ok       err_state_window_kv_L01 = 0.019144898046427473 (need <= 0.06937372966112977 (its noise floor))\n  ok       err_state_window_kv_L02 = 0.027948291100286026 (need <= 0.08515713564392334 (its noise floor))\n  ok       err_state_window_kv_L03 = 0.03184442550562584 (need <= 0.08942736636913289 (its noise floor))\n  ok       err_state_window_kv_L04 = 0.03829684539418053 (need <= 0.0923014304034161 (its noise floor))\n  ok       err_state_window_kv_L05 = 0.052802327109074204 (need <= 0.11021417330245141 (its noise floor))\n  ok       err_state_window_kv_L06 = 0.06786371948124656 (need <= 0.1425798420563141 (its noise floor))\n  ok       err_state_window_kv_L07 = 0.07242489018027293 (need <= 0.14137660760924964 (its noise floor))\n  ok       err_state_window_kv_L08 = 0.063640375826452 (need <= 0.12210685577590993 (its noise floor))\n  ok       err_state_window_kv_L09 = 0.08761936802385843 (need <= 0.18930294808582926 (its noise floor))\n  ok       err_state_window_kv_L10 = 0.10018544927038514 (need <= 0.23961382276061371 (its noise floor))\n  ok       err_state_window_kv_L11 = 0.13024883949552754 (need <= 0.2863991519846223 (its noise floor))\n  ok       err_state_window_kv_L12 = 0.12507749821560205 (need <= 0.2600135240427583 (its noise floor))\n  ok       err_state_window_kv_L13 = 0.10252002505127288 (need <= 0.19237407742885346 (its noise floor))\n  ok       err_state_window_kv_L14 = 0.11493635310491183 (need <= 0.20119307475428513 (its noise floor))\n  ok       err_state_window_kv_L15 = 0.13307568662173347 (need <= 0.21658428172825406 (its noise floor))\n  ok       err_state_window_kv_L16 = 0.14548176139386781 (need <= 0.22865016420929943 (its noise floor))\n  ok       err_state_window_kv_L17 = 0.15310775782208108 (need <= 0.25032410469167987 (its noise floor))\n  ok       err_state_window_kv_L18 = 0.17801243915497736 (need <= 0.2760550268617865 (its noise floor))\n  ok       err_state_window_kv_L19 = 0.1660976599782477 (need <= 0.23116182896368456 (its noise floor))\n  ok       err_state_window_kv_L20 = 0.09966211713932718 (need <= 0.1514719096607378 (its noise floor))\n  ok       err_state_window_kv_L21 = 0.09449263019556726 (need <= 0.15558459389459983 (its noise floor))\n  ok       err_state_window_kv_L22 = 0.06931113948645135 (need <= 0.11302042149497714 (its noise floor))\n  ok       err_state_window_kv_L23 = 0.138172918945075 (need <= 0.19909323756140246 (its noise floor))\n  ok       err_state_window_kv_L24 = 0.13206861863671876 (need <= 0.19116657733433673 (its noise floor))\n  ok       err_state_window_kv_L25 = 0.14677211329297868 (need <= 0.19687343021596032 (its noise floor))\n  ok       err_state_window_kv_L26 = 0.12055433892589465 (need <= 0.17032430620376668 (its noise floor))\n  ok       err_state_window_kv_L27 = 0.14596371212495404 (need <= 0.2182182512620854 (its noise floor))\n  ok       err_state_window_kv_L28 = 0.12156101837125302 (need <= 0.1747033327574315 (its noise floor))\n  ok       err_state_window_kv_L29 = 0.10598531299779759 (need <= 0.16003486842761513 (its noise floor))\n  ok       err_state_window_kv_L30 = 0.0957245115866272 (need <= 0.14607159043787502 (its noise floor))\n  ok       err_state_window_kv_L31 = 0.08245319605938743 (need <= 0.14504275677856152 (its noise floor))\n  ok       err_state_window_kv_L32 = 0.10793142451058695 (need <= 0.17885104484292239 (its noise floor))\n  ok       err_state_window_kv_L33 = 0.09212496369108138 (need <= 0.16407603753634342 (its noise floor))\n  ok       err_state_window_kv_L34 = 0.09895235155823816 (need <= 0.24703057583944374 (its noise floor))\n  ok       err_state_window_kv_L35 = 0.10139508549780223 (need <= 0.27064155122119815 (its noise floor))\n  ok       err_state_window_kv_L36 = 0.10967431308906637 (need <= 0.2683498425356359 (its noise floor))\n  ok       err_state_window_kv_L37 = 0.11226798065221148 (need <= 0.25929886092897103 (its noise floor))\n  ok       err_state_window_kv_L38 = 0.12635830674766357 (need <= 0.3194420682910271 (its noise floor))\n  ok       err_state_window_kv_L39 = 0.08937333970562246 (need <= 0.21467723236776087 (its noise floor))\n  ok       err_final_hidden = 0.13210529160805987 (need <= 0.2421856131438472 (its noise floor))\n  ok       top5_overlap = 1.0 (need >= 0.9942857142857142 (its noise floor))\n  MISSING  contract_checks_failed (need == 0)\n  MISSING  acks_early (need == 0)\n  MISSING  served_bytes_differ (need == 0)\n  MISSING  chunk_wall_ms (need > 0)\n  MISSING  determinism_max_abs_diff_decoder_skip (need == 0)\n  MISSING  contract_checks_failed_decoder_skip (need == 0)\n  MISSING  acks_early_decoder_skip (need == 0)\n  MISSING  unwritten_records_changed_decoder_skip (need == 0)\n  MISSING  decode_acks_failures (need == 0)\n  MISSING  device_ms_total (need > 0)\n  ok       determinism_max_abs_diff = 0.0 (need == 0)"
  },
  "P.6": {
   "agent": {
@@ -5097,8 +5335,8 @@
   "waiting": "pick opportunities in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/opportunities.md; each pick becomes a perf task in tasks.yaml"
  },
  "X.3": {
-  "attempts": 0,
-  "duration_s": 1754.0,
+  "attempts": 1,
+  "duration_s": 486.7,
   "history": [
    {
     "s": 1754.0,
@@ -5112,24 +5350,44 @@
    {
     "status": "COMMITTED",
     "t": "2026-11-05T22:23:32"
+   },
+   {
+    "s": 486.7,
+    "status": "FAIL",
+    "t": "2026-11-13T09:41:06"
    }
   ],
-  "last_run": "2026-11-05T22:20:14",
+  "last_run": "2026-11-13T09:41:06",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.3.log",
-  "rc": 0,
-  "reason": [],
+  "rc": 1,
+  "reason": [
+   "  cmd rc=1 (487s), log: /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.3.log",
+   "  units passed: X.3#test_determinism, X.3#test_profile, X.3#test_positions",
+   "  units remaining: X.3#test_ladder (gate X.3 --continue runs only these)",
+   "  MISSING  err_layer_L* (need <= limit)",
+   "  MISSING  err_state_*_L* (need <= limit)",
+   "  MISSING  prefill_ms_full (need > 0)",
+   "  MISSING  pos_chunk (need >= 1)",
+   "  MISSING  op_rows (need >= 1)",
+   "  MISSING  timeline_ok (need == 1)",
+   "  MISSING  err_final_hidden (need <= limit)",
+   "  MISSING  top5_overlap (need >= limit)",
+   "  ok       determinism_max_abs_diff = 0.0 (need == 0)"
+  ],
   "stamp": {
    "reused": [],
    "units": {
-    "X.3#test_ladder": "171862677aa947b4",
-    "X.3#test_positions": "3588c1985fb29f72",
-    "X.3#test_profile": "62b84ec41e04c1f4"
+    "X.3#test_determinism": "d3e2bc432412a88f",
+    "X.3#test_ladder": "8fdb74f2cdb036d2",
+    "X.3#test_positions": "0c2d0220ac6822e0",
+    "X.3#test_profile": "25a75550bde3774a"
    }
   },
-  "started": "2026-11-05T21:51:00",
-  "status": "PASS",
+  "started": "2026-11-13T09:32:58",
+  "status": "FAIL",
   "units": {
-   "X.3#test_ladder": "PASS",
+   "X.3#test_determinism": "PASS",
+   "X.3#test_ladder": "FAIL",
    "X.3#test_positions": "PASS",
    "X.3#test_profile": "PASS"
   }

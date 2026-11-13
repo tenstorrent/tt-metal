@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from models.demos.common.bringup.core import batch, freeze, hangdump
+from models.demos.common.bringup.core import batch, freeze, hangdump, hostmem
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core import stamps
 from models.demos.common.bringup.core.chunked import log_chunks, roll_log
@@ -656,9 +656,44 @@ def reusable(rec: dict | None, limits: dict, whole: bool) -> bool:
 
 INFRA_STOP = re.compile(  # F169: a unit that did not finish for the box's or the clock's sake: STOPPED, not FAILED
     r"Timeout \(>[\d.]+s\) from pytest-timeout|Timed out while waiting for active ethernet core|"
-    r"Try resetting the board|No Tenstorrent devices|Failed to open device|fabric router .* timed out",
+    r"Try resetting the board|No Tenstorrent devices|Failed to open device|fabric router .* timed out|"
+    + re.escape(hostmem.INFRA_TAG),  # FIX.30: not started for lack of host memory
     re.I,
 )
+NOT_RUN = "NOT RUN"  # FIX.30: a unit of a shared process the process never reached (never PASS, never reused)
+
+
+def hostmem_file(log: Path) -> Path:
+    """FIX.30: the run's host-memory records (core/hostmem.report: one line per device process)."""
+    return log.parent / "hostmem.jsonl"
+
+
+def hostmem_key(cmds: list[str]) -> str:
+    """FIX.30: the configuration a process's host memory is recorded under: its unit's command, or a shared
+    process's units' commands (one model load for all of them)."""
+    return ("group:" if len(cmds) > 1 else "unit:") + stamps.sha16(" && ".join(cmds))
+
+
+def hostmem_env(log: Path, cmds: list[str], f=None) -> dict:
+    """FIX.30: the safe runner's host-memory variables for a process running ``cmds`` (a unit, or a shared group of
+    units): where to record, under which key, and the need measured before (a group never measured: the largest of
+    its units' needs, the shared model being one of theirs). The gate log gets the node's memory now."""
+    path = hostmem_file(log)
+    key = hostmem_key(cmds)
+    need = hostmem.recorded_need(path, [key])
+    src = "measured for it"
+    if need is None and len(cmds) > 1:
+        each = [n for n in (hostmem.recorded_need(path, [hostmem_key([c])]) for c in cmds) if n is not None]
+        need, src = (max(each), "the largest of its units' needs") if each else (None, "")
+    env = {hostmem.FILE_ENV: str(path), hostmem.KEY_ENV: key}
+    if need is not None:
+        env[hostmem.NEED_ENV] = str(need)
+    if f is not None:
+        snap = hostmem.snapshot()
+        what = f"needs {need:.1f} GB ({src}, {key})" if need is not None else f"no measured need yet ({key})"
+        f.write(f"# host memory (FIX.30): {hostmem.describe(snap)}; this process {what}\n")
+        f.flush()
+    return env
 
 
 def under_test_paths(task: dict, tasks: dict | None = None) -> list[str]:
@@ -835,8 +870,9 @@ def run_units(
                 if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model once
                     f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {run}\n")
                     f.flush()
+                penv = dict(uenv, **hostmem_env(log, [cmd], f))  # FIX.30
                 rc = subprocess.run(
-                    run or cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT
+                    run or cmd, shell=True, cwd=spec.repo, env=penv, stdout=f, stderr=subprocess.STDOUT
                 ).returncode
             if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F204: before the next unit's mesh open wipes it
                 kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
@@ -893,6 +929,21 @@ def run_units(
                     stop = verdict != "PASS"  # F169: a unit whose metrics missed stops the gate here too
                     note(k, n, u, dv, round(time.time() - t0, 1))
             if rc != 0 or stop:
+                # FIX.30: the units of this unit's shared process that the process never reached are NOT RUN in this
+                # gate (the delta, the stamp store, the summary), never left with an older PASS
+                for k2, (u2, cmd2, st2, sid2) in enumerate(plan, 1):
+                    if k2 <= k or u2 not in shared or shared[u2]["rc"] == 0:
+                        continue
+                    why = f"not run: the shared process stopped at {u} (rc {rc}) before reaching it"
+                    f.write(f"# {u2}: {NOT_RUN} ({why}, FIX.30)\n")
+                    u2env = dict(env, **{M.TASK_ENV: unit_base(u2)})
+                    if store is not None:
+                        rec = {"stamp": st2, "verdict": NOT_RUN, "rc": shared[u2]["rc"], "s": 0.0, "metrics": {}}
+                        store.put(u2, sid2, dict(rec, by=tid, t=time.strftime("%Y-%m-%dT%H:%M:%S"), why=why), [], tid)
+                    if delta is not None:
+                        delta.put(u2, dict(_delta_rec(NOT_RUN, under, cmd2, u2env, sid2, {}, 0.0), why=why))
+                    note(k2, n, u2, NOT_RUN, 0.0)
+                f.flush()
                 break
     return rc, reused, sids
 
@@ -919,8 +970,9 @@ def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid
     )
     f.flush()
     t0 = time.time()
+    mem = hostmem_env(log, [c for _, c in group], f)  # FIX.30
     with open(blog, "w") as bf:
-        penv = dict(env, **unit_env(names[0]), **hint)
+        penv = dict(env, **unit_env(names[0]), **hint, **mem)
         prc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT).returncode
     got = batch.load_results(plan)
     runs, running = got.get("runs") or {}, got.get("running")
@@ -944,6 +996,9 @@ def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid
         elif prc == SAFE_HANG_RC and running is None and not runs:
             rc = SAFE_HANG_RC  # (hung before any run: the mesh open or the first load)
             text += f"\n# FIX.29: the shared process hung before its first run; its output:\n{btext}"
+        elif any(e["name"] == running for e in mine):  # FIX.30: died in this unit (a SIGKILL: exit 137, OOM)
+            rc = 1
+            text += f"\n# FIX.30: the shared process ended (rc {prc}) while running {running}; its output:\n{btext}"
         else:
             failed = [n for n, r in runs.items() if r and r.get("rc")]
             why = f"run {failed[0]} failed first in the shared process" if failed else f"the process ended (rc {prc})"
@@ -971,10 +1026,10 @@ def _delta_rec(verdict: str, under: str, cmd: str, uenv: dict, sid, metrics: dic
 
 
 def unit_states(spec: Spec, ledger: Ledger, tid: str) -> dict[str, str]:
-    """F169: {unit: its last verdict in this task's gate (PASS, FAIL, STOPPED) or 'not run'}, in gate order."""
-    tasks = ledger.tasks()
-    delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid).all()
-    return {u: (delta.get(u) or {}).get("verdict", "not run") for u, _ in gate_units(tasks[tid], tasks)}
+    """F169: {unit: its last verdict in this task's gate (PASS, FAIL, STOPPED, NOT RUN) or 'not run'}, in gate order.
+    FIX.30: PASS only for a pass on the current code under test, command and environment (a pass the gate would keep);
+    an older pass is 'stale' (it runs again), never reported passed."""
+    return dict(_verdicts(spec, ledger, tid))
 
 
 def progress_lines(spec: Spec, ledger: Ledger, tid: str) -> list[str]:
@@ -987,9 +1042,24 @@ def progress_lines(spec: Spec, ledger: Ledger, tid: str) -> list[str]:
     ]
 
 
+def _verdicts(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
+    """FIX.30: (unit, PASS | stale | <verdict> | not run) from the task's delta, PASS only when kept (``_kept``)."""
+    out = []
+    for u, st in delta_status(spec, ledger, tid):
+        if st.startswith("kept"):
+            out.append((u, "PASS"))
+        elif st.startswith("stale"):
+            out.append((u, "stale"))
+        elif st == "not run":
+            out.append((u, st))
+        else:
+            out.append((u, st.rsplit(" at ", 1)[0]))
+    return out
+
+
 def delta_status(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
     """F169: (unit, state) for every unit of the task's gate: kept (passed on the current code under test), failed,
-    stopped, stale (passed on other code under test: runs again) or not run."""
+    stopped, not run in its shared process (FIX.30), stale (passed on other code under test: runs again) or not run."""
     tasks = ledger.tasks()
     task = tasks[tid]
     delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid)

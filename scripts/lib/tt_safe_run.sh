@@ -66,6 +66,8 @@ _ttrun_run_exit_hooks() {
 # ---------------------------------------------------------------------------
 ttrun_init() {
     REPO_DIR="$(cd "${_TTRUN_LIB_DIR}/../.." && pwd)"
+    # FIX.30: host memory before / during / after a device process (bring-up framework; stdlib only, optional)
+    TTRUN_HOSTMEM="${REPO_DIR}/models/demos/common/bringup/core/hostmem.py"
     TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
     TRIAGE_LOG="/tmp/tt-safe-run-triage-$$.log"
     WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
@@ -348,10 +350,21 @@ ttrun_run_child() {
     trap '_ttrun_signal_cleanup INT'  SIGINT
     "$@" > >(tee "$stdout_log") 2>&1 &
     CHILD_PID=$!
+    # FIX.30: the child's host memory, sampled from outside its tree (a SIGKILLed child still leaves its record)
+    local hostmem_watch=""
+    if [[ -f "$TTRUN_HOSTMEM" ]] && command -v python3 >/dev/null 2>&1; then
+        hostmem_watch="${stdout_log}.hostmem.json"
+        rm -f "$hostmem_watch"
+        python3 -I "$TTRUN_HOSTMEM" watch --pid "$CHILD_PID" --out "$hostmem_watch" >/dev/null 2>&1 &
+    fi
     wait "$CHILD_PID"
     EXIT_CODE=$?
-    wait 2>/dev/null  # let tee flush before anyone greps the log
+    wait 2>/dev/null  # let tee flush before anyone greps the log (and the host-memory watcher end)
     CHILD_PID=""
+    if [[ -n "$hostmem_watch" ]]; then
+        python3 -I "$TTRUN_HOSTMEM" report --watch "$hostmem_watch" --rc "$EXIT_CODE" 2>/dev/null || true
+        rm -f "$hostmem_watch"
+    fi
     # Kill any orphans the child left behind.
     pkill -9 -P $$ 2>/dev/null || true
 }

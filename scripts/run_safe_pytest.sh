@@ -473,6 +473,19 @@ PYTEST_CMD+=("${PYTEST_ARGS[@]}")
 echo "SAFE_PYTEST: $(printf '%q ' "${PYTEST_CMD[@]}")"
 echo "========================================"
 
+# --- Host memory pre-flight (FIX.30) ---
+# A device process started into too little host memory is SIGKILLed by the kernel's OOM killer mid-run (DeepSeek-V4.1
+# X.3, 2026-11-13: ~310 GB held by no process after earlier killed runs, tt-kmd 2.11). MemAvailable is checked against
+# the need measured for this configuration (BRINGUP_HOST_MEM_NEED_GB, set by the bring-up gate from its records; at
+# least BRINGUP_HOST_MEM_FLOOR_GB, default 16): below it the run is not started, an INFRA line says why (exit 3).
+if [[ -f "$TTRUN_HOSTMEM" ]] && command -v python3 >/dev/null 2>&1; then
+    python3 -I "$TTRUN_HOSTMEM" preflight
+    if [[ $? -eq 10 ]]; then
+        echo "SAFE_PYTEST_RESULT: INFRA (host memory too low; not started)"
+        exit 3
+    fi
+fi
+
 # --- Mark device dirty before running tests (hardware only) ---
 # Pessimistic: assume the device will get corrupted. If the script is killed at any
 # point (SIGKILL, OOM, etc.), the flag persists and the next runner will reset.
