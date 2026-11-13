@@ -95,25 +95,17 @@ constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full
     {
         return false;
     }
-    bool bfp8 = false, wide = false, narrow = false;
+    bool bfp8 = false, wide = false;
     for (const std::uint8_t f : formats)
     {
-        const DataFormat d = static_cast<DataFormat>(f);
-        bfp8               = bfp8 || d == DataFormat::Bfp8_b;
-        wide               = wide || matmul_format_is_32bit(d);
-        narrow = narrow || d == DataFormat::Float16 || d == DataFormat::Float16_b || d == DataFormat::Bfp8 || d == DataFormat::Bfp8_b ||
-                 d == DataFormat::Bfp4 || d == DataFormat::Bfp4_b || d == DataFormat::Bfp2 || d == DataFormat::Bfp2_b;
+        bfp8 = bfp8 || f == static_cast<std::uint8_t>(DataFormat::Bfp8_b);
+        wide = wide || matmul_format_is_32bit(static_cast<DataFormat>(f));
     }
     if (!full_sync && !fp32_dest && bfp8)
     {
         return false;
     }
-    // HiFi2 half sync keeps it with a 16-bit or Bfp operand and no Bfp8_b; all-32-bit operands lose (F32 x F32 -> Tf32 1x3x2 +3 cy)
-    if (fp32_dest && wide && fidelity == MathFidelity::HiFi2 && (full_sync || bfp8 || !narrow))
-    {
-        return false;
-    }
-    if (fp32_dest && wide && fidelity == MathFidelity::HiFi3 && full_sync && bfp8)
+    if (fp32_dest && wide && (fidelity == MathFidelity::HiFi2 || (fidelity == MathFidelity::HiFi3 && full_sync && bfp8)))
     {
         return false;
     }
