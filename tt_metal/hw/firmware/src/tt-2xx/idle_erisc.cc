@@ -47,7 +47,7 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
 uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
 
-// One image per CCE: CCE0's is linked at local 0, CCE1's MEM_IERISC_CCE_BASE(1) up. Both reach the
+// One image per CCE: CCE0's is linked at local 0, CCE1's MEM_IERISC_ETH_CCE_BASE(1) up. Both reach the
 // shared mailbox in CCE0's SRAM at the same local address. Processor 0 (CCE0 hart 0) is the master
 // for all sixteen harts; every other hart, CCE1's included, is a subordinate.
 // Uncached alias. L2 does not snoop the host's NOC->TL1 writes, so a cached read of the go
@@ -111,7 +111,7 @@ extern "C" uint32_t _start1() {
     uint32_t hartid = internal_::read_hw_thread_idx();
     configure_csr();
     // Hart 0 of each CCE initializes that CCE's image. Processor 0 also owns the shared mailbox state.
-    constexpr uint32_t image_leader = PHYSICAL_CCE_ID;
+    constexpr uint32_t image_leader = ETH_PHYSICAL_CCE_ID;
     if (hartid == image_leader) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);

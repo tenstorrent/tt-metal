@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dev_mem_map.h"
-#include "experimental/cce_gddr.h"
+#include "experimental/gddr_cce.h"
 #include "risc_common.h"
 
 void kernel_main() {
@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t staging_uncached_address = staging_l1_address + MEM_L1_UNCACHED_BASE;
 
     for (uint32_t mimir_index = 0; mimir_index < num_mimirs; mimir_index++) {
-        experimental::cce_gddr_read(mimir_index, src_buffer_address, staging_uncached_address, num_words);
-        experimental::cce_gddr_write(mimir_index, dst_buffer_address, staging_uncached_address, num_words);
+        experimental::gddr_cce_read(mimir_index, src_buffer_address, staging_uncached_address, num_words);
+        experimental::gddr_cce_write(mimir_index, dst_buffer_address, staging_uncached_address, num_words);
     }
 }

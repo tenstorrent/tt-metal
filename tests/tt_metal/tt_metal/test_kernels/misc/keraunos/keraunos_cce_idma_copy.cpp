@@ -51,7 +51,7 @@ void kernel_main() {
     const NocVcs vcs = get_arg_val<uint32_t>(5) != 0 ? NocVcs::WRITE : NocVcs::READ;
     const bool wait_all = get_arg_val<uint32_t>(6) != 0;
     volatile uint32_t* status =
-        reinterpret_cast<volatile uint32_t*>(MEM_IERISC_UNCACHED_BASE + get_arg_val<uint32_t>(7));
+        reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + get_arg_val<uint32_t>(7));
     const uint32_t copies = get_arg_val<uint32_t>(8);
     const bool use_helper = get_arg_val<uint32_t>(9) != 0;
 

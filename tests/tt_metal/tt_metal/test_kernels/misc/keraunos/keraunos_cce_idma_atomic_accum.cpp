@@ -39,7 +39,7 @@ void kernel_main() {
     const uint32_t fmt = get_arg_val<uint32_t>(6);
     const uint32_t op = get_arg_val<uint32_t>(7);
     volatile uint32_t* status =
-        reinterpret_cast<volatile uint32_t*>(MEM_IERISC_UNCACHED_BASE + get_arg_val<uint32_t>(8));
+        reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + get_arg_val<uint32_t>(8));
 
     status[0] = 0x1D3A0001;
     for (uint32_t i = 0; i < repeats; i++) {

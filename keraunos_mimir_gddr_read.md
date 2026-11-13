@@ -74,7 +74,7 @@ Shown:
 - A CPU store from HSIO2 CCE0 to the M1 D2D1-route GDDR SPA reaches M1 GDDR.
 - A CPU load of that address does not let the hart finish.
 - An IDMA copy from that address into HSIO2's global SRAM window does not let the hart finish either.
-- Mimir CCEs can load the other Mimir's GDDR with an ordinary CPU load (`cce_gddr_read` in `tt_metal/hw/inc/experimental/cce_gddr.h`). That path is M0 D2D1 to M1 D2D0, not K0 D2D2.
+- Mimir CCEs can load the other Mimir's GDDR with an ordinary CPU load (`gddr_cce_read` in `tt_metal/hw/inc/experimental/gddr_cce.h`). That path is M0 D2D1 to M1 D2D0, not K0 D2D2.
 
 Not shown:
 

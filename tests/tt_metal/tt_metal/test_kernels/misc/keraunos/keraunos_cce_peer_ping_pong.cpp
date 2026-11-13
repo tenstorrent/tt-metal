@@ -20,11 +20,11 @@
 #include "dev_mem_map.h"
 
 void kernel_main() {
-    volatile uint32_t* flags = reinterpret_cast<volatile uint32_t*>(MEM_IERISC_UNCACHED_BASE + get_arg_val<uint32_t>(0));
+    volatile uint32_t* flags = reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + get_arg_val<uint32_t>(0));
     const bool initiator = get_arg_val<uint32_t>(1) == 0;
     const uint32_t rounds = get_arg_val<uint32_t>(2);
     volatile uint32_t* status =
-        reinterpret_cast<volatile uint32_t*>(MEM_IERISC_UNCACHED_BASE + get_arg_val<uint32_t>(3));
+        reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + get_arg_val<uint32_t>(3));
     volatile uint32_t* ping = &flags[0];
     volatile uint32_t* pong = &flags[1];
 
