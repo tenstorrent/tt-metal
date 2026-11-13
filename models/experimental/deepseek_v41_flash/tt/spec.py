@@ -354,9 +354,10 @@ class DSparkSpeculator:
         """
         model = self.model
         prompt = list(prompt)
-        logger.info(
-            f"[spec] prefill: {len(prompt)} tokens from {start_pos} (traces captured: {model._traced_captured})"
-        )
+        if _VERBOSE:
+            logger.info(
+                f"[spec] prefill: {len(prompt)} tokens from {start_pos} (traces captured: {model._traced_captured})"
+            )
         if not model._traced_captured:
             self._stall.enter("prefill: capture_spec_traces")
             try:
@@ -384,7 +385,8 @@ class DSparkSpeculator:
             self._proposals = self._draft(token, pos - 1)
         finally:
             self._stall.cancel()
-        logger.info(f"[spec] started at {pos}: first token {token}, drafts {self._proposals}")
+        if _VERBOSE:
+            logger.info(f"[spec] started at {pos}: first token {token}, drafts {self._proposals}")
         return token
 
     def finish(self) -> None:
@@ -687,9 +689,10 @@ class DSparkSpeculator:
             self.model.drain_stale_outputs()
         finally:
             self._stall.cancel()
-        logger.info(
-            f"[spec] generate done: {len(out)} tokens, pos {self._pos}, stats {self.stats.summary(self.drafts)}"
-        )
+        if _VERBOSE:
+            logger.info(
+                f"[spec] generate done: {len(out)} tokens, pos {self._pos}, stats {self.stats.summary(self.drafts)}"
+            )
         return out
 
     def advance(self, budget: int, stop_ids: Sequence[int] = (), ahead: bool = True) -> tuple[list[int], bool]:
@@ -727,16 +730,20 @@ class DSparkSpeculator:
             self._proposals = self._draft(self._next, self._pos - 1)[: self.drafts]
         finally:
             self._stall.cancel()
-        logger.info(
-            f"[spec] cut the round at p={p} to {keep} token(s): pos {self._pos}, next {self._next}, "
-            f"drafts {self._proposals}, rejected {self._rejected}"
-        )
+        if _VERBOSE:
+            logger.info(
+                f"[spec] cut the round at p={p} to {keep} token(s): pos {self._pos}, next {self._next}, "
+                f"drafts {self._proposals}, rejected {self._rejected}"
+            )
 
     def extend(self, tokens: Sequence[int]) -> int:
         """Feed ``tokens`` after the last returned token (say, the next user turn after an end-of-sentence id)
         and seed the drafter on them; returns the first token generated after them, as :meth:`prefill`."""
         start = self._pos
-        logger.info(f"[spec] extend: {len(tokens)} tokens from {start}, next {self._next}, rejected {self._rejected}")
+        if _VERBOSE:
+            logger.info(
+                f"[spec] extend: {len(tokens)} tokens from {start}, next {self._next}, rejected {self._rejected}"
+            )
         self.finish()
         return self.prefill([self._next, *tokens], start)
 

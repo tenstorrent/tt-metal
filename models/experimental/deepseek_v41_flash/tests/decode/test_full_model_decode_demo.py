@@ -224,9 +224,11 @@ def _construct_model(
     verify_rows: int = 1,
     prefill_layer_submesh_ids=None,
     persistent_moe: bool = False,
+    moe_server=None,
+    moe_requester: int = 0,
 ):
     """Build ``DeepSeekV41Model`` + ``lm_head`` and attach the prefetcher session (``verify_rows``,
-    ``prefill_layer_submesh_ids`` and ``persistent_moe``: see the model)."""
+    ``prefill_layer_submesh_ids``, ``persistent_moe``, ``moe_server`` and ``moe_requester``: see the model)."""
     if loader is None:
         loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     if config is None:
@@ -256,6 +258,8 @@ def _construct_model(
         balance_dram_banks=_BALANCE_DRAM_BANKS,
         prefill_layer_submesh_ids=prefill_layer_submesh_ids,
         persistent_moe=persistent_moe,
+        moe_server=moe_server,
+        moe_requester=moe_requester,
     )
     lm_head = DeepSeekV41LMHead(
         dequantized(loader, "lm_head.weight", translate=True),
@@ -292,7 +296,8 @@ def _assert_decode_parallelism(
         server = model.moe_server
         assert server is not None, "persistent_moe must launch the TP12 MoE server"
         assert server.layer_ids == list(range(model.num_layers)), f"the server serves layers {server.layer_ids}"
-        assert tuple(server.moe_mesh.shape) == (3, 4) and server.request_meshes == [model.submeshes[0]]
+        assert tuple(server.moe_mesh.shape) == (3, 4)
+        assert server.request_meshes[model.moe_requester] is model.submeshes[0]
         assert all(layer.mlp is None and layer.moe_server is server for layer in model.layers)
         logger.info(
             f"parallelism: 1 stage x TP{tp_size} for all {model.num_layers} layers' attention and hyper-connections, "
