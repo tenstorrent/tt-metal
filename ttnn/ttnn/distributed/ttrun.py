@@ -531,8 +531,12 @@ def compute_phase1_cache_fingerprint_full(
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
     factory_system_descriptor: Optional[Path] = None,
+    offline: bool = False,
 ) -> str:
     """Full SHA-256 hex (64 chars) of MGD (or MGD mapping + all referenced MGDs) + hosts or mock descriptor contents.
+
+    With ``offline``, the mock descriptors are generated from ``factory_system_descriptor`` after this runs, so the
+    FSD stands in for them and neither ``hosts`` nor ``mock_rank_to_desc`` is given.
 
     If ``mgd_path`` is a multi-MGD mapping YAML (``mgd_is_mapping_yaml`` True, or when omitted, see
     :func:`mesh_graph_path_is_mgd_mapping_yaml`), the fingerprint includes the mapping file bytes
@@ -549,9 +553,14 @@ def compute_phase1_cache_fingerprint_full(
         ValueError: Invalid host/mock combination, or invalid mapping YAML.
         FileNotFoundError: Referenced MGD from mapping is missing.
     """
-    if hosts is not None and mock_rank_to_desc is not None:
+    if offline:
+        if hosts is not None or mock_rank_to_desc is not None:
+            raise ValueError("offline takes neither hosts nor mock_rank_to_desc")
+        if factory_system_descriptor is None:
+            raise ValueError("offline requires factory_system_descriptor")
+    elif hosts is not None and mock_rank_to_desc is not None:
         raise ValueError("hosts and mock_rank_to_desc are mutually exclusive for cache id")
-    if hosts is None and mock_rank_to_desc is None:
+    elif hosts is None and mock_rank_to_desc is None:
         raise ValueError("Either hosts or mock_rank_to_desc is required")
 
     use_mapping_yaml = (
@@ -570,7 +579,9 @@ def compute_phase1_cache_fingerprint_full(
     else:
         h.update(mgd_path.read_bytes())
         h.update(b"\0")
-    if hosts is not None:
+    if offline:
+        h.update(b"\0offline\0")
+    elif hosts is not None:
         h.update(json.dumps(hosts, separators=(",", ":"), ensure_ascii=False).encode())
     else:
         for rank in sorted(mock_rank_to_desc.keys()):
@@ -1097,6 +1108,32 @@ def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=subproc
     return result.returncode if hasattr(result, "returncode") else result
 
 
+def build_generate_rank_bindings_offline_cmd(
+    executable: Path,
+    mgd_path: Path,
+    fsd_path: Path,
+    output_dir: Path,
+    *,
+    mgd_is_mapping_yaml: Optional[bool] = None,
+) -> List[str]:
+    """Command for ``generate_rank_bindings --offline``: Phase 1 on the FSD alone, as one process without mpirun.
+
+    It writes one mock cluster descriptor per FSD host into ``output_dir/mock_cluster_desc``, then the usual
+    Phase 1 outputs, with ``phase2_mock_mapping.yaml`` pointing at those descriptors.
+    """
+    use_mapping = mesh_graph_path_is_mgd_mapping_yaml(mgd_path) if mgd_is_mapping_yaml is None else mgd_is_mapping_yaml
+    return [
+        str(executable.resolve()),
+        "--offline",
+        "--factory-system-descriptor",
+        str(fsd_path.resolve()),
+        "--mesh-graph-descriptor-mapping" if use_mapping else "--mesh-graph-descriptor",
+        str(mgd_path.resolve()),
+        "--output-dir",
+        str(output_dir.resolve()),
+    ]
+
+
 def run_phase1_generate_rank_bindings(
     mgd_path: Path,
     hosts: Optional[List[str]],
@@ -1107,6 +1144,7 @@ def run_phase1_generate_rank_bindings(
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
     factory_system_descriptor: Optional[Path] = None,
+    offline: bool = False,
 ) -> tuple[Path, Path]:
     """Run Phase 1: generate_rank_bindings for rank_bindings (or overlay mapping), rankfile, and mocks.
 
@@ -1122,6 +1160,8 @@ def run_phase1_generate_rank_bindings(
         subprocess_run: Subprocess run function (injectable for testing)
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
         mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
+        offline: Run ``generate_rank_bindings --offline`` on ``factory_system_descriptor`` instead of mpirun;
+            ``hosts``, ``mock_rank_to_desc`` and ``mpi_args`` are not used.
 
     Returns:
         Tuple of (
@@ -1136,16 +1176,23 @@ def run_phase1_generate_rank_bindings(
         RuntimeError: If Phase 1 fails or outputs are missing
     """
     executable = find_generate_rank_bindings_executable()
-    cmd = build_generate_rank_bindings_mpi_cmd(
-        executable,
-        mgd_path,
-        hosts,
-        output_dir,
-        mock_rank_to_desc,
-        mpi_args,
-        mgd_is_mapping_yaml=mgd_is_mapping_yaml,
-        factory_system_descriptor=factory_system_descriptor,
-    )
+    if offline:
+        if factory_system_descriptor is None:
+            raise ValueError("offline requires factory_system_descriptor")
+        cmd = build_generate_rank_bindings_offline_cmd(
+            executable, mgd_path, factory_system_descriptor, output_dir, mgd_is_mapping_yaml=mgd_is_mapping_yaml
+        )
+    else:
+        cmd = build_generate_rank_bindings_mpi_cmd(
+            executable,
+            mgd_path,
+            hosts,
+            output_dir,
+            mock_rank_to_desc,
+            mpi_args,
+            mgd_is_mapping_yaml=mgd_is_mapping_yaml,
+            factory_system_descriptor=factory_system_descriptor,
+        )
 
     logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
@@ -2771,6 +2818,7 @@ def new_mode_flow(
     force_rediscovery: bool = False,
     tracy_args: Optional[str] = None,
     factory_system_descriptor: Optional[Path] = None,
+    offline: bool = False,
 ) -> None:
     """New mode flow for ttrun using mesh graph descriptor(s).
 
@@ -2793,6 +2841,9 @@ def new_mode_flow(
         bare: If True, disable tt-run defaults
         tcp_interface: Network interface for MPI TCP communication
         force_rediscovery: If True, always run Phase 1 and refresh cache (skip cache hit)
+        offline: If True, Phase 1 is ``generate_rank_bindings --offline`` on ``factory_system_descriptor``, one
+            process without mpirun. It writes a mock cluster descriptor per FSD host into the Phase 1 run directory,
+            and Phase 2 uses them like any mock run.
     """
     program = ctx.args
 
@@ -2844,6 +2895,7 @@ def new_mode_flow(
             mock_rank_to_desc,
             mgd_is_mapping_yaml=mgd_mapping_yaml,
             factory_system_descriptor=resolved_fsd,
+            offline=offline,
         )
     except FileNotFoundError as e:
         raise click.ClickException(
@@ -2856,7 +2908,7 @@ def new_mode_flow(
     ttrun_base = ORIGINAL_CWD / "generated" / "ttrun"
     short_dir = ttrun_base / short_id
     full_dir = ttrun_base / fingerprint_full
-    mock_mode = mock_rank_to_desc is not None
+    mock_mode = mock_rank_to_desc is not None or offline
 
     if verbose and hosts_for_phase1:
         logger.info(f"{TT_RUN_PREFIX} Phase 1 canonical host order (sorted): {','.join(hosts_for_phase1)}")
@@ -2920,20 +2972,28 @@ def new_mode_flow(
             )
             try:
                 executable = find_generate_rank_bindings_executable()
-                phase1_cmd = build_generate_rank_bindings_mpi_cmd(
-                    executable,
-                    resolved_mgd,
-                    hosts_for_phase1,
-                    run_dir,
-                    mock_rank_to_desc,
-                    phase1_mpi_args,
-                    mgd_is_mapping_yaml=mgd_mapping_yaml,
-                    factory_system_descriptor=resolved_fsd,
-                )
-                print_command(
-                    phase1_cmd,
-                    prefix=f"{TT_RUN_PREFIX} Phase 1 (generate_rank_bindings) — dry-run, not executed",
-                )
+                if offline:
+                    print_command(
+                        build_generate_rank_bindings_offline_cmd(
+                            executable, resolved_mgd, resolved_fsd, run_dir, mgd_is_mapping_yaml=mgd_mapping_yaml
+                        ),
+                        prefix=f"{TT_RUN_PREFIX} Phase 1 (generate_rank_bindings --offline) — dry-run, not executed",
+                    )
+                else:
+                    phase1_cmd = build_generate_rank_bindings_mpi_cmd(
+                        executable,
+                        resolved_mgd,
+                        hosts_for_phase1,
+                        run_dir,
+                        mock_rank_to_desc,
+                        phase1_mpi_args,
+                        mgd_is_mapping_yaml=mgd_mapping_yaml,
+                        factory_system_descriptor=resolved_fsd,
+                    )
+                    print_command(
+                        phase1_cmd,
+                        prefix=f"{TT_RUN_PREFIX} Phase 1 (generate_rank_bindings) — dry-run, not executed",
+                    )
             except FileNotFoundError as e:
                 logger.warning(f"{TT_RUN_PREFIX} Dry-run: could not locate generate_rank_bindings ({e})")
 
@@ -2967,6 +3027,7 @@ def new_mode_flow(
                 mpi_args=phase1_mpi_args,
                 mgd_is_mapping_yaml=mgd_mapping_yaml,
                 factory_system_descriptor=resolved_fsd,
+                offline=offline,
             )
         except (FileNotFoundError, RuntimeError) as e:
             raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
@@ -2975,7 +3036,7 @@ def new_mode_flow(
     # Phase 2: Use phase2_mock_mapping.yaml from generate_rank_bindings (cluster descriptors used during allocation).
     # The C++ tool writes this file; ttrun only reads it.
     phase2_mock_binding_path: Optional[Path] = None
-    if mock_rank_to_desc:
+    if mock_mode:
         generated_phase2_mock_path = run_dir / PHASE2_MOCK_MAPPING_FILENAME
         if generated_phase2_mock_path.exists():
             phase2_mock_binding_path = generated_phase2_mock_path
@@ -3110,6 +3171,13 @@ def new_mode_flow(
     "See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.",
 )
 @click.option(
+    "--offline",
+    is_flag=True,
+    help="New mode only: run without a cluster. Phase 1 is generate_rank_bindings --offline, one process without "
+    "mpirun, which writes a mock cluster descriptor per --factory-system-descriptor host and maps on the FSD. "
+    "Requires --factory-system-descriptor; replaces --hosts and --mock-cluster-rank-binding.",
+)
+@click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
 )
 @click.option("--skip-mgd-check", is_flag=True, help="Skip the check if MGD file exists on the local host")
@@ -3167,6 +3235,7 @@ def main(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     factory_system_descriptor: Optional[Path],
+    offline: bool,
     skip_executable_check: bool,
     skip_mgd_check: bool,
     bare: bool,
@@ -3195,6 +3264,8 @@ def main(
         tt-run -M mesh_graphs_mapping.yaml --hosts node1,node2 ./my_app
         # Or mock cluster (``--hosts`` optional):
         tt-run -m mesh_graph.textproto --mock-cluster-rank-binding mock.yaml ./my_app
+        # Or offline, from a Factory System Descriptor alone:
+        tt-run -m mesh_graph.textproto --factory-system-descriptor fsd.textproto --offline ./my_app
 
     For detailed documentation on legacy mode, see the legacy_flow function docstring.
     """
@@ -3233,6 +3304,17 @@ def main(
             "or -M/--mesh-graph-descriptor-mapping."
         )
 
+    if offline:
+        if not uses_mesh_graph_inputs:
+            raise click.ClickException("--offline applies only to new mode (-m / -M).")
+        if factory_system_descriptor is None:
+            raise click.ClickException("--offline requires --factory-system-descriptor.")
+        if hosts is not None or mock_cluster_rank_binding is not None:
+            raise click.ClickException(
+                "--offline generates the cluster from --factory-system-descriptor; do not combine it with --hosts "
+                "or --mock-cluster-rank-binding."
+            )
+
     # Legacy mode: use --rank-binding or --rank-bindings-mapping
     if rank_binding is not None or rank_bindings_mapping is not None:
         if force_rediscovery:
@@ -3268,10 +3350,11 @@ def main(
         )
         assert mesh_input is not None
         mg_new_is_mapping = mesh_graph_descriptor_mapping is not None
-        # --hosts is required unless --mock-cluster-rank-binding is provided
-        if mock_cluster_rank_binding is None and hosts is None:
+        # --hosts is required unless --mock-cluster-rank-binding or --offline is provided
+        if mock_cluster_rank_binding is None and hosts is None and not offline:
             raise click.ClickException(
-                "--hosts is required for new mode (-m / -M) unless --mock-cluster-rank-binding is provided."
+                "--hosts is required for new mode (-m / -M) unless --mock-cluster-rank-binding or --offline is "
+                "provided."
             )
 
         new_mode_flow(
@@ -3292,6 +3375,7 @@ def main(
             force_rediscovery=force_rediscovery,
             tracy_args=tracy_args,
             factory_system_descriptor=factory_system_descriptor,
+            offline=offline,
         )
         return
 

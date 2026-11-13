@@ -13,6 +13,7 @@
 #include <cabling_generator/cabling_generator.hpp>
 #include <factory_system_descriptor/query.hpp>
 #include <factory_system_descriptor/utils.hpp>
+#include <node/node.hpp>
 #include <node/node_types.hpp>
 
 // Include generated protobuf headers
@@ -269,8 +270,56 @@ TEST(Cluster, TestGenerateClusterDescriptorFromFSD) {
 
     EXPECT_TRUE(std::filesystem::exists(result_file));
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
+    EXPECT_EQ(YAML::LoadFile(result_file)["cluster_id"].as<std::string>(), deployment.hosts(0).host());
 
     std::cout << "Generated cluster descriptor written to: " << result_file << std::endl;
+}
+
+TEST(Cluster, TestNodeTypeArchitectureAndBoardRevision) {
+    for (const auto node_type : enchantum::values<NodeType>) {
+        const std::string name(enchantum::to_string(node_type));
+        // Unversioned BH_GALAXY instances probe PCIe for their revision.
+        if (name.starts_with("BH_GALAXY") && get_node_type_board_revision(node_type) == BoardRevision::UNSPECIFIED) {
+            continue;
+        }
+        EXPECT_EQ(get_node_type_architecture(node_type), create_node_instance(node_type)->get_architecture()) << name;
+    }
+    EXPECT_EQ(get_node_type_board_revision(NodeType::WH_GALAXY_Y_TORUS), BoardRevision::WH_GALAXY);
+    EXPECT_EQ(get_node_type_board_revision(NodeType::BH_GALAXY_REV_AB_Y_TORUS), BoardRevision::BH_GALAXY_REV_AB);
+    EXPECT_EQ(get_node_type_board_revision(NodeType::BH_GALAXY_REV_C_XY_TORUS), BoardRevision::BH_GALAXY_REV_C);
+    EXPECT_EQ(get_node_type_board_revision(NodeType::BH_GALAXY_Y_TORUS), BoardRevision::UNSPECIFIED);
+    EXPECT_EQ(get_node_type_board_revision(NodeType::N300_LB_DEFAULT), BoardRevision::UNSPECIFIED);
+    EXPECT_EQ(try_get_node_type_from_string("bh_galaxy_rev_c_y_torus"), NodeType::BH_GALAXY_REV_C_Y_TORUS);
+    EXPECT_FALSE(try_get_node_type_from_string("1x_bh_quietbox").has_value());
+}
+
+TEST(Cluster, TestGenerateNodeTypeRevisionClusterDescriptorFromFSD) {
+    const std::string node_type_string = "BH_GALAXY_REV_C";
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor deployment;
+    tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor cluster;
+    create_deployment_descriptor(node_type_string, deployment);
+    create_cluster_config(node_type_string, cluster);
+    CablingGenerator cabling_generator(
+        serialize_proto_to_temp_file(cluster, node_type_string + "_cluster.textproto"),
+        serialize_proto_to_temp_file(deployment, node_type_string + "_deployment.textproto"));
+    auto fsd = cabling_generator.generate_factory_system_descriptor();
+
+    const std::vector<std::pair<std::string, uint64_t>> cases = {
+        {"BH_GALAXY_REV_C_Y_TORUS", 3}, {"BH_GALAXY_REV_AB_XY_TORUS", 1}, {"", 0}};
+    for (const auto& [node_type, expected_revision] : cases) {
+        fsd.mutable_hosts(0)->set_node_type(node_type);
+        const std::string fsd_file =
+            serialize_proto_to_temp_file(fsd, "fsd/factory_system_descriptor_revision.textproto");
+        const std::string result_file = generate_cluster_descriptor_from_fsd(
+            fsd_file, root_output_dir + "cluster_descs/", "cluster_descriptor_revision");
+
+        const YAML::Node boards = YAML::LoadFile(result_file)["boards"];
+        ASSERT_GT(boards.size(), 0u) << node_type;
+        for (const auto& board : boards) {
+            const auto board_id = board[0]["board_id"].as<uint64_t>();
+            EXPECT_EQ((board_id >> 32) & 0xF, expected_revision) << node_type;
+        }
+    }
 }
 
 TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
@@ -290,6 +339,19 @@ TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
 
     EXPECT_TRUE(std::filesystem::exists(result_file));
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
+
+    fsd::proto::FactorySystemDescriptor fsd;
+    std::ifstream fsd_stream(fsd_file);
+    const std::string fsd_content((std::istreambuf_iterator<char>(fsd_stream)), std::istreambuf_iterator<char>());
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd));
+
+    const YAML::Node mapping = YAML::LoadFile(result_file)["rank_to_cluster_mock_cluster_desc"];
+    ASSERT_EQ(mapping.size(), static_cast<size_t>(fsd.hosts_size()));
+    for (int host_idx = 0; host_idx < fsd.hosts_size(); ++host_idx) {
+        const YAML::Node cluster_desc = YAML::LoadFile(mapping[host_idx].as<std::string>());
+        ASSERT_TRUE(cluster_desc["cluster_id"]) << "host " << host_idx;
+        EXPECT_EQ(cluster_desc["cluster_id"].as<std::string>(), fsd.hosts(host_idx).hostname());
+    }
 }
 
 TEST(Cluster, TestMinConnectionsPassesWithMatchingConnections) {

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 
 namespace tt::scaleout_tools {
@@ -36,5 +37,8 @@ enum class NodeType {
 };
 
 NodeType get_node_type_from_string(const std::string& node_name);
+
+// Like get_node_type_from_string, but nullopt for names that aren't a NodeType, e.g. custom node descriptors.
+std::optional<NodeType> try_get_node_type_from_string(const std::string& node_name);
 
 }  // namespace tt::scaleout_tools
