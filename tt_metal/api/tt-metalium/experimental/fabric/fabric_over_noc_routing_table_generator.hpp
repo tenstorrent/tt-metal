@@ -40,8 +40,6 @@ public:
 
     const FlatAddrRoutingTable& get_routing_table() const { return this->routing_table_; }
 
-    void print_routing_tables() const;
-
 private:
     const TopologyMapper& topology_mapper_;
     const tt::Cluster& cluster_;

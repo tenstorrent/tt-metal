@@ -4,12 +4,9 @@
 
 #include <tt-metalium/experimental/fabric/fabric_over_noc_routing_table_generator.hpp>
 
-#include <iomanip>
-#include <sstream>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-umd/cluster.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -178,30 +175,6 @@ void FabricOverNocRoutingTableGenerator::fill_cross_chip_entries_(
             entry.flat_addr[core.x][core.y] = *flat;
         }
     }
-}
-
-void FabricOverNocRoutingTableGenerator::print_routing_tables() const {
-    std::stringstream ss;
-    ss << "Fabric-over-NoC Routing Table Generator: Flat Address Routing Tables" << std::endl;
-    for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->routing_table_.size(); mesh_id_val++) {
-        ss << "M" << mesh_id_val << ":" << std::endl;
-        for (ChipId src_chip_id = 0; src_chip_id < this->routing_table_[mesh_id_val].size(); src_chip_id++) {
-            ss << "   D" << src_chip_id << ": ";
-            for (ChipId dst_chip_id = 0; dst_chip_id < this->routing_table_[mesh_id_val][src_chip_id].size();
-                 dst_chip_id++) {
-                const auto& entry = this->routing_table_[mesh_id_val][src_chip_id][dst_chip_id];
-                ss << dst_chip_id << "(";
-                for (const auto& column : entry.flat_addr) {
-                    for (const auto addr : column) {
-                        ss << "0x" << std::hex << addr << std::dec << " ";
-                    }
-                }
-                ss << ") ";
-            }
-            ss << std::endl;
-        }
-    }
-    log_debug(tt::LogFabric, "{}", ss.str());
 }
 
 }  // namespace tt::tt_fabric
