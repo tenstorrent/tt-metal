@@ -617,6 +617,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
         try:
             from models.demos.blackhole.qwen36.tt.spec_engine import spec_memory_costs
+            from models.demos.blackhole.qwen36.tt.spec_step import rope_table_rows
 
             mc = vllm_config.model_config
             tc = mc.hf_config
@@ -631,7 +632,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                     f"{_SPEC_STEP_CORES} cores gdn_spec_step uses (one per row and head) at TP={tp}",
                     supported_k=(),
                 )
-            costs = spec_memory_costs(tc, tp, max_num_seqs, k, max_seq_len=mc.max_model_len, gdn_state_in_blocks=True)
+            costs = spec_memory_costs(
+                tc,
+                tp,
+                max_num_seqs,
+                k,
+                max_seq_len=mc.max_model_len,
+                gdn_state_in_blocks=True,
+                rope_table_rows=rope_table_rows(mc.max_model_len),
+            )
             # costs are for the whole batch: per_seq scales with B, fixed is shared
             per_seq = math.ceil((costs["per_seq"]["total"] + costs["fixed"]["total"]) / max_num_seqs)
             per_token = int(costs["per_token"]["total"])

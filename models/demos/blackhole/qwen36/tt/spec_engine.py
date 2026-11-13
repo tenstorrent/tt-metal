@@ -26,6 +26,22 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.spec_sample import sampling_plan
+from models.demos.blackhole.qwen36.tt.spec_step import (
+    DRAFT_PENDING,
+    VERIFY_STEP_ROWS,
+    draft_anchor,
+    draft_reseed_positions,
+    draft_reseed_rope,
+    draft_reseed_tokens,
+    draft_step_rope,
+    draft_step_row,
+    drafter_pack,
+    drafter_pack_rows,
+    pack_width,
+    reseed_real_rows,
+    reseed_table,
+    rope_rows,
+)
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -301,6 +317,7 @@ def spec_memory_costs(
     num_layers=None,
     mask_buckets=None,
     gdn_state_in_blocks=False,
+    rope_table_rows=None,
 ):
     """PER-DEVICE bytes of the MTP spec-decode state beyond plain decode. Pure: HF text config + tp only.
 
@@ -314,6 +331,8 @@ def spec_memory_costs(
     ``gdn_state_in_blocks`` (MTPBlockEngine): the GDN state is in vLLM's KV cache blocks, so there is no ring and no
     per-user window; ``fixed`` counts instead the verify's per-group ctrl and index tables (gdn_verify), and verify_io
     drops the ring selectors.
+    ``rope_table_rows``: the rows of the device RoPE tables the verify and drafter traces look up
+    (spec_step.rope_table_rows of the model's max_seq_len); ``fixed`` counts them as rope_tables when given.
     Dims follow the model: TILE tensors pad their last two dims to 32; ROW_MAJOR are exact.
     ``fixed`` scales with B only through page tables / selectors / feed rows (all small). Page-table width nb =
     ``nb`` or ceil(max_seq_len / block_size); with neither, page tables count 0. ``num_layers`` overrides
@@ -355,12 +374,10 @@ def spec_memory_costs(
     groups = B * _SPEC_SDPA_GROUPS_PER_USER[T] if T in _SPEC_SDPA_GROUPS_PER_USER else 1
     logits_w = tp * _pad32(vocab // tp) if vocab % tp == 0 else _pad32(vocab)  # vocab-sharded head gathers
     verify_io = (
-        _rm_bytes([1, rows], i32)  # token_buf
-        + _rm_bytes([rows], i32)  # kvpos_buf
+        _rm_bytes([VERIFY_STEP_ROWS, pack_width(rows)], i32)  # step_buf
         + _rm_bytes([rows, nb], i32)
         + _rm_bytes([B, nb], i32)
         + _rm_bytes([groups, nb], i32)  # page tables
-        + 2 * _tile_bytes([1, rows, 1, rope_dim], bf)  # cos, sin
         + (0 if gdn_state_in_blocks else _rm_bytes([B * nv_tp], i32))  # state_idx
         + (0 if gdn_state_in_blocks else _tile_bytes([B, kconv - 1 + T, kconv - 1 + 2 * T], bf))  # conv_sel
         + _tile_bytes([1, 1, rows, logits_w], bf)
@@ -380,6 +397,8 @@ def spec_memory_costs(
         + (_tile_bytes([1, 1, rows, B], bf) + _tile_bytes([1, 1, rows, rows], bf) if B > 1 else 0)  # _join_take/keep
     )
     fixed = {"verify_io": verify_io, "mtp_scratch_block": block_bytes, "engine_buffers": engine}
+    if rope_table_rows is not None:
+        fixed["rope_tables"] = 2 * _rm_bytes([int(rope_table_rows), rope_dim], bf)  # cos, sin
     if gdn_state_in_blocks:
         groups = -(-n_gdn // max(1, L - n_gdn))  # MambaSpec groups: one GDN layer per attention layer slot each
         ctrl_words = -(-(1 + B + 2 * B * nv_tp) // 16) * 16
@@ -479,11 +498,11 @@ class MTPSpecEngine:
         # A/B + safety switch: 1 = run the drafter eagerly even when its trace is recorded
         self.recorded_drafter = os.environ.get("QWEN36_SPEC_EAGER_DRAFTER", "0") != "1"
         self._dr_bufs = []  # persistent drafter-trace inputs (all of the _dr_* tensors below)
-        self._dr_tok0 = None  # [B,1] uint32 pending tokens
-        self._dr_pos, self._dr_cos, self._dr_sin = [], [], []  # per draft step k: [B] int32, [1,B,1,rd] bf16 x2
-        self._dr_rs_tok = (
-            self._dr_rs_pos
-        ) = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None  # reseed rows (B*T)
+        self._dr_pack = None  # [2K+5, W] uint32: the per-step integers (spec_step drafter pack)
+        self._dr_rs_pt = None  # [B*T, nb] int32: the reseed rows' page table (spec_step.reseed_table)
+        self._dr_iota = None  # [1, B*T] float32 TILE 1 .. B*T: the anchor one-hot's column numbers
+        self._dr_rs_staged = None  # host table _dr_rs_pt holds, None when unknown
+        self._mtp_pt_staged = None  # host table _mtp_pt holds, None when unknown
         self._dr_trace = None  # trace id: anchor gather + batched reseed + K draft steps
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
         self._last_pt = None  # fitted host page table of the most recent verify
@@ -538,9 +557,19 @@ class MTPSpecEngine:
 
     def _stage_mtp_tables(self, pt):
         """Re-stage the persistent MTP page tables from the fitted host table [B, nb]."""
-        self._stage(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage_table(pt, "_mtp_pt", "_mtp_pt_staged")
         for u in range(self.B):
             self._stage(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _stage_table(self, host, buf, mirror):
+        """Copy the int32 table ``host`` into the persistent buffer named ``buf`` unless the host mirror named ``mirror``
+        says the buffer already holds it."""
+        host = torch.as_tensor(host).to(torch.int32)
+        held = getattr(self, mirror)
+        if held is not None and torch.equal(held, host):
+            return
+        self._stage(host, getattr(self, buf), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        setattr(self, mirror, host.clone())
 
     def _check_scratch(self, pt):
         assert int(pt.max()) < self._scratch_block, (
@@ -770,8 +799,8 @@ class MTPSpecEngine:
         for t in (*self._dr_outs, *self._dr_bufs):
             ttnn.deallocate(t)
         self._dr_outs, self._dr_bufs = [], []
-        self._dr_tok0 = self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None
-        self._dr_pos, self._dr_cos, self._dr_sin = [], [], []
+        self._dr_pack = self._dr_rs_pt = self._dr_iota = None
+        self._dr_rs_staged = self._mtp_pt_staged = None
         bufs = [
             *self._last_hidden,
             *self._last_sel.values(),
@@ -816,13 +845,10 @@ class MTPSpecEngine:
             )
         per_seq["drafter_hidden"] = sum(nbytes(t) for t in self._last_hidden)
         vfy = (
-            "token_buf",
-            "kvpos_buf",
+            "step_buf",
             "kvpt_buf",
             "kvpt_users",
             "kvpt1_buf",
-            "cos_buf",
-            "sin_buf",
             "state_idx",
             "conv_sel",
             "logits_out",
@@ -850,6 +876,8 @@ class MTPSpecEngine:
                 )
             ),
         }
+        if getattr(m, "_rope_rm", None) is not None:
+            fixed["rope_tables"] = sum(nbytes(t) for t in m._rope_rm)
         per_token = {"mtp_kv": kv_bytes // (n_blocks * int(att.paged_k.shape[-2]))}
         for d in (per_seq, fixed, per_token):
             d["total"] = sum(d.values())
@@ -1272,14 +1300,10 @@ class MTPSpecEngine:
         self._check_scratch(pt)
         eager = B == 1 and p[0] > self.eager_reseed_len
         if self.recorded_drafter and self.captured and self._dr_trace is not None and not all(decline) and not eager:
-            dpt = pt
-            if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
-                dpt = pt.clone()
-                dpt[torch.tensor(decline)] = self._scratch_block
-                p = [0 if d else pu for d, pu in zip(decline, p)]
-                pending = [0 if d else t for d, t in zip(decline, pending)]
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-            drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt, m_kv)
+            # declined rows draft at position 0 over an all-scratch table; their ids are discarded
+            self._stage_table(self._draft_table(pt, decline), "_mtp_pt", "_mtp_pt_staged")
+            p0 = [max(pu - mu, 0) for pu, mu in zip(p, m)]  # position of verify column 0; 0 for a padding row
+            drafts = self._propose_recorded(ctok, m, p0, decline, keep, pt)
             if any(decline):
                 drafts[torch.tensor(decline)] = 0
             return drafts
@@ -1293,9 +1317,7 @@ class MTPSpecEngine:
         if all(decline):
             return torch.zeros(B, K, dtype=torch.int32)
         if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
-            dpt = pt.clone()
-            dpt[torch.tensor(decline)] = self._scratch_block
-            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._stage_table(self._draft_table(pt, decline), "_mtp_pt", "_mtp_pt_staged")
             p = [0 if d else pu for d, pu in zip(decline, p)]
             pending = [0 if d else t for d, t in zip(decline, pending)]
         drafts = self._draft(pending, self._hp_buf, p)
@@ -1380,63 +1402,99 @@ class MTPSpecEngine:
             h = h_next
         if h is not anchor_hidden:
             ttnn.deallocate(h)
-        steps = [self._id_to_host(t) for t in owned_tok[1:]]  # steps[k][u]
+        steps = self._read_ids(owned_tok[1:])  # steps[k][u]
         for t in owned_tok:
             ttnn.deallocate(t)
-        return torch.tensor([[steps[k][u] for k in range(self.K)] for u in range(B)], dtype=torch.int32)
+        return self._drafts_to_host(steps)
 
     # --------------------------------------------------------------------- #
     # Recorded drafter (anchor gather + batched reseed + K draft steps as one trace)
     # --------------------------------------------------------------------- #
     def _alloc_drafter_inputs(self):
-        """Persistent drafter-trace inputs, zero-filled (a padding-only reseed + position-0 drafts: scratch-safe)."""
-        B, K, R, nb, rd = self.B, self.K, self.B * self.T, self.nb, self.args.rope_head_dim
-        al, z, bf, i32 = self._alloc_host_replicated, torch.zeros, ttnn.bfloat16, torch.int32
-        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
-        self._dr_tok0 = al(z(B, 1, dtype=i32), ttnn.uint32, rm)
-        self._dr_pos = [al(z(B, dtype=i32), ttnn.int32, rm) for _ in range(K)]
-        self._dr_cos = [al(z(1, B, 1, rd, dtype=torch.bfloat16), bf, tile) for _ in range(K)]
-        self._dr_sin = [al(z(1, B, 1, rd, dtype=torch.bfloat16), bf, tile) for _ in range(K)]
-        self._dr_rs_tok = al(z(R, 1, dtype=i32), ttnn.uint32, rm)
-        self._dr_rs_pos = al(z(R, dtype=i32), ttnn.int32, rm)
-        self._dr_rs_pt = al(torch.full((R, nb), self._scratch_block, dtype=i32), ttnn.int32, rm)
-        self._dr_rs_cos = al(z(1, R, 1, rd, dtype=torch.bfloat16), bf, tile)
-        self._dr_rs_sin = al(z(1, R, 1, rd, dtype=torch.bfloat16), bf, tile)
-        self._dr_bufs = [
-            self._dr_tok0,
-            *self._dr_pos,
-            *self._dr_cos,
-            *self._dr_sin,
-            self._dr_rs_tok,
-            self._dr_rs_pos,
-            self._dr_rs_pt,
-            self._dr_rs_cos,
-            self._dr_rs_sin,
-        ]
+        """Persistent drafter-trace inputs: the zero pack (a padding-only reseed and position-0 drafts), the reseed table
+        on the scratch block, the anchor one-hot's column numbers, and the RoPE tables the trace looks up."""
+        B, K, R, nb = self.B, self.K, self.B * self.T, self.nb
+        al, rm = self._alloc_host_replicated, ttnn.ROW_MAJOR_LAYOUT
+        self.model.rope_rm_tables()
+        self._dr_pack = al(torch.zeros(drafter_pack_rows(K), pack_width(R), dtype=torch.int32), ttnn.uint32, rm)
+        self._dr_rs_pt = al(torch.full((R, nb), self._scratch_block, dtype=torch.int32), ttnn.int32, rm)
+        self._dr_rs_staged = None
+        iota = torch.arange(1, R + 1, dtype=torch.float32).reshape(1, R)
+        self._dr_iota = al(iota, ttnn.float32, ttnn.TILE_LAYOUT)
+        self._dr_bufs = [self._dr_pack, self._dr_rs_pt, self._dr_iota]
+
+    def _drafter_inputs(self):
+        """The drafter trace's per-step inputs, derived inside the trace from _dr_pack (spec_step layout): tokens as
+        [1, n] uint32 slices, KV positions as [n] int32, RoPE cos and sin looked up by table row, and the anchor one-hot
+        [1,1,B,B*T] bf16, 1.0 at (u, u*T + m[u]). Returns (inputs, owned): every tensor in ``owned`` is freed after the
+        body.
+
+        The one-hot compares column number + 1 (_dr_iota, zero in the tile padding) with anchor + 1 >= 1, so its padding
+        columns are 0 and the anchor matmul stays exact when B*T < 32 and the feed's padding rows hold any value."""
+        B, K, R, pk, model = self.B, self.K, self.B * self.T, self._dr_pack, self.model
+        owned = []
+
+        def seg(row, n):
+            t = ttnn.slice(pk, (row, 0), (row + 1, n))
+            owned.append(t)
+            return t
+
+        def positions(row, n):
+            t = ttnn.reshape(ttnn.typecast(seg(row, n), ttnn.int32), (n,))
+            owned.append(t)
+            return t
+
+        def rope(row, n):
+            cos, sin = model.rope_lookup(seg(row, n), n)
+            owned.extend((cos, sin))
+            return cos, sin
+
+        tiled = ttnn.to_layout(seg(draft_anchor(K), B), ttnn.TILE_LAYOUT)
+        anchor = ttnn.typecast(tiled, ttnn.float32)  # [1, B]
+        anchor_t = ttnn.transpose(anchor, 0, 1)
+        column = ttnn.add(anchor_t, 1.0)  # [B, 1]
+        onehot = ttnn.eq(self._dr_iota, column, dtype=ttnn.bfloat16)  # [B, B*T]
+        anchor_sel = ttnn.reshape(onehot, (1, 1, B, R))
+        owned.extend((tiled, anchor, anchor_t, column, onehot, anchor_sel))
+        rs_cos, rs_sin = rope(draft_reseed_rope(K), R)
+        steps = [rope(draft_step_rope(K, k), B) for k in range(K)]
+        inputs = dict(
+            anchor_sel=anchor_sel,
+            rs_tok=seg(draft_reseed_tokens(K), R),
+            rs_pos=positions(draft_reseed_positions(K), R),
+            rs_cos=rs_cos,
+            rs_sin=rs_sin,
+            tok0=seg(DRAFT_PENDING, B),
+            pos=[positions(draft_step_row(k), B) for k in range(K)],
+            cos=[c for c, _ in steps],
+            sin=[s for _, s in steps],
+        )
+        return inputs, owned
 
     def _drafter_body(self, feed):
-        """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps; every input is a
-        persistent buffer (device-input twin of _set_anchor + _reseed_mtp_batched + _draft). Returns the K ids
-        tensors [1,1,B] uint32 (step k's drafts)."""
+        """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps, over the inputs
+        _drafter_inputs derives from the persistent pack (device-input twin of _set_anchor + _reseed_mtp_batched +
+        _draft). Returns the K ids tensors [1,1,B] uint32 (step k's drafts)."""
         B, mtp = self.B, self.mtp
-        Hp = ttnn.matmul(self._anchor_sel, feed, compute_kernel_config=self._anchor_cc)
+        x, owned = self._drafter_inputs()
+        Hp = ttnn.matmul(x["anchor_sel"], feed, compute_kernel_config=self._anchor_cc)
         ttnn.copy(Hp, self._hp_buf)
         ttnn.deallocate(Hp)
         _, hn = mtp.forward_decode(
             feed,
-            self._dr_rs_tok,
-            self._dr_rs_pos,
-            self._dr_rs_cos,
-            self._dr_rs_sin,
+            x["rs_tok"],
+            x["rs_pos"],
+            x["rs_cos"],
+            x["rs_sin"],
             self._dr_rs_pt,
             need_logits=False,
             alias_kv_write=True,
             spec_n_users=B,
         )
         free_tensors(hn)
-        h, tok, outs = self._hp_buf, self._dr_tok0, []
+        h, tok, outs = self._hp_buf, x["tok0"], []
         for k in range(self.K):
-            logits, hn = mtp.forward_decode(h, tok, self._dr_pos[k], self._dr_cos[k], self._dr_sin[k], self._mtp_pt)
+            logits, hn = mtp.forward_decode(h, tok, x["pos"][k], x["cos"][k], x["sin"][k], self._mtp_pt)
             idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
             tok = ttnn.reshape(idx, (B, 1))
@@ -1445,34 +1503,39 @@ class MTPSpecEngine:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
+        free_tensors(*owned)
         return outs
 
-    def _propose_recorded(self, ctok, cpos, m, pending, p, pt, m_kv=None):
-        """Stage the drafter trace's inputs (host->device copies only; _mtp_pt already staged), replay, read ids.
-        The reseed rows always run (padding-only when every m == 0). ``m_kv``: reseed row counts (default m)."""
-        B, T, K, model = self.B, self.T, self.K, self.model
-        stage, bf, rm, tile = self._stage, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
-        stage(anchor_selector(m, B, T), self._anchor_sel, bf, tile)
-        plan = reseed_row_plan(ctok, cpos, m if m_kv is None else m_kv, B, T)
-        rtok, rpos, rpt = reseed_rows_host(plan, pt, T, self.nb, self._scratch_block)
-        rcos, rsin = model._rope_tp_cos_sin_decode_torch(rpos, self._row_rope_deltas(T))
-        stage(rtok, self._dr_rs_tok, ttnn.uint32, rm)
-        stage(rpos, self._dr_rs_pos, ttnn.int32, rm)
-        stage(rpt, self._dr_rs_pt, ttnn.int32, rm)
-        stage(rcos, self._dr_rs_cos, bf, tile)
-        stage(rsin, self._dr_rs_sin, bf, tile)
-        tok0, poss = draft_step_plan(pending, p, K)
-        stage(tok0, self._dr_tok0, ttnn.uint32, rm)
-        for k, pv in enumerate(poss):
-            c, s = model._rope_tp_cos_sin_decode_torch(pv, self._rope_deltas)
-            stage(pv, self._dr_pos[k], ttnn.int32, rm)
-            stage(c, self._dr_cos[k], bf, tile)
-            stage(s, self._dr_sin[k], bf, tile)
+    def _draft_table(self, pt, decline):
+        """The draft steps' MTP table: ``pt`` with every declined row on the scratch block."""
+        if not any(decline):
+            return pt
+        dpt = pt.clone()
+        dpt[torch.tensor([bool(d) for d in decline])] = self._scratch_block
+        return dpt
+
+    def _rope_base(self, p0):
+        """Each user's RoPE table row of position ``p0[u]`` with its M-RoPE delta (spec_step.drafter_pack)."""
+        return rope_rows(p0, self._rope_deltas, self.model.rope_table_rows())
+
+    def _propose_recorded(self, ctok, m, p0, decline, keep, pt):
+        """One copy of the drafter pack (spec_step.drafter_pack of the committed block ``ctok``, the accepted drafts
+        ``m``, the verify column-0 positions ``p0``, ``decline`` and ``keep``), the reseed table when it changed, the
+        replay, and one wait for the draft ids. _mtp_pt is staged by the caller. The reseed rows always run (padding-only
+        when every m == 0). Returns int32 [B, K]."""
+        T, K = self.T, self.K
+        pack = drafter_pack(ctok, m, p0, decline, keep, self._rope_base(p0), K, self.model.rope_table_rows())
+        self._stage(pack, self._dr_pack, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        real = reseed_real_rows(m, decline, keep, T)
+        self._stage_table(reseed_table(pt, real, T, self._scratch_block), "_dr_rs_pt", "_dr_rs_staged")
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
-        steps = [self._id_to_host(t) for t in self._dr_outs]  # steps[k][u]
-        return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
+        return self._drafts_to_host(self._read_ids(self._dr_outs))
+
+    def _drafts_to_host(self, steps):
+        """steps[k][u] -> int32 [B, K]."""
+        return torch.tensor([[steps[k][u] for k in range(self.K)] for u in range(self.B)], dtype=torch.int32)
 
     def _draft_warmup(self, pending, Hp, p):
         """One need_logits=True draft step before capture (compiles head norm, LM head, argmax, mesh_partition)."""
@@ -1482,10 +1545,12 @@ class MTPSpecEngine:
             ttnn.deallocate(t)
         ttnn.synchronize_device(self.mesh)
 
-    def _id_to_host(self, id_tt):
-        """[*, B] uint32 device ids -> B ints, read from the device-0 replica."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0])
-        return [int(v) for v in t.reshape(-1)[: self.B]]
+    def _read_ids(self, id_tts):
+        """[*, B] uint32 device ids of each tensor -> B ints per tensor, from the device-0 replicas with one wait: every
+        read is enqueued without blocking, then one synchronize fills them all."""
+        reads = [ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False) for t in id_tts]
+        ttnn.synchronize_device(self.mesh)
+        return [[int(v) for v in ttnn.to_torch(r).reshape(-1)[: self.B]] for r in reads]
 
     # --------------------------------------------------------------------- #
     # MTP KV maintenance

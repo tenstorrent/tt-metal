@@ -23,6 +23,16 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES, FusedShardArgmax
 from models.demos.blackhole.qwen36.tt.spec_sample import VerifySampler, with_draws
+from models.demos.blackhole.qwen36.tt.spec_step import (
+    VERIFY_POSITIONS,
+    VERIFY_ROPE,
+    VERIFY_STEP_ROWS,
+    VERIFY_TOKENS,
+    pack_u32_rows,
+    pack_width,
+    rope_rows,
+    rope_table_rows,
+)
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -1386,6 +1396,51 @@ class Qwen36Model:
         rd = self.args.rope_head_dim
         return tuple(t.reshape(1, 1, -1, rd) for t in self._rope_tp_cos_sin_decode_torch(row_positions, deltas))
 
+    def rope_table_rows(self):
+        """Rows of the device RoPE tables (rope_rm_tables), spec_step.rope_table_rows of max_seq_len."""
+        return rope_table_rows(self.args.max_seq_len)
+
+    def rope_row_deltas(self, n, deltas=None):
+        """The M-RoPE delta of each of ``n`` rows for rope_rows: ``deltas`` (one per row), or rope.rope_delta for every
+        row, the rule of _rope_tp_cos_sin_decode_torch."""
+        if deltas is None:
+            return int(self.rope.rope_delta)
+        deltas = [int(d) for d in deltas]
+        if len(deltas) != n:
+            raise ValueError(f"{len(deltas)} M-RoPE deltas for {n} positions")
+        return deltas
+
+    def rope_rm_tables(self):
+        """(cos, sin) bf16 ROW_MAJOR [rope_table_rows, rope_head_dim], replicated in DRAM. Row i holds
+        _rope_tp_cos_sin_decode_torch of RoPE position i (KV position plus M-RoPE delta), so rope_lookup returns the
+        bytes the host would stage. Built on first use; the callers build them before any trace capture."""
+        if getattr(self, "_rope_rm", None) is None:
+            rows, rd = self.rope_table_rows(), self.args.rope_head_dim
+            positions = torch.arange(rows, dtype=torch.int32)
+            tables = self._rope_tp_cos_sin_decode_torch(positions, torch.zeros(rows, dtype=torch.int32))
+            self._rope_rm = tuple(
+                ttnn.from_torch(
+                    t.reshape(rows, rd).contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
+                for t in tables
+            )
+        return self._rope_rm
+
+    def rope_lookup(self, table_rows, n):
+        """cos, sin [1, 1, n, rope_head_dim] bf16 TILE of the RoPE table rows ``table_rows`` ([1, n] uint32 ROW_MAJOR on
+        the device), in the layout apply_partial_rope_decode rotates in. The caller frees both."""
+        rd = self.args.rope_head_dim
+        out = []
+        for table in self.rope_rm_tables():
+            row = ttnn.embedding(table_rows, table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out.append(ttnn.reshape(row, (1, 1, n, rd)))
+        return out[0], out[1]
+
     def _residual_ar(self, rows):
         """The DecodeResidualAllReduce a verify forward of ``rows`` rows runs on, or None for the fractured residual:
         the replicated residual is one tile of rows, and its GDN path exists only with the GDN state in vLLM KV cache
@@ -1444,15 +1499,25 @@ class Qwen36Model:
         logits + hidden. Reads only fixed-address buffers so it is trace-capturable. Full-attention
         layers run the decode flash kernel with the rows as pseudo-users (see capture_verify_trace).
         GDN stays on seq-dim recurrent verify per user (batch dim is not a valid recurrence axis) and
-        takes its per-user starting state through the two shared selectors. Returns (logits, rows,
-        ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
+        takes its per-user starting state through the two shared selectors. The rows' tokens, KV positions and RoPE
+        table rows come from the step buffer _vfy_step_buf (spec_step), cos and sin from rope_lookup. Returns (logits,
+        rows, ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
         ``logits_rm`` is the ROW_MAJOR bf16 copy the in-trace argmax needs, kept for the sampling path.
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
 
         T = self._vfy_T
         rows = n_users * T
-        x = self.embd(self._vfy_token_buf)
+        step = self._vfy_step_buf
+        tokens = ttnn.slice(step, (VERIFY_TOKENS, 0), (VERIFY_TOKENS + 1, rows))
+        positions = ttnn.slice(step, (VERIFY_POSITIONS, 0), (VERIFY_POSITIONS + 1, rows))
+        kvpos = ttnn.reshape(ttnn.typecast(positions, ttnn.int32), (rows,))
+        ttnn.deallocate(positions)
+        rope_idx = ttnn.slice(step, (VERIFY_ROPE, 0), (VERIFY_ROPE + 1, rows))
+        cos, sin = self.rope_lookup(rope_idx, rows)
+        ttnn.deallocate(rope_idx)
+        x = self.embd(tokens)
+        ttnn.deallocate(tokens)
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         dar = self._residual_ar(rows)
@@ -1462,7 +1527,7 @@ class Qwen36Model:
         # attention layer (TPAttention._forward_verify).
         pos_groups = None
         if KV_GROUP_WRITE_OK and T > 1:
-            pos_groups = [ttnn.slice(self._vfy_kvpos_buf, (j,), (rows,), (T,)) for j in range(T)]
+            pos_groups = [ttnn.slice(kvpos, (j,), (rows,), (T,)) for j in range(T)]
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
@@ -1473,10 +1538,10 @@ class Qwen36Model:
                 # [B, nb] per-user table, is reused by every group.
                 x_new = layer.forward(
                     x,
-                    cos=self._vfy_cos_buf,
-                    sin=self._vfy_sin_buf,
+                    cos=cos,
+                    sin=sin,
                     mode="decode",
-                    position_tensor=self._vfy_kvpos_buf,
+                    position_tensor=kvpos,
                     page_table=self._vfy_kvpt_buf,
                     alias_kv_write=True,
                     spec_user_page_table=self._vfy_kvpt_users,
@@ -1504,7 +1569,7 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
-        for t in pos_groups or ():
+        for t in (*(pos_groups or ()), kvpos, cos, sin):
             ttnn.deallocate(t)
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x vocab floats. The fused per-shard argmax (tt/spec_argmax_fused.py) takes the ids
@@ -1649,7 +1714,7 @@ class Qwen36Model:
         # cur_pos so row u*T+j attends [0, p_u+j]. Causality is free and the KV scan spreads over
         # the full grid.
         key = (B, T, nb, bool(sample))
-        if getattr(self, "_vfy_prepared_key", None) == key and getattr(self, "_vfy_token_buf", None) is not None:
+        if getattr(self, "_vfy_prepared_key", None) == key and getattr(self, "_vfy_step_buf", None) is not None:
             return
         dev = self.device
         rep = ttnn.ReplicateTensorToMesh(dev)
@@ -1661,22 +1726,20 @@ class Qwen36Model:
         self._vfy_T, self._vfy_B = T, B
         self._vfy_nb = nb
 
-        # Persistent per-replay input buffers (addresses baked into the trace).
-        self._vfy_token_buf = ttnn.from_torch(
-            torch.zeros(1, rows, dtype=torch.int32),
+        # The persistent per-replay input buffer (address baked into the trace): the rows' tokens, KV positions (KV is
+        # written position-exact, paged_update_cache at absolute slots) and RoPE table rows, staged per replay by
+        # verify_traced in one copy. The hybrid verify feeds the DECODE attention kernel one rotation per ROW at that
+        # row's own position, looked up from the RoPE tables, which hold the host math of the plain decode step, so the
+        # two paths' rotations are byte-identical and near-ties round the same way.
+        self.rope_rm_tables()
+        self._vfy_step_buf = ttnn.from_torch(
+            self._vfy_step_host([[0] * T] * B, warm_positions, None),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=dev,
             mesh_mapper=rep,
         )
         self._vfy_sampler = VerifySampler(dev, B, T, self.vocab_size) if sample else None
-        # Positions are staged per replay; they are only allocated here, at the captured width, and
-        # re-staged per replay by verify_traced (same convention as the prefill traces).
-        # KV is written position-exact (paged_update_cache at absolute slots), not block-aligned.
-        warm = self._vfy_row_positions(warm_positions)
-        self._vfy_kvpos_buf = ttnn.from_torch(
-            warm, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
-        )
         # Grouped aliased KV write (TPAttention._write_kv_aliased): checked here for the warm passes and on
         # every replay (verify_traced), while the tables are still torch; see spec_kv_write_conflicts.
         self._vfy_pt_host = pt.clone()
@@ -1692,16 +1755,6 @@ class Qwen36Model:
         self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf = (
             ttnn.from_torch(h, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
             for h in self._vfy_page_table_host(pt)
-        )
-        # RoPE tables. Hybrid verify feeds the DECODE attention kernel: one rotation per ROW at that
-        # row's own position, not the prefill table of positions 0..S-1. Same host math the plain decode
-        # step uses, so the two paths' rotations are byte-identical and near-ties round the same way.
-        cos_t, sin_t = self._verify_cos_sin_torch(warm)
-        self._vfy_cos_buf = ttnn.from_torch(
-            cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
-        )
-        self._vfy_sin_buf = ttnn.from_torch(
-            sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
         )
 
         gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
@@ -1850,8 +1903,8 @@ class Qwen36Model:
         samples returns the device sampler's draw in place of its argmax id.
 
         ``page_tables``: int32 [B, num_blocks] block tables (array-like; 1-D only for B == 1), one
-        row per user. When given, every persistent page-table buffer is re-staged for this replay,
-        with columns clipped or padded with block 0 (vLLM's null block) to the captured width.
+        row per user. When given, every persistent page-table buffer is re-staged for this replay if the table differs
+        from the staged one, with columns clipped or padded with block 0 (vLLM's null block) to the captured width.
         None keeps the tables staged last. A grouped KV write that would put two users on the same
         (block, 32-row tile) in the same call (block 0 excepted) raises AssertionError before anything is staged.
         The MTP drafter's own table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does
@@ -1893,29 +1946,23 @@ class Qwen36Model:
         if self._vfy_kv_grouped:
             chk = positions if inactive is None else [-1 if x else int(p) for p, x in zip(positions, inactive)]
             self._vfy_check_kv_writes(pt, chk)
-        if page_tables is not None:
+        # Only this method and prepare_verify_trace write the table buffers, so an unchanged table is not copied again.
+        if page_tables is not None and not torch.equal(pt, self._vfy_pt_host):
             bufs = (self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf)
             for host, buf in zip(self._vfy_page_table_host(pt), bufs):
                 _h = ttnn.from_torch(host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
                 ttnn.copy_host_to_device_tensor(_h, buf)
-            self._vfy_pt_host = pt
+            self._vfy_pt_host = pt.clone()  # the caller may reuse its table tensor
 
-        # Stage per-replay inputs into the persistent buffers (addresses preserved). Row-major flatten
-        # of the B x T token lists is the user-major row order.
-        tok = torch.tensor([int(t) for row in tokens for t in row], dtype=torch.int32).reshape(1, rows)
-        _h = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_token_buf)
-        # Absolute cache slot for each row: positions[u] + j. This doubles as the decode SDPA's
-        # per-row cur_pos, which is what makes the hybrid verify causal.
-        pos = self._vfy_row_positions(positions)
-        _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
-        row_deltas = None if rope_deltas is None else [int(d) for d in rope_deltas for _ in range(T)]
-        cos_t, sin_t = self._verify_cos_sin_torch(pos, row_deltas)
-        _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
-        _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
+        # The rows' tokens, positions and RoPE table rows: one copy into the persistent step buffer.
+        _h = ttnn.from_torch(
+            self._vfy_step_host(tokens, positions, rope_deltas),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+            mesh_mapper=rep,
+        )
+        ttnn.copy_host_to_device_tensor(_h, self._vfy_step_buf)
         if self.gdn_blocks is None:
             self._stage_verify_selectors(mi_prev, B, rep)
         if sample_plan is not None:
@@ -1937,6 +1984,20 @@ class Qwen36Model:
             lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
             lt = lt.reshape(-1, self.vocab_size)[:rows]
         return ids, self._vfy_rows_out, lt
+
+    def _vfy_step_host(self, tokens, positions, rope_deltas):
+        """The verify step buffer's rows (spec_step) of B users x T tokens: ``tokens`` B lists of T ids, ``positions`` user
+        u's first verify slot (row u*T + j sits at positions[u] + j, which doubles as the decode SDPA's per-row cur_pos and
+        makes the hybrid verify causal), ``rope_deltas`` B ints (None: every row takes rope.rope_delta). Rows are
+        user-major, the row-major flatten of the B x T token lists."""
+        T, B = self._vfy_T, self._vfy_B
+        tok = torch.tensor([int(t) for row in tokens for t in row], dtype=torch.int32)
+        pos = self._vfy_row_positions(positions)
+        deltas = None if rope_deltas is None else [int(d) for d in rope_deltas for _ in range(T)]
+        ridx = rope_rows(pos, self.rope_row_deltas(B * T, deltas), self.rope_table_rows())
+        rows = [None] * VERIFY_STEP_ROWS
+        rows[VERIFY_TOKENS], rows[VERIFY_POSITIONS], rows[VERIFY_ROPE] = tok, pos, ridx
+        return pack_u32_rows(rows, width=pack_width(B * T))
 
     def _stage_verify_selectors(self, mi_prev, B, rep):
         """The deferred commit (see prepare_verify_trace): where each user's recurrence and conv window resume in the
@@ -2043,7 +2104,7 @@ class Qwen36Model:
         toks = torch.tensor([int(t) for t in tokens], dtype=torch.int32).reshape(1, B)
         pos = torch.tensor([int(p) for p in positions], dtype=torch.int32)
         token_buf = ttnn.from_torch(toks, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
-        # Absolute cache slot per row, doubling as the decode SDPA's cur_pos (the trace's _vfy_kvpos_buf at T = 1).
+        # Absolute cache slot per row, doubling as the decode SDPA's cur_pos (the verify trace's positions at T = 1).
         kvpos = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
         kvpt = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
         cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
