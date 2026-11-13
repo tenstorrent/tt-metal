@@ -776,9 +776,10 @@ done
 # filters have to pass on both runs, and generated/fabric has to match by physical position: the generated
 # descriptors number the ASICs themselves, so asic_id and UMD chip ids are not compared. On the superpod, which
 # spare channels a same-host Z connection gets follows the ASIC ids, so its ports are compared without them.
-# The 4-host pod is not here: offline maps on all 16 FSD hosts and breaks the pod's mirror symmetry the
-# other way.
+# The quad-host graph runs on the 16-host mock rather than the 4-host pod: offline maps on all 16 FSD hosts,
+# and on the pod alone the mirror symmetry breaks the other way.
 for offline_case in \
+  "${FSD_QUAD_HOST_MGD}|${FSD_HEALTHY_FILTER}|" \
   "${MGD_SUBTORUS}/subtorus_32x4_8x2_mesh_graph_descriptor.textproto|${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestGalaxyCornerPins:${GTEST_PIPELINE_BUILDER_CHECK}|" \
   "${MGD_SUBTORUS}/subtorus_8x4_pipeline_16stage_mesh_graph_descriptor.textproto|${GTEST_SUBTORUS_8X4_PIPELINE}|" \
   "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto|${GTEST_SUBTORUS_2X4_PIPELINE}|--ignore-intermesh-channels"; do
