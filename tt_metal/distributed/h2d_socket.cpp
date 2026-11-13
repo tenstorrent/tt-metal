@@ -383,13 +383,11 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     // per-write driver reconfig. The window holds one of the device's TLBs until the socket is destroyed;
     // when none is free, the socket writes through cluster.write_core, which holds none.
     //
-    // The window posts its writes on a static write VC. A Strict window holds each write until the one
-    // before it is acknowledged, so it moves one write per round trip: about 0.4 us per 128 B page into a
-    // DRAM core, whose L1 takes the write over AXI before acknowledging it, and the strict MMIO rate into
-    // Tensix L1 (#64622). Posted writes are not acknowledged, so their order comes from the VC: a NOC
-    // packet on a dynamic VC may switch VCs at each router (and a DRAM core gives each VC its own AXI ID),
-    // so a bytes_sent update could overtake the pages it counts; on one VC, writes to the receiver arrive
-    // in the order they were made. The window is only written through, which a write-only static VC needs.
+    // The window posts its writes on a static write VC. A Strict window would wait for each write's ack, one
+    // write per round trip (about 0.4 us per 128 B page into a DRAM core; the strict MMIO rate into Tensix L1,
+    // #64622). Posted writes are ordered only by the VC: a packet on a dynamic VC may switch VCs at each router
+    // (and a DRAM core gives each VC its own AXI ID), so bytes_sent could overtake the pages it counts; on one
+    // static VC, writes to the receiver arrive in issue order. Nothing reads through this write-only window.
     if (!cluster.is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
         std::unique_ptr<tt::umd::IoWindow> window;
         try {

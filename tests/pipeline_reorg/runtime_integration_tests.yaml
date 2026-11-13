@@ -31,8 +31,7 @@
   budget_type: integration
 
 # --- Sockets (distributed HD socket) ---
-# H2DSocketHostPushOrderingStress (100k HOST_PUSH pages, each checked for order) uses a single-device fixture,
-# so the HDSocketFixture pattern alone does not select it.
+# H2DSocketHostPushOrderingStress uses a single-device fixture, so *HDSocketFixture* does not select it.
 - name: bh_multicard_sockets
   cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*HDSocketFixture*:*H2DSocketHostPushOrderingStress*'
   skus:

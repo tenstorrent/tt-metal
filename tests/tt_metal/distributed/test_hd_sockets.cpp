@@ -310,8 +310,6 @@ void test_h2d_host_push_ordering_stress(
     auto output_socket = D2HSocket(mesh_device, socket_core, socket_fifo_size);
     input_socket.set_page_size(page_size);
     output_socket.set_page_size(page_size);
-    // Without its own window (no TLB free), the socket writes through cluster.write_core and this test would
-    // pass without exercising the posted path.
     ASSERT_TRUE(experimental::detail::writes_through_window(input_socket))
         << "H2D socket fell back to cluster.write_core; the posted window is not under test";
 
@@ -394,11 +392,9 @@ void test_h2d_host_push_ordering_stress(
     // A failed read leaves the writer waiting for space, which it gives up on after kStallTimeout.
     write_thread.join();
     if (write_error || read_error) {
-        // The loopback kernel is still waiting for pages that will never come, and fixture teardown waits for it
-        // to finish. Bound that wait: with an operation timeout set, closing the device gives up once dispatch
-        // stops progressing, instead of hanging the job. Teardown's wait starts after this, so it sees the new
-        // value; a shorter timeout already configured (e.g. TT_METAL_OPERATION_TIMEOUT_SECONDS) is kept. The timeout
-        // belongs to the MetalEnv, which outlives this device, so it stays set for the rest of the process.
+        // The loopback kernel still waits for pages that will never come, and teardown waits for the kernel. An
+        // operation timeout makes closing the device fail instead of hang; a shorter one already set is kept. It
+        // belongs to the MetalEnv, so it stays set for the rest of the process.
         const auto current_timeout = experimental::GetOperationTimeout(*mesh_device);
         if (current_timeout.count() == 0 || current_timeout > kStallTimeout) {
             experimental::SetOperationTimeout(*mesh_device, kStallTimeout);
