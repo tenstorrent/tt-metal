@@ -18,8 +18,12 @@
 #include "internal/risc_attribs.h"
 
 // The runtime defines ROUTING_MODE in kernels built with fabric enabled. FABRIC_2D selects mesh addressing,
-// otherwise line addressing is used.
-#if defined(ROUTING_MODE)
+// otherwise line addressing is used. Quasar has no fabric yet.
+#if defined(ROUTING_MODE) && !defined(ARCH_QUASAR)
+#define GLOBAL_SEMAPHORE_FABRIC 1
+#endif
+
+#if defined(GLOBAL_SEMAPHORE_FABRIC)
 #if defined(FABRIC_2D)
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
 #else
@@ -83,7 +87,7 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
  * flight, and wait() can miss a value that changes quickly. Only use them when nothing else is changing the
  * semaphore at the same time, and don't mix them with down() on the same semaphore.
  *
- * The fabric calls (to other chips) are available in kernels built with fabric enabled.
+ * The fabric calls (to other chips) are available in kernels built with fabric enabled, on Wormhole and Blackhole.
  */
 class GlobalSemaphore {
 public:
@@ -156,7 +160,7 @@ public:
         semaphore_detail::inc_multicast(l1_addr_, noc, x_start, y_start, x_end, y_end, v, num_dests);
     }
 
-#if defined(ROUTING_MODE)
+#if defined(GLOBAL_SEMAPHORE_FABRIC)
     // ---- Another chip (fabric) ----
     // Like the NoC up(), but for core (noc_x, noc_y) on another chip. Pass ToChip for one chip or ToChips for
     // several. noc_x and noc_y are coordinates on `noc`.
@@ -336,7 +340,7 @@ private:
     static constexpr ProgrammableCoreType CORE_TYPE = ProgrammableCoreType::TENSIX;
     static constexpr SemScope SCOPE = SemScope::EXTERNAL;
 
-#if defined(ROUTING_MODE)
+#if defined(GLOBAL_SEMAPHORE_FABRIC)
 #if defined(FABRIC_2D)
     static FORCE_INLINE tt::tt_fabric::mesh::experimental::MeshMcastRange mcast_range(const ToChips& chip) {
         return tt::tt_fabric::mesh::experimental::MeshMcastRange{chip.e, chip.w, chip.n, chip.s};
