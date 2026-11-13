@@ -26,8 +26,9 @@ that chunk: a replay that wrote or read the wrong slot or rows leaves a differen
 Sensitivity, measured with the capture reading a stand-in word fixed at 0 (eager untouched): a pinned
 slot fails chunk 1 (slot 1) and a pinned start fails chunk 2 (5120), each at the KVPE cache check.
 
-Windows: the first DSA layer alone, two DSA layers (rank-local KV slots 0 and 1 of both caches), and
-KDA + DSA (layers 0-3), where the KDA carries take their slot from the same metadata. Synthetic weights
+Windows: two DSA layers (layers 3-7, rank-local KV slots 0 and 1 of both caches) and KDA + DSA (layers
+0-3), where the KDA carries take their slot from the same metadata. The first DSA layer alone is not a
+separate window: it is layer 3 of the first, with the same seeds, rank flags and schedule. Synthetic weights
 and dense-FFN stand-in for the MoE from `synthetic.py`, as `test_kimi_k3_1_dsa_block.py`.
 """
 
@@ -64,8 +65,8 @@ CHUNKS = [
 NUM_REQUESTS = 3
 # A few layers' capture fits well inside the runner's 256 MB trace region.
 TRACE_REGION_SIZE = 64 * 1024 * 1024
-# (first_layer_idx, num_layers): one DSA layer, two DSA layers (KV slots 0 and 1), and KDA + DSA layers 0-3.
-TRACE_WINDOWS = {"dsa_L3": (3, 1), "dsa_L3_L7": (3, 5), "hybrid_L0_3": (0, 4)}
+# (first_layer_idx, num_layers): two DSA layers (KV slots 0 and 1), and KDA + DSA layers 0-3.
+TRACE_WINDOWS = {"dsa_L3_L7": (3, 5), "hybrid_L0_3": (0, 4)}
 
 
 def _scalar(mesh_device, value: int) -> ttnn.Tensor:

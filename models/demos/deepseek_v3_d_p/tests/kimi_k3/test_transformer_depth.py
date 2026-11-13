@@ -413,7 +413,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 #   (recall 1 by construction, checked). Bar K31_TOPK_RECALL, per golden (below).
 #
 #     scripts/run_safe_pytest.sh \
-#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L24-torus-xy-8x4]"
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-torus-xy-8x4]"
 def k31_layer_pcc(layer: int) -> float:
     """K3's per-layer bar for a layer of PP4 stage 0 (see above)."""
     assert layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE, f"layer {layer}: K3 sets no bar past depth 24"
@@ -480,27 +480,46 @@ def test_topk_recall_counts_each_trace_key_once():
 
 
 # rung -> golden; both run all of PP4 stage 0. "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
-# layers 0-23 over every chunk) on the 128K trace.
+# layers 0-23 over every chunk) on the 128K trace. Both rungs run in one test on one build of the stage, sized for the
+# longer golden, each from fresh caches: the weight load, not the chunks, is most of a rung's time.
 K31_RUNGS = {"L24": TRACE_K31, "L24-128k": TRACE_K31_128K}
+
+
+def _k31_sequence(trace) -> tuple[list[int], int]:
+    """The trace's whole teacher-forced sequence (prompt, then the ids vLLM decoded): (ids, prompt length)."""
+    ids = trace.metadata["token_ids"] + trace.metadata["completion_token_ids"]
+    return ids, len(trace.metadata["token_ids"])
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
-@pytest.mark.parametrize("rung", list(K31_RUNGS))
-def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
+def test_k31_depth_ladder_matches_golden(mesh_device, device_params):
+    traces = {rung: resolve_trace(path) for rung, path in K31_RUNGS.items()}
+    missing = [f"{rung} ({K31_RUNGS[rung]})" for rung, trace in traces.items() if trace is None]
+    assert not missing, f"no K3.1 golden for {', '.join(missing)}"
+    longest = max(len(_k31_sequence(trace)[0]) for trace in traces.values())
+    hf_config, params = k31_stage.first_stage_params(max_seq_len=-(-longest // CACHE_LEN) * CACHE_LEN)
+    runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    failures = {}
+    try:
+        for rung, trace in traces.items():
+            failures[rung] = _k31_rung(rung, trace, mesh_device, hf_config, params, runtime)
+    finally:
+        runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
+    failed = {rung: f for rung, f in failures.items() if f}
+    assert not failed, "; ".join(f"{rung}: " + "; ".join(f) for rung, f in failed.items())
+
+
+def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]:
+    """One golden through PP4 stage 0 from fresh caches; the failed checks, empty when it passes."""
     golden_path = K31_RUNGS[rung]
-    trace = resolve_trace(golden_path)
-    assert trace is not None, f"no K3.1 golden at {golden_path}"
     chunk = k31_stage.CHUNK
-    # The trace's whole teacher-forced sequence (prompt, then the ids vLLM decoded), padded to whole chunks.
-    ids = trace.metadata["token_ids"] + trace.metadata["completion_token_ids"]
-    prompt_len, real_len = len(trace.metadata["token_ids"]), len(ids)
+    ids, prompt_len = _k31_sequence(trace)
+    real_len = len(ids)
     num_chunks = -(-real_len // chunk)
     prompt = ids + [MTP_PAD_TOKEN_ID] * (num_chunks * chunk - real_len)
-    hf_config, params = k31_stage.first_stage_params(max_seq_len=-(-real_len // CACHE_LEN) * CACHE_LEN)
     first, num_layers = params.first_layer_idx, params.num_layers
-    runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
     kv_caches = k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
 
@@ -594,7 +613,9 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             del mla.forward  # the instance attribute; the class's forward shows through again
         if kv_caches.kda_states is not None:
             kv_caches.kda_states.deallocate()
-        runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
+        ttnn.deallocate(kv_caches.kvpe.storage)
+        if kv_caches.index is not None:
+            ttnn.deallocate(kv_caches.index)
 
     kv_failures = []
     for slot, layer in sorted(slots.items()):
@@ -621,9 +642,16 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
         f"K31 {rung} worst layer vs its bar: {worst[0]} chunk {worst[1]}: {scores[worst]:.7f} (bar {k31_layer_pcc(worst[0])})"
     )
     below = {k: v for k, v in scores.items() if v < k31_layer_pcc(k[0])}
-    assert not below, "layers below their bar: " + ", ".join(
-        f"{l}/chunk{c}:{v:.6f}<{k31_layer_pcc(l)}" for (l, c), v in sorted(below.items())
-    )
-    assert not kv_failures, "KV cache diverged: " + "; ".join(kv_failures)
-    assert not topk_miscounted, "device top-k selects a different number of keys: " + "; ".join(topk_miscounted)
-    assert not topk_failures, f"top-k recall below {K31_TOPK_RECALL[golden_path]}: " + "; ".join(topk_failures)
+    failures = []
+    if below:
+        failures.append(
+            "layers below their bar: "
+            + ", ".join(f"{l}/chunk{c}:{v:.6f}<{k31_layer_pcc(l)}" for (l, c), v in sorted(below.items()))
+        )
+    if kv_failures:
+        failures.append("KV cache diverged: " + "; ".join(kv_failures))
+    if topk_miscounted:
+        failures.append("device top-k selects a different number of keys: " + "; ".join(topk_miscounted))
+    if topk_failures:
+        failures.append(f"top-k recall below {K31_TOPK_RECALL[golden_path]}: " + "; ".join(topk_failures))
+    return failures

@@ -493,29 +493,30 @@
   # No fabric_profile, as before: the fabric comes from each test's own device_params, and adding
   # the key here would swap the mesh descriptor and change nothing else.
   #
-  # [3/5] is the only K3 PCC gate on the captured-trace path rather than eager, and its
+  # [3/4] is the only K3 PCC gate on the captured-trace path rather than eager, and its
   # TT_KIMI_K3_PREFILL_TTNN_CACHE export is load-bearing: conftest's `weight_cache_path` fixture
   # reads `variant.ttnn_cache_env` and nothing else, with no fallback to the share, so without it
   # the fixture points at the checkpoint dir and the section dies on `TTNN cache incomplete`.
   #
-  # [4/5] and [5/5] are K3.1's counterparts of [1/5] and [2/5], last so a
-  # K3.1 failure masks no K3 section: test_k31_depth_ladder_matches_golden, layers 0-23 (PP4 stage 0)
-  # on K3.1's real weights against its vLLM trace -- L24 on the 10K trace (two chunks), L24-128k on the
-  # 128K trace (26 chunks, K3's long-context check). Each keeps its K3 counterpart's bound; measured
-  # pytest time on bh-glx-110-c10u14 at TDP_LIMIT_MAX=75 W: 472 / 1088 s (K3's: 479 / 725 s). The test
-  # is TorusXY-only and this row has no fabric_profile, so both sections export what the impl's TorusXY
-  # step would set. Weights, TTNN cache and goldens are KimiK31Adapter's defaults on /mnt/weka; a
-  # missing cache skips, so a section fails unless its one test passed.
+  # [4/4] is K3.1's counterpart of [1/4] and [2/4], last so a K3.1 failure masks no K3 section:
+  # test_k31_depth_ladder_matches_golden, layers 0-23 (PP4 stage 0) on K3.1's real weights against its
+  # vLLM trace -- rung L24 on the 10K trace (two chunks), then rung L24-128k on the 128K trace (26 chunks,
+  # K3's long-context check), both in one test on one stage build (each rung from fresh caches), so the
+  # stage's weights load once. Its bound is the sum of its K3 counterparts' (70 + 90); measured pytest time
+  # 1249 s on bh-glx-120-b08u02 2026-11-13 (612 + 1139 s as two tests). The test is
+  # TorusXY-only and this row has no fabric_profile, so the section exports what the impl's TorusXY step
+  # would set. Weights, TTNN cache and goldens are KimiK31Adapter's defaults on /mnt/weka; a missing cache
+  # skips, so the section fails unless its one test passed.
   cmd: |
     # Sections run in order and the suite stops at the FIRST failure: a failed test can leave the
     # devices unreset, so the next section must not start (tt-metal#57706, enforced by
     # .github/scripts/utils/lint_pipeline_cmds.py). That is a real trade against the separate legs
     # this replaces -- a failure in an early section now masks the later ones.
     #
-    # Each K3 body ([1/5]..[3/5]) is the leg's previous `cmd` verbatim, wrapped in a subshell with its
+    # Each K3 body ([1/4]..[3/4]) is the leg's previous `cmd` verbatim, wrapped in a subshell with its
     # mpirun bounded, so it can be diffed against the leg it replaces. The three K3 sections happen to
     # export the same environment, so the subshell is only keeping them independent (and away from the
-    # K3.1 sections' TorusXY exports, see the entry comment) -- unlike the accuracy suite
+    # K3.1 section's TorusXY exports, see the entry comment) -- unlike the accuracy suite
     # above, where it is load-bearing because one section must NOT see another's KIMI_K3_HF_MODEL.
     # Repeating the exports per section rather than hoisting them is what keeps each body verbatim.
 
@@ -567,33 +568,30 @@
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
       export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_TORUS_XY_CERTIFIED=1
-      export K31_RUNG=$1
-      timeout -k 2m "$2" mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 160m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -eo pipefail
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-${K31_RUNG}-torus-xy-8x4]" -vvv --tb=short | tee /tmp/k31_depth_ladder.out
-        grep -qE "[0-9]+ passed" /tmp/k31_depth_ladder.out || { echo "::error::k31_depth_ladder ${K31_RUNG}: the test did not pass (skipped?): check the TorusXY exports and the K3.1 TTNN cache"; exit 1; }
+        python3 -m pytest "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-torus-xy-8x4]" -vvv --tb=short | tee /tmp/k31_depth_ladder.out
+        grep -qE "[0-9]+ passed" /tmp/k31_depth_ladder.out || { echo "::error::k31_depth_ladder: the test did not pass (skipped?): check the TorusXY exports and the K3.1 TTNN cache"; exit 1; }
       '
     )
 
-    echo "===== [1/5] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
+    echo "===== [1/4] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
     k3_transformer_depth || exit $?
-    echo "===== [2/5] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    echo "===== [2/4] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_chunked_prefill || exit $?
-    echo "===== [3/5] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    echo "===== [3/4] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_transformer_traced || exit $?
-    echo "===== [4/5] (Kimi-K3.1) prefill accuracy L24 10k@5k vs vLLM trace ====="
-    k31_depth_ladder L24 70m || exit $?
-    echo "===== [5/5] (Kimi-K3.1) chunked prefill accuracy L24 128k@5k vs vLLM trace ====="
-    k31_depth_ladder L24-128k 90m || exit $?
-    echo "===== all 5 sections passed ====="
+    echo "===== [4/4] (Kimi-K3.1) prefill accuracy L24 10k@5k and chunked L24 128k@5k vs vLLM traces ====="
+    k31_depth_ladder || exit $?
+    echo "===== all 4 sections passed ====="
   test_type: k3_transformer_suite
   # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
   test_tags: [kimi_k3, transformer, k3_transformer_depth, k3_chunked_prefill, k3_transformer_traced, kimi_k3_1, k31_depth_ladder]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (70 + 90 + 45 + 70 + 90).
+      # Exactly the sum of the per-section bounds (70 + 90 + 45 + 160).
       timeout: 365
       tier: 2
       release_ready: false
@@ -614,7 +612,7 @@
   # stage); [4/4] one captured forward replayed for other users' slots, chunk starts and a partial end is
   # bit-identical to eager, outputs and both caches (the runner runs traced). Measured on
   # bh-glx-120-b08u02 (2026-11-13), pytest time per section incl. synthetic weight generation: DSA block 3 windows
-  # ~3 min, chunked ~1.5-2.5 min, split ~5.5-6.5 min, traced replay 3 windows 6.6 min (~17-19 min), plus the
+  # ~2 min, chunked ~1.3 min, split ~5 min, traced replay 2 windows ~3.2 min (~11.5 min), plus the
   # job's ~5.5 min "Setup multihost job".
   cmd: |
     # Stops at the first failure, as the suites above.

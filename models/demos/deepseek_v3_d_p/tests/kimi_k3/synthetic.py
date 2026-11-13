@@ -100,7 +100,8 @@ def synthetic_state_dict(first_layer_idx: int, num_layers: int) -> dict:
     for name in output_query_names(CHECKPOINT_PREFIX):
         attn_res[name] = _query(name, hidden, generator)
     return {
-        "embed_weight": torch.randn(config.vocab_size, hidden, generator=generator, dtype=torch.bfloat16),
+        # Drawn in fp32 and cast, as `_lin`: torch's bf16 randn is several times slower on the host.
+        "embed_weight": torch.randn(config.vocab_size, hidden, generator=generator).to(torch.bfloat16),
         "norm_weight": torch.ones(hidden, dtype=torch.bfloat16),
         "attn_res_weights": attn_res,
         "layers": layers,
