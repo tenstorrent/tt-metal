@@ -117,8 +117,6 @@ def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, wind
             logger.info(f"{window}: chunk 0 re-tokenized, chunk 1 unchanged")
             other_prefix = token_ids(CHUNK, seed=8) + ids[CHUNK:]
             prefix_outputs = _run_sequence(stack, mesh_device, other_prefix, kvpe, index)
-        l1_small = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
-        logger.info(f"{window}: L1_SMALL after the runs: {l1_small.total_bytes_allocated_per_bank} B/bank allocated")
     finally:
         release(stack, caches)
 
