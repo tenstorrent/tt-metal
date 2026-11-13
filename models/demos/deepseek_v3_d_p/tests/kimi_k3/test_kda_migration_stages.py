@@ -203,15 +203,6 @@ def test_index_cache_must_match_the_config(expect_error):
         _runtime(0, 24, model="kimi_k3_1").kv_migration_stages(_caches(0, 24))
 
 
-def test_kimi_k3_1_adapter_hooks_name_the_four_configs():
-    adapter = get_adapter("kimi_k3_1")
-    assert [adapter.cache_kind(i) for i in range(5)] == ["kvpe", "index", "kda_recurrent", "kda_convolution", "other"]
-    mla = {layer: layer for layer in KimiK3Config.mla_layer_ids()}
-    assert adapter.cache_layer_rows(0, 93) == adapter.cache_layer_rows(1, 93) == mla
-    assert adapter.cache_layer_rows(2, 93) == adapter.cache_layer_rows(3, 93) == KimiK3Adapter().cache_layer_rows(1, 93)
-    assert [adapter.cache_head_dim(i) for i in range(4)] == [576, 128, None, None]
-
-
 # ---- adapter answers vs the table the runtime publishes ------------------------------------------------
 _MESH = (8, 4)
 # Physical kvpe rows: K3's bf8 TILE (512 + 64 wide), K3.1's scaled FP8 (656 B row on a 704 B page).
@@ -279,6 +270,9 @@ def test_adapter_answers_match_the_published_table(model, tmp_path, monkeypatch)
         populated = {layer for layer in range(cfg.num_layers) if table.lookup(layer, 0, 0, config_id).size_bytes}
         rows = adapter.cache_layer_rows(config_id, 24)
         assert all(layer == row for layer, row in rows.items()) and populated == set(rows), kind
+        # Past this rank too: over the whole model, the identity on the layers of the config's kind.
+        ids = KimiK3Config.mla_layer_ids() if kind in ("kvpe", "index") else KimiK3Config.kda_layer_ids()
+        assert adapter.cache_layer_rows(config_id, KimiK3Config.NUM_LAYERS) == {layer: layer for layer in ids}, kind
         head_dim = adapter.cache_head_dim(config_id)
         if kind in ("kvpe", "index"):
             assert cfg.tensor_type == tensor_type.Kv
