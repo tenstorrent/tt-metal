@@ -1359,8 +1359,8 @@ class Qwen36Model:
         Byte-identical to what prepare_decode_inputs_host builds for a decode step at those positions
         (same inv_freq / outer / cat / bf16 cast). The hybrid verify pushes its candidates through the
         DECODE attention kernel as B pseudo-users, so it needs this per-row table, not the
-        prefill [1,1,S,rd] one. ``deltas``: one M-RoPE delta per row (its request's), or None: every row takes
-        rope.rope_delta."""
+        prefill table of positions 0..S-1 (_verify_cos_sin_torch lays it out as [1,1,B,rd]). ``deltas``: one M-RoPE
+        delta per row (its request's), or None: every row takes rope.rope_delta."""
         rd = self.args.rope_head_dim
         pos_vec = positions.to(torch.int32).reshape(-1)
         # RoPE position is the KV position offset by rope_delta (0 for text); same as decode.
@@ -1378,6 +1378,13 @@ class Qwen36Model:
         cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
         sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
         return cos, sin
+
+    def _verify_cos_sin_torch(self, row_positions, deltas=None):
+        """_rope_tp_cos_sin_decode_torch's values (with the same ``deltas``) as [1, 1, R, rope_head_dim]: the layout
+        the attention layers' partial RoPE rotates in (apply_partial_rope_decode), so no layer reshapes the verify's
+        cos / sin."""
+        rd = self.args.rope_head_dim
+        return tuple(t.reshape(1, 1, -1, rd) for t in self._rope_tp_cos_sin_decode_torch(row_positions, deltas))
 
     def _residual_ar(self, rows):
         """The DecodeResidualAllReduce a verify forward of ``rows`` rows runs on, or None for the fractured residual:
@@ -1441,6 +1448,8 @@ class Qwen36Model:
         ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
         ``logits_rm`` is the ROW_MAJOR bf16 copy the in-trace argmax needs, kept for the sampling path.
         """
+        from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
+
         T = self._vfy_T
         rows = n_users * T
         x = self.embd(self._vfy_token_buf)
@@ -1449,6 +1458,11 @@ class Qwen36Model:
         dar = self._residual_ar(rows)
         if dar is not None:
             x = dar.enter(x)  # every layer and _spec_tail then run on the replicated residual
+        # The positions of candidate j's rows {u*T + j}, one KV write call each: the same T slices serve every
+        # attention layer (TPAttention._forward_verify).
+        pos_groups = None
+        if KV_GROUP_WRITE_OK and T > 1:
+            pos_groups = [ttnn.slice(self._vfy_kvpos_buf, (j,), (rows,), (T,)) for j in range(T)]
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
@@ -1474,6 +1488,7 @@ class Qwen36Model:
                     spec_verify_mode=True,
                     spec_page_table=self._vfy_kvpt1_buf,
                     n_users=n_users,
+                    spec_pos_groups=pos_groups,
                 )
             else:
                 x_new = layer.forward(
@@ -1489,6 +1504,8 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        for t in pos_groups or ():
+            ttnn.deallocate(t)
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x vocab floats. The fused per-shard argmax (tt/spec_argmax_fused.py) takes the ids
         # from each device's vocab shard before the all-gather: [1,1,1,32] uint32 ROW_MAJOR, lane r = row r.
@@ -1676,11 +1693,10 @@ class Qwen36Model:
             ttnn.from_torch(h, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
             for h in self._vfy_page_table_host(pt)
         )
-        # RoPE tables. Hybrid verify feeds the DECODE attention kernel, whose cos/sin are
-        # [1, rows, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
-        # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
-        # rotations are byte-identical and near-ties round the same way.
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(warm)
+        # RoPE tables. Hybrid verify feeds the DECODE attention kernel: one rotation per ROW at that
+        # row's own position, not the prefill table of positions 0..S-1. Same host math the plain decode
+        # step uses, so the two paths' rotations are byte-identical and near-ties round the same way.
+        cos_t, sin_t = self._verify_cos_sin_torch(warm)
         self._vfy_cos_buf = ttnn.from_torch(
             cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
         )
@@ -1895,7 +1911,7 @@ class Qwen36Model:
         _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
         row_deltas = None if rope_deltas is None else [int(d) for d in rope_deltas for _ in range(T)]
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos, row_deltas)
+        cos_t, sin_t = self._verify_cos_sin_torch(pos, row_deltas)
         _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
         _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)

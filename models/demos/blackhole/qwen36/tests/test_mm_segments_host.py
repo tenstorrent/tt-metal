@@ -247,7 +247,9 @@ def test_verify_takes_each_users_delta_for_its_rows(monkeypatch):
     for name in ("_vfy_token_buf", "_vfy_kvpos_buf", "_vfy_cos_buf", "_vfy_sin_buf", "_vfy_ids_out", "_vfy_rows_out"):
         setattr(m, name, MagicMock())
     seen = []
-    m._rope_tp_cos_sin_decode_torch = lambda pos, deltas=None: seen.append((pos.tolist(), deltas)) or (None, None)
+    m.args = SimpleNamespace(rope_head_dim=4)  # _verify_cos_sin_torch lays the tables out as [1, 1, R, 4]
+    rope = lambda pos, deltas=None: seen.append((pos.tolist(), deltas)) or (torch.zeros(1, len(pos), 1, 4),) * 2
+    m._rope_tp_cos_sin_decode_torch = rope
     monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: torch.zeros(B * T))
     m.verify_traced([[1] * T] * B, [10, 40], [0] * B, rope_deltas=[0, -12])
     m.verify_traced([[1] * T] * B, [10, 40], [0] * B)

@@ -257,7 +257,8 @@ def test_a_mixed_verify_reads_shard_argmax_ids_and_device_draws(monkeypatch):
     for name in ("_vfy_token_buf", "_vfy_kvpos_buf", "_vfy_cos_buf", "_vfy_sin_buf", "_vfy_rows_out"):
         setattr(m, name, MagicMock())
     m._vfy_ids_out = "ids"
-    m._rope_tp_cos_sin_decode_torch = lambda pos, deltas=None: (None, None)
+    m.args = SimpleNamespace(rope_head_dim=4)  # _verify_cos_sin_torch lays the tables out as [1, 1, R, 4]
+    m._rope_tp_cos_sin_decode_torch = lambda pos, deltas=None: (torch.zeros(1, len(pos), 1, 4),) * 2
     lanes = torch.cat([torch.arange(100, 100 + B * T), torch.zeros(32 - B * T, dtype=torch.int64)]).to(torch.int32)
     staged = []
     m._vfy_sampler = SimpleNamespace(stage=staged.append, read=lambda: torch.arange(500, 500 + B * T))
