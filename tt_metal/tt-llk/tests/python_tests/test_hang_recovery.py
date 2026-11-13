@@ -6,6 +6,7 @@
 import pytest
 from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
+from helpers.device import _SRCA_SRCB
 from helpers.test_config import BuildMode, TestConfig
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_tensix import TensixDebug
@@ -19,12 +20,12 @@ def _clear_valid_flags():
         OnChipCoordinate.create(TestConfig.TENSIX_LOCATION, device=device)
     )
     debug_tensix.inject_instruction(
-        debug_tensix.device.instructions.TT_OP_CLEARDVALID(0b11, 0), 0
+        debug_tensix.device.instructions.TT_OP_CLEARDVALID(_SRCA_SRCB, 0), 0  # thread 0
     )
 
 
-def _launch(source, timeout=2):
-    cfg = TestConfig(f"sources/hang_{source}_test.cpp")
+def _launch(source: str, timeout=2):
+    cfg = TestConfig(source)
     cfg.generate_variant_hash()
     cfg.build_elfs()
     cfg.run_elf_files()
@@ -48,10 +49,13 @@ def test_hang_recovery(order):
     for kind in order:
         if kind == "stall":
             _clear_valid_flags()
+            source = "sources/hang_stall_test.cpp"
+        else:
+            source = "sources/hang_spin_test.cpp"
         with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
             TimeoutError
         ):
-            _launch(kind)
+            _launch(source)
         # Two launches: one right after the hang, one more to show it stays recovered
-        _launch("ok")
-        _launch("ok")
+        _launch("sources/hang_ok_test.cpp")
+        _launch("sources/hang_ok_test.cpp")
