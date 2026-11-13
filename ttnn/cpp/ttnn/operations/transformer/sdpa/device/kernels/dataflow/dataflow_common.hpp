@@ -17,6 +17,14 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
+// SDPA_READER_FLATTEN_READS: for a reader built at -Os (kernel config budget), inline the whole per-tile read path into
+// fetch_block / issue_reads, so each tile's NoC read is not two outlined calls deep. No effect when undefined.
+#if defined(SDPA_READER_FLATTEN_READS)
+#define SDPA_FLATTEN_READS __attribute__((flatten))
+#else
+#define SDPA_FLATTEN_READS
+#endif
+
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
@@ -1376,7 +1384,7 @@ struct PaddedAddrGenerator {
     // Issue async NoC reads for a slice to L1. No barrier — caller must issue a
     // read barrier. Splits valid rows from the padded tail at loop level (no
     // in_bounds branch in the hot path); valid rows advance tile_id by arithmetic only.
-    void issue_reads(
+    SDPA_FLATTEN_READS void issue_reads(
         const Slice& slice,
         uint32_t end_seq_tile,
         uint32_t dst_cb_id,
@@ -1485,7 +1493,7 @@ PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<R
 // inlining at every site overflows the TENSIX kernel-config ringbuffer. Function-call
 // overhead is negligible next to the per-block NoC reads.
 template <typename CatAddrGeneratorType>
-__attribute__((noinline)) void fetch_block(
+__attribute__((noinline)) SDPA_FLATTEN_READS void fetch_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,

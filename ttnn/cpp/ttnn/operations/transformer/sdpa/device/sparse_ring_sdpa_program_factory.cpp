@@ -1142,7 +1142,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         defines["SPARSE_MULTIPASS_PAIRS"] = "1";
         log_info(
             tt::LogOp,
-            "SparseRingSDPA: pair steps kept with {} Q passes (TT_SPARSE_RING_MULTIPASS_PAIRS), reader built at -Os",
+            "SparseRingSDPA: pair steps kept with {} Q passes (TT_SPARSE_RING_MULTIPASS_PAIRS), reader built at -Os "
+            "with flattened reads",
             num_q_passes);
     }
     const uint32_t min_q_per_working_core = q_split.empty() ? std::max(1u, all_heads_num_q_chunks / num_cores)
@@ -1505,7 +1506,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
     if (multipass_pairs) {
+        // -Os to fit; the per-tile K/V read path is flattened so -Os does not outline the NoC read per tile.
         reader_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
+        reader_kernel.defines.emplace_back("SDPA_READER_FLATTEN_READS", "1");
     }
 
     KernelDescriptor writer_kernel{};
