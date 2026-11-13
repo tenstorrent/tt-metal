@@ -16,6 +16,7 @@ import json
 import math
 import os
 import sys
+import weakref
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -237,6 +238,18 @@ def euler_step(
 # =============================================================================
 
 
+def _parameter_addresses(module) -> tuple[int, ...]:
+    """Buffer address of every device-resident parameter of ``module`` and its children, depth-first."""
+    addresses = []
+    for _, child in module.named_children():
+        addresses.extend(_parameter_addresses(child))
+    for _, parameter in module.named_parameters():
+        data = getattr(parameter, "_data", None)
+        if data is not None:
+            addresses.append(data.buffer_address())
+    return tuple(addresses)
+
+
 class LTXPipeline:
     """
     LTX-2 text-to-audio-video generation pipeline.
@@ -319,6 +332,10 @@ class LTXPipeline:
         # ``traced``. False keeps the decoder eager while the transformer replays.
         self._vae_traced = traced if vae_traced is None else vae_traced
         self._trace_state: dict[str, LTXTransformerState] = {}
+        # Per DiT: its weights' addresses at its last dynamic load (see _release_dit_traces_if_weights_moved).
+        self._dit_weight_addresses: weakref.WeakKeyDictionary[
+            LTXTransformerModel, tuple[int, ...]
+        ] = weakref.WeakKeyDictionary()
         # Prompt buffers shared by both stages (the embedding is identical), built on the first
         # traced step — before s1's capture — so they sit below both traces' activations and
         # neither replay overwrites them.
@@ -1194,6 +1211,44 @@ class LTXPipeline:
             post_load_hook=post_load_hook,
         )
         self.transformer = state.model
+        if self.dynamic_load and self._traced:
+            self._release_dit_traces_if_weights_moved(state.model)
+
+    def _release_dit_traces_if_weights_moved(self, model: LTXTransformerModel) -> None:
+        """Release ``model``'s denoise traces when this load put its weights elsewhere than they were.
+
+        A trace bakes the weights' addresses, and a dynamic-load mesh reloads the DiT every request.
+        A reload that lands elsewhere (a state-dict build instead of a cache load, or another module
+        loaded before it in a different order) would replay over memory the weights no longer occupy:
+        on a 2x4 with TT_DIT_CACHE_DIR unset, every replay after the capturing gen came out as noise
+        (FastH3 #645, blx04 jobs 622/625/628). The weights cannot move while loaded, so the addresses
+        seen here are the ones any capture before the next eviction bakes. Released traces recapture
+        on their next call; a reload that lands where it was keeps its traces.
+        """
+        addresses = _parameter_addresses(model)
+        baked = self._dit_weight_addresses.get(model)
+        self._dit_weight_addresses[model] = addresses
+        if baked == addresses:
+            return
+        # No record: anything captured before the first load through here was never checked; release it.
+        tracers = LTXTransformerModel.inner_step._tracers_keyed.get(model, {})
+        captured = sorted(str(key) for key, tracer in tracers.items() if tracer.trace_captured)
+        if not captured:
+            return
+        logger.warning(f"DiT weights moved since its traces {captured} were captured: releasing them to recapture")
+        # Tail traces borrow the DiT producer's output buffers.
+        for state in self._trace_state.values():
+            if state._euler_tail is not None:
+                state._euler_tail.release()
+                state._euler_tail = None
+        # Traces that replay while the DiT is resident were captured with the old weights as live
+        # memory, so their activations may now sit on the moved weights: recapture them too.
+        for tracer in [*tracers.values(), *self._tracers_replayed_beside_dit()]:
+            tracer.release_trace()
+
+    def _tracers_replayed_beside_dit(self) -> list:
+        """Tracers other than the DiT's own that replay while the DiT is loaded."""
+        return []
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str | None:
         """Reuse embeddings only for the same prompt, weights and encoder policy.

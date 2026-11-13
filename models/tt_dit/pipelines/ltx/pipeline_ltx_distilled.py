@@ -2051,6 +2051,10 @@ class LTXDistilledPipeline(LTXPipeline):
         self._t12_io = io
         return io
 
+    def _tracers_replayed_beside_dit(self) -> list:
+        # The stage transition replays between the stage-1 and stage-2 denoise.
+        return list(type(self)._stage_transition._tracers_keyed.get(self, {}).values())
+
     def _upsampler_weight_addresses(self) -> tuple:
         return tuple(p.data.buffer_address() for _, p in self.upsampler.named_parameters() if p.data is not None)
 
