@@ -110,3 +110,16 @@ models:
       - "n150"
       - "n300"
       - "p100"
+
+  - name: "Tiny Deepseek Sparse EP Shakespeare"
+    filename: "tiny_deepseek_single_sparse_ep_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/tiny_deepseek_single_sparse_ep.yaml"
+      - "--epochs 0"
+      - "--max_steps 1000"
+      - "--track_memory"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "deepseek-ai/DeepSeek-V2-Lite"
+      output_file: "data/shakespeare_deepseek"
