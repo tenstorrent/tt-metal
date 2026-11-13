@@ -8,6 +8,7 @@
 #include <bit>
 #include <cstdlib>
 #include <map>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -375,12 +376,40 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t W = input_shape[-1];                            // hidden dim per device
     const uint32_t folded_H = input_tensor.physical_volume() / W;  // total seq rows
-    const uint32_t num_tile_cols = W / TILE_WIDTH;
-    const uint32_t num_tile_rows = folded_H / TILE_HEIGHT;
-
     const uint32_t num_heads_per_device = args.num_heads_per_device;
     const uint32_t head_dim = W / num_heads_per_device;
     const uint32_t head_dim_tiles = head_dim / TILE_WIDTH;
+    const uint32_t seq_tile_rows = folded_H / TILE_HEIGHT;
+
+    // (row, head) work split (TT_DIT_RMSNORM_HEAD_SPLIT=1; FLUX 3 Klein N2). The per-head norm splits work by
+    // whole tile-rows with every head of the row on one core: Klein's q / k norm ([1, 1, 8320, 768], 6 heads) is
+    // 260 rows over 120 cores = 3 rows (72 tiles) on the busiest core and 33 cores idle. In head-split mode the
+    // kernels see one HEAD of one tile-row as their "row": num_tile_cols = head_dim_tiles, num_tile_rows = rows x
+    // heads (unit u = row * heads + head). Row-major tile ids make unit u's input tiles u * head_dim_tiles + c,
+    // exactly the head's tiles in the [rows, heads * head_dim] input, so the input read is unchanged; the reader
+    // pushes the row's broadcast cos / sin at the row's first unit only (compute pops them after the row's last
+    // unit), and the writer maps u back to (head, row) for the [1, heads, N, head_dim] output. Same tiles, same
+    // per-head math, same order inside a head: bit-identical by construction; 1560 units / 120 cores = 13 units =
+    // 52 tiles on the busiest core. Restricted to what that mapping covers: RMS per-head norm on one device, more
+    // than one head, broadcast weight (the per-head weight repeated over the heads, as tt_dit's attention builds
+    // it: the kernels read head 0's tiles), no bias, broadcast RoPE (or none), batch 1, no affine row map.
+    // Env-read, not in the program cache key: one process per setting.
+    const bool head_split = [&] {
+        const char* v = std::getenv("TT_DIT_RMSNORM_HEAD_SPLIT");
+        if (v == nullptr || v[0] != '1') {
+            return false;
+        }
+        const bool rope = trans_mat.has_value() && rope_cos.has_value() && rope_sin.has_value();
+        return args.per_head_norm && args.norm_type == DitFusedNormType::RMS && num_heads_per_device > 1 &&
+               !use_tile_row_map && !bias.has_value() && input_tensor.logical_shape()[1] <= 1 &&
+               (!weight.has_value() || (weight->logical_shape()[-2] == 1 &&
+                                        weight->physical_volume() / weight->padded_shape()[-1] == TILE_HEIGHT)) &&
+               (!rope || (rope_cos->logical_shape()[1] == 1 && rope_cos->logical_shape()[0] == 1));
+    }();
+    // Kernel-facing geometry (the real shape when head_split is off).
+    const uint32_t num_tile_cols = head_split ? head_dim_tiles : (W / TILE_WIDTH);
+    const uint32_t num_tile_rows = head_split ? (seq_tile_rows * num_heads_per_device) : seq_tile_rows;
+    const uint32_t kernel_num_heads = head_split ? 1u : num_heads_per_device;
 
     const bool has_weight = weight.has_value();
     const bool has_bias = bias.has_value();
@@ -569,7 +598,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
     const uint32_t dst_reg_count = get_dest_reg_count(args.compute_kernel_config);
-    const uint32_t block_size = dst_reg_count;
+    // head_split: a "row" is head_dim_tiles wide, so the block must divide it (compute pushes whole blocks).
+    const uint32_t block_size = head_split ? std::gcd(dst_reg_count, head_dim_tiles) : dst_reg_count;
 
     const tt::DataFormat input_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const DataType output_dtype = args.dtype.value_or(input_tensor.dtype());
@@ -837,8 +867,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // still double-buffered (reader one block ahead). RMS TP>1 shapes fit resident
     // (never stream), so this only affects wide TP>1 LayerNorm.
     const uint32_t kStreamingInputBlocks = use_mux ? 2u : 4u;
-    const uint32_t input_cb_tiles =
-        streaming_low_l1 ? (kStreamingInputBlocks * block_size) : (kInputCbChunks * chunk_input_tiles);
+    // head_split: a unit is one head (4 tiles); hold 4 units so the reader runs ahead of compute
+    const uint32_t input_cb_tiles = streaming_low_l1 ? (kStreamingInputBlocks * block_size)
+                                                     : ((head_split ? 4u : kInputCbChunks) * chunk_input_tiles);
     create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
 
     // per_head_norm produces num_heads_per_device stat tiles per row instead
@@ -847,7 +878,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // into stats_gathered_cb (skipping stats_local). When per_head_norm is on
     // but is_tp_1 path is used we still need stats_gathered_cb sized for the
     // per-head fan-out.
-    const uint32_t per_row_stats_count = args.per_head_norm ? args.num_heads_per_device : args.ring_size;
+    const uint32_t per_row_stats_count = args.per_head_norm ? kernel_num_heads : args.ring_size;
     const uint32_t stats_local_tiles = (args.ring_size > 1 && !args.per_head_norm) ? chunk_size_rows : 1;
     create_cb(stats_local_cb_id, program, worker_core_set, fp32_tile_size, stats_local_tiles, fp32_format);
     // Both paths (forwarder AG and is_tp_1) push gathered stats one chunk at a time,
@@ -967,7 +998,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // stream them when block_major_post — keep the whole-row resident size.
         const uint32_t rope_cb_tiles = (per_head_rope && fuse_mm_rope && !block_major_post)
                                            ? std::min(rope_resident_tiles, kRopeStreamBlocks * block_size)
-                                           : rope_resident_tiles;
+                                           // head_split: two rows' cos / sin, so the reader can push the next
+                                           // row's while compute still holds this row's for its later heads
+                                           : (head_split ? 2u : 1u) * rope_resident_tiles;
         create_cb(rope_cos_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
         create_cb(rope_sin_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
     } else {
@@ -1124,6 +1157,11 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
     }
     std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> head_split_defines;
+    if (head_split) {
+        head_split_defines["HEAD_SPLIT_UNITS"] = std::to_string(num_heads_per_device);
+        reader_defines["HEAD_SPLIT_UNITS"] = std::to_string(num_heads_per_device);
+    }
     if (use_tile_row_map) {
         reader_defines["AFFINE_TILE_ROW_MAP"] = "1";
         reader_compile_args.push_back(tile_row_map_cb_id);
@@ -1160,7 +1198,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             num_targets_forward,
             num_targets_backward,
             head_dim_tiles,
-            num_tile_rows,
+            // the output's tile-rows (head_split: units -> (head, row) in the writer)
+            head_split ? seq_tile_rows : num_tile_rows,
         };
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
         // Scalar/eps/trans_mat population args (the writer always populates these
@@ -1184,7 +1223,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "dit_rmsnorm_fused_writer.cpp",
             worker_core_set,
-            WriterDataMovementConfig(writer_compile_args));
+            WriterDataMovementConfig(writer_compile_args, head_split_defines));
     } else {
         // Forwarder-model worker writer (AG path): no fabric. Per row it pushes
         // its 128 B stick into the forwarder's grid-uniform packet CB, waits the
@@ -1314,7 +1353,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         bias_cb_id,
         static_cast<uint32_t>(has_bias),
         static_cast<uint32_t>(args.per_head_norm ? 1u : 0u),
-        args.num_heads_per_device,
+        kernel_num_heads,
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
         std::bit_cast<uint32_t>(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
@@ -1367,6 +1406,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_args,
+            .defines = head_split_defines,
         });
 
     // ------------------------------------------------------------------------

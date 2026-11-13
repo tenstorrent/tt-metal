@@ -138,6 +138,11 @@ void kernel_main() {
         (packed_ag_enabled != 0) ? stats_transposed_gathered_cb : stats_gathered_cb;
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+#ifdef HEAD_SPLIT_UNITS
+    // (row, head) split: each "row" is one unit (row * heads + head) of this core's [start, start + rows) range; the
+    // row's broadcast cos / sin stay at the front of their CBs until the row's last unit (see the reader).
+    const uint32_t unit_start = get_arg_val<uint32_t>(1);
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
     matmul_init(intermediate_cb, transformation_mat_cb);
@@ -722,8 +727,14 @@ void kernel_main() {
 
                 if constexpr (block_major_post && per_head_norm != 0 && fuse_rope && per_head_rope == 0) {
                     // Broadcast cos/sin were held resident across all heads; drain once.
-                    cb_rope_cos.pop_front(head_dim_tiles);
-                    cb_rope_sin.pop_front(head_dim_tiles);
+#ifdef HEAD_SPLIT_UNITS
+                    if (((unit_start + row_processed + 1) % HEAD_SPLIT_UNITS) == 0 ||
+                        (row_processed + 1 == num_tile_rows))
+#endif
+                    {
+                        cb_rope_cos.pop_front(head_dim_tiles);
+                        cb_rope_sin.pop_front(head_dim_tiles);
+                    }
                 }
 
                 if constexpr (block_major_post && per_head_norm == 0) {
@@ -1188,8 +1199,14 @@ void kernel_main() {
                     // Broadcast RoPE holds its head_dim_tiles cos/sin across the row;
                     // pop once here. Per-head streamed cos/sin were popped per block above
                     // (sum over blocks == num_tile_cols, the reader's per-row push count).
-                    cb_rope_cos.pop_front(head_dim_tiles);
-                    cb_rope_sin.pop_front(head_dim_tiles);
+#ifdef HEAD_SPLIT_UNITS
+                    if (((unit_start + row_processed + 1) % HEAD_SPLIT_UNITS) == 0 ||
+                        (row_processed + 1 == num_tile_rows))
+#endif
+                    {
+                        cb_rope_cos.pop_front(head_dim_tiles);
+                        cb_rope_sin.pop_front(head_dim_tiles);
+                    }
                 }
 
                 // Per-token weight/bias: pop the row's slice now so the next

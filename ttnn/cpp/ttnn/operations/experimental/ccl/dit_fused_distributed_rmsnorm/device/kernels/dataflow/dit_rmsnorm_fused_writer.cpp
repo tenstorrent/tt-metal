@@ -256,10 +256,19 @@ void kernel_main() {
 
             for (uint32_t i = 0; i < tiles_in_block; i++) {
                 const uint32_t c = col_tile + i;
+#ifdef HEAD_SPLIT_UNITS
+                // (row, head) split: tile_row is a unit (row * heads + head), num_tile_cols == head_dim_tiles;
+                // total_num_tile_rows is the output's tile-row count (rows, not units)
+                const uint32_t h = tile_row % HEAD_SPLIT_UNITS;
+                const uint32_t out_row = tile_row / HEAD_SPLIT_UNITS;
+                const uint32_t t_col = c;
+#else
                 const uint32_t h = c / head_dim_tiles;
                 const uint32_t t_col = c - h * head_dim_tiles;
+                const uint32_t out_row = tile_row;
+#endif
                 const uint32_t output_tile_idx =
-                    h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
+                    h * total_num_tile_rows * head_dim_tiles + out_row * head_dim_tiles + t_col;
                 noc.async_write(
                     CoreLocalMem<uint32_t>(output_rd_ptr),
                     output_accessor,

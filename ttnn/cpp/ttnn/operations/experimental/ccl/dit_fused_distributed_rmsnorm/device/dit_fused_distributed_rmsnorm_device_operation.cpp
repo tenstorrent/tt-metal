@@ -4,6 +4,8 @@
 
 #include "dit_fused_distributed_rmsnorm_device_operation.hpp"
 
+#include <cstdlib>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -402,6 +404,12 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         args.topology,
         args.compute_kernel_config,
         static_cast<uint8_t>(args.norm_type),
+        // TT_DIT_RMSNORM_HEAD_SPLIT (env-read in the program factory): part of the key so a process that flips it
+        // between calls gets the other program, not a silently cached one
+        [] {
+            const char* v = std::getenv("TT_DIT_RMSNORM_HEAD_SPLIT");
+            return v != nullptr && v[0] == '1';
+        }(),
         subdevice_core_range_set,
         tensor_args);
 }

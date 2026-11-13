@@ -449,13 +449,23 @@ void kernel_main() {
             if (chunk_input_done) {
                 const uint32_t chunk_first = tile_row - pos_in_chunk;
                 for (uint32_t r = chunk_first; r <= tile_row; r++) {
+#ifdef HEAD_SPLIT_UNITS
+                    // (row, head) split: r is a unit (row * heads + head). The row's broadcast cos / sin are
+                    // pushed at its first unit on this core only; compute holds them across the row's units.
+                    if ((r % HEAD_SPLIT_UNITS) != 0 && r != tile_row_start) {
+                        continue;
+                    }
+                    const uint32_t r_row = r / HEAD_SPLIT_UNITS;
+#else
+                    const uint32_t r_row = r;
+#endif
                     // Batched RoPE: fold the global row r into (batch b, within-batch seq row
                     // r_seq) so each input batch reuses cos/sin at seq row r_seq. b selects the
                     // per-batch cos/sin block via rope_batch_stride_tiles (0 => broadcast, all
                     // batches share block 0). At batch=1: r_seq==r, rope_batch_off==0 (unchanged).
-                    const uint32_t r_seq = (rope_seqlen_tiles != 0) ? (r % rope_seqlen_tiles) : r;
+                    const uint32_t r_seq = (rope_seqlen_tiles != 0) ? (r_row % rope_seqlen_tiles) : r_row;
                     const uint32_t rope_batch_off =
-                        (rope_seqlen_tiles != 0) ? ((r / rope_seqlen_tiles) * rope_batch_stride_tiles) : 0u;
+                        (rope_seqlen_tiles != 0) ? ((r_row / rope_seqlen_tiles) * rope_batch_stride_tiles) : 0u;
                     // Per-head RoPE: cos/sin shape [B, num_heads, N, head_dim] — all
                     // heads' head_dim_tiles tiles for row r_seq, idx (+ per-batch offset)
                     // h*rope_seqlen_tiles*head_dim_tiles + r_seq*head_dim_tiles + c.
