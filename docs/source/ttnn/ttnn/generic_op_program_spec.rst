@@ -13,8 +13,10 @@ This form is experimental while its API settles, so everything it adds lives und
 
 Each Python class has the fields of the C++ struct with the same name, whose comments document them: TT-NN's
 ``MeshProgramSpec`` and ``MeshProgramRunArgs`` are in ``ttnn/cpp/ttnn/operations/generic/generic_op.hpp``, and the
-others in ``tt_metal/api/tt-metalium/experimental/metal2_host_api/``. Of the advanced options, Python binds only
-``DFBAdvancedOptions.alias_with``, which lets buffers of the same total size share memory; the others are C++ only.
+others in ``tt_metal/api/tt-metalium/workload/``, apart from the advanced options, which stay experimental in
+``tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp``. Of the advanced options, Python
+binds only ``DFBAdvancedOptions.alias_with``, which lets buffers of the same total size share memory; the others are
+C++ only.
 
 An example
 **********
