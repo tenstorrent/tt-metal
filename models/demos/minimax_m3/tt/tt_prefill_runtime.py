@@ -42,7 +42,7 @@ from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.media import build_injection, build_media_partials
-from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
+from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk, validate_chunks
 from models.demos.minimax_m3.tt.media_injection import MediaPartials, inject_media_embeddings
 from models.demos.minimax_m3.tt.residual import activation_mapper
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
@@ -360,6 +360,29 @@ class TtPrefillRuntime:
             x = ttnn.unsqueeze_to_4D(x)
         return x
 
+    # One image is at most MAX_PIXELS tokens (vision/media.py), so this is the per-image worst case and
+    # the bucket a single-image forward lands in.
+    MEDIA_WARMUP_TOKENS = 576
+
+    def _warm_media(self, kv_cache, chunk: int, n_chunks: int, empty) -> None:
+        """Warm the splice: its programs, and the device tensors trace capture is not allowed to allocate.
+
+        Uses StubEmbeddingReader, so no store has to be reachable at compile time. Like the text warm-up,
+        this writes slots the real run overwrites. Only the single-image bucket is warmed; a forward
+        naming enough images to land in a larger table bucket still compiles that shape on first use."""
+        from models.demos.common.prefill.media_stub import stub_media_key
+        from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+
+        n = min(self.MEDIA_WARMUP_TOKENS, chunk)
+        real_reader = self.media_embedding_reader
+        self.media_embedding_reader = StubEmbeddingReader(self.hf_config.hidden_size)
+        try:
+            chunks = [PrefillChunk(0, 0, chunk)] + [empty] * (n_chunks - 1)
+            inp = self.make_forward_input([[0] * chunk] * n_chunks, [c.actual_start for c in chunks])
+            self.prefill_forward(inp, kv_cache, chunks, media_refs=[MediaRef(0, 0, n, stub_media_key(n, 0))])
+        finally:
+            self.media_embedding_reader = real_reader
+
     def _media_partials(self, chunks: list, media_refs: list):
         """D: image rows as per-SP-row partials, or None when the 1D embedding forces the later splice."""
         if not self.model.embedding.shard_vocab_on_sp:
@@ -449,6 +472,8 @@ class TtPrefillRuntime:
         for chunks in plan:
             inp = self.make_forward_input([[0] * chunk] * n_chunks, [c.actual_start for c in chunks])
             self.prefill_forward(inp, kv_cache, chunks)
+        if cfg.is_first_rank:
+            self._warm_media(kv_cache, chunk, n_chunks, empty)
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(f"[prefill timing] task_id=WARMUP variants={len(plan)} runtime.compile() = {warmup_ms:.2f} ms")

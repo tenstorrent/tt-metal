@@ -53,6 +53,18 @@ def build_injection(
     return rows, mask
 
 
+def table_height(rows: int) -> int:
+    """Snap a partial table's height to a power of two (min 32, one tile).
+
+    k moves with how many images a forward names, so an exact height would compile a new program for
+    every image count and could never be preallocated. Snapping leaves a handful of shapes: the program
+    cache hits, and compile() can warm each one so trace capture has somewhere to put them."""
+    height = 32
+    while height < rows:
+        height *= 2
+    return height
+
+
 def build_media_partials(
     refs: list[MediaRef],
     chunks: list[PrefillChunk],
@@ -60,8 +72,8 @@ def build_media_partials(
     sp: int,
     chunk_local: int,
 ) -> Optional[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    """(table [sp, k + 1, hidden] bf16, lookup [sp, s_total] uint32, is_img [s_total] bool), or None
-    without refs.
+    """(table [sp, h, hidden] bf16, lookup [sp, s_total] uint32, is_img [s_total] bool), or None
+    without refs. h is table_height(k + 1): a power of two, so a forward reuses one of a few shapes.
 
     For the 2D embedding's pre-reduce-scatter partials. Each image row is assigned to exactly one SP
     row, round-robin, so the reduce-scatter that already runs sums it into place: adding zeros is exact
@@ -94,7 +106,7 @@ def build_media_partials(
 
     s_total = positions.numel()
     hidden = rows_of(refs[0]).shape[1]
-    table = torch.zeros(sp, int(slot.max()) + 1 if slot.numel() else 1, hidden, dtype=torch.bfloat16)
+    table = torch.zeros(sp, table_height(int(slot.max()) + 1 if slot.numel() else 1), hidden, dtype=torch.bfloat16)
     lookup = torch.zeros(sp, s_total, dtype=torch.int32)
     is_img = torch.zeros(s_total, dtype=torch.bool)
     lookup[sp_row, flats] = slot.to(torch.int32)

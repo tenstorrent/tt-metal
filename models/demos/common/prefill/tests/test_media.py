@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
-from models.demos.common.prefill.media import _positions, build_injection, build_media_partials
+from models.demos.common.prefill.media import _positions, build_injection, build_media_partials, table_height
 from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK, MediaRef, PrefillChunk
 
 SP, LOCAL, HIDDEN = 4, 32, 8
@@ -114,3 +114,16 @@ def test_partials_balance_across_sp_rows():
 
 def test_partials_text_only():
     assert build_media_partials([], [PrefillChunk(0, 0, C)], None, SP, LOCAL) is None
+
+
+@pytest.mark.parametrize("rows,want", [(1, 32), (32, 32), (33, 64), (73, 128), (288, 512), (1281, 2048)])
+def test_table_height_snaps_to_powers_of_two(rows, want):
+    assert table_height(rows) == want
+
+
+def test_table_is_bucketed_and_tail_stays_zero():
+    chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)]
+    embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
+    table, lookup, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
+    assert table.shape[1] == table_height(int(lookup.max()) + 1)
+    assert not table[:, int(lookup.max()) + 1 :].any(), "padding rows must stay zero"
