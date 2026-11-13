@@ -415,22 +415,40 @@ def test_decode_warmup_restages_when_num_blocks_changes(monkeypatch):
     assert staged == {1: 8, 2: 8, 4: 8, 8: 8}
 
 
-def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatch):
-    """#56474: the eager call allocates/compiles prefill; the traced call records on the same buffers. Both phases
-    compile the GDN state-block programs (idempotent) before any trace can be captured after them."""
-    Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
-    calls = []
-    model = SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), _chunked_trace_id=None)
+def _warmup_model(calls, max_batch_size):
+    """A stand-in model whose prefill trace preparation and capture record their calls."""
+    model = SimpleNamespace(
+        num_devices=4,
+        args=SimpleNamespace(max_batch_size=max_batch_size),
+        _chunked_trace_id=None,
+        _masked_traces_recorded=False,
+    )
 
     def record(device):
         calls.append("record")
         model._chunked_trace_id = 7
 
+    def record_masked():
+        calls.append("record masked")
+        model._masked_traces_recorded = True
+
     model.prepare_prefill_trace_chunked = lambda device, page_table, chunk_size: calls.append(
         ("prepare", tuple(page_table.shape))
     )
     model.record_prefill_trace_chunked = record
+    model.prepare_prefill_traces_masked = lambda: calls.append("prepare masked")
+    model.record_prefill_traces_masked = record_masked
     model.gdn_blocks = SimpleNamespace(warmup=lambda: calls.append("blocks"))
+    return model
+
+
+def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatch):
+    """#56474: the eager call allocates/compiles prefill (the chunk trace and the masked-bucket traces); the traced
+    call records on the same buffers. Both phases compile the GDN state-block programs (idempotent) before any trace
+    can be captured after them."""
+    Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
+    calls = []
+    model = _warmup_model(calls, 8)
     wrapper = SimpleNamespace(model=[model], mesh_device="mesh", _PER_ROW_ROPE_DELTA=False)
     kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
 
@@ -439,7 +457,21 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
 
     prepare = ("prepare", (1, 128))
-    assert calls == [prepare, "blocks", prepare, "record", "blocks"]
+    assert calls == [
+        prepare,
+        "prepare masked",
+        "blocks",
+        prepare,
+        "prepare masked",
+        "record",
+        "record masked",
+        "blocks",
+    ]
+    # A chunk trace recorded without the masked-bucket traces is kept; only those are recorded.
+    calls.clear()
+    model._masked_traces_recorded = False
+    Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
+    assert calls == [prepare, "prepare masked", "record masked", "blocks"]
 
 
 @pytest.mark.parametrize("max_batch_size, per_row_rope_delta", [(1, False), (8, True)])
@@ -449,15 +481,7 @@ def test_prefill_warmup_warms_vision_before_any_trace(monkeypatch, max_batch_siz
     the traced call does not run it again."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     calls = []
-    model = SimpleNamespace(num_devices=8, args=SimpleNamespace(max_batch_size=max_batch_size), _chunked_trace_id=None)
-
-    def record(device):
-        calls.append("record")
-        model._chunked_trace_id = 7
-
-    model.prepare_prefill_trace_chunked = lambda device, page_table, chunk_size: calls.append("prepare")
-    model.record_prefill_trace_chunked = record
-    model.gdn_blocks = SimpleNamespace(warmup=lambda: calls.append("blocks"))
+    model = _warmup_model(calls, max_batch_size)
     wrapper = SimpleNamespace(
         model=[model],
         mesh_device="mesh",
@@ -469,7 +493,17 @@ def test_prefill_warmup_warms_vision_before_any_trace(monkeypatch, max_batch_siz
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
 
-    assert calls == ["vision", "prepare", "blocks", "prepare", "record", "blocks"]
+    prepare = ("prepare", (1, 128))
+    assert calls == [
+        "vision",
+        prepare,
+        "prepare masked",
+        "blocks",
+        prepare,
+        "prepare masked",
+        "record",
+        "record masked",
+    ] + ["blocks"]
 
 
 def test_vision_warmup_covers_each_patch_bucket_once(monkeypatch):
@@ -1308,7 +1342,7 @@ def test_vllm_warmup_leaves_no_late_allocations(
     The adapter allocates through allocate_kv_cache_per_layer, as vllm-tt-plugin does, with the GDN state of each row
     in its own KV cache blocks. Between the replays it also runs what prefix caching (mamba_cache_mode "align") adds: a
     prefill that writes a checkpoint, a prefix hit that restores the checkpoint, and a decode step whose rows cross
-    into new state blocks."""
+    into new state blocks. Every partial last chunk, and every prompt up to one chunk, replays a masked-bucket trace."""
     if not trace_allocation_tracker.TRACE_ALLOC_TRACKING:
         pytest.skip("needs TT_METAL_TRACE_ALLOC_TRACKING=1")
     from models.common.sampling.sampling_params import SamplingParams
@@ -1395,10 +1429,16 @@ def test_vllm_warmup_leaves_no_late_allocations(
             state = layout.step_state([hit], bmax, **kw)
             gen.prefill_forward(prompt, page_table[:1], kv_cache, [T], start_pos=[start], mamba_state=state)
         decode(1, params[-1], starts=[hit] + [None] * (bmax - 1), dests=[cross] + [None] * (bmax - 1))
-        # Checkpoints inside the prompt's last chunk, which that chunk's eager forward computes: after a replayed
-        # chunk, and in a whole last chunk that then runs eagerly.
+        # Checkpoints inside the prompt's last chunk, which that chunk's masked-bucket trace computes: after a replayed
+        # chunk, and in a whole last chunk.
         for end in (2048 + layout.block_size + 100, 4096):
             state = layout.step_state(
                 [hit], bmax, checkpoints=[((end - 1) // layout.block_size * layout.block_size, ckpt)]
             )
+            gen.prefill_forward(long_prompt, page_table[:1], kv_cache, [end], mamba_state=state)
+        # Prompts up to one chunk replay a masked-bucket trace from zero state, with a checkpoint when a block
+        # boundary falls inside them.
+        for end in (600, 2000):
+            p = (end - 1) // layout.block_size * layout.block_size
+            state = layout.step_state([hit], bmax, checkpoints=[(p, ckpt) if p else None])
             gen.prefill_forward(long_prompt, page_table[:1], kv_cache, [end], mamba_state=state)

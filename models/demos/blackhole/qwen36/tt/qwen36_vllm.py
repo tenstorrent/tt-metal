@@ -493,7 +493,7 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         # The eager call (enable_trace=False) allocates and compiles everything; the traced call only
         # records, so nothing persistent is allocated once a trace is live (#56474).
         model = self.model[0]
-        if enable_trace and model._chunked_trace_id is not None:
+        if enable_trace and model._chunked_trace_id is not None and model._masked_traces_recorded:
             return
         # Size the chunk-trace page table to the full KV cache so served ISL isn't capped; round to a multiple of 32:
         # paged/chunked SDPA needs the page-table stick % 32 == 0.
@@ -509,8 +509,12 @@ class Qwen36ForCausalLM(_Qwen36Generator):
             f"page_table_blocks={num_blocks}"
         )
         model.prepare_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
+        # The partial last chunk of every prefill (the whole of a prompt up to one chunk) replays a trace per bucket.
+        model.prepare_prefill_traces_masked()
         if enable_trace:
-            model.record_prefill_trace_chunked(self.mesh_device)
+            if model._chunked_trace_id is None:
+                model.record_prefill_trace_chunked(self.mesh_device)
+            model.record_prefill_traces_masked()
         model.gdn_blocks.warmup()
 
     def warmup_model_decode(self, *args, **kwargs):

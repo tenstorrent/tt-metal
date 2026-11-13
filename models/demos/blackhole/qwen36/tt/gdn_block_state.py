@@ -109,9 +109,10 @@ def prefill_segments(start, end, checkpoint_pos, block_size, chunk_size):
     other on the GDN workspace with Qwen36Model.prefill_traced_chunked (start_pos a, checkpoint_pos c), so that the
     state after ``checkpoint_pos`` tokens (0: none) becomes available. Each range starts on a KV block boundary.
 
-    The prefill replays its full ``chunk_size``-token chunks from a trace and runs its partial last chunk eagerly. A
-    checkpoint inside the last chunk is computed by that chunk's eager forward (one range, c = checkpoint_pos), so the
-    prefill runs no extra forward; a full last chunk then runs eagerly instead of from the trace. Otherwise the
+    The prefill replays its full ``chunk_size``-token chunks from the chunk trace and runs its partial last chunk as
+    one masked-bucket forward. A checkpoint inside the last chunk is computed by that chunk's forward (one range, c =
+    checkpoint_pos), so the prefill runs no extra forward; a full last chunk then runs as a masked-bucket forward
+    instead of a chunk-trace replay. Otherwise the
     prefill stops at the checkpoint (two ranges, c = 0), where the workspace holds its state; on a chunk boundary that
     also adds no forward. vLLM puts the checkpoint on the last block boundary before ``end``, which is one of these
     two cases when ``chunk_size`` is a multiple of ``block_size``."""
@@ -448,7 +449,7 @@ class GdnBlockState:
     def write_checkpoint(self, mamba_state, blocks):
         """Copy the state that every GDN layer of MambaSpec group g of ``mamba_state`` computed at the prefill
         checkpoint of its last prefill forward (TPGatedDeltaNet.take_prefill_checkpoint) into block ``blocks[g]``,
-        and free it."""
+        and release it (TPGatedDeltaNet.release_prefill_checkpoint)."""
         self._write_groups(mamba_state, blocks, checkpoint=True)
 
     def _write_groups(self, mamba_state, blocks, checkpoint):
@@ -533,8 +534,7 @@ class GdnBlockState:
     def _write_checkpoint(self, dn):
         rec_state, conv_carry = dn.take_prefill_checkpoint()
         self._write_state(dn, rec_state, conv_carry)
-        ttnn.deallocate(rec_state)
-        ttnn.deallocate(conv_carry)
+        dn.release_prefill_checkpoint(rec_state, conv_carry)
 
     def _write_state(self, dn, rec_state=None, conv_carry=None):
         """Write a GDN state of ``dn`` into the block that the write tables name: ``rec_state`` [1, Nv, Dk, Dv] float32

@@ -104,6 +104,9 @@ def chunk_gated_delta_rule_fused_adapter(
     # None: the op's own dispatch — fused or phased depending on the cost model.
     wy_inverse=None,  # ttnn.ChunkGdnWyInverse.HORNER / FORWARD_SUBSTITUTION / AUTO: the WY-inverse arithmetic. None = the
     # op's AUTO (the forward-substitution solve on Blackhole at chunk 32, Horner elsewhere).
+    masks=None,  # (beta/g mask float32 [B,T,1], q/k/v mask [B,T,1] in q's dtype): device tensors holding the masks
+    # that valid_len builds on the host, applied with the same multiplies but no host write (a captured trace); the
+    # caller owns them
 ):
     global _logged_path
     if not _logged_path:
@@ -152,7 +155,20 @@ def chunk_gated_delta_rule_fused_adapter(
     # Scalar (one length for all rows) or a per-row list/tuple of B lengths (grouped batched prefill:
     # each user its own real length within the shared bucket).
     _is_per_row = isinstance(valid_len, (list, tuple))
-    if _is_per_row or (valid_len is not None and valid_len < T):
+    if masks is not None:
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        _m, _mq = masks
+        if valid_len is not None or len(q.shape) != 3 or _mq.dtype != q.dtype:
+            raise ValueError(
+                f"device masks replace valid_len for flat q/k/v of their dtype (valid_len={valid_len}, "
+                f"q {tuple(q.shape)} {q.dtype}, q/k/v mask {_mq.dtype})"
+            )
+        beta = ttnn.multiply(beta, _m, memory_config=_dram)
+        g = ttnn.multiply(g, _m, memory_config=_dram)
+        q = ttnn.multiply(q, _mq, memory_config=_dram)
+        k = ttnn.multiply(k, _mq, memory_config=_dram)
+        v = ttnn.multiply(v, _mq, memory_config=_dram)
+    elif _is_per_row or (valid_len is not None and valid_len < T):
         _dram = ttnn.DRAM_MEMORY_CONFIG  # op CBs clash with L1 inputs at small buckets
         _mt = torch.zeros(B, T, 1, dtype=torch.float32)
         if _is_per_row:

@@ -237,16 +237,18 @@ class Qwen36DecoderLayer:
         sp=None,
         gdn_checkpoint=None,
         kv_only=False,
+        gdn_masks=None,
     ):
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
-        # gdn_checkpoint: a gdn.tp.PrefillCheckpoint for the TP single-sequence GDN prefill (forward_prefill).
-        if gdn_checkpoint is not None and (
+        # gdn_checkpoint: a gdn.tp.PrefillCheckpoint, gdn_masks: a gdn.tp.PrefillMasks, for the TP single-sequence GDN
+        # prefill (forward_prefill).
+        if (gdn_checkpoint is not None or gdn_masks is not None) and (
             self.is_full_attention or self.num_devices < 2 or mode != "prefill" or gdn_recurrent or gdn_collect
         ):
-            raise ValueError("gdn_checkpoint needs a GDN layer in a TP single-sequence prefill")
+            raise ValueError("gdn_checkpoint and gdn_masks need a GDN layer in a TP single-sequence prefill")
         # kv_only (the MTP drafter's KV maintenance): run the attention only as far as its paged KV write and return
         # None; the residual, the ffn norm and the MLP would only feed an output that no caller reads.
         if kv_only and not (self.is_full_attention and self.num_devices > 1 and mode == "decode"):
@@ -369,6 +371,7 @@ class Qwen36DecoderLayer:
                             carry_state=gdn_carry_state,
                             sp=sp,
                             checkpoint=gdn_checkpoint,
+                            masks=gdn_masks,
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)
