@@ -22,7 +22,8 @@ next attempt with the note in its brief. A running agent cannot take messages; a
     python -m models.demos.common.bringup.overseer close --spec S OV-1 [--why "..."]
     python -m models.demos.common.bringup.overseer list --spec S
     python -m models.demos.common.bringup.overseer abort --spec S --reason "..." [--tasks GLOB ...]
-    python -m models.demos.common.bringup.overseer fix --spec S --gate TASK [--gate TASK ...] [--title T] [--hold WHY] "text"
+    python -m models.demos.common.bringup.overseer fix --spec S --gate TASK [--gate TASK ...] [--title T] [--hold WHY]
+        [--unit TASK#label ...] [--selftest models/.../selftest/test_x.py ...] "text"
     python -m models.demos.common.bringup.overseer release --spec S FIX.n
     python -m models.demos.common.bringup.overseer status --spec S ["why the run is stopped"]   (empty: clear)
 
@@ -33,6 +34,14 @@ first unpassed task. Its gate reruns the gates of the --gate tasks (the passed s
 their frozen tests must all still pass) and its paths are theirs. Fix tasks keep the plan approval; a fix that stops
 stops the run. A fix that must wait for something (a framework change) is queued at once with --hold: it is on record
 (`list`, the dashboard) and is placed only after `release`. A decision is queued when it is made, never only planned.
+
+FIX.31 (owner 2026-11-13: "fix gates prove only their claim"): with --unit / --selftest the fix's gate is its claim, not
+every unit of its --gate tasks chained (FIX.30 got X.3's whole gate and a 442 s determinism unit unrelated to it):
+its --selftest files (CPU tests, run through the safe runner like every gate test) plus only the named device units
+(`TASK#label` as `gate TASK --status` names them, or `TASK` for all of that task's units), each run as its task (its
+BRINGUP_TASK) with the metric limits those units record. Without --unit / --selftest the old behaviour stays. A model-
+level unit still brings the model determinism check (FIX.25, owner: no exemption), which a stamp-reused determinism
+run costs nothing.
 """
 
 from __future__ import annotations
@@ -100,13 +109,23 @@ def queue_fix(
     tasks: dict | None = None,
     hold: str = "",
     paths: list[str] | None = None,
+    units: list[str] | None = None,
+    selftests: list[str] | None = None,
 ) -> dict:
-    """Queue a fix; ``tasks`` (the ledger's tasks by id), when given, validates the gate tasks."""
+    """Queue a fix; ``tasks`` (the ledger's tasks by id), when given, validates the gate tasks. FIX.31: ``units``
+    (TASK#label or TASK) and ``selftests`` (test files) make the fix's gate its claim only (``fix_task``)."""
     if not gate_tasks:
         raise SystemExit("a fix needs at least one --gate task: the passed steps whose frozen tests must still pass")
     missing = [t for t in gate_tasks if tasks is not None and t not in tasks]
     if missing:
         raise SystemExit(f"no such tasks: {missing}")
+    for u in units or []:
+        src = u.split("#", 1)[0]
+        if src not in gate_tasks:
+            raise SystemExit(f"--unit {u}: {src} is not one of the --gate tasks {gate_tasks}")
+        if tasks is not None and "#" in u and not _raw_segments(tasks[src], u.split("#", 1)[1]):
+            labels = sorted({_label(x, i) for i, x in enumerate(_raw(tasks[src]), 1)})
+            raise SystemExit(f"--unit {u}: no such unit in {src}'s gate; its units: {labels}")
     data = _read(ledger_dir)
     have = [int(str(x["id"]).split(".")[-1]) for x in data.get("fixes") or []]
     have += [int(t.split(".")[-1]) for t in (tasks or {}) if t.startswith("FIX.") and t.split(".")[-1].isdigit()]
@@ -119,6 +138,8 @@ def queue_fix(
         "text": text.strip(),
         **({"hold": hold} if hold else {}),
         **({"paths": list(paths)} if paths else {}),  # F127: where the fix may write, beyond its gate tasks' paths
+        **({"units": list(units)} if units else {}),  # FIX.31: the device units its claim needs
+        **({"selftests": list(selftests)} if selftests else {}),  # FIX.31: its own CPU selftests
     }
     data["fixes"] = list(data.get("fixes") or []) + [job]
     _write(ledger_dir, data)
@@ -137,14 +158,71 @@ def release(ledger_dir: Path, fix_id: str) -> dict:
     raise SystemExit(f"no fix {fix_id} in {path(ledger_dir)}")
 
 
-def fix_task(job: dict, tasks: dict) -> dict:
-    """The ledger task of a queued fix: the --gate tasks' gate commands chained, their metrics and paths merged."""
+SELFTEST_RUN = "scripts/run_safe_pytest.sh --run-all --no-precompile"
+
+
+def _raw(task: dict) -> list[str]:
+    return [x.strip() for x in task["gate"]["cmd"].split("&&") if x.strip()]
+
+
+def _label(seg: str, n: int) -> str:
+    from models.demos.common.bringup.core.gate import segment_label
+
+    return segment_label(seg, n)
+
+
+def _raw_segments(task: dict, label: str | None) -> list[str]:
+    """FIX.31: a task's gate segments as written (before the gate's own rewriting) for one unit label, or all."""
+    segs = _raw(task)
+    return segs if label is None else [x for i, x in enumerate(segs, 1) if _label(x, i) == label]
+
+
+def _claim_metrics(task: dict, label: str | None, recorded) -> dict:
+    """FIX.31: the task's metric limits a named unit records: those matching a metric a past run of that unit
+    recorded (``recorded(task id, label)``: names, or None when it never ran: then all of the task's limits)."""
+    import fnmatch
+
+    lim = dict(task["gate"].get("metrics") or {})
+    names = recorded(task["id"], label) if recorded is not None and label is not None else None
+    if not names:
+        return lim
+    return {g: c for g, c in lim.items() if any(fnmatch.fnmatchcase(n, g) for n in names)}
+
+
+def fix_task(job: dict, tasks: dict, recorded=None) -> dict:
+    """The ledger task of a queued fix: the --gate tasks' gate commands chained, their metrics and paths merged.
+    FIX.31: a fix with ``units`` / ``selftests`` gets only those: its selftests (its own units), then each named unit's
+    segments as its task's gate writes them (BRINGUP_TASK=<task>), with the limits those units record (``recorded``:
+    (task id, label) -> metric names of a past run of that unit, e.g. from the stamp store)."""
     gates = [tasks[t] for t in job["gate"]]
     metrics, paths = {}, []
     for g in gates:
-        metrics.update(g["gate"].get("metrics") or {})
         paths += [p for p in g.get("paths") or [] if p not in paths]
     paths += [p for p in job.get("paths") or [] if p not in paths]
+    if job.get("units") or job.get("selftests"):
+        segs = [f"{SELFTEST_RUN} {t}" for t in job.get("selftests") or []]
+        for u in job.get("units") or []:
+            src, label = (u.split("#", 1) + [None])[:2]
+            segs += [f"BRINGUP_TASK={src} {x}" for x in _raw_segments(tasks[src], label)]
+            metrics.update(_claim_metrics(tasks[src], label, recorded))
+        return {
+            "id": job["id"],
+            "title": job["title"],
+            "step": FIX_STEP,
+            "role": FIX_ROLE,
+            "precheck": False,
+            "deps": list(job["gate"]),
+            "gate": {"cmd": " && ".join(segs), "metrics": metrics},
+            "device": bool(job.get("units")) and any(tasks[u.split("#", 1)[0]].get("device") for u in job["units"]),
+            "paths": paths,
+            "brief": {
+                "details": job["text"],
+                "gate_tasks": list(job["gate"]),
+                "claim": {"units": list(job.get("units") or []), "selftests": list(job.get("selftests") or [])},
+            },
+        }
+    for g in gates:
+        metrics.update(g["gate"].get("metrics") or {})
     return {
         "id": job["id"],
         "title": job["title"],
@@ -362,6 +440,14 @@ def main(argv=None) -> int:
             p.add_argument(
                 "--paths", action="append", default=None, help="where the fix may write (default: the model's tt/ dir)"
             )
+            p.add_argument(
+                "--unit",
+                action="append",
+                default=None,
+                help="FIX.31: a device unit the claim needs (TASK#label, or TASK for all its units); the gate is these "
+                "and the --selftest files only",
+            )
+            p.add_argument("--selftest", action="append", default=None, help="FIX.31: a CPU selftest of the fix")
             p.add_argument("text")
         if name == "release":
             p.add_argument("id")
@@ -388,7 +474,7 @@ def main(argv=None) -> int:
         led_tasks = {t["id"]: t for t in (yaml.safe_load((bdir / "tasks.yaml").read_text()) or {}).get("tasks", [])}
         # F127: a fix changes the model's code even when its gate tasks own no paths (a scripted gate such as X.3)
         paths = a.paths or [str((bdir.parent / "tt").resolve().relative_to(Path.cwd().resolve()))]
-        x = queue_fix(bdir, a.text, a.gate, a.title, led_tasks, a.hold, paths)
+        x = queue_fix(bdir, a.text, a.gate, a.title, led_tasks, a.hold, paths, a.unit, a.selftest)
         when = f"held until `release` ({a.hold})" if a.hold else "the orchestrator starts it at its next task boundary"
         print(f"queued {x['id']} (gate {x['gate']}): {when}")
     elif a.cmd == "status":

@@ -1278,6 +1278,75 @@ tasks:
       waiver). Agent rules 18 / 19; no fork regression suites.'
     gate_tasks:
     - K.1
+- id: FIX.31
+  title: 'Framework: count every device run once, fix gates prove only their claim, bookkeeping out of the code key, API crashes
+    are infra, back-to-back gates in one process, watch follows a gate'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - FIX.30
+  gate:
+    cmd: BRINGUP_TASK=FIX.30 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/selftest/test_one_process.py
+      && BRINGUP_TASK=FIX.30 DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=FIX.30 DS41_ENGRAM_TABLE=resident BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh
+      --run-all models/demos/common/bringup/tests/test_profile.py && BRINGUP_TASK=FIX.30 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh
+      --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      prefill_ms_full: '> 0'
+      pos_chunk: '>= 1'
+      op_rows: '>= 1'
+      timeline_ok: == 1
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt/runners
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - scripts/run_safe_pytest.sh
+  - scripts/lib/tt_safe_run.sh
+  brief:
+    details: 'OWNER 2026-11-13: bookkeeping eats the Galaxy. Evidence (Nov 6-13): device busy 24.6 h of ~168 h; FIX.30 ran
+      X.3 one-process units via a raw devjob (7m40s PASS) that its own gate could not count, so the gate had to run them again
+      (~8 min); FIX.30 also got a generic determinism unit (442 s) unrelated to its claim; three Cloudflare 403 agent crashes
+      used the free retries and then a gate ran on an unchanged tree. Four changes, each with a selftest, CPU only: (1) every
+      device run through scripts/run_safe_pytest.sh files its result in the stamp store by command + env key + code key (core/stamps.py),
+      so a gate reuses a matching unit however it was launched (devjob, gate --check, by hand); a unit is reused only on an
+      exact stamp match and a PASS, never a FAIL/HANG. (2) overseer fix builds the fix tasks gate from the fixs claim: its
+      selftests plus only the device units named with the fix (a new option), not every unit of the --gate tasks chained;
+      keep the current behaviour only when the fix names no units. (3) split gate.py / batch.py / scripts/run_safe_pytest.sh
+      / scripts/lib/tt_safe_run.sh into what changes a measurement and what is bookkeeping (pass lists, reporting, memory
+      precheck, logging); only the measuring part is in code_key (F162); a selftest shows a bookkeeping-only edit keeps every
+      stamp and a measuring edit invalidates them. (4) an agent exit with an API/auth error (e.g. 403, 529, overloaded) is
+      INFRA: back off and retry, never counted as an attempt, never followed by a gate on an unchanged tree. (5) OWNER 2026-11-13
+      (added): gates that run back to back are ONE run: orchestrator.pending_full_gates (the quick-accepted picks full gates)
+      and the milestone gate after them (X.3) collect every pending unit of every task, drop the units whose stamp already
+      passed, and run the rest in ONE process on ONE loaded model (FIX.29s one-process mechanism), each unit once even when
+      several tasks name it (same command + env key); each task then gets its own verdict and metrics from its own units,
+      and a failing unit fails only the tasks that name it. Today each pick is its own gate with its own model load (~210
+      GB, minutes each): P.49/P.50/P.51 shared the ladder and profile by stamp but still loaded the model three times. Also
+      (seen 2026-11-13 on FIX.30 --continue): core/batch.parse refuses any run without --no-precompile, so X.3s units (ladder
+      s56320, profile = wall run && clean-wall full prefill, positions) all ran as separate pytest processes, ~4 model loads
+      where tests.one_process promises one; the batcher must precompile once and then batch, never silently fall back, and
+      the gate log must say why a unit did not batch. Also (P.51 full gate, 2026-11-13): its 5 units ran as 5 processes because
+      the profile unit sets DS41_ENGRAM_TABLE=resident, the shipped default, and batch.model_key treats any switch variable
+      as a different model; model_key must normalize a switch at its settings.py default to unset. Also (P.51, 2026-11-13):
+      adding a test_determinism unit to a gate changed the ladder unit command hash (gate_units rewrites another unit when
+      a determinism unit is present), so a passed ladder re-ran; a unit stamp must depend only on its own command and environment.
+      And `gate --status` from a shell differs from the orchestrator env_key (it reported every passed unit "stale"); status
+      must compute the key the gate will use. Selftest: three tasks with overlapping units -> one process, one load, each
+      shared unit run once, per-task verdicts correct. (6) watch follows a live gate too: python -m ...watch exits 3 ORCHESTRATOR
+      NOT RUNNING while a gate --continue or a chain script holds the device; it must treat a running gate (its pid, unit
+      progress) as live and wake on its result. Selftest for both. Proof: the selftests; then this tasks gate with every device
+      unit reused from FIX.30s run (0 device minutes when the code key is unchanged) - report how many units were reused vs
+      run. Never loosen a check; never reset the board.'
+    gate_tasks:
+    - FIX.30
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1290,6 +1359,7 @@ tasks:
   - FIX.15
   - FIX.16
   - FIX.18
+  - FIX.31
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
@@ -2727,7 +2797,8 @@ tasks:
     gate_tasks:
     - P.28
 - id: P.33
-  title: 'DECODER_CUT_TEST: prefill that stops at an even cut 128 tokens short of the end (every chunk non-last), checked at the cut'
+  title: 'DECODER_CUT_TEST: prefill that stops at an even cut 128 tokens short of the end (every chunk non-last), checked
+    at the cut'
   step: perf
   role: perf
   device: true
@@ -2736,7 +2807,14 @@ tasks:
   paths:
   - models/demos/deepseek_v41_flash_d_p/tests/
   brief:
-    details: 'OWNER 2026-11-05 (Kartik / Nikhil''s updated proposal: prefill never runs the decoder; it stops at an even cut 128 tokens short of the end; decode runs the last 128 through all 40 layers): a test only, no model change. Add tests/bringup/test_decoder_cut.py: a prompt (rung s10240 goldens) prefilled up to an even cut = end - 128 (rounded down to even), every chunk last=False under DECODER_SKIP=exact; check at the cut the encoder windows (layers 0-19, the last 128 window rows before the cut) and layer 20''s compressed KV and index keys against the golden, each with its limit from the framework''s end-to-end limits (testing/e2e_limits.py), recorded as cut_err_window_kv_L*, cut_err_compress_kv_L20, cut_err_index_k_L20 with their _limit. If the model cannot end a prefill at a cut (an end not at a chunk boundary with last=False), say so with the evidence instead of changing the model. Model-level checks only.'
+    details: 'OWNER 2026-11-05 (Kartik / Nikhil''s updated proposal: prefill never runs the decoder; it stops at an even cut
+      128 tokens short of the end; decode runs the last 128 through all 40 layers): a test only, no model change. Add tests/bringup/test_decoder_cut.py:
+      a prompt (rung s10240 goldens) prefilled up to an even cut = end - 128 (rounded down to even), every chunk last=False
+      under DECODER_SKIP=exact; check at the cut the encoder windows (layers 0-19, the last 128 window rows before the cut)
+      and layer 20''s compressed KV and index keys against the golden, each with its limit from the framework''s end-to-end
+      limits (testing/e2e_limits.py), recorded as cut_err_window_kv_L*, cut_err_compress_kv_L20, cut_err_index_k_L20 with
+      their _limit. If the model cannot end a prefill at a cut (an end not at a chunk boundary with last=False), say so with
+      the evidence instead of changing the model. Model-level checks only.'
   gate:
     cmd: DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=exact scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_decoder_cut.py
     metrics:
@@ -2793,7 +2871,8 @@ tasks:
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: P.32
-  title: 'WINDOW_KV_KEEP full | ring | none: keep the window history, only each layer''s last 192 rows per user, or nothing (replay)'
+  title: 'WINDOW_KV_KEEP full | ring | none: keep the window history, only each layer''s last 192 rows per user, or nothing
+    (replay)'
   step: perf
   role: perf
   device: true
@@ -2805,7 +2884,31 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-04: the memory half of DeepSeek-V4.1-Flash''s bounded window (arXiv 2609.19969: SWA KV is not persisted). OWNER 2026-11-05: one switch, three values. A new switch WINDOW_KV_KEEP (full | ring | none; default full until the owner decides; full = today: every position of every layer''s window KV; ring = DeepSeek-style: the windows kept per user, here on the device; none = Kartik''s page: nothing kept, every follow-up replays). ring = per user and layer only the last 192 window rows (128 the window reads + 64, the server''s kv_block_size: a follow-up turn starts at align_down(prev_end, 64), so its 128-row carry is still in the ring), written in place as a ring; the compressed KV and index keys unchanged. Everything that reads window rows reads the ring: the chunk''s 128-row carry, a pulled-back chunk, load_host / load_ring / to_host for the harness. none = no window rows kept between requests (the served window cache holds nothing outside the running request): every follow-up and every prefix hit is served by the replay modes below. A start whose carry is not in the ring (a prefix reused from another request, a resume older than the ring, an evicted ring) is served by the decoder-skip modes P.30 / P.31 already have (exact: the caller pulls back >= 2688 tokens; replay128: the 128-token replay); with DECODER_SKIP=off such a start is refused with a clear error, never computed from missing rows. Add tests/bringup/test_window_ring.py: (1) a 3-chunk prompt (rung s10240 + one more chunk, or the goldens available) and a follow-up turn starting at align_down(end, 64), for each of WINDOW_KV_KEEP=ring and none, each under DECODER_SKIP=exact and replay128, vs full (4 combinations, metrics suffixed _ring_exact / _ring_replay128 / _none_exact / _none_replay128): the last chunk''s final hidden, top-5 and every layer''s final 128 window rows against the golden with the framework''s end-to-end limits (testing/e2e_limits.py), recorded as ring_err_final_hidden / ring_err_window_kv_L* / ring_top5_overlap with their _limit, the full path''s values beside them; (2) a start outside the ring under DECODER_SKIP=off raises. Memory: test_dram.py (1M, one slot) on both sides (and record none''s served window bytes in test_window_ring); the served window cache per chip per user should fall from ~1.25 GiB to ~5 MB. The serving contract''s window-KV per-position tests and the tt-d-gen runner tests expect the full history: not in this gate (tt-d-gen change pending). TIMING (owner 2026-11-04): the gate also times one 5k chunk at 51200 and 512000 as the request''s last chunk under DECODER_SKIP=replay128 (decoder on its last 128 rows; metrics *_p<pos>_last) and as a non-last chunk under DECODER_SKIP=exact (*_p<pos>_nonlast), on both A/B sides: the framework runs these (BRINGUP_CHUNK_LAST); do not time them yourself. Model-level checks only; no fork regression suites on the 8x4; every Python-built op prepared.'
+    details: 'OWNER 2026-11-04: the memory half of DeepSeek-V4.1-Flash''s bounded window (arXiv 2609.19969: SWA KV is not
+      persisted). OWNER 2026-11-05: one switch, three values. A new switch WINDOW_KV_KEEP (full | ring | none; default full
+      until the owner decides; full = today: every position of every layer''s window KV; ring = DeepSeek-style: the windows
+      kept per user, here on the device; none = Kartik''s page: nothing kept, every follow-up replays). ring = per user and
+      layer only the last 192 window rows (128 the window reads + 64, the server''s kv_block_size: a follow-up turn starts
+      at align_down(prev_end, 64), so its 128-row carry is still in the ring), written in place as a ring; the compressed
+      KV and index keys unchanged. Everything that reads window rows reads the ring: the chunk''s 128-row carry, a pulled-back
+      chunk, load_host / load_ring / to_host for the harness. none = no window rows kept between requests (the served window
+      cache holds nothing outside the running request): every follow-up and every prefix hit is served by the replay modes
+      below. A start whose carry is not in the ring (a prefix reused from another request, a resume older than the ring, an
+      evicted ring) is served by the decoder-skip modes P.30 / P.31 already have (exact: the caller pulls back >= 2688 tokens;
+      replay128: the 128-token replay); with DECODER_SKIP=off such a start is refused with a clear error, never computed from
+      missing rows. Add tests/bringup/test_window_ring.py: (1) a 3-chunk prompt (rung s10240 + one more chunk, or the goldens
+      available) and a follow-up turn starting at align_down(end, 64), for each of WINDOW_KV_KEEP=ring and none, each under
+      DECODER_SKIP=exact and replay128, vs full (4 combinations, metrics suffixed _ring_exact / _ring_replay128 / _none_exact
+      / _none_replay128): the last chunk''s final hidden, top-5 and every layer''s final 128 window rows against the golden
+      with the framework''s end-to-end limits (testing/e2e_limits.py), recorded as ring_err_final_hidden / ring_err_window_kv_L*
+      / ring_top5_overlap with their _limit, the full path''s values beside them; (2) a start outside the ring under DECODER_SKIP=off
+      raises. Memory: test_dram.py (1M, one slot) on both sides (and record none''s served window bytes in test_window_ring);
+      the served window cache per chip per user should fall from ~1.25 GiB to ~5 MB. The serving contract''s window-KV per-position
+      tests and the tt-d-gen runner tests expect the full history: not in this gate (tt-d-gen change pending). TIMING (owner
+      2026-11-04): the gate also times one 5k chunk at 51200 and 512000 as the request''s last chunk under DECODER_SKIP=replay128
+      (decoder on its last 128 rows; metrics *_p<pos>_last) and as a non-last chunk under DECODER_SKIP=exact (*_p<pos>_nonlast),
+      on both A/B sides: the framework runs these (BRINGUP_CHUNK_LAST); do not time them yourself. Model-level checks only;
+      no fork regression suites on the 8x4; every Python-built op prepared.'
   ab:
     keep_default: true
     env:
@@ -2821,14 +2924,17 @@ tasks:
   - 51200
   - 512000
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_window_ring.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py
+      && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=replay128 BRINGUP_CHUNK_LAST=1 BRINGUP_POS=51200 BRINGUP_PROFILE_HOST=1
       scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_window_ring.py && scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=replay128 BRINGUP_CHUNK_LAST=1 BRINGUP_POS=51200 BRINGUP_PROFILE_HOST=1
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=exact
-      BRINGUP_CHUNK_LAST=0 BRINGUP_POS=51200 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=replay128 BRINGUP_CHUNK_LAST=1 BRINGUP_POS=512000 BRINGUP_PROFILE_HOST=1
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=exact
-      BRINGUP_CHUNK_LAST=0 BRINGUP_POS=512000 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      DS41_DECODER_SKIP=exact BRINGUP_CHUNK_LAST=0 BRINGUP_POS=51200 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=replay128
+      BRINGUP_CHUNK_LAST=1 BRINGUP_POS=512000 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py && DS41_ENGRAM_TABLE=resident DS41_DECODER_SKIP=exact BRINGUP_CHUNK_LAST=0
+      BRINGUP_POS=512000 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       chunk_wall_ms_p51200_last: '> 0'
       chunk_wall_ms_p512000_last: '> 0'
@@ -2855,7 +2961,21 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-06 (mHC study, opportunity #1). The next sublayer''s collapse uses pre weights that are already known when the residual runs (DS41-3: ffn_hc collapses with attn_hc''s mix, which attn_residual has; the next layer''s attn_hc collapses with ffn_hc''s mix, which ffn_residual has). mhc_post''s stats kernel already holds the four new streams of a column in DEST (mhc_post_stats_compute.cpp): also write y = sum_k pre_k * X''_k there (the collapsed bf16 input of the next sublayer), and run the Sinkhorn coefficients on the row root after mhc_post''s existing partial-row reduction, so the next step needs no mhc_pre_xing pass that re-reads the 4 x 5120 streams (6.5 MB a call). Expected: about 3-3.5 ms device and 80 launches (~7.7 ms host) a chunk. Risks: DEST room for 4 more coefficient tiles (the kernel splits top / bottom halves); stay bit-identical by rounding each new stream to bf16 in registers before the collapse with the packer''s rounding. Layer 0 keeps its first collapse (the embedding emits no row). Setting POST_COLLAPSE (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line).'
+    details: 'OWNER 2026-11-06 (mHC study, opportunity #1). The next sublayer''s collapse uses pre weights that are already
+      known when the residual runs (DS41-3: ffn_hc collapses with attn_hc''s mix, which attn_residual has; the next layer''s
+      attn_hc collapses with ffn_hc''s mix, which ffn_residual has). mhc_post''s stats kernel already holds the four new streams
+      of a column in DEST (mhc_post_stats_compute.cpp): also write y = sum_k pre_k * X''_k there (the collapsed bf16 input
+      of the next sublayer), and run the Sinkhorn coefficients on the row root after mhc_post''s existing partial-row reduction,
+      so the next step needs no mhc_pre_xing pass that re-reads the 4 x 5120 streams (6.5 MB a call). Expected: about 3-3.5
+      ms device and 80 launches (~7.7 ms host) a chunk. Risks: DEST room for 4 more coefficient tiles (the kernel splits top
+      / bottom halves); stay bit-identical by rounding each new stream to bf16 in registers before the collapse with the packer''s
+      rounding. Layer 0 keeps its first collapse (the embedding emits no row). Setting POST_COLLAPSE (on / off). Each change
+      behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated
+      by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision
+      at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical,
+      every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model
+      yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and
+      host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line).'
   ab:
     env:
       POST_COLLAPSE: 'off'
@@ -2893,7 +3013,23 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-06 (mHC study, opportunity #3; built on P.34). Under OWN_ROWS each chip holds whole rows, so attn_norm and ffn_norm are local rms_norm calls on the collapsed y (0.70 ms each a chunk, 80 launches). Fold the norm into the pass that writes the collapsed y (after P.34 that is mhc_post''s new collapse output; layer 0''s first collapse in mhc_pre_xing): y * rsqrt(mean(y^2) + eps) * gamma, written as the norm output; optionally also the bfp8 copy q_a reads (0.55 ms of typecasts a chunk). Needs a cross-core row reduction where the collapse is split by column tiles (mhc_pre has a gather-to-root / fold / multicast pattern). perf_proposals.md #10 (NORM_STATS_IN_MHC) predates OWN_ROWS and only moved the statistics; this is the full norm. Expected: about 1.4 ms device (+0.55 with the bfp8 copy) and 80-120 launches a chunk. Setting NORM_IN_MHC (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line). UPDATE 2026-11-07 (owner released): the tree is now P.43 (defaults: MOE_BLOCK_SRC=main, bf16 KV, WINDOW_KV_KEEP=snapshot128, REINDEX_SERVE=alias, INDEX_K_FORMAT=bfp8, DECODER_SKIP=off; DS41-216: one high_bw_all_gather semaphore pair per mesh axis). Current section times (results/P.43_profile.json, opportunities.md 2026-11-07): attn_norm 0.7, ffn_norm 0.7, ffn_residual 12.7 (includes the snapshot write), experts 97.8 ms a chunk.'
+    details: 'OWNER 2026-11-06 (mHC study, opportunity #3; built on P.34). Under OWN_ROWS each chip holds whole rows, so attn_norm
+      and ffn_norm are local rms_norm calls on the collapsed y (0.70 ms each a chunk, 80 launches). Fold the norm into the
+      pass that writes the collapsed y (after P.34 that is mhc_post''s new collapse output; layer 0''s first collapse in mhc_pre_xing):
+      y * rsqrt(mean(y^2) + eps) * gamma, written as the norm output; optionally also the bfp8 copy q_a reads (0.55 ms of
+      typecasts a chunk). Needs a cross-core row reduction where the collapse is split by column tiles (mhc_pre has a gather-to-root
+      / fold / multicast pattern). perf_proposals.md #10 (NORM_STATS_IN_MHC) predates OWN_ROWS and only moved the statistics;
+      this is the full norm. Expected: about 1.4 ms device (+0.55 with the bfp8 copy) and 80-120 launches a chunk. Setting
+      NORM_IN_MHC (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s
+      path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card
+      device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on
+      (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests
+      for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000.
+      Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md
+      (per-layer flow, costs, file:line). UPDATE 2026-11-07 (owner released): the tree is now P.43 (defaults: MOE_BLOCK_SRC=main,
+      bf16 KV, WINDOW_KV_KEEP=snapshot128, REINDEX_SERVE=alias, INDEX_K_FORMAT=bfp8, DECODER_SKIP=off; DS41-216: one high_bw_all_gather
+      semaphore pair per mesh axis). Current section times (results/P.43_profile.json, opportunities.md 2026-11-07): attn_norm
+      0.7, ffn_norm 0.7, ffn_residual 12.7 (includes the snapshot write), experts 97.8 ms a chunk.'
   ab:
     env:
       NORM_IN_MHC: 'off'
@@ -2908,12 +3044,13 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
-      && DS41_DECODER_SKIP=replay128 DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
-      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && DS41_DECODER_SKIP=replay128
+      DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2938,7 +3075,28 @@ tasks:
   - models/demos/moe_block
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-06 (mHC study, opportunity #2; built on P.34 / P.35; after the owner''s moe_block update). The only collective left next to mHC on the 8x4 default path is the MoE x all_to_all after ffn_norm (all_to_all_async_generic over TP, [160, H] -> [640, H/4] into head.x; moe_block.py:720-722, 997-1010): 4.69 ms max chip, 40 launches, ~13.6 ms host with ffn_norm, ~17 ms device idle before it. Have the pass that writes the normalized ffn input send each 1280-column block straight into the peer chip''s head.x over fabric (persistent buffer, same address on every chip): ports, fabric connections, global semaphores and the ready fence as fabric_reduce_scatter / combine_rf do; a slot in the 110-core cap for the ports. The head''s x must be written before the MoE arena is taken. Risks: hangs; the skew wait (~3.7 ms) moves into the head, it does not vanish. Expected: about 2.2 ms device and 80 launches a chunk. Setting FFN_FEED (on / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer flow, costs, file:line). UPDATE 2026-11-07 (owner released): the tree is now P.43 (defaults: MOE_BLOCK_SRC=main, bf16 KV, WINDOW_KV_KEEP=snapshot128, REINDEX_SERVE=alias, INDEX_K_FORMAT=bfp8, DECODER_SKIP=off; DS41-216: one high_bw_all_gather semaphore pair per mesh axis). Current section times (results/P.43_profile.json, opportunities.md 2026-11-07): attn_norm 0.7, ffn_norm 0.7, ffn_residual 12.7 (includes the snapshot write), experts 97.8 ms a chunk. The default MoE path is now Marko Staletovic''s block (MOE_BLOCK_SRC=main): its x all_to_all_async_generic over TP into the block''s fused head is in tt/moe_block_main_adapter.py (around lines 395-411; the head is mb.fused_head). Target that path; the carried block (moe_block.py) is secondary (make FFN_FEED refuse or fall back there, say which). The 4.69 ms / 13.6 ms / 17 ms figures were measured on the carried block: re-measure on main in the report.'
+    details: 'OWNER 2026-11-06 (mHC study, opportunity #2; built on P.34 / P.35; after the owner''s moe_block update). The
+      only collective left next to mHC on the 8x4 default path is the MoE x all_to_all after ffn_norm (all_to_all_async_generic
+      over TP, [160, H] -> [640, H/4] into head.x; moe_block.py:720-722, 997-1010): 4.69 ms max chip, 40 launches, ~13.6 ms
+      host with ffn_norm, ~17 ms device idle before it. Have the pass that writes the normalized ffn input send each 1280-column
+      block straight into the peer chip''s head.x over fabric (persistent buffer, same address on every chip): ports, fabric
+      connections, global semaphores and the ready fence as fabric_reduce_scatter / combine_rf do; a slot in the 110-core
+      cap for the ports. The head''s x must be written before the MoE arena is taken. Risks: hangs; the skew wait (~3.7 ms)
+      moves into the head, it does not vanish. Expected: about 2.2 ms device and 80 launches a chunk. Setting FFN_FEED (on
+      / off). Each change behind its own setting in tt/settings.py (default on once accepted; off = today''s path) so a regression
+      can be isolated by its switch. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold; forks
+      first; precision at the reference''s level: aim for bit-identical results with the switch on (the same bf16 rounding
+      points; if not bit-identical, every gated metric within its limit and say why). Add fork tests for every fork option
+      you add. Do not profile the model yourself: the orchestrator measures off vs on at 51200 and 512000. Report: ops / launches
+      removed a chunk, device and host ms a chunk before / after. Study: /scratch/dnijemcevic/rebase/mhc/notes.md (per-layer
+      flow, costs, file:line). UPDATE 2026-11-07 (owner released): the tree is now P.43 (defaults: MOE_BLOCK_SRC=main, bf16
+      KV, WINDOW_KV_KEEP=snapshot128, REINDEX_SERVE=alias, INDEX_K_FORMAT=bfp8, DECODER_SKIP=off; DS41-216: one high_bw_all_gather
+      semaphore pair per mesh axis). Current section times (results/P.43_profile.json, opportunities.md 2026-11-07): attn_norm
+      0.7, ffn_norm 0.7, ffn_residual 12.7 (includes the snapshot write), experts 97.8 ms a chunk. The default MoE path is
+      now Marko Staletovic''s block (MOE_BLOCK_SRC=main): its x all_to_all_async_generic over TP into the block''s fused head
+      is in tt/moe_block_main_adapter.py (around lines 395-411; the head is mb.fused_head). Target that path; the carried
+      block (moe_block.py) is secondary (make FFN_FEED refuse or fall back there, say which). The 4.69 ms / 13.6 ms / 17 ms
+      figures were measured on the carried block: re-measure on main in the report.'
   ab:
     env:
       FFN_FEED: 'off'
@@ -2953,12 +3111,13 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
-      && DS41_DECODER_SKIP=replay128 DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
-      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && DS41_DECODER_SKIP=replay128
+      DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -2971,7 +3130,8 @@ tasks:
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.37
-  title: 'MOE_BLOCK_SRC=main (Marko''s reworked block, no DRISC): functional parity with the carried block (SE_PACK_PRECISE, NORM_INTO_MOE, DECODER_SKIP=replay128 and every other setting it honours)'
+  title: 'MOE_BLOCK_SRC=main (Marko''s reworked block, no DRISC): functional parity with the carried block (SE_PACK_PRECISE,
+    NORM_INTO_MOE, DECODER_SKIP=replay128 and every other setting it honours)'
   step: perf
   role: perf
   device: true
@@ -2983,7 +3143,31 @@ tasks:
   - models/demos/moe_block_main
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-06. Marko''s reworked MoE block (mstaletovic/moe-block-main @ 0c0bbe59d98, which does not use the DRISC cores the serving framework''s KV Manager uses) is ported beside the carried block: C++ ops ttnn/ttnn/bringup/moe_block_main_ttnn (ttnn.bringup.moe_block_main.*), Python models/demos/moe_block_main, DS41 adapter tt/moe_block_main_adapter.py, switch MOE_BLOCK_SRC (carried / main; commits bc71f592543..906a493eabb; report: /scratch/dnijemcevic/rebase/moe_main/, the MOE_BLOCK_SRC description in tt/settings.py lists what main lacks). Give the main block the three features the carried block has, each behind its existing setting so MOE_BLOCK_SRC=main honours it, by porting the logical change: read how each was done for the carried block (git log -S / --grep on the setting and task id, the settings.py description, its task here and BREADCRUMBS) and make the equivalent change in the main block (the bring-up copy; never stock ops, never the carried block). (1) SE_PACK_PRECISE (FIX.9, DS41-132): the fused head''s shared expert packs its bfp8 h with one rounding from fp32 DEST at the group''s shared exponent, as the reference casts h once. (2) NORM_INTO_MOE (P.21): ffn_norm writes the block''s own input buffer in place and, through the rms_norm fork''s bfp8_twin option, the head''s bfp8 x in the same program (no bf16 copy, no separate typecast); bit-identical outputs on vs off. (3) DECODER_SKIP=replay128 (P.31): the main block runs the decoder tail chunk (the last <= 128 rows, TtDS41Model.build_tail) instead of raising. FUNCTIONAL PARITY (owner 2026-11-06): beyond these three, every setting value and code path the carried block honours must work on MOE_BLOCK_SRC=main with the same results; first audit every setting in tt/settings.py that the carried block or its adapter reads (and every value), list each as works / ported / out of scope, and port the missing ones the same way. Out of scope (owner): the carried block''s prepared-program / HOST_ALLOC hooks (P.2, P.14, P.15, TAIL_A2A_PREPARED and similar host-launch tricks: the C++ ops cover them) and mixed expert formats (EXPERTS_IMPL=bfp8_down4 and similar per-matrix combos); uniform formats (bfp4_mse, bfp4, bfp8) are in scope. Put the audit table in the report. Add tests for each (fork tests for every fork option; a DS41 test that SE_PACK_PRECISE bit-matches the reference rounding and that NORM_INTO_MOE on / off are bit-identical, on MOE_BLOCK_SRC=main), and run them before ending. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold. Do not profile the model yourself: the orchestrator measures off vs on at 51200; the gate runs on MOE_BLOCK_SRC=main, including P.31''s short-turn test with replay128. Report in plain language: what each feature needed in the main block, tests added, per-layer MoE device / host ms before / after (before: main 2.91 / 1.24 ms, carried 2.39 / 1.70 ms at 51200).'
+    details: 'OWNER 2026-11-06. Marko''s reworked MoE block (mstaletovic/moe-block-main @ 0c0bbe59d98, which does not use
+      the DRISC cores the serving framework''s KV Manager uses) is ported beside the carried block: C++ ops ttnn/ttnn/bringup/moe_block_main_ttnn
+      (ttnn.bringup.moe_block_main.*), Python models/demos/moe_block_main, DS41 adapter tt/moe_block_main_adapter.py, switch
+      MOE_BLOCK_SRC (carried / main; commits bc71f592543..906a493eabb; report: /scratch/dnijemcevic/rebase/moe_main/, the
+      MOE_BLOCK_SRC description in tt/settings.py lists what main lacks). Give the main block the three features the carried
+      block has, each behind its existing setting so MOE_BLOCK_SRC=main honours it, by porting the logical change: read how
+      each was done for the carried block (git log -S / --grep on the setting and task id, the settings.py description, its
+      task here and BREADCRUMBS) and make the equivalent change in the main block (the bring-up copy; never stock ops, never
+      the carried block). (1) SE_PACK_PRECISE (FIX.9, DS41-132): the fused head''s shared expert packs its bfp8 h with one
+      rounding from fp32 DEST at the group''s shared exponent, as the reference casts h once. (2) NORM_INTO_MOE (P.21): ffn_norm
+      writes the block''s own input buffer in place and, through the rms_norm fork''s bfp8_twin option, the head''s bfp8 x
+      in the same program (no bf16 copy, no separate typecast); bit-identical outputs on vs off. (3) DECODER_SKIP=replay128
+      (P.31): the main block runs the decoder tail chunk (the last <= 128 rows, TtDS41Model.build_tail) instead of raising.
+      FUNCTIONAL PARITY (owner 2026-11-06): beyond these three, every setting value and code path the carried block honours
+      must work on MOE_BLOCK_SRC=main with the same results; first audit every setting in tt/settings.py that the carried
+      block or its adapter reads (and every value), list each as works / ported / out of scope, and port the missing ones
+      the same way. Out of scope (owner): the carried block''s prepared-program / HOST_ALLOC hooks (P.2, P.14, P.15, TAIL_A2A_PREPARED
+      and similar host-launch tricks: the C++ ops cover them) and mixed expert formats (EXPERTS_IMPL=bfp8_down4 and similar
+      per-matrix combos); uniform formats (bfp4_mse, bfp4, bfp8) are in scope. Put the audit table in the report. Add tests
+      for each (fork tests for every fork option; a DS41 test that SE_PACK_PRECISE bit-matches the reference rounding and
+      that NORM_INTO_MOE on / off are bit-identical, on MOE_BLOCK_SRC=main), and run them before ending. Agent rules 18 (at
+      most 110 cores an op) and 19 (no single-card device jobs) hold. Do not profile the model yourself: the orchestrator
+      measures off vs on at 51200; the gate runs on MOE_BLOCK_SRC=main, including P.31''s short-turn test with replay128.
+      Report in plain language: what each feature needed in the main block, tests added, per-layer MoE device / host ms before
+      / after (before: main 2.91 / 1.24 ms, carried 2.39 / 1.70 ms at 51200).'
   ab:
     env:
       MOE_BLOCK_SRC: main
@@ -3000,9 +3184,10 @@ tasks:
   gate:
     cmd: DS41_MOE_BLOCK_SRC=main BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_MOE_BLOCK_SRC=main DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && DS41_MOE_BLOCK_SRC=main DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && DS41_MOE_BLOCK_SRC=main scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && DS41_MOE_BLOCK_SRC=main scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && DS41_MOE_BLOCK_SRC=main DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py && DS41_MOE_BLOCK_SRC=main scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && DS41_MOE_BLOCK_SRC=main scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3015,7 +3200,8 @@ tasks:
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.38
-  title: 'KV in bf16 for now: CKV_FORMAT=bf16 and a bf16 window KV (computed, not only served), default until the owner returns to 4-bit'
+  title: 'KV in bf16 for now: CKV_FORMAT=bf16 and a bf16 window KV (computed, not only served), default until the owner returns
+    to 4-bit'
   step: perf
   role: perf
   device: true
@@ -3026,7 +3212,19 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-06 (PD migration first cut: decode''s cache formats are still open, so for now both KV caches are 16-bit end to end; the owner will return to 4-bit compressed KV later, so keep bfp4_rows / bfp8_tiles working and only change the defaults). Make the default compressed KV attention table bf16 (CKV_FORMAT=bf16: the history as bf16 rows, read by sparse_sdpa in bf16) and the window KV bf16 (computed and read in bf16, no 8-bit rounding). Today WINDOW_KV_FORMAT=bf16_tiles (P.26: the per-chip region with the neighbour send) asserts CKV_FORMAT=bfp4_rows on compressed layers (tt/sparse_attention.py:301: the window comes to the fork as kv_window next to the bfp4 table). Prefer making bf16_tiles work with CKV_FORMAT=bf16 (keep the per-chip region and neighbour send; the compressed layers read the bf16 table plus the bf16 region, e.g. through the sdpa fork''s kv_window with a bf16 table, or stock sparse_sdpa if it can take both); if that is not reasonable, use WINDOW_KV_FORMAT=bf16 (the row table before P.18) and say what it costs. INDEX_K_FORMAT stays bfp4. The served caches are already bf16 (contract unchanged). Add fork tests for every fork option you add. Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold. Do not profile the model yourself: the orchestrator measures off vs on at 51200. Report in plain language: what changed, accuracy (it should be closer to the golden than 4/8-bit: err_state_compress_kv_*, err_state_window_kv_*, layers, final hidden) and device / host ms a chunk before / after.'
+    details: 'OWNER 2026-11-06 (PD migration first cut: decode''s cache formats are still open, so for now both KV caches
+      are 16-bit end to end; the owner will return to 4-bit compressed KV later, so keep bfp4_rows / bfp8_tiles working and
+      only change the defaults). Make the default compressed KV attention table bf16 (CKV_FORMAT=bf16: the history as bf16
+      rows, read by sparse_sdpa in bf16) and the window KV bf16 (computed and read in bf16, no 8-bit rounding). Today WINDOW_KV_FORMAT=bf16_tiles
+      (P.26: the per-chip region with the neighbour send) asserts CKV_FORMAT=bfp4_rows on compressed layers (tt/sparse_attention.py:301:
+      the window comes to the fork as kv_window next to the bfp4 table). Prefer making bf16_tiles work with CKV_FORMAT=bf16
+      (keep the per-chip region and neighbour send; the compressed layers read the bf16 table plus the bf16 region, e.g. through
+      the sdpa fork''s kv_window with a bf16 table, or stock sparse_sdpa if it can take both); if that is not reasonable,
+      use WINDOW_KV_FORMAT=bf16 (the row table before P.18) and say what it costs. INDEX_K_FORMAT stays bfp4. The served caches
+      are already bf16 (contract unchanged). Add fork tests for every fork option you add. Agent rules 18 (at most 110 cores
+      an op) and 19 (no single-card device jobs) hold. Do not profile the model yourself: the orchestrator measures off vs
+      on at 51200. Report in plain language: what changed, accuracy (it should be closer to the golden than 4/8-bit: err_state_compress_kv_*,
+      err_state_window_kv_*, layers, final hidden) and device / host ms a chunk before / after.'
   ab:
     env:
       CKV_FORMAT: bfp4_rows
@@ -3042,9 +3240,9 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3057,7 +3255,8 @@ tasks:
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.39
-  title: 'Served index keys in Blaze decode''s format: scaled FP8 E4M3, one fp32 scale a row, 192-byte rows (PD migration compatibility, for now)'
+  title: 'Served index keys in Blaze decode''s format: scaled FP8 E4M3, one fp32 scale a row, 192-byte rows (PD migration
+    compatibility, for now)'
   step: perf
   role: perf
   device: true
@@ -3069,7 +3268,28 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-06 (PD migration first cut, compatibility with Blaze decode for now; keep today''s bf16 served index keys behind a switch). OWNER-AUTHORIZED CONTRACT CHANGE: the served index-key caches (2_index_k_r2, 4_index_k_r1) change from bf16 rows (256 B) to Blaze decode''s indexer key cache rows, byte for byte: uint8 [.., 192] row-major, one row per compressed position; bytes 0..127 = e4m3 of key[i] / scale (same order as the bf16 key), bytes 128..131 = scale as fp32 little-endian, scale = clamp(amax(|key|), 1e-4, 3e38) * float32(1/448) (not a power of two), bytes 132..191 padding (zeros). Encoding as Blaze''s device writer: values times the reciprocal of the scale truncated to TF32 (& 0xFFFFE000), e4m3 mantissa truncated toward zero, below 2^-6 flushed to zero. Byte-exact reference: tt-metal''s ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x, round_scale_to_power_of_two=False) (tt-blaze 8223e7f9963e tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:75-118 checks bytes 0..131 against it; _quantize_scaled_keys is the exact torch recipe; do NOT use csa2_harness.py pack_index_keys, it rounds to nearest). Use per_token_cast_to_fp8 on device (stock op, already in the tree) plus a step that builds the 192-byte rows and writes them into the served cache (records: 32 rows x 192 B contiguous in one bank, the contract''s record rule; our SP placement stays). Our indexer keeps scoring with INDEX_K_FORMAT (bfp4 default): read the served fp8 rows, dequantize, then as today; or keep a persistent compute copy, your choice, say the cost. Layers: we serve index keys on 2, 8, 14 (ratio 2) and 20 (ratio 1); Blaze decode also keeps an index cache on reindex layers 24, 28, 32, 36 (ratio 1, key from the stage payload index_cache_row, csa_attention/op.py:1156-1161): check in tt-blaze (clone /scratch/dnijemcevic/tt-blaze-ro) what key those layers hold; if it is layer 20''s key, serve the same rows under those layers too (configs and order as serving_contract.md, documented). Setting INDEX_K_SERVED (fp8_row192 default / bf16 = today). Update serving_contract.md (the table, record sizes: 32 x 192 = 6144 B a record for ratio 1, 16 x 192 for ratio 2) and the contract / kv_layout / acks tests'' readers of index_k to the new bytes: decode the fp8 rows and compare with the golden at a stated fp8 tolerance, plus a byte-exact check of the encoding against per_token_cast_to_fp8 / the Blaze recipe. Never loosen any other check. Agent rules 18 and 19 hold. Do not profile the model yourself: the orchestrator measures at 51200. Report in plain language.'
+    details: 'OWNER 2026-11-06 (PD migration first cut, compatibility with Blaze decode for now; keep today''s bf16 served
+      index keys behind a switch). OWNER-AUTHORIZED CONTRACT CHANGE: the served index-key caches (2_index_k_r2, 4_index_k_r1)
+      change from bf16 rows (256 B) to Blaze decode''s indexer key cache rows, byte for byte: uint8 [.., 192] row-major, one
+      row per compressed position; bytes 0..127 = e4m3 of key[i] / scale (same order as the bf16 key), bytes 128..131 = scale
+      as fp32 little-endian, scale = clamp(amax(|key|), 1e-4, 3e38) * float32(1/448) (not a power of two), bytes 132..191
+      padding (zeros). Encoding as Blaze''s device writer: values times the reciprocal of the scale truncated to TF32 (& 0xFFFFE000),
+      e4m3 mantissa truncated toward zero, below 2^-6 flushed to zero. Byte-exact reference: tt-metal''s ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x,
+      round_scale_to_power_of_two=False) (tt-blaze 8223e7f9963e tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:75-118
+      checks bytes 0..131 against it; _quantize_scaled_keys is the exact torch recipe; do NOT use csa2_harness.py pack_index_keys,
+      it rounds to nearest). Use per_token_cast_to_fp8 on device (stock op, already in the tree) plus a step that builds the
+      192-byte rows and writes them into the served cache (records: 32 rows x 192 B contiguous in one bank, the contract''s
+      record rule; our SP placement stays). Our indexer keeps scoring with INDEX_K_FORMAT (bfp4 default): read the served
+      fp8 rows, dequantize, then as today; or keep a persistent compute copy, your choice, say the cost. Layers: we serve
+      index keys on 2, 8, 14 (ratio 2) and 20 (ratio 1); Blaze decode also keeps an index cache on reindex layers 24, 28,
+      32, 36 (ratio 1, key from the stage payload index_cache_row, csa_attention/op.py:1156-1161): check in tt-blaze (clone
+      /scratch/dnijemcevic/tt-blaze-ro) what key those layers hold; if it is layer 20''s key, serve the same rows under those
+      layers too (configs and order as serving_contract.md, documented). Setting INDEX_K_SERVED (fp8_row192 default / bf16
+      = today). Update serving_contract.md (the table, record sizes: 32 x 192 = 6144 B a record for ratio 1, 16 x 192 for
+      ratio 2) and the contract / kv_layout / acks tests'' readers of index_k to the new bytes: decode the fp8 rows and compare
+      with the golden at a stated fp8 tolerance, plus a byte-exact check of the encoding against per_token_cast_to_fp8 / the
+      Blaze recipe. Never loosen any other check. Agent rules 18 and 19 hold. Do not profile the model yourself: the orchestrator
+      measures at 51200. Report in plain language.'
   ab:
     env:
       INDEX_K_SERVED: bf16
@@ -3083,9 +3303,9 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3109,7 +3329,18 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-07: an A/B of the index-key format the indexer stores and scores with, three arms: INDEX_K_FORMAT=bf16 (no rounding step; exists), bfp4 (today''s default, rounded to bfloat4_b to mimic the reference''s fp4; exists) and a NEW option bfp8 (the tiled key slab rounded to bfloat8_b with ttnn.bringup.bfp_round and the ring''s key buffer bfloat8_b, read by ring_indexer_score_dsa through the unpacker, the same way bfp4 is done today). Add bfp8 behind the existing switch; bf16 and bfp4 behave exactly as today; the default stays bfp4 (the owner decides after reading the table). The served index keys are not in scope: they stay INDEX_K_SERVED=fp8_row192 (Blaze rows) in every arm. Measure all three arms on the same code and report one table: err_final_hidden, top5_overlap, err_state_topk_idx_L* and overlap_state_topk_idx_L* (every index layer), err_state_index_k_L*, device_ms_indexer, device_ms_total, chunk_wall_ms, plus the ring key-buffer bytes a chip per arm. The orchestrator''s quick A/B compares bfp4 (env) with bfp8 (change); measure the bf16 arm with the same tooling at the same position and add it to the table. Never loosen any check. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator measures at 51200. Report in plain language, short, every term defined.'
+    details: 'OWNER 2026-11-07: an A/B of the index-key format the indexer stores and scores with, three arms: INDEX_K_FORMAT=bf16
+      (no rounding step; exists), bfp4 (today''s default, rounded to bfloat4_b to mimic the reference''s fp4; exists) and
+      a NEW option bfp8 (the tiled key slab rounded to bfloat8_b with ttnn.bringup.bfp_round and the ring''s key buffer bfloat8_b,
+      read by ring_indexer_score_dsa through the unpacker, the same way bfp4 is done today). Add bfp8 behind the existing
+      switch; bf16 and bfp4 behave exactly as today; the default stays bfp4 (the owner decides after reading the table). The
+      served index keys are not in scope: they stay INDEX_K_SERVED=fp8_row192 (Blaze rows) in every arm. Measure all three
+      arms on the same code and report one table: err_final_hidden, top5_overlap, err_state_topk_idx_L* and overlap_state_topk_idx_L*
+      (every index layer), err_state_index_k_L*, device_ms_indexer, device_ms_total, chunk_wall_ms, plus the ring key-buffer
+      bytes a chip per arm. The orchestrator''s quick A/B compares bfp4 (env) with bfp8 (change); measure the bf16 arm with
+      the same tooling at the same position and add it to the table. Never loosen any check. Agent rules 18 and 19 hold. Do
+      not profile the model yourself beyond the A/B: the orchestrator measures at 51200. Report in plain language, short,
+      every term defined.'
   ab:
     env:
       INDEX_K_FORMAT: bfp4
@@ -3123,9 +3354,9 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3150,7 +3381,23 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-07: with INDEX_K_FORMAT=bfp8 (P.40 default) and INDEX_K_SERVED=fp8_row192 (P.39 default), keep no 16-bit copy of the index keys. Today tt/compressor.py keeps a persistent bf16 compute copy of every index-key cache (``slab``, compressor.py:52 / :366 / :397), the indexer rounds it to bfp8 every chunk (bfp_round) into the ring key buffer, and the served 192-byte rows are packed from the bf16 keys. Target: the keys are written once, as bfloat8_b, into a persistent bfp8 copy (no bf16 slab, no per-chunk re-rounding of the history; only the new chunk''s keys are rounded); the indexer scores that copy; the served Blaze rows (e4m3 of key / scale, fp32 scale a row, 192 B rows, same encoding rules as P.39) are built from the bfp8 keys (the unpacker reads bfp8 natively; add a typecast if per_token_cast_to_fp8 does not accept bfp8). Behind a new switch INDEX_K_COPY: bfp8 (new, default after acceptance) | bf16 (today''s path, unchanged). KEEP EVERY OPTION: INDEX_K_FORMAT bf16 / bfp4 and INDEX_K_SERVED bf16 keep working (with INDEX_K_COPY=bfp8 they need the bf16 copy, so either fall back to the bf16 copy with a log line or refuse with a clear error; say which). OWNER-AUTHORIZED TEST CHANGE: P.39''s byte-exact check of the served rows applies the Blaze recipe to the keys the rows are built from; with INDEX_K_COPY=bfp8 that is the bfp8-rounded keys (dequantized), not the bf16 keys. Change only that reference input; every other check, tolerance and limit stays. Report in one short table: per-chip memory of the index-key copies at 56,320 and 1,044,480 tokens (before / after), err_state_index_k_L*, err_state_topk_idx_L* and overlap, err_final_hidden, top5_overlap, device_ms_indexer, device_ms_total, chunk_wall_ms. Never loosen any check. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator measures at 51200. Report in plain language, short, every term defined.'
+    details: 'OWNER 2026-11-07: with INDEX_K_FORMAT=bfp8 (P.40 default) and INDEX_K_SERVED=fp8_row192 (P.39 default), keep
+      no 16-bit copy of the index keys. Today tt/compressor.py keeps a persistent bf16 compute copy of every index-key cache
+      (``slab``, compressor.py:52 / :366 / :397), the indexer rounds it to bfp8 every chunk (bfp_round) into the ring key
+      buffer, and the served 192-byte rows are packed from the bf16 keys. Target: the keys are written once, as bfloat8_b,
+      into a persistent bfp8 copy (no bf16 slab, no per-chunk re-rounding of the history; only the new chunk''s keys are rounded);
+      the indexer scores that copy; the served Blaze rows (e4m3 of key / scale, fp32 scale a row, 192 B rows, same encoding
+      rules as P.39) are built from the bfp8 keys (the unpacker reads bfp8 natively; add a typecast if per_token_cast_to_fp8
+      does not accept bfp8). Behind a new switch INDEX_K_COPY: bfp8 (new, default after acceptance) | bf16 (today''s path,
+      unchanged). KEEP EVERY OPTION: INDEX_K_FORMAT bf16 / bfp4 and INDEX_K_SERVED bf16 keep working (with INDEX_K_COPY=bfp8
+      they need the bf16 copy, so either fall back to the bf16 copy with a log line or refuse with a clear error; say which).
+      OWNER-AUTHORIZED TEST CHANGE: P.39''s byte-exact check of the served rows applies the Blaze recipe to the keys the rows
+      are built from; with INDEX_K_COPY=bfp8 that is the bfp8-rounded keys (dequantized), not the bf16 keys. Change only that
+      reference input; every other check, tolerance and limit stays. Report in one short table: per-chip memory of the index-key
+      copies at 56,320 and 1,044,480 tokens (before / after), err_state_index_k_L*, err_state_topk_idx_L* and overlap, err_final_hidden,
+      top5_overlap, device_ms_indexer, device_ms_total, chunk_wall_ms. Never loosen any check. Agent rules 18 and 19 hold.
+      Do not profile the model yourself beyond the A/B: the orchestrator measures at 51200. Report in plain language, short,
+      every term defined.'
   ab:
     env:
       INDEX_K_COPY: bf16
@@ -3164,9 +3411,9 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3179,7 +3426,8 @@ tasks:
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.42
-  title: 'PD table per decode''s review: re-index layers 24-36 as aliases of layer 20''s index rows (no copies); window KV as a 128-row snapshot clamped at cap'
+  title: 'PD table per decode''s review: re-index layers 24-36 as aliases of layer 20''s index rows (no copies); window KV
+    as a 128-row snapshot clamped at cap'
   step: perf
   role: perf
   device: true
@@ -3191,7 +3439,33 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-11-07, OWNER-AUTHORIZED CONTRACT CHANGE, from decode''s review (Brian Liu, #blaze-deepseek-v4 2026-11-06 21:35 CET, https://claude.ai/artifact/HG8kwWMJedV7TZsJtPMjgk; prefill-side summary /scratch/dnijemcevic/rebase/dgen_migration_table_draft.md). tt-d-gen for serving: /scratch/dnijemcevic/tt-d-gen at jazpur/dsv4-replay-window 48b79127fb1 (built; its engine/tests/integration/dsv4_tables.py shows a ''snapshot'' config with max_sequence_length 128). Two changes, one task, every old behaviour kept behind its switch. (1) RE-INDEX ALIASES. Today 4_index_k_r1 covers layers 20, 24, 28, 32, 36 and each re-index layer has its own slab holding a physical copy of layer 20''s rows (serving_contract.md, ~96 MiB a chip a slot at 1M). Decode wants the re-index layers published as aliases of layer 20''s rows. alias_rows does not exist in tt-d-gen or tt-blaze today: implement it as table entries for layers 24, 28, 32, 36 whose noc_addr / size are layer 20''s records (same config, same positions), and drop the copies and their slabs. Check that the KV Manager table builder and our adapter accept several entries sharing one address (read tt-d-gen''s migration_strategy_builder / table code on that branch); if they reject it, keep the copies, say exactly what rejects it, and stop part (1) there. Switch REINDEX_SERVE: alias (new, default after acceptance) | copy (today). (2) WINDOW SNAPSHOT AT CAP. cap = (prompt_len - 1) // 64 * 64 (64 = the deployed kv_block_size; take it from the runtime/spec, do not hard-code). Decode receives rows [0, cap) of the history caches and replays [cap, prompt_len) itself. The served window KV becomes a 128-row ring per layer (all 40 layers), position p at row p % 128, written only for p < cap (clamp like update_padded_kv_cache(valid_global=...)), bf16 row-major 512 wide (1024 B a row), 32-row records in one bank (4 records a layer, 32,768 B each), shipped once after the last chunk, published as 0_window_kv with tensor_type snapshot, max_sequence_length 128 (tt-d-gen#1955 is the Snapshot tagging on their side; if the branch already supports it use it, else report what is missing). The history caches (compressed KV, index keys) are served for [0, cap) only. New WINDOW_KV_KEEP value snapshot128 (the default after acceptance); full, ring (192) and none keep working. Attention inside prefill must stay correct for every position up to prompt_len (positions >= cap still attend normally; only the served ring is clamped). Update serving_contract.md (table, cap rule, aliases, snapshot) and the contract / kv_layout / acks / runner_contract tests to the new layout: the snapshot rows equal the golden window KV of positions [cap - 128, cap) at row p % 128, rows for p >= cap are never written, and the alias entries resolve to layer 20''s bytes. Test prompt lengths that are not multiples of 64, and one shorter than 128. Never loosen any other check. Report: per-chip memory per slot at 56,320 and 1,048,576 tokens before / after; the table (configs, layers, record bytes, entry counts); accuracy metrics; chunk_wall_ms and device_ms_total. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator measures at 51200. Report in plain language, short, every term defined.'
+    details: 'OWNER 2026-11-07, OWNER-AUTHORIZED CONTRACT CHANGE, from decode''s review (Brian Liu, #blaze-deepseek-v4 2026-11-06
+      21:35 CET, https://claude.ai/artifact/HG8kwWMJedV7TZsJtPMjgk; prefill-side summary /scratch/dnijemcevic/rebase/dgen_migration_table_draft.md).
+      tt-d-gen for serving: /scratch/dnijemcevic/tt-d-gen at jazpur/dsv4-replay-window 48b79127fb1 (built; its engine/tests/integration/dsv4_tables.py
+      shows a ''snapshot'' config with max_sequence_length 128). Two changes, one task, every old behaviour kept behind its
+      switch. (1) RE-INDEX ALIASES. Today 4_index_k_r1 covers layers 20, 24, 28, 32, 36 and each re-index layer has its own
+      slab holding a physical copy of layer 20''s rows (serving_contract.md, ~96 MiB a chip a slot at 1M). Decode wants the
+      re-index layers published as aliases of layer 20''s rows. alias_rows does not exist in tt-d-gen or tt-blaze today: implement
+      it as table entries for layers 24, 28, 32, 36 whose noc_addr / size are layer 20''s records (same config, same positions),
+      and drop the copies and their slabs. Check that the KV Manager table builder and our adapter accept several entries
+      sharing one address (read tt-d-gen''s migration_strategy_builder / table code on that branch); if they reject it, keep
+      the copies, say exactly what rejects it, and stop part (1) there. Switch REINDEX_SERVE: alias (new, default after acceptance)
+      | copy (today). (2) WINDOW SNAPSHOT AT CAP. cap = (prompt_len - 1) // 64 * 64 (64 = the deployed kv_block_size; take
+      it from the runtime/spec, do not hard-code). Decode receives rows [0, cap) of the history caches and replays [cap, prompt_len)
+      itself. The served window KV becomes a 128-row ring per layer (all 40 layers), position p at row p % 128, written only
+      for p < cap (clamp like update_padded_kv_cache(valid_global=...)), bf16 row-major 512 wide (1024 B a row), 32-row records
+      in one bank (4 records a layer, 32,768 B each), shipped once after the last chunk, published as 0_window_kv with tensor_type
+      snapshot, max_sequence_length 128 (tt-d-gen#1955 is the Snapshot tagging on their side; if the branch already supports
+      it use it, else report what is missing). The history caches (compressed KV, index keys) are served for [0, cap) only.
+      New WINDOW_KV_KEEP value snapshot128 (the default after acceptance); full, ring (192) and none keep working. Attention
+      inside prefill must stay correct for every position up to prompt_len (positions >= cap still attend normally; only the
+      served ring is clamped). Update serving_contract.md (table, cap rule, aliases, snapshot) and the contract / kv_layout
+      / acks / runner_contract tests to the new layout: the snapshot rows equal the golden window KV of positions [cap - 128,
+      cap) at row p % 128, rows for p >= cap are never written, and the alias entries resolve to layer 20''s bytes. Test prompt
+      lengths that are not multiples of 64, and one shorter than 128. Never loosen any other check. Report: per-chip memory
+      per slot at 56,320 and 1,048,576 tokens before / after; the table (configs, layers, record bytes, entry counts); accuracy
+      metrics; chunk_wall_ms and device_ms_total. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the
+      A/B: the orchestrator measures at 51200. Report in plain language, short, every term defined.'
   ab:
     env:
       REINDEX_SERVE: copy
@@ -3207,10 +3481,10 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3223,7 +3497,8 @@ tasks:
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.43
-  title: 'Decode hand-off clean-up: DECODER_SKIP (exact and replay128) last-chunk start derived from cap so every layer''s snapshot is computed; the framework contract check accepts snapshot configs; the snapshot config declared as 128 rows'
+  title: 'Decode hand-off clean-up: DECODER_SKIP (exact and replay128) last-chunk start derived from cap so every layer''s
+    snapshot is computed; the framework contract check accepts snapshot configs; the snapshot config declared as 128 rows'
   step: perf
   role: perf
   device: true
@@ -3236,7 +3511,42 @@ tasks:
   - models/demos/common/bringup/testing/contract.py
   - models/demos/common/bringup/tests/
   brief:
-    details: 'OWNER 2026-11-07 (widened the same day to both skip modes). Background: decode receives [0, cap) of the history caches, cap = (prompt_len - 1) // KV_BLOCK_SIZE * KV_BLOCK_SIZE, plus a 128-row window snapshot of every layer for positions [cap - 128, cap) (P.42, WINDOW_KV_KEEP=snapshot128). Under DECODER_SKIP the skipped layers (layer 20''s attention / MoE, 21-39) only get correct window rows from the last chunk, which today is placed relative to the prompt''s END, not to cap. (a) replay128: the tail starts at end - 128, so rows [cap - 128, end - 128) of the skipped layers are never computed; P.42 therefore does not write their snapshot. (b) exact: a row is exact from last-chunk start + 20 x 127 = start + 2540; the caller rule start <= end - 2688 makes the last 128 rows before the END exact, but the snapshot needs [cap - 128, cap), i.e. start <= cap - 2668 (up to end - 2732; 44 tokens more in the worst case). Fix: derive the last chunk''s start from cap for both modes: replay128 tail start = min(end - 128, cap - 128); exact last-chunk start <= min(end - 2688, cap - 2668); clamp at 0 / the request''s start. Put the rule where the caller (runner / adapter / harness) chooses the last chunk''s start, and in the model''s check of it, not as a silent pull-back. Then write the snapshot for every layer under both modes (remove the P.42 exclusion). Keep today''s behaviour behind a switch SKIP_TAIL_START: end (today) | cap (new, the default after acceptance). DECODER_SKIP stays off by default (owner has not decided the skip); DECODER_SKIP=off is unchanged. Note (owner 2026-11-07): in serving the skip only acts on chunks marked not-last, and tt-d-gen''s chunk header has no last flag yet; the owner is raising it with tt-d-gen. Do not change the runner contract for that here; say in the report what the runtime would need (the flag, and the last chunk''s minimum length under each mode). Tests: extend models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py so that under each of DECODER_SKIP=exact and replay128 with snapshot128 every layer''s snapshot is written and its rows equal the golden window KV of [cap - 128, cap) at row p % 128: under exact within the no-skip limits (it is exact), under replay128 within the replay128 limits already used for its tail (never loosen a limit; if a new one is needed, derive it like the existing ones and say so); prompt lengths that are multiples of 64, not multiples of 64, and shorter than the last-chunk minimum. Update serving_contract.md and the DECODER_SKIP / WINDOW_KV_KEEP setting text. Report: the last-chunk start for 3 example lengths before / after under each mode; the extra full-model tokens and ms; accuracy; chunk_wall_ms and device_ms_total. Agent rules 18 and 19 hold. Report in plain language, short, every term defined. PART 2 (owner 2026-11-07, bundled into P.43): (a) the framework contract check (models/demos/common/bringup/testing/contract.py) re-reads every config after each ack and counts any later byte change as an early ack (acks_early); a snapshot config (tensor_type snapshot) is rewritten by design on every chunk and only the last chunk''s version is shipped (tt-d-gen prefill_reader.cpp ships snapshot configs with the last chunk only), so P.42 fails it with acks_early 40 (DS41-218). Make the check treat snapshot configs as tt-d-gen does: verify them (bytes, no change after the ack) at the request''s last chunk only; history configs keep every existing check unchanged; never loosen any other check; add a framework unit test that a history config changed after its ack still fails and a snapshot config rewritten before the last chunk passes. (b) Then declare 0_window_kv''s max_sequence_length as 128 (decode''s table; P.42 declared the full sequence length because tt-metal''s table crashed on lookups past a config''s declared length during the framework check): kv_contract.address_table, and any lookup that still reads a snapshot config at positions >= 128 must not (fix the reader, not the length). The full test_contract must pass (acks_early == 0, contract_checks_failed == 0). Note: P.42 moved the snapshot back onto the model''s high_bw gather after the DS41-216 fix (one semaphore pair per mesh axis); keep it. '
+    details: 'OWNER 2026-11-07 (widened the same day to both skip modes). Background: decode receives [0, cap) of the history
+      caches, cap = (prompt_len - 1) // KV_BLOCK_SIZE * KV_BLOCK_SIZE, plus a 128-row window snapshot of every layer for positions
+      [cap - 128, cap) (P.42, WINDOW_KV_KEEP=snapshot128). Under DECODER_SKIP the skipped layers (layer 20''s attention /
+      MoE, 21-39) only get correct window rows from the last chunk, which today is placed relative to the prompt''s END, not
+      to cap. (a) replay128: the tail starts at end - 128, so rows [cap - 128, end - 128) of the skipped layers are never
+      computed; P.42 therefore does not write their snapshot. (b) exact: a row is exact from last-chunk start + 20 x 127 =
+      start + 2540; the caller rule start <= end - 2688 makes the last 128 rows before the END exact, but the snapshot needs
+      [cap - 128, cap), i.e. start <= cap - 2668 (up to end - 2732; 44 tokens more in the worst case). Fix: derive the last
+      chunk''s start from cap for both modes: replay128 tail start = min(end - 128, cap - 128); exact last-chunk start <=
+      min(end - 2688, cap - 2668); clamp at 0 / the request''s start. Put the rule where the caller (runner / adapter / harness)
+      chooses the last chunk''s start, and in the model''s check of it, not as a silent pull-back. Then write the snapshot
+      for every layer under both modes (remove the P.42 exclusion). Keep today''s behaviour behind a switch SKIP_TAIL_START:
+      end (today) | cap (new, the default after acceptance). DECODER_SKIP stays off by default (owner has not decided the
+      skip); DECODER_SKIP=off is unchanged. Note (owner 2026-11-07): in serving the skip only acts on chunks marked not-last,
+      and tt-d-gen''s chunk header has no last flag yet; the owner is raising it with tt-d-gen. Do not change the runner contract
+      for that here; say in the report what the runtime would need (the flag, and the last chunk''s minimum length under each
+      mode). Tests: extend models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py so that under each of DECODER_SKIP=exact
+      and replay128 with snapshot128 every layer''s snapshot is written and its rows equal the golden window KV of [cap -
+      128, cap) at row p % 128: under exact within the no-skip limits (it is exact), under replay128 within the replay128
+      limits already used for its tail (never loosen a limit; if a new one is needed, derive it like the existing ones and
+      say so); prompt lengths that are multiples of 64, not multiples of 64, and shorter than the last-chunk minimum. Update
+      serving_contract.md and the DECODER_SKIP / WINDOW_KV_KEEP setting text. Report: the last-chunk start for 3 example lengths
+      before / after under each mode; the extra full-model tokens and ms; accuracy; chunk_wall_ms and device_ms_total. Agent
+      rules 18 and 19 hold. Report in plain language, short, every term defined. PART 2 (owner 2026-11-07, bundled into P.43):
+      (a) the framework contract check (models/demos/common/bringup/testing/contract.py) re-reads every config after each
+      ack and counts any later byte change as an early ack (acks_early); a snapshot config (tensor_type snapshot) is rewritten
+      by design on every chunk and only the last chunk''s version is shipped (tt-d-gen prefill_reader.cpp ships snapshot configs
+      with the last chunk only), so P.42 fails it with acks_early 40 (DS41-218). Make the check treat snapshot configs as
+      tt-d-gen does: verify them (bytes, no change after the ack) at the request''s last chunk only; history configs keep
+      every existing check unchanged; never loosen any other check; add a framework unit test that a history config changed
+      after its ack still fails and a snapshot config rewritten before the last chunk passes. (b) Then declare 0_window_kv''s
+      max_sequence_length as 128 (decode''s table; P.42 declared the full sequence length because tt-metal''s table crashed
+      on lookups past a config''s declared length during the framework check): kv_contract.address_table, and any lookup that
+      still reads a snapshot config at positions >= 128 must not (fix the reader, not the length). The full test_contract
+      must pass (acks_early == 0, contract_checks_failed == 0). Note: P.42 moved the snapshot back onto the model''s high_bw
+      gather after the DS41-216 fix (one semaphore pair per mesh axis); keep it. '
   ab:
     env:
       DECODER_SKIP: replay128
@@ -3254,12 +3564,13 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
-      && DS41_DECODER_SKIP=replay128 DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
-      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && DS41_DECODER_SKIP=replay128
+      DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
+      && DS41_DECODER_SKIP=exact DS41_WINDOW_KV_KEEP=snapshot128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3285,12 +3596,45 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/migration_configs.md
   - ttnn/ttnn/bringup
   brief:
-    details: |
-      OWNER 2026-11-10. Background: P.41 (INDEX_K_COPY=bfp8, the default) keeps one persistent bfloat8_b copy of the index keys (``k8``) for scoring and builds the served 192-byte rows from it: tt/compressor.py TtServedRows._put8 rounds the chunk's keys into k8 (bfp_round), typecasts k8 back to bf16 and encodes that (fp8_rows_tile). The served bytes are therefore fp8(bfp8(key)). Blaze decode's own writer (tt-blaze DsaIndexerDirectKCacheUpdate; its test tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:300 asserts the written bytes 0..131 equal the stock per_token_cast_to_fp8 + pack_scaled_fp8_kv_cache with atol 0) encodes the bf16 key directly: fp8(key). Before P.41 (P.39 / P.40) the served rows were encoded from the unrounded bf16 keys. The notes give no reason for encoding the served rows from k8; the persistent memory saving of P.41 comes from dropping the persistent bf16 slab, not from where the served rows are encoded.
-      Change: a new switch INDEX_K_SERVED_FROM: bf16 (new, default after acceptance) | bfp8 (P.41's path, unchanged). With bf16, in _put8 (the start % chunk == 0 branch and the _region branch of every other start) encode the served rows, and the mirrors' (re-index layers 24 / 28 / 32 / 36), from the chunk's tiled bf16 rows (the bfp_round input) with fp8_rows_tile, without the k8 typecast; free that tiled copy after the encode (it is a per-chunk transient, not a persistent copy). The bfp_round into k8 for scoring is unchanged, so the scored keys, err_state_topk_idx and the top-k overlap stay as they are. No new persistent memory. INDEX_K_COPY=bf16 and every INDEX_K_FORMAT / INDEX_K_SERVED value keep working as they do today. KEEP EVERY OPTION.
-      OWNER-AUTHORIZED TEST CHANGES: (1) test_kv_layout's reference input for the served rows: P.41 made it the golden keys rounded to bfloat8_b when k8 is in use. Under INDEX_K_SERVED_FROM=bf16 it goes back to the unrounded golden keys, so the served bytes equal the stock cast of the golden keys exactly (the byte-exact check P.39 had); under bfp8 it stays as P.41 left it. (2) tests/test_index_k_copy.py: its served / mirror byte-equality assertion follows the switch (add the bf16-source arm; the k8-equals-the-bf16-path's-copy assertions are unchanged). Change only these two reference inputs; every other check, tolerance and limit stays. Never loosen any check.
-      Also update bringup/serving_contract.md and bringup/migration_configs.md: the line ``Since P.41 the keys are rounded to bfloat8_b first ... then cast to fp8 from that`` and open point 1 (the served rows are now the stock cast of the bf16 key, which is what tt-blaze's writer test compares its writer with; tt-blaze's torch helper pack_index_keys at tests/blaze/deepseekv4_1/csa2_harness.py:402 rounds to nearest even and divides by 448, a different recipe from the writer and from the stock cast: about half of the e4m3 values and the scale bytes differ from the writer's recipe on random keys, measured on CPU 2026-11-10; do not change the cast to match it).
-      Report in one short table: per-chip memory of the index-key copies at 56,320 and 1,044,480 tokens (before / after; expected equal, say if not), err_state_index_k_L*, err_state_topk_idx_L* and overlap, err_final_hidden, top5_overlap, device_ms_indexer, device_ms_total, chunk_wall_ms. Add one host-only number: on the golden index keys of one chunk, the share of served e4m3 values (and of rows) that differ between fp8(key) and fp8(bfp8(key)). Agent rules 18 (at most 110 cores an op) and 19 (no single-card device jobs) hold. Do not profile the model yourself: the orchestrator measures off vs on at 51200.
+    details: 'OWNER 2026-11-10. Background: P.41 (INDEX_K_COPY=bfp8, the default) keeps one persistent bfloat8_b copy of the
+      index keys (``k8``) for scoring and builds the served 192-byte rows from it: tt/compressor.py TtServedRows._put8 rounds
+      the chunk''s keys into k8 (bfp_round), typecasts k8 back to bf16 and encodes that (fp8_rows_tile). The served bytes
+      are therefore fp8(bfp8(key)). Blaze decode''s own writer (tt-blaze DsaIndexerDirectKCacheUpdate; its test tests/blaze/micro_ops/dsa/test_dsa_indexer_direct_k_cache_update.py:300
+      asserts the written bytes 0..131 equal the stock per_token_cast_to_fp8 + pack_scaled_fp8_kv_cache with atol 0) encodes
+      the bf16 key directly: fp8(key). Before P.41 (P.39 / P.40) the served rows were encoded from the unrounded bf16 keys.
+      The notes give no reason for encoding the served rows from k8; the persistent memory saving of P.41 comes from dropping
+      the persistent bf16 slab, not from where the served rows are encoded.
+
+      Change: a new switch INDEX_K_SERVED_FROM: bf16 (new, default after acceptance) | bfp8 (P.41''s path, unchanged). With
+      bf16, in _put8 (the start % chunk == 0 branch and the _region branch of every other start) encode the served rows, and
+      the mirrors'' (re-index layers 24 / 28 / 32 / 36), from the chunk''s tiled bf16 rows (the bfp_round input) with fp8_rows_tile,
+      without the k8 typecast; free that tiled copy after the encode (it is a per-chunk transient, not a persistent copy).
+      The bfp_round into k8 for scoring is unchanged, so the scored keys, err_state_topk_idx and the top-k overlap stay as
+      they are. No new persistent memory. INDEX_K_COPY=bf16 and every INDEX_K_FORMAT / INDEX_K_SERVED value keep working as
+      they do today. KEEP EVERY OPTION.
+
+      OWNER-AUTHORIZED TEST CHANGES: (1) test_kv_layout''s reference input for the served rows: P.41 made it the golden keys
+      rounded to bfloat8_b when k8 is in use. Under INDEX_K_SERVED_FROM=bf16 it goes back to the unrounded golden keys, so
+      the served bytes equal the stock cast of the golden keys exactly (the byte-exact check P.39 had); under bfp8 it stays
+      as P.41 left it. (2) tests/test_index_k_copy.py: its served / mirror byte-equality assertion follows the switch (add
+      the bf16-source arm; the k8-equals-the-bf16-path''s-copy assertions are unchanged). Change only these two reference
+      inputs; every other check, tolerance and limit stays. Never loosen any check.
+
+      Also update bringup/serving_contract.md and bringup/migration_configs.md: the line ``Since P.41 the keys are rounded
+      to bfloat8_b first ... then cast to fp8 from that`` and open point 1 (the served rows are now the stock cast of the
+      bf16 key, which is what tt-blaze''s writer test compares its writer with; tt-blaze''s torch helper pack_index_keys at
+      tests/blaze/deepseekv4_1/csa2_harness.py:402 rounds to nearest even and divides by 448, a different recipe from the
+      writer and from the stock cast: about half of the e4m3 values and the scale bytes differ from the writer''s recipe on
+      random keys, measured on CPU 2026-11-10; do not change the cast to match it).
+
+      Report in one short table: per-chip memory of the index-key copies at 56,320 and 1,044,480 tokens (before / after; expected
+      equal, say if not), err_state_index_k_L*, err_state_topk_idx_L* and overlap, err_final_hidden, top5_overlap, device_ms_indexer,
+      device_ms_total, chunk_wall_ms. Add one host-only number: on the golden index keys of one chunk, the share of served
+      e4m3 values (and of rows) that differ between fp8(key) and fp8(bfp8(key)). Agent rules 18 (at most 110 cores an op)
+      and 19 (no single-card device jobs) hold. Do not profile the model yourself: the orchestrator measures off vs on at
+      51200.
+
+      '
   ab:
     env:
       INDEX_K_SERVED_FROM: bfp8
@@ -3304,11 +3648,11 @@ tasks:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && DS41_DECODER_SKIP=replay128 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_short_turn.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_index_k_copy.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_index_k_copy.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3321,7 +3665,8 @@ tasks:
       acks_early: == 0
       contract_checks_failed: == 0
 - id: P.50
-  title: 'Deterministic MoE combine (COMBINE_SPLIT, DS41-235) ported onto the pre-replication base; A/B off vs on: determinism, accuracy and perf before / after'
+  title: 'Deterministic MoE combine (COMBINE_SPLIT, DS41-235) ported onto the pre-replication base; A/B off vs on: determinism,
+    accuracy and perf before / after'
   step: perf
   role: perf
   device: true
@@ -3336,10 +3681,36 @@ tasks:
   - models/demos/common/bringup/tests
   - ttnn/ttnn/bringup
   brief:
-    details: |-
-      OWNER 2026-11-12. THE FIX EXISTS; PORT IT AND MEASURE IT, NOTHING ELSE. On another branch (dnijemcevic/moe_replication, which carries MoE expert-replica work this base must NOT get) an agent found why identical prefills give different outputs: the MoE combine (ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine) adds each token's weighted expert terms in fp32 in packet-arrival order; the snap (COMBINE_SNAP = 2^-19) makes that order-free only while a sum stays below 2^24 x 2^-19 = 32, and real prompts reach 21,376 (layers 15-39 on the code prompt, the novel prompt's first tokens): DS41-233 / DS41-234 / DS41-235. The fix: MoEBlockConfig.combine_snap_split / model setting COMBINE_SPLIT - each snapped term split into a coarse part (a multiple of 2^-1) and a fine part (the rest), two exact fp32 sums, added once at the end: order-free up to 2^23, bit-identical to the old sum wherever the old sum was exact; the final version fuses the split into one kernel pass. Its complete work is commit 4e90f611e86 (branch exp/fix23_snapshot), whose parent 4c79ce65ece is the replica branch: take `git diff 4c79ce65ece 4e90f611e86` and port ONLY the fix and what verifies it onto this tree: the combine fork's kernel / config / nanobind / tests / docs, the model setting COMBINE_SPLIT and its plumbing in the MoE adapters, the determinism test (tests/test_determinism.py) and the parts of the back-to-back harness it needs (testing/b2b.py etc.), the known-issues entries DS41-233 / 234 / 235. Do NOT port anything of the replica work (MOE_REPLICAS, MOE_COUNTS, MOE_POLICY, expert_slot_copy, slot maps, tile_gather) and nothing of the bisect probes. Files that carry both (moe_block_main_adapter.py, settings.py, CHANGELOGs) need the fix's hunks only. Do not redesign the fix and do not investigate further: no bisect, no history search.
-      SWITCH: COMBINE_SPLIT on (the fix) | off (today's single sum). Keep the SHIPPED DEFAULT off in tt/settings.py: the owner decides after reading this task's A/B whether it becomes the default.
-      WHAT THE OWNER WANTS FROM THIS TASK, as one short table each, both sides measured by the same runs: (1) DETERMINISM before / after: the determinism test (the same prompt run several times in one process, cold first run and warm runs, both the spec's novel prompt and the code prompt, several chunks; max abs diff per chunk) with COMBINE_SPLIT=off and with on; off is expected to differ on the code prompt, on must be max abs diff 0 everywhere; record the metrics determinism_max_abs_diff_off and determinism_max_abs_diff_on. (2) ACCURACY before / after: every recorded metric against its limit (the orchestrator's A/B table) and the largest differences between the two sides. (3) PERF before / after: chunk wall and device time per section at the quick rung and at 51,200 (the orchestrator's A/B), and the combine op's own device time on both sides. Never loosen a check. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the determinism runs: the orchestrator measures the A/B. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+    details: 'OWNER 2026-11-12. THE FIX EXISTS; PORT IT AND MEASURE IT, NOTHING ELSE. On another branch (dnijemcevic/moe_replication,
+      which carries MoE expert-replica work this base must NOT get) an agent found why identical prefills give different outputs:
+      the MoE combine (ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine) adds each token''s weighted expert terms
+      in fp32 in packet-arrival order; the snap (COMBINE_SNAP = 2^-19) makes that order-free only while a sum stays below
+      2^24 x 2^-19 = 32, and real prompts reach 21,376 (layers 15-39 on the code prompt, the novel prompt''s first tokens):
+      DS41-233 / DS41-234 / DS41-235. The fix: MoEBlockConfig.combine_snap_split / model setting COMBINE_SPLIT - each snapped
+      term split into a coarse part (a multiple of 2^-1) and a fine part (the rest), two exact fp32 sums, added once at the
+      end: order-free up to 2^23, bit-identical to the old sum wherever the old sum was exact; the final version fuses the
+      split into one kernel pass. Its complete work is commit 4e90f611e86 (branch exp/fix23_snapshot), whose parent 4c79ce65ece
+      is the replica branch: take `git diff 4c79ce65ece 4e90f611e86` and port ONLY the fix and what verifies it onto this
+      tree: the combine fork''s kernel / config / nanobind / tests / docs, the model setting COMBINE_SPLIT and its plumbing
+      in the MoE adapters, the determinism test (tests/test_determinism.py) and the parts of the back-to-back harness it needs
+      (testing/b2b.py etc.), the known-issues entries DS41-233 / 234 / 235. Do NOT port anything of the replica work (MOE_REPLICAS,
+      MOE_COUNTS, MOE_POLICY, expert_slot_copy, slot maps, tile_gather) and nothing of the bisect probes. Files that carry
+      both (moe_block_main_adapter.py, settings.py, CHANGELOGs) need the fix''s hunks only. Do not redesign the fix and do
+      not investigate further: no bisect, no history search.
+
+      SWITCH: COMBINE_SPLIT on (the fix) | off (today''s single sum). Keep the SHIPPED DEFAULT off in tt/settings.py: the
+      owner decides after reading this task''s A/B whether it becomes the default.
+
+      WHAT THE OWNER WANTS FROM THIS TASK, as one short table each, both sides measured by the same runs: (1) DETERMINISM
+      before / after: the determinism test (the same prompt run several times in one process, cold first run and warm runs,
+      both the spec''s novel prompt and the code prompt, several chunks; max abs diff per chunk) with COMBINE_SPLIT=off and
+      with on; off is expected to differ on the code prompt, on must be max abs diff 0 everywhere; record the metrics determinism_max_abs_diff_off
+      and determinism_max_abs_diff_on. (2) ACCURACY before / after: every recorded metric against its limit (the orchestrator''s
+      A/B table) and the largest differences between the two sides. (3) PERF before / after: chunk wall and device time per
+      section at the quick rung and at 51,200 (the orchestrator''s A/B), and the combine op''s own device time on both sides.
+      Never loosen a check. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the determinism runs: the
+      orchestrator measures the A/B. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language,
+      short, every term defined.'
   ab:
     env:
       COMBINE_SPLIT: 'off'
@@ -3362,7 +3733,8 @@ tasks:
       device_ms_total: '> 0'
       determinism_max_abs_diff: == 0
 - id: P.49
-  title: 'Serving contract: prefill stops at decode''s cap (the 64-token boundary) instead of computing to the prompt''s end; prefill''s cap equals decode''s for every prompt length (DS41-219)'
+  title: 'Serving contract: prefill stops at decode''s cap (the 64-token boundary) instead of computing to the prompt''s end;
+    prefill''s cap equals decode''s for every prompt length (DS41-219)'
   step: perf
   role: perf
   device: true
@@ -3376,12 +3748,39 @@ tasks:
   - models/demos/common/bringup
   - ttnn/ttnn/bringup
   brief:
-    details: |-
-      OWNER 2026-11-12, CONTRACT CHANGE AUTHORIZED, from decode's review (Brian Liu, #blaze-deepseek-v4, 2026-11-06 21:38: "stop prefill at the 64 boundary if you are only storing 128 SWA"; Kartik 2026-11-11 00:35: round the prefill tokens to the 64-token block, then pad to the chunk size). Today (serving_contract.md, P.42) prefill computes and attends every position up to the prompt's end and only clamps what it SERVES at cap = (prompt_len - 1) // kv_block_size x kv_block_size (kv_block_size = setting KV_BLOCK_SIZE, 64 deployed); decode replays [cap, prompt_len) itself, so prefill's work on [cap, prompt end) is wasted. Target: under the serving path prefill computes only positions [0, cap): the request's last chunk ends at cap (padded to the chunk size as the model already pads), nothing at or past cap is computed or written.
-      DS41-219 IN THE SAME TASK: under PD_DISAGG tt-d-gen hands prefill actual_end = prompt_len - 1 (tt-d-gen at /scratch/dnijemcevic/tt-d-gen, jazpur/dsv4-replay-window 48b79127fb1: types.hpp:105 prompt_compute_end; decode's cap: prefix_indexer.hpp reusable_prefix_cap). The model computes cap = (actual_end - 1) // 64 x 64, which differs from decode's when prompt_len % 64 == 1 (2,945 tokens: ours 2,880, decode's 2,944). Read tt-d-gen's code and make prefill's cap equal decode's for EVERY prompt length, from what the engine actually passes; cite the lines. If the model cannot know the length decode uses, stop and say exactly what is missing.
-      Behind a switch PREFILL_END: cap (new; default after acceptance) | end (today's path, kept). Update serving_contract.md and migration_configs.md (a "Changed in P.49" section) and the contract / runner / kv_layout / acks / window-snapshot tests to the new rule.
-      VERIFICATION, the owner's requirement: NO perf impact and NO accuracy degradation. (1) Every served tensor (window snapshot rows [cap - 128, cap), compressed KV and index keys [0, cap)) must be BIT-IDENTICAL between PREFILL_END=end and cap for the same prompt: positions below cap depend only on positions below cap; if any byte differs, find why and report it before anything else. Test prompt lengths with prompt_len % 64 in {0, 1, 2, 63}, one shorter than 128 + 64, one that is a single chunk and one of several chunks, both prompts (the spec's novel prompt and the code prompt from FIX.23). (2) Every accuracy check and limit holds; never loosen a check. If a check measures something the new path no longer computes (e.g. a last-token output past cap), do not change or drop it: stop and report which checks and why, and propose; the owner decides. (3) Perf: the A/B below at the quick rung and 51,200: chunk wall and device time per section, both sides. (4) The determinism test (FIX.23 / FIX.25) passes.
-      Report: the cap rule and its tt-d-gen citations; the bit-identity results per prompt length; accuracy table; A/B; what changed in the contract docs. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator measures. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+    details: 'OWNER 2026-11-12, CONTRACT CHANGE AUTHORIZED, from decode''s review (Brian Liu, #blaze-deepseek-v4, 2026-11-06
+      21:38: "stop prefill at the 64 boundary if you are only storing 128 SWA"; Kartik 2026-11-11 00:35: round the prefill
+      tokens to the 64-token block, then pad to the chunk size). Today (serving_contract.md, P.42) prefill computes and attends
+      every position up to the prompt''s end and only clamps what it SERVES at cap = (prompt_len - 1) // kv_block_size x kv_block_size
+      (kv_block_size = setting KV_BLOCK_SIZE, 64 deployed); decode replays [cap, prompt_len) itself, so prefill''s work on
+      [cap, prompt end) is wasted. Target: under the serving path prefill computes only positions [0, cap): the request''s
+      last chunk ends at cap (padded to the chunk size as the model already pads), nothing at or past cap is computed or written.
+
+      DS41-219 IN THE SAME TASK: under PD_DISAGG tt-d-gen hands prefill actual_end = prompt_len - 1 (tt-d-gen at /scratch/dnijemcevic/tt-d-gen,
+      jazpur/dsv4-replay-window 48b79127fb1: types.hpp:105 prompt_compute_end; decode''s cap: prefix_indexer.hpp reusable_prefix_cap).
+      The model computes cap = (actual_end - 1) // 64 x 64, which differs from decode''s when prompt_len % 64 == 1 (2,945
+      tokens: ours 2,880, decode''s 2,944). Read tt-d-gen''s code and make prefill''s cap equal decode''s for EVERY prompt
+      length, from what the engine actually passes; cite the lines. If the model cannot know the length decode uses, stop
+      and say exactly what is missing.
+
+      Behind a switch PREFILL_END: cap (new; default after acceptance) | end (today''s path, kept). Update serving_contract.md
+      and migration_configs.md (a "Changed in P.49" section) and the contract / runner / kv_layout / acks / window-snapshot
+      tests to the new rule.
+
+      VERIFICATION, the owner''s requirement: NO perf impact and NO accuracy degradation. (1) Every served tensor (window
+      snapshot rows [cap - 128, cap), compressed KV and index keys [0, cap)) must be BIT-IDENTICAL between PREFILL_END=end
+      and cap for the same prompt: positions below cap depend only on positions below cap; if any byte differs, find why and
+      report it before anything else. Test prompt lengths with prompt_len % 64 in {0, 1, 2, 63}, one shorter than 128 + 64,
+      one that is a single chunk and one of several chunks, both prompts (the spec''s novel prompt and the code prompt from
+      FIX.23). (2) Every accuracy check and limit holds; never loosen a check. If a check measures something the new path
+      no longer computes (e.g. a last-token output past cap), do not change or drop it: stop and report which checks and why,
+      and propose; the owner decides. (3) Perf: the A/B below at the quick rung and 51,200: chunk wall and device time per
+      section, both sides. (4) The determinism test (FIX.23 / FIX.25) passes.
+
+      Report: the cap rule and its tt-d-gen citations; the bit-identity results per prompt length; accuracy table; A/B; what
+      changed in the contract docs. Agent rules 18 and 19 hold. Do not profile the model yourself beyond the A/B: the orchestrator
+      measures. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every
+      term defined.'
   ab:
     env:
       PREFILL_END: end
@@ -3394,11 +3793,11 @@ tasks:
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_prefill_end.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_prefill_end.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3411,7 +3810,8 @@ tasks:
       served_bytes_differ: == 0
       determinism_max_abs_diff: == 0
 - id: FIX.25
-  title: 'Determinism in every gate: a model-level run-twice-bit-for-bit check that every task gate, quick and full, runs and enforces'
+  title: 'Determinism in every gate: a model-level run-twice-bit-for-bit check that every task gate, quick and full, runs
+    and enforces'
   step: overseer_fix
   role: overseer
   precheck: false
@@ -3424,10 +3824,27 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/bringup
   brief:
-    details: |-
-      OWNER 2026-11-12: DETERMINISM IS THE HIGHEST OF ALL PRIORITIES. Today no task gate checks it: the gates (test_ladder, test_profile, test_positions, test_contract, the final task's full-target gate and the quick-accepted picks' full gates run before it) check accuracy against limits and times; a run-to-run difference smaller than the limits passes, which is how the MoE combine's non-determinism (DS41-233 / 234 / 235, up to 0.26 on the code prompt; fixed by P.50, COMBINE_SPLIT=on) went unnoticed for weeks. The framework has testing/determinism.py (A, then a different input B, then A again, byte for byte), but only component tests and fork unit tests use it; the last such run in this ledger was 2026-10-26/27.
-      Make determinism a framework property of every gate: (1) a model-level check that runs the same input at least twice in one process (cold first run after load included, plus a warm run after a different input, as determinism.py does) over several chunks, on both the spec's prompt and a second, different prompt (the code prompt of DS41-234), and requires every chunk's final hidden and the served states bit for bit (max abs diff 0); reuse testing/determinism.py and the model's determinism test (tests/test_determinism.py, from P.50), do not write a second mechanism. (2) The orchestrator runs it as part of EVERY gate (per-task gates, quick A/B accept gates, the full gates, the final task) without each tasks.yaml entry having to name it; a gate whose model is not deterministic FAILS, with the first differing chunk / layer in the message. A per-step exemption only through the existing tests.nondeterministic switch with a written reason, and none for the model. (3) Report its cost per gate (seconds) and keep it as low as coverage allows; say what coverage you chose and why. (4) A selftest of the framework part (a deliberately non-deterministic fake model must fail the gate). Never loosen any other check.
-      SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+    details: 'OWNER 2026-11-12: DETERMINISM IS THE HIGHEST OF ALL PRIORITIES. Today no task gate checks it: the gates (test_ladder,
+      test_profile, test_positions, test_contract, the final task''s full-target gate and the quick-accepted picks'' full
+      gates run before it) check accuracy against limits and times; a run-to-run difference smaller than the limits passes,
+      which is how the MoE combine''s non-determinism (DS41-233 / 234 / 235, up to 0.26 on the code prompt; fixed by P.50,
+      COMBINE_SPLIT=on) went unnoticed for weeks. The framework has testing/determinism.py (A, then a different input B, then
+      A again, byte for byte), but only component tests and fork unit tests use it; the last such run in this ledger was 2026-10-26/27.
+
+      Make determinism a framework property of every gate: (1) a model-level check that runs the same input at least twice
+      in one process (cold first run after load included, plus a warm run after a different input, as determinism.py does)
+      over several chunks, on both the spec''s prompt and a second, different prompt (the code prompt of DS41-234), and requires
+      every chunk''s final hidden and the served states bit for bit (max abs diff 0); reuse testing/determinism.py and the
+      model''s determinism test (tests/test_determinism.py, from P.50), do not write a second mechanism. (2) The orchestrator
+      runs it as part of EVERY gate (per-task gates, quick A/B accept gates, the full gates, the final task) without each
+      tasks.yaml entry having to name it; a gate whose model is not deterministic FAILS, with the first differing chunk /
+      layer in the message. A per-step exemption only through the existing tests.nondeterministic switch with a written reason,
+      and none for the model. (3) Report its cost per gate (seconds) and keep it as low as coverage allows; say what coverage
+      you chose and why. (4) A selftest of the framework part (a deliberately non-deterministic fake model must fail the gate).
+      Never loosen any other check.
+
+      SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language,
+      short, every term defined.'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
@@ -3438,7 +3855,8 @@ tasks:
       top5_overlap: '>= limit'
       determinism_max_abs_diff: == 0
 - id: FIX.26
-  title: 'Golden state at the serving handoff point (cap): test_contract judges the default PREFILL_END=cap path at cap instead of the old path at the request''s end'
+  title: 'Golden state at the serving handoff point (cap): test_contract judges the default PREFILL_END=cap path at cap instead
+    of the old path at the request''s end'
   step: overseer_fix
   role: overseer
   precheck: false
@@ -3451,15 +3869,30 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/bringup
   brief:
-    details: |-
-      OWNER 2026-11-12. P.49 made prefill stop at decode's cap (PREFILL_END=cap, the default; cap = actual_end // KV_BLOCK_SIZE x KV_BLOCK_SIZE, equal to decode's cap). test_contract (models/demos/common/bringup/tests/test_contract.py) sends a request ending at 10208 (cap 10176) and compares the model's INTERNAL state (window state, engram tail) at 10208 with the golden - a state the cap path never computes and that is never served (DS41-236). The golden has state snapshots at 0, 5120 and 10208 only. As a stopgap the owner chose to run that gate unit on the old path (DS41_PREFILL_END=end, P.49's gate; the cap path is covered byte for byte by tests/test_prefill_end.py).
-      Target: test_contract judges the DEFAULT path at the handoff point. (1) Add a golden state snapshot at the request's cap (10176 for the test's request; derive it from the request, do not hard-code), produced by the SAME golden pipeline, reference and precision as the existing snapshots (find how they are made; reuse it; if producing it needs a resource this node does not have, stop and say exactly what). (2) Make test_contract compare the state at cap and the served caches over [0, cap) under PREFILL_END=cap, and keep its old comparison at the request's end for PREFILL_END=end. (3) Limits for any new metric follow the framework's existing rule for recording limits; never loosen or edit an existing limit. (4) Do not edit tasks.yaml: report the gate command the owner should put back into P.49's gate (test_contract without DS41_PREFILL_END=end). (5) The determinism check (FIX.25) passes.
-      Report: how the golden snapshots are produced, what was added, the new metrics and their limits, the test_contract results on both paths. SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+    details: 'OWNER 2026-11-12. P.49 made prefill stop at decode''s cap (PREFILL_END=cap, the default; cap = actual_end //
+      KV_BLOCK_SIZE x KV_BLOCK_SIZE, equal to decode''s cap). test_contract (models/demos/common/bringup/tests/test_contract.py)
+      sends a request ending at 10208 (cap 10176) and compares the model''s INTERNAL state (window state, engram tail) at
+      10208 with the golden - a state the cap path never computes and that is never served (DS41-236). The golden has state
+      snapshots at 0, 5120 and 10208 only. As a stopgap the owner chose to run that gate unit on the old path (DS41_PREFILL_END=end,
+      P.49''s gate; the cap path is covered byte for byte by tests/test_prefill_end.py).
+
+      Target: test_contract judges the DEFAULT path at the handoff point. (1) Add a golden state snapshot at the request''s
+      cap (10176 for the test''s request; derive it from the request, do not hard-code), produced by the SAME golden pipeline,
+      reference and precision as the existing snapshots (find how they are made; reuse it; if producing it needs a resource
+      this node does not have, stop and say exactly what). (2) Make test_contract compare the state at cap and the served
+      caches over [0, cap) under PREFILL_END=cap, and keep its old comparison at the request''s end for PREFILL_END=end. (3)
+      Limits for any new metric follow the framework''s existing rule for recording limits; never loosen or edit an existing
+      limit. (4) Do not edit tasks.yaml: report the gate command the owner should put back into P.49''s gate (test_contract
+      without DS41_PREFILL_END=end). (5) The determinism check (FIX.25) passes.
+
+      Report: how the golden snapshots are produced, what was added, the new metrics and their limits, the test_contract results
+      on both paths. SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report
+      in plain language, short, every term defined.'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && DS41_PREFILL_END=end scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && DS41_PREFILL_END=end
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3468,7 +3901,8 @@ tasks:
       contract_checks_failed: == 0
       determinism_max_abs_diff: == 0
 - id: FIX.27
-  title: 'Ledger files that grow by appending are split into chunks below the repo''s 500 KB limit (state_metrics.json first): no compaction, no data dropped'
+  title: 'Ledger files that grow by appending are split into chunks below the repo''s 500 KB limit (state_metrics.json first):
+    no compaction, no data dropped'
   step: overseer_fix
   role: overseer
   precheck: false
@@ -3481,16 +3915,34 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   brief:
-    details: |-
-      OWNER 2026-11-12. FIX.26's gate passed but git refused its commit: the pre-commit hook check-large-files (500 KB limit) rejects ledgers/galaxy_8x4-full/state_metrics.json (515,706 bytes now; F253: every task's gate metrics beside state.json, ledger.py:250, written on every gate). FIX.26 stays COMMIT_PENDING until this is fixed. Other ledger files grow the same way: history_state.json 290 KB, state.json 146 KB today.
-      THE FIX, the owner's words: "split the file, if this is something that gets appended to split it into chunks, do not compact". So: (1) state_metrics.json becomes a set of chunk files (a directory or numbered files beside state.json), each well below the limit, new entries appended to the newest chunk and a new chunk started when it would pass a size bound (say 256 KB); NO compaction, no rounding, no dropping or summarising of old entries: every byte of information that is in the file today stays, readable. (2) Every reader and writer (ledger.py state() / its merge, gate.py, the dashboard, stamps / _SKIP patterns, orchestrator.py's file patterns, selftests) uses the chunks through one place; no second code path. (3) Migrate today's file into chunks once, losslessly: a selftest proves the merged content of the chunks equals today's file content exactly (as parsed JSON). (4) Check EVERY file the framework appends to and commits (history_state.json, state.json, results/*, knowledge_use, the dashboard files, logs that are committed) and apply the same chunking to any that grows without bound; list each with its size and growth per task in your report. (5) Selftests: the round trip, the size bound, appending across a chunk boundary, readers seeing every chunk. Do not touch FIX.26's work (its staged files) beyond what the split needs; the owner then lets FIX.26 commit through the framework. No device use.
-      Report in plain language, short, every term defined: what was split, the chunk rule, the files checked and their sizes, the selftest results.
+    details: 'OWNER 2026-11-12. FIX.26''s gate passed but git refused its commit: the pre-commit hook check-large-files (500
+      KB limit) rejects ledgers/galaxy_8x4-full/state_metrics.json (515,706 bytes now; F253: every task''s gate metrics beside
+      state.json, ledger.py:250, written on every gate). FIX.26 stays COMMIT_PENDING until this is fixed. Other ledger files
+      grow the same way: history_state.json 290 KB, state.json 146 KB today.
+
+      THE FIX, the owner''s words: "split the file, if this is something that gets appended to split it into chunks, do not
+      compact". So: (1) state_metrics.json becomes a set of chunk files (a directory or numbered files beside state.json),
+      each well below the limit, new entries appended to the newest chunk and a new chunk started when it would pass a size
+      bound (say 256 KB); NO compaction, no rounding, no dropping or summarising of old entries: every byte of information
+      that is in the file today stays, readable. (2) Every reader and writer (ledger.py state() / its merge, gate.py, the
+      dashboard, stamps / _SKIP patterns, orchestrator.py''s file patterns, selftests) uses the chunks through one place;
+      no second code path. (3) Migrate today''s file into chunks once, losslessly: a selftest proves the merged content of
+      the chunks equals today''s file content exactly (as parsed JSON). (4) Check EVERY file the framework appends to and
+      commits (history_state.json, state.json, results/*, knowledge_use, the dashboard files, logs that are committed) and
+      apply the same chunking to any that grows without bound; list each with its size and growth per task in your report.
+      (5) Selftests: the round trip, the size bound, appending across a chunk boundary, readers seeing every chunk. Do not
+      touch FIX.26''s work (its staged files) beyond what the split needs; the owner then lets FIX.26 commit through the framework.
+      No device use.
+
+      Report in plain language, short, every term defined: what was split, the chunk rule, the files checked and their sizes,
+      the selftest results.'
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/selftest/test_core.py models/demos/common/bringup/selftest/test_ledger_chunks.py
     metrics:
       ledger_files_over_limit: == 0
 - id: P.51
-  title: 'DECODER_SKIP=decode (Kartik''s cut): prefill never runs layers 21-39; per-position encoder replay below global_write_start with no history-cache writes'
+  title: 'DECODER_SKIP=decode (Kartik''s cut): prefill never runs layers 21-39; per-position encoder replay below global_write_start
+    with no history-cache writes'
   step: perf
   role: perf
   device: true
@@ -3506,12 +3958,43 @@ tasks:
   - models/demos/common/bringup
   - ttnn/ttnn/bringup
   brief:
-    details: |-
-      OWNER 2026-11-12, CONTRACT CHANGE AUTHORIZED: decode's proposal (Kartik Paigwar, #blaze-deepseek-v4, 2026-11-12), the model's side only. tt-d-gen will (not yet implemented there): compute the prefill stop P = floor((N - 128) / KV_BLOCK_SIZE) x KV_BLOCK_SIZE (N = prompt length; example N 5002 -> P 4864) and send prefill chunks with actual_end <= P, exclusive (positions outside [actual_start, actual_end) are PAD, no state updates); decode runs [P, N) through all 40 layers itself (128..191 tokens, DeepSeek's Decoder SWA Bounded Replay on decode's side: arXiv 2609.19969 section 3.2.2). The chunk header grows by one field: {slot_id, actual_start, actual_end, global_write_start}; global_write_start = Xp, the frontier of the long-range caches decode / the prefix cache already hold. Example (N 5002, Xp 4096): encoder replay [3968, 4096), new computation [4096, 4864), decode [4864, 5002).
-      MODEL BEHAVIOUR, per valid position p of a chunk: p < global_write_start: ENCODER REPLAY - layers 0-19 only, their sliding windows rebuilt with every window truncated at the replay start (DeepSeek's Encoder SWA Bounded Replay; the model already has begin_chunk(.., replay=True) for a chunk-level replay: reuse it), the compressed KV, index keys and layer 20's KV are READ but NEVER WRITTEN (today every history-cache write covers the chunk's whole [start, end): model.py:699 compressor.write, attention.py:1494 / 1659 cache.write - gate them at global_write_start), layer 20's KV / index head not run. p >= global_write_start: layers 0-19 plus layer 20's KV / index head, writes as today. Layers 21-39 NEVER run on any chunk; every chunk still acks every layer 0-39 as completed (sink.layers_completed; tt-d-gen stays unaware which layers run - Jonathan Azpur's ask). Served: history caches [0, P), the window snapshot of layers 0-19 at P (rows [P - 128, P)); say what is served for layers 20-39's windows and update serving_contract.md / migration_configs.md.
-      SWITCHES: a new DECODER_SKIP value `decode` (keep the shipped default `off`: the owner decides after the A/B). The adapter takes an optional global_write_start; missing = actual_start = no replay (today's engine keeps working).
-      VERIFICATION, nothing loosened: (1) no prefix hit (global_write_start = actual_start): every served byte of the history caches and of the layer 0-19 window snapshot is BIT-IDENTICAL between DECODER_SKIP=off and decode for the same chunks (the encoder does not depend on the decoder); several prompt lengths, both prompts (novel, code). (2) prefix hit: the cached rows below global_write_start are bit-identical before and after the replay chunk (never written); the rows from global_write_start on vs a fresh full prefill: report their errors against the existing limits and against the golden (approximate by design for positions whose encoder windows reach before the replay start); a golden state at P where a check needs one (reuse FIX.26's reference/handoff.py, same pipeline). (3) acks: every layer once per chunk. (4) determinism (automatic in every gate since FIX.25). (5) if an existing check measures something this mode no longer computes (the decoder's states, a final hidden), do not change or drop it: run it on DECODER_SKIP=off and say so, as P.49 did for test_contract (DS41-236); stop and ask if that is not enough. (6) perf: device time per chunk off vs decode (P.30 measured a skipped chunk at 83.6 vs 167.9 ms at 51200).
-      Report: the per-position rule as implemented, the files touched, the bit-identity tables, accuracy, acks, perf. Agent rules 18 and 19 hold. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+    details: 'OWNER 2026-11-12, CONTRACT CHANGE AUTHORIZED: decode''s proposal (Kartik Paigwar, #blaze-deepseek-v4, 2026-11-12),
+      the model''s side only. tt-d-gen will (not yet implemented there): compute the prefill stop P = floor((N - 128) / KV_BLOCK_SIZE)
+      x KV_BLOCK_SIZE (N = prompt length; example N 5002 -> P 4864) and send prefill chunks with actual_end <= P, exclusive
+      (positions outside [actual_start, actual_end) are PAD, no state updates); decode runs [P, N) through all 40 layers itself
+      (128..191 tokens, DeepSeek''s Decoder SWA Bounded Replay on decode''s side: arXiv 2609.19969 section 3.2.2). The chunk
+      header grows by one field: {slot_id, actual_start, actual_end, global_write_start}; global_write_start = Xp, the frontier
+      of the long-range caches decode / the prefix cache already hold. Example (N 5002, Xp 4096): encoder replay [3968, 4096),
+      new computation [4096, 4864), decode [4864, 5002).
+
+      MODEL BEHAVIOUR, per valid position p of a chunk: p < global_write_start: ENCODER REPLAY - layers 0-19 only, their sliding
+      windows rebuilt with every window truncated at the replay start (DeepSeek''s Encoder SWA Bounded Replay; the model already
+      has begin_chunk(.., replay=True) for a chunk-level replay: reuse it), the compressed KV, index keys and layer 20''s
+      KV are READ but NEVER WRITTEN (today every history-cache write covers the chunk''s whole [start, end): model.py:699
+      compressor.write, attention.py:1494 / 1659 cache.write - gate them at global_write_start), layer 20''s KV / index head
+      not run. p >= global_write_start: layers 0-19 plus layer 20''s KV / index head, writes as today. Layers 21-39 NEVER
+      run on any chunk; every chunk still acks every layer 0-39 as completed (sink.layers_completed; tt-d-gen stays unaware
+      which layers run - Jonathan Azpur''s ask). Served: history caches [0, P), the window snapshot of layers 0-19 at P (rows
+      [P - 128, P)); say what is served for layers 20-39''s windows and update serving_contract.md / migration_configs.md.
+
+      SWITCHES: a new DECODER_SKIP value `decode` (keep the shipped default `off`: the owner decides after the A/B). The adapter
+      takes an optional global_write_start; missing = actual_start = no replay (today''s engine keeps working).
+
+      VERIFICATION, nothing loosened: (1) no prefix hit (global_write_start = actual_start): every served byte of the history
+      caches and of the layer 0-19 window snapshot is BIT-IDENTICAL between DECODER_SKIP=off and decode for the same chunks
+      (the encoder does not depend on the decoder); several prompt lengths, both prompts (novel, code). (2) prefix hit: the
+      cached rows below global_write_start are bit-identical before and after the replay chunk (never written); the rows from
+      global_write_start on vs a fresh full prefill: report their errors against the existing limits and against the golden
+      (approximate by design for positions whose encoder windows reach before the replay start); a golden state at P where
+      a check needs one (reuse FIX.26''s reference/handoff.py, same pipeline). (3) acks: every layer once per chunk. (4) determinism
+      (automatic in every gate since FIX.25). (5) if an existing check measures something this mode no longer computes (the
+      decoder''s states, a final hidden), do not change or drop it: run it on DECODER_SKIP=off and say so, as P.49 did for
+      test_contract (DS41-236); stop and ask if that is not enough. (6) perf: device time per chunk off vs decode (P.30 measured
+      a skipped chunk at 83.6 vs 167.9 ms at 51200).
+
+      Report: the per-position rule as implemented, the files touched, the bit-identity tables, accuracy, acks, perf. Agent
+      rules 18 and 19 hold. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language,
+      short, every term defined.'
   ab:
     env:
       DECODER_SKIP: 'off'
@@ -3527,8 +4010,8 @@ tasks:
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3545,7 +4028,8 @@ tasks:
       decode_acks_failures: == 0
       device_ms_total: '> 0'
 - id: FIX.28
-  title: 'Gates cover DECODER_SKIP=decode (Kartik''s cut): determinism, contract and acks run with the skip active, not only the full path'
+  title: 'Gates cover DECODER_SKIP=decode (Kartik''s cut): determinism, contract and acks run with the skip active, not only
+    the full path'
   step: overseer_fix
   role: overseer
   precheck: false
@@ -3559,16 +4043,35 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/bringup
   brief:
-    details: |-
-      OWNER 2026-11-13. P.51 added DECODER_SKIP=decode (prefill runs layers 0-19 + layer 20's KV only on chunks marked last=False; positions below global_write_start are replayed with no history-cache writes). Its own test (tests/test_decoder_skip_decode.py) shows 0 of 20,912 served records differ vs the full path, but the framework harness (ladder, determinism, contract, acks) passes last unset, so every gate runs the FULL path under decode: the skipped path is never checked for determinism, contract or acks. Branch dnijemcevic/model_bringup must be functionally correct for end-to-end prefill + decode testing.
-      Target, the skipped path exercised by the gate tests themselves (extend the existing tests; no parallel copies): (1) Determinism: test_determinism also runs DECODER_SKIP=decode with chunks marked last=False and a global_write_start inside the request (tt-d-gen's rule: actual_end = P = floor((N-128)/64)*64, exclusive; replay below global_write_start), both prompts (novel, code), cold and warm, and emits determinism_max_abs_diff_decoder_skip (== 0, bit for bit, every served tensor and the state decode reads). (2) Contract: test_contract and test_adapter_acks run a decode-mode request the way tt-d-gen sends it (actual_start, actual_end = P, global_write_start, last=False) and check what decode is served: history caches [0, P) and layers 0-19's window snapshots against the golden at P (reuse FIX.26's golden-at-cap pipeline; derive P from the request, no hard-coding), every layer acked exactly once and never early, nothing written in [P, N). Check the cap rule on this path: the served end equals decode's cap (cap = actual_end // 64 * 64 = P); a request whose actual_end is not a multiple of 64 under decode must be handled by the documented rule (find it in serving_contract.md; if undefined, stop and report). (3) Limits for new metrics follow the framework's existing rule; never loosen or edit an existing limit. (4) The full-path checks stay as they are. Do not edit tasks.yaml; report the gate lines P.51's gate should use.
-      Report: what each test now runs under decode, results on both paths (full and decode), new metrics and limits. SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+    details: 'OWNER 2026-11-13. P.51 added DECODER_SKIP=decode (prefill runs layers 0-19 + layer 20''s KV only on chunks marked
+      last=False; positions below global_write_start are replayed with no history-cache writes). Its own test (tests/test_decoder_skip_decode.py)
+      shows 0 of 20,912 served records differ vs the full path, but the framework harness (ladder, determinism, contract,
+      acks) passes last unset, so every gate runs the FULL path under decode: the skipped path is never checked for determinism,
+      contract or acks. Branch dnijemcevic/model_bringup must be functionally correct for end-to-end prefill + decode testing.
+
+      Target, the skipped path exercised by the gate tests themselves (extend the existing tests; no parallel copies): (1)
+      Determinism: test_determinism also runs DECODER_SKIP=decode with chunks marked last=False and a global_write_start inside
+      the request (tt-d-gen''s rule: actual_end = P = floor((N-128)/64)*64, exclusive; replay below global_write_start), both
+      prompts (novel, code), cold and warm, and emits determinism_max_abs_diff_decoder_skip (== 0, bit for bit, every served
+      tensor and the state decode reads). (2) Contract: test_contract and test_adapter_acks run a decode-mode request the
+      way tt-d-gen sends it (actual_start, actual_end = P, global_write_start, last=False) and check what decode is served:
+      history caches [0, P) and layers 0-19''s window snapshots against the golden at P (reuse FIX.26''s golden-at-cap pipeline;
+      derive P from the request, no hard-coding), every layer acked exactly once and never early, nothing written in [P, N).
+      Check the cap rule on this path: the served end equals decode''s cap (cap = actual_end // 64 * 64 = P); a request whose
+      actual_end is not a multiple of 64 under decode must be handled by the documented rule (find it in serving_contract.md;
+      if undefined, stop and report). (3) Limits for new metrics follow the framework''s existing rule; never loosen or edit
+      an existing limit. (4) The full-path checks stay as they are. Do not edit tasks.yaml; report the gate lines P.51''s
+      gate should use.
+
+      Report: what each test now runs under decode, results on both paths (full and decode), new metrics and limits. SAFETY:
+      a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short,
+      every term defined.'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3580,7 +4083,8 @@ tasks:
       acks_early: == 0
       served_bytes_differ: == 0
 - id: FIX.29
-  title: 'Load the model ONCE per gate: every model-level device test of a gate (contract, acks, the model''s own tests, determinism, ladder) runs in one process on one loaded model'
+  title: 'Load the model ONCE per gate: every model-level device test of a gate (contract, acks, the model''s own tests, determinism,
+    ladder) runs in one process on one loaded model'
   step: overseer_fix
   role: overseer
   precheck: false
@@ -3594,16 +4098,34 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup
   - scripts/run_safe_pytest.sh
   brief:
-    details: |-
-      OWNER 2026-11-13, angry, asked for days: "IT DOESN'T MAKE SENSE TO LOAD THE MODEL AGAIN AND AGAIN to conduct tests in serial. LOAD THE MODEL ONLY ONCE." F259 (core/batch.py, testing/batch.py, tests.one_process on) shares one process only among SHARED_TESTS (ladder, profile, positions, smoke, framework determinism). Every other test of a gate loads the model again (~4-5 min each on the 8x4): FIX.26's gate loaded it 4 times (logs/FIX.26.log: 4 x 271-313 s), FIX.28's gate 5 times (ladder, tests/test_determinism.py, test_contract, test_adapter_acks, test_decoder_skip_decode).
-      Target: one gate = one model load per distinct model configuration (switch values read at load). (1) Extend F259 to every device test a gate runs: test_contract, test_contract_acks, the model's tests (models/demos/deepseek_v41_flash_d_p/tests/: test_determinism, test_decoder_skip_decode, test_prefill_end, bringup/contract/test_adapter_acks, test_window_snapshot, ...) take the batch's model. The contract tests build the model through the engine's adapter because the adapter is part of what they check: then the batch loads the model THROUGH the adapter once and every test uses that (the adapter path stays tested; no second load path). Tests that need different switch values per run (e.g. DECODER_SKIP off vs decode, PREFILL_END end vs cap) must take them as per-call arguments of the one loaded model where the model allows it; where a switch is truly frozen at load, say which and why, and group them so each configuration loads once. KV/state freed between runs as F259 does. (2) A single command for agents to run several tests in one process while working (no reload per test), and the bringup-engineer agent definition tells agents to use it. (3) Proof on the device: FIX.28's gate command as is, in one process: number of model loads (emit gate_model_loads), every metric identical to the separate-process runs (FIX.28's results), determinism 0, wall before / after (FIX.28's gate wall from its log vs now). Never loosen a check; tests must still fail when what they check breaks (show one injected failure per moved test is still caught).
-      Report: loads before/after, wall before/after, what is shared and what is not, and why. SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+    details: 'OWNER 2026-11-13, angry, asked for days: "IT DOESN''T MAKE SENSE TO LOAD THE MODEL AGAIN AND AGAIN to conduct
+      tests in serial. LOAD THE MODEL ONLY ONCE." F259 (core/batch.py, testing/batch.py, tests.one_process on) shares one
+      process only among SHARED_TESTS (ladder, profile, positions, smoke, framework determinism). Every other test of a gate
+      loads the model again (~4-5 min each on the 8x4): FIX.26''s gate loaded it 4 times (logs/FIX.26.log: 4 x 271-313 s),
+      FIX.28''s gate 5 times (ladder, tests/test_determinism.py, test_contract, test_adapter_acks, test_decoder_skip_decode).
+
+      Target: one gate = one model load per distinct model configuration (switch values read at load). (1) Extend F259 to
+      every device test a gate runs: test_contract, test_contract_acks, the model''s tests (models/demos/deepseek_v41_flash_d_p/tests/:
+      test_determinism, test_decoder_skip_decode, test_prefill_end, bringup/contract/test_adapter_acks, test_window_snapshot,
+      ...) take the batch''s model. The contract tests build the model through the engine''s adapter because the adapter is
+      part of what they check: then the batch loads the model THROUGH the adapter once and every test uses that (the adapter
+      path stays tested; no second load path). Tests that need different switch values per run (e.g. DECODER_SKIP off vs decode,
+      PREFILL_END end vs cap) must take them as per-call arguments of the one loaded model where the model allows it; where
+      a switch is truly frozen at load, say which and why, and group them so each configuration loads once. KV/state freed
+      between runs as F259 does. (2) A single command for agents to run several tests in one process while working (no reload
+      per test), and the bringup-engineer agent definition tells agents to use it. (3) Proof on the device: FIX.28''s gate
+      command as is, in one process: number of model loads (emit gate_model_loads), every metric identical to the separate-process
+      runs (FIX.28''s results), determinism 0, wall before / after (FIX.28''s gate wall from its log vs now). Never loosen
+      a check; tests must still fail when what they check breaks (show one injected failure per moved test is still caught).
+
+      Report: loads before/after, wall before/after, what is shared and what is not, and why. SAFETY: a hang or a board reset
+      need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -3616,7 +4138,8 @@ tasks:
       served_bytes_differ: == 0
       gate_model_loads: == 1
 - id: FIX.30
-  title: 'FIX.29 regression: X.3''s one-process gate was killed (exit 137) at its first run, and units it never ran were listed as passed'
+  title: 'FIX.29 regression: X.3''s one-process gate was killed (exit 137) at its first run, and units it never ran were listed
+    as passed'
   step: overseer_fix
   role: overseer
   precheck: false
@@ -3631,16 +4154,42 @@ tasks:
   - scripts/run_safe_pytest.sh
   - scripts/lib/tt_safe_run.sh
   brief:
-    details: |-
-      OWNER 2026-11-13 (model loaded once per gate, FIX.29). X.3's fresh gate at ce9eb07a8fd FAILED: its units test_ladder (BRINGUP_RUNG=s56320, DS41_ENGRAM_TABLE=resident), test_profile (BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1) and test_positions were put in ONE process (FIX.29), and that process was killed (pytest exit 137, SIGKILL, scripts/lib/tt_safe_run.sh:351 "Killed") 151 s in, right at "BATCH (F259) run 1/4 X.3#test_ladder.0", before any metric (logs/X.3.log, logs/X.3.shared/process.log). Before FIX.29 the same units passed in separate processes (492 / 838 / 418 s). Two defects:
-      (1) The kill: find who sent SIGKILL and why (host memory of a model loaded for the longest sequence 56,320 plus LM head plus full prefill and the ops profiler? the safe runner's watchdog? a cgroup/Slurm limit? read tt_safe_run.sh and the kernel/Slurm evidence; the node has 566 GB). Measure, do not guess. Fix at the cause so X.3's gate runs in as few processes as truly possible; if the full-prefill profile with BRINGUP_PROFILE_OPS (device profiler variables are read at process start; core/batch.py already excludes TT_METAL_* runs) cannot share, the batch planner must know that rule and plan a separate process for it, not crash.
-      LIKELY CAUSE (owner 2026-11-13: a kernel leak): at 09:45 the node had 566 GB RAM, ~3 GB free, swap full; ~310 GB used by no process (not anon, not page cache, not hugetlb 36 GB, slab ~2 GB): kernel/driver memory leaked (tt-kmd 2.11.0, IOMMU on), likely pinned host buffers of killed processes. A driver fix is the infra team's (#exabox-infra); do not try to fix the kernel, never reset or reload the driver. What the framework must do: measure the process's peak host memory (RSS) for each gate unit and for the shared process; before starting a device process, check MemAvailable against the measured need (recorded per configuration) and stop with a clear INFRA message (free GB, needed GB, leaked GB = used minus all processes' RSS minus hugetlb) instead of being killed; record the free / leaked memory in the gate log. If X.3's shared process really needs more than the separate ones together, say so with numbers.
-      (2) False PASS: the gate printed "units passed: X.3#test_determinism, X.3#test_profile, X.3#test_positions" although test_profile and test_positions never ran (the process died during test_ladder). A unit the process never reached must be reported as not run / failed, everywhere (the summary, stamps, the delta, reuse), never as passed. Add a selftest that kills a shared process mid-run and checks every unit's reported status.
-      Proof on the device: X.3's gate (gate X.3 --fresh) PASSES with every metric present; report process count, loads, wall vs before (492 + 838 + 418 s + determinism), and the X.3 metrics vs its last recorded results (identical accuracy). Determinism 0. Never loosen a check.
-      SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+    details: 'OWNER 2026-11-13 (model loaded once per gate, FIX.29). X.3''s fresh gate at ce9eb07a8fd FAILED: its units test_ladder
+      (BRINGUP_RUNG=s56320, DS41_ENGRAM_TABLE=resident), test_profile (BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1) and test_positions
+      were put in ONE process (FIX.29), and that process was killed (pytest exit 137, SIGKILL, scripts/lib/tt_safe_run.sh:351
+      "Killed") 151 s in, right at "BATCH (F259) run 1/4 X.3#test_ladder.0", before any metric (logs/X.3.log, logs/X.3.shared/process.log).
+      Before FIX.29 the same units passed in separate processes (492 / 838 / 418 s). Two defects:
+
+      (1) The kill: find who sent SIGKILL and why (host memory of a model loaded for the longest sequence 56,320 plus LM head
+      plus full prefill and the ops profiler? the safe runner''s watchdog? a cgroup/Slurm limit? read tt_safe_run.sh and the
+      kernel/Slurm evidence; the node has 566 GB). Measure, do not guess. Fix at the cause so X.3''s gate runs in as few processes
+      as truly possible; if the full-prefill profile with BRINGUP_PROFILE_OPS (device profiler variables are read at process
+      start; core/batch.py already excludes TT_METAL_* runs) cannot share, the batch planner must know that rule and plan
+      a separate process for it, not crash.
+
+      LIKELY CAUSE (owner 2026-11-13: a kernel leak): at 09:45 the node had 566 GB RAM, ~3 GB free, swap full; ~310 GB used
+      by no process (not anon, not page cache, not hugetlb 36 GB, slab ~2 GB): kernel/driver memory leaked (tt-kmd 2.11.0,
+      IOMMU on), likely pinned host buffers of killed processes. A driver fix is the infra team''s (#exabox-infra); do not
+      try to fix the kernel, never reset or reload the driver. What the framework must do: measure the process''s peak host
+      memory (RSS) for each gate unit and for the shared process; before starting a device process, check MemAvailable against
+      the measured need (recorded per configuration) and stop with a clear INFRA message (free GB, needed GB, leaked GB =
+      used minus all processes'' RSS minus hugetlb) instead of being killed; record the free / leaked memory in the gate log.
+      If X.3''s shared process really needs more than the separate ones together, say so with numbers.
+
+      (2) False PASS: the gate printed "units passed: X.3#test_determinism, X.3#test_profile, X.3#test_positions" although
+      test_profile and test_positions never ran (the process died during test_ladder). A unit the process never reached must
+      be reported as not run / failed, everywhere (the summary, stamps, the delta, reuse), never as passed. Add a selftest
+      that kills a shared process mid-run and checks every unit''s reported status.
+
+      Proof on the device: X.3''s gate (gate X.3 --fresh) PASSES with every metric present; report process count, loads, wall
+      vs before (492 + 838 + 418 s + determinism), and the X.3 metrics vs its last recorded results (identical accuracy).
+      Determinism 0. Never loosen a check.
+
+      SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language,
+      short, every term defined.'
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/selftest/test_one_process.py
-      && DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/selftest/test_one_process.py &&
+      DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
     metrics:

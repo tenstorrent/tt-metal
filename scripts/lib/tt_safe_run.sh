@@ -420,6 +420,35 @@ ttrun_dump_hang_logs() {
 
 ttrun_cleanup_tmp() { rm -f "$TRIAGE_LOG" "$@"; }
 
+# ttrun_runrec_begin <args...> (FIX.31): file this run in the bring-up stamp store (core/runrec.py) when BRINGUP_SPEC
+# names a spec: its identity (tests, measuring env, code key) now, its result at exit (an EXIT hook). A batch given as
+# BRINGUP_BATCH_CMD becomes the same plan as a file, so each of its runs is filed. Bookkeeping only: any failure is one
+# line and never changes the run or its exit code. BRINGUP_RUNREC=0 turns it off.
+ttrun_runrec_begin() {
+    [[ -n "${BRINGUP_SPEC:-}" && "${BRINGUP_RUNREC:-1}" != 0 ]] || return 0
+    TTRUN_RUNREC_STATE="/tmp/safe-pytest-runrec-$$.json"
+    if [[ -n "${BRINGUP_BATCH_CMD:-}" && -z "${BRINGUP_BATCH:-}" ]]; then
+        TTRUN_RUNREC_PLAN="/tmp/safe-pytest-batch-plan-$$.json"
+        if (cd "$REPO_DIR" && PYTHONPATH="$REPO_DIR" python3 -m models.demos.common.bringup.core.runrec plan \
+                --cmd "$BRINGUP_BATCH_CMD" --out "$TTRUN_RUNREC_PLAN"); then
+            export BRINGUP_BATCH="$TTRUN_RUNREC_PLAN"
+        fi
+    fi
+    (cd "$REPO_DIR" && PYTHONPATH="$REPO_DIR" python3 -m models.demos.common.bringup.core.runrec begin \
+        --state "$TTRUN_RUNREC_STATE" -- "$@") || true
+    ttrun_on_exit ttrun_runrec_end
+}
+ttrun_runrec_end() {
+    local ec="$1"
+    [[ -n "${TTRUN_RUNREC_STATE:-}" && -f "$TTRUN_RUNREC_STATE" ]] || return 0
+    (cd "$REPO_DIR" && PYTHONPATH="$REPO_DIR" python3 -m models.demos.common.bringup.core.runrec end \
+        --state "$TTRUN_RUNREC_STATE" --rc "$ec") >/dev/null 2>&1 || true
+    if [[ -n "${TTRUN_RUNREC_PLAN:-}" ]]; then
+        rm -f "$TTRUN_RUNREC_PLAN" "${TTRUN_RUNREC_PLAN}.results.json"
+    fi
+    return 0
+}
+
 # Registered by run_safe_pytest.sh: total wall-clock from card acquired to exit,
 # always the last line. Nothing is printed for exits before a run began.
 ttrun_print_total_runtime() {

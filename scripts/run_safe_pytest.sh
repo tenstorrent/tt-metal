@@ -361,6 +361,15 @@ if [[ "$SIM_MODE" == false ]]; then
 fi
 ttrun_activate_venv
 
+# --- Run record (FIX.31): this run's result in the bring-up stamp store (bookkeeping, never the verdict) ---
+# What the run measures: its pytest arguments and the measuring flags (core/runrec.py drops the launch flags).
+_runrec_args=()
+[[ "$DEV_MODE" == true ]] && _runrec_args+=(--dev)
+[[ "$PROFILE_MODE" == true ]] && _runrec_args+=(--profile)
+[[ "${DEVICE_SELECTOR:-mesh}" != mesh ]] && _runrec_args+=(--device "$DEVICE_SELECTOR")
+_runrec_args+=("${PYTEST_ARGS[@]}")
+ttrun_runrec_begin "${_runrec_args[@]}"
+
 # --- Profiling preflight ---
 # `python -m tracy` needs a Tracy-enabled build and tracy deps (e.g. websockets).
 # Probe the import it does at startup (tracy.__main__ -> tracy.serve_wasm) so a
