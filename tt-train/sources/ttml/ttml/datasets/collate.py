@@ -10,7 +10,8 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-from .llm_dataset import IGNORED_INDEX
+# The label of a position that isn't trained on, as in HF: the prompt and the padding.
+IGNORED_INDEX = -100
 
 
 def collate_causal_lm(examples: Sequence[Mapping], max_length: int, pad_token_id: int) -> dict[str, np.ndarray]:

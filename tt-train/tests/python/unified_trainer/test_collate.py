@@ -7,7 +7,7 @@
 import numpy as np
 import pytest
 
-from ttml.unified_trainer.data import IGNORED_INDEX, collate_causal_lm
+from ttml.datasets.collate import IGNORED_INDEX, collate_causal_lm
 
 PAD = 0
 

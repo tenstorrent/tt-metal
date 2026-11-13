@@ -4,14 +4,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..configs import SFTTrainerConfig
-from .llm_dataset import LLMDataset
+from .provider import DatasetProvider
 from .templates import custom_prompt_and_response, resolve_column_mapping
 
+if TYPE_CHECKING:
+    from ttml.unified_trainer.configs import SFTTrainerConfig
 
-class CustomDataset(LLMDataset):
+
+class CustomProvider(DatasetProvider):
     """A local JSON / JSONL / CSV / Parquet file per split, rendered with a template (``dataset.custom_options``)."""
 
     def __init__(self, config: SFTTrainerConfig, split: str, tokenizer: Any) -> None:
@@ -23,11 +25,15 @@ class CustomDataset(LLMDataset):
         self.column_mapping = custom.column_mapping
         super().__init__(config, split, tokenizer)
 
+    @classmethod
+    def has_split(cls, config: SFTTrainerConfig, split: str) -> bool:
+        # Validation is optional: there is none without a file for it.
+        return split == "train" or bool(config.dataset.custom_options.val_dataset_path)
+
     def _load_raw_dataset(self) -> Any:
         if not self.data_path:
-            if self.split == "train":
-                raise ValueError("dataset.custom_options.train_dataset_path is required")
-            return None
+            field = "train_dataset_path" if self.split == "train" else "val_dataset_path"
+            raise ValueError(f"dataset.custom_options.{field} is required")
         from datasets import load_dataset
 
         raw_dataset = load_dataset(self.file_type, data_files={self.split: self.data_path}, split=self.split)

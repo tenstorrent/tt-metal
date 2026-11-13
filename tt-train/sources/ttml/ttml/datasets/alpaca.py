@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .llm_dataset import LLMDataset
+from .provider import DatasetProvider
 from .templates import ALPACA_PROMPT_TEMPLATE, ALPACA_PROMPT_TEMPLATE_NO_INPUT
 
 
-class AlpacaDataset(LLMDataset):
+class AlpacaProvider(DatasetProvider):
     """tatsu-lab/alpaca instruction following."""
 
     # Alpaca only has a train split; validation is carved out of it.

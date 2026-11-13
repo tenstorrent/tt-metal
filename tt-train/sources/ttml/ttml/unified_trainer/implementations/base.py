@@ -16,10 +16,10 @@ from typing import Any, Iterable, Iterator, Optional
 import numpy as np
 from tqdm import tqdm
 
-from .callbacks.callback import CallbackHandler
-from .configs import CheckpointConfig, TrainerConfig
-from .managers.checkpoint import CheckpointManager
-from .managers.logging import TrainingLogger
+from ..callbacks.callback import CallbackHandler
+from ..configs import CheckpointConfig, TrainerConfig
+from ..managers.checkpoint import CheckpointManager
+from ..managers.logging import TrainingLogger
 
 
 class Trainer(ABC):
@@ -51,8 +51,7 @@ class Trainer(ABC):
         self.step_loss: Any = None
 
     def setup(self, config: TrainerConfig) -> None:
-        """Validate ``config`` and build what a run needs: data, device, model and optimizer, which start from the
-        checkpoint ``model.init_strategy`` names, if any.
+        """Validate ``config`` and build what a run needs: data, device, model and optimizer.
 
         Fails on an untrainable config before the device is opened or any weights are downloaded. Any
         exception goes to every callback's ``on_setup_error`` and is re-raised; ``cleanup`` still frees what
@@ -70,7 +69,6 @@ class Trainer(ABC):
             self.device_manager = self._create_device_manager()
             self.model = self._load_model()
             self.optimizer = self._load_optimizer()
-            self._apply_init_strategy()
         except Exception as exception:
             self.callback_handler("on_setup_error", exception)
             raise
@@ -102,7 +100,7 @@ class Trainer(ABC):
 
         accumulation_steps = self.config.gradient_accumulation_steps
         with self._train_lifecycle():
-            # After `on_train_start`, where a callback may resume the run from a checkpoint.
+            # After `on_train_start`, which may have resumed the run from a checkpoint.
             first_epoch, first_batch = self._start_position()
             self.epoch = first_epoch
             self.step_loss = None
@@ -227,19 +225,6 @@ class Trainer(ABC):
     @abstractmethod
     def _load_optimizer(self) -> Any:
         """Build the optimizer over the model's trainable parameters."""
-
-    def _apply_init_strategy(self) -> None:
-        """Start the run from the checkpoint ``model.init_strategy`` names, if any."""
-        init = self.config.model.init_strategy
-        if init is None:
-            return
-        if init.type == "resume":
-            self.resume_from_checkpoint(init.path)
-            self.logger.info(f"Resuming after step {self.global_step} from {init.path}")
-        else:
-            # Weights only: training still starts at step 0, so the stored step, epoch and metrics are unused.
-            self.load_checkpoint(init.path)
-            self.logger.info(f"Initialized the trained weights from {init.path}")
 
     # ------------------------------------------------------------------ steps
 

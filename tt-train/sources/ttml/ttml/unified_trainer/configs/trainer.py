@@ -2,12 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .checkpoint import CheckpointConfig
 from .dataset import DatasetConfig
+from .device import DeviceConfig
 from .logging import LoggingConfig
 from .metrics import MetricsConfig
 from .model import ModelConfig
@@ -21,6 +20,7 @@ class TrainerConfig(BaseModel):
 
     dataset: DatasetConfig
     model: ModelConfig
+    device: DeviceConfig = Field(default_factory=DeviceConfig)
     dtype: str = "bfloat16"
 
     # One optimizer, or a list of them that each train the weights their `modules` match. Every trainable weight
@@ -50,12 +50,10 @@ class TrainerConfig(BaseModel):
 
 
 class SFTTrainerConfig(TrainerConfig):
-    """``SFTTrainer``: supervised fine-tuning of a causal LM on prompt/response pairs."""
+    """``SFTTrainer``: supervised fine-tuning of a causal LM on prompt/response pairs. It trains LoRA adapters only
+    so far, so it needs ``model.lora``."""
 
     # Every batch is padded to this many tokens; longer examples are dropped.
     max_length: int = Field(gt=0)
     # Clip the global gradient norm to this; 0 disables clipping.
     max_grad_norm: float = Field(default=0.0, ge=0.0)
-    # What the trainable weights are stored in. float32 keeps master weights for AdamW, and the model computes on
-    # their bf16 view: full fine-tuning needs it, as updates at fine-tuning learning rates round away in bf16.
-    master_dtype: Literal["bfloat16", "float32"] = "bfloat16"

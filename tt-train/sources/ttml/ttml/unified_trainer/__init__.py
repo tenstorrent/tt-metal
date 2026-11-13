@@ -17,6 +17,8 @@ A host builds a trainer once with its callbacks and runs any number of jobs on i
 ``tt-train/docs/UNIFIED_TRAINER.md``.
 """
 
+from ttml.models.provider import UnsupportedTrainingConfig
+
 from .callbacks import Callback, CallbackHandler, CheckpointCallback, MetricsCallback
 from .configs import (
     OPTIMIZERS,
@@ -25,6 +27,7 @@ from .configs import (
     CheckpointConfig,
     CustomDatasetConfig,
     DatasetConfig,
+    DeviceConfig,
     EpochSave,
     InitStrategy,
     LastRotation,
@@ -40,9 +43,7 @@ from .configs import (
     TrainerConfig,
     load_config,
 )
-from .providers import UnsupportedTrainingConfig
-from .sft_trainer import SFTTrainer
-from .trainer import Trainer
+from .implementations import SFTTrainer, Trainer
 
 __all__ = [
     "OPTIMIZERS",
@@ -54,6 +55,7 @@ __all__ = [
     "CheckpointConfig",
     "CustomDatasetConfig",
     "DatasetConfig",
+    "DeviceConfig",
     "EpochSave",
     "InitStrategy",
     "LastRotation",

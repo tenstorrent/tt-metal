@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""HF ``model_type: llama`` checkpoints (Llama 3.x) on ttml's Python ``Llama``, with LoRA or without.
+"""HF ``model_type: llama`` checkpoints (Llama 3.x) on ttml's Python ``Llama``, with LoRA adapters.
 
 ttml's Llama fuses q, k and v into one ``qkv_linear``, and gate and up into one ``w_gate_up``. A fused layer
 has one LoRA adapter, so LoRA targets all of its projections or none of them; a partly targeted layer is
@@ -12,16 +12,19 @@ rejected rather than silently widened.
 from __future__ import annotations
 
 import os
-from typing import Any, Iterator, Sequence
+from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
 import numpy as np
 
-from ..configs import LoraConfig, SFTTrainerConfig
-from .base import AdapterState, UnsupportedTrainingConfig
-from .hub import model_dir
-from .peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
+from ..peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
+from ..provider import AdapterState, UnsupportedTrainingConfig, model_dir
+
+if TYPE_CHECKING:
+    from ttml.unified_trainer.configs import LoraConfig, SFTTrainerConfig
 
 SUPPORTED_DTYPES = ("bfloat16",)
+# Rows and columns of the device mesh: a single chip.
+SUPPORTED_MESH = (1, 1)
 TILE = 32
 
 # The HF projections each LoRA-able layer of ttml's Llama holds, and the regex ``LoraModel`` matches
@@ -103,6 +106,9 @@ class LlamaProvider:
     """Provider for HF Llama checkpoints."""
 
     def check(self, config: SFTTrainerConfig, hf_config: dict[str, Any]) -> None:
+        mesh = tuple(config.device.mesh)
+        if mesh != SUPPORTED_MESH:
+            _fail("device.mesh", f"Llama trains on a single chip so far, {list(SUPPORTED_MESH)}; got {list(mesh)}")
         if config.dtype not in SUPPORTED_DTYPES:
             _fail("dtype", f"ttml Llama weights and adapters are bf16; use 'bfloat16', got {config.dtype!r}")
         max_length = config.max_length
@@ -111,10 +117,9 @@ class LlamaProvider:
         if max_length > hf_config.get("max_position_embeddings", max_length):
             _fail("max_length", f"exceeds the model's max_position_embeddings ({hf_config['max_position_embeddings']})")
         lora = config.model.lora
-        if lora is not None:
-            if lora.task_type != "CAUSAL_LM":
-                _fail("model.lora.task_type", f"only CAUSAL_LM is supported, got {lora.task_type!r}")
-            lora_layers(lora.target_modules)
+        if lora.task_type != "CAUSAL_LM":
+            _fail("model.lora.task_type", f"only CAUSAL_LM is supported, got {lora.task_type!r}")
+        lora_layers(lora.target_modules)
         self._llama_config(config, hf_config)
 
     def _llama_config(self, config: SFTTrainerConfig, hf_config: dict[str, Any]) -> Any:
@@ -141,8 +146,6 @@ class LlamaProvider:
         model = Llama(llama_config)
         load_from_safetensors(model, weights)
         lora = config.model.lora
-        if lora is None:
-            return model
         lora_config = TtmlLoraConfig(
             rank=lora.r,
             # Scaling alpha / r, as in PEFT.
@@ -218,16 +221,3 @@ class LlamaProvider:
                     _fail("checkpoint", f"adapter tensor of shape {value.shape} for a {shape} LoRA weight")
                 # Keeps the parameter's dtype (bf16) and layout.
                 ttml.autograd.assign_numpy(parameter.tensor, value.reshape(1, 1, *shape).astype(np.float32))
-
-    def export_weights(self, model: Any, config: SFTTrainerConfig, directory: str) -> None:
-        from ttml.models.llama import export_hf_model
-
-        export_hf_model(model, directory, hf_source_dir=model_dir(config.model.name))
-
-    def import_weights(self, model: Any, directory: str, config: SFTTrainerConfig) -> None:
-        from ttml.models.llama import load_from_safetensors
-
-        try:
-            load_from_safetensors(model, directory)
-        except (FileNotFoundError, RuntimeError) as e:
-            raise UnsupportedTrainingConfig(f"checkpoint: {directory} doesn't load into this model: {e}") from e

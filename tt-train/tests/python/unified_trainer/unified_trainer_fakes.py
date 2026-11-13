@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from typing import Any, Optional, Sequence
 
 from ttml.unified_trainer import TrainerConfig
-from ttml.unified_trainer.trainer import Trainer
+from ttml.unified_trainer.implementations.base import Trainer
 
 
 def make_config(**overrides: Any) -> TrainerConfig:

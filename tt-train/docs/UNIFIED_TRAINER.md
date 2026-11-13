@@ -44,9 +44,10 @@ Checkpoints the ttml Llama can't represent are rejected before the device opens:
 biases, an activation other than SiLU, and RoPE scaling other than `llama3` or the default. Other architectures plug in
 as model providers (see [Adding a model](#adding-a-model)).
 
-**LoRA or every weight.** With a `lora` section in `model`, the run trains LoRA adapters and nothing else. Without
-one, it trains every weight. `target_modules` uses HF projection names. ttml's Llama fuses some projections into one layer, which has
-one LoRA pair, so a fused group is targeted whole or not at all:
+**LoRA only.** A run trains the LoRA adapters its `model.lora` section describes, and nothing else. Full fine-tuning
+(every weight) is not supported yet: a config without `model.lora` is rejected. `target_modules` uses HF projection
+names. ttml's Llama fuses some projections into one layer, which has one LoRA pair, so a fused group is targeted whole
+or not at all:
 
 | HF projections | ttml Llama layer |
 |---|---|
@@ -57,6 +58,8 @@ one LoRA pair, so a fused group is targeted whole or not at all:
 
 `[q_proj, k_proj, v_proj, o_proj]` trains attention, and adding `gate_proj, up_proj, down_proj` trains every projection.
 `[q_proj, v_proj]` is rejected, because LoRA on `qkv_linear` also updates `k_proj`.
+
+**Optimizer.** AdamW at a constant learning rate; it is the only optimizer supported so far.
 
 **Data.** The `id` of the `dataset` section picks one:
 
@@ -77,7 +80,7 @@ dataset:
 ```
 
 Examples longer than `max_length` tokens are dropped. The loss is the cross-entropy of the response tokens; the prompt
-and padding don't count.
+and padding don't count. Other datasets plug in as dataset providers (see [Adding a dataset](#adding-a-dataset)).
 
 ---
 
@@ -88,7 +91,8 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | Field | Default | Description |
 |---|---|---|
 | `dataset` | | `id`, one of `sst2`, `alpaca` or `custom`, is required. `custom_options` is required when `id` is `custom`: `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
-| `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora` (unset) trains LoRA adapters: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`); unset trains every weight. `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. `init_strategy` (unset) is a checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). |
+| `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora` is the LoRA adapters to train, and a run needs it, as only LoRA training is supported so far: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. |
+| `device` | | `mesh` (`[1, 1]`), the rows and columns of the device mesh the run opens. A single chip, `[1, 1]`, is the only mesh supported so far. |
 | `dtype` | `bfloat16` | Must be `bfloat16`. |
 | `max_length` | | Tokens per example: a multiple of 32, at most the model's `max_position_embeddings`. |
 | `batch_size` | | Examples per micro-batch. |
@@ -97,17 +101,11 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `max_steps` | `0` | Stop after this many optimizer steps; 0 runs every epoch. |
 | `max_grad_norm` | `0.0` | Clip the global gradient norm to this; 0 disables clipping. |
 | `val_steps_freq` | `0` | Validate before training and every this many optimizer steps; 0 disables validation. |
-| `master_dtype` | `bfloat16` | `float32` keeps fp32 master weights for AdamW; full fine-tuning needs it (see below). |
 | `seed` | `0` | Seeds initialization, LoRA dropout and data shuffling. |
-| `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
+| `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one supported so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
 | `metrics` | | `steps_freq` (10): train metrics are averaged over and logged every this many steps. `train_metrics` (`[loss]`, `learning_rate` also works), `val_metrics` (`[loss]`). |
 | `logging` | | `log_level` (`INFO`), `use_wandb` (false), `wandb_project`, `wandb_run_name`, `wandb_tags`. |
 | `checkpoint` | | See [Checkpoints](#checkpoints). |
-
-**Full fine-tuning precision.** At fine-tuning learning rates, an AdamW update is smaller than bf16 can resolve next
-to most weights, so a bf16 weight doesn't move. `master_dtype: float32` stores the trainable weights in fp32; the
-forward and backward passes still run in bf16. LoRA doesn't need it, as its adapters start at zero. See
-[fp32 master weights](MIXED_PRECISION.md#fp32-master-weights).
 
 ### Several optimizers
 
@@ -116,8 +114,8 @@ A list under `optimizer` trains different weights with different optimizers or s
 ```yaml
 optimizer:
   - lr: 1.0e-3
-    modules: [attention_norm, mlp_norm]  # these weights train here
-  - lr: 1.0e-4                           # no modules: every other trainable weight
+    modules: [lora_B]  # these weights train here
+  - lr: 1.0e-4         # no modules: every other trainable weight
     weight_decay: 0.01
 ```
 
@@ -132,18 +130,13 @@ and so on, in list order.
 
 ## Checkpoints
 
-A checkpoint holds what the run trains, in the format HuggingFace tools load:
+A checkpoint holds what the run trains, the LoRA adapters, as a PEFT adapter directory: `adapter_config.json` and
+`adapter_model.safetensors`, which `PeftModel.from_pretrained(base_model, path)` loads.
 
-| Run | Directory | Loads with |
-|---|---|---|
-| LoRA | `adapter_config.json`, `adapter_model.safetensors` | `PeftModel.from_pretrained(base_model, path)` |
-| Every weight | `config.json`, `model.safetensors` (bf16), tokenizer files | `AutoModelForCausalLM.from_pretrained(path)` |
-
-Both also hold `trainer_state.json`: the step, epoch and metrics at the save. With `save_optim`, they hold
-`optimizer_state.pkl` too: the optimizer state, the trained weights at the precision they train in (a full
-checkpoint's `model.safetensors` is bf16) and the RNG state, which a resumed run needs. The adapter of a fused layer
-is written per HF projection, with the projections sharing one `lora_A` and splitting `lora_B` by rows. A full
-checkpoint writes a tied embedding once, as HF does.
+It also holds `trainer_state.json`: the step, epoch and metrics at the save. With `save_optim`, it holds
+`optimizer_state.pkl` too: the optimizer state, the trained weights and the RNG state, which a resumed run needs. The
+adapter of a fused layer is written per HF projection, with the projections sharing one `lora_A` and splitting `lora_B`
+by rows.
 
 The `checkpoint` section:
 
@@ -151,6 +144,7 @@ The `checkpoint` section:
 |---|---|---|
 | `save_strategy` | `type: none` | When to save; see below. Unless `none`, the final checkpoint is also saved at the end. |
 | `rotation_strategy` | `type: last` | Which checkpoints to keep; see below. |
+| `init_strategy` | unset | A checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). Unset starts from the pretrained weights. |
 | `project_dir` | `runs/unified_trainer` | Checkpoints go in `<project_dir>/checkpoints/`. |
 | `final_checkpoint_name` | `final` | |
 | `save_optim` | `false` | Also save the optimizer state, so a run can resume from the checkpoint. |
@@ -192,12 +186,11 @@ directory and moved into place when complete, so a failed save leaves the previo
 
 ### Starting from a checkpoint
 
-`model.init_strategy` names a checkpoint directory, which `setup` loads once it has built the model and optimizer.
-Unset, the run starts from the pretrained weights of `model.name`.
+`checkpoint.init_strategy` names a checkpoint directory, which `CheckpointCallback` loads when training starts. Unset,
+the run starts from the pretrained weights of `model.name`.
 
 ```yaml
-model:
-  name: meta-llama/Llama-3.2-1B-Instruct
+checkpoint:
   init_strategy:
     type: resume
     path: runs/my_run/checkpoints/final
@@ -206,13 +199,14 @@ model:
 Its `type` is one of:
 
 - `init`: the trained weights only. Training starts at step 0 with a fresh optimizer.
-- `resume`: also the optimizer state, which the checkpoint holds if it was saved with `checkpoint.save_optim`.
-  Training continues after the checkpoint's step, on the batches the run would have trained on next, so keep
-  `batch_size`, `gradient_accumulation_steps`, `optimizer`, the data and the `seed` as they were.
+- `resume`: also the optimizer state, which the checkpoint holds if it was saved with `save_optim`. Training continues
+  after the checkpoint's step, on the batches the run would have trained on next, so keep `batch_size`,
+  `gradient_accumulation_steps`, `optimizer`, the data and the `seed` as they were.
 
-The trainer loads it whichever callbacks it has, so a run needs no `CheckpointCallback` to start from a checkpoint. A
-checkpoint that doesn't load fails `setup`. A checkpoint of the other kind is an error: a LoRA run can't load a full
-model (make it the `model.name` instead), and a full run can't load an adapter.
+It takes effect only in a run with `CheckpointCallback`. A host that saves with callbacks of its own starts from a
+checkpoint by calling `trainer.load_checkpoint(path)` or `trainer.resume_from_checkpoint(path)` between `setup` and
+`train`. A checkpoint that doesn't load fails `train`. A full model directory is not a checkpoint a run can start
+from: to train adapters on it, make it the `model.name` instead.
 
 ---
 
@@ -222,8 +216,7 @@ A host builds one trainer with its callbacks and runs each job as:
 
 ```python
 try:
-    trainer.setup(config)  # validates, loads data, opens the device, builds the model and optimizer,
-                           # and loads the checkpoint model.init_strategy names
+    trainer.setup(config)  # validates, loads data, opens the device, builds the model and optimizer
     trainer.train()
 finally:
     trainer.cleanup()  # also after a failed setup
@@ -257,16 +250,37 @@ finally:
 ## Adding a model
 
 A model provider builds the ttml model for an HF `model_type` and maps its weights to HF's. It implements the
-`ModelProvider` protocol in `ttml/unified_trainer/providers/base.py`:
+`ModelProvider` protocol in `ttml/models/provider.py`:
 
-- `check(config, hf_config)`: raise `UnsupportedTrainingConfig` for anything the model can't train. It runs before the
-  device opens.
-- `build(config, hf_config)`: the model with pretrained weights, wrapped in LoRA when `config.model.lora` is set.
+- `check(config, hf_config)`: raise `UnsupportedTrainingConfig` for anything the model can't train, including a
+  `device.mesh` it can't be built on. It runs before the device opens.
+- `build(config, hf_config)`: the model with pretrained weights, wrapped in LoRA as `config.model.lora` describes.
 - `export_adapter` / `import_adapter`: the LoRA weights as PEFT tensors and adapter config, and back.
-- `export_weights` / `import_weights`: every weight, as an HF model directory, and back.
 
-Register it in `PROVIDERS` in `ttml/unified_trainer/providers/__init__.py`. `LlamaProvider` in `providers/llama.py` is
-the reference.
+Write it in `ttml/models/<model>/provider.py` and add it to `providers()` in `ttml/models/provider.py`, keyed by the
+`model_type`. `LlamaProvider` in `ttml/models/llama/provider.py` is the reference.
+
+---
+
+## Adding a dataset
+
+A dataset provider serves one split of a dataset as batches: the trainer builds one for training and one for
+validation, and asks each for its next batch. It subclasses `DatasetProvider` in `ttml/datasets/provider.py`, which
+tokenizes the examples, masks the prompt, drops the examples longer than `max_length`, and batches them. The subclass
+adds what is the dataset's own:
+
+- `_load_raw_dataset()`: the HF dataset of `self.split`.
+- `_prompt_and_response(example)`: the prompt and the response of one example.
+- `train_val_split_ratio`, for a source with a train split only: the share of it to train on, the rest being held out
+  for validation.
+- `has_split(config, split)`, for a source that may lack a split: the trainer then runs without it.
+
+Write it in `ttml/datasets/<dataset>.py` and add it to `providers()` in `ttml/datasets/provider.py`, keyed by its
+`dataset.id`. `SST2Provider` in `ttml/datasets/sst2.py` is the reference.
+
+What a trainer uses of a provider: `next_batch()`, the next batch of the epoch as host arrays, or `None` once the
+epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch; and
+`seek(epoch, batch)`, with which a resumed run continues where the run before it stopped.
 
 ---
 
@@ -278,4 +292,4 @@ pytest tt-train/tests/python/unified_trainer
 
 Most tests are device-free: the training loop and callbacks on a fake trainer, configs and recipes, data, the PEFT
 mapping and checkpoint files. The tests marked `requires_device` train a tiny random Llama on a device. They check
-that loss decreases and that HF PEFT and `from_pretrained` load the checkpoints with the same logits as ttml.
+that loss decreases and that HF PEFT loads the adapters with the same logits as ttml.

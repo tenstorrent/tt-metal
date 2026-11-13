@@ -9,7 +9,8 @@ import json
 import numpy as np
 import pytest
 
-from ttml.unified_trainer.checkpoint_io import (
+from ttml.models.provider import AdapterState
+from ttml.unified_trainer.utils import (
     ADAPTER_CONFIG,
     ADAPTER_WEIGHTS,
     is_adapter_dir,
@@ -20,7 +21,6 @@ from ttml.unified_trainer.checkpoint_io import (
     write_adapter,
     write_trainer_state,
 )
-from ttml.unified_trainer.providers.base import AdapterState
 
 pytest.importorskip("safetensors")
 
@@ -99,9 +99,9 @@ def test_is_model_dir(tmp_path):
 
 
 def trainer_for(lora):
-    """An SFTTrainer as setup leaves it, short of the model: a checkpoint of the wrong kind fails before it is read."""
+    """An SFTTrainer as setup leaves it, short of the model: what is not an adapter fails before it is read."""
     from ttml.unified_trainer import SFTTrainer, SFTTrainerConfig
-    from ttml.unified_trainer.providers import LlamaProvider
+    from ttml.models.llama.provider import LlamaProvider
 
     trainer = SFTTrainer()
     trainer.config = SFTTrainerConfig(
@@ -115,22 +115,16 @@ def trainer_for(lora):
     return trainer
 
 
-def test_a_checkpoint_of_the_other_kind_is_rejected(tmp_path, expect_error):
+def test_what_is_not_an_adapter_is_rejected_as_a_checkpoint(tmp_path, expect_error):
     from ttml.unified_trainer import UnsupportedTrainingConfig
 
-    model, adapter = tmp_path / "model", tmp_path / "adapter"
+    model = tmp_path / "model"
     model.mkdir()
     (model / "config.json").write_text("{}")
     (model / "model.safetensors").write_bytes(b"")
-    adapter.mkdir()
-    write_adapter(adapter, AdapterState({}, {"peft_type": "LORA"}))
 
     lora = {"r": 4, "alpha": 8, "target_modules": ["o_proj"]}
     with expect_error(UnsupportedTrainingConfig, "is a full model, not a LoRA adapter; .* make it the model.name"):
         trainer_for(lora).load_checkpoint(str(model))
-    with expect_error(UnsupportedTrainingConfig, "is a LoRA adapter, and this run trains every weight"):
-        trainer_for(None).load_checkpoint(str(adapter))
-    with expect_error(FileNotFoundError, "is not an HF model directory"):
-        trainer_for(None).load_checkpoint(str(tmp_path / "missing"))
     with expect_error(FileNotFoundError, "is not a PEFT adapter directory"):
         trainer_for(lora).load_checkpoint(str(tmp_path / "missing"))

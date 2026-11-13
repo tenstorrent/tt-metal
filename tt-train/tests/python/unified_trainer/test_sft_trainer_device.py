@@ -6,10 +6,10 @@
 
 - the HF export of a loaded model reproduces its checkpoint bit for bit;
 - an exported LoRA adapter makes the same logits in HF PEFT as in ttml;
-- LoRA and full fine-tuning runs learn, save checkpoints HF loads, rotate them, and load them back;
+- a LoRA run learns, saves checkpoints HF PEFT loads, rotates them, and loads them back;
 - a gradient-checkpointed run trains as one that keeps its activations;
 - a run resumed from a checkpoint trains as the run it continues would have;
-- one trainer runs a LoRA job and then a full one.
+- one trainer runs one LoRA job and then another.
 """
 
 import gc
@@ -21,22 +21,24 @@ import pytest
 import ttnn
 import ttml
 from ttml.models import RunnerType
+from ttml.models.llama.provider import LlamaProvider
+from ttml.models.provider import load_hf_config
 from ttml.unified_trainer import (
     CheckpointCallback,
+    DeviceConfig,
     MetricsCallback,
     SFTTrainer,
     SFTTrainerConfig,
     UnsupportedTrainingConfig,
 )
-from ttml.unified_trainer.checkpoint_io import (
+from ttml.unified_trainer.managers.device import DeviceManager
+from ttml.unified_trainer.utils import (
     is_adapter_dir,
     is_model_dir,
     read_adapter,
     read_trainer_state,
     write_adapter,
 )
-from ttml.unified_trainer.managers.device import DeviceManager
-from ttml.unified_trainer.providers import LlamaProvider, load_hf_config
 
 safetensors_numpy = pytest.importorskip("safetensors.numpy")
 
@@ -115,7 +117,7 @@ def no_open_device():
 
 @pytest.fixture
 def char_tokenizer(monkeypatch):
-    monkeypatch.setattr("ttml.unified_trainer.sft_trainer.load_tokenizer", lambda model_name: CharTokenizer())
+    monkeypatch.setattr("ttml.unified_trainer.implementations.sft.load_tokenizer", lambda model_name: CharTokenizer())
 
 
 def write_jsonl(path, rows):
@@ -129,7 +131,6 @@ def sft_config(
     checkpoint=None,
     rows=None,
     lora=None,
-    init_strategy=None,
     gradient_checkpointing=False,
     **overrides,
 ):
@@ -147,7 +148,6 @@ def sft_config(
             "name": str(model_dir),
             "lora": lora,
             "gradient_checkpointing": gradient_checkpointing,
-            "init_strategy": init_strategy,
         },
         "max_length": MAX_LENGTH,
         "optimizer": {"lr": 1e-2},
@@ -234,7 +234,7 @@ def test_the_hf_export_reproduces_the_checkpoint(tmp_path, tied, no_open_device)
     from ttml.models.llama import Llama, LlamaConfig, export_hf_model, load_from_safetensors
 
     source = save_hf_llama(tmp_path / "source", tied)
-    device = DeviceManager()
+    device = DeviceManager(DeviceConfig())
     try:
         model = Llama(LlamaConfig.from_hf(str(source), max_position_embeddings=MAX_LENGTH))
         load_from_safetensors(model, str(source))
@@ -256,7 +256,7 @@ def test_an_exported_adapter_makes_the_same_logits_in_peft(tiny_llama, tmp_path,
     config = sft_config(tiny_llama, tmp_path, lora=lora())
     provider = LlamaProvider()
     ids = sample_ids()
-    device = DeviceManager()
+    device = DeviceManager(config.device)
     try:
         model = provider.build(config, load_hf_config(config.model.name))
         model.eval()
@@ -369,15 +369,18 @@ def test_init_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_t
     finally:
         first.cleanup()
 
-    # The next run starts from the final checkpoint of the first; one step at a learning rate of 0 keeps it. It
-    # has no CheckpointCallback: the trainer loads the checkpoint, and nothing overwrites it.
-    second = SFTTrainer()
+    # The next run starts from the final checkpoint of the first; one step at a learning rate of 0 keeps it.
+    init = {
+        "save_strategy": {"type": "none"},
+        "init_strategy": {"type": "init", "path": str(final_checkpoint(tmp_path))},
+    }
+    second = SFTTrainer(callbacks=[CheckpointCallback()])
     try:
         second.setup(
             sft_config(
                 tiny_llama,
                 tmp_path,
-                init_strategy={"type": "init", "path": str(final_checkpoint(tmp_path))},
+                checkpoint=init,
                 lora=lora(ATTENTION),
                 optimizer={"lr": 0.0},
                 max_steps=1,
@@ -397,56 +400,14 @@ def test_init_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_t
     assert_close(restored, trained, "restored logits", min_pcc=0.9999, max_rel=0.01)
 
 
-def test_a_full_fine_tune_saves_an_hf_model_directory(tiny_llama, tmp_path, no_open_device, char_tokenizer):
-    config = sft_config(
-        tiny_llama, tmp_path, optimizer={"lr": 1e-3}, max_steps=4, max_grad_norm=1.0, master_dtype="float32"
-    )
-    losses = Losses()
-    ids = sample_ids()
-    trainer = SFTTrainer(callbacks=[losses, CheckpointCallback()])
-    try:
-        trainer.setup(config)
-        trainer.train()
-        trained = trained_logits(trainer, ids)
-    finally:
-        trainer.cleanup()
-    assert np.isfinite(losses.train).all() and losses.train[-1] < losses.train[0]
-
-    final = final_checkpoint(tmp_path)
-    assert is_model_dir(final) and not is_adapter_dir(final)
-    assert read_trainer_state(final)["step"] == 4
-    assert sorted(safetensors_numpy.load_file(str(final / "model.safetensors"))) == sorted(
-        safetensors_numpy.load_file(str(tiny_llama / "model.safetensors"))
-    )
-    assert_close(trained, hf_logits(load_hf(final), ids), "trained logits in HF")
-
-    second = SFTTrainer()
-    try:
-        second.setup(sft_config(tiny_llama, tmp_path, val_steps_freq=0, master_dtype="float32"))
-        second.load_checkpoint(str(final))
-        second.provider.export_weights(second.model, second.config, tmp_path / "reloaded")
-        reloaded = trained_logits(second, ids)
-    finally:
-        second.cleanup()
-    assert_same_bits(final / "model.safetensors", tmp_path / "reloaded" / "model.safetensors")
-    assert_close(reloaded, trained, "reloaded logits", min_pcc=0.9999, max_rel=0.01)
-
-
-@pytest.mark.parametrize(
-    "overrides, weights",
-    [
-        ({"lora": {**lora(ATTENTION), "dropout": 0.2}}, "adapter_model.safetensors"),
-        ({"optimizer": {"lr": 1e-3}, "master_dtype": "float32"}, "model.safetensors"),
-    ],
-    ids=["lora with dropout", "full in float32"],
-)
-def test_a_resumed_run_trains_as_the_run_it_continues(
-    overrides, weights, tiny_llama, tmp_path, no_open_device, char_tokenizer
-):
+def test_a_resumed_run_trains_as_the_run_it_continues(tiny_llama, tmp_path, no_open_device, char_tokenizer):
     # Distinct rows, so training on other batches than the uninterrupted run would show in the losses.
     rows = [{"instruction": f"Say word {i}.", "output": "tenstorrent"[: 3 + i % 9]} for i in range(16)]
+    # With dropout, so the resumed run also has to continue the RNG.
+    dropout_lora = {**lora(ATTENTION), "dropout": 0.2}
+    weights = "adapter_model.safetensors"
 
-    def train(project, checkpoint, init_strategy=None):
+    def train(project, checkpoint):
         losses = Losses()
         trainer = SFTTrainer(callbacks=[losses, CheckpointCallback()])
         checkpoint = {"project_dir": str(tmp_path / project), "save_optim": True, **checkpoint}
@@ -456,12 +417,11 @@ def test_a_resumed_run_trains_as_the_run_it_continues(
                     tiny_llama,
                     tmp_path,
                     checkpoint=checkpoint,
-                    init_strategy=init_strategy,
+                    lora=dropout_lora,
                     rows=rows,
                     num_epochs=2,
                     gradient_accumulation_steps=2,
                     val_steps_freq=0,
-                    **overrides,
                 )
             )
             trainer.train()
@@ -473,22 +433,22 @@ def test_a_resumed_run_trains_as_the_run_it_continues(
     uninterrupted = train("run", {"save_strategy": {"type": "step", "frequency": 3}})
     (step_3,) = (tmp_path / "run" / "checkpoints").glob("checkpoint_step3_*")
     # From the middle of the first epoch, through the second.
-    resumed = train("resumed", {}, init_strategy={"type": "resume", "path": str(step_3)})
+    resumed = train("resumed", {"init_strategy": {"type": "resume", "path": str(step_3)}})
 
     assert len(uninterrupted) == 8 and resumed == uninterrupted[3:]
     assert_same_bits(final_checkpoint(tmp_path) / weights, final_checkpoint(tmp_path, "resumed") / weights)
 
 
-def test_one_trainer_runs_a_lora_job_and_then_a_full_one(tiny_llama, tmp_path, no_open_device, char_tokenizer):
+def test_one_trainer_runs_one_lora_job_and_then_another(tiny_llama, tmp_path, no_open_device, char_tokenizer):
     losses = Losses()
     trainer = SFTTrainer(callbacks=[losses, CheckpointCallback()])
     jobs = [
-        sft_config(tiny_llama, tmp_path, checkpoint={"project_dir": str(tmp_path / "lora")}, lora=lora()),
+        sft_config(tiny_llama, tmp_path, checkpoint={"project_dir": str(tmp_path / "every")}, lora=lora()),
         sft_config(
             tiny_llama,
             tmp_path,
-            checkpoint={"project_dir": str(tmp_path / "full")},
-            optimizer={"lr": 1e-3},
+            checkpoint={"project_dir": str(tmp_path / "attention")},
+            lora={**lora(ATTENTION), "r": 8},
             max_steps=4,
         ),
     ]
@@ -500,18 +460,29 @@ def test_one_trainer_runs_a_lora_job_and_then_a_full_one(tiny_llama, tmp_path, n
             trainer.cleanup()
 
     assert len(losses.train) == 12 and np.isfinite(losses.train).all()
-    assert is_adapter_dir(final_checkpoint(tmp_path, "lora"))
-    assert is_model_dir(final_checkpoint(tmp_path, "full"))
+    # Each job saved the adapter it trained, not the one before it.
+    every, attention = (read_adapter(final_checkpoint(tmp_path, project)) for project in ("every", "attention"))
+    assert every.config["target_modules"] == sorted(EVERY_PROJECTION)
+    assert attention.config["target_modules"] == sorted(ATTENTION) and attention.config["r"] == 8
     assert trainer.config is None and not hasattr(trainer, "model")
 
 
-def test_a_partly_targeted_fused_layer_fails_before_the_device_opens(
-    tiny_llama, tmp_path, char_tokenizer, expect_error
+@pytest.mark.parametrize(
+    "fields, error",
+    [
+        ({"lora": None}, "model.lora: only LoRA training is supported so far"),
+        ({"lora": lora(["q_proj", "v_proj"])}, "one fused layer"),
+        ({"lora": lora(), "device": {"mesh": [1, 2]}}, "device.mesh: Llama trains on a single chip so far"),
+    ],
+    ids=["no lora", "a partly targeted fused layer", "a mesh of several chips"],
+)
+def test_an_untrainable_config_fails_before_the_device_opens(
+    fields, error, tiny_llama, tmp_path, char_tokenizer, expect_error
 ):
     trainer = SFTTrainer()
     try:
-        with expect_error(UnsupportedTrainingConfig, "one fused layer"):
-            trainer.setup(sft_config(tiny_llama, tmp_path, lora=lora(["q_proj", "v_proj"])))
+        with expect_error(UnsupportedTrainingConfig, error):
+            trainer.setup(sft_config(tiny_llama, tmp_path, **fields))
         assert not hasattr(trainer, "device_manager")
     finally:
         trainer.cleanup()

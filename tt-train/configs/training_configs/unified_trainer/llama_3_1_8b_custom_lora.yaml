@@ -23,6 +23,9 @@ dataset:
     val_dataset_path: data/val.jsonl
     template: alpaca
 
+device:
+  mesh: [1, 1]
+
 max_length: 256
 batch_size: 4
 num_epochs: 1

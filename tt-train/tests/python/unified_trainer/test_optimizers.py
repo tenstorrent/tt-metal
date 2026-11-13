@@ -7,7 +7,7 @@
 import pytest
 
 from ttml.unified_trainer import AdamWConfig, UnsupportedTrainingConfig
-from ttml.unified_trainer.optimizers import CombinedOptimizer, assign_parameters
+from ttml.unified_trainer.utils import CombinedOptimizer, assign_parameters
 
 QKV_A = "llama/blocks/0/attention/qkv_linear/lora_A"
 QKV_B = "llama/blocks/0/attention/qkv_linear/lora_B"

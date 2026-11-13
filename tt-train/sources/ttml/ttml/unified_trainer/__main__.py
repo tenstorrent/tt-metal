@@ -11,7 +11,7 @@ from typing import Optional, Sequence
 
 from .callbacks import CheckpointCallback, MetricsCallback
 from .configs import load_config
-from .sft_trainer import SFTTrainer
+from .implementations import SFTTrainer
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:

@@ -6,11 +6,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .llm_dataset import LLMDataset
+from .provider import DatasetProvider
 from .templates import SST2_LABELS, SST2_PROMPT_TEMPLATE, SST2_RESPONSE_TEMPLATE
 
 
-class SST2Dataset(LLMDataset):
+class SST2Provider(DatasetProvider):
     """GLUE SST-2 sentiment classification, answered as ``{"label": "positive"}``."""
 
     def _load_raw_dataset(self) -> Any:

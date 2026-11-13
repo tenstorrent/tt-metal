@@ -9,7 +9,7 @@ class LoraConfig(BaseModel):
     """LoRA adapters, in PEFT's terms: HF module names, and the scaling ``alpha / r``.
 
     The model provider maps these onto the ttml model, and rejects targets the model can't train
-    (see ``ttml.unified_trainer.providers``).
+    (see ``ttml.models.provider``).
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -2,37 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .lora import LoraConfig
 
 
-class InitStrategy(BaseModel):
-    """The checkpoint a run starts from."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # "init" loads the trained weights only: training starts at step 0 with a fresh optimizer. "resume" also loads
-    # the optimizer state, which a checkpoint holds only if saved with `checkpoint.save_optim`, and continues the run
-    # after the checkpoint's step, on the batches it would have trained on next.
-    type: Literal["init", "resume"]
-    # A checkpoint directory.
-    path: str = Field(min_length=1)
-
-
 class ModelConfig(BaseModel):
-    """The model a run trains: the pretrained model it builds and how, what of it trains, and the checkpoint it
-    starts from."""
+    """The model a run trains: the pretrained model it builds and how, and what of it trains."""
 
     model_config = ConfigDict(extra="forbid")
 
     # An HF hub id or a local HF model directory.
     name: str = Field(min_length=1)
-    # Train LoRA adapters; unset trains every weight (full fine-tuning).
+    # The LoRA adapters to train. Unset would train every weight (full fine-tuning), which no trainer supports yet.
     lora: Optional[LoraConfig] = None
     # Build the model to recompute activations in the backward pass instead of keeping them.
     gradient_checkpointing: bool = False
-    # Unset starts from the pretrained weights.
-    init_strategy: Optional[InitStrategy] = None

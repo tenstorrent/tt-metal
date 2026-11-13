@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -63,16 +63,29 @@ class NoRotation(BaseModel):
     type: Literal["none"] = "none"
 
 
+class InitStrategy(BaseModel):
+    """The checkpoint a run starts from."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # "init" loads the trained weights only: training starts at step 0 with a fresh optimizer. "resume" also loads
+    # the optimizer state, which a checkpoint holds only if saved with `save_optim`, and continues the run after the
+    # checkpoint's step, on the batches it would have trained on next.
+    type: Literal["init", "resume"]
+    # A checkpoint directory.
+    path: str = Field(min_length=1)
+
+
 # `type` picks one, and with it the other fields it takes.
 SaveStrategy = Annotated[Union[StepSave, EpochSave, NoSave], Field(discriminator="type")]
 RotationStrategy = Annotated[Union[LastRotation, BestRotation, NoRotation], Field(discriminator="type")]
 
 
 class CheckpointConfig(BaseModel):
-    """When ``CheckpointCallback`` saves, and which checkpoints ``CheckpointManager`` keeps.
+    """The checkpoint ``CheckpointCallback`` starts the run from, when it saves, and which checkpoints
+    ``CheckpointManager`` keeps.
 
-    A checkpoint is a directory holding what the model trains: a PEFT adapter for a LoRA run, an HF model
-    directory for a full fine-tune. What a run starts from is ``model.init_strategy``.
+    A checkpoint is a directory holding what the model trains, as a PEFT adapter.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -80,6 +93,8 @@ class CheckpointConfig(BaseModel):
     save_strategy: SaveStrategy = Field(default_factory=NoSave)
     # Never deletes the checkpoint just saved, such as the final one.
     rotation_strategy: RotationStrategy = Field(default_factory=LastRotation)
+    # Unset starts from the pretrained weights.
+    init_strategy: Optional[InitStrategy] = None
 
     # Checkpoints go to <project_dir>/checkpoints/.
     project_dir: str = "runs/unified_trainer"

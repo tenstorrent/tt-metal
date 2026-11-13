@@ -11,7 +11,7 @@ import pytest
 from ttml.common.utils import permute_proj_rows, unpermute_proj_rows
 from ttml.models.llama.safetensors_loader import HfTensor, split_hf_tensors
 from ttml.unified_trainer import UnsupportedTrainingConfig
-from ttml.unified_trainer.providers.peft import (
+from ttml.models.peft import (
     PEFT_PREFIX,
     check_peft_keys,
     lora_to_peft,

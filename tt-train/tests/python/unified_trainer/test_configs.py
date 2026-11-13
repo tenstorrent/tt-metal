@@ -34,11 +34,11 @@ def sft(**overrides):
     return SFTTrainerConfig.model_validate({**MINIMAL, "max_length": 64, **overrides})
 
 
-def test_defaults_train_every_weight_without_checkpoints():
+def test_defaults_name_no_lora_and_save_no_checkpoints():
     config = sft()
     assert config.model.lora is None
-    assert config.model.init_strategy is None
     assert config.checkpoint.save_strategy.type == "none"
+    assert config.checkpoint.init_strategy is None
     assert not config.checkpoint.save_optim
     assert (config.num_epochs, config.gradient_accumulation_steps, config.max_steps, config.val_steps_freq) == (
         1,
@@ -56,11 +56,14 @@ def test_defaults_train_every_weight_without_checkpoints():
     "overrides",
     [
         {"epochs": 2},
+        {"master_dtype": "float32"},
         {"gradient_checkpointing": True},
         {"dataset": {"id": "sst2", "split": "train"}},
         {"dataset": {"id": "custom", "custom_options": {"train_dataset_path": "train.jsonl", "delimiter": ","}}},
         {"model": {"name": "m", "revision": "main"}},
-        {"model": {"name": "m", "init_strategy": {"type": "init", "path": "runs", "strict": True}}},
+        {"device": {"mesh": [1, 1], "device_ids": [0]}},
+        {"model": {"name": "m", "init_strategy": {"type": "init", "path": "runs"}}},
+        {"checkpoint": {"init_strategy": {"type": "init", "path": "runs", "strict": True}}},
         {"model": {"name": "m", "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "rank": 4}}},
         {"optimizer": {"lr": 1e-4, "momentum": 0.9}},
         {"checkpoint": {"save_every": 10}},
@@ -71,10 +74,13 @@ def test_defaults_train_every_weight_without_checkpoints():
     ],
     ids=[
         "top level",
+        "master weights",
         "a model field at the top level",
         "dataset",
         "custom options",
         "model",
+        "device",
+        "a checkpoint field in model",
         "init strategy",
         "lora",
         "optimizer",
@@ -101,8 +107,13 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
         ({"model": {}}, "model.name"),
         ({"model": {"name": ""}}, "model.name"),
         ({"model": {"name": "m", "gradient_checkpointing": "sometimes"}}, "model.gradient_checkpointing"),
-        ({"model": {"name": "m", "init_strategy": {"type": "last", "path": "runs"}}}, "model.init_strategy.type"),
-        ({"model": {"name": "m", "init_strategy": {"type": "resume"}}}, "model.init_strategy.path"),
+        ({"checkpoint": {"init_strategy": {"type": "last", "path": "runs"}}}, "checkpoint.init_strategy.type"),
+        ({"checkpoint": {"init_strategy": {"type": "resume"}}}, "checkpoint.init_strategy.path"),
+        ({"device": [1, 1]}, "device"),
+        ({"device": {"mesh": "1x1"}}, "device.mesh"),
+        ({"device": {"mesh": [1]}}, "device.mesh.1"),
+        ({"device": {"mesh": [1, 1, 1]}}, "device.mesh"),
+        ({"device": {"mesh": [0, 1]}}, "device.mesh.0"),
         ({"optimizer": {"lr": -1.0}}, "optimizer.0.lr"),
         ({"optimizer": {"lr": 1e-4, "weight_decay": -1.0}}, "optimizer.0.weight_decay"),
         ({"optimizer": {"lr": 1e-4, "beta2": 1.0}}, "optimizer.0.beta2"),
@@ -133,7 +144,6 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
             {"checkpoint": {"rotation_strategy": {"type": "best", "mode": "lowest"}}},
             "checkpoint.rotation_strategy.best.mode",
         ),
-        ({"master_dtype": "float16"}, "master_dtype"),
     ],
 )
 def test_invalid_values_are_rejected(overrides, field, expect_error):
@@ -226,22 +236,32 @@ def test_the_dataset_section_names_the_dataset_and_the_options_of_a_custom_one()
     }
 
 
-def test_the_model_section_names_the_model_how_it_is_built_and_the_checkpoint_it_starts_from():
+def test_the_model_section_names_the_model_and_how_it_is_built():
     assert sft().model_dump(mode="json")["model"] == {
         "name": "meta-llama/Llama-3.2-1B",
         "lora": None,
         "gradient_checkpointing": False,
-        "init_strategy": None,
     }
     lora = {"r": 4, "alpha": 8, "target_modules": ["o_proj"]}
-    init = {"type": "resume", "path": "runs/checkpoints/final"}
-    model = {"name": "m", "lora": lora, "gradient_checkpointing": True, "init_strategy": init}
+    model = {"name": "m", "lora": lora, "gradient_checkpointing": True}
     assert sft(model=model).model_dump(mode="json")["model"] == {
         "name": "m",
         "lora": {**lora, "dropout": 0.0, "task_type": "CAUSAL_LM"},
         "gradient_checkpointing": True,
-        "init_strategy": init,
     }
+
+
+def test_the_checkpoint_section_names_the_checkpoint_a_run_starts_from():
+    init = {"type": "resume", "path": "runs/checkpoints/final"}
+    config = sft(checkpoint={"init_strategy": init})
+    assert config.model_dump(mode="json")["checkpoint"]["init_strategy"] == init
+
+
+def test_the_device_section_names_the_mesh_a_single_chip_unless_set():
+    assert sft().device.mesh == (1, 1)
+    assert sft().model_dump(mode="json")["device"] == {"mesh": [1, 1]}
+    # Any mesh is a valid config; the model provider decides which ones it trains on.
+    assert sft(device={"mesh": [1, 2]}).device.mesh == (1, 2)
 
 
 @pytest.mark.parametrize("section", ["dataset", "model"])
@@ -299,13 +319,14 @@ def test_load_config_applies_overrides(tmp_path):
             "model.lora.r=4",
             "model.lora.alpha=8",
             "model.lora.target_modules=[o_proj]",
-            "model.init_strategy={type: init, path: runs/final}",
+            "checkpoint.init_strategy={type: init, path: runs/final}",
         ],
     )
     assert config.batch_size == 2 and config.model.lora.target_modules == ["o_proj"]
     assert config.optimizer[0].lr == 1e-5
     # An override into a section keeps the section's other fields.
-    assert (config.model.name, config.model.init_strategy.path) == ("m", "runs/final")
+    assert config.model.name == "m"
+    assert (config.checkpoint.init_strategy.path, config.checkpoint.save_strategy.type) == ("runs/final", "none")
 
 
 def test_load_config_rejects_a_non_mapping(tmp_path, expect_error):
@@ -316,10 +337,13 @@ def test_load_config_rejects_a_non_mapping(tmp_path, expect_error):
 
 
 @pytest.mark.parametrize("recipe", sorted(RECIPES.glob("*.yaml")), ids=lambda path: path.stem)
-def test_every_recipe_validates(recipe):
+def test_every_recipe_validates_and_trains_lora_with_adamw(recipe):
     config = load_config(recipe)
     assert config.max_length % 32 == 0
+    # What a run can train so far.
+    assert config.model.lora is not None
+    assert all(isinstance(optimizer, AdamWConfig) for optimizer in config.optimizer)
 
 
 def test_there_are_recipes():
-    assert len(list(RECIPES.glob("*.yaml"))) >= 4
+    assert len(list(RECIPES.glob("*.yaml"))) >= 3

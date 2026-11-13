@@ -2,19 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Llama provider's config checks and LoRA targets, and the provider registry. Device-free: nothing here
-builds a model."""
+"""The Llama provider's config checks and LoRA targets, the provider registry, and the trainer's own check that a
+run trains LoRA. Device-free: nothing here builds a model."""
 
 import json
 import re
 
 import pytest
 
+from ttml.models.llama.provider import LORA_LAYERS, LlamaProvider, _same_model, hf_target_modules, lora_layers
+from ttml.models.provider import AdapterState, get_provider, providers
 from ttml.unified_trainer import SFTTrainerConfig, UnsupportedTrainingConfig
 from ttml.unified_trainer.configs import LoraConfig
-from ttml.unified_trainer.providers import PROVIDERS, LlamaProvider, get_provider
-from ttml.unified_trainer.providers.base import AdapterState
-from ttml.unified_trainer.providers.llama import LORA_LAYERS, _same_model, hf_target_modules, lora_layers
 
 HF_CONFIG = {
     "model_type": "llama",
@@ -35,7 +34,7 @@ EVERY_PROJECTION = ATTENTION + ["gate_proj", "up_proj", "down_proj"]
 
 
 def config(targets=ATTENTION, model_name="meta-llama/Llama-3.2-1B", lora=None, **overrides):
-    """A LoRA run on ``targets``, or with ``lora`` as given; ``targets=None`` trains every weight."""
+    """A LoRA run on ``targets``, or with ``lora`` as given; ``targets=None`` leaves ``model.lora`` unset."""
     if lora is None and targets is not None:
         lora = {"r": 4, "alpha": 8, "target_modules": list(targets)}
     fields = {
@@ -83,7 +82,7 @@ def test_hf_target_modules_are_sorted():
     assert hf_target_modules(lora) == ["k_proj", "o_proj", "q_proj", "v_proj"]
 
 
-@pytest.mark.parametrize("targets", [ATTENTION, EVERY_PROJECTION, None], ids=["attention", "every projection", "full"])
+@pytest.mark.parametrize("targets", [ATTENTION, EVERY_PROJECTION], ids=["attention", "every projection"])
 def test_a_trainable_config_passes(targets):
     LlamaProvider().check(config(targets), HF_CONFIG)
 
@@ -92,7 +91,9 @@ def test_a_trainable_config_passes(targets):
 def test_gradient_checkpointing_picks_the_runner_the_model_is_built_with(gradient_checkpointing, runner):
     from ttml.models import RunnerType
 
-    run_config = config(model={"name": "meta-llama/Llama-3.2-1B", "gradient_checkpointing": gradient_checkpointing})
+    lora = {"r": 4, "alpha": 8, "target_modules": ATTENTION}
+    model = {"name": "meta-llama/Llama-3.2-1B", "lora": lora, "gradient_checkpointing": gradient_checkpointing}
+    run_config = config(model=model)
     provider = LlamaProvider()
     provider.check(run_config, HF_CONFIG)
     assert provider._llama_config(run_config, HF_CONFIG).runner_type == getattr(RunnerType, runner)
@@ -101,6 +102,12 @@ def test_gradient_checkpointing_picks_the_runner_the_model_is_built_with(gradien
 @pytest.mark.parametrize(
     "overrides, hf_overrides, error",
     [
+        (
+            {"device": {"mesh": [1, 2]}},
+            {},
+            r"device.mesh: Llama trains on a single chip so far, \[1, 1\]; got \[1, 2\]",
+        ),
+        ({"device": {"mesh": [2, 1]}}, {}, r"device.mesh: .* got \[2, 1\]"),
         ({"dtype": "float32"}, {}, "dtype: ttml Llama weights"),
         ({"dtype": "torch.bfloat16"}, {}, "dtype: ttml Llama weights"),
         ({"max_length": 48}, {}, "max_length: must be a multiple of 32"),
@@ -125,10 +132,22 @@ def test_an_untrainable_config_is_rejected(overrides, hf_overrides, error, expec
         LlamaProvider().check(config(**overrides), {**HF_CONFIG, **hf_overrides})
 
 
+def test_the_sft_trainer_only_trains_lora(expect_error):
+    from ttml.unified_trainer import SFTTrainer
+
+    trainer = SFTTrainer()
+    try:
+        # Before it looks the model up: the model name here is not one it could load.
+        with expect_error(UnsupportedTrainingConfig, "model.lora: only LoRA training is supported so far"):
+            trainer.setup(config(targets=None, model_name="no/such-model"))
+    finally:
+        trainer.cleanup()
+
+
 def test_get_provider_reads_the_model_type(tmp_path, expect_error):
     (tmp_path / "config.json").write_text(json.dumps(HF_CONFIG))
     provider, hf_config = get_provider(config(model_name=str(tmp_path)))
-    assert provider is PROVIDERS["llama"] and hf_config == HF_CONFIG
+    assert provider is providers()["llama"] and hf_config == HF_CONFIG
 
     (tmp_path / "config.json").write_text(json.dumps({**HF_CONFIG, "model_type": "qwen3"}))
     with expect_error(UnsupportedTrainingConfig, "model.name: no provider for model_type 'qwen3'"):
