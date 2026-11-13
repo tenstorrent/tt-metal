@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <atomic>
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
@@ -1042,8 +1041,7 @@ struct NamedArgWords {
     std::vector<uint32_t> values;
 };
 
-// `check_values`: false when only the names (and nodes) matter (clearing), so array values need not have the length.
-std::vector<NamedArgWords> resolve_named_args(const Program& program, const ProgramRunArgs& args, bool check_values) {
+std::vector<NamedArgWords> resolve_named_args(const Program& program, const ProgramRunArgs& args) {
     const auto& program_impl = program.impl();
     TT_FATAL(
         program_impl.created_from_spec() || program_impl.has_metal2_registry(),
@@ -1073,10 +1071,6 @@ std::vector<NamedArgWords> resolve_named_args(const Program& program, const Prog
         auto array_slots_of = [&](const auto& slots, const std::string& name, const ArrayArgValue& value) {
             const auto it = slots.find(name);
             TT_FATAL(it != slots.end(), "Array argument '{}' is not declared by kernel '{}'", name, kernel_name);
-            if (!check_values) {
-                return std::pair{
-                    static_cast<uint32_t>(it->second.first_slot), std::vector<uint32_t>(it->second.size, 0u)};
-            }
             TT_FATAL(
                 value.size() == it->second.size,
                 "Array argument '{}' of kernel '{}' has {} values, not {}",
@@ -1132,8 +1126,7 @@ void SetProgramRunArgsPerDevice(
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,
     const ProgramRunArgs& values) {
-    const auto resolved =
-        resolve_named_args(program_at(workload, program_range, device), values, /*check_values=*/true);
+    const auto resolved = resolve_named_args(program_at(workload, program_range, device), values);
     auto& impl = workload.impl();
     // All or nothing: check every arg first, so setting them cannot fail half-way.
     for (const auto& words : resolved) {
@@ -1150,19 +1143,6 @@ void SetProgramRunArgsPerDevice(
     for (const auto& words : resolved) {
         impl.set_per_device_named_runtime_args(
             program_range, device, words.kernel, words.core, words.first_word, words.values);
-    }
-}
-
-void ClearProgramRunArgsPerDevice(
-    distributed::MeshWorkload& workload,
-    const distributed::MeshCoordinateRange& program_range,
-    const distributed::MeshCoordinate& device,
-    const ProgramRunArgs& names) {
-    const auto resolved =
-        resolve_named_args(program_at(workload, program_range, device), names, /*check_values=*/false);
-    for (const auto& words : resolved) {
-        workload.impl().clear_per_device_runtime_args(
-            program_range, device, words.kernel, words.core, words.first_word);
     }
 }
 

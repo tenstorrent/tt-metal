@@ -910,15 +910,11 @@ TEST_F(CommandListMultiDeviceTest, Metal2PerDeviceRunArgsEager) {
         EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), expected_value(index++)) << "Device coordinate: " << coord;
     }
 
-    // A cleared device follows the program's own value again.
-    const auto cleared = *std::next(all_devices.begin());
-    m2::ClearProgramRunArgsPerDevice(workload, all_devices, cleared, l1_write_value_for_device(0));
+    // Updating the program's own value drops the per-device values: every device follows the program again.
+    m2::UpdateProgramRunArgs(workload.get_programs().at(all_devices), l1_write_value_for_device(kValueB));
     EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
-    index = 0;
     for (const auto& coord : all_devices) {
-        const uint32_t expected = coord == cleared ? kValueA : expected_value(index);
-        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), expected) << "Device coordinate: " << coord;
-        index++;
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueB) << "Device coordinate: " << coord;
     }
 }
 
@@ -1278,13 +1274,12 @@ TEST_F(CommandListMultiDeviceTest, TracesMetal2PerDeviceNodeRunArgs) {
     mesh_device_->release_mesh_trace(trace_id);
 }
 
-TEST_F(CommandListMultiDeviceTest, ClearedPerDeviceRunArgCanBeAParameter) {
-    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_cleared");
+// An arg whose per-device values were dropped (UpdateProgramRunArgs) can be a command-list parameter again.
+TEST_F(CommandListMultiDeviceTest, DroppedPerDeviceRunArgCanBeAParameter) {
+    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_dropped");
     const MeshCoordinateRange all_devices(mesh_device_->shape());
     set_per_device_values(workload, all_devices);
-    for (const auto& coord : all_devices) {
-        m2::ClearProgramRunArgsPerDevice(workload, all_devices, coord, l1_write_value_for_device(0));
-    }
+    m2::UpdateProgramRunArgs(workload.get_programs().at(all_devices), l1_write_value_for_device(kValueA));
     auto& cq = mesh_device_->mesh_command_queue(0);
     const CmdListCommonRuntimeArgName value{"value"};
     CmdListParameters parameters;
