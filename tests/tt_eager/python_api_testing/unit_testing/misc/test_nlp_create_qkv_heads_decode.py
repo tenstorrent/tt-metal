@@ -16,7 +16,6 @@ from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     nearest_32,
-    skip_for_blackhole,
 )
 
 
@@ -372,7 +371,6 @@ def test_create_min_width_shard(
     assert device.num_program_cache_entries() == expected_entries
 
 
-@skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @pytest.mark.parametrize("batch", (32,))
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
@@ -413,7 +411,6 @@ def test_create_heads_with_slice(
     assert device.num_program_cache_entries() == expected_entries
 
 
-@skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("batch", (1, 8, 16))
 @pytest.mark.parametrize(

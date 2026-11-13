@@ -100,7 +100,6 @@ params += [
 ]
 
 
-# @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes, untilize_with_unpadding_args", params)
 def test_run_untilize_with_unpadding_test(input_shapes, untilize_with_unpadding_args, device):
     datagen_func = [
