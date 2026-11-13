@@ -50,6 +50,10 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
 
     const CoreCoord reduce_scatter_core_grid_offset;
 
+    // On a program-cache hit, rewrite only the buffer bindings whose address changed and the runtime-arg fields the
+    // call can change, instead of the full override. Same argument values. Off: the full override.
+    const bool changed_args_only = false;
+
     // Compile-time attributes select exactly the program-structure-affecting fields for the default
     // program-cache reflection hash + canonical key.
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -68,7 +72,8 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
         "num_buffers_per_channel",
         "chunk_width_in_mm_blocks",
         "mm_window_blocks",
-        "reduce_scatter_core_grid_offset");
+        "reduce_scatter_core_grid_offset",
+        "changed_args_only");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(matmul_struct),
@@ -86,7 +91,8 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
             std::cref(num_buffers_per_channel),
             std::cref(chunk_width_in_mm_blocks),
             std::cref(mm_window_blocks),
-            std::cref(reduce_scatter_core_grid_offset));
+            std::cref(reduce_scatter_core_grid_offset),
+            changed_args_only);
     }
 };
 

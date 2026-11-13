@@ -49,6 +49,7 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<tt::tt_metal::DataType> dtype = std::nullopt,
     const std::optional<const Tensor>& mm_progress_counters = std::nullopt,
     std::optional<uint32_t> mm_window_blocks = std::nullopt,
-    const std::optional<const Tensor>& mm_credit_counters = std::nullopt);
+    const std::optional<const Tensor>& mm_credit_counters = std::nullopt,
+    bool changed_args_only = false);
 
 }  // namespace ttnn::experimental

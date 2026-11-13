@@ -96,6 +96,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
               (2 * num_links * num_workers_per_link). REQUIRED whenever :attr:`mm_window_blocks` is set
               (the op rejects the call otherwise), for the same reason as mm_progress_counters. Share one
               across every MMRS call (see CCLManager.get_mm_credit_counters_buffer).
+            * :attr:`changed_args_only` (bool): On a program-cache hit, rewrite only the buffer bindings whose
+              address changed and the runtime-arg fields the call can change. Same argument values. Default
+              False (the full override).
 
         )doc",
         &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
@@ -128,7 +131,8 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         nb::arg("dtype") = nb::none(),
         nb::arg("mm_progress_counters") = nb::none(),
         nb::arg("mm_window_blocks") = nb::none(),
-        nb::arg("mm_credit_counters") = nb::none());
+        nb::arg("mm_credit_counters") = nb::none(),
+        nb::arg("changed_args_only") = false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

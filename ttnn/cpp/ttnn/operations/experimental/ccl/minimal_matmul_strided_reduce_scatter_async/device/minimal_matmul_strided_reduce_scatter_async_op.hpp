@@ -35,7 +35,7 @@ struct MinimalMatmulStridedReduceScatterAsync {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
-    using program_factory_t = std::variant<MinimalMatmulStridedReduceScatterAsyncProgramFactory>;
+    using program_factory_t = std::variant<MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -84,6 +84,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<uint32_t> mm_window_blocks = std::nullopt,
     const std::optional<const Tensor>& mm_credit_counters = std::nullopt,
     // Fused concat: second in0 source (suffix half of K; input_tensor is the prefix half).
-    const std::optional<const Tensor>& mm_optional_input_tensor = std::nullopt);
+    const std::optional<const Tensor>& mm_optional_input_tensor = std::nullopt,
+    bool changed_args_only = false);
 
 }  // namespace ttnn::prim

@@ -17,7 +17,7 @@ namespace ttnn::experimental::prim {
 MinimalMatmulStridedReduceScatterAsync::program_factory_t
 MinimalMatmulStridedReduceScatterAsync::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return MinimalMatmulStridedReduceScatterAsyncProgramFactory{};
+    return MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory{};
 }
 
 void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_hit(
@@ -427,7 +427,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<const Tensor>& mm_progress_counters,
     std::optional<uint32_t> mm_window_blocks,
     const std::optional<const Tensor>& mm_credit_counters,
-    const std::optional<const Tensor>& mm_optional_input_tensor) {
+    const std::optional<const Tensor>& mm_optional_input_tensor,
+    bool changed_args_only) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -464,7 +465,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         /* num_buffers_per_channel */ num_buffers_per_channel,
         /* chunk_width_in_mm_blocks */ chunk_width_in_mm_blocks,
         /* mm_window_blocks */ mm_window_blocks,
-        /* reduce_scatter_core_grid_offset */ reduce_scatter_core_grid_offset};
+        /* reduce_scatter_core_grid_offset */ reduce_scatter_core_grid_offset,
+        /* changed_args_only */ changed_args_only};
 
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
