@@ -100,7 +100,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
         cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y);
     }
 
-    auto alignment = input.buffer()->alignment();
+    auto alignment = input.mesh_buffer().alignment();
     uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
     uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
 

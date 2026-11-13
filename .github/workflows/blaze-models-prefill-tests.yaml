@@ -98,6 +98,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      actions: read
+      checks: read
     secrets: inherit
     uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
@@ -116,6 +118,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      actions: read
+      checks: read
     secrets: inherit
     uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
@@ -136,6 +140,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      actions: read
+      checks: read
     secrets: inherit
     uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
@@ -154,6 +160,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      actions: read
+      checks: read
     secrets: inherit
     uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
@@ -174,6 +182,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      actions: read
+      checks: read
     secrets: inherit
     uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
@@ -191,6 +201,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      actions: read
+      checks: read
     secrets: inherit
     uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
@@ -270,6 +282,8 @@ jobs:
         run: |
           python3 models/demos/common/prefill/runners/ci/scaling_summary.py \
             --metrics-dir perf_metrics --model "${{ matrix.model }}" ${{ matrix.sc4_only && '--sc4-only' || '' }} \
+            ${{ matrix.ref && format('--ref {0}', matrix.ref) || '' }} \
+            ${{ matrix.base && format('--base {0}', matrix.base) || '' }} \
             ${{ steps.gantt.outputs.url && format('--gantt-url {0}', steps.gantt.outputs.url) || '' }} \
             ${{ steps.chunk-time.outputs.artifact-url && format('--chunk-time-url {0}', steps.chunk-time.outputs.artifact-url) || '' }}
 

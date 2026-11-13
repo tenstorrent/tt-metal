@@ -33,6 +33,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
+#ifdef PACK_RELU_CONFIG
+    pack_relu_config(PACK_RELU_CONFIG);
+#endif
     dram_read::for_each_chunk(num_tiles, [&](uint32_t count) {
         for (uint32_t i = 0; i < count; ++i) {
             tile_regs_acquire();

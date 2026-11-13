@@ -1365,7 +1365,7 @@ TEST_F(SDPABackwardTest, GateTest_ProgramCacheHitReadsNewGate) {
     const xt::xarray<float> gate_a_host = core::to_xtensor(gate_a);
     auto gate_b = core::from_xtensor(xt::eval(gate_a_host + 1.5F), device);
     const xt::xarray<float> gate_b_host = core::to_xtensor(gate_b);
-    ASSERT_NE(gate_a.buffer()->address(), gate_b.buffer()->address())
+    ASSERT_NE(gate_a.mesh_buffer().address(), gate_b.mesh_buffer().address())
         << "Both gates must be alive at distinct device addresses for this test to mean anything";
     const xt::xarray<float> s_b = 1.0F / (1.0F + xt::exp(-gate_b_host));
 
@@ -1474,7 +1474,7 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
         ASSERT_TRUE(gate_t->is_grad_initialized()) << "backward did not populate gate->get_grad()";
         EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(gate_t->get_grad()), dG_ref_host)))
             << "gate->get_grad() differs from metal::sdpa_bw's grad_gate";
-        EXPECT_EQ(gate_t->get_grad().buffer()->address(), out->get_value().buffer()->address())
+        EXPECT_EQ(gate_t->get_grad().mesh_buffer().address(), out->get_value().mesh_buffer().address())
             << "grad_gate should be written into the forward output's buffer";
         EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(out->get_grad()), dY_host)))
             << "the gated dO must not be written into the output gradient's buffer";

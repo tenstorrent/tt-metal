@@ -131,11 +131,11 @@ def _reference(num_tokens, num_layers, seed=0):
     )
 
 
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"])
 # The mesh-8x4 variant needs roughly 3 min on a warm JIT cache and considerably more on a cold one,
 # against pytest.ini's blanket 300 s. The torus variants happen to fit; this one does not.
 @pytest.mark.timeout(1800)
-def test_transformer_loop_matches_reference(mesh_device, device_params):
+def test_transformer_loop_matches_reference(mesh_device, device_params, sp_axis):
     """A caller-owned layer loop over all 93 layers, and what it hands a pipeline boundary.
 
     This is the integration a block will do, so it fails on what a block can get wrong that
@@ -148,7 +148,7 @@ def test_transformer_loop_matches_reference(mesh_device, device_params):
     nothing evicts, so what crosses is a sealed set one snapshot deeper at every boundary,
     not just the activation.
     """
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=1 - sp_axis)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     hidden_states, (q_pre, q_post, q_out) = _host_case(num_tokens)
 
@@ -193,9 +193,9 @@ SPLIT_BOUNDARY = 2 * BLOCK_SIZE
 SPLIT_LAYERS = SPLIT_BOUNDARY + BLOCK_SIZE
 
 
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"])
 @pytest.mark.timeout(1800)
-def test_split_loop_matches_reference(mesh_device, device_params):
+def test_split_loop_matches_reference(mesh_device, device_params, sp_axis):
     """Two pipeline ranks, the second opening on what the first hands over: bit-identical to the undivided walk.
 
     The second rank opens owing the read that straddles the boundary. It batches that one site over the
@@ -207,7 +207,7 @@ def test_split_loop_matches_reference(mesh_device, device_params):
     read on the other: the production path.
     """
     boundary = SPLIT_BOUNDARY
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=1 - sp_axis)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     hidden_states, (q_pre, q_post, q_out) = _host_case(num_tokens)
     q_pre, q_post = q_pre[:SPLIT_LAYERS], q_post[:SPLIT_LAYERS]

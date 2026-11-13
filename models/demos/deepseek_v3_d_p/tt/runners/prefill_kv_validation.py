@@ -251,7 +251,8 @@ def kv_cache_pcc_check(
 
     cfg = pipeline.config
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
-    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache
+    from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache, striped_cache_to_host
 
     assert not resolve_has_indexer(pipeline.hf_config), (
         "kv_cache_pcc_check checks the KVPE cache only, so a sparse/DSA model's index-key cache would go "
@@ -305,16 +306,12 @@ def kv_cache_pcc_check(
 
     # Gather the persistent representation and reconstruct scaled FP8 only on the host. This keeps
     # validation compatible with both cache formats without allocating a BF16 cache on device.
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-
     def _to_host(tensor):
-        host = ttnn.to_torch(tensor, mesh_composer=composer)  # [slots, tp, seq_len_cache / tp, row]
-        if not kv_dedup:
-            return host[:, :1]  # TP-replicated: any one column is a full replica
-        local = host.shape[2] // sp  # rows per chip
-        return torch.cat(
-            [host[:, t : t + 1, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=2
-        )  # [slots, 1, seq_len_cache, row] in linear chip order
+        if kv_dedup:
+            # [slots, 1, seq_len_cache, row] in linear chip order
+            return striped_cache_to_host(tensor, mesh_device, cfg.sp_axis).unsqueeze(1)
+        # TP-replicated: the SP shards concatenate on the sequence dim and only one TP replica is read back.
+        return ttnn.to_torch(tensor, mesh_composer=get_sp_mesh_composer(mesh_device, cfg.sp_axis, concat_dim=2))
 
     cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 

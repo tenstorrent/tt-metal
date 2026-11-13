@@ -37,6 +37,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.attn_res.device_determinism import deterministic_input
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import EXACT_BOX, HIDDEN_SIZE, L1_SMALL_SIZE
@@ -114,9 +115,12 @@ _REFERENCE_US = {
 
 def _assert_within_margin(what: str, measured_us: float, reference_us: float, margin: float) -> None:
     lower, upper = reference_us * (1.0 - margin), reference_us * (1.0 + margin)
-    assert lower <= measured_us <= upper, (
-        f"{what} {measured_us:.1f} us is outside performance range [{lower:.1f}, {upper:.1f}] us "
-        f"(reference {reference_us:.1f} us ± {margin:.0%})"
+    assert_perf_gate(
+        lower <= measured_us <= upper,
+        (
+            f"{what} {measured_us:.1f} us is outside performance range [{lower:.1f}, {upper:.1f}] us "
+            f"(reference {reference_us:.1f} us ± {margin:.0%})"
+        ),
     )
 
 

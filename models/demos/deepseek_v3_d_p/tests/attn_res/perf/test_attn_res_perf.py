@@ -50,6 +50,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
@@ -145,10 +146,13 @@ def _perf_reference_e2e_us(layout: str, mode: str) -> dict[str, float]:
 def _assert_within_margin(what: str, measured_us: float, reference_us: float, margin: float) -> None:
     lower = reference_us * (1.0 - margin)
     upper = reference_us * (1.0 + margin)
-    assert lower <= measured_us <= upper, (
-        f"{what} {measured_us:.1f} us is outside performance range "
-        f"[{lower:.1f}, {upper:.1f}] us "
-        f"(reference {reference_us:.1f} us ± {margin:.0%})"
+    assert_perf_gate(
+        lower <= measured_us <= upper,
+        (
+            f"{what} {measured_us:.1f} us is outside performance range "
+            f"[{lower:.1f}, {upper:.1f}] us "
+            f"(reference {reference_us:.1f} us ± {margin:.0%})"
+        ),
     )
 
 

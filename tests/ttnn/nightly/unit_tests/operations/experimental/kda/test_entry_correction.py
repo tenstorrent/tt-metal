@@ -18,6 +18,7 @@ from loguru import logger
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.entry_correction import EntryCorrection
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
@@ -133,10 +134,14 @@ def _entry_correction_ops() -> perf_model.FpuOps:
     )
 
 
-# HiFi4 is exact enough to bound the op's own error tightly; HiFi2 is the model's scan fidelity.
+# The model's entry correction runs at Kimi-K3's scan fidelity.
+_PRODUCTION_FIDELITY = kimi_k3_program_config(
+    active_seq_len_local=_ROWS, tp_ccl_topology=ttnn.Topology.Linear
+).recurrence.scan_math_fidelity
+# HiFi4 is exact enough to bound the op's own error tightly.
 _FIDELITIES = [
     pytest.param(ttnn.MathFidelity.HiFi4, 0.01, 1e-3, id="hifi4"),
-    pytest.param(ttnn.MathFidelity.HiFi2, 0.01, 0.01, id="hifi2-production"),
+    pytest.param(_PRODUCTION_FIDELITY, 0.01, 0.01, id="production"),
 ]
 
 
@@ -230,10 +235,10 @@ def test_entry_correction_rejects_aliased_entry_states(
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_entry_correction_production_performance(device: ttnn.Device) -> None:
-    """The model's call shape, starting inside the rank, at the scan's HiFi2."""
+    """The model's call shape, starting inside the rank, at the scan's fidelity."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for entry-correction performance checks")
-    math_fidelity = ttnn.MathFidelity.HiFi2
+    math_fidelity = _PRODUCTION_FIDELITY
     correction = _correction(device, math_fidelity)
     inputs = _device_inputs(device, correction, _host_inputs(seed=117))
     interval = _INTERVALS["offset"]
