@@ -12,7 +12,9 @@ model:
     # ttml fuses q, k and v into one layer, and gate and up into another: target all of a group or none.
     target_modules: [q_proj, k_proj, v_proj, o_proj]
 
-dataset_id: sst2
+dataset:
+  id: sst2
+
 max_length: 64
 batch_size: 8
 num_epochs: 1

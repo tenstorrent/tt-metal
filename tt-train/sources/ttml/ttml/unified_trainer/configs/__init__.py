@@ -13,7 +13,7 @@ from .checkpoint import (
     NoSave,
     StepSave,
 )
-from .dataset import CustomDatasetConfig
+from .dataset import CustomDatasetConfig, DatasetConfig
 from .loader import apply_override, load_config
 from .logging import LoggingConfig
 from .lora import LoraConfig
@@ -28,6 +28,7 @@ __all__ = [
     "BestRotation",
     "CheckpointConfig",
     "CustomDatasetConfig",
+    "DatasetConfig",
     "EpochSave",
     "InitStrategy",
     "LastRotation",

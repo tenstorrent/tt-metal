@@ -124,13 +124,15 @@ def write_jsonl(path, rows):
 def sft_config(model_dir, tmp_path, checkpoint=None, rows=None, lora=None, init_strategy=None, **overrides):
     rows = rows or [{"instruction": "Say the word.", "output": "tenstorrent"}] * 16
     fields = {
-        "dataset_id": "custom",
-        "model": {"name": str(model_dir), "lora": lora, "init_strategy": init_strategy},
-        "custom_dataset": {
-            "file_type": "jsonl",
-            "train_dataset_path": write_jsonl(tmp_path / "train.jsonl", rows),
-            "val_dataset_path": write_jsonl(tmp_path / "val.jsonl", rows[:4]),
+        "dataset": {
+            "id": "custom",
+            "custom_options": {
+                "file_type": "jsonl",
+                "train_dataset_path": write_jsonl(tmp_path / "train.jsonl", rows),
+                "val_dataset_path": write_jsonl(tmp_path / "val.jsonl", rows[:4]),
+            },
         },
+        "model": {"name": str(model_dir), "lora": lora, "init_strategy": init_strategy},
         "max_length": MAX_LENGTH,
         "optimizer": {"lr": 1e-2},
         "batch_size": 2,

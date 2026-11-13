@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .checkpoint import CheckpointConfig
-from .dataset import CustomDatasetConfig
+from .dataset import DatasetConfig
 from .logging import LoggingConfig
 from .metrics import MetricsConfig
 from .model import ModelConfig
@@ -19,8 +19,7 @@ class TrainerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # "sst2", "alpaca" or "custom" (see ``ttml.unified_trainer.data``).
-    dataset_id: str
+    dataset: DatasetConfig
     model: ModelConfig
     dtype: str = "bfloat16"
 
@@ -39,14 +38,6 @@ class TrainerConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
-
-    custom_dataset: Optional[CustomDatasetConfig] = None
-
-    @model_validator(mode="after")
-    def _check_custom_dataset(self) -> "TrainerConfig":
-        if self.dataset_id == "custom" and self.custom_dataset is None:
-            raise ValueError("custom_dataset is required when dataset_id is 'custom'")
-        return self
 
     @model_validator(mode="after")
     def _check_best_rotation(self) -> "TrainerConfig":

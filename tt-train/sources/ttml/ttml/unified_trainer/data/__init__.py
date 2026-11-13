@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Datasets by ``dataset_id``, and the dataloaders over them."""
+"""Datasets by ``dataset.id``, and the dataloaders over them."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ DATASETS: dict[str, type[LLMDataset]] = {"sst2": SST2Dataset, "alpaca": AlpacaDa
 
 
 def get_dataset(config: SFTTrainerConfig, split: str, tokenizer: Any) -> LLMDataset:
-    dataset_id = config.dataset_id.lower()
+    dataset_id = config.dataset.id.lower()
     if dataset_id not in DATASETS:
-        raise ValueError(f"dataset_id: {config.dataset_id!r} is not one of {sorted(DATASETS)}")
+        raise ValueError(f"dataset.id: {config.dataset.id!r} is not one of {sorted(DATASETS)}")
     return DATASETS[dataset_id](config, split, tokenizer)
 
 

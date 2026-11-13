@@ -52,8 +52,8 @@ class SFTTrainer(Trainer):
     config: SFTTrainerConfig
 
     def _check_config(self) -> None:
-        if self.config.dataset_id.lower() not in DATASETS:
-            raise UnsupportedTrainingConfig(f"dataset_id: {self.config.dataset_id!r} is not one of {sorted(DATASETS)}")
+        if self.config.dataset.id.lower() not in DATASETS:
+            raise UnsupportedTrainingConfig(f"dataset.id: {self.config.dataset.id!r} is not one of {sorted(DATASETS)}")
         self.provider, self.hf_config = get_provider(self.config)
         self.provider.check(self.config, self.hf_config)
 
@@ -66,7 +66,7 @@ class SFTTrainer(Trainer):
         train_dataset = get_dataset(self.config, "train", tokenizer)
         if len(train_dataset) < self.config.batch_size:
             raise ValueError(
-                f"dataset_id: the train split has {len(train_dataset)} examples of at most max_length="
+                f"dataset.id: the train split has {len(train_dataset)} examples of at most max_length="
                 f"{self.config.max_length} tokens, fewer than one batch of {self.config.batch_size}"
             )
         train_dataloader = build_dataloader(train_dataset, self.config, shuffle=True)

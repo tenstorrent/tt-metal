@@ -23,7 +23,7 @@ from ttml.unified_trainer.configs import apply_override
 RECIPES = Path(__file__).resolve().parents[3] / "configs" / "training_configs" / "unified_trainer"
 
 MINIMAL = {
-    "dataset_id": "sst2",
+    "dataset": {"id": "sst2"},
     "model": {"name": "meta-llama/Llama-3.2-1B"},
     "optimizer": {"lr": 1e-4},
     "batch_size": 8,
@@ -56,6 +56,8 @@ def test_defaults_train_every_weight_without_checkpoints():
     "overrides",
     [
         {"epochs": 2},
+        {"dataset": {"id": "sst2", "split": "train"}},
+        {"dataset": {"id": "custom", "custom_options": {"train_dataset_path": "train.jsonl", "delimiter": ","}}},
         {"model": {"name": "m", "revision": "main"}},
         {"model": {"name": "m", "init_strategy": {"type": "init", "path": "runs", "strict": True}}},
         {"model": {"name": "m", "lora": {"r": 4, "alpha": 8, "target_modules": ["q_proj"], "rank": 4}}},
@@ -68,6 +70,8 @@ def test_defaults_train_every_weight_without_checkpoints():
     ],
     ids=[
         "top level",
+        "dataset",
+        "custom options",
         "model",
         "init strategy",
         "lora",
@@ -88,6 +92,9 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
     "overrides, field",
     [
         ({"batch_size": 0}, "batch_size"),
+        ({"dataset": "sst2"}, "dataset"),
+        ({"dataset": {}}, "dataset.id"),
+        ({"dataset": {"id": ""}}, "dataset.id"),
         ({"model": "m"}, "model"),
         ({"model": {}}, "model.name"),
         ({"model": {"name": ""}}, "model.name"),
@@ -195,13 +202,25 @@ def test_only_one_optimizer_may_take_the_remaining_weights(expect_error):
         sft(optimizer=[{"lr": 1e-3}, {"lr": 1e-4}])
 
 
-def test_a_custom_dataset_needs_its_files(expect_error):
-    with expect_error(ValidationError, "custom_dataset is required"):
-        sft(dataset_id="custom")
-    assert (
-        sft(dataset_id="custom", custom_dataset={"train_dataset_path": "train.jsonl"}).custom_dataset.template
-        == "alpaca"
-    )
+@pytest.mark.parametrize("dataset_id", ["custom", "Custom"])
+def test_a_custom_dataset_needs_its_options(dataset_id, expect_error):
+    with expect_error(ValidationError, r"\ndataset\n  Value error, custom_options is required when id is 'custom'"):
+        sft(dataset={"id": dataset_id})
+
+
+def test_the_dataset_section_names_the_dataset_and_the_options_of_a_custom_one():
+    assert sft().model_dump(mode="json")["dataset"] == {"id": "sst2", "custom_options": None}
+    custom = sft(dataset={"id": "custom", "custom_options": {"train_dataset_path": "train.jsonl"}})
+    assert custom.model_dump(mode="json")["dataset"] == {
+        "id": "custom",
+        "custom_options": {
+            "file_type": "json",
+            "train_dataset_path": "train.jsonl",
+            "val_dataset_path": None,
+            "template": "alpaca",
+            "column_mapping": None,
+        },
+    }
 
 
 def test_the_model_section_names_the_model_its_lora_and_the_checkpoint_it_starts_from():
@@ -219,10 +238,11 @@ def test_the_model_section_names_the_model_its_lora_and_the_checkpoint_it_starts
     }
 
 
-def test_a_config_needs_a_model(expect_error):
-    without_model = {key: value for key, value in MINIMAL.items() if key != "model"}
-    with expect_error(ValidationError, r"\nmodel\n  Field required"):
-        SFTTrainerConfig.model_validate({**without_model, "max_length": 64})
+@pytest.mark.parametrize("section", ["dataset", "model"])
+def test_a_config_needs_a_dataset_and_a_model(section, expect_error):
+    without_section = {key: value for key, value in MINIMAL.items() if key != section}
+    with expect_error(ValidationError, rf"\n{section}\n  Field required"):
+        SFTTrainerConfig.model_validate({**without_section, "max_length": 64})
 
 
 @pytest.mark.parametrize(
@@ -236,8 +256,8 @@ def test_a_config_needs_a_model(expect_error):
         ),
         ("checkpoint.save_strategy={type: none}", {"checkpoint": {"save_strategy": {"type": "none"}}}),
         (
-            "custom_dataset.column_mapping={output: answer}",
-            {"custom_dataset": {"column_mapping": {"output": "answer"}}},
+            "dataset.custom_options.column_mapping={output: answer}",
+            {"dataset": {"custom_options": {"column_mapping": {"output": "answer"}}}},
         ),
     ],
 )
@@ -262,7 +282,9 @@ def test_apply_override_rejects_malformed_overrides(override, error, expect_erro
 
 def test_load_config_applies_overrides(tmp_path):
     recipe = tmp_path / "recipe.yaml"
-    recipe.write_text("dataset_id: sst2\nmodel:\n  name: m\noptimizer:\n  lr: 1.0e-4\nbatch_size: 8\nmax_length: 64\n")
+    recipe.write_text(
+        "dataset:\n  id: sst2\nmodel:\n  name: m\noptimizer:\n  lr: 1.0e-4\nbatch_size: 8\nmax_length: 64\n"
+    )
     config = load_config(
         recipe,
         [

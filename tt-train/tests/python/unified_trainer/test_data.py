@@ -44,7 +44,7 @@ class CharTokenizer:
 
 def config(**overrides):
     fields = {
-        "dataset_id": "sst2",
+        "dataset": {"id": "sst2"},
         "model": {"name": "m"},
         "optimizer": {"lr": 1e-4},
         "batch_size": 2,
@@ -165,7 +165,7 @@ def test_column_mapping_errors(mapping, columns, error, expect_error):
 
 
 def test_an_unknown_template_is_an_error(expect_error):
-    with expect_error(ValueError, "custom_dataset.template"):
+    with expect_error(ValueError, "dataset.custom_options.template"):
         resolve_column_mapping("chatml", None, {"instruction", "output"})
 
 
@@ -181,7 +181,7 @@ def test_a_custom_dataset_from_jsonl_files(tmp_path):
         "train_dataset_path": train,
         "column_mapping": {"instruction": "question", "output": "answer"},
     }
-    run_config = config(dataset_id="custom", custom_dataset=custom, max_length=256)
+    run_config = config(dataset={"id": "custom", "custom_options": custom}, max_length=256)
     dataset = get_dataset(run_config, "train", CharTokenizer())
     assert isinstance(dataset, CustomDataset) and len(dataset) == 3
     # Without val_dataset_path there is no validation split, and no dataloader for it.
@@ -191,12 +191,12 @@ def test_a_custom_dataset_from_jsonl_files(tmp_path):
 
 
 def test_a_custom_dataset_needs_a_train_file(expect_error):
-    run_config = config(dataset_id="custom", custom_dataset={"file_type": "json"})
-    with expect_error(ValueError, "train_dataset_path is required"):
+    run_config = config(dataset={"id": "custom", "custom_options": {"file_type": "json"}})
+    with expect_error(ValueError, "dataset.custom_options.train_dataset_path is required"):
         get_dataset(run_config, "train", CharTokenizer())
 
 
 def test_dataset_ids(expect_error):
     assert sorted(DATASETS) == ["alpaca", "custom", "sst2"]
-    with expect_error(ValueError, "dataset_id"):
-        get_dataset(config(dataset_id="imdb"), "train", CharTokenizer())
+    with expect_error(ValueError, "dataset.id: 'imdb' is not one of"):
+        get_dataset(config(dataset={"id": "imdb"}), "train", CharTokenizer())

@@ -58,13 +58,23 @@ one LoRA pair, so a fused group is targeted whole or not at all:
 `[q_proj, k_proj, v_proj, o_proj]` trains attention, and adding `gate_proj, up_proj, down_proj` trains every projection.
 `[q_proj, v_proj]` is rejected, because LoRA on `qkv_linear` also updates `k_proj`.
 
-**Data.** `dataset_id` picks one:
+**Data.** The `id` of the `dataset` section picks one:
 
 - `sst2` (GLUE SST-2 sentiment), with prompts `Review: <sentence>\nOutput:` and responses `{"label": "positive"}`.
 - `alpaca` (`tatsu-lab/alpaca`), with the Alpaca prompt; 2% of it is held out for validation.
-- `custom`: local files, for example JSONL, in the `custom_dataset` section, formatted with the `alpaca` template. The
-  template reads `instruction` and `output`, and `input` if present. `column_mapping` maps those fields to columns
-  with other names.
+- `custom`: local files, for example JSONL, named in the section's `custom_options` and formatted with the `alpaca`
+  template. The template reads `instruction` and `output`, and `input` if present. `column_mapping` maps those fields
+  to columns with other names.
+
+```yaml
+dataset:
+  id: custom
+  custom_options:
+    file_type: jsonl
+    train_dataset_path: data/train.jsonl
+    val_dataset_path: data/val.jsonl
+    column_mapping: {instruction: question, output: answer}
+```
 
 Examples longer than `max_length` tokens are dropped. The loss is the cross-entropy of the response tokens; the prompt
 and padding don't count.
@@ -77,7 +87,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 
 | Field | Default | Description |
 |---|---|---|
-| `dataset_id` | | `sst2`, `alpaca` or `custom`. |
+| `dataset` | | `id`, one of `sst2`, `alpaca` or `custom`, is required. `custom_options` is required when `id` is `custom`: `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
 | `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora` (unset) trains LoRA adapters: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`); unset trains every weight. `init_strategy` (unset) is a checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). |
 | `dtype` | `bfloat16` | Must be `bfloat16`. |
 | `max_length` | | Tokens per example: a multiple of 32, at most the model's `max_position_embeddings`. |
@@ -91,7 +101,6 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `master_dtype` | `bfloat16` | `float32` keeps fp32 master weights for AdamW; full fine-tuning needs it (see below). |
 | `seed` | `0` | Seeds initialization, LoRA dropout and data shuffling. |
 | `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
-| `custom_dataset` | unset | `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
 | `metrics` | | `steps_freq` (10): train metrics are averaged over and logged every this many steps. `train_metrics` (`[loss]`, `learning_rate` also works), `val_metrics` (`[loss]`). |
 | `logging` | | `log_level` (`INFO`), `use_wandb` (false), `wandb_project`, `wandb_run_name`, `wandb_tags`. |
 | `checkpoint` | | See [Checkpoints](#checkpoints). |

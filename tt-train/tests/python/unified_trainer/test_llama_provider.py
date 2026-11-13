@@ -39,7 +39,7 @@ def config(targets=ATTENTION, model_name="meta-llama/Llama-3.2-1B", lora=None, *
     if lora is None and targets is not None:
         lora = {"r": 4, "alpha": 8, "target_modules": list(targets)}
     fields = {
-        "dataset_id": "sst2",
+        "dataset": {"id": "sst2"},
         "model": {"name": model_name, "lora": lora},
         "optimizer": {"lr": 1e-4},
         "batch_size": 2,

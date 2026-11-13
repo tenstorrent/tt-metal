@@ -83,7 +83,7 @@ CUSTOM_TEMPLATE_KEYS = {"alpaca": {"required": {"instruction", "output"}, "optio
 def _check_template(template: str) -> str:
     name = template.strip().lower()
     if name not in CUSTOM_TEMPLATE_KEYS:
-        raise ValueError(f"custom_dataset.template: {template!r} is not one of {sorted(CUSTOM_TEMPLATE_KEYS)}")
+        raise ValueError(f"dataset.custom_options.template: {template!r} is not one of {sorted(CUSTOM_TEMPLATE_KEYS)}")
     return name
 
 
@@ -113,13 +113,13 @@ def resolve_column_mapping(
     missing_columns = set(resolved.values()) - dataset_columns
     if missing_columns:
         raise ValueError(
-            f"custom_dataset.column_mapping: no dataset columns {sorted(missing_columns)}; "
+            f"dataset.custom_options.column_mapping: no dataset columns {sorted(missing_columns)}; "
             f"the dataset has {sorted(dataset_columns)}"
         )
     unsupported = set(resolved) - required - optional
     if unsupported:
         raise ValueError(
-            f"custom_dataset.column_mapping: template {template!r} reads no {sorted(unsupported)}; "
+            f"dataset.custom_options.column_mapping: template {template!r} reads no {sorted(unsupported)}; "
             f"it reads {sorted(required | optional)}"
         )
 
@@ -129,7 +129,7 @@ def resolve_column_mapping(
     unmapped = required - set(resolved)
     if unmapped:
         raise ValueError(
-            f"custom_dataset.column_mapping: template {template!r} needs {sorted(unmapped)}, which are neither "
-            "mapped nor dataset columns"
+            f"dataset.custom_options.column_mapping: template {template!r} needs {sorted(unmapped)}, which are "
+            "neither mapped nor dataset columns"
         )
     return resolved

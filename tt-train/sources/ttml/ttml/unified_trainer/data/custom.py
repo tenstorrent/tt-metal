@@ -12,10 +12,10 @@ from .templates import custom_prompt_and_response, resolve_column_mapping
 
 
 class CustomDataset(LLMDataset):
-    """A local JSON / JSONL / CSV / Parquet file per split, rendered with a template (``custom_dataset``)."""
+    """A local JSON / JSONL / CSV / Parquet file per split, rendered with a template (``dataset.custom_options``)."""
 
     def __init__(self, config: SFTTrainerConfig, split: str, tokenizer: Any) -> None:
-        custom = config.custom_dataset
+        custom = config.dataset.custom_options
         # `datasets` reads JSON Lines with its "json" builder.
         self.file_type = "json" if custom.file_type == "jsonl" else custom.file_type
         self.data_path = custom.train_dataset_path if split == "train" else custom.val_dataset_path
@@ -26,7 +26,7 @@ class CustomDataset(LLMDataset):
     def _load_raw_dataset(self) -> Any:
         if not self.data_path:
             if self.split == "train":
-                raise ValueError("custom_dataset.train_dataset_path is required")
+                raise ValueError("dataset.custom_options.train_dataset_path is required")
             return None
         from datasets import load_dataset
 

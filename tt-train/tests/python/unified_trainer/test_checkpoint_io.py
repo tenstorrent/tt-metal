@@ -105,7 +105,11 @@ def trainer_for(lora):
 
     trainer = SFTTrainer()
     trainer.config = SFTTrainerConfig(
-        dataset_id="sst2", model={"name": "m", "lora": lora}, optimizer={"lr": 1e-4}, batch_size=1, max_length=32
+        dataset={"id": "sst2"},
+        model={"name": "m", "lora": lora},
+        optimizer={"lr": 1e-4},
+        batch_size=1,
+        max_length=32,
     )
     trainer.provider, trainer.model = LlamaProvider(), None
     return trainer
