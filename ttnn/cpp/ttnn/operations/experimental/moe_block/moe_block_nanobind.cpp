@@ -13,6 +13,7 @@
 #include "common/moe_block_resources.hpp"
 #include "flat_routed_expert/flat_routed_expert_nanobind.hpp"
 #include "moe_head/moe_head_nanobind.hpp"
+#include "moe_tail/moe_tail_nanobind.hpp"
 #include "routed_experts_combine/routed_experts_combine_nanobind.hpp"
 #include "sparse_dispatch_2d/sparse_dispatch_2d_nanobind.hpp"
 
@@ -26,6 +27,7 @@ void bind_moe_block(nb::module_& experimental) {
     sparse_dispatch_2d::bind_sparse_dispatch_2d(mod);
     flat_routed_expert::bind_flat_routed_expert(mod);
     routed_experts_combine::bind_routed_experts_combine(mod);
+    moe_tail::bind_moe_tail(mod);
 }
 
 }  // namespace ttnn::operations::experimental::moe_block
