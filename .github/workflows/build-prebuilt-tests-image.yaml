@@ -351,7 +351,7 @@ jobs:
           build-args: |
             BASE=${{ inputs.base-image }}
             ${{ inputs.build-args }}
-          image-output-options: compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
+          image-output-options: compression=zstd,compression-level=9,oci-mediatypes=true
           sbom: "false"
           # CPython's test suite (lib/python3.X/test/) and Python packages
           # (future, tornado, ...) ship TLS test fixtures that the crypto scan
