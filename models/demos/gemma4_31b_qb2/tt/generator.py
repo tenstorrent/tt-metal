@@ -49,7 +49,6 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
-        self.prefill_shapes = set()
         self.counters = {
             k: 0
             for k in (
@@ -384,11 +383,7 @@ class Gemma4Generator:
         starts = [0] * len(prompt_lens) if start_positions is None else list(start_positions)
         if len(starts) != len(prompt_lens) or any(s < 0 or s >= n for s, n in zip(starts, prompt_lens)):
             raise ValueError("Prefill must advance each request from its current position")
-        shape_key = (state.batch, state.capacity, tuple(prompt_lens), tuple(starts), bool(return_all_logits))
-        if shape_key not in self.prefill_shapes:
-            # A new prefill signature may create cached protocol semaphores or
-            # norm buffers. Retire old traces before those persistent allocations.
-            self._retire_traces()
+        programs = self.mesh.num_program_cache_entries()
         self._tables(state, page_table)
         outputs = []
         for row, (slot, length) in enumerate(zip(slots, prompt_lens)):
@@ -462,7 +457,12 @@ class Gemma4Generator:
             # Device-return outputs retain their own owners in outputs. Host
             # mode has consumed out; do not carry it into the next prefill.
             del out, tt_ids, tables, uploaded_rows
-        self.prefill_shapes.add(shape_key)
+        if self.mesh.num_program_cache_entries() != programs:
+            # A prefill that compiled new programs created persistent device state (programs, semaphores, buffers)
+            # that a captured decode trace may overlap, so the traces are rebuilt. A signature the program cache
+            # already holds creates none: warm_prefill_shapes compiles every length class before serving, and
+            # the decode trace then survives the prefills of an agent loop.
+            self._retire_traces()
         if return_device:
             return outputs
         width = max(prompt_lens) if return_all_logits else 1
@@ -488,12 +488,23 @@ class Gemma4Generator:
         """Consume compact prefill rows with the canonical sampling trace."""
         batch = len(outputs)
         self.configure_sampling(batch=batch, **sampling_params)
-        merged = outputs[0] if batch == 1 else ttnn.concat(outputs, dim=2)
-        if batch > 1 and batch < 32:
-            merged = ttnn.pad(merged, [(0, 0), (0, 0), (0, 32 - batch), (0, 0)], value=0.0)
+        # The concat/pad programs of a new batch size compile here, with decode traces live and outside prefill_forward's
+        # count: they are counted too (warm_prefill_shapes compiles every batch size, so this normally adds none).
+        programs = self.mesh.num_program_cache_entries()
+        merged = self._merge_prefill_rows(outputs)
+        compiled = self.mesh.num_program_cache_entries() - programs
         entry = self._entry(state)
+        programs = self.mesh.num_program_cache_entries()
         shape = ttnn.Shape([1, 1, 32, self.model.config.vocab_size // 4])
         ttnn.copy(ttnn.reshape(merged, shape, shape), entry["logits"])
+        compiled += self.mesh.num_program_cache_entries() - programs
+        if compiled:
+            # Programs compiled while decode traces were live: no captured trace, the sampling trace included, may run before
+            # it is rebuilt. Rebuilding the entry overwrites its logits, so the merged rows are copied again.
+            logger.info("Sampling a batch of {} compiled {} programs: decode traces retired", batch, compiled)
+            self._retire_traces()
+            entry = self._entry(state)
+            ttnn.copy(ttnn.reshape(merged, shape, shape), entry["logits"])
         # CQ0 consumes the copy before replay. Release temporary prefill owners
         # so a hot trace never replays with unrelated live postcapture buffers.
         outputs.clear()
@@ -502,10 +513,40 @@ class Gemma4Generator:
         self.counters["sampling_replays"] += 1
         return self._read_tokens(entry["tokens"], batch).reshape(-1, 1)
 
+    def _merge_prefill_rows(self, outputs):
+        """One 32-row logits tile from the compact rows of a prefill batch."""
+        batch = len(outputs)
+        merged = outputs[0] if batch == 1 else ttnn.concat(outputs, dim=2)
+        if 1 < batch < 32:
+            merged = ttnn.pad(merged, [(0, 0), (0, 0), (0, 32 - batch), (0, 0)], value=0.0)
+        return merged
+
     def _sample_step(self, entry):
         self.sampler(entry["logits"], tt_out_tok=entry["tokens"])
         # Seed state advances on device, including when an explicit seed was set.
         ttnn.plus_one(self.sampler.seeds_tt_tensor)
+
+    def warm_prefill_shapes(self, state, page_table, max_tokens):
+        """Prefill every 32-token length (the tile-padded prompt shapes) from position 0 once.
+
+        Programs are keyed by the padded chunk length, so a warmed length compiles nothing when a request first
+        arrives with it. Continuations (a chunk starting at a later position) are separate signatures and are
+        not covered. Uses blocks 1.. of the (still empty) pool; nothing there is read afterwards.
+        """
+        pages = max_tokens // 32
+        for length in range(32, max_tokens + 1, 32):
+            tokens = torch.ones(1, length, dtype=torch.int32)
+            self.prefill_forward(tokens, page_table=page_table, kv_cache=state, prompt_lens=[length], slots=[0])
+        # Every prefill batch size of sample_prefill_outputs (the row merge compiles per size).
+        for batch in range(2, 33):
+            rows = [
+                self.model.tensor(torch.zeros(1, 1, 1, self.model.config.vocab_size), dim=3, dtype=ttnn.bfloat16)
+                for _ in range(batch)
+            ]
+            self._merge_prefill_rows(rows)
+            del rows
+        self._retire_traces()
+        logger.info("Warmed {} prefill lengths up to {} tokens", pages, max_tokens)
 
     def _entry(self, state):
         key = id(state)
