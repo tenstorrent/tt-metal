@@ -312,7 +312,9 @@ class Hy4IHCFused:
             fp32_dest_acc_en=True,
             dst_full_sync_en=True,
         )
-        if EXPAND:
+        if EXPAND and not (
+            int(os.environ.get("HY4_IHC_CABL", "0")) & 16
+        ):  # exact SFPU add needs unpack-to-dest fp32; the matmul form (CABL&16) must not have it
             modes = [ttnn.UnpackToDestMode.Default] * 64
             modes[XR] = ttnn.UnpackToDestMode.UnpackToDestFp32
             modes[INC] = ttnn.UnpackToDestMode.UnpackToDestFp32

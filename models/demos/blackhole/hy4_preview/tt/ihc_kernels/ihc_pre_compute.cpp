@@ -38,6 +38,20 @@ ALWI void rsqrt_tile_rows(uint32_t idst) {
         VectorMode::R));
 }
 
+// exact fp32 add of two dest tiles on rows 0..15 only (faces 0 and 1): the 4T <= 16 stream rows of T <= 4 tokens live
+// there
+ALWI void add_binary_tile_rows(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (APPROX, ckernel::BinaryOp::ADD, 8 /* ITERATIONS */, DST_ACCUM_MODE, ckernel::DstRoundingMode::Default),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::R)));
+}
+
 void kernel_main() {
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
@@ -147,7 +161,11 @@ void kernel_main() {
             }
             add_binary_tile_init();
             for (uint32_t i = 0; i < nn; ++i) {
-                add_binary_tile(i, DT / 2 + i, i);
+                if constexpr (T_ROWS <= 4) {
+                    add_binary_tile_rows(i, DT / 2 + i, i);
+                } else {
+                    add_binary_tile(i, DT / 2 + i, i);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
