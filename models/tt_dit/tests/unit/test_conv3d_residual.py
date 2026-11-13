@@ -103,9 +103,11 @@ def test_conv3d_residual_halo_falls_back(
 ):
     """Where the residual CBs would take the prefetch shard, conv3d adds the residual separately.
 
-    Without the fallback, a halo reader that needs the shard refuses the blocking ("Conv3d halo mode needs the L1
-    prefetch shard", ltx-rt), and one that does not drops to its direct path. The call must return exactly the
-    plain halo conv plus ttnn.add.
+    Without the fallback, the residual CBs cost this blocking its prefetch shard, and halo mode then runs on the
+    direct reader, which has no halo branch: it ignores the halo buffer and zero-pads the H/W edges, so the output
+    is silently wrong at device boundaries (on ltx-rt the reader refuses it instead: "Conv3d halo mode needs the
+    L1 prefetch shard"). The halo buffer is random, not zeros, so that drop shows. The call must return exactly
+    the plain halo conv plus ttnn.add.
     """
     mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
     torch.manual_seed(0)
@@ -122,9 +124,10 @@ def test_conv3d_residual_halo_falls_back(
         device=mesh,
     )
     tt_b = _to_dev(conv.bias.data.reshape(1, -1), mesh, ttnn.TILE_LAYOUT)
-    # [Htop|Hbot|Wleft|Wright] sections for pad (1, 1): zeros, i.e. a mesh edge on every side.
+    # [Htop|Hbot|Wleft|Wright] sections for pad (1, 1): random neighbour rows, so a reader that drops the halo
+    # (zero-padding the edges instead) gives different bytes from the plain halo conv.
     halo_pages = 2 * N * T * (1 * W + 1 * (H + 2))
-    tt_halo = _to_dev(torch.zeros(halo_pages, C_in), mesh, ttnn.ROW_MAJOR_LAYOUT)
+    tt_halo = _to_dev(torch.randn(halo_pages, C_in), mesh, ttnn.ROW_MAJOR_LAYOUT)
     cfg = ttnn.Conv3dConfig(
         weights_dtype=ttnn.bfloat16,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
