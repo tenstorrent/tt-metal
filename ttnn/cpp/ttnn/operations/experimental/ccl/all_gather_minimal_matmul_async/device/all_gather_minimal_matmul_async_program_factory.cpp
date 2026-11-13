@@ -273,7 +273,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
-    bool fuse_swiglu = false) {
+    bool fuse_swiglu = false,
+    uint32_t head_split_chunks_mask = 0) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -785,14 +786,15 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         defines["CHUNK_TILE_WIDTHS"] = widths_csv;
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
 
-        // Head-split output chunks: a head-split chunk tensor ([1, H > 1, M, head_dim], from the op's output spec)
-        // gets its tiles written per head (chunk_out_tile_id in matmul_dataflow_common.hpp). No head-split chunk:
-        // no define.
+        // Head-split output chunks: a chunk named in head_split_chunks_mask comes as a head-split tensor
+        // ([1, H > 1, M, head_dim], from the op's output spec) and gets its tiles written per head
+        // (chunk_out_tile_id in matmul_dataflow_common.hpp). Other chunks keep the row layout, whatever their shape
+        // (an input with a batch dim > 1 gives row-layout chunks with shape[-3] > 1). No head-split chunk: no define.
         uint32_t head_split_mask = 0;
         uint32_t head_dt = 0;
         for (size_t c = 0; c < mm_output_tensors.size() && c < 32; ++c) {
             const auto& shape = mm_output_tensors[c].padded_shape();
-            if (shape.rank() >= 3 && shape[-3] > 1) {
+            if (((head_split_chunks_mask >> c) & 1u) != 0 && shape.rank() >= 3 && shape[-3] > 1) {
                 const uint32_t dt = shape[-1] / tt::constants::TILE_WIDTH;
                 TT_FATAL(head_dt == 0 || head_dt == dt, "head-split chunks must share one head_dim");
                 TT_FATAL(
@@ -1764,7 +1766,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    uint32_t head_split_chunks_mask) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -1799,7 +1802,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_ring_index,
         fsdp_semaphore,
         fsdp_topology,
-        fuse_swiglu);
+        fuse_swiglu,
+        head_split_chunks_mask);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -1878,7 +1882,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         fsdp_ring_index,
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
-        attributes.fuse_swiglu);
+        attributes.fuse_swiglu,
+        attributes.head_split_chunks_mask);
 }
 
 tt::tt_metal::WorkloadDescriptor AllGatherMinimalMatmulAsyncProgramFactory::create_workload_descriptor(
