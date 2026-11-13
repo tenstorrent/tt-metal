@@ -451,8 +451,10 @@ inline constexpr bool pack_strides_u2d = true;
 #endif
 
 // reconfigured: the reconfigure's state, stored by the caller of the noinline reconfigure (store_state false there),
-// so that call writes no memory and the caller keeps its registers across it.
-template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true>
+// so that call writes no memory and the caller keeps its registers across it. zero_ch1: hw_configure and the fast
+// untilize close; elsewhere a channel-1 stride left by the strided fast untilize (Y) or the W forms (W) is idle, as
+// they reset their channel-1 counter at the end of every block and no other pack program moves it.
+template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true, bool zero_ch1 = false>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
     // The state store first: behind the config writes it waits for them.
@@ -476,11 +478,11 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
-    // Channel-1 (L1 output) strides are zero for every pack mode: output placement comes from
-    // L1_Dest_addr and the packer's write pointer. Only the fast-untilize strided pack sets a
-    // channel-1 (Y) stride, in its own init.
-    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
-    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+    if constexpr (zero_ch1)
+    {
+        TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
+        TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+    }
     // A default pack writes its destination before its first PACR, which spaces the stride writes from it; with an unpack
     // to DEST the NOPs stay, as the earlier pack start contends with the unpacker for L1.
     if constexpr (pack_mode != PackMode::Default || pack_strides_u2d<pack_mode>)
@@ -970,7 +972,7 @@ inline void configure_pack(
 
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
-    set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+    set_packer_strides<pack_mode, false, true, true>(pack_src_format, tile_c_dim);
 
     // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. It is
     // owned by _llk_pack_init_, which runs after hw-configure and sets its own value per the

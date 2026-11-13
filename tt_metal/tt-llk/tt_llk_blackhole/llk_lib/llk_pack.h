@@ -586,7 +586,7 @@ inline void _llk_pack_uninit_()
 inline void _llk_pack_restore_default_program_(const std::uint32_t pack_src_format)
 {
     // set_packer_strides also zeroes the channel-1 Y stride the fast untilize strided path programs.
-    set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
+    set_packer_strides<PackMode::Default, false, true, true>(pack_src_format, TILE_C_DIM);
     // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
     _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
         pack_src_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
