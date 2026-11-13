@@ -18,11 +18,6 @@ https://arxiv.org/abs/2303.12077
 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-- The PCC tests need the reference weights, which are not checked into the repository:
-
-```sh
-bash models/experimental/vadv2/weights_download.sh
-```
 
 ## Demo
 
@@ -70,7 +65,7 @@ TT_VADV2_TIMING=1 TT_VADV2_WARM_ITERS=2 pytest models/experimental/vadv2/tests/p
 pytest --disable-warnings models/experimental/vadv2/tests/pcc/
 ```
 - Every test compares against the PyTorch reference in `reference/` with a PCC floor of 0.99, the
-  coders' outputs with 0.999.
+  coders' outputs with 0.999. Both run on the same seeded dummy weights (`common.py`), not trained ones.
 - `test_tt_backbone.py`: camera images through the ResNet50 backbone and the FPN.
 - `test_tt_temporal_self_attention.py`: the temporal self-attention.
 - `test_tt_spatial_cross_attention.py`: the spatial cross-attention with its per-camera rebatch.
@@ -109,7 +104,7 @@ The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2
 `VAD_NUM_LAYERS=N` keeps the first `N` BEV encoder, detection decoder and map decoder layers, with
 their class and box branches, and, in each ResNet stage, the first block, which alone strides and
 projects the shortcut, and `N` repeats of the block after it. The end-to-end test and the demo read
-it. The reference is reduced the same way after the checkpoint loads, so the PCC floors still apply,
+it. The reference is reduced the same way after its weights are set, so the PCC floors still apply,
 but the reduced model is not the trained planner and its outputs have no meaning:
 
 ```sh
@@ -120,14 +115,13 @@ VAD_NUM_LAYERS=1 pytest --disable-warnings models/experimental/vadv2/tests/pcc/t
 
 ```
 models/experimental/vadv2/
-├── common.py           # Loads the reference weights for the tests
+├── common.py           # Seeded dummy weights for the tests
 ├── demo/               # Sequence CLI, manifest adapter and visualizer
 ├── num_layers.py       # VAD_NUM_LAYERS: reduces every stack of repeated layers
 ├── reference/          # PyTorch reference implementation
 ├── tests/
 │   └── pcc/            # Unit tests for individual components and the model end to end
-├── tt/                 # TTNN implementation; model_preprocessing.py prepares every part's parameters
-└── weights_download.sh # Fetches the reference weights the tests use
+└── tt/                 # TTNN implementation; model_preprocessing.py prepares every part's parameters
 ```
 
 ## Model Structure

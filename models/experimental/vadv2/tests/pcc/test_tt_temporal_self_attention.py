@@ -17,7 +17,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
-from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.common import init_dummy_weights
 
 
 def custom_preprocessor(model, name):
@@ -85,14 +85,9 @@ def create_vadv2_model_parameters_tsa(model: ResNet, input_tensor, device=None):
 def test_vadv2_tsa(
     device,
     reset_seeds,
-    model_location_generator,
 ):
     torch_model = temporal_self_attention.TemporalSelfAttention(embed_dims=256, num_levels=1)
-    torch_model = load_torch_model(
-        torch_model=torch_model,
-        layer="pts_bbox_head.transformer.encoder.layers.0.attentions.0.",
-        model_location_generator=model_location_generator,
-    )
+    torch_model = init_dummy_weights(torch_model)
 
     query = torch.randn(1, 10000, 256)
     query_pos = torch.randn(1, 10000, 256)

@@ -31,7 +31,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_layernorm_parameter,
 )
-from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.common import init_dummy_weights
 
 
 def custom_preprocessor(model, name):
@@ -227,15 +227,12 @@ def branch_parameters(branches, device):
 def test_vadv2_transformer(
     device,
     reset_seeds,
-    model_location_generator,
 ):
     torch_model = transformer.VADPerceptionTransformer(
         rotate_prev_bev=True, use_shift=True, use_can_bus=True, decoder=True, map_decoder=True, embed_dims=256
     )
 
-    torch_model = load_torch_model(
-        torch_model=torch_model, layer="pts_bbox_head.transformer", model_location_generator=model_location_generator
-    )
+    torch_model = init_dummy_weights(torch_model)
 
     parameter = create_vadv2_model_parameters_tramsformer(torch_model, device=device)
 
@@ -264,15 +261,9 @@ def test_vadv2_transformer(
     reg_branch.append(nn.Linear(256, 10))
     reg_branch = nn.Sequential(*reg_branch)
     reg_branches = nn.ModuleList([copy.deepcopy(reg_branch) for i in range(3)])
-    # The trained refinement branches, which both models apply between decoder layers.
-    reg_branches = load_torch_model(
-        torch_model=reg_branches, layer="pts_bbox_head.reg_branches.", model_location_generator=model_location_generator
-    )
-    map_reg_branches = load_torch_model(
-        torch_model=map_reg_branches,
-        layer="pts_bbox_head.map_reg_branches.",
-        model_location_generator=model_location_generator,
-    )
+    # The refinement branches, which both models apply between decoder layers.
+    reg_branches = init_dummy_weights(reg_branches, seed=1)
+    map_reg_branches = init_dummy_weights(map_reg_branches, seed=2)
     img_metas = [
         {
             "can_bus": np.array(
