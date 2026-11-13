@@ -67,7 +67,7 @@ void kernel_main() {
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
-    // The static split's units; with load balancing, the range the balance kernel releases (see the reader).
+    // The static split's units; with load balancing, the positions of the core's unit table (see the reader).
     uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     argidx++;  // logical_nt (unused: the writer only follows the ring order)
@@ -172,19 +172,17 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
-    // Load balancing: the range the balance kernel releases (the reader waits for the same words) and, with
-    // cross-device balancing, which of its units are swapped in (their outputs go to the export buffer and are counted
-    // on the balance core, which has the gather writers send them home).
-    [[maybe_unused]] uint32_t import_bits = 0;
+    // Load balancing: the unit table the balance kernel writes into cb_balance (the reader passes it on to compute).
+    // A unit swapped in from another device has its output go to the export buffer, counted on the balance core, which
+    // has the gather writers send it home.
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* unit_table = nullptr;
     if constexpr (balance) {
-        Semaphore<> range_sem(get_named_compile_time_arg_val("balance_sem_range"));
-        range_sem.wait_min(sparse_balance::kRangeValid);
-        const uint32_t range = range_sem.value();
-        global_q_start = sparse_balance::range_start(range);
-        global_q_end = sparse_balance::range_end(range);
-        if constexpr (balance_remote) {
-            import_bits = Semaphore<>(get_named_compile_time_arg_val("balance_sem_bits")).value();
-        }
+        Semaphore<>(get_named_compile_time_arg_val("balance_sem_table")).wait_min(1);
+        unit_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            CircularBuffer(get_named_compile_time_arg_val("cb_balance")).get_write_ptr());
+        invalidate_l1_cache();
+        global_q_start = 0;
+        global_q_end = unit_table[0];
     }
 
     // Passes split the core's Q blocks evenly (see the reader); each replays the ring order from the start (the
@@ -205,13 +203,14 @@ void kernel_main() {
                 continue;
             }
             [[maybe_unused]] uint32_t n_exported = 0;
-            for (uint32_t q_flat = pass_q_start; q_flat < pass_q_end; ++q_flat) {
+            for (uint32_t pos = pass_q_start; pos < pass_q_end; ++pos) {
+                const uint32_t q_flat = balance ? unit_table[1 + pos] & sparse_balance::kUnitMask : pos;
                 const auto decoded_q = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing);
                 const uint32_t q_chunk =
                     res_remap ? sparse_dense::resident_block(shard, decoded_q.q_chunk, mask_nb, mask_nb_pad, in_dense)
                               : decoded_q.q_chunk;
                 if constexpr (balance_remote) {
-                    if (((import_bits >> (q_flat - global_q_start)) & 1u) != 0) {
+                    if ((unit_table[1 + pos] & sparse_balance::kImported) != 0) {
                         export_q_block(q_chunk, decoded_q.nb, decoded_q.nq);
                         ++n_exported;
                         continue;

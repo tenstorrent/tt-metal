@@ -199,7 +199,7 @@ void kernel_main() {
     const uint32_t gathered_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t gathered_v_addr = get_arg_val<uint32_t>(argidx++);
     argidx++;  // attention sink address (none)
-    // The static split's units; with load balancing the core works on the range the balance kernel releases.
+    // The static split's units; with load balancing the core works on the unit table the balance kernel writes.
     const uint32_t static_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t static_q_end = get_arg_val<uint32_t>(argidx++);
     argidx++;  // KV cache batch index (no KV cache)
@@ -453,10 +453,10 @@ void kernel_main() {
     const auto in_dense_rt = [&](uint32_t g) { return in_dense(g); };
 
     // Load balancing (sparse_ring_balance.cpp): the costs of this core's static units into its slice of this device's
-    // cost page, then the range the balance kernel releases and, with cross-device balancing, which of its units are
-    // swapped in from another device (their Q and mask rows are read from the import buffers once the balance kernel
-    // says they have arrived). Compute gets the range in cb_balance; the writer reads the same semaphores.
-    [[maybe_unused]] uint32_t import_bits = 0;
+    // cost page, then the unit table the balance kernel writes into cb_balance ([count, units], a unit swapped in from
+    // another device flagged: its Q and mask rows are read from the import buffers once the balance kernel says they
+    // have arrived). The core's units are positions [0, count) of the table; compute and the writer read it too.
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* unit_table = nullptr;
     [[maybe_unused]] bool imports_ready = false;
     if constexpr (balance) {
         constexpr uint32_t cost_words = get_named_compile_time_arg_val("balance_cost_words");
@@ -494,25 +494,26 @@ void kernel_main() {
                 .up(noc, get_arg_val<uint32_t>(balance_base + 2), get_arg_val<uint32_t>(balance_base + 3), 1);
             noc.async_atomic_barrier();
         }
-        Semaphore<> range_sem(get_named_compile_time_arg_val("balance_sem_range"));
-        range_sem.wait_min(sparse_balance::kRangeValid);
-        const uint32_t range = range_sem.value();
-        global_q_start = sparse_balance::range_start(range);
-        global_q_end = sparse_balance::range_end(range);
-        if constexpr (balance_remote) {
-            import_bits = Semaphore<>(get_named_compile_time_arg_val("balance_sem_bits")).value();
-        }
-        CircularBuffer cb_range(get_named_compile_time_arg_val("cb_balance"));
-        cb_range.reserve_back(1);
-        volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_range.get_write_ptr());
-        page[0] = global_q_start;
-        page[1] = global_q_end;
-        cb_range.push_back(1);
+        Semaphore<>(get_named_compile_time_arg_val("balance_sem_table")).wait_min(1);
+        CircularBuffer cb_table(get_named_compile_time_arg_val("cb_balance"));
+        cb_table.reserve_back(1);
+        unit_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_table.get_write_ptr());
+        invalidate_l1_cache();
+        global_q_start = 0;
+        global_q_end = unit_table[0];
+        cb_table.push_back(1);
     }
     const uint32_t q_per_core = global_q_end - global_q_start;
-    // Unit i of a pass starting at pass_q_start is swapped in from another device.
-    [[maybe_unused]] const auto swapped_in = [&](uint32_t pass_q_start, uint32_t i) -> bool {
-        return balance_remote && ((import_bits >> (pass_q_start - global_q_start + i)) & 1u) != 0;
+    // The flat unit at position k of the core's units, and whether it is swapped in from another device.
+    const auto unit_at = [&](uint32_t k) -> uint32_t {
+        if constexpr (balance) {
+            return unit_table[1 + k] & sparse_balance::kUnitMask;
+        } else {
+            return k;
+        }
+    };
+    [[maybe_unused]] const auto swapped_in = [&](uint32_t k) -> bool {
+        return balance_remote && (unit_table[1 + k] & sparse_balance::kImported) != 0;
     };
     // Group delivery args: the resident group's [role, producer x, y, receivers, rectangles, (5 words each, producer
     // only)], then (dense units) the dense group's in the same form.
@@ -535,8 +536,9 @@ void kernel_main() {
         uint32_t heads[32];
         uint32_t blocks[32];
     };
-    // One ring iteration over shard ring_id for the pass's Q blocks [pass_q_start, pass_q_end), or one dense batch
-    // (dense != nullptr) over the local shard: every live block kept, own K/V reads, no pooled entries.
+    // One ring iteration over shard ring_id for the pass's Q blocks (positions [pass_q_start, pass_q_end), see
+    // unit_at), or one dense batch (dense != nullptr) over the local shard: every live block kept, own K/V reads, no
+    // pooled entries.
     const auto run_iteration =
         [&](const uint32_t ring_id, const uint32_t pass_q_start, const uint32_t pass_q_end, const DenseBatch* dense) {
             const uint32_t do_pooled = (dense == nullptr && pooled_route && pooled_pending) ? 1u : 0u;
@@ -563,7 +565,8 @@ void kernel_main() {
                     res_qc[i] = dense->blocks[i];
                     continue;
                 }
-                const auto d = decompose_global_q_index(pass_q_start + i, num_q_chunks, NH, use_zigzag_balancing);
+                const auto d =
+                    decompose_global_q_index(unit_at(pass_q_start + i), num_q_chunks, NH, use_zigzag_balancing);
                 res_nb[i] = d.nb;
                 res_nq[i] = d.nq;
                 // This shard's dense rows run as dense units: its resident blocks are the others.
@@ -571,7 +574,7 @@ void kernel_main() {
                                 ? sparse_dense::resident_block(ring_index, d.q_chunk, mask_nb, mask_nb_pad, in_dense_rt)
                                 : d.q_chunk;
                 if constexpr (balance_remote) {
-                    res_imported |= swapped_in(pass_q_start, i) ? 1u << i : 0u;
+                    res_imported |= swapped_in(pass_q_start + i) ? 1u << i : 0u;
                 }
             }
             [[maybe_unused]] const auto imported = [&](uint32_t i) { return ((res_imported >> i) & 1u) != 0; };

@@ -461,7 +461,8 @@ def test_balance_perf(bench, results_file, rows, structure, pooled):
 
 def test_balance_trace_masks(runtime):
     """Correctness under trace replay: one captured trace of the op, replayed after new mask contents are written into
-    the same device tensor (prefix, causal, random): costs, ranges and swaps are recomputed on device every replay."""
+    the same device tensor (prefix, causal, random): costs, unit tables and swaps are recomputed on device every replay.
+    """
     geo = ALIGNED["r1024k256"]
     case = Case(runtime, geo)
     mesh = runtime.mesh_device

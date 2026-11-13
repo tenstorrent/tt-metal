@@ -261,8 +261,7 @@ struct DenseResources {
 };
 
 // Load balancing (kernels/dataflow/sparse_ring_balance.cpp, kernels/sparse_ring_balance_plan.hpp), decided per build
-// from the shapes (see make_balance_config); cross-device balancing (remote) on a ring of 2+ devices with a 1D fabric
-// when a core's units fit one bit word.
+// from the shapes (see make_balance_config); cross-device balancing (remote) on a ring of 2+ devices with a 1D fabric.
 struct BalanceConfig {
     bool on = false;
     bool remote = false;
@@ -335,9 +334,10 @@ BalanceConfig make_balance_config(const SparseRingSDPAParams& args, const Sparse
     c.cost_words = sparse_balance::cost_words_per_core(max_q);
     c.swappable = q_tiles / args.block_tiles();
     const auto core = choose_balance_core(args, tensor_args);
-    // The range word holds 15-bit unit indices; the reader stages a core's costs in its second plan page.
+    // Unit tables hold 15-bit unit indices and kMaxCoreUnits units; the reader stages a core's costs in its second plan
+    // page.
     if (!core.has_value() || c.units >= (1u << 15) || c.q_blocks > sparse_balance::kMaxUnitsPerHead ||
-        c.cost_words * sizeof(uint32_t) + 63 > 64 + mask_row_bytes) {
+        max_q > sparse_balance::kMaxCoreUnits || c.cost_words * sizeof(uint32_t) + 63 > 64 + mask_row_bytes) {
         return c;
     }
     constexpr uint32_t kMaxScratchBytes = 512 * 1024;  // the balance core's L1 holds the cost pages and the plan
@@ -356,8 +356,7 @@ BalanceConfig make_balance_config(const SparseRingSDPAParams& args, const Sparse
     for (auto* device : mesh->get_devices()) {
         same_noc = same_noc && device->worker_core_from_logical_core(c.core) == noc;
     }
-    c.remote = c.on && same_noc && args.ring_size > 1 && max_q <= 32 &&
-               !args.all_gather_operation_attributes.full_mesh &&
+    c.remote = c.on && same_noc && args.ring_size > 1 && !args.all_gather_operation_attributes.full_mesh &&
                tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
                scratch(args.ring_size) <= kMaxScratchBytes && same_dram_banks_on_every_device(mesh);
     c.devices = c.remote ? static_cast<uint32_t>(args.ring_size) : 1u;
@@ -602,6 +601,20 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         balancing.on,
         balancing.remote,
         balancing.core);
+    // The balance kernel's scratch (sparse_balance::Scratch) first: the unit-table CB, laid out with the SDPA CBs, also
+    // spans the balance core and so lands above both.
+    constexpr uint32_t kBalanceScratchCb = 0;
+    if (balance) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = balancing.scratch_bytes,
+            .core_ranges = CoreRangeSet(CoreRange(balancing.core)),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(kBalanceScratchCb),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = balancing.scratch_bytes,
+            }}},
+        });
+    }
     // Each device's role for each owner's units: normalize (the owner) or emit toward it, one hop along the shorter
     // way round (ties: +); and which neighbours' partials arrive here.
     const bool ring_topology = args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring;
@@ -986,11 +999,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (dense_h && group_mcast) {
         dense_sems = ChainSemaphores::create(desc, core_grid_set);
     }
-    // Load balancing: per SDPA core its released range (written last: the release), its swapped-in units' bits and the
-    // imports-arrived signal; on the balance core the count of cores that wrote their costs and of swapped-in units
-    // whose outputs are written.
+    // Load balancing: per SDPA core the release of its unit table (written after the table) and the imports-arrived
+    // signal; on the balance core the count of cores that wrote their costs and of swapped-in units whose outputs are
+    // written.
     struct BalanceSemaphores {
-        uint32_t range = 0, bits = 0, import = 0, costs = 0, outputs = 0;
+        uint32_t table = 0, import = 0, costs = 0, outputs = 0;
     } balance_sems;
     if (balance) {
         const auto add_semaphore = [&](const CoreRangeSet& cores) {
@@ -1000,8 +1013,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             return id;
         };
         const CoreRangeSet balance_core_set(CoreRange(balancing.core));
-        balance_sems.range = add_semaphore(core_grid_set);
-        balance_sems.bits = add_semaphore(core_grid_set);
+        balance_sems.table = add_semaphore(core_grid_set);
         balance_sems.import = add_semaphore(core_grid_set);
         balance_sems.costs = add_semaphore(balance_core_set);
         balance_sems.outputs = add_semaphore(balance_core_set);
@@ -1253,8 +1265,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // One arriving dense partial (bf16, the output's format), merged one at a time.
         l.dense_in = dense_h && !dense_debug ? tile_cb(partial_tiles, out_tile_size, out_df)
                                              : std::numeric_limits<uint32_t>::max();  // inactive
-        // Load balancing: the reader's released range [start, end) for compute.
-        l.balance = balance ? alloc(32, 1, tt::DataFormat::UInt32) : std::numeric_limits<uint32_t>::max();  // inactive
+        // Load balancing: the core's unit table, written by the balance kernel (sparse_balance::kTableWords words).
+        l.balance = balance ? alloc(sparse_balance::kTableWords * sizeof(uint32_t), 1, tt::DataFormat::UInt32)
+                            : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
     const auto cb_bytes_for_slots =
@@ -1386,9 +1399,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             }
         }
     }
-    // A core's most units under load balancing; with cross-device balancing its swapped-in units are one bit word.
-    const uint32_t balance_cap =
-        balancing.remote ? std::min(32u, num_q_passes * resident_slots) : num_q_passes * resident_slots;
+    // A core's most units under load balancing (its unit table's room).
+    const uint32_t balance_cap = std::min(sparse_balance::kMaxCoreUnits, num_q_passes * resident_slots);
     log_debug(
         tt::LogOp,
         "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages, pair steps {} "
@@ -1402,6 +1414,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         usable_l1);
 
     const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, pair_steps, step_members, allocate_cb);
+    if (balance) {
+        // The unit-table CB (the last one laid out) also on the balance core: a CB has one address on all its cores,
+        // so the balance kernel writes each SDPA core's table at its own copy's address.
+        auto& table_cb = desc.cbs.back();
+        TT_FATAL(table_cb.format_descriptors[0].buffer_index == cbs.balance, "SparseRingSDPA: unit-table CB not last");
+        table_cb.core_ranges = table_cb.core_ranges.merge(CoreRangeSet(CoreRange(balancing.core)));
+    }
     const uint32_t cb_q_in = cbs.q_in;
     const uint32_t cb_k_in = cbs.k_in;
     const uint32_t cb_v_in = cbs.v_in;
@@ -1449,7 +1468,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     {
         uint64_t cb_bytes = 0;
         for (const auto& cb : desc.cbs) {
-            cb_bytes += cb.total_size;
+            cb_bytes += cb.core_ranges.intersects(core_grid_set) ? cb.total_size : 0;
         }
         log_debug(
             tt::LogOp,
@@ -1701,12 +1720,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"dense_q_rows_t", dense_q_rows_t},
         {"dense_blocks_total", std::max(1u, dense_units / NH)},
         // Load balancing (sparse_ring_balance.cpp): on, cross-device, a core's cost words, the semaphores (see
-        // BalanceSemaphores) and compute's range CB.
+        // BalanceSemaphores) and the unit table's CB.
         {"balance", balance ? 1u : 0u},
         {"balance_remote", balancing.remote ? 1u : 0u},
         {"balance_cost_words", balancing.cost_words},
-        {"balance_sem_range", balance_sems.range},
-        {"balance_sem_bits", balance_sems.bits},
+        {"balance_sem_table", balance_sems.table},
         {"balance_sem_import", balance_sems.import},
         {"balance_sem_costs", balance_sems.costs},
         {"balance_sem_outputs", balance_sems.outputs},
@@ -2248,16 +2266,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // scratch: cost pages, row-block costs, the plan (sparse_balance::Scratch).
     if (balance) {
         const CoreRangeSet balance_core_set(CoreRange(balancing.core));
-        constexpr uint32_t kBalanceScratchCb = 0;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = balancing.scratch_bytes,
-            .core_ranges = balance_core_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(kBalanceScratchCb),
-                .data_format = tt::DataFormat::RawUInt32,
-                .page_size = balancing.scratch_bytes,
-            }}},
-        });
         KernelDescriptor balance_kernel{};
         balance_kernel.kernel_source =
             "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/sparse_ring_balance.cpp";
@@ -2281,9 +2289,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             {"balance_grid_x", static_cast<uint32_t>(grid_size.x)},
             {"balance_sem_costs", balance_sems.costs},
             {"balance_sem_outputs", balance_sems.outputs},
-            {"balance_sem_range", balance_sems.range},
-            {"balance_sem_bits", balance_sems.bits},
+            {"balance_sem_table", balance_sems.table},
             {"balance_sem_import", balance_sems.import},
+            {"cb_balance", cbs.balance},
             {"balance_writer_flag", ring_balance.writer_flag_semaphore},
             {"balance_cb", kBalanceScratchCb},
         };

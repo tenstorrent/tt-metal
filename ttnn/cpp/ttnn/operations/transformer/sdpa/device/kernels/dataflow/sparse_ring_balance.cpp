@@ -16,8 +16,8 @@
 //   2. cross-device (remote): have the gather writers multicast the page to every device (flag 1), wait for the other
 //      devices' pages, run the row-block swaps (every device computes all of them, the same way), write this device's
 //      partner page and have the writers send its swapped row blocks (flag 2);
-//   3. cut every head's units over its cores on the costs of the units the slots now hold and release each SDPA
-//      core's range (its imported units' bits first, then the range word it waits on);
+//   3. deal every head's units over its cores on the costs of the units the slots now hold
+//      (sparse_balance::plan_unit_tables), write each SDPA core's unit table into its cb_balance page, then release it;
 //   4. cross-device: once the swapped-in row blocks have arrived, tell every SDPA core; once their outputs are
 //      written, have the writers send them home (flag 3); wait until this device's own swapped-out outputs are back.
 // Fabric counters (GlobalSemaphores) are consumed by an atomic decrement, never reset: an increment of the next call
@@ -36,13 +36,13 @@ void kernel_main() {
     constexpr uint32_t grid_x = get_named_compile_time_arg_val("balance_grid_x");
     constexpr uint32_t sem_costs = get_named_compile_time_arg_val("balance_sem_costs");
     constexpr uint32_t sem_outputs = get_named_compile_time_arg_val("balance_sem_outputs");
-    constexpr uint32_t sem_range = get_named_compile_time_arg_val("balance_sem_range");
-    constexpr uint32_t sem_bits = get_named_compile_time_arg_val("balance_sem_bits");
+    constexpr uint32_t sem_table = get_named_compile_time_arg_val("balance_sem_table");
     constexpr uint32_t sem_import = get_named_compile_time_arg_val("balance_sem_import");
     constexpr uint32_t writer_flag_sem = get_named_compile_time_arg_val("balance_writer_flag");
     constexpr uint32_t cb_scratch = get_named_compile_time_arg_val("balance_cb");
+    constexpr uint32_t cb_table = get_named_compile_time_arg_val("cb_balance");
     static_assert(units % q_blocks == 0 && q_blocks <= sparse_balance::kMaxUnitsPerHead, "whole heads, <= 1024 units");
-    static_assert(!remote || cap <= 32, "an SDPA core's imported units are one bit word");
+    static_assert(cap <= sparse_balance::kMaxCoreUnits, "a core's units fit its table");
     constexpr uint32_t active = units < cores ? units : cores;
     constexpr uint32_t page_words = cores * cost_words;
     constexpr uint32_t q_blocks_pad = (q_blocks + 15) / 16 * 16;
@@ -73,8 +73,6 @@ void kernel_main() {
     uint32_t* const base = reinterpret_cast<uint32_t*>((cb.get_write_ptr() + 63) & ~63u);
     ASSERT((layout.words + 16) * sizeof(uint32_t) <= get_local_cb_interface(cb_scratch).fifo_size);
     uint32_t* const tables = base + layout.tables;
-    uint32_t* const prefix = base + layout.prefix;
-    uint32_t* const starts = base + layout.starts;
 
     // The gather writers' flag: 1 = this device's cost page is complete, 2 = its partner page is, 3 = the outputs of
     // the row blocks it computes for other devices are written.
@@ -178,9 +176,9 @@ void kernel_main() {
         signal_writers();
     }
 
-    // 3. Ranges on the costs of the units the slots hold now: the same sequential walk over this device's page, a
+    // 3. Unit tables on the costs of the units the slots hold now: the same sequential walk over this device's page, a
     // swapped slot taking its partner unit's cost.
-    prefix[0] = 0;
+    uint32_t* const unit_costs = base + layout.unit_costs;
     {
         const uint32_t* const page = tables + mine * page_words;
         uint32_t f = 0;
@@ -196,27 +194,43 @@ void kernel_main() {
                         u = cost(p >> 16, f - b + (p & 0xFFFFu));
                     }
                 }
-                prefix[f + 1] = prefix[f] + u;
+                unit_costs[f] = u;
                 b = b + 1 == q_blocks ? 0 : b + 1;
             }
         }
     }
-    sparse_balance::RangePlanner(split, passes, cap, prefix).plan(starts);
-    // The imported-units word first (barriered), then the range word each core waits on.
-    if constexpr (remote) {
-        for (uint32_t i = 0; i < cores; ++i) {
-            uint32_t bits = 0;
-            for (uint32_t f = starts[i]; f < starts[i + 1]; ++f) {
-                bits |= partners[me * q_blocks + f % q_blocks] != sparse_balance::kHome ? 1u << (f - starts[i]) : 0u;
-            }
-            noc_inline_dw_write(get_noc_addr(core_x(i), core_y(i), get_semaphore(sem_bits)), bits);
-        }
-        noc_async_write_barrier();
-    }
+    uint32_t* const unit_tables = base + layout.unit_tables;
+    sparse_balance::plan_unit_tables(
+        split,
+        passes,
+        cap,
+        unit_costs,
+        unit_tables,
+        base + layout.core_loads,
+        base + layout.bins,
+        reinterpret_cast<uint16_t*>(base + layout.unit_order),
+        reinterpret_cast<uint16_t*>(base + layout.bin_of));
+    // Each core's table (swapped-in units flagged) into its cb_balance page, at the address the CB has on every core
+    // of the program (this one included), then the release each core waits on.
+    const uint32_t table_addr = CircularBuffer(cb_table).get_write_ptr();
     for (uint32_t i = 0; i < cores; ++i) {
-        noc_inline_dw_write(
-            get_noc_addr(core_x(i), core_y(i), get_semaphore(sem_range)),
-            sparse_balance::encode_range(starts[i], starts[i + 1]));
+        volatile uint32_t* const table = unit_tables + i * sparse_balance::kTableWords;
+        const uint32_t n = table[0];
+        if constexpr (remote) {
+            for (uint32_t k = 1; k <= n; ++k) {
+                const bool imported = partners[me * q_blocks + table[k] % q_blocks] != sparse_balance::kHome;
+                table[k] = table[k] | (imported ? sparse_balance::kImported : 0u);
+            }
+        }
+        (void)table[n];  // the RISC stores land before the NoC reads them
+        noc_async_write(
+            reinterpret_cast<uint32_t>(table),
+            get_noc_addr(core_x(i), core_y(i), table_addr),
+            (n + 1) * sizeof(uint32_t));
+    }
+    noc_async_write_barrier();
+    for (uint32_t i = 0; i < cores; ++i) {
+        noc_inline_dw_write(get_noc_addr(core_x(i), core_y(i), get_semaphore(sem_table)), 1);
     }
     noc_async_write_barrier();
 

@@ -1252,7 +1252,8 @@ def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0
 def test_balance(runtime, geom, kind):
     """Load balancing (kept-only route): rows ~90 % dense scattered over the heads the reference checks, a dense
     prefix on shard 0 and a causal mask, against the reference (r1184: a partial last block, which never moves between
-    devices)."""
+    devices). Every case deals units to cores out of order and with per-core counts that differ from the static split
+    (host-checked)."""
     case = Case(runtime, GEOMETRIES[geom])
     checked = sorted({0, 1, case.H // 2, case.H - 1})
     mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=40, heads=checked)
@@ -1274,7 +1275,7 @@ def test_balance_passes(runtime, kind):
 
 
 def test_balance_masks_per_call(runtime):
-    """The cached kept-only program with another mask every call (costs, ranges and swaps are decided per call, and the
+    """The cached kept-only program with another mask every call (costs, unit tables and swaps are decided per call, and the
     fabric counters must come back to zero): prefix, random, causal, heavy rows, prefix again, each against its
     reference."""
     case = Case(runtime, ALIGNED["r1024k256"])

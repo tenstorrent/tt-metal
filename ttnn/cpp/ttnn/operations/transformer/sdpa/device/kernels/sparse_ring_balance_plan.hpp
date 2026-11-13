@@ -4,7 +4,7 @@
 
 // Load balancing of sparse_ring_sdpa (kept-only route), decided on device every call by the balance kernel
 // (sparse_ring_balance.cpp): the static split of a device's (head, Q block) units over its SDPA cores, the
-// cost-balanced unit range of every core and the cross-device row-block swaps, plus the words the balance kernel, the
+// cost-balanced unit table of every core and the cross-device row-block swaps, plus the words the balance kernel, the
 // SDPA kernels, the gather writers and the program factory share. Plain integer code: every device computes the same
 // result from the same costs.
 
@@ -14,11 +14,13 @@
 
 namespace sparse_balance {
 
-// A core's released unit range, written last into its range semaphore: valid bit, end << 16, start (< 2^15 units).
-constexpr uint32_t kRangeValid = 1u << 31;
-inline uint32_t encode_range(uint32_t start, uint32_t end) { return kRangeValid | (end << 16) | start; }
-inline uint32_t range_start(uint32_t w) { return w & 0xFFFFu; }
-inline uint32_t range_end(uint32_t w) { return (w >> 16) & 0x7FFFu; }
+// A core's unit table, written by the balance kernel into the core's cb_balance page: [count, entries], an entry a
+// flat unit (< 2^15), with kImported when its row block is swapped in from another device. Ascending, so a head's
+// units are consecutive.
+constexpr uint32_t kTableWords = 64;
+constexpr uint32_t kMaxCoreUnits = kTableWords - 1;
+constexpr uint32_t kImported = 1u << 15;
+constexpr uint32_t kUnitMask = kImported - 1;
 
 // A unit's cost: its kept blocks holding a real token plus kUnitCost, the fixed per-unit work in kept blocks (plan and
 // mask reads, step membership, normalization). Capped so a head's cost stays below 2^22.
@@ -31,9 +33,11 @@ inline uint32_t cost_words_per_core(uint32_t max_units_per_core) { return (max_u
 
 // The balance kernel's L1 scratch, in words, each region 64-byte aligned: the cost pages of every device, the
 // row-block costs, loads and partners of every device, the sort order (halfwords), heads / tails, moved flags (bytes),
-// this device's partner page, the cost prefix and the range starts.
+// this device's partner page, then this device's unit costs, the cores' unit tables and loads, a head's bins (bounds,
+// loads, counts), and every unit's place in its head's cost order and bin (halfwords).
 struct Scratch {
-    uint32_t tables, row_costs, loads, partners, order, heads, tails, moved, partner_page, prefix, starts, words;
+    uint32_t tables, row_costs, loads, partners, order, heads, tails, moved, partner_page, unit_costs, unit_tables,
+        core_loads, bins, unit_order, bin_of, words;
     Scratch(
         uint32_t devices, uint32_t cores, uint32_t cost_words, uint32_t q_blocks, uint32_t swappable, uint32_t units) {
         uint32_t w = 0;
@@ -51,8 +55,12 @@ struct Scratch {
         tails = take(devices);
         moved = take((devices * q_blocks + 3) / 4);
         partner_page = take(q_blocks);
-        prefix = take(units + 1);
-        starts = take(cores + 1);
+        unit_costs = take(units);
+        unit_tables = take(cores * kTableWords);
+        core_loads = take(2 * cores);
+        bins = take(4 * cores);
+        unit_order = take((units + 1) / 2);
+        bin_of = take((units + 1) / 2);
         words = w;
     }
 };
@@ -77,183 +85,13 @@ struct StaticSplit {
     uint32_t last_head(uint32_t i) const { return (start(i) + count(i) - 1) / q_blocks; }
 };
 
-// The largest t in [t_min, t_max] whose units from flat unit pos cost at most `budget` (prefix: running costs), or
-// t_min - 1 when t_min units already cost more.
-inline uint32_t take_within(const uint32_t* prefix, uint32_t pos, uint32_t t_min, uint32_t t_max, uint32_t budget) {
-    const auto fits = [&](uint32_t t) { return prefix[pos + t] - prefix[pos] <= budget; };
-    if (!fits(t_min)) {
-        return t_min - 1;
-    }
-    uint32_t a = t_min;  // fits
-    uint32_t b = t_max;
-    while (a < b) {
-        const uint32_t m = a + (b - a + 1) / 2;
-        if (fits(m)) {
-            a = m;
-        } else {
-            b = m - 1;
-        }
-    }
-    return a;
-}
-
-// The static split stays unless the cut lowers the largest core cost by at least 1/kRecutMargin. The cost model leaves
-// out what moving a cut changes beyond unit counts (head segments per pass, step groups, group lockstep), so a small
-// modeled gain is noise; masks worth balancing gain far more. A core's cost is below two heads' (< 2^23), so the
-// products fit 32 bits.
-constexpr uint32_t kRecutMargin = 16;
-inline bool static_cut_kept(uint32_t static_max, uint32_t planned_max) {
-    return kRecutMargin * planned_max > (kRecutMargin - 1) * static_max;
-}
-
-// Every core's unit range for unit costs >= 1, prefix[f] = the cost of flat units [0, f) (units + 1 words): each core
-// keeps its static heads (so head groups, chains and head boundaries stay as built) and takes a contiguous run of
-// them; the ranges tile the units in core order. A core holding one head takes between `passes` (one unit per pass:
-// a head group's members stream every pass in lockstep) and `cap` units, a core holding several (never a group
-// member) at most `cap` in all. The largest core cost is minimized: the smallest budget (from the perfect split up by
-// 1/8, then four halvings of the last step) for which taking, core by core and head by head, as many units as fit
-// the budget and the bounds (leaving the later cores theirs) covers every head. A core continuing into the next head
-// takes the rest of the current one and carries its units and cost into the next. Sets starts[i] for every core,
-// starts[cores] = units: core i's range is [starts[i], starts[i + 1]).
-class RangePlanner {
-public:
-    RangePlanner(const StaticSplit& split, uint32_t passes, uint32_t cap, const uint32_t* prefix) :
-        split_(split), passes_(passes), cap_(cap), prefix_(prefix) {}
-
-    void plan(uint32_t* starts) const {
-        const uint32_t active = split_.units < split_.cores ? split_.units : split_.cores;
-        uint32_t t = prefix_[split_.units] / active;
-        for (uint32_t f = 0; f < split_.units; ++f) {
-            const uint32_t c = prefix_[f + 1] - prefix_[f];
-            t = c > t ? c : t;
-        }
-        t += t / 32 + 1;
-        uint32_t t_bad = 0;
-        while (!pass(t, nullptr)) {
-            t_bad = t;
-            t += t / 8 + 1;
-        }
-        for (uint32_t step = 0; step < 4 && t_bad + 1 < t; ++step) {
-            const uint32_t mid = t_bad + (t - t_bad) / 2;
-            if (pass(mid, nullptr)) {
-                t = mid;
-            } else {
-                t_bad = mid;
-            }
-        }
-        pass(t, starts);
-        for (uint32_t i = active; i <= split_.cores; ++i) {
-            starts[i] = split_.units;
-        }
-        uint32_t planned_max = 0;
-        uint32_t static_max = 0;
-        for (uint32_t i = 0; i < active; ++i) {
-            const uint32_t p = prefix_[starts[i + 1]] - prefix_[starts[i]];
-            const uint32_t s = prefix_[split_.start(i) + split_.count(i)] - prefix_[split_.start(i)];
-            planned_max = p > planned_max ? p : planned_max;
-            static_max = s > static_max ? s : static_max;
-        }
-        if (static_cut_kept(static_max, planned_max)) {
-            for (uint32_t i = 0; i < active; ++i) {
-                starts[i] = split_.start(i);
-            }
-        }
-    }
-
-private:
-    // Head bounds of core i's part: (lo, hi), given the units it already holds in earlier heads.
-    void bounds(uint32_t i, uint32_t held, uint32_t& lo, uint32_t& hi) const {
-        const bool one_head = split_.first_head(i) == split_.last_head(i);
-        lo = one_head ? passes_ : 0u;
-        hi = cap_ - held;
-    }
-
-    // One greedy pass at budget t (starts == nullptr: only test it). False when the units do not fit.
-    bool pass(uint32_t t, uint32_t* starts) const {
-        const uint32_t q_blocks = split_.q_blocks;
-        const uint32_t heads = split_.units / q_blocks;
-        uint32_t pos = 0;
-        uint32_t carry_core = split_.cores;  // the core continuing from the previous head, with its units and cost
-        uint32_t carry_n = 0;
-        uint32_t carry_c = 0;
-        for (uint32_t h = 0; h < heads; ++h) {
-            const uint32_t head_end = (h + 1) * q_blocks;
-            const uint32_t first = split_.core_of(h * q_blocks);
-            const uint32_t last = split_.core_of(head_end - 1);
-            uint32_t lo_after = 0;
-            uint32_t hi_after = 0;
-            for (uint32_t i = first; i <= last; ++i) {
-                uint32_t lo = 0;
-                uint32_t hi = 0;
-                bounds(i, i == carry_core ? carry_n : 0u, lo, hi);
-                lo_after += lo;
-                hi_after += hi;
-            }
-            for (uint32_t i = first; i <= last; ++i) {
-                const uint32_t held_n = i == carry_core ? carry_n : 0u;
-                const uint32_t held_c = i == carry_core ? carry_c : 0u;
-                uint32_t lo = 0;
-                uint32_t hi = 0;
-                bounds(i, held_n, lo, hi);
-                lo_after -= lo;
-                hi_after -= hi;
-                const uint32_t rest = head_end - pos;
-                const bool continues = i == last && split_.last_head(i) > h;
-                uint32_t take = rest;
-                if (!continues) {
-                    const uint32_t need = rest > hi_after ? rest - hi_after : 0u;  // the later cores cannot take more
-                    const uint32_t t_min = lo > need ? lo : need;
-                    const uint32_t t_max = hi < rest - lo_after ? hi : rest - lo_after;
-                    if (t_min > t_max || held_c > t) {
-                        return false;
-                    }
-                    take = take_within(prefix_, pos, t_min, t_max, t - held_c);
-                    if (take + 1 == t_min) {
-                        return false;
-                    }
-                } else if (take > hi || prefix_[pos + take] - prefix_[pos] + held_c > t) {
-                    return false;
-                }
-                if (starts != nullptr && i != carry_core) {
-                    starts[i] = pos;
-                }
-                if (continues) {
-                    carry_n = held_n + take;
-                    carry_c = held_c + prefix_[pos + take] - prefix_[pos];
-                    carry_core = i;
-                }
-                pos += take;
-            }
-        }
-        return true;
-    }
-
-    StaticSplit split_;
-    uint32_t passes_;
-    uint32_t cap_;
-    const uint32_t* prefix_;
-};
-
-// Row-block swaps between devices. Every device has q_blocks row blocks (a Q block of every head); the first
-// `swappable` may move (full blocks: a partial last block stays home). row_costs[r * q_blocks + b]: row block b of
-// device r's cost; loads[r]: device r's whole cost. While the most loaded device is more than 1/32 above the mean, its
-// heaviest unswapped block trades places with the least loaded device's lightest unswapped block, when that lowers the
-// pair's maximum (the heavy side may skip to a lighter block that does, at most kScan ahead) by at least a quarter of
-// an average block (a trade moves a whole row block's Q, mask rows and output). A slot trades at most once.
-// partners[r * q_blocks + b] = kHome, or (r' << 16) | b': device r's slot b computes block b' of device r', and r''s
-// slot b' computes r's block b. Deterministic: integer arithmetic, ties to the lower device / block.
-constexpr uint32_t kHome = 0xFFFFFFFFu;
-constexpr uint32_t kScan = 16;
-
-inline void sort_blocks_by_cost(const uint32_t* row_costs, uint32_t n, uint16_t* order) {
-    // Shell sort, heaviest first, ties by block index (Ciura's gaps).
+// order = 0..n-1 sorted by costs, heaviest first, ties by index (Shell sort, Ciura's gaps).
+inline void sort_heaviest_first(const uint32_t* costs, uint32_t n, uint16_t* order) {
     constexpr uint32_t gaps[] = {701, 301, 132, 57, 23, 10, 4, 1};
     for (uint32_t b = 0; b < n; ++b) {
         order[b] = static_cast<uint16_t>(b);
     }
-    const auto before = [&](uint16_t x, uint16_t y) {
-        return row_costs[x] > row_costs[y] || (row_costs[x] == row_costs[y] && x < y);
-    };
+    const auto before = [&](uint16_t x, uint16_t y) { return costs[x] > costs[y] || (costs[x] == costs[y] && x < y); };
     for (const uint32_t gap : gaps) {
         for (uint32_t i = gap; i < n; ++i) {
             const uint16_t v = order[i];
@@ -266,6 +104,17 @@ inline void sort_blocks_by_cost(const uint32_t* row_costs, uint32_t n, uint16_t*
         }
     }
 }
+
+// Row-block swaps between devices. Every device has q_blocks row blocks (a Q block of every head); the first
+// `swappable` may move (full blocks: a partial last block stays home). row_costs[r * q_blocks + b]: row block b of
+// device r's cost; loads[r]: device r's whole cost. While the most loaded device is more than 1/32 above the mean, its
+// heaviest unswapped block trades places with the least loaded device's lightest unswapped block, when that lowers the
+// pair's maximum (the heavy side may skip to a lighter block that does, at most kScan ahead) by at least a quarter of
+// an average block (a trade moves a whole row block's Q, mask rows and output). A slot trades at most once.
+// partners[r * q_blocks + b] = kHome, or (r' << 16) | b': device r's slot b computes block b' of device r', and r''s
+// slot b' computes r's block b. Deterministic: integer arithmetic, ties to the lower device / block.
+constexpr uint32_t kHome = 0xFFFFFFFFu;
+constexpr uint32_t kScan = 16;
 
 // Returns the swaps made. Scratch: order (devices x swappable halfwords), heads, tails (one word per device), moved
 // (devices x q_blocks bytes).
@@ -283,7 +132,7 @@ inline uint32_t place_swaps(
     uint64_t sum = 0;
     for (uint32_t r = 0; r < devices; ++r) {
         sum += loads[r];
-        sort_blocks_by_cost(row_costs + r * q_blocks, swappable, order + r * swappable);
+        sort_heaviest_first(row_costs + r * q_blocks, swappable, order + r * swappable);
         heads[r] = 0;
         tails[r] = swappable;
         for (uint32_t b = 0; b < q_blocks; ++b) {
@@ -348,6 +197,215 @@ inline uint32_t place_swaps(
         ++swaps;
     }
     return swaps;
+}
+
+// Within a device: each head's units over the cores holding it in the static split, a core being a bin.
+// improve_balance: up to kImproveRounds times, the busiest bin trades units with (or moves one to) the least loaded bin
+// that admits a gain (bins tried from the least loaded up): the pair of units whose cost difference d is closest to
+// half the bins' gap, which lowers the pair's maximum by min(d, gap - d). Bins keep between lo[b] and hi[b] units.
+// order: the units, heaviest first. Deterministic: ties to the lower bin and unit.
+constexpr uint32_t kImproveRounds = 8;
+
+inline void improve_balance(
+    const uint32_t* costs,
+    uint32_t n,
+    const uint16_t* order,
+    uint32_t n_bins,
+    const uint32_t* lo,
+    const uint32_t* hi,
+    uint32_t* load,
+    uint32_t* count,
+    uint16_t* bin_of) {
+    for (uint32_t round = 0; round < kImproveRounds; ++round) {
+        uint32_t big = 0;
+        for (uint32_t b = 1; b < n_bins; ++b) {
+            big = load[b] > load[big] ? b : big;
+        }
+        uint32_t best_u = n;
+        uint32_t best_v = n;  // n: a move
+        uint32_t best_gain = 0;
+        uint32_t small = n_bins;
+        for (uint32_t tried = 0; tried + 1 < n_bins && best_gain == 0; ++tried) {
+            // The next bin by (load, index) after the last one tried.
+            uint32_t next = n_bins;
+            for (uint32_t b = 0; b < n_bins; ++b) {
+                const bool after = small == n_bins || load[b] > load[small] || (load[b] == load[small] && b > small);
+                if (b != big && after && (next == n_bins || load[b] < load[next])) {
+                    next = b;
+                }
+            }
+            if (next == n_bins || load[next] >= load[big]) {
+                break;
+            }
+            small = next;
+            const uint32_t gap = load[big] - load[small];
+            const auto consider = [&](uint32_t u, uint32_t v) {
+                const uint32_t cv = v < n ? costs[v] : 0u;
+                if (costs[u] > cv && costs[u] - cv < gap) {
+                    const uint32_t d = costs[u] - cv;
+                    const uint32_t gain = d < gap - d ? d : gap - d;
+                    if (gain > best_gain) {
+                        best_gain = gain;
+                        best_u = u;
+                        best_v = v;
+                    }
+                }
+            };
+            // Both bins' units in cost order: for each u of big, small's units just above and at or below
+            // cost(u) - gap / 2.
+            const bool can_move = count[big] > lo[big] && count[small] < hi[small];
+            uint32_t j = 0;
+            uint32_t above = n;
+            for (uint32_t k = 0; k < n; ++k) {
+                const uint32_t u = order[k];
+                if (bin_of[u] != big) {
+                    continue;
+                }
+                if (can_move) {
+                    consider(u, n);
+                }
+                const uint32_t target = costs[u] > gap / 2 ? costs[u] - gap / 2 : 0u;
+                for (; j < n && (bin_of[order[j]] != small || costs[order[j]] > target); ++j) {
+                    above = bin_of[order[j]] == small ? order[j] : above;
+                }
+                if (above < n) {
+                    consider(u, above);
+                }
+                if (j < n) {
+                    consider(u, order[j]);
+                }
+            }
+        }
+        if (best_gain == 0) {
+            break;
+        }
+        const uint32_t d = costs[best_u] - (best_v < n ? costs[best_v] : 0u);
+        load[big] -= d;
+        load[small] += d;
+        bin_of[best_u] = static_cast<uint16_t>(small);
+        if (best_v < n) {
+            bin_of[best_v] = static_cast<uint16_t>(big);
+        } else {
+            --count[big];
+            ++count[small];
+        }
+    }
+}
+
+// n units (costs[u] >= 1) over n_bins bins: bin b ends with between lo[b] and hi[b] units (sum lo <= n <= sum hi) and
+// its load (in: what it holds already) grows by their costs; bin_of[u] = unit u's bin, order = the units heaviest
+// first. Every unit, heaviest first, goes to the least loaded bin with a free slot (only to bins below lo once the
+// rest are needed there), then improve_balance. Scratch: count (n_bins words).
+inline void assign_balanced(
+    const uint32_t* costs,
+    uint32_t n,
+    uint32_t n_bins,
+    const uint32_t* lo,
+    const uint32_t* hi,
+    uint32_t* load,
+    uint32_t* count,
+    uint16_t* bin_of,
+    uint16_t* order) {
+    sort_heaviest_first(costs, n, order);
+    uint32_t short_of = 0;  // units the bins below lo still need
+    for (uint32_t b = 0; b < n_bins; ++b) {
+        count[b] = 0;
+        short_of += lo[b];
+    }
+    for (uint32_t k = 0; k < n; ++k) {
+        const bool must_fill = n - k <= short_of;
+        uint32_t best = n_bins;
+        for (uint32_t b = 0; b < n_bins; ++b) {
+            if (count[b] < hi[b] && (!must_fill || count[b] < lo[b]) && (best == n_bins || load[b] < load[best])) {
+                best = b;
+            }
+        }
+        short_of -= count[best] < lo[best] ? 1u : 0u;
+        ++count[best];
+        load[best] += costs[order[k]];
+        bin_of[order[k]] = static_cast<uint16_t>(best);
+    }
+    improve_balance(costs, n, order, n_bins, lo, hi, load, count, bin_of);
+}
+
+// Every core's unit table (tables: cores x kTableWords) for this device's unit costs (costs[f], flat units): each
+// head's units over the cores holding it in the static split, so head groups, chains and head boundaries stay as
+// built. A core holding one head takes between `passes` (one unit per pass: a head group's members stream every pass
+// in lockstep) and `cap` (<= kMaxCoreUnits) units; a core holding several (never a group member) its static units of
+// each when they are dealt, at most `cap` in all when they are improved. The heads are assigned in order, then
+// improved once more on the final loads of the cores spanning heads; the static split stays when it is no worse.
+// Scratch: core_load (2 x cores words: loads, then units), bins (4 x cores words), order and bin_of (units halfwords
+// each).
+inline void plan_unit_tables(
+    const StaticSplit& split,
+    uint32_t passes,
+    uint32_t cap,
+    const uint32_t* costs,
+    uint32_t* tables,
+    uint32_t* core_load,
+    uint32_t* bins,
+    uint16_t* order,
+    uint16_t* bin_of) {
+    const uint32_t q_blocks = split.q_blocks;
+    uint32_t* const lo = bins;
+    uint32_t* const hi = bins + split.cores;
+    uint32_t* const load = bins + 2 * split.cores;
+    uint32_t* const count = bins + 3 * split.cores;
+    uint32_t* const core_units = core_load + split.cores;
+    for (uint32_t i = 0; i < split.cores; ++i) {
+        core_load[i] = 0;
+        core_units[i] = 0;
+    }
+    for (uint32_t sweep = 0; sweep < 2; ++sweep) {
+        for (uint32_t f0 = 0; f0 < split.units; f0 += q_blocks) {
+            const uint32_t first = split.core_of(f0);
+            const uint32_t n_bins = split.core_of(f0 + q_blocks - 1) - first + 1;
+            for (uint32_t b = 0; b < n_bins; ++b) {
+                count[b] = 0;
+            }
+            for (uint32_t u = 0; sweep > 0 && u < q_blocks; ++u) {
+                ++count[bin_of[f0 + u]];
+            }
+            for (uint32_t b = 0; b < n_bins; ++b) {
+                const uint32_t i = first + b;
+                core_units[i] -= count[b];  // its units of other heads
+                // A core spanning heads: its static units of the head when dealing, any free slot when improving.
+                const uint32_t a = split.start(i) > f0 ? split.start(i) : f0;
+                const uint32_t e =
+                    split.start(i) + split.count(i) < f0 + q_blocks ? split.start(i) + split.count(i) : f0 + q_blocks;
+                const bool one_head = split.first_head(i) == split.last_head(i);
+                lo[b] = one_head ? passes : 0u;
+                hi[b] = one_head ? cap : (sweep == 0 ? e - a : cap - core_units[i]);
+                load[b] = core_load[i];
+            }
+            if (sweep == 0) {
+                assign_balanced(costs + f0, q_blocks, n_bins, lo, hi, load, count, bin_of + f0, order + f0);
+            } else {
+                improve_balance(costs + f0, q_blocks, order + f0, n_bins, lo, hi, load, count, bin_of + f0);
+            }
+            for (uint32_t b = 0; b < n_bins; ++b) {
+                core_load[first + b] = load[b];
+                core_units[first + b] += count[b];
+            }
+        }
+    }
+    uint32_t planned_max = 0;
+    uint32_t static_max = 0;
+    for (uint32_t i = 0, f = 0; i < split.cores; ++i) {
+        planned_max = core_load[i] > planned_max ? core_load[i] : planned_max;
+        uint32_t static_load = 0;
+        for (uint32_t k = 0; k < split.count(i); ++k, ++f) {
+            static_load += costs[f];
+        }
+        static_max = static_load > static_max ? static_load : static_max;
+        tables[i * kTableWords] = 0;
+    }
+    const bool keep_static = static_max <= planned_max;
+    for (uint32_t f = 0; f < split.units; ++f) {
+        const uint32_t i = keep_static ? split.core_of(f) : split.core_of(f - f % q_blocks) + bin_of[f];
+        uint32_t* const table = tables + i * kTableWords;
+        table[1 + table[0]++] = f;
+    }
 }
 
 }  // namespace sparse_balance

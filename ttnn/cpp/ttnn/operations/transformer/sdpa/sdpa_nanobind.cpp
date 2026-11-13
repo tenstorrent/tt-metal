@@ -884,7 +884,7 @@ void bind_sdpa(nb::module_& mod) {
           kept blocks.
 
         On the kept-only route without dense_blocks the op balances the work of any mask by itself, on device, every
-        call (so under traces too): each head's Q blocks are re-split over its cores by cost (kept blocks plus a fixed
+        call (so under traces too): each head's Q blocks are dealt over its cores by cost (kept blocks plus a fixed
         amount), and with a 1D fabric whole Q blocks (all heads) are swapped between devices whose loads differ. The
         pooled route and dense_blocks keep the even split.
 
