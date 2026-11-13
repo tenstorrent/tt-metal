@@ -571,7 +571,7 @@ inline void set_icache_prefetch()
     }
     else
     {
-        TTI_RMWCIB0(thread_bit, 0, RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32);
+        TTI_RMWCIB0(thread_bit, 0 /*Data: clear the enable bit*/, RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32);
     }
 #endif
 }
