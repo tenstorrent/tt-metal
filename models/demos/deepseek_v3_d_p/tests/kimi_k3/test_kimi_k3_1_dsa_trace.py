@@ -37,9 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
-    CACHE_LEN,
     CHUNK,
-    HF_CONFIGS,
     build_stack,
     compose,
     placements,
@@ -83,16 +81,16 @@ def _scalar(mesh_device, value: int) -> ttnn.Tensor:
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
-    "model, mesh_device, device_params",
-    placements(["kimi_k3_1"], trace_region_size=TRACE_REGION_SIZE),
+    "mesh_device, device_params",
+    placements(trace_region_size=TRACE_REGION_SIZE),
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("window", TRACE_WINDOWS, ids=TRACE_WINDOWS)
-def test_k31_dsa_traced_replay_matches_eager(model, mesh_device, device_params, window):
+def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window):
     first_layer_idx, num_layers, kv_only = WINDOWS[window]
     assert not kv_only
-    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), first_layer_idx, num_layers)
-    stack, caches = build_stack(mesh_device, model, state_dict, first_layer_idx, num_layers, num_users=NUM_USERS)
+    state_dict = synthetic_state_dict(first_layer_idx, num_layers)
+    stack, caches = build_stack(mesh_device, state_dict, first_layer_idx, num_layers, num_users=NUM_USERS)
     kvpe, index = caches.kvpe, caches.index
     # Fresh caches, restored in place before the traced pass so both passes start from the same state.
     pristine = (kvpe.storage.cpu(), index.cpu())

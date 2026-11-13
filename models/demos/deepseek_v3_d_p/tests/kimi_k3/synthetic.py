@@ -3,13 +3,13 @@
 
 """Kimi-K3.1 stacks on synthetic weights, with the caches the runner allocates for them.
 
-For the K3.1 checks that need no reference: what the stack wrote (every cache slot its own, carries
-stored, rows past a prompt's end untouched), that a repeated request is bit-identical, and that a split
-stack matches the undivided one. K3.1 is K3 with Gated DSA on its 24 full-attention layers, run through
+For the K3.1 checks that need no reference: what the stack wrote (carries stored, rows past a prompt's
+end untouched), that a repeated request is bit-identical, and that a split stack matches the undivided
+one. K3.1 is K3 with Gated DSA on its 24 full-attention layers, run through
 K3's stack; accuracy against vLLM is the golden tests' job (`test_k31_golden.py`, the depth ladder's
 K3.1 rungs).
 
-One deliberate substitution: every layer's FFN is K3's dense FFN (`dense_ffn_config`). A synthetic
+One deliberate substitution: every layer's FFN is K3's dense FFN (`DENSE_FFN_CONFIG`). A synthetic
 LatentMoE layer is 896 routed experts at 33 M parameters each, ~59 GB per layer; the MoE is the same
 in K3 and K3.1 and covered by K3's own tests. Attention, norms, AttnRes and KDA are the model's own.
 
@@ -41,40 +41,39 @@ CHUNK = 5120
 CACHE_LEN = 40960
 STD = 0.02
 
-MODEL_CONFIGS = {"kimi_k3_1": KimiK31Config}
-HF_CONFIGS = {"kimi_k3_1": kimi_k3_1_hf_config}
+# K3.1's config with every layer's FFN dense: the one substitution (see the module docstring).
+DENSE_FFN_CONFIG = type("KimiK31ConfigDenseFfn", (KimiK31Config,), {"NUM_DENSE_LAYERS": KimiK31Config.NUM_LAYERS})
 
 
-def placements(models=tuple(MODEL_CONFIGS), **device_params) -> list:
-    """`(model, mesh_device, device_params)` on 8x4 Fabric2D at the model's L1_SMALL; extra
-    `device_params` (e.g. a trace test's `trace_region_size`) are added to every placement."""
+def hf_config():
+    """K3.1's HF config at the synthetic stacks' cache capacity."""
+    return kimi_k3_1_hf_config(CACHE_LEN)
+
+
+def placements(**device_params) -> list:
+    """`(mesh_device, device_params)` on 8x4 Fabric2D at K3.1's L1_SMALL; extra `device_params` (e.g. a
+    trace test's `trace_region_size`) are added."""
     return [
         pytest.param(
-            model,
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "l1_small_size": MODEL_CONFIGS[model].L1_SMALL_SIZE,
+                "l1_small_size": KimiK31Config.L1_SMALL_SIZE,
                 **device_params,
             },
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id=f"{model}-fabric2d-8x4",
+            id="fabric2d-8x4",
         )
-        for model in models
     ]
-
-
-def dense_ffn_config(model_cfg: type) -> type:
-    """`model_cfg` with every layer's FFN dense: the one substitution (see the module docstring)."""
-    return type(f"{model_cfg.__name__}DenseFfn", (model_cfg,), {"NUM_DENSE_LAYERS": model_cfg.NUM_LAYERS})
 
 
 def _lin(generator, out_features, in_features):
     return (torch.randn(out_features, in_features, generator=generator) * STD).to(torch.bfloat16)
 
 
-def synthetic_state_dict(config, first_layer_idx: int, num_layers: int) -> dict:
-    """Embedding, final norm, AttnRes queries, and per layer: norms, MLA/DSA or KDA, dense FFN."""
+def synthetic_state_dict(first_layer_idx: int, num_layers: int) -> dict:
+    """Embedding, final norm, AttnRes queries, and per layer: norms, DSA or KDA, dense FFN."""
+    config = hf_config()
     hidden, inter = config.hidden_size, config.intermediate_size
     mla_layers = set(KimiK3Config.mla_layer_ids())
     layers, attn_res = [], {}
@@ -121,7 +120,6 @@ def window(state_dict: dict, first_layer_idx: int, num_layers: int) -> dict:
 
 def build_stack(
     mesh_device,
-    model: str,
     state_dict: dict,
     first_layer_idx: int,
     num_layers: int,
@@ -135,11 +133,11 @@ def build_stack(
     """A rank's `TtKimiK3Transformer` and its caches from the serving allocator (`allocate_kv_cache`).
 
     TP-deduped scaled-FP8 kvpe, the bf8 indexer key cache, and the KDA slabs, attached to the model as
-    the runner's compile() does. `num_users` is the slot count of
-    every cache and slab and the model's user slots.
+    the runner's compile() does. `num_users` is the slot count of every cache and slab and the model's
+    user slots.
     """
-    adapter = get_adapter(model)
-    config = HF_CONFIGS[model](CACHE_LEN)
+    adapter = get_adapter("kimi_k3_1")
+    config = hf_config()
     params = PrefillRunParams(
         mesh_shape=tuple(mesh_device.shape),
         num_layers=num_layers,
@@ -162,7 +160,7 @@ def build_stack(
     transformer = TtKimiK3Transformer(
         mesh_device,
         config,
-        dense_ffn_config(MODEL_CONFIGS[model]),
+        DENSE_FFN_CONFIG,
         state_dict,
         num_layers=num_layers,
         seq_len=seq_len,
@@ -191,7 +189,7 @@ def release(transformer, caches) -> None:
 
 def token_ids(num_tokens: int, seed: int = 7) -> list[int]:
     return torch.randint(
-        0, kimi_k3_1_hf_config().vocab_size, (num_tokens,), generator=torch.Generator().manual_seed(seed)
+        0, KimiK31Config.VOCAB_SIZE, (num_tokens,), generator=torch.Generator().manual_seed(seed)
     ).tolist()
 
 
