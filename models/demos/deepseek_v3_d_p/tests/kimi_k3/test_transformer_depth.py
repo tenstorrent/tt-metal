@@ -462,12 +462,12 @@ def k31_layer_pcc(layer: int) -> float:
 K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.85}
 
 
-def k31_topk_rows(mesh_device, indices, rows: int) -> torch.Tensor:
+def k31_topk_rows(mesh_device, indices, rows: int, sp_axis: int, tp_axis: int) -> torch.Tensor:
     """A DSA layer's top-k `[1, 1, rows/sp(/tp), k]` (one chunk's query rows over SP, TP-split or TP-replicated)
     as host int64 `[rows, k]` in token order; the uint32 no-key sentinel reads 0xFFFFFFFF."""
-    sp, tp = mesh_device.shape[SP_AXIS], mesh_device.shape[TP_AXIS]
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
     dims = [0, 0]
-    dims[SP_AXIS], dims[TP_AXIS] = 2, 1
+    dims[sp_axis], dims[tp_axis] = 2, 1
     host = (
         ttnn.to_torch(
             indices,
@@ -583,7 +583,7 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     def with_topk(layer, mla_forward):
         def forward_returning_topk(*args, **kwargs):
             out, indices = mla_forward(*args, return_indexer_indices=True, **kwargs)
-            topk[layer] = k31_topk_rows(mesh_device, indices, chunk)
+            topk[layer] = k31_topk_rows(mesh_device, indices, chunk, params.sp_axis, params.tp_axis)
             return out
 
         return forward_returning_topk

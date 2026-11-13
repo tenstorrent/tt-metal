@@ -156,6 +156,7 @@ def _k31_table(tmp_path, monkeypatch, name, *, index, kda):
         num_layers=7,
         mesh_shape=_K31_MESH,
         sp_axis=0,
+        tp_axis=1,
         num_users=2,
         chunk_size_global=PREFILL_CHUNK_TOKENS,
         path=str(tmp_path / f"{name}.pb"),
