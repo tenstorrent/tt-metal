@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // RISC-V AMOs (Zaamo) and LR/SC (Zalrsc) on cached words of the hart's own TL1. Flags and the status line go through
-// the uncached alias, and no iDMA or ITN write targets this TL1 while they are stored (MIM-560). Sub-word AMOs and
-// amocas are not in the toolchain (no Zabha, no Zacas), so no mode issues them.
+// the uncached alias, except kModeOrdering's flag and ack words, which are cached AMO targets. No iDMA or ITN write
+// targets this TL1 while they are stored (MIM-560). Sub-word AMOs and amocas
+// are not in the toolchain (no Zabha, no Zacas), so no mode issues them.
 
 #include "cce_amo_ops_abi.h"
 #include "cce_test_common.h"
@@ -16,14 +17,11 @@
 
 namespace abi = cce_amo_ops_abi;
 using cce_test::arg_u64;
+using cce_test::cached_tl1_words;
 using cce_test::own_tl1_words;
 using cce_test::peer_tl1_word;
 using cce_test::poll_bounded;
 using cce_test::WaitDeadline;
-
-static volatile uint32_t* cached_word(uint32_t offset) {
-    return reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(offset));
-}
 
 static inline __attribute__((always_inline)) uint32_t amoadd_w(volatile uint32_t* word, uint32_t value) {
     uint32_t previous;
@@ -321,18 +319,10 @@ static void flush_line(uint32_t line) {
     flush_l2_cache_line(line);
 }
 
-static void discard_l1_range(uint32_t offset, uint32_t num_bytes) {
-    for (uint32_t line = offset; line < offset + num_bytes; line += abi::kLineBytes) {
-        invalidate_l1_dcache(line);
-    }
-}
-
-static uint32_t read_line_cached(uint32_t line) {
-    uint32_t sum = 0;
+static void read_line_cached(uint32_t line) {
     for (uint32_t word = 0; word < abi::kLineBytes / sizeof(uint32_t); ++word) {
-        sum += cached_word(line)[word];
+        (void)cached_tl1_words(line)[word];
     }
-    return sum;
 }
 
 struct Args {
@@ -426,8 +416,8 @@ static bool args_valid(const Args& args) {
 }
 
 static void run_two_hart_increment(const Args& args, Status& status) {
-    volatile uint32_t* amo_word = cached_word(args.target_offset);
-    volatile uint32_t* lrsc_word = cached_word(args.target_offset + abi::kLineBytes);
+    volatile uint32_t* amo_word = cached_tl1_words(args.target_offset);
+    volatile uint32_t* lrsc_word = cached_tl1_words(args.target_offset + abi::kLineBytes);
     // The host wrote the initial words to TL1; drop any copy an earlier launch left cached.
     invalidate_l1_dcache(args.target_offset);
     invalidate_l1_dcache(args.target_offset + abi::kLineBytes);
@@ -481,7 +471,7 @@ static void run_two_hart_increment(const Args& args, Status& status) {
 
 static void run_op_matrix(const Args& args, const WaitDeadline& deadline, Status& status) {
     const uint32_t num_bytes = args.num_points * abi::kLineBytes;
-    discard_l1_range(args.target_offset, num_bytes);
+    cce_test::invalidate_l1_lines(args.target_offset, num_bytes);
     invalidate_l2_cache_range(args.target_offset, num_bytes);
     const uint64_t start = get_timestamp();
     for (uint32_t entry = 0; entry < args.num_points; ++entry) {
@@ -548,7 +538,7 @@ static void finish_participants(const Args& args, uint32_t num_bytes, const Wait
 // Drops every copy of `num_bytes` from the target before the first barrier, so each participant reads the host's
 // initial values.
 static void discard_participant_range(const Args& args, uint32_t num_bytes) {
-    discard_l1_range(args.target_offset, num_bytes);
+    cce_test::invalidate_l1_lines(args.target_offset, num_bytes);
     if (args.participant == 0) {
         invalidate_l2_cache_range(args.target_offset, num_bytes);
     }
@@ -621,7 +611,7 @@ static void run_sweep(const Args& args, const WaitDeadline& deadline, Status& st
 static void run_line_state(const Args& args, Status& status) {
     const uint32_t line = args.target_offset;
     const uint32_t control_line = line + abi::kLineBytes;
-    volatile uint32_t* words = cached_word(line);
+    volatile uint32_t* words = cached_tl1_words(line);
     switch (args.leg) {
         case abi::kLegClean:
             discard_line(line);
@@ -643,13 +633,13 @@ static void run_line_state(const Args& args, Status& status) {
             read_line_cached(line);
             read_line_cached(control_line);
             status.words[abi::kStatusObservedFirst] = words[0];
-            status.words[abi::kStatusObservedSecond] = *cached_word(control_line);
+            status.words[abi::kStatusObservedSecond] = *cached_tl1_words(control_line);
             return;
         default: break;
     }
     status.words[abi::kStatusObservedFirst] = *own_tl1_words(line);
     if (args.leg == abi::kLegAfterWrite || args.leg == abi::kLegInvalidateAfterWrite) {
-        status.words[abi::kStatusObservedSecond] = *cached_word(control_line);
+        status.words[abi::kStatusObservedSecond] = *cached_tl1_words(control_line);
     }
     if (args.leg == abi::kLegInvalidateAfterWrite) {
         discard_line(line);
@@ -691,7 +681,7 @@ static void run_ordering(const Args& args, const WaitDeadline& deadline, Status&
         status.fail(abi::kCodePeerTimeout);
         return;
     }
-    volatile uint32_t* data = cached_word(data_line);
+    volatile uint32_t* data = cached_tl1_words(data_line);
     const uint32_t words_per_line = abi::kLineBytes / sizeof(uint32_t);
     const uint64_t start = get_timestamp();
     for (uint32_t round = 0; round < args.count; ++round) {
@@ -745,7 +735,7 @@ static void run_neighbour_write(const Args& args, const WaitDeadline& deadline, 
         status.fail(abi::kCodePeerTimeout);
         return;
     }
-    volatile uint32_t* words = cached_word(args.target_offset);
+    volatile uint32_t* words = cached_tl1_words(args.target_offset);
     const uint64_t start = get_timestamp();
     for (uint32_t iteration = 0; iteration < args.count; ++iteration) {
         if (deadline.expired()) {
@@ -933,7 +923,7 @@ static void run_itn_writer(const Args& args, const WaitDeadline& deadline, Statu
 
 static void run_itn_receiver(const Args& args, const WaitDeadline& deadline, Status& status) {
     const uint32_t line = args.target_offset;
-    volatile uint32_t* words = cached_word(line);
+    volatile uint32_t* words = cached_tl1_words(line);
     discard_line(line);
     read_line_cached(line);
     status.words[abi::kStatusObservedFirst] = words[0];
@@ -992,10 +982,6 @@ void kernel_main() {
         }
     }
 
-    // No status store outside the test area; the host's deadline reports the missing status.
-    if (!region_valid(args.status_offset, abi::kLineBytes)) {
-        return;
-    }
     volatile uint32_t* status_line = own_tl1_words(args.status_offset);
     status_line[abi::kStatusCode] = status.code;
     for (uint32_t word = abi::kStatusCode + 1; word < abi::kStatusWords; ++word) {

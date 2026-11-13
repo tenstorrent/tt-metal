@@ -9,8 +9,6 @@
 #include "cce_test_status_abi.h"
 
 // cce_amo_ops kernel ABI. The kernel (cce_amo_ops.cpp) and the host (dram/test_mimir_atomics.cpp) both include it.
-// Args, modes, codes and status words are append-only: a later stage adds entries after the last one and never
-// renumbers.
 namespace cce_amo_ops_abi {
 
 using cce_test_status_abi::kLineBytes;
@@ -21,9 +19,8 @@ inline constexpr uint32_t kMaxParticipants = 8;
 // participant of one launch passes the same kArgTargetOffset, kArgFlagOffset and kArgNumParticipants, and its own
 // kArgParticipant (0 .. kArgNumParticipants - 1). kArgFlagOffset (64 B aligned) holds 2 * kMaxParticipants flag lines
 // the host zeroes: ready flags first, then done flags, one line per participant. Every region a mode touches (target
-// extent, flags, results, table, status line) must lie in the test TL1 area below the 4 MiB cacheable port, else
-// kCodeBadArgs (no status store when the status line itself is outside). kArgPollBudget* is rdcycle cycles per
-// bounded wait and must be nonzero.
+// extent, flags, results, table) must lie in the test TL1 area below the 4 MiB cacheable port, else kCodeBadArgs.
+// kArgPollBudget* is rdcycle cycles per bounded wait and must be nonzero.
 // MM42 args (from kArgResultOffset). kArgResultOffset (64 B aligned, own TL1) receives per-participant results the
 // status line has no room for; kArgTableOffset (64 B aligned, own TL1) is a host-written table of kArgNumPoints
 // entries. kArgOperation is a kOp* code, kArgStrideBytes the distance between participants' words, kArgLeg selects a
@@ -53,7 +50,7 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo =
 // kSweepResultBytes. Every participant flushes its L1 D$ before its done flag; participant 0 waits for every done
 // flag and flushes the points from L2.
 // kModeLineState (CleanDirtyLine, MixedPathControl): one participant runs leg kArgLeg (kLeg*) on the line at
-// kArgTargetOffset; the control line is the next line. kStatusReturnedLo/Hi is what amoadd.w of kArgValue on word 0
+// kArgTargetOffset; the control line is the next line. kStatusReturnedLo is what amoadd.w of kArgValue on word 0
 // returned, kStatusObservedFirst word 0 read through the uncached alias before the AMO, kStatusObservedSecond the
 // control line's word 0 read through the cache.
 // kModeOrdering (two participants): kArgCount rounds of message passing. Participant 0 stores round data through the
