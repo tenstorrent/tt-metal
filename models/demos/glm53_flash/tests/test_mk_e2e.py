@@ -12,6 +12,9 @@ GLM53_MK_PREFIX=1 (needs GLM53_MK_B >= 3): the device prefix cache through the g
 a request A whose state at GLM53_MK_PREFIX_LEN = 32,768 tokens is snapshotted into a pool entry, a request B with the
 same document and another question attaching to it with A's pages shared, and B prefilled from scratch); B's greedy ids
 must equal the cold run's. Logs MK_PREFIX: lines (TTFT of the attach vs the cold prefill, decode, ids, counters).
+GLM53_MK_PREFIX_SPILL=1 (with GLM53_MK_PREFIX=1): the host tier's round trip in between -- A's entry 0 exported to host
+(export_snapshot, the state-export staging allocated before the warm-up's captures), entry 0 clobbered with another
+slot's state, the blob imported into entry 1 (import_snapshot) and B attached THERE: B == B_cold proves the restore.
 
 Image input (GLM53_MK_IMAGE_FEATS=<.pt> and / or GLM53_MK_IMAGE=<png>): every user's prompt is the image prompt (the
 HF processor's ids: chat template + image placeholder run; from the file, else the processor on the png) and its
@@ -71,6 +74,7 @@ OSL = int(os.environ.get("GLM53_MK_OSL", "128"))
 PREFIX = os.environ.get("GLM53_MK_PREFIX", "0") == "1"
 PREFIX_LEN = int(os.environ.get("GLM53_MK_PREFIX_LEN", "32768"))
 PREFIX_TAIL = 256  # the prompts' document runs about this many tokens past the boundary (then the question)
+PREFIX_SPILL = os.environ.get("GLM53_MK_PREFIX_SPILL", "0") == "1"
 _ISL_SEQ = PREFIX_LEN + PREFIX_TAIL if PREFIX else ISL  # the longest prompt the cache must hold
 SEQ = int(os.environ.get("GLM53_MK_SEQ", str(max(2048, 1 << (_ISL_SEQ + OSL + 64).bit_length()))))
 GALAXY = tuple(MESH) == GD.GALAXY
@@ -188,6 +192,18 @@ def run_prefix(gen, kv, ids_a: list[int], ids_b: list[int], prefix_len: int, osl
     out["ttft_a"], out["first_a"] = time.perf_counter() - t0, int(first[0])
     gen.release_slot(kv, 0)  # A finished: its blocks are cached, the entry holds its state at P
     sync()
+    if PREFIX_SPILL:  # the host tier: entry 0 -> host blob; entry 0 clobbered; the blob -> entry 1, which B attaches
+        t0 = time.perf_counter()
+        blob = gen.export_snapshot(kv, entry, n_tokens=prefix_len)
+        out["export_s"] = time.perf_counter() - t0
+        out["blob_bytes"] = _blob_nbytes(blob)
+        gen.snapshot_slot(kv, 2, entry)  # (slot 2 holds no request yet: entry 0 now holds unrelated state)
+        sync()
+        entry = 1
+        t0 = time.perf_counter()
+        gen.import_snapshot(kv, entry, blob)
+        sync()
+        out["import_s"] = time.perf_counter() - t0
     t0 = time.perf_counter()
     first = gen.prefill_forward(ids(ids_b[prefix_len:]), page_table=pt(row_b), kv_cache=kv,
                                 prompt_lens=[len(ids_b) - prefix_len], empty_slots=[1], start_pos=[prefix_len],
@@ -210,6 +226,16 @@ def run_prefix(gen, kv, ids_a: list[int], ids_b: list[int], prefix_len: int, osl
     out["decode_s"], out["decode_steps"] = time.perf_counter() - t0, osl - 1
     out["ids_b"], out["ids_cold"] = toks_b, toks_c
     return out
+
+
+def _blob_nbytes(blob) -> int:
+    if isinstance(blob, torch.Tensor):
+        return int(blob.numel()) * int(blob.element_size())
+    if isinstance(blob, dict):
+        return sum(_blob_nbytes(v) for v in blob.values())
+    if isinstance(blob, (list, tuple)):
+        return sum(_blob_nbytes(v) for v in blob)
+    return 0
 
 
 def image_input(snapshot) -> dict:
@@ -752,6 +778,10 @@ def _prefix_e2e(gen, tok, mesh_device, source) -> None:
     entries = int(getattr(gen.backend, "snapshot_entries", 0))
     if not entries:
         raise ValueError("GLM53_MK_PREFIX needs the device snapshot pool (GLM53_PREFIX_DEVICE_ENTRIES > 0)")
+    if PREFIX_SPILL:  # the host tier's export / import staging: before the warm-up's first capture
+        assert entries >= 2, "GLM53_MK_PREFIX_SPILL restores into pool entry 1"
+        ensure = getattr(gen.backend, "ensure_state_export", None)
+        assert callable(ensure) and ensure(kv), "GLM53_MK_PREFIX_SPILL needs the backend's KDA export staging"
     t0 = time.perf_counter()
     gen.warmup(kv, capture=True)
     ttnn.synchronize_device(mesh_device)
@@ -776,6 +806,10 @@ def _prefix_e2e(gen, tok, mesh_device, source) -> None:
                 f"(B + B_cold, {r['decode_steps']} steps)")  # fmt: skip
     logger.info(f"MK_PREFIX: ids B == B_cold {same} (first divergence {diverge}; first tokens A {r['first_a']} B "
                 f"{r['ids_b'][0]} B_cold {r['ids_cold'][0]}); B {r['ids_b'][:24]} B_cold {r['ids_cold'][:24]}")  # fmt: skip
+    if PREFIX_SPILL:
+        logger.info(f"MK_PREFIX_SPILL: entry 0 [0, {PREFIX_LEN}) exported in {r['export_s'] * 1e3:.0f} ms "
+                    f"({r['blob_bytes'] / 2**20:.1f} MiB), entry 0 clobbered, imported into entry 1 in "
+                    f"{r['import_s'] * 1e3:.0f} ms; B attached entry 1: ids B == B_cold {same}")  # fmt: skip
     logger.info(f"MK_PREFIX_TEXT B: {text(r['ids_b'])!r}")
     if not same:
         logger.info(f"MK_PREFIX_TEXT B_cold: {text(r['ids_cold'])!r}")
