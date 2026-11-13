@@ -84,6 +84,7 @@ def vocoder(m, native):
     obj = cls()
     obj.ccl_manager = m
     obj.mesh_device = m.mesh_device
+    obj.prepare_audio_ccl = True
     obj._prepared_audio_ccl = {}
     obj._tpad_mask_cache = {}
     obj.calls = []
@@ -311,6 +312,61 @@ class PreparationTest(unittest.TestCase):
         self.assertEqual(native.freed, [slot])
         v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
         self.assertEqual(len(native.copies), 1)
+
+
+class LtxUnchangedTest(unittest.TestCase):
+    """LTX's vocoder and BWE share these helpers; only the H3 decoder opts into prepared persistent buffers."""
+
+    def test_ltx_vocoder_decodes_without_scope_or_preparation(self):
+        native = Native()
+        m = manager(native)
+        v = vocoder(m, native)
+        v.prepare_audio_ccl = False
+        scoped = []
+
+        def forward(self, x, *, traced=False, tracer_trace_key=None):
+            scoped.append((traced, getattr(m, "_audio_buffer_record", None) is not None))
+            return x
+
+        type(v)._forward_device = forward
+        x = tensor()
+        # A traced call at a never-warmed shape still captures lazily, as on ltx-rt before this change.
+        v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+        v.forward_device_BTC(x, t_pad=0, trace_key="a")
+        self.assertEqual(scoped, [(True, False), (False, False)])
+        self.assertEqual(native.copies, [])
+        self.assertEqual(v._prepared_audio_ccl, {})
+        self.assertIsNone(getattr(m, "_audio_buffer_record", None))
+
+    def test_audio_gathers_persistent_only_inside_h3_scope(self):
+        class TConfig:
+            def __init__(self, a0, a1):
+                self.axis0, self.axis1 = SimpleNamespace(mesh_axis=a0), SimpleNamespace(mesh_axis=a1)
+
+        tree = ast.parse((ROOT / "layers/audio_ops.py").read_text())
+        names = {"_audio_persistent", "_all_gather_t", "all_gather_channel"}
+        selected = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+        self.assertEqual({n.name for n in selected}, names)
+        ns = {"ttnn": None, "AudioTParallelConfig": TConfig, "channel_axis": lambda pc: 1}
+        exec(compile("from __future__ import annotations\n" + ast.unparse(ast.Module(selected, [])), "ops", "exec"), ns)
+        m = manager(Native())
+        seen = []
+        m.all_gather = lambda x, **kw: seen.append(kw["use_persistent_buffer"]) or x
+
+        def gather_all():
+            ns["_all_gather_t"](m, "x", TConfig(0, 1))
+            ns["_all_gather_t"](m, "x", SimpleNamespace(mesh_axis=1))
+            ns["all_gather_channel"](m, "x", None, dim=2)
+
+        gather_all()
+        self.assertEqual(seen, [False] * 4)
+        seen.clear()
+        with m.audio_buffer_scope():
+            gather_all()
+        self.assertEqual(seen, [True] * 4)
+        seen.clear()
+        gather_all()
+        self.assertEqual(seen, [False] * 4)
 
 
 if __name__ == "__main__":

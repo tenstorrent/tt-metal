@@ -140,6 +140,7 @@ class MiniMaxH3AudioDecoder(Module):
             # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
             pack_bands=pack_bands,
+            prepare_audio_ccl=True,
             act_mode=act_mode,
             polyphase_ups=polyphase_ups,
         )

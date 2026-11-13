@@ -665,7 +665,9 @@ class AudioGatherLifetimeTest(unittest.TestCase):
         self.time = configs["AudioTParallelConfig"](self.pf(4, 0), self.pf(8, 1))
         self.tc = configs["AudioTCParallelConfig"](self.pf(4, 0), self.pf(8, 1))
         self.ops = definitions(
-            ROOT / "layers/audio_ops.py", {"channel_axis", "all_gather_channel", "_all_gather_t"}, configs
+            ROOT / "layers/audio_ops.py",
+            {"channel_axis", "all_gather_channel", "_all_gather_t", "_audio_persistent"},
+            configs,
         )
         self.native = SimpleNamespace(
             bfloat16="bf16",
@@ -690,6 +692,9 @@ class AudioGatherLifetimeTest(unittest.TestCase):
         self.manager.topology = "ring"
         self.manager._ping_pong_buffer_cache = {}
         self.manager._ping_pong_buffer_indices = {}
+        # Inside an H3 decoder's (recording) audio buffer scope: the only place these gathers persist.
+        self.manager._audio_buffer_record = {}
+        self.manager._audio_buffer_capture = False
         self.manager.get_ag_ping_pong_semaphore = Mock(return_value=["ready", "done"])
         self.manager.get_barrier_semaphore = Mock(side_effect=AssertionError("replay-unsafe barrier requested"))
         self.manager.get_ag_hyperparams = Mock(side_effect=AssertionError("unexpected hyperparameters"))

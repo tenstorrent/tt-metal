@@ -243,8 +243,12 @@ class Vocoder(Module):
         pack_bands: dict[int, int] | None = None,
         act_mode: str = "chain",
         polyphase_ups: bool = False,
+        prepare_audio_ccl: bool = False,
     ) -> None:
         super().__init__()
+        # H3-only opt-in: decode inside an audio buffer scope so a capture replays the eager warm's
+        # persistent CCL buffers. LTX's vocoder and BWE keep their fresh-output gathers.
+        self.prepare_audio_ccl = prepare_audio_ccl
         self.pack_bands = dict(pack_bands or {})
         self.batch_shard = None
 
@@ -457,6 +461,10 @@ class Vocoder(Module):
         self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None
     ) -> torch.Tensor:
         """``(B, T+t_pad, C_in)`` on device -> ``(B, C_out, T_out)`` torch."""
+        if not self.prepare_audio_ccl:
+            self._t_pad = t_pad
+            y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
+            return self._device_to_host(y_dev)
         key = (trace_key, tuple(x_dev.shape), x_dev.get_dtype(), t_pad, id(self.mesh_device))
         manager = self.ccl_manager
         if traced:
