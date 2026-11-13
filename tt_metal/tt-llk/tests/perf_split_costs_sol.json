@@ -28,7 +28,7 @@
   "perf_unpack_a_bcast_eltwise": 9.1,
   "perf_unpack_tilize": 266.8,
   "perf_unpack_transpose": 10.8,
-  "perf_vif_targets": 6.4
+  "perf_vif_equiv_sweep": 6.4
  },
  "blackhole": {
   "perf_compressed_custom_mm": 85.6,
@@ -63,6 +63,6 @@
   "perf_unpack_a_bcast_eltwise": 0.0,
   "perf_unpack_tilize": 531.6,
   "perf_unpack_transpose": 8.8,
-  "perf_vif_targets": 0.0
+  "perf_vif_equiv_sweep": 0.0
  }
 }
