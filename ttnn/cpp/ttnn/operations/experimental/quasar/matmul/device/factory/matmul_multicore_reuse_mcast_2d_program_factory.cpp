@@ -971,6 +971,7 @@ namespace reuse_mcast_optimized_helpers {
             .page_size = in0_aligned_tile_size,
             .tile = in0_tile_desc});
         if (in0_height_sharded) {
+            cb_desc.globally_allocated = true;
             cb_desc.tensor = &in0_tensor;
         }
         desc.cbs.push_back(std::move(cb_desc));
@@ -987,6 +988,7 @@ namespace reuse_mcast_optimized_helpers {
             .page_size = in1_aligned_tile_size,
             .tile = in1_tile_desc});
         if (in1_is_sharded and not in1_is_dram) {
+            cb_desc.globally_allocated = true;
             cb_desc.tensor = &in1_tensor;
         }
         desc.cbs.push_back(std::move(cb_desc));
@@ -1003,6 +1005,7 @@ namespace reuse_mcast_optimized_helpers {
                 .data_format = in0_data_format,
                 .page_size = in0_single_tile_size,
                 .tile = in0_tile_desc});
+            cb_desc.globally_allocated = true;
             cb_desc.tensor = &in0_tensor;
             desc.cbs.push_back(std::move(cb_desc));
         }
@@ -1033,6 +1036,7 @@ namespace reuse_mcast_optimized_helpers {
                 .page_size = output_single_tile_size,
                 .tile = output_tile_desc});
             if (output_is_sharded) {
+                cb_desc.globally_allocated = true;
                 cb_desc.tensor = &out_tensor;
             }
             desc.cbs.push_back(std::move(cb_desc));
@@ -1065,6 +1069,7 @@ namespace reuse_mcast_optimized_helpers {
             .page_size = interm0_single_tile_size,
             .tile = output_tile_desc});
         if (output_is_sharded) {
+            cb_desc.globally_allocated = true;
             cb_desc.tensor = &out_tensor;
         }
         desc.cbs.push_back(std::move(cb_desc));

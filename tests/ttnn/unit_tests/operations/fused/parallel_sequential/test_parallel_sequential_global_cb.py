@@ -192,6 +192,7 @@ def _make_cb_desc(buffer_index, core_ranges, total_size=TILE_SIZE_BF16, is_remot
     else:
         cb.format_descriptors = [fmt]
     if gcb is not None:
+        cb.globally_allocated = True
         cb.set_global_circular_buffer(gcb)
     return cb
 
@@ -330,6 +331,7 @@ def build_globalcb_consumer_op(output_tensor, core_ranges, gcb, num_tiles):
     )
     cb_recv.format_descriptors = [local_fmt]
     cb_recv.remote_format_descriptors = [remote_fmt]
+    cb_recv.globally_allocated = True
     cb_recv.set_global_circular_buffer(gcb)
 
     coords = _get_core_coords(core_ranges)

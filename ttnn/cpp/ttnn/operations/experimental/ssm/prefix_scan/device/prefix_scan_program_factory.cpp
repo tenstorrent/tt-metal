@@ -205,6 +205,7 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(cb_out_id),
             .data_format = input_format,
             .page_size = input_tile_size}}},
+        .globally_allocated = output_buffer != nullptr,
         .buffer = output_buffer});
 
     // Build kernels with per-core runtime args.

@@ -534,6 +534,7 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
                 .data_format = plan.cb_data_format,
                 .page_size = plan.cb_page_size,
             }}},
+            .globally_allocated = plan.input_buffer != nullptr,
             .buffer = plan.input_buffer,
         });
         desc.cbs.push_back(CBDescriptor{
@@ -544,6 +545,7 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
                 .data_format = plan.cb_data_format,
                 .page_size = plan.cb_page_size,
             }}},
+            .globally_allocated = plan.output_buffer != nullptr,
             .buffer = plan.output_buffer,
         });
     }
@@ -623,8 +625,10 @@ void RollShardedProgramFactory::override_runtime_arguments(
     // args above. CBs are matched positionally, and create_descriptor pushes input then output first.
     if (!plan.is_dram) {
         tt::tt_metal::ProgramDescriptor cb_addr_only;
-        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.input_buffer});
-        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.output_buffer});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .globally_allocated = plan.input_buffer != nullptr, .buffer = plan.input_buffer});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .globally_allocated = plan.output_buffer != nullptr, .buffer = plan.output_buffer});
         tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
     }
 }

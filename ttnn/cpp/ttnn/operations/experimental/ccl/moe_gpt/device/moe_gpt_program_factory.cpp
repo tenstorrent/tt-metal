@@ -77,6 +77,7 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
                 .data_format = data_format,
                 .page_size = page_size,
             }}},
+            .globally_allocated = buffer != nullptr,
             .buffer = buffer,
         });
     };

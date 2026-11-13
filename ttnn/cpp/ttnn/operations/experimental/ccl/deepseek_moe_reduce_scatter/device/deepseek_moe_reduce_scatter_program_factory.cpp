@@ -127,6 +127,7 @@ void push_tensor_cb(
             .data_format = data_format,
             .page_size = page_size,
         }}},
+        .globally_allocated = buffer != nullptr,
         .buffer = buffer,
     });
 }

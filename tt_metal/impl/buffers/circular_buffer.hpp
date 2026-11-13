@@ -91,4 +91,8 @@ private:
     // add a callback to invalidate circular buffer allocation
 };
 
+// Checks that `descriptor` names its backing consistently with CBDescriptor::globally_allocated: exactly one of buffer,
+// tensor or global_circular_buffer if it is set, and none of them if it is not.
+void validate_cb_descriptor_backing(const CBDescriptor& descriptor);
+
 }  // namespace tt::tt_metal

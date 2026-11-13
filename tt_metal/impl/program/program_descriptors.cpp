@@ -8,6 +8,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
+#include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/experimental/blaze/named_kernel_args_impl.hpp"
 #include "tt_stl/overloaded.hpp"
@@ -175,7 +176,8 @@ static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
     for (const auto& format_descriptor : cb.remote_format_descriptors) {
         ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
     }
-    ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
+    // Whether a buffer backs the CB, not which: the buffer is bound at launch.
+    ttsl::hash::hash_combine(hash, cb.globally_allocated);
     ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
     return hash;
 }
@@ -230,9 +232,13 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
     auto program_cbs = program.circular_buffers();
     for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
         const auto& cb_desc = desc.cbs[ci];
+        validate_cb_descriptor_backing(cb_desc);
         TT_FATAL(
-            !(cb_desc.buffer && cb_desc.tensor),
-            "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+            cb_desc.globally_allocated == program_cbs[ci]->globally_allocated(),
+            "CB {} is {}globally allocated in the descriptor but {}in the program",
+            ci,
+            cb_desc.globally_allocated ? "" : "not ",
+            program_cbs[ci]->globally_allocated() ? "" : "not ");
         if (cb_desc.tensor) {
             Buffer* buf = cb_desc.tensor->mesh_buffer().get_reference_buffer();
             UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *buf, cb_desc.address_offset);

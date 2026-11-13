@@ -903,6 +903,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                       .data_format = in_data_format,
                       .page_size = in0_cb_page_size,
                   }}},
+            .globally_allocated = true,
             .buffer = a.buffer(),
         };
         if (welford_fp32_alias) {
@@ -922,6 +923,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 .data_format = in_data_format,
                 .page_size = in0_cb_page_size,
             }}},
+            .globally_allocated = true,
             .buffer = a.buffer(),
         };
         if (welford_fp32_alias) {
@@ -943,6 +945,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 .data_format = out_data_format,
                 .page_size = out_cb_page_size,
             }}},
+            .globally_allocated = true,
             .buffer = output.buffer(),
         });
     }

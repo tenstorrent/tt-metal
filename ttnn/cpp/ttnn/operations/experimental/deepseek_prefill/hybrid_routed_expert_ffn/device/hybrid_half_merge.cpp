@@ -141,6 +141,7 @@ uint32_t overlay_circular_buffers(
                         which);
                 }
             }
+            cb.globally_allocated = l1_arena != nullptr;
             cb.buffer = l1_arena;
             cb.address_offset = offset;
             offset += (cb.total_size + alignment - 1) / alignment * alignment;
@@ -483,6 +484,7 @@ tt::tt_metal::ProgramDescriptor merge_halves(
                 .page_size = weight_table_bytes,
             }},
         };
+        table_cb.globally_allocated = l1_arena != nullptr;
         table_cb.buffer = l1_arena;
         table_cb.address_offset = offset;
         merged.cbs.push_back(std::move(table_cb));

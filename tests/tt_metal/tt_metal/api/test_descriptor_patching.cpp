@@ -336,6 +336,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbTensor_ResolvesToT
             .data_format = tt::DataFormat::Float16_b,
             .page_size = 2048,
         }}},
+        .globally_allocated = true,
         .tensor = &tensor,
     });
 
@@ -363,11 +364,72 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramConstruction_CbWithBothBuffer
             .data_format = tt::DataFormat::Float16_b,
             .page_size = 2048,
         }}},
+        .globally_allocated = true,
         .buffer = tensor_buffer,
         .tensor = &tensor,
     });
 
     EXPECT_ANY_THROW((void)Program{desc});
+}
+
+// A single-tile CB on core (0, 0) backed by `tensor`, or static when it is null.
+CBDescriptor MakeSingleTileCb(const MeshTensor* tensor) {
+    return CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .globally_allocated = tensor != nullptr,
+        .tensor = tensor,
+    };
+}
+
+// globally_allocated says whether the CB is backed; a backing pointer must agree with it.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramConstruction_CbBackingMustMatchGloballyAllocated_Throws) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+
+    ProgramDescriptor backed_but_not_flagged;
+    backed_but_not_flagged.kernels = {MakeBlankReaderKernel({0, 0})};
+    backed_but_not_flagged.cbs.push_back(MakeSingleTileCb(&tensor));
+    backed_but_not_flagged.cbs[0].globally_allocated = false;
+    EXPECT_ANY_THROW((void)Program{backed_but_not_flagged});
+
+    ProgramDescriptor flagged_but_not_backed;
+    flagged_but_not_backed.kernels = {MakeBlankReaderKernel({0, 0})};
+    flagged_but_not_backed.cbs.push_back(MakeSingleTileCb(nullptr));
+    flagged_but_not_backed.cbs[0].globally_allocated = true;
+    EXPECT_ANY_THROW((void)Program{flagged_but_not_backed});
+}
+
+// A static and a backed CB give different programs, so they must not share a program hash.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramHash_DistinguishesStaticAndTensorBackedCbs) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+    ProgramDescriptor static_cb;
+    static_cb.cbs.push_back(MakeSingleTileCb(nullptr));
+    ProgramDescriptor tensor_backed;
+    tensor_backed.cbs.push_back(MakeSingleTileCb(&tensor));
+    EXPECT_NE(std::hash<ProgramDescriptor>{}(static_cb), std::hash<ProgramDescriptor>{}(tensor_backed));
+}
+
+// Applying a descriptor checks its backing too, and that the CB is backed in the program iff it is in the
+// descriptor.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_GloballyAllocatedMismatch_Throws) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+    ProgramDescriptor desc;
+    desc.kernels = {MakeBlankReaderKernel({0, 0})};
+    desc.cbs.push_back(MakeSingleTileCb(&tensor));
+    Program program{desc};
+
+    ProgramDescriptor not_flagged = desc;
+    not_flagged.cbs[0].globally_allocated = false;
+    EXPECT_ANY_THROW(apply_descriptor_runtime_args(program, not_flagged));
+
+    ProgramDescriptor static_cb = desc;
+    static_cb.cbs[0] = MakeSingleTileCb(nullptr);
+    EXPECT_ANY_THROW(apply_descriptor_runtime_args(program, static_cb));
 }
 
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_CbTensor_UpdatesAddress) {
@@ -392,6 +454,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_CbTensor_
             .data_format = tt::DataFormat::Float16_b,
             .page_size = 2048,
         }}},
+        .globally_allocated = true,
         .tensor = &tensor_a,
     });
 
@@ -434,6 +497,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ApplyDescriptorRuntimeArgs_CbBothBuf
             .data_format = tt::DataFormat::Float16_b,
             .page_size = 2048,
         }}},
+        .globally_allocated = true,
         .tensor = &tensor,
     });
     Program program{valid_desc};
@@ -562,6 +626,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbOnly_PopulatesCbs_
             .data_format = tt::DataFormat::Float16_b,
             .page_size = 2048,
         }}},
+        .globally_allocated = true,
         .buffer = buf_l1.get(),
     });
 
@@ -764,6 +829,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbBufferNotInTensorL
             .data_format = tt::DataFormat::Float16_b,
             .page_size = 2048,
         }}},
+        .globally_allocated = true,
         .buffer = buf_l1_pegged.get(),
     });
     // Second CB: backed by a tensor-arg buffer (should be resolved normally).
@@ -775,6 +841,7 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbBufferNotInTensorL
             .data_format = tt::DataFormat::Float16_b,
             .page_size = 2048,
         }}},
+        .globally_allocated = true,
         .buffer = buf_l1_in_args.get(),
     });
 

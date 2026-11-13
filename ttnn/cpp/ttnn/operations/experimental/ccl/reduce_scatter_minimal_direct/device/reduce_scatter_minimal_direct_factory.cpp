@@ -347,6 +347,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         .core_ranges = worker_core_range,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(direct_cb_reduce_id), .data_format = df, .page_size = cb_page_size}}},
+        .globally_allocated = arrivals_in_cb,
         .buffer = arrivals_in_cb ? staging.buffer() : nullptr,
     });
 

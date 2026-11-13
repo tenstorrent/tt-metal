@@ -249,6 +249,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
                 .data_format = data_format,
                 .page_size = tile_size,
             }}},
+            .globally_allocated = shard_buffer != nullptr,
             .buffer = shard_buffer,
         });
     };

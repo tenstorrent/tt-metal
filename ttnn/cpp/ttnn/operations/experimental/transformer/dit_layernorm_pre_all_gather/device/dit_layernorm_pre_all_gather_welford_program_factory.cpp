@@ -228,6 +228,7 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
             .data_format = reciprocal_cb_data_format,
             .page_size = reciprocal_CB_size_bytes}}},
+        .globally_allocated = true,
         .buffer = recip_tensor.buffer()});
 
     return program_descriptor;

@@ -83,6 +83,7 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
                 .core_ranges = cores,
                 .format_descriptors = {{CBFormatDescriptor{
                     .buffer_index = static_cast<uint8_t>(idx), .data_format = df, .page_size = tile_size}}},
+                .globally_allocated = buf != nullptr,
                 .buffer = buf});
         };
         alias_cb(CB_MIXES, mixes_buffer);

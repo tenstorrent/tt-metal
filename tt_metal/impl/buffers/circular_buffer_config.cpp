@@ -10,6 +10,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "impl/buffers/circular_buffer.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -57,6 +58,23 @@ CircularBufferConfig::CircularBufferConfig(uint32_t total_size, const std::map<u
     this->set_config(data_format_spec);
 }
 
+void validate_cb_descriptor_backing(const CBDescriptor& descriptor) {
+    const int num_backings = (descriptor.buffer != nullptr) + (descriptor.tensor != nullptr) +
+                             (descriptor.global_circular_buffer != nullptr);
+    if (descriptor.globally_allocated) {
+        TT_FATAL(
+            num_backings == 1,
+            "A globally allocated CBDescriptor names its backing with exactly one of buffer, tensor or "
+            "global_circular_buffer, but {} are set",
+            num_backings);
+    } else {
+        TT_FATAL(
+            num_backings == 0,
+            "CBDescriptor sets buffer, tensor or global_circular_buffer but not globally_allocated; set "
+            "globally_allocated for a CB backed by an allocated buffer");
+    }
+}
+
 // User is expected to use the builder here.
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
     total_size_(total_size), globally_allocated_address_(std::nullopt) {}
@@ -70,9 +88,7 @@ CircularBufferConfig::CircularBufferConfig(
 }
 
 CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
-    TT_FATAL(
-        !(descriptor.buffer && descriptor.tensor),
-        "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+    validate_cb_descriptor_backing(descriptor);
 
     const Buffer* backing_buffer = descriptor.buffer;
     if (!backing_buffer && descriptor.tensor) {

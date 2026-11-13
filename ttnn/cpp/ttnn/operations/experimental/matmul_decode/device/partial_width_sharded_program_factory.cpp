@@ -185,6 +185,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .page_size = in0_tile_size,
             .tile = in0_tile_desc,
         }}},
+        .globally_allocated = true,
         .buffer = input_tensor_a.buffer(),
     });
     desc.cbs.push_back(CBDescriptor{
@@ -196,6 +197,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .page_size = in1_tile_size,
             .tile = in1_tile_desc,
         }}},
+        .globally_allocated = true,
         .buffer = input_tensor_b.buffer(),
     });
     desc.cbs.push_back(CBDescriptor{
@@ -207,6 +209,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .page_size = out_tile_size,
             .tile = out_tile_desc,
         }}},
+        .globally_allocated = true,
         .buffer = output_tensor.buffer(),
     });
     desc.cbs.push_back(CBDescriptor{

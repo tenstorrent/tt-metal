@@ -553,6 +553,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             .data_format = in0_data_format,
             .page_size = in0_single_tile_size,
             .tile = in0_tile_desc});
+        cb_desc.globally_allocated = true;
         cb_desc.tensor = &in0_tensor;
         desc.cbs.push_back(std::move(cb_desc));
     }
@@ -610,6 +611,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             .data_format = output_data_format,
             .page_size = output_single_tile_size,
             .tile = output_tile_desc});
+        cb_desc.globally_allocated = true;
         cb_desc.tensor = &out_tensor;
         desc.cbs.push_back(std::move(cb_desc));
     }

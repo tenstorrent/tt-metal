@@ -305,13 +305,14 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
     mod.def(
         "copy_cb_backing",
         [](tt::tt_metal::CBDescriptor& dst, const tt::tt_metal::CBDescriptor& src) {
+            dst.globally_allocated = src.globally_allocated;
             dst.buffer = src.buffer;
             dst.tensor = src.tensor;
         },
         nb::arg("dst"),
         nb::arg("src"),
         R"doc(
-        Copy Buffer* and tensor backing from one CBDescriptor to another.
+        Copy Buffer* and tensor backing, and globally_allocated, from one CBDescriptor to another.
         )doc");
 
     mod.def(

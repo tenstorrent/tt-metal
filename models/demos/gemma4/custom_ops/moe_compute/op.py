@@ -869,6 +869,7 @@ class MoeComputeCustom:
                 shared.memory_config().shard_spec.grid,
                 [ttnn.CBFormatDescriptor(idx, ttnn.bfloat16, BF16_TILE_BYTES)],
             )
+            d.globally_allocated = True
             d.set_buffer_from_cb(ttnn.cb_descriptor_from_sharded_tensor(idx, shared))
             cbs.append(d)
         # c_2: per-expert token counts (every worker core)

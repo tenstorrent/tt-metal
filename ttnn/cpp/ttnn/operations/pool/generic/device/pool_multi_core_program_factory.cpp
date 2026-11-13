@@ -431,6 +431,7 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
                 .tile = tile,
                 .face_geometry = face_geometry,
             }}},
+            .globally_allocated = buffer != nullptr,
             .buffer = buffer,
         });
     };

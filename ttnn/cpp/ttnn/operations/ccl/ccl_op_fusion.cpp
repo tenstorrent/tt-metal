@@ -384,6 +384,7 @@ CBDescriptor make_cb_descriptor(
         config.globally_allocated_address().has_value() == (tensor != nullptr || buffer != nullptr),
         "make_cb_descriptor: pass the backing tensor/buffer exactly when the CircularBufferConfig is globally "
         "allocated");
+    cb.globally_allocated = tensor != nullptr || buffer != nullptr || global_cb != nullptr;
     cb.tensor = tensor;
     cb.buffer = buffer;
     cb.address_offset = config.address_offset();  // a slice of the backing buffer starts there, not at its base

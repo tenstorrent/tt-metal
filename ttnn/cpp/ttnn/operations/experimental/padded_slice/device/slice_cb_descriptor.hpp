@@ -26,6 +26,7 @@ inline tt::tt_metal::CBDescriptor make_slice_cb_descriptor(
             .data_format = data_format,
             .page_size = page_size,
         }}},
+        .globally_allocated = buffer != nullptr,
         .buffer = buffer,
     };
 }

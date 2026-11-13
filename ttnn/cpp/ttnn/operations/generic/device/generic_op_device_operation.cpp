@@ -96,7 +96,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
         for (const auto& format_descriptor : cb.remote_format_descriptors) {
             ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
         }
-        ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
+        // Whether a buffer backs the CB, not which: the buffer is bound at launch.
+        ttsl::hash::hash_combine(hash, cb.globally_allocated);
         ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
         return hash;
     };

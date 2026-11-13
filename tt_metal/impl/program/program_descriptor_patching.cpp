@@ -187,9 +187,7 @@ ResolvedBindings resolve_bindings(
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
             const auto& cb_desc = desc.cbs[ci];
-            TT_FATAL(
-                !(cb_desc.buffer && cb_desc.tensor),
-                "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+            validate_cb_descriptor_backing(cb_desc);
 
             Buffer* cb_buffer = cb_desc.buffer;
             if (!cb_buffer && cb_desc.tensor) {

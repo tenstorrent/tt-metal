@@ -138,6 +138,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             .page_size = in0_tile_size,
             .tile = in0_tile_desc,
         }}},
+        .globally_allocated = true,
         .buffer = input_tensor_a.buffer(),
     });
 
@@ -150,6 +151,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             .page_size = in1_tile_size,
             .tile = in1_tile_desc,
         }}},
+        .globally_allocated = true,
         .buffer = input_tensor_b.buffer(),
     });
 
@@ -162,6 +164,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             .page_size = out_tile_size,
             .tile = out_tile_desc,
         }}},
+        .globally_allocated = true,
         .buffer = output_tensor.buffer(),
     });
     desc.cbs.push_back(CBDescriptor{

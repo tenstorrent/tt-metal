@@ -73,6 +73,7 @@ TEST_F(GetCbAddressTest, BufferOnlyReturnsBufferAddressPlusOffset) {
     ASSERT_NE(buf, nullptr);
 
     CBDescriptor desc{};
+    desc.globally_allocated = true;
     desc.buffer = buf;
     desc.address_offset = 64;
 
@@ -84,6 +85,7 @@ TEST_F(GetCbAddressTest, TensorOnlyReturnsTensorAddressPlusOffset) {
     const MeshTensor* mt = &input_tensor.mesh_tensor();
 
     CBDescriptor desc{};
+    desc.globally_allocated = true;
     desc.tensor = mt;
     desc.address_offset = 128;
 
@@ -97,6 +99,7 @@ TEST_F(GetCbAddressTest, BufferTakesPrecedenceOverTensor) {
     ASSERT_NE(buf, nullptr);
 
     CBDescriptor desc{};
+    desc.globally_allocated = true;
     desc.buffer = buf;
     desc.tensor = mt;
     desc.address_offset = 32;

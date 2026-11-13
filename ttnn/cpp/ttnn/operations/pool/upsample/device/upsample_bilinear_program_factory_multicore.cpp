@@ -111,6 +111,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
             .data_format = input_cb_data_format,
             .page_size = in_cb_pagesize,
         }}},
+        .globally_allocated = true,
         .buffer = halo_in.buffer(),
     });
 
@@ -182,6 +183,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
             .page_size = out_cb_pagesize,
             .face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2},
         }}},
+        .globally_allocated = true,
         .buffer = output.buffer(),
     });
 

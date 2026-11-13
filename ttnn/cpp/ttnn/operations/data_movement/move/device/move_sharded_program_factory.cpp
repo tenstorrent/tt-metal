@@ -74,6 +74,7 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = page_size_bytes,
         }}},
+        .globally_allocated = src_buffer != nullptr,
         .buffer = src_buffer,
     });
 
@@ -86,6 +87,7 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = page_size_bytes,
         }}},
+        .globally_allocated = dst_buffer != nullptr,
         .buffer = dst_buffer,
     });
 
@@ -151,8 +153,10 @@ void MoveShardedProgramFactory::override_runtime_arguments(
 
     // Both CBs are tensor-backed; create_descriptor pushes src then dst.
     tt::tt_metal::ProgramDescriptor cb_addr_only;
-    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = src_buffer});
-    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = dst_buffer});
+    cb_addr_only.cbs.push_back(
+        tt::tt_metal::CBDescriptor{.globally_allocated = src_buffer != nullptr, .buffer = src_buffer});
+    cb_addr_only.cbs.push_back(
+        tt::tt_metal::CBDescriptor{.globally_allocated = dst_buffer != nullptr, .buffer = dst_buffer});
     tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
 }
 

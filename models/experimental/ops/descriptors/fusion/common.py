@@ -134,6 +134,8 @@ def _copy_cb_backing(dst, src) -> None:
         pass
     set_buffer = getattr(dst, "set_buffer_from_cb", None)
     if callable(set_buffer):
+        if hasattr(src, "globally_allocated"):
+            dst.globally_allocated = src.globally_allocated
         set_buffer(src)
 
 

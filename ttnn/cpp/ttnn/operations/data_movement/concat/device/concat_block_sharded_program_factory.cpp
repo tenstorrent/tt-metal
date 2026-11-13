@@ -221,6 +221,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = unit_size,
             }}},
+            .globally_allocated = true,
             .buffer = input_tensors[i].buffer(),
         });
     }
@@ -234,6 +235,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = unit_size,
         }}},
+        .globally_allocated = true,
         .buffer = output.buffer(),
     });
 

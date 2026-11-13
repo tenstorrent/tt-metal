@@ -36,6 +36,7 @@ inline tt::tt_metal::CBDescriptor make_cnn_circular_buffer(
             .data_format = format,
             .page_size = page_size,
         }}},
+        .globally_allocated = buffer != nullptr,
         .buffer = buffer,
     };
 }

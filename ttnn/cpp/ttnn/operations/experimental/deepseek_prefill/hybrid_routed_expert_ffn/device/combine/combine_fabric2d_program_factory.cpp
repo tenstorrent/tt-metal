@@ -434,6 +434,7 @@ void add_untilizer_cbs(
     if (arena != nullptr) {
         uint32_t offset = 0;
         for (size_t i = first; i < desc.cbs.size(); i++) {
+            desc.cbs[i].globally_allocated = arena != nullptr;
             desc.cbs[i].buffer = arena;
             desc.cbs[i].address_offset = offset;
             offset = align_l1(offset + desc.cbs[i].total_size);

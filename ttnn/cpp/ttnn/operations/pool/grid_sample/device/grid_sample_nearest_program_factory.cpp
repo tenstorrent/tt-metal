@@ -88,6 +88,7 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             .data_format = grid_cb_data_format,
             .page_size = grid_stick_size,
         }}},
+        .globally_allocated = is_sharded,
         .buffer = is_sharded ? grid_tensor.buffer() : nullptr,
     });
 
@@ -131,6 +132,7 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_cb_page_size,
         }}},
+        .globally_allocated = true,
         .buffer = output_tensor.buffer(),
     });
 

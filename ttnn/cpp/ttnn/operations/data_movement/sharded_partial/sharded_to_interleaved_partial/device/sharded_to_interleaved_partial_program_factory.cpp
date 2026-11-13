@@ -38,6 +38,7 @@ void push_s2i_partial_cb_pair(
         .data_format = data_format,
         .page_size = page_size,
     });
+    cb.globally_allocated = bound_buffer != nullptr;
     cb.buffer = bound_buffer;
     desc.cbs.push_back(std::move(cb));
 }

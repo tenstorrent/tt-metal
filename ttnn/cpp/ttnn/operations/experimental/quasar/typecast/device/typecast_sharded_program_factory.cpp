@@ -92,6 +92,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
             .data_format = act_df,
             .page_size = in_cb_pagesize,
         }}},
+        .globally_allocated = true,
         .buffer = input.buffer(),
     });
 
@@ -109,6 +110,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
             .data_format = out_df,
             .page_size = out_cb_pagesize,
         }}},
+        .globally_allocated = true,
         .buffer = output.buffer(),
     });
 

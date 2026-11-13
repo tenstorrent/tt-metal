@@ -107,6 +107,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .data_format = grid_cb_data_format,
             .page_size = grid_stick_size,
         }}},
+        .globally_allocated = is_sharded,
         .buffer = is_sharded ? grid_tensor.buffer() : nullptr,
     });
 
@@ -212,6 +213,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .tile = output_tile,
             .face_geometry = output_face_geometry,
         }}},
+        .globally_allocated = is_sharded,
         .buffer = is_sharded ? output_tensor.buffer() : nullptr,
     });
 

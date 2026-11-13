@@ -165,6 +165,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = page_size,
             }}},
+            .globally_allocated = true,
             .buffer = input_tensors[input_id].buffer(),
         });
 
@@ -186,6 +187,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = page_size,
         }}},
+        .globally_allocated = true,
         .buffer = output.buffer(),
     });
 
