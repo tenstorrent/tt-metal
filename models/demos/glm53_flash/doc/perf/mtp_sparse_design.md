@@ -153,3 +153,37 @@ vs 46 fallback steps at c4).
 | `pt_vc` (v2) | 32 rows x bps_local int32 (64 KiB at 1 M) |
 | The alternate step | its own verify / MTP-catch-up programs, heads, records, `pt_v`, the 16-row flat MTP residual (1 MiB); no second MTP layer or state |
 | L1 | no new buffer expected: the alternate's persistent buffers are row views (`_seed_persist`); measured by the chain's GLM53_L1_REPORT rows |
+
+## Multi-user step timing (F18, 2026-11-13)
+
+The e2e `MK_SPEC_MULTI` "spec step" is `decode_s / spec_steps`. `decode_s` runs from the first token to the end of the batch. It includes:
+- `spec_enter`, the bootstrap;
+- the speculative step loop;
+- `spec_leave`;
+- the **plain tail**. v1 speculates only while every user runs and the next step fits, so the users still running when the first one finishes, or when a user runs out of context room, decode plainly.
+
+The tail's length follows the users' tau spread and the room near the context end, not the step. Rows from 2026-11-13, G4K3, B16 x 1M, OSL 128, concurrency 4:
+
+| ISL (per user) | Steps | Committed per user | Plain tail | decode_s | Booked "spec step" | Step without the tail (+ enter/leave per step) |
+|---|---|---|---|---|---|---|
+| 4,096 (probe, OSL 32) | 10 | 28 / 26 / 29 / 33 | ~5 steps x 28.5 ms | 620 ms | 62.0 ms | ~47.7 ms |
+| 32,768 | 40 | 129 / 128 / 123 / 121 | ~6 steps x 28.9 ms | 2,048 ms | 51.2 ms | ~46.9 ms |
+| 1,048,447 | 37 (room ends at ~1,048,571) | 116 / 123 / 114 / 97 | ~30 steps x 30.8 ms | 2,865 ms | 77.4 ms | ~52.5 ms |
+
+So the multi-user sparse step grows about +5.5 ms from 32K to 1M, not +26. The rest of the booked growth is the 30-step plain tail at 1M.
+
+That +5.5 ms against the plain 4-user step's +1.9 ms fits the row count:
+- the verify runs 16 rows (4 users x 4 positions) through every main sparse_dsa layer, i.e. 16 top-k selections per layer instead of the plain step's 4;
+- on the default 8 DSA lanes that is 2 rows per lane, about 2x the plain step's per-layer context term;
+- the MTP catch-up (16 rows) and the two chained launches (4 rows each) add one more DSA layer's worth.
+
+Corrected in-loop rates: about 3.13 / 0.0455 s ≈ 69 tok/s/u at 32K (~2.0x the plain 34.6) and about 3.04 / 0.051 s ≈ 60 tok/s/u at 1M (~1.8x the plain 32.4). These are estimates; enter/leave are unmeasured, hence the new timing lines.
+
+**Instrumentation.** `generator.py`'s `_spec_decode` / `_spec_decode_groups` record `spec_enter_s` / `spec_loop_s` / `spec_leave_s`, and `generate_batch` records `spec_tail_steps` / `spec_tail_s`. `test_mk_e2e.py` logs `MK_SPEC_TIMING` / `MK_SPEC_MULTI_TIMING` / `MK_SPEC_SAMPLED_TIMING`: the in-loop step, enter, leave, the tail, and the in-loop effective tok/s/u and speedup. The existing `MK_SPEC*` lines are unchanged.
+
+**Levers on the real per-row context term:**
+1. `GLM53_MLA_DSA_LANES=16`, an existing knob. At t = 16 it gives one row per lane coordinator instead of two, for the verify, the MTP catch-up and the plain full-width step. It needs 16 free lane cores; a cap prints `MK_SHARD_LANES`.
+2. F16's merge pre-filter (doc/perf/ctx16_decode.md). Every one of the 16 verify rows merges 32 x 512 candidates past ~64K.
+3. Shared indices for the chained drafts (the reference's index_share_for_mtp_iteration): the chained launches reuse catch-up row sel[u]'s selection.
+   - It saves the two chained launches' indexer + select: about 0.5-1.3 ms per step (estimate; their context term is about 0.17 ms per launch at 1M).
+   - It needs a persisted per-row selection (DRAM) plus a "preselected" attention mode in att_dsa_shard_dm0 and an index-core skip: a kernel change, not done here.

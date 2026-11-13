@@ -3195,6 +3195,7 @@ class Glm53Generator(_ReadinessGenerator):
             lookahead = (GLM53_DECODE_LOOKAHEAD and next_input is None and not self.host_sampling
                          and getattr(self.backend, "decode_lookahead", False))  # fmt: skip
             inflight: Optional[tuple[list[int], Any]] = None  # (live rows, read handle) of the step enqueued ahead
+            t_plain, plain_steps = _time.perf_counter(), 0  # (F18: the plain steps after a speculation = its tail)
 
             def collect(settled: bool):
                 """the step in flight: its tokens emitted (a row stopped by an earlier step's token: its extra step
@@ -3232,6 +3233,7 @@ class Glm53Generator(_ReadinessGenerator):
                 self._sync_tokens(b, want)
                 self._write_params(b)
                 live = list(want)
+                plain_steps += 1
                 mode = "greedy" if all(b.slots[s].params.is_greedy for s in live) else "sample"
                 if lookahead:
                     handle = self._decode_enqueue(b, live, enable_trace=enable_trace, mode=mode)
@@ -3251,6 +3253,8 @@ class Glm53Generator(_ReadinessGenerator):
                                       "decode_steps": max(len(o) for o in outputs) - 1}  # fmt: skip
             if spec_stats is not None:
                 self.last_batch_timing.update(spec_stats)
+                # F18: the plain steps decoded after the speculation ended (its tail) and their wall
+                self.last_batch_timing.update(spec_tail_steps=plain_steps, spec_tail_s=_time.perf_counter() - t_plain)
         finally:
             if spec_k:  # (an exception before / inside the speculative steps: the arming and the speculation end here)
                 if callable(getattr(self.backend, "disarm_mtp_prefill", None)):
@@ -3303,7 +3307,9 @@ class Glm53Generator(_ReadinessGenerator):
         if st.finished or not self.spec_room(kv):
             return stats
         self._sync_tokens(b, {slot: feed[slot]})  # the next input (the prefill's sample) in device row 0
+        t0 = _time.perf_counter()
         self.spec_enter(kv, slot)
+        t1 = _time.perf_counter()
         stats["spec_enters"] += 1
         try:
             while not st.finished and self.spec_room(kv):
@@ -3320,7 +3326,11 @@ class Glm53Generator(_ReadinessGenerator):
         except BaseException:
             self.spec_abort(kv)  # (the speculation's state is dead; the request ends with the exception)
             raise
+        t2 = _time.perf_counter()
         self.spec_leave(kv)
+        # the wall split (F18): enter (the bootstrap), the step loop (spec_loop_s / spec_steps = the speculative step as
+        # the loop runs it: replay + record read + host bookkeeping), leave; generate_batch adds the plain tail
+        stats.update(spec_enter_s=t1 - t0, spec_loop_s=t2 - t1, spec_leave_s=_time.perf_counter() - t2)
         return stats
 
     def _spec_decode_groups(self, b, slots: Sequence[int], outputs: list, K: int, user_of: dict, feed: dict) -> dict:
@@ -3337,7 +3347,9 @@ class Glm53Generator(_ReadinessGenerator):
         if any(st.finished for st in sts) or not self.spec_room(kv):
             return stats
         self._sync_tokens(b, {s: feed[s] for s in slots})  # the next inputs (the prefills' samples) in the base rows
+        t0 = _time.perf_counter()
         self.spec_enter(kv, slots=slots)
+        t1 = _time.perf_counter()
         stats["spec_enters"] += 1
         try:
             while not any(st.finished for st in sts) and self.spec_room(kv):
@@ -3359,7 +3371,12 @@ class Glm53Generator(_ReadinessGenerator):
         except BaseException:
             self.spec_abort(kv)
             raise
+        t2 = _time.perf_counter()
         self.spec_leave(kv)
+        # the wall split (F18, as _spec_decode): v1 speculates only while every user runs and the next step fits, so the
+        # users that are still running after the loop decode plainly in generate_batch (its spec_tail_*): decode_s /
+        # spec_steps mixes that tail in -- its length follows the users' tau spread and the context room, not the step
+        stats.update(spec_enter_s=t1 - t0, spec_loop_s=t2 - t1, spec_leave_s=_time.perf_counter() - t2)
         return stats
 
     def _emit(self, b, slot, out, token, next_input, user_of, feed):

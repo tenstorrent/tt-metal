@@ -344,6 +344,27 @@ def _first_mismatch(gen, tok, prompt, plain, sids):
     return first, gap
 
 
+def _spec_timing(tag: str, st: dict, tau: float, plain_ms: float) -> None:
+    """F18: <tag>_TIMING -- the step loop's wall per speculative step (spec_loop_s / spec_steps: replay + record read +
+    host bookkeeping) split from spec_enter (the bootstrap), spec_leave and the plain tail generate_batch decodes after
+    the speculation ends (v1 multi-user: the first user to finish or to run out of context room ends it for all, the
+    rest decode plainly). The MK_SPEC* "spec step" (decode_s / spec_steps) mixes all four in; the in-loop effective rate
+    = tau (mean committed tokens per user per step) / the in-loop step"""
+    steps = int(st.get("spec_steps", 0))
+    if not steps or "spec_loop_s" not in st:
+        return
+    loop_ms = st["spec_loop_s"] * 1e3
+    step_ms = loop_ms / steps
+    eff = tau / step_ms * 1e3 if step_ms > 0 else 0.0
+    logger.info(
+        f"{tag}_TIMING: in-loop spec step {step_ms:.1f} ms ({steps} steps in {loop_ms:.0f} ms), enter "
+        f"{st.get('spec_enter_s', 0) * 1e3:.0f} ms, leave {st.get('spec_leave_s', 0) * 1e3:.0f} ms, plain tail "
+        f"{st.get('spec_tail_steps', 0)} steps in {st.get('spec_tail_s', 0) * 1e3:.0f} ms (decode_s "
+        f"{st['decode_s'] * 1e3:.0f} ms); in-loop effective {eff:.1f} tok/s/u = {eff * plain_ms / 1e3:.2f}x the plain "
+        f"{plain_ms:.1f} ms/step (tau {tau:.2f})"
+    )
+
+
 def _spec_sampled(gen, backend, mesh_device, tok, prompts, plains, plain_timing, plain_ms, K, sampling) -> None:
     """GLM53_SPEC_SAMPLED with GLM53_MK_TEMP (the served AgentX traffic: temperature 1.0 / top-p 0.95): the same prompts
     through the speculative step with the SAMPLED verify head (one user, or G on the group bases) after the plain sampled
@@ -374,6 +395,7 @@ def _spec_sampled(gen, backend, mesh_device, tok, prompts, plains, plain_timing,
         f"{eff * plain_ms / 1e3:.2f}x; TTFT spec {st['prefill_s'] * 1e3:.0f} ms vs plain "
         f"{plain_timing['prefill_s'] * 1e3:.0f} ms"
     )
+    _spec_timing("MK_SPEC_SAMPLED", st, sum(taus) / max(1, G), plain_ms)
     logger.info(f"MK_SPEC_SAMPLED_TEXT user 0: {tok.decode([t for t in souts[0] if 0 <= t < vocab])!r}")
     logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
     assert steps > 0, "the sampled speculative path ran no step"
@@ -428,6 +450,7 @@ def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing
         f"{plain_timing['prefill_s'] * 1e3:.0f} ms (MTP prefill rows {st.get('spec_mtp_prefill_rows')} of "
         f"{sum(len(p) - 1 for p in prompts)}); ids equal per user {[r[0] is None for r in res]}"
     )
+    _spec_timing("MK_SPEC_MULTI", st, sum(taus) / max(1, G), plain_ms)
     logger.info(f"MK_SPEC_MULTI_TEXT user 0: {tok.decode([t for t in souts[0] if 0 <= t < tok.vocab_size])!r}")
     logger.info(
         f"MK_SPEC_MULTI_STEP: (K, G) {st.get('spec_step')} of the steps {[s[:2] for s in gen.spec_steps()]} "
@@ -475,6 +498,7 @@ def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_
         f"(MTP prefill rows {st.get('spec_mtp_prefill_rows')} of {len(prompt) - 1}); ids equal "
         f"{first is None} (first mismatch {first}, plain top-2 gap {gap}); spec ids {sids[:24]}"
     )
+    _spec_timing("MK_SPEC", st, tau, plain_ms)
     logger.info(f"MK_SPEC_TEXT: {text!r}")
     logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
     tie = float(os.environ.get("GLM53_MK_SPEC_TIE", "1.0"))
