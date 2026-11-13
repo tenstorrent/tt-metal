@@ -94,7 +94,11 @@ STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 # SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
 # end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
 # 394 / 416. Local medians, synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2,
-# gather_softmax 120.2 / 121.2 / 123.4. That measurement predates the owed batch, so its owed steps only report.
+# gather_softmax 120.2 / 121.2 / 123.4. That measurement predates the exact boundary read: it is of the old 25-site
+# batch over C = 7 with the owed read closed, not of the 24-site block batch its block/* steps now gate, and nothing
+# measured the owed batch, so the owed steps only report. The block/* references carry over unmeasured on this shape
+# because on SP8xTP4 the same change kept these steps in place: same host, new block_mix over old 0.992-0.994 (b07u08,
+# b08u02), and the pool's new block gather_softmax (70.0 / 67.6) within the old readings' spread (67.5-69.0).
 # Locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
