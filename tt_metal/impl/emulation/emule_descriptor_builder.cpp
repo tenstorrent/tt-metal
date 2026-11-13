@@ -33,7 +33,11 @@
 #include "host_sanitizers.hpp"               // emule_asan_enabled (host ASAN master switch)
 #include "jit_build/build_env_manager.hpp"   // BuildEnvManager (kernel build-env defines)
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
-#include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
+#include "jit_build/genfiles.hpp"            // jit_build_genfiles_descriptors
+#include "jit_build/jit_build_options.hpp"   // JitBuildOptions
+#include <fstream>
+#include <unistd.h>
+#include <tt-metalium/kernel_types.hpp>  // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
@@ -85,6 +89,27 @@ ProcIdList compute_proc_ids_and_thread_count(
         out.proc_ids.push_back(static_cast<uint8_t>(kernel.get_kernel_processor_type(0)));
     }
     return out;
+}
+
+// The kernel's chlkc_descriptors.h exactly as a silicon build generates it (Program::compile's prep_kernel).
+std::string generate_chlkc_descriptors(detail::ProgramImpl& impl, IDevice& device, Kernel& kernel) {
+    const auto& env = MetalContext::instance(impl.get_context_id())
+                          .build_env_manager()
+                          .get_device_build_env(device.build_id())
+                          .build_env;
+    JitBuildOptions options(env);
+    kernel.set_build_options(options);
+    impl.set_dfb_data_fmt_and_tile(kernel.logical_coreranges(), options);
+    const auto dir = std::filesystem::temp_directory_path() / ("tt_emule_chlkc_" + std::to_string(::getpid()) + "_" +
+                                                               std::to_string(kernel.get_watcher_kernel_id()));
+    options.path = dir.string() + "/";
+    jit_build_genfiles_descriptors(env, options);
+    std::ifstream in(options.path + "chlkc_descriptors.h");
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    TT_FATAL(!text.empty(), "emule: no chlkc_descriptors.h generated for kernel {}", kernel.name());
+    return text;
 }
 
 }  // namespace
@@ -430,6 +455,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 kd.num_threads = procs.num_threads;
                 kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
                 kd.rvv_enabled = k.get_rvv_enabled();
+            }
+            if (kd.is_quasar_compute) {
+                kd.chlkc_descriptors = generate_chlkc_descriptors(impl, *device, k);
             }
             TT_FATAL(
                 k.global_semaphore_binding_handles().empty(),
