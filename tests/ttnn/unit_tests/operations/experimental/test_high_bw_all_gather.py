@@ -76,6 +76,16 @@ _LINE_PERF_DEVICE_PARAMS = [
     ),
 ]
 
+# Without a mesh shape a Galaxy opens as 1x32, and _rank_line_mesh takes its first eight chips: no ring, so the ring
+# floors above would gate a line. A Galaxy opens as 8x4 instead: the rank line is the 8x1 column, a ring on axis 0
+# under FABRIC_1D_RING / TORUS_Y / TORUS_XY and a line under the others, as the axis-0 floors expect. Other systems
+# keep their default mesh.
+_LINE_PERF_MESH = pytest.mark.parametrize(
+    "mesh_device",
+    [pytest.param((8, 4), id="8x4")] if ttnn.get_num_devices() == 32 else [pytest.param(None, id="system_mesh")],
+    indirect=True,
+)
+
 _FABRIC_2D_LINE_DEVICE_PARAMS = pytest.param(
     _device_params(ttnn.FabricConfig.FABRIC_2D),
     id="fabric_2d_line",
@@ -1443,6 +1453,7 @@ def test_high_bw_all_gather_quietbox_ci_perf(mesh_device):
     _LINE_PERF_DEVICE_PARAMS,
     indirect=["device_params"],
 )
+@_LINE_PERF_MESH
 def test_high_bw_all_gather_512k(mesh_device, axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps):
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     min_bandwidth_gbps = (axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps)[cluster_axis]
@@ -2375,7 +2386,7 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
         num_links=num_links,
         metadata_batch_index=2,
     )
-    for invalid_links, message in [(0, "greater than 0"), (100, "usable links")]:
+    for invalid_links, message in [(0, "greater than 0"), (100, "usable link")]:
         with expect_error(RuntimeError, message):
             _run_high_bw_all_gather_accuracy(
                 rank_line,
