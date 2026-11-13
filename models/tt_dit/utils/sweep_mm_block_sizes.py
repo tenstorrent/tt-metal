@@ -189,6 +189,12 @@ SHAPES = [
     (9184, 5376, 5376, 11, 10, True, "qkv_nt"),
     (4736, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
     (9184, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
+    # Longer lengths: there M > N, so the model's qkv / ff1 run on the op's transposed grid (12x9, 6 in0 workers per
+    # link = the config's num_workers_per_link), with the approx-mode compute config.
+    (9184, 5376, 5376, 12, 9, True, "qkv"),
+    (13664, 5376, 5376, 12, 9, True, "qkv"),
+    (9184, 5376, 7168, 12, 9, True, "ff1_swiglu_t"),
+    (13664, 5376, 7168, 12, 9, True, "ff1_swiglu_t"),
     (4736, 3584, 5376, 12, 7, False, "mmrs_approx"),
     (4736, 3584, 5376, 12, 8, False, "mmrs_approx"),
     (4736, 3584, 5376, 12, 9, False, "mmrs_approx"),
@@ -603,6 +609,11 @@ USE_CASE_CONFIGS = {
         "fuse_swiglu": True,
         "math_approx_mode": True,
         "transpose_core_grid": False,
+    },
+    # The same ff1 on the op's transposed grid (M > N), as the model runs it at longer lengths.
+    "ff1_swiglu_t": {
+        "fuse_swiglu": True,
+        "math_approx_mode": True,
     },
     # "mmrs" with the approx-mode compute config the DiT block uses for all four big matmuls.
     "mmrs_approx": {
