@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     fold_batch_norm2d_into_conv2d,
 )
-from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.common import init_dummy_weights
 
 
 def create_vadv2_model_parameters(model: ResNet, input_tensor, device=None):
@@ -81,16 +81,13 @@ def custom_preprocessor(model, name):
 def test_vadv2_backbone(
     device,
     reset_seeds,
-    model_location_generator,
 ):
     torch_model = backbone.ResNet(
         layers=[3, 4, 6, 3],
         out_indices=(3,),
         block=backbone.Bottleneck,
     )
-    torch_model = load_torch_model(
-        torch_model=torch_model, layer="img_backbone", model_location_generator=model_location_generator
-    )
+    torch_model = init_dummy_weights(torch_model)
 
     torch_input = torch.randn((6, 3, 384, 640), dtype=torch.bfloat16)
     torch_input = torch_input.float()

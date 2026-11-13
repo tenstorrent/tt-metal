@@ -168,6 +168,7 @@ def build_reference_vad(checkpoint, seed):
     """The PyTorch VAD-Tiny the TT model takes its parameters and shapes from."""
     import torch
 
+    from models.experimental.vadv2.common import init_dummy_weights
     from models.experimental.vadv2.reference import vad
 
     torch.manual_seed(seed)
@@ -180,7 +181,9 @@ def build_reference_vad(checkpoint, seed):
         fut_ts=6,
         fut_mode=6,
     )
-    if checkpoint != "random":
+    if checkpoint == "random":
+        init_dummy_weights(model, seed)
+    else:
         state = torch.load(checkpoint, map_location="cpu")
         state = state.get("state_dict", state)
         state = {

@@ -17,7 +17,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
-from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.common import init_dummy_weights
 
 
 def custom_preprocessor(model, name):
@@ -88,18 +88,13 @@ def create_vadv2_model_parameters_sca(model: SpatialCrossAttention, input_tensor
 def test_vadv2_sca(
     device,
     reset_seeds,
-    model_location_generator,
 ):
     point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
     batch_first = True
     torch_model = spatial_cross_attention.SpatialCrossAttention(
         embed_dims=256, pc_range=point_cloud_range, batch_first=batch_first
     )
-    torch_model = load_torch_model(
-        torch_model=torch_model,
-        layer="pts_bbox_head.transformer.encoder.layers.0.attentions.1.",
-        model_location_generator=model_location_generator,
-    )
+    torch_model = init_dummy_weights(torch_model)
 
     query = torch.randn(1, 10000, 256)
     key = torch.randn(6, 240, 1, 256)

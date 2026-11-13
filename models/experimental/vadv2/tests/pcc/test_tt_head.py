@@ -30,7 +30,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_layernorm_parameter,
 )
-from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.common import init_dummy_weights
 
 
 def custom_preprocessor(model, name):
@@ -350,7 +350,6 @@ def create_vadv2_model_parameters_head(model: ResNet, device=None):
 def test_vadv2_head(
     device,
     reset_seeds,
-    model_location_generator,
     map_thresh,
 ):
     torch_model = head.VADHead(
@@ -420,9 +419,7 @@ def test_vadv2_head(
         valid_fut_ts=6,
     )
 
-    torch_model = load_torch_model(
-        torch_model=torch_model, layer="pts_bbox_head", model_location_generator=model_location_generator
-    )
+    torch_model = init_dummy_weights(torch_model)
 
     parameter = create_vadv2_model_parameters_head(torch_model, device=device)
 

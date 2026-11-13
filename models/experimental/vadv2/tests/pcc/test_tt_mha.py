@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.common import init_dummy_weights
 from models.experimental.vadv2.reference.decoder import MultiheadAttention
 from models.experimental.vadv2.tt.tt_mha import TtMultiheadAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -32,13 +32,9 @@ def _linear_params(weight, bias, device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_vadv2_mha_key_padding_mask(device, reset_seeds, model_location_generator):
+def test_vadv2_mha_key_padding_mask(device, reset_seeds):
     torch_model = MultiheadAttention(EMBED_DIMS, NUM_HEADS)
-    torch_model = load_torch_model(
-        torch_model=torch_model,
-        layer="pts_bbox_head.motion_map_decoder.layers.0.attentions.0.",
-        model_location_generator=model_location_generator,
-    )
+    torch_model = init_dummy_weights(torch_model)
 
     query = torch.randn(1, NUM_QUERIES, EMBED_DIMS)
     key = torch.randn(NUM_KEYS, NUM_QUERIES, EMBED_DIMS)

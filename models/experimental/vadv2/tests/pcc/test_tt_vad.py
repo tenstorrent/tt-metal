@@ -18,7 +18,7 @@ from models.experimental.vadv2.tt.model_preprocessing import (
     create_vadv2_model_parameters_vad,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.common import init_dummy_weights
 from models.experimental.vadv2.num_layers import log_layer_counts, num_layers_from_env, reduce_layers
 
 
@@ -27,7 +27,6 @@ from models.experimental.vadv2.num_layers import log_layer_counts, num_layers_fr
 def test_vadv2(
     device,
     reset_seeds,
-    model_location_generator,
 ):
     torch_model = vad.VAD(
         use_grid_mask=True,
@@ -50,7 +49,7 @@ def test_vadv2(
         fut_mode=6,
     )
 
-    torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
+    torch_model = init_dummy_weights(torch_model)
     num_layers = num_layers_from_env()
     if num_layers is not None:
         reduce_layers(torch_model, num_layers)
