@@ -387,7 +387,7 @@ def test_rejects_non_bf16_q(device, expect_error):
     x = _build_inputs(shape, with_h0=False)
     t = _upload(x, shape, ttnn.float32, device)
     t["q"] = _tt(x["q"].reshape(1, 1, 64, -1), device, ttnn.float32)
-    with expect_error(RuntimeError, "q, k, v must be BFLOAT16"):
+    with expect_error(RuntimeError, "q has unsupported dtype"):
         _call(dict(t, key_head_dim=32, chunk_size=32))
 
 
@@ -396,7 +396,7 @@ def test_rejects_mixed_gate_dtypes(device, expect_error):
     x = _build_inputs(shape, with_h0=False)
     t = _upload(x, shape, ttnn.float32, device)
     t["beta"] = _tt(x["beta"].reshape(1, 1, 64, -1), device, ttnn.bfloat16)
-    with expect_error(RuntimeError, "g and beta must both be BFLOAT16 or both FLOAT32"):
+    with expect_error(RuntimeError, "beta has unsupported dtype"):
         _call(dict(t, key_head_dim=32, chunk_size=32))
 
 
@@ -405,7 +405,7 @@ def test_rejects_bad_initial_state(device, expect_error):
     x = _build_inputs(shape, with_h0=True)
     t = _upload(x, shape, ttnn.float32, device)
     t["h0"] = _tt(x["h0"], device, ttnn.bfloat16)
-    with expect_error(RuntimeError, "initial_state must be FLOAT32"):
+    with expect_error(RuntimeError, "initial_state has unsupported dtype"):
         _call(dict(t, key_head_dim=32, chunk_size=32))
 
 
@@ -413,4 +413,27 @@ def test_rejects_hv_not_multiple_of_hk(device, expect_error):
     shape = (1, 64, 2, 3, 32, 32)  # 2 key heads, 3 value heads
     t = _upload(_build_inputs(shape, with_h0=False), shape, ttnn.float32, device)
     with expect_error(RuntimeError, "HK=2 must divide HV=3"):
+        _call(dict(t, key_head_dim=32, chunk_size=32))
+
+
+def test_rejects_host_tensor(device, expect_error):
+    shape = (1, 64, 1, 1, 32, 32)
+    x = _build_inputs(shape, with_h0=False)
+    t = _upload(x, shape, ttnn.float32, device)
+    t["k"] = ttnn.from_torch(x["k"].reshape(1, 1, 64, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "k must be on Device"):
+        _call(dict(t, key_head_dim=32, chunk_size=32))
+
+
+def test_rejects_row_major_input(device, expect_error):
+    shape = (1, 64, 1, 1, 32, 32)
+    x = _build_inputs(shape, with_h0=False)
+    t = _upload(x, shape, ttnn.float32, device)
+    t["v"] = ttnn.from_torch(
+        x["v"].reshape(1, 1, 64, -1).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "v requires TILE layout"):
         _call(dict(t, key_head_dim=32, chunk_size=32))
