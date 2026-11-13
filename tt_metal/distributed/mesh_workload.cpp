@@ -46,7 +46,6 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/lightmetal/host_api_capture_helpers.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "sub_device_types.hpp"

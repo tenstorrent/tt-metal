@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "impl/host_api/temp_quasar_api.hpp"
@@ -51,7 +51,7 @@ using test_helpers::ProgramSpecTestQuasar;
 TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigDefaultsMapToInternalDefaults) {
     // A default ComputeHardwareConfig{} must yield the historical internal QuasarComputeConfig defaults.
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // compute_kernel carries a default ComputeHardwareConfig
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
     const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
@@ -67,7 +67,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigDefaultsMapToInternalDefa
 // defaults. Guards the perf/precision settings that don't move a functional pass/fail result.
 TEST_F(ProgramSpecTestGen1, CPU_ComputeHardwareConfigDefaultsMapToInternalDefaults) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // compute_kernel carries a default ComputeHardwareConfig
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
     const auto& built = std::get<ComputeConfig>(built_variant);
@@ -89,7 +89,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_Config2xxTrisc0RvvMapsToInternal) {
                 ComputeHardwareConfig::Compute2XXConfig{.enable_unpack_rvv = true};
         }
     }
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
     const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
@@ -104,7 +104,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_Config12xTrisc2RvvMapsToInternal) {
                 ComputeHardwareConfig::Compute12XConfig{.enable_pack_rvv = true};
         }
     }
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
     const auto& built = std::get<ComputeConfig>(built_variant);
@@ -123,7 +123,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigInversionAndEnumMapToInte
             config.sfpu_precision_mode = tt::tt_metal::Precision::Approximate;  // -> internal math_approx_mode == true
         }
     }
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
     const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
@@ -164,7 +164,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
     spec.dataflow_buffers = {dfb0, dfb1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Inspect the constructed compute kernel's QuasarComputeConfig:
     //  - vector must be sized to max_dfbs (so JIT's iteration up to max_dfbs is in-bounds)

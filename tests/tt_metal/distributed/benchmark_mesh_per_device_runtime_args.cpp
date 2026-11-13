@@ -30,7 +30,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -174,10 +173,10 @@ void kernel_main() {
         .kernels = {kernel},
         .work_units = {m2::test_helpers::MakeMinimalWorkUnit("main", m2::NodeCoord{0, 0}, {kMetal2Kernel})},
     };
-    auto workload = m2x::MakeMeshWorkloadFromSpec(mesh_device(), spec);
+    MeshWorkload workload(mesh_device(), spec);
     const MeshCoordinateRange range(mesh_device().shape());
     auto& program = workload.get_programs().at(range);
-    m2x::SetProgramRunArgs(program, metal2_args(true, true, 0));
+    program.set_program_run_args(metal2_args(true, true, 0));
     std::vector<m2::ProgramRunArgs> per_device_args;
     for (uint32_t index = 1; index <= range.shape().mesh_size(); index++) {
         per_device_args.push_back(metal2_args(false, true, 1000 * index));
@@ -185,7 +184,7 @@ void kernel_main() {
     auto set_per_device = [&] {
         uint32_t index = 0;
         for (const auto& coord : range) {
-            m2x::UpdateProgramRunArgsForDevice(workload, range, coord, per_device_args[index++]);
+            workload.update_program_run_args_for_device(range, coord, per_device_args[index++]);
         }
     };
     if (mode != 0) {
@@ -197,11 +196,11 @@ void kernel_main() {
         run(state, workload, set_per_device);
     } else if (mode == 2) {
         run(state, workload, [&] {
-            m2x::UpdateProgramRunArgs(program, update_values, m2::ValidationMode::SKIP);
+            program.update_program_run_args(update_values, m2::ValidationMode::SKIP);
             set_per_device();
         });
     } else {
-        run(state, workload, [&] { m2x::UpdateProgramRunArgs(program, update_address, m2::ValidationMode::SKIP); });
+        run(state, workload, [&] { program.update_program_run_args(update_address, m2::ValidationMode::SKIP); });
     }
 }
 
@@ -262,7 +261,7 @@ void BM_Setter(benchmark::State& state) {
             .kernels = {kernel},
             .work_units = {m2::test_helpers::MakeMinimalWorkUnit("main", core_set, {kMetal2Kernel})},
         };
-        auto workload = m2x::MakeMeshWorkloadFromSpec(mesh_device(), spec);
+        MeshWorkload workload(mesh_device(), spec);
         auto& program = workload.get_programs().at(range);
         auto make_args = [&](uint32_t value_set, std::optional<uint32_t> device) {
             m2::ProgramRunArgs::KernelRunArgs kernel_args{.kernel = m2::KernelSpecName{kMetal2Kernel}};
@@ -279,7 +278,7 @@ void BM_Setter(benchmark::State& state) {
             args.kernel_run_args = {std::move(kernel_args)};
             return args;
         };
-        m2x::SetProgramRunArgs(program, make_args(0, std::nullopt));
+        program.set_program_run_args(make_args(0, std::nullopt));
         std::vector<std::vector<m2::ProgramRunArgs>> per_device(2);
         for (uint32_t s = 0; s < 2; s++) {
             for (uint32_t d = 0; d < num_devices; d++) {
@@ -289,7 +288,7 @@ void BM_Setter(benchmark::State& state) {
         for ([[maybe_unused]] auto _ : state) {
             uint32_t d = 0;
             for (const auto& coord : range) {
-                m2x::UpdateProgramRunArgsForDevice(workload, range, coord, per_device[set][d++]);
+                workload.update_program_run_args_for_device(range, coord, per_device[set][d++]);
             }
             set = changed ? set ^ 1 : set;
         }

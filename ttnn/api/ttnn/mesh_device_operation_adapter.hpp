@@ -10,7 +10,8 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/run_args/validation_mode.hpp>
 #include "ttnn/per_device_program_merge.hpp"
@@ -1072,7 +1073,7 @@ public:
                 for (const auto& b : sv.bindings) {
                     fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
                 }
-                tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, validation);
+                program.update_tensor_args(fresh_tensor_args, validation);
             }
         }
 
@@ -1102,7 +1103,7 @@ public:
                         run_args.advanced_options.prefetcher_pipe_args.emplace(
                             b.pipe_parameter_name, PrefetcherPipeArgument{*prefetcher_pipes[b.pipe_idx]});
                     }
-                    tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, validation);
+                    program.update_program_run_args(run_args, validation);
                 }
             }
         }
@@ -1296,9 +1297,9 @@ public:
 
             // Cache miss is the cold path: always validate here, so every cached program was
             // built from a checked spec. validate_program_args only gates the hit-path re-checks.
-            auto mesh_workload = tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(*mesh_device, program_specs);
+            tt::tt_metal::distributed::MeshWorkload mesh_workload(*mesh_device, program_specs);
             for (auto& [range, program] : mesh_workload.get_programs()) {
-                tt::tt_metal::experimental::SetProgramRunArgs(program, run_params.at(range));
+                program.set_program_run_args(run_params.at(range));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
@@ -1342,7 +1343,7 @@ public:
                     tensor_args,
                     tensor_return_value,
                     std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
-                tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, validation);
+                program.update_program_run_args(run_args, validation);
             }
         }
     };
@@ -1527,14 +1528,13 @@ public:
                     }
                 }
             }
-            auto mesh_workload = tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(mesh_device, program_specs);
+            tt::tt_metal::distributed::MeshWorkload mesh_workload(mesh_device, program_specs);
             for (auto& [range, program] : mesh_workload.get_programs()) {
-                tt::tt_metal::experimental::SetProgramRunArgs(program, run_params.at(range));
+                program.set_program_run_args(run_params.at(range));
             }
             for (const auto& [range, values] : merged_values) {
                 for (const auto& [device, device_values] : values) {
-                    tt::tt_metal::experimental::UpdateProgramRunArgsForDevice(
-                        mesh_workload, range, device, device_values);
+                    mesh_workload.update_program_run_args_for_device(range, device, device_values);
                 }
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
@@ -1609,19 +1609,16 @@ public:
             const tt::tt_metal::ValidationMode validation = program_args_validation_mode();
             for (auto& [state, run_args, keys] : pending) {
                 if (state->merged) {
-                    tt::tt_metal::experimental::UpdateProgramRunArgs(
-                        programs.at(state->factory_range), run_args.base, validation);
+                    programs.at(state->factory_range).update_program_run_args(run_args.base, validation);
                     for (const auto& [device, values] : run_args.per_device) {
-                        tt::tt_metal::experimental::UpdateProgramRunArgsForDevice(
-                            workload, state->factory_range, device, values);
+                        workload.update_program_run_args_for_device(state->factory_range, device, values);
                     }
                 } else {
                     for (const auto& coord_range : state->program_ranges) {
                         const auto* values = pd::values_of(run_args.per_device, coord_range.start_coord());
-                        tt::tt_metal::experimental::UpdateProgramRunArgs(
-                            programs.at(coord_range),
-                            values != nullptr ? pd::overlay(run_args.base, *values) : run_args.base,
-                            validation);
+                        programs.at(coord_range)
+                            .update_program_run_args(
+                                values != nullptr ? pd::overlay(run_args.base, *values) : run_args.base, validation);
                     }
                 }
             }
@@ -1691,9 +1688,9 @@ public:
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
-            auto mesh_workload = tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(mesh_device, program_specs);
+            tt::tt_metal::distributed::MeshWorkload mesh_workload(mesh_device, program_specs);
             for (auto& [range, program] : mesh_workload.get_programs()) {
-                tt::tt_metal::experimental::SetProgramRunArgs(program, run_params.at(range));
+                program.set_program_run_args(run_params.at(range));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
@@ -1714,7 +1711,7 @@ public:
                     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                         auto run_args = WorkloadSpecFactory::override_runtime_arguments(
                             attrs, tensor_args, tensor_return_value, coordinate_range);
-                        tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, validation);
+                        program.update_program_run_args(run_args, validation);
                     }
                 } else {
                     SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
