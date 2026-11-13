@@ -769,6 +769,74 @@ public:
     bool program_run_args_initialized() const { return program_run_args_initialized_; }
     void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
 
+    // Metal 2.0 per-device run args (experimental::SetProgramRunArgsPerDevice). A program-level set of the run args
+    // drops every per-device value, and an update drops those of the args it lists. The MeshWorkload holds the
+    // per-device values, so the program only records the drops; the workload applies them before its next per-device
+    // set and at enqueue. Nothing is recorded until the workload tracks a per-device arg of this program, so programs
+    // without per-device args pay one empty() check per set or update.
+    struct PerDeviceRunArgKey {
+        KernelHandle kernel = 0;
+        std::optional<CoreCoord> core;  // nullopt: a common run arg
+        uint32_t first_word = 0;        // the arg's slot (an array's first slot)
+        bool operator==(const PerDeviceRunArgKey&) const = default;
+    };
+    struct PerDeviceRunArgKeyHash {
+        size_t operator()(const PerDeviceRunArgKey& key) const noexcept {
+            uint64_t h = (static_cast<uint64_t>(key.kernel) << 32) ^ key.first_word;
+            if (key.core.has_value()) {
+                h ^= ((static_cast<uint64_t>(key.core->x) << 16) ^ key.core->y ^ (uint64_t{1} << 31)) *
+                     0x9E3779B97F4A7C15ull;
+            }
+            return std::hash<uint64_t>{}(h);
+        }
+    };
+    using PerDeviceRunArgKeys = std::unordered_set<PerDeviceRunArgKey, PerDeviceRunArgKeyHash>;
+    struct PerDeviceRunArgDrops {
+        PerDeviceRunArgKeys tracked;  // the args the workload holds per-device values of
+        std::unordered_map<KernelHandle, uint32_t> tracked_per_kernel;  // number of tracked args per kernel
+        bool drop_all = false;        // SetProgramRunArgs since the workload last applied the drops
+        PerDeviceRunArgKeys pending;  // tracked args UpdateProgramRunArgs set since then (empty when drop_all)
+        bool any_pending() const { return drop_all || !pending.empty(); }
+        // The workload entry that holds per-device args of the program (see MeshWorkloadImpl): the drops are its.
+        uint64_t owner = 0;
+    };
+    bool tracks_per_device_run_args() const { return !per_device_run_arg_drops_.tracked.empty(); }
+    bool tracks_per_device_run_args_of(KernelHandle kernel) const {
+        return per_device_run_arg_drops_.tracked_per_kernel.contains(kernel);
+    }
+    void track_per_device_run_arg(const PerDeviceRunArgKey& key) {
+        if (per_device_run_arg_drops_.tracked.insert(key).second) {
+            per_device_run_arg_drops_.tracked_per_kernel[key.kernel]++;
+        }
+    }
+    void untrack_per_device_run_arg(const PerDeviceRunArgKey& key) {
+        auto& drops = per_device_run_arg_drops_;
+        if (drops.tracked.erase(key) != 0) {
+            const auto it = drops.tracked_per_kernel.find(key.kernel);
+            TT_ASSERT(it != drops.tracked_per_kernel.end(), "Per-device run arg tracking out of sync");
+            if (--it->second == 0) {
+                drops.tracked_per_kernel.erase(it);
+            }
+        }
+    }
+    void record_per_device_run_args_drop_all() {
+        if (tracks_per_device_run_args()) {
+            per_device_run_arg_drops_.drop_all = true;
+            per_device_run_arg_drops_.pending.clear();
+        }
+    }
+    void record_per_device_run_arg_drop(const PerDeviceRunArgKey& key) {
+        auto& drops = per_device_run_arg_drops_;
+        if (!drops.drop_all && drops.tracked.contains(key)) {
+            drops.pending.insert(key);
+        }
+    }
+    PerDeviceRunArgDrops& per_device_run_arg_drops() { return per_device_run_arg_drops_; }
+    const PerDeviceRunArgDrops& per_device_run_arg_drops() const { return per_device_run_arg_drops_; }
+    // A workload entry starts holding per-device args of this program: what an earlier one tracked or left pending
+    // (the program was moved out of it) does not apply to it, and the earlier entry is no longer the owner.
+    void reset_per_device_run_arg_drops(uint64_t owner) { per_device_run_arg_drops_ = {.owner = owner}; }
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -781,6 +849,7 @@ private:
 
     bool finalized_{false};
     bool program_run_args_initialized_{false};
+    PerDeviceRunArgDrops per_device_run_arg_drops_;
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device
     std::optional<uint64_t> cached_device_hash_;

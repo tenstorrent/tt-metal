@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
@@ -133,6 +134,20 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
     programs_[device_range] = std::move(program);
 }
 
+namespace {
+// Whether `per_device` holds the per-device args of `program`: set for it, and, for a program whose program-level
+// sets drop per-device values (one created from a ProgramSpec), not taken over by another workload entry since (the
+// program moved away and back), which would have taken the drops recorded meanwhile.
+bool holds_program(const PerDeviceRuntimeArgs& per_device, const Program& program) {
+    const auto& program_impl = program.impl();
+    if (per_device.program_id != program_impl.get_id()) {
+        return false;
+    }
+    return !program_impl.created_from_spec() || per_device.owner == program_impl.per_device_run_arg_drops().owner;
+}
+std::atomic<uint64_t> next_per_device_owner{1};
+}  // namespace
+
 uint32_t coordinate_index_in_range(const MeshCoordinateRange& range, const MeshCoordinate& coord) {
     TT_FATAL(range.contains(coord), "Coordinate {} is not in range {}", coord, range);
     const auto shape = range.shape();
@@ -188,8 +203,9 @@ std::shared_ptr<const PerDeviceRuntimeArgs> snapshot_per_device_runtime_args(
     const PerDeviceRuntimeArgs& per_device_args) {
     auto snapshot = std::make_shared<PerDeviceRuntimeArgs>();
     snapshot->program_id = per_device_args.program_id;
+    snapshot->fields.reserve(per_device_args.fields.size());
     for (const auto& field : per_device_args.fields) {
-        snapshot->fields.push_back(std::make_unique<PerDeviceRuntimeArgsField>(*field));
+        snapshot->fields.push_back(std::make_unique<PerDeviceRuntimeArgsField>(field->values_only()));
     }
     return snapshot;
 }
@@ -217,7 +233,7 @@ void validate_per_device_runtime_args_mode() {
 }
 }  // namespace
 
-PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
+PerDeviceRuntimeArgsField* MeshWorkloadImpl::find_per_device_runtime_args_field(
     const MeshCoordinateRange& program_range,
     KernelHandle kernel_handle,
     const std::optional<CoreCoord>& core,
@@ -273,13 +289,15 @@ PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
         core.has_value() ? fmt::format(" on core {}", *core) : std::string(" common"),
         logical_words);
 
-    auto& per_device = per_device_runtime_args_[program_range];
-    if (per_device.fields.empty()) {
-        per_device.program_id = program.impl().get_id();
+    const auto per_device_it = per_device_runtime_args_.find(program_range);
+    if (per_device_it == per_device_runtime_args_.end() || per_device_it->second.fields.empty()) {
+        return nullptr;
     }
+    auto& per_device = per_device_it->second;
     TT_FATAL(
-        per_device.program_id == program.impl().get_id(),
-        "Per-device runtime args of range {} were set for another program",
+        holds_program(per_device, program),
+        "Per-device runtime args of range {} were set for another program, or the program was moved to another "
+        "workload that set per-device args of it",
         program_range);
     for (auto& field : per_device.fields) {
         if (field->kernel != kernel_handle || field->core != core) {
@@ -293,7 +311,7 @@ PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
                 kernel_handle,
                 field->num_words,
                 num_words);
-            return *field;
+            return field.get();
         }
         TT_FATAL(
             first_word + num_words <= field->first_word || field->first_word + field->num_words <= first_word,
@@ -304,6 +322,27 @@ PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
             field->first_word,
             field->first_word + field->num_words);
     }
+    return nullptr;
+}
+
+PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
+    const MeshCoordinateRange& program_range,
+    KernelHandle kernel_handle,
+    const std::optional<CoreCoord>& core,
+    uint32_t first_word,
+    uint32_t num_words,
+    bool metal2) {
+    if (auto* existing =
+            find_per_device_runtime_args_field(program_range, kernel_handle, core, first_word, num_words, metal2)) {
+        return *existing;
+    }
+    auto& program = programs_.at(program_range);
+    auto& per_device = per_device_runtime_args_[program_range];
+    if (per_device.fields.empty()) {
+        per_device.program_id = program.impl().get_id();
+        per_device.owner = next_per_device_owner.fetch_add(1, std::memory_order_relaxed);
+        program.impl().reset_per_device_run_arg_drops(per_device.owner);
+    }
     const size_t num_coords = program_range.shape().mesh_size();
     auto field = std::make_unique<PerDeviceRuntimeArgsField>();
     field->kernel = kernel_handle;
@@ -312,9 +351,14 @@ PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
     field->num_words = num_words;
     field->values.assign(num_coords * num_words, 0);
     field->present.assign(num_coords, 0);
+    field->dirty = true;
+    if (metal2) {
+        // A program-level set or update of this arg now drops its per-device values.
+        program.impl().track_per_device_run_arg({kernel_handle, core, first_word});
+    }
     per_device.fields.push_back(std::move(field));
     per_device.generation++;
-    per_device.values_version++;
+    per_device.dirty = true;
     return *per_device.fields.back();
 }
 
@@ -332,7 +376,8 @@ void MeshWorkloadImpl::set_per_device_runtime_args(
     const uint32_t index = coordinate_index_in_range(program_range, device);
     std::copy(values.begin(), values.end(), field.values.begin() + static_cast<size_t>(index) * field.num_words);
     field.present[index] = 1;
-    per_device_runtime_args_.at(program_range).values_version++;
+    field.dirty = true;
+    per_device_runtime_args_.at(program_range).dirty = true;
 }
 
 void MeshWorkloadImpl::set_per_device_runtime_args(
@@ -352,7 +397,8 @@ void MeshWorkloadImpl::set_per_device_runtime_args(
     auto& field = per_device_runtime_args_field(program_range, kernel, core, first_word, num_words);
     std::copy(values_in_range_order.begin(), values_in_range_order.end(), field.values.begin());
     std::fill(field.present.begin(), field.present.end(), 1);
-    per_device_runtime_args_.at(program_range).values_version++;
+    field.dirty = true;
+    per_device_runtime_args_.at(program_range).dirty = true;
 }
 
 void MeshWorkloadImpl::set_per_device_named_runtime_args(
@@ -369,38 +415,8 @@ void MeshWorkloadImpl::set_per_device_named_runtime_args(
     const uint32_t index = coordinate_index_in_range(program_range, device);
     std::copy(values.begin(), values.end(), field.values.begin() + static_cast<size_t>(index) * field.num_words);
     field.present[index] = 1;
-    per_device_runtime_args_.at(program_range).values_version++;
-}
-
-MeshWorkloadImpl::PerDeviceRuntimeArgsBackup MeshWorkloadImpl::backup_per_device_runtime_args(
-    const MeshCoordinateRange& program_range) const {
-    const auto it = per_device_runtime_args_.find(program_range);
-    if (it == per_device_runtime_args_.end()) {
-        return {};
-    }
-    return {
-        .snapshot = snapshot_per_device_runtime_args(it->second),
-        .generation = it->second.generation,
-        .values_version = it->second.values_version};
-}
-
-void MeshWorkloadImpl::restore_per_device_runtime_args(
-    const MeshCoordinateRange& program_range, const PerDeviceRuntimeArgsBackup& backup) {
-    if (backup.snapshot == nullptr) {
-        per_device_runtime_args_.erase(program_range);
-        return;
-    }
-    auto& per_device = per_device_runtime_args_[program_range];
-    // New generation and values version, past any the failed update reached, so nothing cached for its fields is used.
-    const uint64_t generation = std::max(per_device.generation, backup.generation) + 1;
-    const uint64_t values_version = std::max(per_device.values_version, backup.values_version) + 1;
-    per_device.program_id = backup.snapshot->program_id;
-    per_device.fields.clear();
-    for (const auto& field : backup.snapshot->fields) {
-        per_device.fields.push_back(std::make_unique<PerDeviceRuntimeArgsField>(*field));
-    }
-    per_device.generation = generation;
-    per_device.values_version = values_version;
+    field.dirty = true;
+    per_device_runtime_args_.at(program_range).dirty = true;
 }
 
 void MeshWorkloadImpl::clear_per_device_runtime_args(
@@ -418,12 +434,57 @@ void MeshWorkloadImpl::clear_per_device_runtime_args(
     for (auto& field : it->second.fields) {
         if (field->kernel == kernel && field->core == core && field->first_word == first_word) {
             field->present[coordinate_index_in_range(program_range, device)] = 0;
-            it->second.values_version++;
+            field->dirty = true;
+            it->second.dirty = true;
         }
     }
 }
 
-const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const MeshCoordinateRange& program_range) const {
+namespace {
+// Applies `program`'s pending drops (Metal 2.0 SetProgramRunArgs / UpdateProgramRunArgs) to its per-device args.
+void apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program) {
+    auto& drops = program.impl().per_device_run_arg_drops();
+    if (!drops.any_pending()) {
+        return;
+    }
+    for (auto& field : per_device.fields) {
+        if (drops.drop_all || drops.pending.contains({field->kernel, field->core, field->first_word})) {
+            std::fill(field->present.begin(), field->present.end(), 0);
+            field->dirty = true;
+            per_device.dirty = true;
+        }
+    }
+    drops.drop_all = false;
+    drops.pending.clear();
+}
+
+// Whether the field's effective values (which devices have one, and theirs) equal its last commit.
+bool equals_committed(const PerDeviceRuntimeArgsField& field) {
+    if (field.present != field.committed_present) {
+        return false;
+    }
+    for (size_t index = 0; index < field.present.size(); index++) {
+        if (field.present[index] != 0 && !std::equal(
+                                             field.values.begin() + index * field.num_words,
+                                             field.values.begin() + (index + 1) * field.num_words,
+                                             field.committed_values.begin() + index * field.num_words)) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
+
+void MeshWorkloadImpl::apply_per_device_run_arg_drops(const MeshCoordinateRange& program_range) {
+    const auto it = per_device_runtime_args_.find(program_range);
+    const auto program_it = programs_.find(program_range);
+    if (it != per_device_runtime_args_.end() && program_it != programs_.end() &&
+        holds_program(it->second, program_it->second)) {
+        apply_run_arg_drops(it->second, program_it->second);
+    }
+}
+
+const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const MeshCoordinateRange& program_range) {
     if (per_device_runtime_args_.empty()) {
         return nullptr;
     }
@@ -434,11 +495,55 @@ const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const Mesh
     validate_per_device_runtime_args_mode();
     const auto program_it = programs_.find(program_range);
     TT_FATAL(
-        program_it != programs_.end() && program_it->second.impl().get_id() == it->second.program_id,
+        program_it != programs_.end() && holds_program(it->second, program_it->second),
         "Per-device runtime args of range {} were set for a program that is no longer there (the program was replaced "
-        "or moved out of the MeshWorkload)",
+        "or moved out of the MeshWorkload, or moved to another workload that set per-device args of it)",
         program_range);
-    return &it->second;
+    auto& per_device = it->second;
+    auto& program = program_it->second;
+    apply_run_arg_drops(per_device, program);
+    if (!per_device.dirty) {
+        return &per_device;
+    }
+    per_device.dirty = false;
+    // Fields no device has a value of only cost patching work: remove them (the program stops tracking them, and the
+    // next per-device set of the arg adds the field again).
+    const auto unused = std::remove_if(per_device.fields.begin(), per_device.fields.end(), [&](const auto& field) {
+        if (!field->dirty ||
+            std::find(field->present.begin(), field->present.end(), uint8_t{1}) != field->present.end()) {
+            return false;
+        }
+        program.impl().untrack_per_device_run_arg({field->kernel, field->core, field->first_word});
+        return true;
+    });
+    if (unused != per_device.fields.end()) {
+        per_device.fields.erase(unused, per_device.fields.end());
+        per_device.generation++;
+    }
+    if (per_device.fields.empty()) {
+        // Nothing per device is left: the range enqueues as a plain program again, and the program at it may be
+        // replaced. The entry's caches go with it.
+        per_device_runtime_args_.erase(it);
+        return nullptr;
+    }
+    // Commit: a new values version only when the effective values differ from the last commit, so setting the same
+    // values again keeps every cached per-device command image. Only fields set or dropped since then are compared.
+    bool changed = false;
+    for (auto& field : per_device.fields) {
+        if (!field->dirty) {
+            continue;
+        }
+        field->dirty = false;
+        if (!equals_committed(*field)) {
+            field->committed_values = field->values;
+            field->committed_present = field->present;
+            changed = true;
+        }
+    }
+    if (changed) {
+        per_device.values_version++;
+    }
+    return &per_device;
 }
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
@@ -1030,15 +1135,21 @@ void SetProgramRunArgsPerDevice(
     const auto resolved =
         resolve_named_args(program_at(workload, program_range, device), values, /*check_values=*/true);
     auto& impl = workload.impl();
-    const auto backup = impl.backup_per_device_runtime_args(program_range);
-    try {
-        for (const auto& words : resolved) {
-            impl.set_per_device_named_runtime_args(
-                program_range, device, words.kernel, words.core, words.first_word, words.values);
-        }
-    } catch (...) {
-        impl.restore_per_device_runtime_args(program_range, backup);  // all or nothing
-        throw;
+    // All or nothing: check every arg first, so setting them cannot fail half-way.
+    for (const auto& words : resolved) {
+        (void)impl.find_per_device_runtime_args_field(
+            program_range,
+            words.kernel,
+            words.core,
+            words.first_word,
+            static_cast<uint32_t>(words.values.size()),
+            /*metal2=*/true);
+    }
+    // Drops recorded by earlier program-level sets / updates apply before these values, never to them.
+    impl.apply_per_device_run_arg_drops(program_range);
+    for (const auto& words : resolved) {
+        impl.set_per_device_named_runtime_args(
+            program_range, device, words.kernel, words.core, words.first_word, words.values);
     }
 }
 

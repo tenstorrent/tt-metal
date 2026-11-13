@@ -24,6 +24,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/distributed/mesh_workload_impl.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -86,6 +87,8 @@ protected:
 
     void unique_and_common_fields_eager();
     void batched_setter_and_clear();
+    void same_values_keep_version();
+    void legacy_program_moved_away_and_back();
     void own_args_change_between_enqueues();
     void trace_replays_capture_time_values();
     void field_after_kernel_without_args_on_core();
@@ -209,6 +212,127 @@ void PerDeviceRuntimeArgsChecks::batched_setter_and_clear() {
         }
         EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
         idx++;
+    }
+}
+
+// Setting the same values again (as an op's cache hit does) is no change: the values version, and with it every
+// cached per-device command image, stays. Different values, or a device losing its value, are a new version.
+void PerDeviceRuntimeArgsChecks::same_values_keep_version() {
+    const MeshCoordinateRange range(mesh_device_->shape());
+    const CoreCoord core{0, 0};
+    const uint32_t results = results_addr();
+
+    Program program = CreateProgram();
+    const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
+    SetRuntimeArgs(program, kernel, core, default_args(core));
+    SetCommonRuntimeArgs(program, kernel, default_common_args());
+    MeshWorkload workload;
+    workload.add_program(range, std::move(program));
+
+    const uint32_t num_devices = range.shape().mesh_size();
+    std::vector<uint32_t> values(num_devices);
+    for (uint32_t i = 0; i < num_devices; i++) {
+        values[i] = 8000 + i;
+    }
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto run_and_check = [&] {
+        EnqueueMeshWorkload(cq, workload, false);
+        Finish(cq);
+        uint32_t idx = 0;
+        for (const auto& coord : range) {
+            auto expected = default_args(core);
+            expected[3] = values[idx++];
+            EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
+        }
+    };
+    auto version = [&] { return workload.impl().per_device_runtime_args(range)->values_version; };
+    // As run_and_check, with word 5 set to `first_device_word5` on the first device only.
+    auto run_and_check_word5 = [&](uint32_t first_device_word5) {
+        EnqueueMeshWorkload(cq, workload, false);
+        Finish(cq);
+        uint32_t idx = 0;
+        for (const auto& coord : range) {
+            auto expected = default_args(core);
+            expected[3] = values[idx];
+            if (idx == 0) {
+                expected[5] = first_device_word5;
+            }
+            idx++;
+            EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
+        }
+    };
+
+    SetRuntimeArgsPerDevice(workload, range, kernel, core, 3, 1, values);
+    run_and_check();
+    const uint64_t first = version();
+    for (int i = 0; i < 3; i++) {
+        SetRuntimeArgsPerDevice(workload, range, kernel, core, 3, 1, values);
+        run_and_check();
+        EXPECT_EQ(version(), first) << "re-set " << i;
+    }
+    // A value changed and changed back before the enqueue is no change either.
+    MeshCoordinate last = *range.begin();
+    for (const auto& coord : range) {
+        last = coord;
+    }
+    SetRuntimeArgs(workload, range, last, kernel, core, 3, std::vector<uint32_t>{1});
+    SetRuntimeArgs(workload, range, last, kernel, core, 3, std::vector<uint32_t>{values[num_devices - 1]});
+    run_and_check();
+    EXPECT_EQ(version(), first);
+
+    values[num_devices - 1] += 1;
+    SetRuntimeArgsPerDevice(workload, range, kernel, core, 3, 1, values);
+    run_and_check();
+    EXPECT_GT(version(), first);
+
+    // A field only some devices have a value of: a value set on another device and cleared again before the enqueue
+    // is no change (the words of devices without a value are not compared).
+    if (num_devices < 2) {
+        return;
+    }
+    SetRuntimeArgs(workload, range, *range.begin(), kernel, core, 5, std::vector<uint32_t>{4242});
+    run_and_check_word5(4242);
+    const uint64_t second = version();
+    SetRuntimeArgs(workload, range, last, kernel, core, 5, std::vector<uint32_t>{4343});
+    ClearRuntimeArgs(workload, range, last, kernel, core, 5);
+    run_and_check_word5(4242);
+    EXPECT_EQ(version(), second);
+}
+
+// A legacy program moved to a workload that set per-device args of it, then back: its program-level sets never drop
+// per-device values, so the first workload's values still apply.
+void PerDeviceRuntimeArgsChecks::legacy_program_moved_away_and_back() {
+    const MeshCoordinateRange range(mesh_device_->shape());
+    const CoreCoord core{0, 0};
+    const uint32_t results = results_addr();
+
+    Program program = CreateProgram();
+    const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
+    SetRuntimeArgs(program, kernel, core, default_args(core));
+    SetCommonRuntimeArgs(program, kernel, default_common_args());
+    MeshWorkload first;
+    first.add_program(range, std::move(program));
+    const uint32_t num_devices = range.shape().mesh_size();
+    std::vector<uint32_t> values(num_devices), other(num_devices);
+    for (uint32_t i = 0; i < num_devices; i++) {
+        values[i] = 6000 + i;
+        other[i] = 6500 + i;
+    }
+    SetRuntimeArgsPerDevice(first, range, kernel, core, 2, 1, values);
+
+    MeshWorkload second;
+    second.add_program(range, std::move(first.get_programs().at(range)));
+    SetRuntimeArgsPerDevice(second, range, kernel, core, 2, 1, other);
+    first.get_programs().at(range) = std::move(second.get_programs().at(range));
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    EnqueueMeshWorkload(cq, first, false);
+    Finish(cq);
+    uint32_t idx = 0;
+    for (const auto& coord : range) {
+        auto expected = default_args(core);
+        expected[2] = values[idx++];
+        EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
     }
 }
 
@@ -513,6 +637,8 @@ TEST_F(MeshPerDeviceRuntimeArgsTest, UniqueAndCommonFieldsEager) { unique_and_co
 TEST_F(MeshPerDeviceRuntimeArgsTest, ProgramOnSubRange) { program_on_sub_range(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, TraceNodeInSeveralPartitions) { trace_node_in_several_partitions(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, BatchedSetterAndClear) { batched_setter_and_clear(); }
+TEST_F(MeshPerDeviceRuntimeArgsTest, SameValuesKeepVersion) { same_values_keep_version(); }
+TEST_F(MeshPerDeviceRuntimeArgsTest, LegacyProgramMovedAwayAndBack) { legacy_program_moved_away_and_back(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, OwnArgsChangeBetweenEnqueues) { own_args_change_between_enqueues(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, TraceReplaysCaptureTimeValues) { trace_replays_capture_time_values(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, FieldAfterKernelWithoutArgsOnCore) { field_after_kernel_without_args_on_core(); }
@@ -541,6 +667,7 @@ protected:
 
 TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, UniqueAndCommonFields) { unique_and_common_fields_eager(); }
 TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, BatchedSetterAndClear) { batched_setter_and_clear(); }
+TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, SameValuesKeepVersion) { same_values_keep_version(); }
 TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, FieldAfterKernelWithoutArgsOnCore) {
     field_after_kernel_without_args_on_core();
 }
