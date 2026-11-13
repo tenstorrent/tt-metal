@@ -17,6 +17,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "impl/drisc_service/seat_lock.hpp"
 #include "llrt/core_descriptor_types.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -147,6 +148,9 @@ private:
     std::unique_ptr<llrt::RunTimeOptions> rtoptions_;
     std::unique_ptr<Cluster> cluster_;
     std::unique_ptr<Hal> hal_;
+    // Held while the DRAM programmable cores are on, so no DRISC service starts on a core metal resets. Released
+    // after cluster_ closes.
+    std::vector<drisc_service::SeatLock> dram_core_seat_locks_;
 
     std::atomic<int> use_count_{0};
 

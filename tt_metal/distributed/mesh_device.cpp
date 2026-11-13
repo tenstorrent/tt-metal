@@ -1973,53 +1973,8 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
-    const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
-
-    // Sender 0: the free non-endpoint subchannel.
-    const CoreCoord free_core = pick_unused_dram_logical_core(device, bank_id);
-
-    // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
-    // matching the endpoint's physical (TRANSLATED) coord against this bank's
-    // subchannels (mirrors the loop in pick_unused_dram_logical_core).
-    const CoreCoord noc1_endpoint_phys =
-        soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/static_cast<uint8_t>(1));
-    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
-    for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
-        const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
-            static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
-        if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
-            const CoreCoord noc1_core =
-                soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
-            // A sender mapping resolves logical DRAM coords against one reference device and is then
-            // reused mesh-wide (see build_dram_sender_mapping), so a role must land on the same
-            // logical y on every device. dram_bank_endpoint_coords orders a bank as [NOC0 endpoint,
-            // NOC1 endpoint, remaining subchannels ascending], which pins the NOC1 endpoint to y == 1
-            // and every free subchannel above it -- but only while the bank's two worker endpoints are
-            // distinct subchannels. A descriptor that names one subchannel for both NOCs (Wormhole
-            // does) collapses that ordering and would let the free and NOC1 roles swap logical y
-            // between devices, which the per-device membership check cannot see. Wormhole has no DRAM
-            // senders, so require the split here rather than in the descriptor.
-            TT_FATAL(
-                noc1_core.y == 1 && free_core.y > noc1_core.y,
-                "DRAM bank {} on device {}: expected the NOC1 worker endpoint at logical y=1 with the free "
-                "subchannel above it, but found NOC1 at ({}, {}) and free at ({}, {}). A bank's NOC0 and NOC1 "
-                "worker endpoints must be distinct subchannels so that a sender's logical coord names the same "
-                "endpoint role on every device in the mesh; check this view's worker_endpoint pair in the SoC "
-                "descriptor.",
-                bank_id,
-                device->id(),
-                noc1_core.x,
-                noc1_core.y,
-                free_core.x,
-                free_core.y);
-            return {free_core, noc1_core};
-        }
-    }
-    TT_THROW(
-        "Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={} on device {}",
-        bank_id,
-        device->id());
+    return tt::tt_metal::dram_sender_logical_cores(
+        metal_env().get_cluster().get_soc_desc(device->id()), bank_id, device->id());
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }

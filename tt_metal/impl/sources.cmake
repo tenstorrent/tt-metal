@@ -48,6 +48,9 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe_dram_sender.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/drisc_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/seat_lock.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/service.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp

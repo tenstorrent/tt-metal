@@ -59,6 +59,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deployment)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/device)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/context)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/drisc_service)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eth)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hal_codegen)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration)
@@ -86,6 +87,7 @@ add_custom_target(
         unit_tests_device
         unit_tests_context
         unit_tests_dispatch
+        unit_tests_drisc_service
         unit_tests_eth
         unit_tests_integration
         unit_tests_llk

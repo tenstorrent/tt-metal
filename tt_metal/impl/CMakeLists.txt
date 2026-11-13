@@ -90,9 +90,12 @@ list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chun
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
-# Keep the reload extension from perturbing the established unity source batches.
+# Keep the reload extension and the DRISC service from perturbing the established unity source batches.
 set_source_files_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/drisc_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/seat_lock.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/service.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE
