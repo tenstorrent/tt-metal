@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Math hangs in a RISC-V spin (what an LLK assert's ebreak looks like to the launch); the other threads finish.
+// Math hangs in a RISC-V spin; the other threads finish. The launch times out (not an assert/ebreak).
 #include <cstdint>
 
 #include "ckernel.h"

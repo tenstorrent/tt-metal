@@ -13,7 +13,4 @@ struct RuntimeParams
 
 void run_kernel([[maybe_unused]] const struct RuntimeParams& params)
 {
-#if defined(LLK_TRISC_MATH)
-
-#endif
 }

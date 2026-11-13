@@ -253,8 +253,15 @@ def commit_tensix_soft_reset(
     )
 
 
-# SOFT_RESET_0 bits of the Tensix pipeline units: unpackers, packers, mover, search, glue, THCON, FPU, SrcA/SrcB/Dest.
+# SOFT_RESET_0 bits of the Tensix pipeline units to reset after a hang:
+#   bits  0-1: unpackers 0-1
+#   bits  2-5: packers 0-3
+#   bits  6-10: mover, search, glue, THCON (bit 9 zeroes the THCON config), FPU (bit 10 resets SFPU LReg/LaneConfig)
+#   bits 15-17: SrcA/SrcB/Dest register banks
+# Bits 11-14 and 18 (the RISCs) are excluded: they are held in reset by the caller via get_soft_reset_mask(ALL_CORES).
 _PIPELINE_RESET_MASK = 0x7FF | (0x7 << 15)
+_SRCA_SRCB = 0b11  # SETDVALID/CLEARDVALID: satisfy and clear both SrcA and SrcB
+_CLOCK_KEEPALIVE_READS = 16  # thread-0 reads that keep unit clocks running while the stall drains
 
 
 def recover_tensix_core(location: str = "0,0", device_id=0):
@@ -272,13 +279,13 @@ def recover_tensix_core(location: str = "0,0", device_id=0):
     )
     store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", held)
     ops = debug_tensix.device.instructions
-    debug_tensix.inject_instruction(ops.TT_OP_SETDVALID(0b11), 0)
-    debug_tensix.inject_instruction(ops.TT_OP_CLEARDVALID(0b11, 0), 0)
+    debug_tensix.inject_instruction(ops.TT_OP_SETDVALID(_SRCA_SRCB), 0)   # thread 0
+    debug_tensix.inject_instruction(ops.TT_OP_CLEARDVALID(_SRCA_SRCB, 0), 0)  # thread 0
     # Unit clocks are gated when idle: reads keep them running while the wait drains and the reset is asserted.
-    for _ in range(16):
+    for _ in range(_CLOCK_KEEPALIVE_READS):
         store.read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
     store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", held | _PIPELINE_RESET_MASK)
-    for _ in range(16):
+    for _ in range(_CLOCK_KEEPALIVE_READS):
         store.read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
     store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", held)
 
