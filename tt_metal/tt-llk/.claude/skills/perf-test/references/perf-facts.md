@@ -25,10 +25,12 @@ Each of these changes the measured code. Never mix them in one report or one
 comparison.
 
 - **Speed of light.** `--speed-of-light` turns runtime parameters into
-  compile-time constants (`SPEED_OF_LIGHT` is defined). The nightly
-  **LLK perf** run measures it; the PR and merge perf gates build both sides
-  without it, and the gate refuses to compare the two kinds. Normal builds also load the runtime-parameter struct, so they move more
-  under layout changes.
+  compile-time constants (`SPEED_OF_LIGHT` is defined). CI gates both kinds,
+  in separate gates: the scheduled **LLK perf** run measures and gates speed
+  of light; the PR, merge and `llk-perf-gate.yaml` nightly gates build the
+  normal kind. A gate refuses to compare the two kinds ("CI" below). Normal
+  builds also load the runtime-parameter struct, so they move more under
+  layout changes.
 - **Asserts.** CI builds perf with `TT_LLK_DISABLE_ASSERTS=1`, which drops
   `-DENABLE_LLK_ASSERT`. A local perf build without it measures code with
   asserts. `run_test.sh --perf` and `perf_compare_commits.sh` set it by
@@ -103,7 +105,9 @@ comparison.
 - Workflow **LLK perf** (`llk-perf.yaml`) runs `tests/run_llk_perf_wormhole.sh`
   and `tests/run_llk_perf_blackhole.sh`: producer `-n 10`, consumer
   `--dist loadgroup -n 15`, `-m "perf and not accuracy"`, `--timeout=60`,
-  speed of light for the scheduled run, `TT_LLK_DISABLE_ASSERTS=1`.
+  speed of light for the scheduled run, `TT_LLK_DISABLE_ASSERTS=1`. The
+  consumer stops at the first failure (`-x`, `LLK_PERF_EXITFIRST`); local
+  `run_test.sh --perf` does not.
 - CI cuts the perf sweep into groups of equal estimated time. It prefers
   measured per-test durations from earlier runs (`LLK_SPLIT_DURATIONS`,
   summed by `perf/sum_split_durations.py`) and otherwise falls back to the
@@ -113,14 +117,23 @@ comparison.
   update its entries and say so in the PR.
 - The perf gates and `perf_compare_commits.sh` share
   `perf/regression_compare.py`: a point regresses only when it is slower by
-  both more than the threshold and more than the cycle floor. Both differ by
-  architecture and gate, and some modules have their own threshold:
-  - PR and nightly gates: the per-architecture `include` matrices in
-    `.github/workflows/llk-perf-gate.yaml` (`threshold`,
-    `module_thresholds`, `min_cycles`).
-  - Merge gate: the `thresholds` output and `min_cycles` in
+  both more than the threshold and more than the cycle floor. Thresholds
+  differ by architecture, gate and build kind, and some gates give modules
+  their own. Each gate calls `llk-perf-gate-impl.yaml`; read the values at
+  the call site:
+  - Speed-of-light nightly gate: the `gate` job in
+    `.github/workflows/llk-perf.yaml`, a per-architecture `include` matrix
+    (`threshold`, `module_thresholds`) and a literal `min_cycles`.
+  - PR gate: the `llk-perf-gate` job in `.github/workflows/llk-perf-gate.yaml`,
+    a per-architecture `threshold` matrix (no module thresholds) and a
+    literal `min_cycles`.
+  - Normal-build nightly gate: the `nightly-gate` job in the same file, a
+    per-architecture matrix with `module_thresholds` and a literal
+    `min_cycles`.
+  - Merge gate: the `thresholds` output and the literal `min_cycles` in
     `.github/workflows/merge-gate.yaml`.
   - Local comparisons: the `perf_compare_commits.sh` defaults (`--help`).
 
-  When reproducing a gate verdict locally, pass that gate's values to
-  `perf_compare_commits.sh` with `--threshold` and `--min-cycles`.
+  When reproducing a gate verdict locally, match its build kind and pass its
+  values to `perf_compare_commits.sh` with `--threshold` (the module's own
+  threshold when it has one) and `--min-cycles`.

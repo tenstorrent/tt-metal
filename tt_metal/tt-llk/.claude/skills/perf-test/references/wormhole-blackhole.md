@@ -30,18 +30,29 @@ unpack and math for unary unpack paths. Multiply it by `LOOP_FACTOR`.
   per face on Wormhole (`_llk_unpack_tilize_num_dvalids_wrapper_`, which
   `_perf_src_handshake_iters_` calls; call the shared helper rather than the
   wrapper).
-- Some unpack paths post a zeroed SrcB with every SrcA dvalid, because math's
-  datacopy clears SrcA and SrcB every face (`CLR_AB` end op), whether it
-  copies with `MOVA2D` (SrcA only) or `ELWADD`: `unpack_A` with
-  `BroadcastType::NONE` (no `acc_to_dest`, not unpack-to-dest), every face,
-  and both tilize MOPs. They do it whatever `dest_acc` is, `No` included. Stand-ins for these paths
-  are `<true, true>`. Datacopy-style unary kernels: unpack sets SrcB for
-  `tilize_en || is_fp32_dest_acc_en`, and math clears `<true, true>`.
-- Unpack-to-dest posts no source dvalids. Unpack writes Dest and hands it to
-  math through a semaphore, so in `UNPACK_ISOLATE` math keeps its real
-  unpack-to-dest path (the block helper, no source wait) as the stand-in, and
-  in `MATH_ISOLATE` there is no math stage to measure: leave that run type
-  out for unpack-to-dest-only sweeps, or report it as empty.
+- `unpack_A` with `BroadcastType::NONE` (no `acc_to_dest`, not
+  unpack-to-dest) posts a zeroed SrcB with every SrcA dvalid, whatever
+  `dest_acc` is, so the datacopy's `ELWADD` branch (32-bit Dest, integer FPU,
+  UInt8 output) reads zeros. Tilize does the same: one per face on Wormhole,
+  one per tile on Blackhole, where math's tilize datacopy also runs a single
+  iteration. `MOVA2D` never waits on SrcB, which is why kernels that post
+  SrcB only when math uses `ELWADD` still run.
+- Math ends each datacopy iteration with `CLR_AB`, clearing both banks. So a
+  math stand-in in `UNPACK_ISOLATE` clears `<true, true>`, and in
+  `MATH_ISOLATE` an unpack stand-in that posts `<true, true>` matches the real
+  unpack.
+- Unpack-to-dest writes Dest directly. The handshake is the math-to-unpack
+  mailbox (math's Dest index, read in `set_dst_write_addr`) plus the
+  `UNPACK_TO_DEST` semaphore. Unary unpack-to-dest posts no source dvalids,
+  but on Blackhole a broadcast with 32-bit input also posts one SrcB dvalid
+  per tile, which math's broadcast datacopy consumes.
+  - `UNPACK_ISOLATE`: math keeps its real unpack-to-dest path (the block
+    helper, no source wait) as the stand-in.
+  - `MATH_ISOLATE`: a plain unpack-to-dest copy has no math stage to
+    measure; leave that run type out, or report it as empty. A broadcast
+    does real `MOVD2B`/`MOVB2D` work: measure it with an unpack stand-in that
+    services the mailbox, the semaphore and the Blackhole SrcB, as
+    `tests/sources/unpack_A_bcast_test.cpp` does.
 
 ## Sweep and build
 

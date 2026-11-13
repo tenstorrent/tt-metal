@@ -124,10 +124,16 @@ Known counts:
 - Scalar binary broadcast clears SrcAB once on the final outer-loop
   iteration: one handshake per tile, not per face.
 - Row and column broadcast may handshake per face; inspect the MOP.
-- Unary datacopy through math posts one source dvalid per tile. With 32-bit
-  Dest (`is_fp32_dest_acc_en`) it uses ELWADD: unpack produces a real SrcA and
-  a dummy SrcB, so the stand-ins use `<true, is_fp32_dest_acc_en>`. 32-bit
-  data that goes unpack-to-dest posts no source dvalids.
+- Unary datacopy through math posts one source dvalid per tile. The stand-ins
+  follow the source math reads
+  (`tests/sources/quasar/eltwise_unary_datacopy_quasar_test.cpp`):
+  - 32-bit Dest (`is_fp32_dest_acc_en`): ELWADD consumes the selected source
+    and the dummy one unpack produces, `<true, true>`.
+  - A2D: `<true, false>`.
+  - B2D: `<false, true>`. `MOVB2D` waits for SrcB, so an A2D-style stand-in
+    hangs `MATH_ISOLATE`.
+
+  32-bit data that goes unpack-to-dest posts no source dvalids.
 - Check pulse counts in the code, not the comments: the variable-tile unpack
   MOP comment says "per face" but it pulses once per tile
   (`llk_unpack_unary_operand.h`).

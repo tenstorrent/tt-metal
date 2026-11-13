@@ -143,7 +143,8 @@ bash "$LLK/.claude/scripts/run_test.sh" run --worktree "$LLK" --arch wormhole \
 Snapshot the ELFs after the compile phase of each variant (step 1). Reports land in
 `tt_metal/tt-llk/perf_data/runs/<tag>/<module>/`. Swap only the test's own
 files to the baseline with `git restore --source=<ref> --worktree -- <files>`, and restore
-them afterwards. A file that exists on only one side, such as a deleted `[op]_perf.cpp`,
+them afterwards. That restore silently overwrites uncommitted edits to those files: stash or
+commit them first. A file that exists on only one side, such as a deleted `[op]_perf.cpp`,
 must be removed by hand.
 
 ## Failure handling

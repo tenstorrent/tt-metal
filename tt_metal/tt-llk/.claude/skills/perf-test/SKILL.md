@@ -167,7 +167,8 @@ traffic you measure.
 inline copies drift the first time one is edited). `L1_TO_L1` and that
 thread's isolate call the same helper with the same `NUM_BLOCKS`,
 `NUM_TILES_IN_BLOCK`, `DST_INDEX` and addresses, and repeat it `LOOP_FACTOR`
-times. The two branches then differ only in sync:
+times. The two branches then differ only in sync, plus the Dest bookkeeping
+that pack's section done carries (below the table):
 
 | Run type | Unpack | Math | Pack |
 |---|---|---|---|
@@ -178,6 +179,12 @@ times. The two branches then differ only in sync:
 
 Adapt the table to the real pipeline: an unpack-to-dest kernel may bypass
 math, and a 4-TRISC Quasar kernel adds an SFPU column.
+
+On Wormhole and Blackhole, `_llk_pack_dest_section_done_` is more than the
+math semaphore: it also stalls on pack, clears the packed Dest half
+(`ZEROACC`) and flips the packer's Dest bank. Without it, `PACK_ISOLATE`
+skips the Dest clear and always packs bank 0, so part of the gap to
+`L1_TO_L1` is that bookkeeping, not handshake cost.
 
 - Idle branches are empty and fall through to `PROFILER_SYNC()`; no early
   `return` inside the zone. Keep the same `if constexpr` chain shape in every
@@ -218,7 +225,8 @@ Signal completion only to an active consumer:
 - `L1_TO_L1`: keep the real producer-to-pack setup and section-done calls.
 - `UNPACK_ISOLATE` and `MATH_ISOLATE`: do not signal the idle pack.
 - `PACK_ISOLATE`: pack without waiting for math and without Dest section
-  done.
+  done, which also drops its Dest clear and bank flip (see the run-type
+  table).
 
 Architecture-specific state (Quasar wait masks, `set_up_dest_dvalid_per_thread`)
 is in the references.
@@ -243,7 +251,7 @@ still compile. Every name it uses must exist in every build.
   hides untested code.
 - If a field is missing in one mode, fix the Python side, not the kernel.
 - Use sources of truth such as `get_dest_max_tiles<...>()` and
-  `TILE_WIDTH * TILE_HEIGHT`. Label literal arguments (`false /* untilize */`)
+  `TILE_WIDTH * TILE_HEIGHT`. Label literal arguments (`false /*untilize*/`)
   and check each label against the callee's parameter name.
 - Use the target architecture's current LLK signatures. Do not copy calls
   from another architecture's or an older perf kernel.

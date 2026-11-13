@@ -49,11 +49,11 @@ sweep in the test file to make a run finish.
 
 ## 2. Run the sweep
 
-Use `run-test` with `--perf`. It runs the producer and consumer phases the
-way CI does (`-m perf`, `--mode perf` for SFPU sweep modules,
-`TT_LLK_DISABLE_ASSERTS=1`, no `maxfail`, `--dist loadgroup -n 15` on
-silicon), serializes device or simulator access, diagnoses hangs, and prints
-the report directory:
+Use `run-test` with `--perf`. It builds and selects as CI does (`-m perf`,
+`--mode perf` for SFPU sweep modules, `TT_LLK_DISABLE_ASSERTS=1`,
+`--dist loadgroup -n 15` on silicon), but unlike CI it does not stop at the
+first failure, so the report covers the whole sweep. It serializes device or
+simulator access, diagnoses hangs, and prints the report directory:
 
 ```bash
 bash .claude/scripts/run_test.sh run --worktree "$PWD" --arch <arch> \
