@@ -32,6 +32,25 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_in(dfb::in);
     const uint32_t tile_size = dfb_in.get_tile_size();
+#ifdef PROLOGUE_AFFINE
+    {
+        // The per-channel scale / shift tiles ([1, C] TILE tensors, one page per channel tile) for the
+        // untilize compute kernel; pushed once, never popped
+        DataflowBuffer dfb_scale(dfb::scale);
+        DataflowBuffer dfb_shift(dfb::shift);
+        const auto s_scale = TensorAccessor(tensor::scale_src);
+        const auto s_shift = TensorAccessor(tensor::shift_src);
+        dfb_scale.reserve_back(num_tiles_per_row);
+        dfb_shift.reserve_back(num_tiles_per_row);
+        for (uint32_t t = 0; t < num_tiles_per_row_this_core; ++t) {
+            noc.async_read(s_scale, dfb_scale, tile_size, {.page_id = t}, {.offset_bytes = t * tile_size});
+            noc.async_read(s_shift, dfb_shift, tile_size, {.page_id = t}, {.offset_bytes = t * tile_size});
+        }
+        noc.async_read_barrier();
+        dfb_scale.push_back(num_tiles_per_row);
+        dfb_shift.push_back(num_tiles_per_row);
+    }
+#endif
 
     // Per-dimension index counter. The host passes its starting values as varargs, which are read-only,
     // so the kernel copies them into this scratchpad and counts there.
