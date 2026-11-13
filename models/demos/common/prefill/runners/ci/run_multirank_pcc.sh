@@ -215,7 +215,8 @@ case "${MODEL}" in
     SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
     ;;
   kimi_k3_1)
-    # Kimi-K3 with its 24 MLA layers changed to DSA: same depths, slots and gate as kimi_k3 above.
+    # Kimi-K3 with its 24 MLA layers changed to DSA: kimi_k3's depths and gate, on one 8x4 stage per galaxy
+    # (kimi_k3's *_8x4 layout: SP=8 on axis 0, 5120-token chunks) with kimi_k3_1.json's slots.
     # The adapter's defaults already name the K3.1 weights, cache and golden, so no path is exported.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
