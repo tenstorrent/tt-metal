@@ -11,6 +11,7 @@
 #include <initializer_list>
 #include <optional>
 #include <string>
+#include <cstdint>
 
 namespace ttnn::operations::binary_ng {
 
@@ -47,7 +48,7 @@ struct BinaryNgKernelConfig {
     KernelName reader_kernel;
     KernelName compute_kernel;
     KernelName writer_kernel;
-    std::optional<uint32_t> bcast_input;
+    std::optional<std::uint32_t> bcast_input;
 };
 
 std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op);
@@ -119,7 +120,7 @@ void add_activation_defines(
     std::string_view operand,
     std::optional<DataType> dtype = std::nullopt);
 
-uint32_t pack_scalar_runtime_arg(unary::ScalarVariant scalar, DataType dtype, bool is_quant_op);
+std::uint32_t pack_scalar_runtime_arg(unary::ScalarVariant scalar, DataType dtype, bool is_quant_op);
 
 std::map<std::string, std::string> make_dataflow_defines(
     DataType dtype, std::optional<DataType> b_dtype = std::nullopt);
@@ -147,6 +148,11 @@ std::optional<AllShardVolumes> get_shard_volumes(
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
+
+// True when both configs are 2D-sharded and place the same tensor region on every core: equal ShardSpec
+// (grid, shard shape, orientation) and equal memory layout. Required before a sharded input may be
+// aliased in place against the output.
+bool sharded_layout_matches(const MemoryConfig& input, const MemoryConfig& output);
 
 // b == nullptr is a scalar operand. The optional overload forwards a spec the caller already owns.
 bool is_native_L1_sharding(const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const MemoryConfig& c);

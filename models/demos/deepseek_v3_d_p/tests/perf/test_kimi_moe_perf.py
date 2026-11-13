@@ -70,8 +70,7 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    # Mean of CI runs 40424879138, 40494538796, 40532334659 and 40610708699 (2.991-3.000 ms).
-    expected_ns=2_996_000,
+    expected_ns=2_896_000,
     margin=0.03,
     shape_note="384 experts / top-8, 7168 emb",
 )
@@ -205,6 +204,8 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         **case.extra,
         measure=measure,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(case.config),
+        dispatch_fwd_vc_pages=case.config.MOE_FWD_VC_PAGES,
+        combine_fwd_vc_pages=case.config.MOE_FWD_VC_PAGES,
     )
 
     assert replays_ns, f"no traced replay was timed for the {case.label} MoE forward"
