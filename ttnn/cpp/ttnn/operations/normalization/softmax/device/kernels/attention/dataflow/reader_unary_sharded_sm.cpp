@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -16,6 +16,10 @@
 void kernel_main() {
     constexpr auto dfb_max_scaler = dfb::max_scaler;
     constexpr auto dfb_sum_scaler = dfb::sum_scaler;
+    // Kernel-scope scaler DataflowBuffers, passed to the helpers by reference: on Quasar a helper-owned
+    // DataflowBuffer drains in its destructor and would wait here for compute's pop (#60848).
+    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
+    DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler);
 
 #ifdef MASK_PADDED_DATA
     // The last dimension is not a multiple of the tile width: the compute adds this -inf tile to the last tile of
@@ -33,7 +37,8 @@ void kernel_main() {
 
     constexpr auto dfb_fused_scale = dfb::fused_scale;
     const std::uint32_t pre_scale = get_arg(args::pre_scale);
-    generate_bcast_unary_scalar(CircularBuffer(dfb_fused_scale), pre_scale);
+    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
+    generate_bcast_unary_scalar(dfb_fused_scale_obj, pre_scale);
 
 #ifndef SHARDED_CAUSAL_MASK
     // When the mask is interleaved (not sharded-resident) the reader streams it into dfb_attn (c_3).
@@ -74,19 +79,21 @@ void kernel_main() {
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     dfb_max_scaler,
                     ckernel::PoolType::MAX,
-                    ckernel::ReduceDim::REDUCE_ROW>();
+                    ckernel::ReduceDim::REDUCE_ROW>(dfb_max_scaler_obj);
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     dfb_sum_scaler,
                     ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW>();
+                    ckernel::ReduceDim::REDUCE_ROW>(dfb_sum_scaler_obj);
             }
         }
     }
 #elif defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_max_scaler_obj);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_sum_scaler_obj);
 #else
     dfb_attn_obj.reserve_back(block_wt);
     std::uint32_t write_offset = 0;
@@ -99,16 +106,20 @@ void kernel_main() {
     dfb_attn_obj.push_back(block_wt);
 
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_max_scaler_obj);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_sum_scaler_obj);
 #endif
 
 #else
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_max_scaler_obj);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_sum_scaler_obj);
 #ifdef MASK_PADDED_DATA
     // The padding mask goes after the reduce scalers.
     push_mask_padded_tile<num_datum_padded, tile_hw, true>(dfb_mask_padded_obj);

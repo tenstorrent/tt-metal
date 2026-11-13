@@ -38,7 +38,7 @@ The host-side setup for this custom SFPI example follows the standard pattern: d
     auto src1_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
     auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     // Create mesh workload for program execution across the mesh
     distributed::MeshWorkload workload;

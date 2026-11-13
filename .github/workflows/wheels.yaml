@@ -76,13 +76,14 @@ jobs:
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
+          if [ -z "${{ vars.GARAGE_S3_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
             echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
+            echo "Needs vars.GARAGE_S3_ACCESS_KEY_ID and secrets.GARAGE_S3_SECRET_KEY."
             exit 1
           fi
           # The ccache-storage-s3 helper reads credentials from the standard AWS
           # credential chain, so export them to the job environment.
-          echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=${{ vars.GARAGE_S3_ACCESS_KEY_ID }}" >> $GITHUB_ENV
           echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=garage" >> $GITHUB_ENV
           # The s3:// scheme makes ccache auto-spawn and manage the helper itself:

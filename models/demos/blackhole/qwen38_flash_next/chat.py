@@ -13,13 +13,15 @@ import hashlib
 import json
 import os
 import re
-import stat
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 import torch
+
+from models.demos.blackhole.qwen38_flash_next.checkpoint import admit_checkpoint_file
 
 CHECKPOINT_REVISION = "f5d08274bafd880402bd16f5e3e6c514136ec06c"
 VOCAB_SIZE = 248_320
@@ -56,23 +58,6 @@ class Qwen38ChatFormatError(ValueError):
 
 class Qwen38ToolExecutionError(RuntimeError):
     """A requested local tool is absent, malformed, or outside its safe domain."""
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while block := stream.read(4 * 1024 * 1024):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _regular_file(path: Path) -> None:
-    try:
-        mode = path.lstat().st_mode
-    except OSError as error:
-        raise Qwen38ChatFormatError(f"required tokenizer artifact is unavailable: {path}") from error
-    if not stat.S_ISREG(mode) or path.is_symlink():
-        raise Qwen38ChatFormatError(f"tokenizer artifact must be a non-symlink regular file: {path}")
 
 
 def _normal_reasoning_effort(value: str) -> Literal["xhigh", "medium", "low"]:
@@ -185,10 +170,9 @@ class Qwen38OfficialChatTemplate:
         root = Path(checkpoint_root).resolve(strict=True)
         if not root.is_dir():
             raise Qwen38ChatFormatError(f"checkpoint root is not a directory: {root}")
+        artifacts = {name: admit_checkpoint_file(root / name).read_bytes() for name in PINNED_TOKENIZER_ARTIFACTS}
         for name, expected in PINNED_TOKENIZER_ARTIFACTS.items():
-            path = root / name
-            _regular_file(path)
-            actual = _sha256(path)
+            actual = hashlib.sha256(artifacts[name]).hexdigest()
             if actual != expected:
                 raise Qwen38ChatFormatError(
                     f"pinned tokenizer artifact {name} has SHA-256 {actual}, expected {expected}"
@@ -197,11 +181,15 @@ class Qwen38OfficialChatTemplate:
         # Network and remote-code execution are both disabled.
         from transformers import AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            root,
-            local_files_only=True,
-            trust_remote_code=False,
-        )
+        # Loads the verified bytes: a snapshot link retargeted after the check is never read.
+        with tempfile.TemporaryDirectory(prefix="qwen38-tokenizer-") as staged:
+            for name, data in artifacts.items():
+                (Path(staged) / name).write_bytes(data)
+            tokenizer = AutoTokenizer.from_pretrained(
+                staged,
+                local_files_only=True,
+                trust_remote_code=False,
+            )
         # The LM head has padded rows above the tokenizer size: valid output indices, never prompt tokens.
         if len(tokenizer) != TOKENIZER_SIZE or tokenizer.vocab_size != END_OF_TEXT_ID:
             raise Qwen38ChatFormatError(
@@ -214,7 +202,7 @@ class Qwen38OfficialChatTemplate:
             raise Qwen38ChatFormatError("tokenizer <|im_end|> ID differs from the pinned checkpoint")
         if tokenizer.eos_token_id != IM_END_ID or tokenizer.pad_token_id != END_OF_TEXT_ID:
             raise Qwen38ChatFormatError("tokenizer EOS/pad IDs differ from the pinned chat contract")
-        expected_template = (root / "chat_template.jinja").read_text(encoding="utf-8")
+        expected_template = artifacts["chat_template.jinja"].decode("utf-8")
         if tokenizer.chat_template != expected_template:
             raise Qwen38ChatFormatError("loaded tokenizer did not select the pinned standalone chat template")
         self.checkpoint_root = root

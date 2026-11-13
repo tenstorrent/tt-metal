@@ -12,6 +12,8 @@ import ttnn
 
 from tt_py_test_utils_common.utility_functions import torch2tt_tensor, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+
+import tests.ttnn.unit_tests.operations.fused.test_layer_norm as layer_norm_base
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm,
     ttnn_rms_norm,
@@ -462,3 +464,16 @@ def test_layernorm_interleaved_row_major_residual(device, dtype):
         atol=0.019,
         frobenius_threshold=0.004,
     )
+
+
+@pytest.mark.parametrize(
+    "h",
+    [
+        h
+        for h in layer_norm_base.LARGE_LAYER_NORM_WIDE_ROWS_HEIGHTS
+        if h not in layer_norm_base.LARGE_LAYER_NORM_WIDE_ROWS_SANITY_HEIGHTS
+    ],
+)
+@pytest.mark.parametrize("w", [8192, 16384])
+def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
+    layer_norm_base.test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w)

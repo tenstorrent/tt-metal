@@ -66,17 +66,12 @@ CPMAddPackage(
         "BOOST_ENABLE_CMAKE ON"
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
-        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree"
+        "BOOST_INCLUDE_LIBRARIES asio"
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
 ensureboosttarget(algorithm)
 ensureboosttarget(asio)
-ensureboosttarget(lockfree)
-ensureboosttarget(core)
-ensureboosttarget(container)
-ensureboosttarget(smart_ptr)
-ensureboosttarget(interprocess)
 
 ############################################################################################################################
 # protobuf
@@ -200,22 +195,6 @@ CPMAddPackage(
 ############################################################################################################################
 
 CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.1.4 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
-
-############################################################################################################################
-# range-v3 : https://github.com/ericniebler/range-v3
-############################################################################################################################
-
-CPMAddPackage(
-    NAME range-v3
-    GITHUB_REPOSITORY ericniebler/range-v3
-    GIT_TAG 0.12.0
-    PATCHES
-        range-v3.patch
-    OPTIONS
-        "CMAKE_BUILD_TYPE Release"
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-    CUSTOM_CACHE_KEY "0_12_0_patched"
-)
 
 ############################################################################################################################
 # nanobind : https://github.com/wjakob/nanobind

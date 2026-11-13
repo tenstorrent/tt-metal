@@ -78,3 +78,12 @@ def test_moreh_linear_backward(
 def test_moreh_linear_backward_bias_only(output_shape, bias_shape, device):
     torch.manual_seed(0)
     run_moreh_linear_backward_bias_only_test(output_shape, bias_shape, device)
+
+
+def test_moreh_linear_backward_rejects_mismatched_bias_grad(device, expect_error):
+    # The bias-grad program sizes its buffers from output_grad, so an fp32 bias_grad would be written as bf16.
+    tt = lambda t, d=ttnn.bfloat16: ttnn.from_torch(t, dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
+    dy, x, w = tt(torch.randn(1, 1, 32, 64)), tt(torch.randn(1, 1, 32, 32)), tt(torch.randn(1, 1, 64, 32))
+    b, db = tt(torch.randn(1, 1, 1, 64)), tt(torch.zeros(1, 1, 1, 64), ttnn.float32)
+    with expect_error(RuntimeError, "must match the output_grad dtype"):
+        ttnn.moreh_linear_backward(dy, x, w, are_required_outputs=[False, False, True], bias=b, bias_grad=db)

@@ -19,11 +19,16 @@ void bind_nlp_concat_heads(nb::module_& mod) {
         mod,
         R"doc(
             Shuffles [B, num_heads, S, head_dim] tensor into tensor with shape [B, 1, S, num_heads * head_dim].
+
+            Keyword Args:
+                memory_config: Memory Config of the output tensor, if `None` then it gets set to input_tensor.memory_config(). Defaults to `None`.
+                runtime_rows (bool): interleaved input and output only: one program serves every S, so a change in S is a program cache hit. Defaults to `False`.
         )doc",
         &ttnn::experimental::nlp_concat_heads,
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("runtime_rows") = false);
 }
 
 }  // namespace ttnn::operations::experimental::nlp_concat_heads::detail

@@ -88,7 +88,8 @@ struct DeviceStorage {
     DeviceStorage& operator=(DeviceStorage&&) noexcept;
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory,
-    // but with a different set of coords.
+    // but with a different set of coords. A storage with a topology of its own (single_shard) keeps it when the
+    // coords are the same.
     // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
     DeviceStorage(const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords);
 
@@ -216,12 +217,13 @@ private:
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
     // coords_ only make sense when the DeviceStorage is allocated.
     std::vector<tt::tt_metal::distributed::MeshCoordinate> coords_;
-    // The storage's own tensor topology, set by single_shard(); otherwise the MeshTensor's topology applies.
+    // The storage's own tensor topology, set by single_shard() and kept by a copy restricted to the same coords;
+    // otherwise the MeshTensor's topology applies.
     std::optional<tt::tt_metal::TensorTopology> tensor_topology_;
 
     // Replaces the tensor topology that get_tensor_topology() returns: the storage's own when it has one (the
     // MeshTensor's is untouched), otherwise the MeshTensor's, which every storage sharing it then sees. Reached
-    // through Tensor::update_tensor_topology only.
+    // through Tensor::update_tensor_topology and combine_device_storages.
     // Throws if the DeviceStorage is deallocated.
     friend class TensorAttributes;
     void update_tensor_topology(tt::tt_metal::TensorTopology tensor_topology);

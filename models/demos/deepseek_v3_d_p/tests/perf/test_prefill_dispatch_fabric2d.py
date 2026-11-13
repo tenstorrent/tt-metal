@@ -25,6 +25,7 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d import (
+    FWD_VC_PAGES,
     PRODUCTION_ROUTING,
     _draw_indices,
     _expert_dispatch_table,
@@ -159,6 +160,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links):
             seq_len_per_chip=seq_len_per_chip,
             cluster_axis=sp_axis,
             num_links=num_links,
+            fwd_vc_pages=FWD_VC_PAGES,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

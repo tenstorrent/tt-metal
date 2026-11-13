@@ -414,7 +414,7 @@ void RecvAsyncProgramFactory::override_runtime_arguments(
     tt::tt_metal::IDevice* target_device =
         ttnn::send_recv_utils::resolve_target_device(output_tensor, mesh_dispatch_coordinate, "recv_async");
 
-    auto* output_buffer = output_tensor.buffer();
+    const auto* output_buffer = &output_tensor.mesh_buffer();
     TT_FATAL(output_buffer != nullptr, "recv_async: output tensor buffer is null");
 
     // Everything else in the runtime args (page counts, offsets, bank ids, fabric connection

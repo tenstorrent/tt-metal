@@ -188,7 +188,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     auto hugepage_size = get_hugepage_size(device_id);
 
     for ([[maybe_unused]] auto _ : state) {
-        auto pgm = CreateProgram();
+        auto pgm = CreateProgram(*device);
         std::optional<CoreRange> configured_cores;
         if (ctx.number_reader_kernels) {
             configured_cores = configure_kernels(device, pgm, ctx, 0, ctx.number_reader_kernels, false, hugepage_size);
@@ -253,7 +253,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     auto host_hugepage_size = get_hugepage_size(device_id + 1);
 
     for ([[maybe_unused]] auto _ : state) {
-        auto pgm = CreateProgram();
+        auto pgm = CreateProgram(*device);
         auto configured_cores =
             configure_kernels(device, pgm, ctx, 0, ctx.number_reader_kernels, false, device_hugepage_size).value();
         double host_copy_time = 0;
@@ -293,8 +293,7 @@ TestResult mem_bench_multi_mmio_devices(
         std::map<int, Program> programs;                  // device : programs
         std::map<int, CoreRange> configured_core_ranges;  // device : cores
         for (const auto& [device_id, device] : devices) {
-            programs[device_id] = CreateProgram();
-            Program& pgm = programs[device_id];
+            Program& pgm = programs.emplace(device_id, CreateProgram(*device)).first->second;
             auto device_hugepage_size = get_hugepage_size(device_id);
             configured_core_ranges.insert(
                 {device_id,
@@ -401,7 +400,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     TestResult results;
 
     for ([[maybe_unused]] auto _ : state) {
-        auto pgm = CreateProgram();
+        auto pgm = CreateProgram(*device);
         auto configured_read_cores =
             configure_kernels(device, pgm, ctx, 0, ctx.number_reader_kernels, false, hugepage_size / 2).value();
         // Offset write cores to second half of PCIe

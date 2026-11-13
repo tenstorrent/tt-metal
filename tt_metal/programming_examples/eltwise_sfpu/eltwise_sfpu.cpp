@@ -37,7 +37,7 @@ int main() {
         // simultaneously.
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
         constexpr CoreCoord core = {0, 0};

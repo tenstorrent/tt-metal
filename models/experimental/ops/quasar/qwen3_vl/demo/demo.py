@@ -252,7 +252,7 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150": (1, 1), "P150x8": (1, 8)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -337,10 +337,10 @@ def test_demo(
     if on_quasar:
         # Quasar: bf16 only (no block floats), no trace, host sampling (on-device argmax is unchecked on Quasar),
         # and the op workarounds the e2e uses (tests/e2e/op_overrides.py). Its 2 GiB of DRAM holds a few layers
-        # only, so unless given on the command line: 2 vision blocks, 2 text layers, the deepstack tap at vision
-        # block 0, the small prompt (256x256 image, 78 tokens) in one batch, and 2 generated tokens. That runs
-        # every per-layer code path once: the block-to-block handoff, a deepstack merger, a text layer with and
-        # one without the deepstack add, and a decode step that reuses the compiled programs.
+        # only, so unless given on the command line: 2 vision blocks, 2 text layers, the small prompt (256x256
+        # image, 78 tokens) in one batch, and 2 generated tokens. Deepstack keeps the model's own taps that fall
+        # inside the vision depth (none at 2 blocks, [5] at 6, [5, 11] at 12, all from 18); --deepstack_at N
+        # puts a single tap at block N, e.g. 0 to run a deepstack merger in a 2-block run.
         from models.experimental.ops.quasar.qwen3_vl.tests.e2e.op_overrides import OverrideSession
 
         def cli_or(name, default):
@@ -349,7 +349,6 @@ def test_demo(
 
         num_layers = cli_or("--num_layers", 2)
         vision_depth = cli_or("--vision_depth", 2)
-        deepstack_at = cli_or("--deepstack_at", 0)
         input_prompts = cli_or(
             "--input_prompts", "models/experimental/ops/quasar/qwen3_vl/demo/sample_prompts/demo_tiny.json"
         )
@@ -436,11 +435,16 @@ def test_demo(
     ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
     transformers_logging.set_verbosity_error()
     config = Qwen3VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
-    truncate_hf_config(
-        config,
-        vision_depth or config.vision_config.depth,
-        model_args.n_layers,
-        deepstack_at,
+    run_depth = vision_depth or config.vision_config.depth
+    truncate_hf_config(config, run_depth, model_args.n_layers, deepstack_at)
+    # Without --deepstack_at, keep the model's own taps that a cut-down vision tower still reaches (the TT vision
+    # model drops the others too), so the reference and TT models agree and a shallow run has no deepstack.
+    config.vision_config.deepstack_visual_indexes = [
+        i for i in config.vision_config.deepstack_visual_indexes if i < run_depth
+    ]
+    logger.info(
+        f"Vision depth {run_depth}, text layers {model_args.n_layers}, "
+        f"deepstack taps {config.vision_config.deepstack_visual_indexes}"
     )
     reference_model = Qwen3VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"

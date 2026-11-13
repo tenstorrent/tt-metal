@@ -19,6 +19,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_equal,
+    decode_tail,
     make_actual_start,
 )
 
@@ -157,11 +158,7 @@ def test_device_weight_placement(
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [_FABRIC_1D], indirect=True)
 def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshDevice) -> None:
     config = KDAConfig(
         hidden_size=256,
@@ -193,7 +190,9 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
 
     actual_output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     recurrent_shards = _host_shards(state.recurrent)
-    convolution_shards = _host_shards(state.convolution)
+    convolution_shards = [
+        decode_tail(shard, layer.convolution_page_channels) for shard in _host_shards(state.convolution)
+    ]
     actual_recurrent = torch.cat(recurrent_shards, dim=1)
     local_key_width = config.head_k_dim
     local_value_width = config.head_v_dim

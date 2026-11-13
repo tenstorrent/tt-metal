@@ -151,7 +151,7 @@ TEST_F(CommandListTensorPrefetcherFixture, EveryReplayResendsTheRecordedRequest)
         builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
         auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
             device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-        builder.add(validator);
+        builder.add(device_->mesh_command_queue(), validator);
         auto command_list = builder.build(device_->mesh_command_queue());
         builder.deallocate();
 
@@ -170,7 +170,7 @@ TEST_F(CommandListTensorPrefetcherFixture, RecordedRequestsDoNotOutliveThePrefet
     builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
     auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
         device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-    builder.add(validator);
+    builder.add(device_->mesh_command_queue(), validator);
     auto command_list = builder.build(device_->mesh_command_queue());
     metal_exp::StopTensorPrefetcher(*device_);
 
@@ -181,7 +181,7 @@ TEST_F(CommandListTensorPrefetcherFixture, RecordedRequestsDoNotOutliveThePrefet
     EXPECT_ANY_THROW(builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs()));
     builder.clear();
     builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
-    builder.add(validator);
+    builder.add(device_->mesh_command_queue(), validator);
     command_list.deallocate();
     command_list = builder.build(device_->mesh_command_queue());
     builder.deallocate();
@@ -203,7 +203,7 @@ TEST_F(CommandListTensorPrefetcherFixture, ReplayUnderAnotherSubDeviceManagerSen
         builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
         auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
             device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-        builder.add(validator);
+        builder.add(device_->mesh_command_queue(), validator);
         auto command_list = builder.build(device_->mesh_command_queue());
         builder.deallocate();
 

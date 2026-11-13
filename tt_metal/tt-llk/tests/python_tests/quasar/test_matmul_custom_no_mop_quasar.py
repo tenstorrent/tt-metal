@@ -39,6 +39,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
+    MathFidelity,
     Transpose,
     format_dict,
 )
@@ -47,6 +48,7 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
 )
 from helpers.param_config import (
+    DEST_DEPTH_BLOCK_COUNTS,
     input_output_formats,
     max_dest_tiles,
     parametrize,
@@ -287,5 +289,81 @@ def test_matmul_custom_no_mop_quasar_mxfp4_2x(
         input_A_dimensions,
         input_B_dimensions,
         enable_2x_format=True,
+        boot_mode=boot_mode,
+    )
+
+
+def _dest_depth_dimensions(dest_acc):
+    """A x B spanning 4 and 8 full Dest sections; the kernel runs it as (ct=2, rt=max/2, kt=2) blocks."""
+    rt_per_block = max_dest_tiles(dest_acc, DEST_SYNC_MODE) // 2
+    return [
+        ([32 * blocks * rt_per_block, 64], [64, 64])
+        for blocks in DEST_DEPTH_BLOCK_COUNTS
+    ]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dimensions=runtime(_dest_depth_dimensions),
+)
+def test_matmul_custom_no_mop_quasar_dest_depth(
+    formats,
+    dest_acc,
+    dimensions,
+    boot_mode=BootMode.DEFAULT,
+):
+    """Output larger than Dest: the replayed MVMUL walk runs once per stacked Dest section."""
+    input_A_dimensions, input_B_dimensions = dimensions
+    _run_matmul_custom_no_mop(
+        MathFidelity.LoFi,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        enable_2x_format=False,
+        boot_mode=boot_mode,
+    )
+
+
+# Float32 L1 operands reach SrcA/SrcB as Tf32 (32-bit Dest) or Float16_b (16-bit Dest).
+MATMUL_FLOAT32_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    math_fidelity=lambda formats: [
+        fidelity
+        for fidelity in get_valid_math_fidelities(formats)
+        if fidelity in (MathFidelity.LoFi, MathFidelity.HiFi4)
+    ],
+    formats=MATMUL_FLOAT32_FORMATS,
+    # A Float32 output needs a 32-bit Dest; the packer cannot upcast.
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if formats.output_format.is_32_bit()
+        else [DestAccumulation.Yes, DestAccumulation.No]
+    ),
+    dimensions=runtime(MATMUL_2X_DIMENSIONS),
+)
+def test_matmul_custom_no_mop_quasar_float32(
+    math_fidelity,
+    formats,
+    dest_acc,
+    dimensions,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = dimensions
+    _run_matmul_custom_no_mop(
+        math_fidelity,
+        formats,
+        dest_acc,
+        input_A_dimensions,
+        input_B_dimensions,
+        enable_2x_format=False,
         boot_mode=boot_mode,
     )

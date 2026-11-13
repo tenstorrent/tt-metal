@@ -165,7 +165,7 @@ BenchList make_list(MeshDevice& mesh_device, bool tensor, uint32_t num_programs,
                 patches[1].common_runtime_args.emplace(name, i + 0x10001);
             }
         }
-        builder.add(workload, parameters);
+        builder.add(mesh_device.mesh_command_queue(0), workload, parameters);
     }
     return BenchList{std::move(tensors), builder.build(mesh_device.mesh_command_queue(0)), std::move(patches)};
 }

@@ -73,6 +73,7 @@ def test_enabling_topk_reporting_refreshes_candidate_parameters(monkeypatch):
     sampler.max_top_k = 32
     sampler._sampling_dp = 1
     sampler._greedy_col = object()
+    sampler._scale_logprobs = object()
     sampler.k_tensor, sampler.p_tensor, sampler.temp_tensor = object(), object(), object()
     calculator = SimpleNamespace(enable_log_probs=False, _use_topk_logprobs=True)
     calculator.set_log_probs_mode = lambda enabled, **kw: setattr(calculator, "enable_log_probs", enabled)
@@ -82,6 +83,41 @@ def test_enabling_topk_reporting_refreshes_candidate_parameters(monkeypatch):
     monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda source, dest: copied.append((source, dest)))
     sampler.reset_params(k=[1], p=[1.0], temp=[1.0], enable_log_probs=True)
     assert sampler.force_argmax_sampling is False
-    assert len(copied) == 4
+    assert len(copied) == 5
     assert copied[0][1] is sampler.k_tensor
     assert torch.equal(copied[0][0], torch.tensor([1]))
+    assert copied[-1][1] is sampler._scale_logprobs
+
+
+def test_scalar_log_probs_enable_temperature_broadcasts_scale_tensor(monkeypatch):
+    sampler = object.__new__(TTSampling)
+    sampler._allow_force_argmax_sampling = False
+    sampler._is_force_argmax_sampling = lambda k, p, temp: False
+    sampler._normalize_device_params = lambda k, temp: (torch.as_tensor(k), torch.as_tensor(temp))
+    sampler._sampling_dp = 1
+    sampler.mesh_device = SimpleNamespace(get_num_devices=lambda: 1)
+    sampler.cluster_shape = (1, 1)
+    sampler._param_dims = (None, None)
+    sampler._greedy_col_dims = lambda: (None, None)
+    sampler.k_tensor = object()
+    sampler.p_tensor = object()
+    sampler.temp_tensor = object()
+    sampler._greedy_col = object()
+    sampler._scale_logprobs = object()
+    sampler.log_probs_calculator = SimpleNamespace(
+        _use_topk_logprobs=False,
+        set_log_probs_mode=lambda *args, **kwargs: None,
+    )
+
+    copied_tensors = []
+    monkeypatch.setattr(ttnn, "from_torch", lambda value, **kwargs: torch.as_tensor(value))
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, device: copied_tensors.append((host, device)))
+
+    temp = [0.7] * 5
+    sampler.reset_params(k=[1] * 5, p=[0.0] * 5, temp=temp, log_probs_enable_temperature=True)
+
+    # copy order: k, p, temp, greedy_col, scale_logprobs
+    assert len(copied_tensors) == 5
+    scale_host, scale_device = copied_tensors[-1]
+    assert scale_device is sampler._scale_logprobs
+    torch.testing.assert_close(scale_host, torch.tensor(temp).reshape(1, 1, -1, 1).to(torch.bfloat16), rtol=0, atol=0)

@@ -174,6 +174,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         perf_gate = metal / "models/demos/common/prefill/runners/ci/perf_gate.py"
         perf_gate.parent.mkdir(parents=True)
         shutil.copyfile(HARNESS.with_name("perf_gate.py"), perf_gate)
+        ci_failure = metal / "models/common/ci_failure.py"
+        ci_failure.parent.mkdir(parents=True)
+        shutil.copyfile(HARNESS.parents[6] / "models/common/ci_failure.py", ci_failure)
         ttrun_dir = root / "ttop"
         ttrun_dir.mkdir()
         if hosts is None:
@@ -368,6 +371,34 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.one_record(records, "producer")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def failure_records(self, **kwargs):
+        """Run the harness with CI_FAILURE_RECORDS set; return (result, deterministic-failure reasons)."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        extra_env = {**kwargs.pop("extra_env", {}), "CI_FAILURE_RECORDS": directory.name}
+        result, _ = self.run_harness("mistral4", extra_env=extra_env, **kwargs)
+        return result, [path.read_text() for path in Path(directory.name).glob("*.txt")]
+
+    def test_perf_gate_miss_marks_the_job_non_retryable(self):
+        result, reasons = self.failure_records(extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000"})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("TPS GATE FAIL", reasons[0])
+
+    def test_perf_gate_miss_after_a_runner_failure_stays_retryable(self):
+        # The verdict of a run that did not complete says nothing about the commit: keep the retry.
+        result, reasons = self.failure_records(
+            runner_rc=17, extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000"}
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        self.assertEqual(reasons, [])
+
+    def test_perf_gate_pass_records_nothing(self):
+        result, reasons = self.failure_records(extra_env={"TEST_TPS": "17000", "PREFILL_EXPECTED_TPS": "17500"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(reasons, [])
+
 
 def _load_perf_gate():
     spec = importlib.util.spec_from_file_location("perf_gate", HARNESS.with_name("perf_gate.py"))
@@ -406,7 +437,10 @@ class PerfGateTableTests(unittest.TestCase):
         argv += ["--config", "sc1"] + (["--power", power] if power else []) + list(extra_args)
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(sys, "argv", argv), mock.patch.dict(
-            os.environ, {"PREFILL_SUMMARIES": str(root / "summaries"), **(env or {})}
+            # CI_FAILURE_RECORDS blanked unless a test sets it: these deliberate gate failures must never
+            # mark the CI job running this suite as non-retryable.
+            os.environ,
+            {"PREFILL_SUMMARIES": str(root / "summaries"), "CI_FAILURE_RECORDS": "", **(env or {})},
         ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             returncode = self.perf_gate.main()
         result = types.SimpleNamespace(returncode=returncode, stdout=out.getvalue(), stderr=err.getvalue())
@@ -440,6 +474,40 @@ class PerfGateTableTests(unittest.TestCase):
         result, _ = self.gate("multi", {"@55k": 10000})
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("no finite throughput_tok_s at @5k", result.stderr)
+
+    def gate_records(self, model, throughput, **kwargs):
+        """gate() with CI_FAILURE_RECORDS set; return (result, deterministic-failure reasons)."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        env = {**kwargs.pop("env", {}), "CI_FAILURE_RECORDS": directory.name}
+        with mock.patch.object(sys, "path", [str(HARNESS.parents[6]), *sys.path]):
+            result, _ = self.gate(model, throughput, env=env, **kwargs)
+        return result, [path.read_text() for path in Path(directory.name).glob("*.txt")]
+
+    def test_out_of_band_verdict_is_recorded(self):
+        result, reasons = self.gate_records("multi", {"@5k": 20000, "@55k": 5000})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("TPS GATE FAIL", reasons[0])
+
+    def test_context_change_is_recorded(self):
+        _, reasons = self.gate_records("multi", {"@5k": 20000, "@55k": 10000, "@1M": 5000})
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("the context length changed", reasons[0])
+
+    def test_missing_measurement_and_misrouted_host_stay_retryable(self):
+        for throughput, power in (({"@55k": 10000}, "14kw"), ({"@5k": 20000, "@55k": 10000}, "8kw")):
+            with self.subTest(throughput=throughput, power=power):
+                result, reasons = self.gate_records("multi", throughput, power=power)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(reasons, [])
+
+    def test_missing_deepest_probe_stays_retryable(self):
+        # Only @5k was measured on a leg baselined at @55k: a lost deep sample, not a known context change.
+        result, reasons = self.gate_records("legacy", {"@5k": 20000})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("the deeper probes were not measured", result.stderr)
+        self.assertEqual(reasons, [])
 
     def test_deeper_context_than_baseline_fails(self):
         result, _ = self.gate("multi", {"@5k": 20000, "@55k": 10000, "@1M": 5000})

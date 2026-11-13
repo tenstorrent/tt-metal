@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import torch
 
+import ttnn
 from models.demos.qwen38_27b_qb2.tt.generator import Qwen38Generator
 from models.demos.qwen38_27b_qb2.tt.generator_vllm import Qwen38ForCausalLM as Adapter
 
@@ -68,6 +69,11 @@ class SamplingModeTests(unittest.TestCase):
     def test_plugin_contract_declares_device_sampling_limits(self):
         self.assertEqual(Adapter.model_capabilities["max_device_top_k"], 32)
         self.assertFalse(Adapter.model_capabilities["supports_device_penalties"])
+
+    def test_plugin_contract_declares_the_demo_fabric(self):
+        fabric = Adapter.model_capabilities["fabric_config"]
+        self.assertEqual(fabric["config"], ttnn.FabricConfig.FABRIC_1D_RING)
+        self.assertEqual(fabric["router_config"].max_packet_payload_size_bytes, 8192)
 
     def test_explicit_all_mode_uses_existing_host_boundary(self):
         with patch.dict(os.environ, {"QWEN_VLLM_HOST_COMPATIBILITY": "all"}):

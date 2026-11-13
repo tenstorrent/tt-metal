@@ -41,7 +41,10 @@ targets:
               text_image_pcc: 1.0
               text_image_pcc_tolerance: 0.03
               edit_image_pcc: 1.0
-              edit_image_pcc_tolerance: 0.03
+              # The edit image amplifies small op rounding changes through the VAE encode and 40 denoising
+              # steps: correct softmax precision changes alone move it between 0.964 and 0.988 while the
+              # text image stays at 0.9902.
+              edit_image_pcc_tolerance: 0.05
             owner_id: U03HY7MK4BT
             team: models
   gemma4-31b-qb2:
@@ -55,6 +58,21 @@ targets:
               # The validator uses symmetric bands: 100 +/- 20% gives that floor.
               gpqa: 100
               gpqa_tolerance: 0.2
+            owner_id: U03HY7MK4BT
+            team: models
+          # Serving perf shapes. Without these, the GPQA entry above applies to them and fails on a missing gpqa.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U03HY7MK4BT
+            team: models
+          - batch_size: 32
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
             owner_id: U03HY7MK4BT
             team: models
   gemma4-26b-a4b-qb2:
@@ -113,6 +131,49 @@ targets:
               # First 10/198 GPQA Diamond questions; require at least 9/10.
               gpqa: 100
               gpqa_tolerance: 0.1
+            owner_id: U08BGTAMU1W
+            team: models
+          # Serving perf shapes. Without these, the GPQA entry above applies to them and fails on a missing gpqa.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 8
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 8
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 16
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 16
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
             owner_id: U08BGTAMU1W
             team: models
   # Consolidation: additive central-accuracy targets for models whose TTTv2 demo has no committed CI e2e
@@ -1057,11 +1118,14 @@ targets:
           # Specific entry so it wins over the catch-all for this config without disturbing
           # the b4/b1 runs above. Reseeded after removing dummy host-logprob copies:
           # run 36987762999, job 110780206653 measured 71.1432 t/s/u and 2276.5818 t/s.
+          # TTFT re-centred 2026-11-05 from 28 to 24.4 ms: six scheduled runs 10-31..11-05 on three
+          # QB2 hosts (qb2-120-p06t02, qb2-120-p02t06, qb2-120-p02t09) measured 23.77-24.70 ms, so the
+          # old 23.8 ms floor sat inside the normal spread (11-05 failed "much better than expected").
           - batch_size: 32
             seq_len: 712
             status: active
             perf:
-              prefill_time_to_first_token: 28
+              prefill_time_to_first_token: 24.4
               decode_t/s/u: 71.1
               decode_t/s: 2275.2
             accuracy: {}
@@ -2640,7 +2704,8 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.0933
+              # Re-centred 2026-11-03 from 10 scheduled nights (10-25..11-03) on 7 QB2 hosts: 0.1051-0.1081 fps.
+              fps: 0.1060
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2663,6 +2728,16 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  ideogram-4:
+    aliases: ["ideogram-4"]
+    skus:
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ANYQF656Y # Rahmy Salman
             team: models
   wan-2.2-t2v:
     aliases: ["wan-2.2-t2v", "wan2.2"]

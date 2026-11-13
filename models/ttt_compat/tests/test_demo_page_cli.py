@@ -45,16 +45,27 @@ def test_page_params_rejects_invalid_objects(value, expect_error):
 
 @pytest.mark.parametrize("disabled_mode", [None, "token_accuracy", "stress_test"])
 @pytest.mark.parametrize(
+    "page_params, expected_page_params",
+    [
+        (
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},
+        ),
+        ({"page_block_size": 64}, {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024}),
+        ({"page_max_num_blocks_per_dp": 2048}, {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048}),
+    ],
+    ids=["full-page-params", "block-size-only", "block-count-only"],
+)
+@pytest.mark.parametrize(
     "cli_value, preset, expected",
     [("False", True, False), ("True", False, True), (None, True, True), (None, False, False)],
 )
 def test_paged_attention_override_reaches_model_builder(
-    cli_value, preset, expected, disabled_mode, monkeypatch, expect_error
+    cli_value, preset, expected, disabled_mode, page_params, expected_page_params, monkeypatch, expect_error
 ):
     from models.ttt_compat.demo import simple_text_demo as demo
 
-    params = {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048}
-    argv = ["--page_params", json.dumps(params)]
+    argv = ["--page_params", json.dumps(page_params)]
     if cli_value is not None:
         argv += ["--paged_attention", cli_value]
     if disabled_mode is not None:
@@ -70,7 +81,7 @@ def test_paged_attention_override_reaches_model_builder(
 
     def capture(**kwargs):
         assert kwargs["paged_attention"] is expected
-        assert kwargs["page_params"] == params
+        assert kwargs["page_params"] == expected_page_params
         raise ReachedModelBuilder
 
     def unexpected_skip(reason):

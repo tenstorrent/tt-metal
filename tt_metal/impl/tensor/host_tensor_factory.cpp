@@ -7,6 +7,7 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 #include <tt-metalium/experimental/host_bfp_conversion.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -25,6 +26,7 @@
 #include <optional>
 #include <span>
 #include <type_traits>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 
@@ -107,7 +109,8 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec = TensorSpec(
         spec.logical_shape(),
-        TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
+        experimental::tensor_layout_with_custom_alignment(
+            buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     size_t volume = spec.logical_shape().volume();
 
@@ -183,7 +186,8 @@ HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, Tenso
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec = TensorSpec(
         spec.logical_shape(),
-        TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
+        experimental::tensor_layout_with_custom_alignment(
+            buffer_dtype, spec.page_config(), spec.memory_config(), spec.tensor_layout().get_alignment()));
 
     auto host_buffer =
         buffer_spec.layout() == Layout::ROW_MAJOR && buffer_spec.logical_2d_shape() == buffer_spec.physical_shape()

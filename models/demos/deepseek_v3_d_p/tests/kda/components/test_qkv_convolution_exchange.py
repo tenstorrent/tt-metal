@@ -22,12 +22,15 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    decode_tail,
+    encode_tail,
     make_actual_start,
 )
 
@@ -78,22 +81,14 @@ def _mesh(shape: tuple[int, int], sp_axis: int, device_params: dict, topology: s
     )
 
 
-# LoudBox, its production SP2xTP4 call on a 1D fabric (the last rank reaches rank 0 backward).
-_LOUDBOX = _mesh((2, 4), 0, fabric_1d_device_params(), "mesh-2x4", "loudbox-SP2xTP4-fabric-1d", _LOUDBOX_SP2XTP4)
+# LoudBox, its production SP2xTP4 call on a 2D fabric.
+_LOUDBOX = _mesh((2, 4), 0, kda_device_params((2, 4)), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d", _LOUDBOX_SP2XTP4)
 # Each system's ids start with it, so its CI job selects them with -k.
 _MESHES = [
     _LOUDBOX,
-    # QuietBox: an SP4 ring and SP2 on a 2D fabric. The ring's SP axis turns at every chip, which a 2D multicast
-    # cannot follow, so it runs on a 1D ring fabric, whose routing plane follows the turns.
-    _mesh(
-        (1, 4),
-        1,
-        fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
-        "ring",
-        "quietbox-SP4-axis1-ring",
-        _COVERAGE,
-    ),
-    _mesh((2, 2), 0, fabric2d_device_params(), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
+    # QuietBox: an SP4 ring on TorusX and SP2 on an unwrapped 2D fabric.
+    _mesh((1, 4), 1, kda_device_params((1, 4)), "ring", "quietbox-SP4-axis1-ring", _COVERAGE),
+    _mesh((2, 2), 0, kda_device_params((2, 2)), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
 ]
 
 
@@ -193,7 +188,11 @@ class _Exchange:
         )
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         self.history_tt = ttnn.from_torch(
-            self.history, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, mesh_mapper=replicate
+            encode_tail(self.history, KDA_CONVOLUTION_PAGE_CHANNELS),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=replicate,
         )
         self.taps_tt = tuple(
             ttnn.from_torch(
@@ -202,6 +201,14 @@ class _Exchange:
             for tap in self.taps
         )
         self.exchange = _HistoryExchange.allocate(mesh_device, channels)
+        # The KDA layer's compute config (FP32 DST), which its QKV convolution call runs.
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
     def run(self, actual_start: ttnn.Tensor, actual_end: ttnn.Tensor | None) -> tuple[ttnn.Tensor, ...]:
         return ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
@@ -210,19 +217,24 @@ class _Exchange:
             *self.taps_tt,
             *self.widths,
             program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=_CHANNEL_CHUNK_SIZE),
+            compute_kernel_config=self.compute_kernel_config,
             actual_start=actual_start,
             exchange_buffer=self.exchange.buffer,
             exchange_semaphores=self.exchange.semaphores,
             actual_end=actual_end,
             sequence_parallel_axis=self.sp_axis,
             memory_config=self.output_memory_config,
+            page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
         )
 
     def to_host(self, outputs: tuple[ttnn.Tensor, ...]) -> list[list[torch.Tensor]]:
-        """Per device, in mesh order: the concatenated Q, K and V, and the carry."""
+        """Per device, in mesh order: the concatenated Q, K and V, and the carry as ``[1, K-1, W]`` rows."""
         q, k, v, carry = (ttnn.get_device_tensors(output) for output in outputs)
         return [
-            [torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0], ttnn.to_torch(final)]
+            [
+                torch.cat([ttnn.to_torch(part) for part in parts], dim=-1)[0],
+                decode_tail(ttnn.to_torch(final), KDA_CONVOLUTION_PAGE_CHANNELS),
+            ]
             for *parts, final in zip(q, k, v, carry, strict=True)
         ]
 
@@ -330,7 +342,7 @@ def _ring_perf_case(shape: tuple[int, int], sp_axis: int, case_id: str, referenc
     return pytest.param(
         shape,
         sp_axis,
-        fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
+        kda_device_params(shape),
         _GALAXY_PER_CHIP,
         reference_us,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology="ring"),
@@ -338,9 +350,11 @@ def _ring_perf_case(shape: tuple[int, int], sp_axis: int, case_id: str, referenc
     )
 
 
+# The BF16-DST references (LoudBox 63.6 us, QuietBox 64.0 us; #62559) scaled by the FP32-DST / BF16-DST ratio 1.3245,
+# measured on LoudBox bh-lb-18 over 3 interleaved rounds. QuietBox was not measured; it assumes LoudBox's ratio.
 _PERF_CASES = [
-    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 63.6),
-    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 64.0),
+    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 84.2),
+    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 84.8),
 ]
 
 

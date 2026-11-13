@@ -942,6 +942,42 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
         bias_single_tile_size = tt::tile_size(bias_data_format);
     }
+    {
+        // MX (OCP microscaling) operands. The unpacker expands every MX format to Float16_b in the Src registers,
+        // so the FPU never sees MX and the matmul itself is format-agnostic; the packer converts Dest back to MX
+        // for an MX output (the partials ring stays Float16_b / Float32, see get_interm_data_format). What the
+        // kernels cannot do on MX tiles is rejected here:
+        //  - MXFP4: matmul_init unpacks it as the 2x-packed src-register format (MxFp4_2x_B) and the FPU reads
+        //    SrcB through the same packed-FP4 view, so both operands must be MXFP4 (or neither);
+        //  - transpose: SrcA transpose is not supported for 2x formats, and the in0 transpose kernel path has
+        //    not been run on MX tiles;
+        //  - K not a tile multiple: the readers zero the last K tile's padding in L1 (pad_last_ktile), which knows
+        //    the bf16 / fp32 / WH block-float tile layouts but not the MX scale + element layout;
+        //  - bias: added through the Float16_b bias path; MX bias tiles are out of scope.
+        const DataType a_dtype = input_tensor_a.dtype();
+        const DataType b_dtype = input_tensor_b.dtype();
+        if (is_mx(a_dtype) || is_mx(b_dtype)) {
+            TT_FATAL(
+                (a_dtype == DataType::MXFP4) == (b_dtype == DataType::MXFP4),
+                "MXFP4 matmul needs both operands in MXFP4 (the 2x-packed src format pairs FP4 with FP4), got in0 {} "
+                "and in1 {}",
+                a_dtype,
+                b_dtype);
+            TT_FATAL(
+                !attributes.transpose_a && !attributes.transpose_b,
+                "transpose_a / transpose_b are not supported with MX operands (in0 {}, in1 {})",
+                a_dtype,
+                b_dtype);
+            TT_FATAL(
+                a_shape[-1] % input_tensor_a.tensor_spec().tile().get_width() == 0,
+                "MX matmul needs K to be a tile multiple (the MX tile layout cannot be zero-padded in L1), got K = {}",
+                a_shape[-1]);
+            TT_FATAL(
+                !optional_bias.has_value() || !is_mx(optional_bias->dtype()),
+                "MX bias tensors are not supported, got {}",
+                optional_bias->dtype());
+        }
+    }
     operations::experimental::quasar::matmul::MatmulProgramConfig chosen_program_config =
         operations::experimental::quasar::matmul::get_program_config(
             input_tensor_a,
@@ -1201,17 +1237,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                             input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
+                             input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM) ||
                             // Receiver-contiguous Tensor prefetcher: in1 is an NdShardSpec DRAM
                             // weight (reported as ND_SHARDED) whose data is delivered via the
                             // global CB receivers, not read directly per its DRAM layout. The
                             // weight's own layout is irrelevant to the matmul in this case.
                             (attributes.global_cb.has_value() &&
-                             input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
+                             input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM),
                         "Input tensor B must be width sharded, DRAM interleaved, or a DRAM weight fed "
                         "via a global circular buffer when using gather_in0.");
                     if (!attributes.global_cb.has_value() && input_tensor_b.is_sharded()) {
-                        if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
+                        if (input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::L1) {
                             TT_FATAL(
                                 input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
                                 "Input tensor A and B must be sharded on the same cores "
@@ -1358,7 +1394,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
                             "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                     }
-                    if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 &&
+                    if (input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::L1 &&
                         input_tensor_b.memory_config().is_sharded()) {
                         TT_FATAL(
                             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -1640,8 +1676,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     // interleaved-style reader, which addresses the NdShardSpec layout from the accessor
                     // args. The width/height-specific validation below is gated on those layouts, so ND
                     // DRAM in1 skips it (no shard_spec() access).
-                    const bool in1_is_nd_dram = tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
-                                                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+                    const bool in1_is_nd_dram =
+                        tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
+                        input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
                     TT_FATAL(
                         tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
                             tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || in1_is_nd_dram,
@@ -1650,9 +1687,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     if (tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         // Height-sharded in1 is only supported for DRAM batched matmuls
                         TT_FATAL(
-                            input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM,
+                            input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM,
                             "HEIGHT_SHARDED input B is only supported in DRAM, got: {}",
-                            input_tensor_b.buffer()->buffer_type());
+                            input_tensor_b.memory_config().buffer_type());
                         TT_FATAL(
                             !program_config.fuse_batch,
                             "HEIGHT_SHARDED input B requires fuse_batch=false for batched matmul");
@@ -1697,7 +1734,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             batches_per_bank * num_banks,
                             B);
                     }
-                    if (input_tensor_b.buffer()->buffer_type() != tt_metal::BufferType::DRAM) {
+                    if (input_tensor_b.memory_config().buffer_type() != tt_metal::BufferType::DRAM) {
                         const auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
                         TT_FATAL(
                             (input_tensor_a.memory_config().is_sharded() &&
@@ -2377,9 +2414,13 @@ MatmulParams create_matmul_attributes(
     auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
+    // MX elements carry at most 7 mantissa bits and are unpacked to Float16_b, which the first fidelity phase
+    // multiplies in full on Quasar (#57880), so MX inputs default to LoFi like the WH/BH block floats.
+    const auto is_low_precision_df = [](DataType dtype) {
+        return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || is_mx(dtype);
+    };
     bool are_inputs_low_precision_df =
-        ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
-         (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
+        is_low_precision_df(input_tensor_a.dtype()) && is_low_precision_df(input_tensor_b.dtype());
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);

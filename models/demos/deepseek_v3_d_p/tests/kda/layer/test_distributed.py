@@ -13,6 +13,7 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
+    kda_device_params,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
@@ -26,11 +27,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
+    pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True),
 ]
 
 
@@ -106,8 +103,6 @@ def test_sp_explicit_grouping_matches_reference(
     expected_convolution = torch.cat(
         (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
-    local_heads = config.num_heads // tuple(mesh_device.shape)[tensor_parallel_axis]
-    local_width = local_heads * config.head_k_dim
     sp_size = tuple(mesh_device.shape)[sp_axis]
 
     assert_accurate(
@@ -127,7 +122,8 @@ def test_sp_explicit_grouping_matches_reference(
             sp_axis,
             tensor_parallel_axis,
             sp_rank,
-            local_width,
+            config,
+            layer.convolution_page_channels,
         )
         assert_accurate(
             expected_state.recurrent,
@@ -201,14 +197,14 @@ def test_sp_segmented_prefill_matches_one_shot(
     one_shot_recurrent = reconstruct_state_at_sp_rank(
         one_shot_state.recurrent, mesh_device, sp_axis, tensor_parallel_axis, sp_rank=0
     )
-    local_heads = config.num_heads // tuple(mesh_device.shape)[tensor_parallel_axis]
     one_shot_convolution = reconstruct_convolution_at_sp_rank(
         one_shot_state.convolution,
         mesh_device,
         sp_axis,
         tensor_parallel_axis,
         sp_rank=0,
-        local_width=local_heads * config.head_k_dim,
+        config=config,
+        page_channels=layer.convolution_page_channels,
     )
 
     chunked_state = layer.allocate_state(batch_size=1)
@@ -256,7 +252,8 @@ def test_sp_segmented_prefill_matches_one_shot(
         sp_axis,
         tensor_parallel_axis,
         sp_rank=0,
-        local_width=local_heads * config.head_k_dim,
+        config=config,
+        page_channels=chunk_layer.convolution_page_channels,
     )
     label = f"tp_axis={tensor_parallel_axis} group={summary_group_chunks}"
     assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.9999, nrmse_threshold=9e-06)
@@ -311,8 +308,6 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
         active_seq_len=sequence,
     )
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
-    tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
-    local_width = config.num_heads // tp_size * config.head_k_dim
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         state = layer.allocate_state(batch_size=1)
@@ -339,7 +334,8 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
             sp_axis,
             tensor_parallel_axis,
             sp_rank,
-            local_width,
+            config,
+            layer.convolution_page_channels,
         )
         assert_accurate(
             expected_state.recurrent.to(actual_recurrent.dtype),

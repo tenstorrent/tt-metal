@@ -43,6 +43,16 @@ std::map<std::string, std::string> get_block_defines(
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
+// The packer ReLU configuration that computes a lone op as its tile is packed, as a
+// ckernel::ReluConfig expression, or none when the op runs on the SFPU. `sharded`: the input and
+// the output are both sharded, so no tile crosses the NoC.
+std::optional<std::string> get_pack_relu_config(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    bool sharded);
+
 template <typename T>
 bool is_parametrized_type(T val) {
     switch (val) {
