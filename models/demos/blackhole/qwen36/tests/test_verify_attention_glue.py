@@ -3,8 +3,8 @@
 """The MTP verify's attention (TPAttention._forward_verify) against the previous op sequence, on device.
 
 One full-attention layer of the checkpoint, at the mesh's TP. Both sequences run on the same input rows and on two
-copies of one paged bf8 KV cache with random contents; the attention output and both caches must be equal byte for
-byte. The reference is forward_decode's full verify body (_forward_verify_ok forced False), with
+copies of one paged bf8 KV cache with random contents; the attention output (the `wo` partial sum of each device,
+before the all-reduce, which is the same op in both) and both caches must be equal byte for byte. The reference is forward_decode's full verify body (_forward_verify_ok forced False), with
 apply_partial_rope_decode as it was before (the RoPE pass-through slice lands in L1, then a copy to DRAM) and cos / sin
 as [1, R, 1, rope_dim]. Shapes: (users, T) = (8, 4), (1, 4), (4, 8), (2, 12). Each user has its own shuffled blocks
 and its own long-context position; some users' T rows cross a 32-row tile or a block boundary.
@@ -70,6 +70,13 @@ def _host(t, mesh_device):
     return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
 
 
+class _KeepPartial:
+    """Stands in for the decode_ar all-reduce: returns the wo partial sum unreduced."""
+
+    def all_reduce(self, partial):
+        return partial
+
+
 @torch.no_grad()
 @parametrize_mesh_tp()
 @pytest.mark.parametrize("n_users, T", [(8, 4), (1, 4), (4, 8), (2, 12)], ids=["u8T4", "u1T4", "u4T8", "u2T12"])
@@ -82,9 +89,6 @@ def test_verify_attention_matches_the_previous_op_sequence(
     NKV, HD, rd = args.n_local_kv_heads, args.head_dim, args.rope_head_dim
     R = n_users * T
 
-    from models.tt_transformers.tt.ccl import TT_CCL
-
-    tt_ccl = TT_CCL(mesh_device)
     tw = load_attention_weights_tp(mesh_device, load_attn_layer(args.CKPT_DIR, li), args)
 
     # User u's T rows sit at p_u .. p_u + T - 1: across a block boundary for odd u, across a 32-row tile for even u.
@@ -93,7 +97,7 @@ def test_verify_attention_matches_the_previous_op_sequence(
     nb = (max(starts) + T) // BLOCK + 1
     blocks = torch.randperm(n_users * nb + 1)[: n_users * nb].reshape(n_users, nb).to(torch.int32)
 
-    probe = TPAttention(mesh_device, args, tw, tt_ccl)
+    probe = TPAttention(mesh_device, args, tw, None)
     groups = probe._spec_sdpa_plan(T, n_users)[1]
     pt_rows = _rm_int(mesh_device, blocks.repeat_interleave(T, dim=0))
     pt_users = _rm_int(mesh_device, blocks)
@@ -133,6 +137,7 @@ def test_verify_attention_matches_the_previous_op_sequence(
             spec_page_table=pt_groups,
             spec_n_users=n_users,
             spec_user_page_table=pt_users,
+            decode_ar=_KeepPartial(),
             **kw,
         )
 
@@ -142,7 +147,7 @@ def test_verify_attention_matches_the_previous_op_sequence(
         m.setattr(TPAttention, "_forward_verify_ok", lambda self, *a: False)
         m.setattr(tp_mod, "apply_partial_rope_decode", _previous_partial_rope_decode)
         out_old = run(a_old, rope_old)
-    a_new = TPAttention(mesh_device, args, tw, tt_ccl)
+    a_new = TPAttention(mesh_device, args, tw, None)
     a_new.set_paged_kv_cache(*caches())
     assert a_new._forward_verify_ok(R, pt_rows, True, pt_groups, n_users, pt_users)
     pos_groups = [ttnn.slice(cur_pos, (j,), (R,), (T,)) for j in range(T)]
@@ -156,7 +161,7 @@ def test_verify_attention_matches_the_previous_op_sequence(
     for name, (a, b) in checks.items():
         ha, hb = _host(a, mesh_device), _host(b, mesh_device)
         same = tuple(ha.shape) == tuple(hb.shape) and torch.equal(ha, hb)
-        logger.info(f"users={n_users} T={T} {name} {tuple(ha.shape)}: bit-identical={same}")
+        logger.info(f"users={n_users} T={T} {name} {tuple(ha.shape)}: bit-identical={same}, max abs {ha.abs().max()}")
         assert same, f"users={n_users} T={T}: {name} differs (max abs {(ha.float() - hb.float()).abs().max()})"
     ref_cache = _host(
         ttnn.from_torch(
