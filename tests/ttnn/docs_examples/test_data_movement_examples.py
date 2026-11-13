@@ -201,9 +201,9 @@ def test_untilize_with_unpadding(device):
     # Create a tilized tensor with padding
     tilized_tensor = ttnn.rand((1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
-    # Untilize the tensor with unpadding
-    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(1, 1, 64, 32))
-    logger.info("Untilized Tensor with Unpadding Shape:", untilized_tensor.shape)
+    # Untilize the tensor and keep its first 32 columns; output_tensor_end holds inclusive end indices
+    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=(0, 0, 63, 31))
+    logger.info(f"Untilized Tensor with Unpadding Shape: {untilized_tensor.shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_indexed_fill(device):

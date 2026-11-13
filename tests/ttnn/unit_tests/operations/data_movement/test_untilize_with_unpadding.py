@@ -11,6 +11,13 @@ import ttnn
 
 from tt_py_test_utils_common.utility_functions import is_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 TTNN_TO_TORCH_DTYPE = {
     ttnn.float32: torch.float32,
@@ -1642,3 +1649,43 @@ def test_untilize_with_unpadding_rank_5_zero_volume(device, shape, ends):
 
     assert list(output.shape) == list(shape)
     assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.untilize_with_unpadding))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.untilize_with_unpadding))
+@pytest.mark.parametrize(
+    "shape, output_tensor_end",
+    [
+        ((2, 3, 64, 96), (1, 2, 49, 69)),  # cuts the last two dims only
+        ((2, 3, 64, 96), (0, 1, 63, 95)),  # cuts the outer dims, keeping them contiguous
+        ((2, 3, 4, 64, 64), (0, 1, 3, 40, 40)),  # rank 5
+        ((1, 1, 64, 2048), (0, 0, 40, 2000)),  # wide rows
+    ],
+    ids=["last_two", "outer", "rank5", "wide"],
+)
+def test_untilize_with_unpadding_docstring_supported_inputs(
+    shape, output_tensor_end, dtype, layout, buffer_type, device
+):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.untilize_with_unpadding docstring lists.
+
+    The ends follow the docstring: inclusive, within the input, and contiguous across the dims before the last two.
+    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. A BFLOAT8_B input is compared
+    with its own block-float values, which its BFLOAT16 output holds exactly.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.untilize_with_unpadding(input_tensor, output_tensor_end=list(output_tensor_end))
+
+    expected = ttnn.to_torch(input_tensor)[tuple(slice(0, end + 1) for end in output_tensor_end)]
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output.dtype == (ttnn.bfloat16 if dtype == ttnn.bfloat8_b else dtype)
+    assert output.memory_config() == memory_config
+    assert list(output.shape) == [end + 1 for end in output_tensor_end]
+    assert_exact(expected, ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
