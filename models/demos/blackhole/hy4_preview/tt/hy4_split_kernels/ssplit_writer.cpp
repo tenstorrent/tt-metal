@@ -95,6 +95,9 @@ void kernel_main() {
         sink_args_q.next_compile_time_args_offset(),
         sink_args_q.next_common_runtime_args_offset()>();
     constexpr bool emit_stats = get_compile_time_arg_val(ssplit::writer_ct_arg::EMIT_STATS) != 0;
+    // EMIT_STATS == 2: the stats ride in the output rows: head-row page = [V_DIM bf16 o | raw max | sum | 30 zeros]
+    // (page V_DIM+32 elements, 64 B tail)
+    constexpr bool emit_cols = get_compile_time_arg_val(ssplit::writer_ct_arg::EMIT_STATS) == 2;
     constexpr uint32_t cb_m_out = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_M_OUT);
     constexpr uint32_t cb_l_out = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_L_OUT);
     constexpr uint32_t cb_stat_scr = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_STAT_SCR);
@@ -322,8 +325,26 @@ void kernel_main() {
             }
             const auto stats =
                 TensorAccessor(stats_args, get_common_arg_val<uint32_t>(ssplit::writer_common_arg::STATS_ADDRESS));
-            noc.async_write(scr, stats, 2 * H * sizeof(uint16_t), {.offset_bytes = 0}, {.page_id = tok});
-            noc.async_write_barrier();
+            if constexpr (emit_cols) {
+                // scr is a 2048 B scratch page: rebuild it as H x 64 B tails [m, l, 0 ...]; one 64 B write per head row
+                // (page h*S+tok, byte offset row_bytes)
+                volatile tt_l1_ptr uint32_t* sp32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr.get_write_ptr());
+                for (uint32_t h = 0; h < H; ++h) {
+                    const uint16_t mv = row_empty ? neg_inf_bf16 : mt[ssplit::tile_col0_offset(h)];
+                    const uint16_t lv = row_empty ? (uint16_t)0 : lt[ssplit::tile_col0_offset(h)];
+                    sp32[h * 16] = (uint32_t)mv | ((uint32_t)lv << 16);
+                    for (uint32_t k = 1; k < 16; ++k) {
+                        sp32[h * 16 + k] = 0;
+                    }
+                }
+                for (uint32_t h = 0; h < H; ++h) {
+                    noc.async_write(
+                        scr, stats, 64, {.offset_bytes = h * 64}, {.page_id = h * S + tok, .offset_bytes = row_bytes});
+                }
+            } else {
+                noc.async_write(scr, stats, 2 * H * sizeof(uint16_t), {.offset_bytes = 0}, {.page_id = tok});
+                noc.async_write_barrier();
+            }
             m_cb.pop_front(1);
             l_cb.pop_front(1);
         }

@@ -106,16 +106,20 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         sink = _DUMMY_SINK[key]
+    cols = (
+        emit_stats == 2
+    )  # EMIT_STATS=2: stats ride in the output row tails: out [1,H,S,v_dim+32], col v_dim = raw max, v_dim+1 = sum (one tensor, no stats tensor)
+    emit_stats = int(emit_stats)
     use_sink = 0 if emit_stats else 1
     stats = (
         ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, S, 64]), bf, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
         )
-        if emit_stats
+        if emit_stats and not cols
         else None
     )
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, H, S, v_dim]),
+        ttnn.Shape([1, H, S, v_dim + 32 if cols else v_dim]),
         bf,
         ttnn.ROW_MAJOR_LAYOUT,
         md,
@@ -226,7 +230,7 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
             cb(K_ROPE_T, TILE, Skt * (DHt - vDHt), bf),
         ]
     if emit_stats:
-        cbs += [cb(M_OUT, TILE, 1, bf), cb(L_OUT, TILE, 1, bf), cb(STAT_SCR, 128, 1, bf)]
+        cbs += [cb(M_OUT, TILE, 1, bf), cb(L_OUT, TILE, 1, bf), cb(STAT_SCR, 2048 if cols else 128, 1, bf)]
     bc = [0, 1, 1, 0, 0]
     reader_ct = [H, S, topk, k_chunk, D, Q_RM, K_RM, MASK_PART, IDX, CTRL, 2, kv_b, 4] + bc
     reader_ct += (
@@ -275,12 +279,12 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         Q_RM,
         QROWS,
         QMODE,
-        int(emit_stats),
+        (2 if cols else int(emit_stats)),
         M_OUT,
         L_OUT,
         STAT_SCR,
     ]
-    writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q) + (_acc(stats) if emit_stats else _acc(out))
+    writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q) + (_acc(stats) if (emit_stats and not cols) else _acc(out))
     fid = getattr(ckc, "math_fidelity", ttnn.MathFidelity.HiFi4)
     approx = bool(getattr(ckc, "math_approx_mode", False))
     fp32 = bool(getattr(ckc, "fp32_dest_acc_en", True)) and os.environ.get("SS_FP32", "1") == "1"
@@ -368,7 +372,7 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
             0,
             sink.buffer_address(),
             q.buffer_address(),
-            (stats if emit_stats else out).buffer_address(),
+            (stats if (emit_stats and not cols) else out).buffer_address(),
         ],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -423,6 +427,9 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         )
         & ((1 << 40) - 1)
     )
+    if cols:
+        ttnn.generic_op([q, kv, idx, sink, out], prog)
+        return out
     if emit_stats:
         ttnn.generic_op([q, kv, idx, sink, stats, out], prog)
         return out, stats
