@@ -27,6 +27,11 @@ namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
 // shard per part of the row, each on its own sum core, num_chips slots of that part then a flag word per
 // chip. The sum, in chip order, is the output.
 //
+// With `streams`, `post` and `comb` (PersistentMoeRequestInputs) the request also runs the hyper-connection
+// post step on the sum x: the output is the new streams post[h] * x + sum_g comb[g, h] * streams[g], in the
+// streams' spec. The partials shards then sit on the streams' cores, in shard order, each holding that core's
+// columns, so every core mixes its own shard.
+//
 // The persistent op does not ack the request page; it takes a requester's next page only after this
 // one's partials, so this op credits the request socket itself.
 struct PersistentMoeRequestParams {
@@ -49,15 +54,22 @@ struct PersistentMoeRequestParams {
     }
 };
 
+struct PersistentMoeRequestInputs {
+    Tensor input;                   // the [1, D] bf16 ROW_MAJOR row, interleaved
+    std::optional<Tensor> streams;  // [1, 1, hc, D] bf16 ROW_MAJOR, L1 WIDTH_SHARDED over the partials' cores
+    std::optional<Tensor> post;     // [1, 1, hc, 1] bf16 TILE
+    std::optional<Tensor> comb;     // [1, 1, hc, hc] bf16 TILE
+};
+
 struct PersistentMoeRequestDeviceOperation {
     using operation_attributes_t = PersistentMoeRequestParams;
-    using tensor_args_t = Tensor;
+    using tensor_args_t = PersistentMoeRequestInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct MultiCore {
-        // Per chip: its request receivers fix the fabric routes. Chips with no sender core of the request
-        // socket get an empty descriptor.
+        // Per chip: every chip sums the partials it receives; a chip with a sender core of the request socket
+        // also sends the page, its receivers fixing the fabric routes. One chip may send for the whole mesh.
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
@@ -89,6 +101,9 @@ Tensor persistent_moe_request(
     const Tensor& input_tensor,
     uint32_t layer,
     const tt::tt_metal::distributed::MeshSocket& request_socket,
-    const Tensor& partials);
+    const Tensor& partials,
+    const std::optional<Tensor>& streams = std::nullopt,
+    const std::optional<Tensor>& post = std::nullopt,
+    const std::optional<Tensor>& comb = std::nullopt);
 
 }  // namespace ttnn::prim

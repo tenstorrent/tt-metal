@@ -2950,7 +2950,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 )
 
         moes = pmoe.build_moe_layers(self.config, self.loader, self.moe_mesh, self.cache, range(num_layers), log=log)
-        self.moe_server = pmoe.PersistentMoE(self.moe_mesh, [self.submeshes[0]], moes)
+        self.moe_server = pmoe.PersistentMoE(
+            self.moe_mesh, [self.submeshes[0]], moes, single_senders=pmoe.single_senders([pmoe.REQUESTER_ROW])
+        )
         logger.info(f"persistent MoE launched over layers 0..{num_layers - 1} ({time.perf_counter() - start:.0f}s)")
         logger.debug(f"stage before its layers: {_l1_report(self.submeshes[0])}")
 

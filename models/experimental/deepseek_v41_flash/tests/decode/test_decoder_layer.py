@@ -229,6 +229,16 @@ def _streams_attribution(block, h, x, expected, attn, ffn, mid_dev, ffn_dev, pos
     return report, swaps["all"]
 
 
+def _fused_moe_row(new_streams, streams, post, comb) -> torch.Tensor:
+    """The MoE row x behind a fused request's new streams ``post[h] * x + sum_g comb[g, h] * streams[g]``, by least
+    squares over the streams, from the device's own ``streams`` / ``post`` / ``comb``. It carries the new streams'
+    bf16 rounding, divided by ``|post|``."""
+    hc = post.numel()
+    post, comb = post.reshape(hc), comb.reshape(hc, hc)
+    rest = new_streams.reshape(hc, -1) - comb.T @ streams.reshape(hc, -1)
+    return (post @ rest) / (post @ post)
+
+
 def _to_torch(t: ttnn.Tensor) -> torch.Tensor:
     """Rank 0's copy of a tensor replicated over the mesh, as fp32."""
     return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
@@ -439,6 +449,9 @@ def _check_decode(device, layers, seq_len, tp_size: int, build_layer=None) -> No
                 if pre_error > pre_atol:
                     failures.append(f"{what} pre_mix: max abs error {pre_error} > {pre_atol}")
                 moe_expected, moe_actual = expected_parts[i]["ffn"].reshape(-1), _to_torch(parts[i]["ffn"]).reshape(-1)
+                if moe_actual.numel() == hc * moe_expected.numel():
+                    # The MoE request ran the FFN post step itself and returned the new streams.
+                    moe_actual = _fused_moe_row(moe_actual, ffn_hc_in, *(_to_torch(t) for t in parts[i]["ffn_hc"][:2]))
                 _, pcc = comp_pcc(moe_expected, moe_actual, PCC)
                 logger.info(f"{what} MoE: PCC {pcc}")
                 out_dev = _to_torch(out)

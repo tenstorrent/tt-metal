@@ -25,15 +25,28 @@
 // control core's reduce-stage count), which the grid's go for iteration i waits on for iteration i - 2, so
 // the staging half a row is sent from is refilled only after it has left.
 //
+// The link-0 sender also carries the sharded router's candidate exchange (router_reduce.cpp, num_exchange_routes >
+// 0): the reducer leaves this chip's candidates of each iteration in its slot of the candidate slots here and bumps
+// the ready count; whenever this kernel waits, it forwards every candidate slot it has not yet forwarded, in order,
+// along the whole-mesh branches to the same slot of every other chip's route merge core, each slot followed on the
+// same branch by an increment of that core's sem_router, then bumps the reducer's forwarded count. The router stage
+// runs a row ahead of the grid and this stage a row behind it, so it is idle on its own work when candidates come.
+//
 // Compile-time args:
 //   0: my_chip (this chip's slot in the requesters' partials buffers)   1: part_bytes (this link's part of a
-//   row, its output cores' partials together)   2: sem_ar_ready   3: sem_go   4: cb_scratch (the staging, at
-//   the scratch address)   5: num_requesters   6: max_payload (fabric packet bytes)   7: num_slots (chips,
-//   the slots of a partials buffer)   8: num_connections (one per direction the partials leave in)
+//   row, its output cores' partials together; sub_parts sum cores' worth of columns, each its own packet)   2:
+//   sem_ar_ready   3: sem_go   4: cb_scratch (the staging, at the scratch address)   5: num_requesters   6: max_payload
+//   (fabric packet bytes)   7: num_slots (chips, the slots of a partials buffer)   8: cand_slot_bytes   9: sem_router
+//   (on the route merge) 10: sub_parts (the requester's sum cores per link: this link's part of a row splits evenly
+//   over them)
 //
 // Runtime args: num_cores (this link's output cores), the source ring's address, then per requester: the
-// connection its sends leave by, its partials buffer address, this link's sum core's NoC x and y, its number
-// of routes and the routes (d2d_send.h); then the fabric connections.
+// connection its sends leave by, its partials buffer address, this link's sub_parts sum cores' NoC xs, then ys,
+// its number
+// of routes and the routes (d2d_send.h); then num_exchange_routes (0 off link 0) and, with an exchange, the
+// candidate slots address, the route merge's and the reducer's NoC x and y, the ready count address (on this
+// core), the reducer's forwarded count address, and per exchange route its connection and the route; then
+// num_connections (one per direction the partials or the candidates leave in) and the fabric connections.
 
 constexpr uint32_t my_chip = get_compile_time_arg_val(0);
 constexpr uint32_t part_bytes = get_compile_time_arg_val(1);
@@ -43,7 +56,11 @@ constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(4);
 constexpr uint32_t num_requesters = get_compile_time_arg_val(5);
 constexpr uint32_t max_payload = get_compile_time_arg_val(6);
 constexpr uint32_t num_slots = get_compile_time_arg_val(7);
-constexpr uint32_t num_connections = get_compile_time_arg_val(8);
+constexpr uint32_t cand_slot_bytes = get_compile_time_arg_val(8);
+constexpr uint32_t sem_router_id = get_compile_time_arg_val(9);
+constexpr uint32_t sub_parts = get_compile_time_arg_val(10);
+constexpr uint32_t sub_bytes = part_bytes / sub_parts;
+constexpr uint32_t kMaxExchangeRoutes = 4;
 constexpr uint32_t kStopBit = 0x80000000u;
 
 void kernel_main() {
@@ -52,33 +69,103 @@ void kernel_main() {
     auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     uint32_t connection[num_requesters];
     uint32_t partials_addr[num_requesters];
-    uint32_t sum_x[num_requesters];
-    uint32_t sum_y[num_requesters];
+    uint32_t sum_x[num_requesters][sub_parts];
+    uint32_t sum_y[num_requesters][sub_parts];
     uint32_t route_args[num_requesters];
     uint32_t num_routes[num_requesters];
     for (uint32_t k = 0; k < num_requesters; ++k) {
         connection[k] = get_arg_val<uint32_t>(arg_idx++);
         partials_addr[k] = get_arg_val<uint32_t>(arg_idx++);
-        sum_x[k] = get_arg_val<uint32_t>(arg_idx++);
-        sum_y[k] = get_arg_val<uint32_t>(arg_idx++);
+        for (uint32_t p = 0; p < sub_parts; ++p) {
+            sum_x[k][p] = get_arg_val<uint32_t>(arg_idx++);
+        }
+        for (uint32_t p = 0; p < sub_parts; ++p) {
+            sum_y[k][p] = get_arg_val<uint32_t>(arg_idx++);
+        }
         num_routes[k] = get_arg_val<uint32_t>(arg_idx++);
         route_args[k] = arg_idx;
         arg_idx += num_routes[k] * kD2DRouteArgs;
     }
+    uint32_t cand_addr = 0;
+    uint32_t merge_x = 0;
+    uint32_t merge_y = 0;
+    uint32_t reducer_x = 0;
+    uint32_t reducer_y = 0;
+    volatile tt_l1_ptr uint32_t* cand_ready = nullptr;
+    uint32_t forwarded_addr = 0;
+    const uint32_t num_exchange_routes = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t exchange_connection[kMaxExchangeRoutes];
+    D2DRoute exchange_route[kMaxExchangeRoutes];
+    if (num_exchange_routes > 0u) {
+        cand_addr = get_arg_val<uint32_t>(arg_idx++);
+        merge_x = get_arg_val<uint32_t>(arg_idx++);
+        merge_y = get_arg_val<uint32_t>(arg_idx++);
+        reducer_x = get_arg_val<uint32_t>(arg_idx++);
+        reducer_y = get_arg_val<uint32_t>(arg_idx++);
+        cand_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+        forwarded_addr = get_arg_val<uint32_t>(arg_idx++);
+        for (uint32_t r = 0; r < num_exchange_routes; ++r) {
+            exchange_connection[r] = get_arg_val<uint32_t>(arg_idx++);
+            exchange_route[r] = read_d2d_route(arg_idx);
+        }
+    }
+    const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_idx);
     auto* header = PacketHeaderPool::allocate_header();
+    auto* exchange_header = PacketHeaderPool::allocate_header();
     const uint32_t staging_addr = get_write_ptr(cb_scratch_id);
 
-    Semaphore<> ar_ready(sem_ar_ready_id);
+    // Forwards every candidate slot the reducer has left here and this kernel has not yet forwarded.
+    uint32_t num_forwarded = 0;
+    auto pump = [&]() {
+        if (num_exchange_routes > 0u) {
+            invalidate_l1_cache();
+            const uint32_t ready = *cand_ready;
+            while (num_forwarded < ready) {
+                DeviceZoneScopedN("FE_RED_EXCHANGE");
+                const uint32_t slot = cand_addr + ((num_forwarded & 1u) * num_slots + my_chip) * cand_slot_bytes;
+                for (uint32_t r = 0; r < num_exchange_routes; ++r) {
+                    auto* sender = &fabric_connection.get(exchange_connection[r]).sender;
+                    const D2DRoute& route = exchange_route[r];
+                    noc_async_writes_flushed();
+                    tt::tt_fabric::mesh::experimental::fabric_multicast_noc_unicast_write(
+                        sender,
+                        exchange_header,
+                        route.dst_chip,
+                        route.dst_mesh,
+                        route.range,
+                        slot,
+                        cand_slot_bytes,
+                        tt::tt_fabric::NocUnicastCommandHeader{safe_get_noc_addr(merge_x, merge_y, slot, 0)});
+                    noc_async_writes_flushed();
+                    tt::tt_fabric::mesh::experimental::fabric_multicast_noc_unicast_atomic_inc(
+                        sender,
+                        exchange_header,
+                        route.dst_chip,
+                        route.dst_mesh,
+                        route.range,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            safe_get_noc_addr(merge_x, merge_y, get_semaphore(sem_router_id), 0), 1, true});
+                }
+                ++num_forwarded;
+                noc_semaphore_inc(get_noc_addr(reducer_x, reducer_y, forwarded_addr), 1);
+                noc_async_atomic_barrier();
+            }
+        }
+    };
+
+    auto* ar_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ar_ready_id));
     auto* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_go_id));
-    for (uint32_t iter = 0;; ++iter) {
+    uint32_t iter = 0;
+    for (;; ++iter) {
         if (iter > 0) {
             noc_semaphore_inc(get_noc_addr(FE_CTRL_X, FE_CTRL_Y, get_semaphore(FE_SEM_READY)), 1);
             noc_async_atomic_barrier();
         }
         uint32_t v;
         do {
+            pump();
             invalidate_l1_cache();
             v = *go;
         } while ((v & ~kStopBit) < iter + 1u);
@@ -88,23 +175,42 @@ void kernel_main() {
 
         {
             DeviceZoneScopedN("FE_RED_PARTIALS_WAIT");
-            ar_ready.wait_min(num_cores * (iter + 1u));
+            while (true) {
+                pump();
+                invalidate_l1_cache();
+                if (*ar_ready >= num_cores * (iter + 1u)) {
+                    break;
+                }
+            }
         }
         DeviceZoneScopedN("FE_RED_SEND");
         invalidate_l1_cache();
         const uint32_t k = source[iter % kFeSourceRing];
         const uint32_t src = staging_addr + (iter & 1u) * part_bytes;
-        const uint32_t slot = partials_addr[k] + my_chip * part_bytes;
-        const uint32_t flag = partials_addr[k] + num_slots * part_bytes + my_chip * 4u;
+        // Every sum core of the requester holds its own columns' slots, at the same address.
+        const uint32_t slot = partials_addr[k] + my_chip * sub_bytes;
+        const uint32_t flag = partials_addr[k] + num_slots * sub_bytes + my_chip * 4u;
         auto* sender = &fabric_connection.get(connection[k]).sender;
         size_t idx = route_args[k];
         for (uint32_t r = 0; r < num_routes[k]; ++r) {
             const D2DRoute route = read_d2d_route(idx);
-            d2d_send<max_payload>(sender, header, route, src, part_bytes, sum_x[k], sum_y[k], slot);
-            d2d_send_word(sender, header, route, sum_x[k], sum_y[k], flag, 1u);
+            for (uint32_t p = 0; p < sub_parts; ++p) {
+                d2d_send<max_payload>(
+                    sender, header, route, src + p * sub_bytes, sub_bytes, sum_x[k][p], sum_y[k][p], slot);
+            }
+            for (uint32_t p = 0; p < sub_parts; ++p) {
+                d2d_send_word(sender, header, route, sum_x[k][p], sum_y[k][p], flag, 1u);
+            }
         }
         // The staging half is refilled two iterations on, so every packet has to have left it.
         noc_async_writes_flushed();
+    }
+    // The router stage ran every iteration a row ahead, so its last candidates may still be waiting here.
+    if (num_exchange_routes > 0u) {
+        while (num_forwarded < iter) {
+            pump();
+        }
+        *cand_ready = 0;
     }
     noc_async_write_barrier();
     close_connections(fabric_connection);

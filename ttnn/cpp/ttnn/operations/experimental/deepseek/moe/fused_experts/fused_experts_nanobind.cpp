@@ -211,16 +211,25 @@ void bind_fused_experts(nb::module_& mod) {
                 page, 64 + 2H bytes.
             partials: The partials buffer this requester gave the persistent op (its
                 ``persistent_partials`` entry), on the input's mesh.
+            streams: Optional; with ``post`` and ``comb``, fuses the hyper-connection post step: the result
+                is then the new streams ``post[h] * row + sum_g comb[g, h] * streams[g]``. [1, 1, hc, H]
+                bfloat16 ROW_MAJOR, L1 WIDTH_SHARDED on the partials' cores in their order (hc <= 4).
+            post: [1, 1, hc, 1] bfloat16 TILE, interleaved.
+            comb: [1, 1, hc, hc] bfloat16 TILE, interleaved.
 
         Returns:
-            ttnn.Tensor: the reduced row, in the input's spec (unwritten after a stop).
+            ttnn.Tensor: the reduced row, in the input's spec, or with ``streams`` the new streams, in the
+            streams' spec (unwritten after a stop).
         )doc",
         &ttnn::experimental::deepseek::moe::persistent_moe_request,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("layer"),
         nb::arg("request_socket"),
-        nb::arg("partials"));
+        nb::arg("partials"),
+        nb::arg("streams") = std::nullopt,
+        nb::arg("post") = std::nullopt,
+        nb::arg("comb") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::fused_experts::detail

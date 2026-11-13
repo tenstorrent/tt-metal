@@ -133,6 +133,9 @@
 // supplies the experts' weight addresses, and the hits' addresses are broadcast after their weights
 // in cb_bcast (gate_up at num_weights + num_active * batch, down num_active past it).
 //
+// FE_ROUTER_SHARDED (persistent): the candidates come from the chips' sharded routers, one slot per chip at
+// FE_CAND_ADDR (see router_reduce.cpp), in alternate halves.
+//
 // FE_ROUTE_STAGE (persistent, in-op router): the route merge of the router stage, on a router core's
 // free DM processor -- 1.-3. only, a row ahead of the worker grid, which runs every reader loop (core
 // {0,0} as a plain hub0). The grid still reads the previous row's cb_bcast, so the broadcast waits for
@@ -408,7 +411,14 @@ void kernel_main() {
             if constexpr (rank_from_router) {
                 constexpr uint32_t slot_words = router_cand_slot_bytes / 4u;
                 Semaphore<>(sem_router_id).wait_min(num_router_cores * (iter + 1u));
+#if defined(FE_ROUTER_SHARDED)
+                // The sharded router: one slot per chip, written by its reducer (this chip's) or exchange sender
+                // (the others'), into alternate halves in alternate iterations -- a chip can be a row ahead.
+                CoreLocalMem<volatile uint32_t> cand(
+                    FE_CAND_ADDR + (iter & 1u) * num_router_cores * router_cand_slot_bytes);
+#else
                 CoreLocalMem<volatile uint32_t> cand(routing_l1 + router_cand_offset);
+#endif
                 uint32_t head[num_router_cores > 0u ? num_router_cores : 1u];
                 for (uint32_t c = 0; c < num_router_cores; ++c) {
                     head[c] = 0;

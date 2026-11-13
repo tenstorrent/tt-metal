@@ -356,7 +356,9 @@ def test_interleaved_sessions_match_solo_persistent_moe(mesh_device, reset_seeds
         start = time.perf_counter()
         moes = pmoe.build_moe_layers(config, loader, moe_mesh, WeightCache(CACHE_DIR), range(num_layers))
         # Its sockets take L1 on every requester before the instances' layers do.
-        server = pmoe.PersistentMoE(moe_mesh, request_meshes, moes)
+        server = pmoe.PersistentMoE(
+            moe_mesh, request_meshes, moes, single_senders=pmoe.single_senders(_MOE_INSTANCE_ROWS)
+        )
         # The device cannot close until every requester has sent its stop; a no-op after the stop below.
         stack.callback(server.stop)
         logger.info(

@@ -75,26 +75,29 @@ std::vector<D2DRoute> d2d_routes(
                 route.hops[*dir] = std::max(route.hops[*dir], distance(src, d, *dir));
             }
         } else {
-            // A spine passes the teeth onto every row it crosses, so all the receivers are in its last row.
-            const uint32_t r = row(dsts.front());
-            if (!std::all_of(dsts.begin(), dsts.end(), [&](const auto& d) { return row(d) == r; })) {
-                return std::nullopt;
-            }
-            const auto spine_end = node(r, col(src));
-            dir = direction(src, spine_end);
-            if (dir != eth_chan_directions::NORTH && dir != eth_chan_directions::SOUTH) {
-                return std::nullopt;
-            }
-            route.hops[*dir] = distance(src, spine_end, *dir);
+            // A spine lands its teeth on every row it crosses, so the receivers have to be whole runs of the rows
+            // it crosses, one direction from src: the spine reaches the farthest row, the teeth the widest run.
+            // The landed set below has to come out exactly the receivers.
             for (const auto& d : dsts) {
-                if (d == spine_end) {
+                if (row(d) == row(src)) {
+                    return std::nullopt;
+                }
+                const auto spine_at = node(row(d), col(src));
+                const auto spine_dir = direction(src, spine_at);
+                if ((spine_dir != eth_chan_directions::NORTH && spine_dir != eth_chan_directions::SOUTH) ||
+                    (dir.has_value() && spine_dir != dir)) {
+                    return std::nullopt;
+                }
+                dir = spine_dir;
+                route.hops[*dir] = std::max(route.hops[*dir], distance(src, spine_at, *dir));
+                if (d == spine_at) {
                     continue;
                 }
-                const auto tooth = direction(spine_end, d);
+                const auto tooth = direction(spine_at, d);
                 if (tooth != eth_chan_directions::EAST && tooth != eth_chan_directions::WEST) {
                     return std::nullopt;
                 }
-                route.hops[*tooth] = std::max(route.hops[*tooth], distance(spine_end, d, *tooth));
+                route.hops[*tooth] = std::max(route.hops[*tooth], distance(spine_at, d, *tooth));
             }
         }
         route.dst = step(row(src), col(src), *dir, 1);

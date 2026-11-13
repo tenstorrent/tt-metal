@@ -56,7 +56,9 @@ struct FusedPersistentParams {
     // Per requester.
     std::vector<uint32_t> input_socket_config_addresses;
     std::vector<uint32_t> partials_addresses;
-    // Per requester, per link: the NoC coordinates of the sum core that link's part of a row goes to.
+    // Sum cores per link: a link's part of a row splits evenly over them (each its own packet).
+    uint32_t sub_parts{};
+    // Per requester, per sum core (in the row's order): its NoC coordinates.
     std::vector<std::vector<uint32_t>> sum_core_noc_xs;
     std::vector<std::vector<uint32_t>> sum_core_noc_ys;
     // Per chip of the op (its linear index, its slot), per requester: the sends to that requester's chips (see
