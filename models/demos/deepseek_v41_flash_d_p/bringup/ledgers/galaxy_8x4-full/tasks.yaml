@@ -3524,6 +3524,7 @@ tasks:
   - 51200
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
@@ -3536,6 +3537,11 @@ tasks:
       acks_early: == 0
       served_bytes_differ: == 0
       chunk_wall_ms: '> 0'
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed_decoder_skip: == 0
+      acks_early_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      decode_acks_failures: == 0
       device_ms_total: '> 0'
 - id: FIX.28
   title: 'Gates cover DECODER_SKIP=decode (Kartik''s cut): determinism, contract and acks run with the skip active, not only the full path'
