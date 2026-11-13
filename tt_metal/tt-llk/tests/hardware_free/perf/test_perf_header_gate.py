@@ -358,6 +358,12 @@ def test_functional():
 def _run_spread(extra):
     return PerfConfig(templates=[LOOP_FACTOR(1), *extra])
 
+def _partly_dynamic(extra):
+    return [NUM_FACES(), *extra]
+
+def _run_partly_dynamic(extra):
+    return PerfConfig(templates=_partly_dynamic(extra))
+
 def _run_conditional(c):
     return PerfConfig(templates=[LOOP_FACTOR(1), NUM_FACES() if c else None])
 """

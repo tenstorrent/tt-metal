@@ -139,6 +139,15 @@ def _configuration_accesses(node):
 
 
 def _binds_configuration(statement):
+    def binds_name(target):
+        if _is_name(target, "configuration"):
+            return True
+        if isinstance(target, (ast.List, ast.Tuple)):
+            return any(binds_name(element) for element in target.elts)
+        if isinstance(target, ast.Starred):
+            return binds_name(target.value)
+        return False
+
     targets = []
     if isinstance(statement, (ast.Assign, ast.AnnAssign)):
         targets = (
@@ -146,11 +155,7 @@ def _binds_configuration(statement):
             if isinstance(statement, ast.Assign)
             else [statement.target]
         )
-    return any(
-        _is_name(node, "configuration")
-        for target in targets
-        for node in ast.walk(target)
-    )
+    return any(binds_name(target) for target in targets)
 
 
 def _configuration_accesses_in_block(statements, bound=False):
@@ -169,8 +174,14 @@ def _configuration_accesses_in_block(statements, bound=False):
             )
             failures.extend(body_failures)
             failures.extend(else_failures)
-            if statement.orelse:
-                bound = body_bound and else_bound
+            continuing = [
+                branch_bound
+                for branch_bound in (body_bound, else_bound)
+                if branch_bound is not None
+            ]
+            if not continuing:
+                return failures, None
+            bound = all(continuing)
             continue
         if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
             failures.extend(_configuration_accesses_in_block(statement.body, bound)[0])
@@ -195,6 +206,8 @@ def _configuration_accesses_in_block(statements, bound=False):
             failures.extend(_configuration_accesses(statement))
         if _binds_configuration(statement):
             bound = True
+        if isinstance(statement, (ast.Return, ast.Raise)):
+            return failures, None
     return failures, bound
 
 
@@ -268,10 +281,28 @@ def run(use_new):
     return configuration.variant_stimuli
 """
     ).body[0]
+    attribute_target = ast.parse(
+        """
+def run():
+    configuration.runtimes = []
+    return configuration.variant_stimuli
+"""
+    ).body[0]
+    terminating_branch = ast.parse(
+        """
+def run(use_existing):
+    if use_existing:
+        return None
+    configuration = build()
+    return configuration.variant_stimuli
+"""
+    ).body[0]
     assert not _undefined_configuration_accesses(bound)
     assert _undefined_configuration_accesses(stale)
     assert _undefined_configuration_accesses(late)
     assert _undefined_configuration_accesses(conditional)
+    assert _undefined_configuration_accesses(attribute_target)
+    assert not _undefined_configuration_accesses(terminating_branch)
 
 
 def test_perf_backed_runners_have_no_stale_configuration_references():

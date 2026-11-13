@@ -124,22 +124,21 @@ def _self_attr(node):
     return None
 
 
-def _param_calls_from_value(value, specs: dict) -> list:
-    """Param constructor calls in a return value: one call, or a list/tuple of them."""
+def _param_calls_from_value(value, specs: dict) -> list | None:
+    """Return statically visible param calls, or ``None`` for a dynamic value."""
     if value is None:
-        return []
+        return None
     if isinstance(value, ast.Call) and _call_name(value) in specs:
         return [value]
     if isinstance(value, (ast.List, ast.Tuple)):
-        return [
-            elt
-            for elt in value.elts
-            if isinstance(elt, ast.Call) and _call_name(elt) in specs
-        ]
-    return []
+        if all(
+            isinstance(elt, ast.Call) and _call_name(elt) in specs for elt in value.elts
+        ):
+            return list(value.elts)
+    return None
 
 
-def _function_returned_param_calls(fn: ast.FunctionDef, specs: dict) -> list:
+def _function_returned_param_calls(fn: ast.FunctionDef, specs: dict) -> list | None:
     """Param constructor calls returned by ``fn``, ignoring nested functions."""
     nested = {
         n
@@ -150,8 +149,11 @@ def _function_returned_param_calls(fn: ast.FunctionDef, specs: dict) -> list:
     calls = []
     for node in ast.walk(fn):
         if isinstance(node, ast.Return) and node not in nested:
-            calls.extend(_param_calls_from_value(node.value, specs))
-    return calls
+            returned = _param_calls_from_value(node.value, specs)
+            if returned is None:
+                return None
+            calls.extend(returned)
+    return calls or None
 
 
 def _local_returned_param_calls(tree: ast.AST, specs: dict) -> dict:
