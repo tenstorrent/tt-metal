@@ -1765,7 +1765,7 @@ std::vector<Tensor> polygamma_bw(
 
 // erfinv
 // self: 0.5 * sqrt(M_PI) * exp(self.erfinv().pow(2)) * grad
-// for input -1 and 1: grad.sign() * inf, for input > 1 or < -1 : nan
+// for input -1 and 1: grad * inf, for input > 1 or < -1 : nan
 std::vector<Tensor> erfinv_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
@@ -1791,7 +1791,6 @@ std::vector<Tensor> erfinv_bw(
         EltwiseUnaryWithParam{UnaryOpType::ERFINV},
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::EXP, 0.0f}};
-    const std::array sign_of_it = {EltwiseUnaryWithParam{UnaryOpType::SIGN}};
     const std::array below_minus_one = {EltwiseUnaryWithParam{UnaryOpType::UNARY_LT, -1.0f}};
     const std::array above_one = {EltwiseUnaryWithParam{UnaryOpType::UNARY_GT, 1.0f}};
     // x == 1 or x == -1 is abs(x) == 1, and both wheres wrote the same value.
@@ -1803,8 +1802,7 @@ std::vector<Tensor> erfinv_bw(
         m_sqrtpi * 0.5f,
         std::nullopt,
         output_mem_config);
-    Tensor t_inf = ttnn::multiply(
-        grad, std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config, std::nullopt, {}, sign_of_it);
+    Tensor t_inf = ttnn::multiply(grad, std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
     result = ttnn::where(
         ttnn::logical_or(input, input, std::nullopt, output_mem_config, std::nullopt, {}, below_minus_one, above_one),
         std::nanf(" "),
