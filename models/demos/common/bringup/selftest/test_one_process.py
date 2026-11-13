@@ -34,9 +34,14 @@ def test_only_safe_runs_of_shared_model_tests_may_join():
         "run_all": True,
     }
     assert B.parse(f"BRINGUP_RUNG=last {R} {T}test_ladder.py")["env"] == {"BRINGUP_RUNG": "last"}
+    # FIX.29: the contract test shares too (the adapter's runtime takes the batch's model: the model's loader goes
+    # through testing/batch.shared_model), and a model test that declares BATCH_SHARED = True
+    assert B.parse(f"{R} {T}test_contract.py")["args"] == [f"{T}test_contract.py"]
+    mine = "models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py"
+    assert B.parse(f"{R} {mine}")["args"] == [mine]
     no = [
-        f"{R} {T}test_contract.py",  # builds the model through the engine's adapter: what it checks
-        f"{R} models/demos/x/tests/bringup/contract/test_kv_layout.py",  # a model's own test loads its own
+        f"{R} models/demos/x/tests/bringup/contract/test_kv_layout.py",  # a model's own test, not declared: own load
+        f"{R} models/demos/deepseek_v41_flash_d_p/tests/test_ckv_codec.py",  # (exists, not declared)
         f"scripts/run_safe_pytest.sh --run-all {T}test_profile.py",  # precompile pass: a process of its own
         f"TT_METAL_DEVICE_PROFILER=1 {R} {T}test_profile.py",  # read at process start
         f"BRINGUP_PROFILER=device {R} {T}test_profile.py",
@@ -44,7 +49,8 @@ def test_only_safe_runs_of_shared_model_tests_may_join():
         f"python -m x {T}test_profile.py",
     ]
     assert [B.parse(c) for c in no] == [None] * len(no)
-    assert B.parse_all(f"{WALL} && {PROF}") and B.parse_all(f"{WALL} && {R} {T}test_contract.py") is None
+    assert B.parse_all(f"{WALL} && {PROF}") and B.parse_all(f"{WALL} && {R} {T}test_contract.py")
+    assert B.parse_all(f"{WALL} && {R} models/demos/x/tests/test_y.py") is None
 
 
 def test_ladders_first_clean_walls_before_profiled_runs():
@@ -67,7 +73,8 @@ def test_the_model_key_ignores_per_run_variables_only():
 def test_a_gate_unit_of_a_clean_wall_and_its_profile_is_one_process(sandbox):
     s = sandbox.write_spec(target={"seq": 128, "chunk": 32})
     run = B.unit_command(f"{WALL} && {PROF}", s)
-    assert run.endswith(f"{R} {B.BATCH_TEST}") and f"{B.CMD_ENV}=" in run and f"{B.MAX_SEQ_ENV}=96" in run
+    # (FIX.29: at least target.seq, whatever loads first)
+    assert run.endswith(f"{R} {B.BATCH_TEST}") and f"{B.CMD_ENV}=" in run and f"{B.MAX_SEQ_ENV}=128" in run
     assert B.LM_HEAD_ENV not in run  # no ladder in it
     assert shlex.split(run.split(f"{B.CMD_ENV}=")[1])[0] == f"{WALL} && {PROF}"  # the unit's own command, intact
     plan = B.plan_from_cmd(f"{WALL} && {PROF}")
@@ -349,7 +356,7 @@ def test_an_ab_side_runs_in_one_process_and_keeps_each_runs_results(mk, sandbox)
     o.run_cmd = batch_runner(calls)
     assert o.run() == HUMAN, mk.lines
     assert [c[0] for c in calls] == ["batch", "batch"]  # off, on: one process a side
-    assert calls[0][1] == ["quick.0", "p64.0", "p64.1"] and calls[0][2] == "96"  # walls first; seq for position 64
+    assert calls[0][1] == ["quick.0", "p64.0", "p64.1"] and calls[0][2] == "128"  # walls first; target.seq
     d = o.run_dir / "ab" / "P.1"
     rec = o.led.state()["P.1"]["ab"]
     assert rec["quick"]["old"]["chunk_wall_ms"] == 840.0 and rec["quick"]["new"]["chunk_wall_ms"] == 250.0
@@ -401,6 +408,12 @@ def test_off_by_default_every_run_is_its_own_process(mk, sandbox):
     task = o.led.task("P.1")
     o.ab_measure(task, "old", {}, o.ab_base({}, {}, "P.1"), o.ab_code_key(task))
     assert [c[0] for c in calls] == ["single", "single"]
+
+
+def test_a_hand_run_batch_keeps_going_past_a_failure_when_asked(monkeypatch):
+    monkeypatch.setenv(B.KEEP_GOING_ENV, "1")
+    plan = B.plan_from_cmd(f"{WALL} && {PROF}")
+    assert not plan["stop_on_fail"] and len({e["group"] for e in plan["entries"]}) == 2  # FIX.29
 
 
 def test_the_device_test_reads_a_plan_or_a_units_command(monkeypatch, tmp_path):
