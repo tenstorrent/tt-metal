@@ -301,7 +301,9 @@ GatherPlan build_gather_plan(
         }
     }
 
-    // Gather groups (members in row-major order; rank = index in the group) and the ring orders over each.
+    // Gather groups (rank = index in the group) and the ring orders over each. An axis group's members run
+    // along the axis; the full-mesh group's run row-major, or column-major with full_mesh_outer_axis 1 (a
+    // TP-deduplicated cache with SP on mesh axis 1 holds its shards SP-major).
     std::vector<std::vector<Coord>> groups;
     std::vector<std::vector<std::vector<Coord>>> rings_of_group;
     bool closed_ring = false;
@@ -320,9 +322,9 @@ GatherPlan build_gather_plan(
         }
     } else {
         std::vector<Coord> members;
-        for (uint32_t r = 0; r < mesh_rows; ++r) {
-            for (uint32_t c = 0; c < mesh_cols; ++c) {
-                members.emplace_back(r, c);
+        for (uint32_t outer = 0; outer < mesh_shape[args.full_mesh_outer_axis]; ++outer) {
+            for (uint32_t inner = 0; inner < mesh_shape[1 - args.full_mesh_outer_axis]; ++inner) {
+                members.push_back(args.full_mesh_outer_axis == 0 ? Coord(outer, inner) : Coord(inner, outer));
             }
         }
         groups.push_back(members);
