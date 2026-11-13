@@ -5,9 +5,14 @@
 #include "all_gather_weight_minimal_matmul_async_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
+#include <internal/mesh_device.hpp>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -540,6 +545,44 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     const uint32_t chunk_tiles = K_block_tiles;  // senders ship K in the chunks the matmul consumes
     const auto src_node_id = device->get_fabric_node_id(mesh_coordinate);
 
+    // Senders run on the sink row's free data movers - column 0 stays free. Each one sits in the column of the worker
+    // closest to its link's Ethernet core or in the nearest free column before it: its packets leave on
+    // large_input_noc, which goes one way round the row, so every column back costs one hop and a column past it
+    // costs almost the whole row.
+    auto sender_cores_at = [&](const ttnn::MeshCoordinate& coord) {
+        const std::array<std::optional<ttnn::MeshCoordinate>, 2> peers = {
+            ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, 1, topology, axis),
+            ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, -1, topology, axis)};
+        const tt::tt_metal::IDevice* chip = tt::tt_metal::internal::get_device(*device, coord);
+        const auto src = device->get_fabric_node_id(coord);
+        std::vector<ttnn::CoreCoord> cores(2 * num_links);
+        std::set<uint32_t> taken = {0};
+        auto take_at_or_before = [&](uint32_t x) {
+            x = std::min<uint32_t>(x, grid_size.x - 1);
+            while (taken.contains(x)) {
+                x = (x == 0) ? grid_size.x - 1 : x - 1;
+            }
+            taken.insert(x);
+            return ttnn::CoreCoord{x, sink_row};
+        };
+        for (uint32_t link = 0; link < num_links; ++link) {
+            for (uint32_t dir = 0; dir < 2; ++dir) {
+                if (!peers[dir].has_value()) {
+                    continue;  // no sender in this direction, and nobody looks its core up
+                }
+                const auto dst = device->get_fabric_node_id(peers[dir].value());
+                const auto links = tt::tt_fabric::get_forwarding_link_indices(*device, src, dst);
+                TT_FATAL(link < links.size(), "AGMM: link {} of {} has no fabric route", link, num_links);
+                const ttnn::CoreCoord eth = tt::tt_fabric::get_forwarding_eth_core(*device, src, dst, links[link]);
+                const auto closest =
+                    tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*chip, eth, large_input_noc);
+                cores[(2 * link) + dir] = take_at_or_before(closest.logical_coord.x);
+            }
+        }
+        return cores;
+    };
+    const std::vector<ttnn::CoreCoord> my_sender_cores = sender_cores_at(mesh_coordinate);
+
     // Packet slots (header + payload each), plus one alignment unit of slack so the kernel can align the base.
     const auto send_slots_bytes = static_cast<uint32_t>((grid_send_slots * slot_bytes) + kSendSlotAlignBytes);
     for (uint32_t link = 0; link < num_links; ++link) {
@@ -582,10 +625,11 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                 continue;
             }
 
-            // Senders run on the sink row's free data movers, spread evenly past column 0.
             const uint32_t sender_index = (2 * link) + dir;
-            const ttnn::CoreCoord send_core{1 + ((sender_index * (grid_size.x - 1)) / (2 * num_links)), sink_row};
-            const ttnn::CoreCoord send_virtual_core = device->worker_core_from_logical_core(send_core);
+            const ttnn::CoreCoord send_core = my_sender_cores[sender_index];
+            // The sender of this link and direction on the next device, which forwards what we send it.
+            const ttnn::CoreCoord peer_virtual_core =
+                device->worker_core_from_logical_core(sender_cores_at(neighbour.value())[sender_index]);
             create_circular_buffer_bytes(
                 program,
                 tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(send_core)),
@@ -616,7 +660,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             send_rt.insert(send_rt.end(), stripe_sem_addrs.begin(), stripe_sem_addrs.end());
             send_rt.insert(
                 send_rt.end(),
-                {static_cast<uint32_t>(send_virtual_core.x), static_cast<uint32_t>(send_virtual_core.y)});
+                {static_cast<uint32_t>(peer_virtual_core.x), static_cast<uint32_t>(peer_virtual_core.y)});
             // Router connection for this link; the kernel opens it with open_connections.
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                 *device,
