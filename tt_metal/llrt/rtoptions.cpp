@@ -591,7 +591,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_EMULE_REAL_FAST_DISPATCH
         // In fast dispatch, emulated chips run metal's own fast-dispatch stack (command queues, prefetcher and
-        // dispatcher kernels) instead of the emulator's command queue. Requires TT_METAL_EMULE_MODE=1.
+        // dispatcher kernels) instead of the emulator's command queue. Requires TT_METAL_EMULE_MODE=1; no effect in
+        // slow dispatch.
         // Usage: export TT_METAL_EMULE_REAL_FAST_DISPATCH=1
         case EnvVarID::TT_METAL_EMULE_REAL_FAST_DISPATCH: this->emule_real_fast_dispatch = is_env_enabled(value); break;
 

@@ -302,7 +302,8 @@ bool Cluster::runs_dispatch_firmware() const {
     if (this->target_type_ == tt::TargetDevice::Mock) {
         return false;
     }
-    return this->target_type_ != tt::TargetDevice::Emule || this->rtoptions_.get_emule_real_fast_dispatch();
+    return this->target_type_ != tt::TargetDevice::Emule ||
+           (this->rtoptions_.get_fast_dispatch() && this->rtoptions_.get_emule_real_fast_dispatch());
 }
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
