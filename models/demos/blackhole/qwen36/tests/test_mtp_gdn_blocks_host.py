@@ -228,6 +228,27 @@ def test_verify_tables_are_bound_per_mambaspec_group(copies):
         assert torch.equal(ctrl, want[0]) and torch.equal(idx, want[1])
 
 
+def test_unchanged_verify_tables_are_not_copied_again(copies):
+    """A table the device already holds is not copied: a second verify of the same blocks copies nothing, and a row
+    whose start block moves (a new accepted count) copies only the ctrl pages. Clearing the tables restages all."""
+    st, plugin = _block_state()
+    blocks = SpecBlocks(plugin, 3, "none")
+    blocks.admit(0)
+    blocks.prefill(0, 0, 100)
+    sel = {0: blocks.decode(0, 100, 4)}
+    st.set_verify_blocks(blocks.state(sel, 4))
+    copies.clear()
+    st.set_verify_blocks(blocks.state(sel, 4))
+    assert copies == []
+    blocks.commit(0, 2)
+    sel = {0: blocks.decode(0, 102, 4)}
+    st.set_verify_blocks(blocks.state(sel, 4))
+    assert {id(dev) for _, dev in copies} <= {id(t) for t in st._verify_ctrl} and len(copies) == plugin.num_groups
+    copies.clear()
+    st.clear_verify_blocks()
+    assert len(copies) == 2 * plugin.num_groups
+
+
 def test_verify_tables_refuse_other_groupings_and_short_windows(copies, expect_error):
     st, plugin = _block_state()
     blocks = SpecBlocks(plugin, 3, "none")
@@ -376,32 +397,39 @@ def test_slot_keeps_its_requests_mrope_delta(engine):
 
 
 def test_drafter_rows_take_their_slots_delta(engine, monkeypatch):
-    """Every drafter position table takes each row's own delta: the recorded drafter's reseed rows (user-major, T per
-    user) and draft steps, and the eager draft steps and reseeds."""
+    """Every drafter RoPE row takes each row's own delta: the recorded drafter's reseed rows (user-major, T per user)
+    and draft steps (the pack's table rows), and the eager draft steps and reseeds."""
     from models.demos.blackhole.qwen36.tt import spec_engine
+    from models.demos.blackhole.qwen36.tt.spec_step import draft_reseed_rope, draft_step_rope
 
     eng, _ = engine
     B, T, K = eng.B, eng.T, eng.K
     eng._rope_deltas = [0, -12, 5, 0]
-    tables, steps = [], []
+    tables, steps, staged = [], [], {}
     eng.model._rope_tp_cos_sin_decode_torch = lambda pos, deltas=None: tables.append(list(deltas)) or (None, None)
     eng.model.ttnn_mtp_decode_forward = lambda *a, rope_deltas=None, **kw: steps.append(list(rope_deltas)) or (
         "logits",
         "h",
     )
-    eng._stage = lambda *a: None
-    eng._id_to_host = lambda t: [0] * B
-    eng._dr_outs, eng._dr_pos, eng._dr_cos, eng._dr_sin = [None] * K, [None] * K, [None] * K, [None] * K
+    eng.model.rope_table_rows = lambda: 4096
+    eng._stage = lambda host, buf, *a: staged.__setitem__(buf, host)
+    eng._dr_pack, eng._dr_rs_pt, eng._dr_rs_staged = "pack", "rs_pt", None
+    eng._read_ids = lambda ts: [[0] * B for _ in ts]
+    eng._dr_outs = [None] * K
     eng.mtp_extra_steps, eng.mesh = 0, None
     monkeypatch.setattr(ttnn, "execute_trace", lambda *a, **kw: None)
     monkeypatch.setattr(spec_engine, "draft_argmax", lambda mtp, logits: "ids")
     ctok = torch.zeros(B, T, dtype=torch.int64)
     cpos = torch.arange(1, T + 1).repeat(B, 1)
     pt = torch.ones(B, eng.nb, dtype=torch.int32)
-    m = [1, 2, 0, 0]
-    eng._propose_recorded(ctok, cpos, m, [0] * B, [7] * B, pt)
-    assert tables == [[d for d in eng._rope_deltas for _ in range(T)]] + [eng._rope_deltas] * K
-    tables.clear()
+    m, p0, no = [1, 2, 0, 0], [100] * B, [False] * B
+    eng._propose_recorded(ctok, m, p0, no, no, pt)
+    pack = staged["pack"]
+    reseed = pack[draft_reseed_rope(K), : B * T].tolist()
+    assert reseed == [100 + d + j for d in eng._rope_deltas for j in range(T)]
+    for k in range(K):
+        assert pack[draft_step_rope(K, k), :B].tolist() == [100 + mu + k + d for mu, d in zip(m, eng._rope_deltas)]
+    assert tables == [], "the recorded drafter stages table rows, no host cos / sin"
     eng._vfeed = SimpleNamespace(shape=(1, 1, B * T, 64))
     eng.mtp = SimpleNamespace(forward_decode=lambda *a, **kw: (None, "h"))
     eng._reseed_mtp_batched(ctok, cpos, m, pt)

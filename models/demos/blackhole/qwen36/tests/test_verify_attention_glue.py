@@ -107,7 +107,9 @@ def test_verify_attention_matches_the_previous_op_sequence(
     cur_pos = _rm_int(mesh_device, row_pos)
 
     model = SimpleNamespace(args=args, rope=SimpleNamespace(rope_delta=0))
-    model._rope_tp_cos_sin_decode_torch = lambda p: Qwen36Model._rope_tp_cos_sin_decode_torch(model, p)
+    model._rope_tp_cos_sin_decode_torch = lambda p, deltas=None: Qwen36Model._rope_tp_cos_sin_decode_torch(
+        model, p, deltas
+    )
     rope_old = [replicate_to_device(mesh_device, t) for t in Qwen36Model._rope_tp_cos_sin_decode_torch(model, row_pos)]
     rope_new = [replicate_to_device(mesh_device, t) for t in Qwen36Model._verify_cos_sin_torch(model, row_pos)]
     assert tuple(rope_old[0].shape) == (1, R, 1, rd) and tuple(rope_new[0].shape) == (1, 1, R, rd)

@@ -562,7 +562,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     plugin's spec-decode contract (B * (K+1) <= 32), synchronous scheduling and host acceptance.
     On a step the plugin samples on the device (sample_on_device_mode), a sampled row's ids are the device sampler's
     draws, one per verify column (spec_ids_are_sampled, spec_sample.VerifySampler), which the host id walk accepts as
-    exact rejection sampling.
+    exact rejection sampling. An argmax_ids verify also runs the same walk and the drafter on the device when the next
+    propose is decided before the verify (MTPBlockEngine one-enqueue steps); propose_draft_tokens then returns those
+    drafts once the runner's commit matches the device's.
 
     vLLM owns the GDN state as for Qwen36ForCausalLM; its MambaSpec groups declare num_speculative_blocks = K, so a
     verify row gets 1 + K state blocks per group (mamba_state.windows). Every decode step is a verify: it reads each
@@ -617,6 +619,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             return SpecReject(reason=f"requested_k={requested_k} < engine K={k}", supported_k=(k,))
         try:
             from models.demos.blackhole.qwen36.tt.spec_engine import spec_memory_costs
+            from models.demos.blackhole.qwen36.tt.spec_step import rope_table_rows
 
             mc = vllm_config.model_config
             tc = mc.hf_config
@@ -631,7 +634,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                     f"{_SPEC_STEP_CORES} cores gdn_spec_step uses (one per row and head) at TP={tp}",
                     supported_k=(),
                 )
-            costs = spec_memory_costs(tc, tp, max_num_seqs, k, max_seq_len=mc.max_model_len, gdn_state_in_blocks=True)
+            costs = spec_memory_costs(
+                tc,
+                tp,
+                max_num_seqs,
+                k,
+                max_seq_len=mc.max_model_len,
+                gdn_state_in_blocks=True,
+                rope_table_rows=rope_table_rows(mc.max_model_len),
+            )
             # costs are for the whole batch: per_seq scales with B, fixed is shared
             per_seq = math.ceil((costs["per_seq"]["total"] + costs["fixed"]["total"]) / max_num_seqs)
             per_token = int(costs["per_token"]["total"])
@@ -849,6 +860,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             slot_remap=remap,
             mamba_state=mamba_state,
             sampling=sampling,
+            one_enqueue=False,
         )
         if sampling is None:
             return res.logits[:, :1].float()
