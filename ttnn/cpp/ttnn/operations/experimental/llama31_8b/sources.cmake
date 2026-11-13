@@ -26,11 +26,13 @@ set(TTNN_OP_EXPERIMENTAL_LLAMA31_8B_API_HEADERS
     rms_norm_residual/device/rms_norm_residual_table.hpp
     rms_norm_residual/rms_norm_residual.hpp
     rms_norm_residual_decode/device/rms_norm_residual_decode_device_operation.hpp
+    rms_norm_residual_decode/device/rms_norm_residual_decode_table.hpp
     rms_norm_residual_decode/rms_norm_residual_decode.hpp
     rotary_bf8/device/rotary_bf8_device_operation.hpp
     rotary_bf8/device/rotary_bf8_table.hpp
     rotary_bf8/rotary_bf8.hpp
     sdpa_bh/device/sdpa_bh_device_operation.hpp
+    sdpa_bh/device/sdpa_bh_table.hpp
     sdpa_bh/sdpa_bh.hpp
 )
 

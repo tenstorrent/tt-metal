@@ -43,43 +43,6 @@ void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
     fill_tile_zeros<tile_bytes, wait_for_barrier>(noc, cb_id, tile_id);
 }
 
-template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, uint32_t capacity_t = 0>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
-    constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
-    const uint32_t head_offset = cur_head * block_size_t * Wt;
-
-    if constexpr (capacity_t > 0) {
-        seq_tile_idx %= capacity_t;
-    }
-    const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
-    const uint32_t block_row_offset = seq_tile_idx % block_size_t;
-    const uint32_t block_offset = block_row_offset * Wt;
-    return physical_block * block_stride + head_offset + block_offset;
-}
-
-template <typename PageTableArgs>
-volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
-    Noc noc,
-    uint32_t cb_id,
-    uint32_t batch_idx,
-    const PageTableArgs& page_table_args,
-    uint32_t page_table_addr,
-    uint32_t page_table_stick_size) {
-    CircularBuffer cb(cb_id);
-    uint32_t page_table_cb_wr_ptr = cb.get_write_ptr();
-    const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
-    noc.async_read(
-        page_table_reader,
-        CoreLocalMem<uint32_t>(page_table_cb_wr_ptr),
-        page_table_stick_size,
-        {.page_id = batch_idx},
-        {});
-    noc.async_read_barrier();
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
-}
-
 class TensorTileShape {
 public:
     uint32_t shape[4];
@@ -218,64 +181,6 @@ FORCE_INLINE void read_q_subblock(
     noc.async_read_barrier();
     noc.write_zeros_l1_barrier();
     cb.push_back(sb_tiles);
-}
-
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
-void read_paged_chunk_with_padding(
-    const ReaderType& reader,
-    const uint32_t cb_id,
-    const uint32_t cur_head,
-    const uint32_t chunk_start_row,
-    const uint32_t src_rows,
-    const uint32_t src_cols,
-    const uint32_t dst_rows,
-    const uint32_t dst_cols,
-    const uint32_t tile_bytes,
-    const uint32_t barrier_threshold,
-    const volatile tt_l1_ptr uint32_t* const page_table_ptr,
-    const bool transpose = false,
-    const uint32_t skip_src_cols = 0) {
-    Noc noc;
-    const uint32_t num_tiles = dst_rows * dst_cols;
-    CircularBuffer cb(cb_id);
-    cb.reserve_back(num_tiles);
-    const uint32_t base_write_ptr = cb.get_write_ptr();
-
-    uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
-    uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
-
-    uint32_t barrier_count = 0;
-    for (uint32_t row = 0; row < src_rows; ++row) {
-        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
-        uint32_t virtual_row_num = chunk_start_row + row;
-        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
-            virtual_row_num, cur_head, page_table_ptr);
-
-        for (uint32_t col = 0; col < src_cols; ++col) {
-            noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = physical_tile_id}, {});
-            physical_tile_id += 1;
-            write_ptr += inner_ptr_stride;
-
-            if (++barrier_count == barrier_threshold) {
-                noc.async_read_barrier();
-                barrier_count = 0;
-            }
-        }
-        physical_tile_id += skip_src_cols;
-    }
-
-    for (uint32_t row = 0; row < dst_rows; ++row) {
-        for (uint32_t col = 0; col < dst_cols; ++col) {
-            if (row < src_rows && col < src_cols) {
-                continue;
-            }
-            uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
-        }
-    }
-    noc.async_read_barrier();
-    noc.write_zeros_l1_barrier();
-    cb.push_back(num_tiles);
 }
 
 template <uint32_t tile_bytes>

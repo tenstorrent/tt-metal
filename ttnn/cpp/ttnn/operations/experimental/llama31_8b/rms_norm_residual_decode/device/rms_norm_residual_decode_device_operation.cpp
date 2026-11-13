@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/llama31_8b/rms_norm_residual_decode/device/rms_norm_residual_decode_device_operation.hpp"
+#include "ttnn/operations/experimental/llama31_8b/rms_norm_residual_decode/device/rms_norm_residual_decode_table.hpp"
 
 #include <algorithm>
 #include <array>
@@ -62,16 +63,12 @@ using namespace CMAKE_UNIQUE_NAMESPACE;
 
 namespace {
 
-struct TableRow {
-    CoreCoord grid;
-    std::uint32_t shard_w;
-    std::uint32_t subblock_w;
-};
+using table::kRows;
+using table::kWidth;
 
-constexpr std::uint32_t kWidth = 4096;
-const std::array<TableRow, 2> kTable{{{CoreCoord{8, 8}, 64, 2}, {CoreCoord{8, 4}, 128, 4}}};
-
-bool width_sharded_on(const MemoryConfig& m, CoreCoord grid, std::uint32_t shard_w) {
+bool width_sharded_on(const MemoryConfig& m, const table::Row& row) {
+    const CoreCoord grid{row.grid_x, row.grid_y};
+    const std::uint32_t shard_w = row.shard_w;
     return m.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && m.buffer_type() == BufferType::L1 &&
            m.shard_spec().has_value() && m.shard_spec()->orientation == ShardOrientation::ROW_MAJOR &&
            m.shard_spec()->grid == CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, grid.y - 1})) &&
@@ -104,20 +101,19 @@ bool in_table(
         weight.padded_shape() != ttnn::Shape({1, 1, kWidth / tt::constants::TILE_WIDTH, tt::constants::TILE_WIDTH})) {
         return false;
     }
-    const auto& residual_row = kTable[1];
-    if (!width_sharded_on(residual.memory_config(), residual_row.grid, residual_row.shard_w)) {
+    if (!width_sharded_on(residual.memory_config(), kRows[table::kResidualRow])) {
         return false;
     }
-    if (std::none_of(kTable.begin(), kTable.end(), [&](const TableRow& row) {
-            return width_sharded_on(input.memory_config(), row.grid, row.shard_w);
+    if (std::none_of(kRows.begin(), kRows.end(), [&](const table::Row& row) {
+            return width_sharded_on(input.memory_config(), row);
         })) {
         return false;
     }
-    return std::any_of(kTable.begin(), kTable.end(), [&](const TableRow& row) {
-        return program_config.compute_with_storage_grid_size == row.grid &&
+    return std::any_of(kRows.begin(), kRows.end(), [&](const table::Row& row) {
+        return program_config.compute_with_storage_grid_size == CoreCoord{row.grid_x, row.grid_y} &&
                program_config.block_w * tt::constants::TILE_WIDTH == row.shard_w &&
                program_config.subblock_w == row.subblock_w && program_config.block_h == 1 && !program_config.inplace &&
-               width_sharded_on(memory_config, row.grid, row.shard_w);
+               width_sharded_on(memory_config, row);
     });
 }
 
