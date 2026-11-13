@@ -69,13 +69,22 @@ def make_hidden(seq_len, hidden_size, seed=42, input_path=None):
     return torch.randn(1, seq_len, hidden_size, dtype=torch.bfloat16)
 
 
+def _semantics_tag(config) -> str:
+    """Reference semantics a config selects beyond the weights tag, so a cached truth is never reused across them.
+
+    Empty for the DS-V3.2 / GLM defaults, which keeps their existing cache entries valid.
+    """
+    eps = getattr(config, "index_k_norm_eps", None)
+    return "" if eps is None else f"_knormeps{eps:g}"
+
+
 def run_cpu_reference(config, weights, hidden_states, seq_len, cache_dir, cache_tag):
     """Single-shot sparse-MLA CPU truth (indexer active). Disk-cached (output + KVPE + index) under `cache_dir`.
 
     Returns (ref_output [1, seq, dim], ref_kvpe [1, 1, seq, kv_lora_rank + rope],
     ref_index [1, seq, index_head_dim]).
     """
-    cache_path = Path(cache_dir) / f"{cache_tag}_seq{seq_len}.pt"
+    cache_path = Path(cache_dir) / f"{cache_tag}{_semantics_tag(config)}_seq{seq_len}.pt"
     if cache_path.exists():
         logger.info(f"Loading cached CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
@@ -107,7 +116,7 @@ def run_cpu_reference_ragged(config, weights, hidden_states, seq_len, bounds, ca
     ref_index [1, seq, index_head_dim]).
     """
     shape_key = "-".join(f"{a}:{b}" for a, b in bounds[:2]) + f"-x{len(bounds)}"
-    cache_path = Path(cache_dir) / f"ragged_{cache_tag}_seq{seq_len}_{shape_key}.pt"
+    cache_path = Path(cache_dir) / f"ragged_{cache_tag}{_semantics_tag(config)}_seq{seq_len}_{shape_key}.pt"
     if cache_path.exists():
         logger.info(f"Loading cached ragged CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)
@@ -133,7 +142,7 @@ def run_cpu_reference_chunked(config, weights, hidden_states, seq_len, chunk, ca
     Returns (ref_output [1, seq, dim], ref_kvpe [1, seq, kv_lora_rank + rope],
     ref_index [1, seq, index_head_dim]).
     """
-    cache_path = Path(cache_dir) / f"chunked_{cache_tag}_seq{seq_len}_c{chunk}.pt"
+    cache_path = Path(cache_dir) / f"chunked_{cache_tag}{_semantics_tag(config)}_seq{seq_len}_c{chunk}.pt"
     if cache_path.exists():
         logger.info(f"Loading cached chunked CPU reference from {cache_path}")
         cached = torch.load(cache_path, weights_only=True)

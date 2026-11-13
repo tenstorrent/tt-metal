@@ -93,6 +93,9 @@ class K3AttnContext:
 
     rope_tensors: Optional[dict] = None
     kvpe_cache: object = None
+    # K3.1's DSA indexer key cache, layer-stacked in the same rank-local slot space as `kvpe_cache`
+    # (K3.1 has no `indexer_types`, so every DSA layer owns its slot). `None` on K3, which has no indexer.
+    index_kv_cache: object = None
     # RANK-LOCAL MLA slot, from `KimiK3LayerSchedule.kv_slot`. `None` on a KDA layer, which has no
     # slot at all; see layer_schedule.py for why this is not the global one.
     cache_layer_idx: Optional[int] = None
@@ -129,11 +132,11 @@ class K3Attention(Protocol):
 
 
 class TtK3MlaAttention(LightweightModule):
-    """`ttMLA` under the protocol.
+    """`ttMLA` under the protocol: K3's dense MLA, or K3.1's Gated DSA on the same layers.
 
     A thin adapter and deliberately nothing more: K3's MLA differences — NoPE, the output gate, 96
-    heads — are all read off the `config` inside `ttMLA.__init__`, so there is no K3-specific
-    attention code to write. What K3 does change is on the *caller's* side: `layer_num` is the
+    heads — and K3.1's DSA indexer (`resolve_has_indexer` reads its `index_*` fields) are all read off
+    the `config` inside `ttMLA.__init__`, so there is no K3-specific attention code to write. What K3 does change is on the *caller's* side: `layer_num` is the
     rank's MLA count rather than its layer count, and `cache_layer_idx` is a rank-local slot from
     the schedule rather than an enumerate index.
     """
@@ -163,16 +166,23 @@ class TtK3MlaAttention(LightweightModule):
         """The wrapped module, for the KV pad-zero and ack the block still owes on this layer."""
         return self._mla
 
-    def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
-        """K3 is dense, so the indexer arguments are absent and the return is the bare tensor.
+    def set_trace_controller(self, controller):
+        """Sparse MLA splits a capture around its top-k / KV-gather sub-device swaps; dense MLA ignores it."""
+        self._mla.set_trace_controller(controller)
 
-        `resolve_has_indexer` reports False for K3's config (no `has_indexer`, no `index_*` fields),
-        which is also what lets the trace guard in `TtPrefillTransformer.set_trace_controller` pass.
+    def release_sub_device_manager(self):
+        """Drop the sparse-MLA overlap manager before mesh close (a no-op for dense MLA)."""
+        self._mla.release_sparse_mla_overlap_manager()
+
+    def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
+        """The return is the bare tensor: K3.1's DSA layers each run their own indexer, so no top-k
+        indices cross layers and none are requested. K3's dense MLA ignores `index_kv_cache` (None).
         """
         return self._mla.forward(
             normed,
             ctx.rope_tensors,
             ctx.kvpe_cache,
+            index_kv_cache=ctx.index_kv_cache,
             cache_layer_idx=ctx.cache_layer_idx,
             actual_start=ctx.actual_start,
             # #54744 clamps the KV write to the real tokens. The shared block threads this through;
@@ -271,12 +281,14 @@ def build_attention(
     is_balanced: bool = False,
     first_layer_idx: int = 0,
     tp_shard_kv: Optional[bool] = None,
+    sparse_kv_cache_format=None,
 ) -> K3Attention:
     """The one place the hybrid schedule turns into a module.
 
     Everything below this call is polymorphic; everything above it knows the schedule. `topology` is
     the per-axis pair the model opened — `per_axis_topology()` — and is passed to MLA whole (its SDPA
     runs on the SP axis) but to KDA as its TP element only, since KDA's own CCL is TP-side.
+    `sparse_kv_cache_format` is the KVPE cache format of a DSA (K3.1) layer; `None` on dense K3.
     """
     from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
     from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
@@ -309,6 +321,7 @@ def build_attention(
                 kv_only=kv_only,
                 first_layer_idx=first_layer_idx,
                 tp_shard_kv=tp_shard_kv,
+                sparse_kv_cache_format=sparse_kv_cache_format,
             )
         )
 

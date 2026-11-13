@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geo
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -77,8 +78,8 @@ class TtKimiK3Transformer(LightweightModule):
         stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
         if stale:
             logger.warning(
-                f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format KDA weights; rebuild them from "
-                f"the checkpoint (test_transformer_depth does this, rebuilding only the KDA weights)"
+                f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format attention weights (KDA or "
+                f"indexer); rebuild them from the checkpoint (load_layer_state_dict_cached rebuilds only those)"
             )
         return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
 
@@ -119,10 +120,12 @@ class TtKimiK3Transformer(LightweightModule):
         super().__init__()
         if mtp_predictor is not None:
             raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
-        # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
-        # kvpe cache (bf16/fp8 ROW_MAJOR, read natively by sparse_sdpa) does not satisfy. Accepting a
-        # sparse format silently would produce a cache the pad-zero path cannot touch, so refuse it.
-        if sparse_kv_cache_format is not None:
+        # K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse kvpe
+        # cache (bf16/fp8 ROW_MAJOR, read natively by sparse_sdpa) does not satisfy, so K3 refuses a
+        # sparse format. K3.1 turns the same layers into Gated DSA (its config carries the indexer
+        # fields): those read the sparse cache, and `zero_pad_and_ack` skips a ROW_MAJOR cache.
+        self.has_indexer = resolve_has_indexer(config)
+        if sparse_kv_cache_format is not None and not self.has_indexer:
             raise ValueError(
                 f"Kimi-K3 uses a dense MLA KV cache; got sparse_kv_cache_format={sparse_kv_cache_format!r}"
             )
@@ -250,6 +253,7 @@ class TtKimiK3Transformer(LightweightModule):
                 is_balanced=is_balanced,
                 first_layer_idx=first_layer_idx,
                 tp_shard_kv=tp_shard_kv,
+                sparse_kv_cache_format=sparse_kv_cache_format,
             )
             self.layers.append(
                 TtKimiK3Block(
@@ -309,8 +313,8 @@ class TtKimiK3Transformer(LightweightModule):
         Required by `TtPrefillRuntime._prepare_trace`, which calls this unconditionally when
         PREFILL_USE_TRACE=1; without it the runner dies with AttributeError during compile().
 
-        Kimi-K3 is trace-eligible for the reason `TtPrefillTransformer.set_trace_controller` gives:
-        its attention is KDA or dense MLA, never a sparse/DSA indexer. Its KDA carries are
+        Kimi-K3 is trace-eligible for the reasons `TtPrefillTransformer.set_trace_controller` gives
+        for dense and sparse/DSA MLA (K3.1's indexer reads its per-chunk scalars on device). Its KDA carries are
         capture-safe for every user slot: they live at fixed addresses in the engine's `KdaStates`
         slabs and every load and store selects the slot on device from `metadata[0]`, the way MLA
         selects its KV slot, so one capture serves any slot the request is on (#59977).
@@ -431,8 +435,6 @@ class TtKimiK3Transformer(LightweightModule):
             def attn_input_tap(local_idx, hidden):
                 on_layer_hidden(first + local_idx - 1, hidden)
 
-        if index_kv_cache is not None:
-            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
         if (
@@ -443,6 +445,10 @@ class TtKimiK3Transformer(LightweightModule):
             or mtp_geometry is not None
         ):
             raise ValueError("Kimi-K3 has no MTP predictor; MTP forward arguments must be left at their defaults")
+        if index_kv_cache is not None and not self.has_indexer:
+            raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
+        if index_kv_cache is None and self.has_indexer and self.schedule.num_mla_layers:
+            raise ValueError("Kimi-K3.1's DSA layers write and read an indexer key cache; pass index_kv_cache")
         # The constructor argument is the channel `TtPrefillTransformer` uses (it reads
         # `self.padding_side` and takes no per-call value), so defaulting the keyword to "right"
         # here made a `padding_side="left"` model mask the wrong end of every chunk.
@@ -476,6 +482,7 @@ class TtKimiK3Transformer(LightweightModule):
                 ctx = K3AttnContext(
                     rope_tensors=rope_tensors,
                     kvpe_cache=kvpe_cache,
+                    index_kv_cache=index_kv_cache,
                     cache_layer_idx=self.schedule.kv_slot(local_idx),
                     cache_user_id=cache_user_id,
                     actual_start=actual_start,

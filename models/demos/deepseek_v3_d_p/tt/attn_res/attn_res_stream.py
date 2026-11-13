@@ -193,13 +193,15 @@ class TtAttnResWalk(object):
         against the set that arrives rather than anything this rank has sealed.
 
         Nothing statistical crosses the boundary: `inter_block` is a pure function of
-        `(sealed set, queries)`, and this rank owns `q_pre[0]`, so the batch is
-        recomputed here rather than shipped. Ownership of the tensor transfers in.
-
-        The owed read is taken in `open_layer(0)`, which seals first. The live stream it
-        reads arrives complete, and a seal right after the read is what layer 0 owes
-        anyway, so scoring `q_pre[0]` against the set *with* that stream sealed is the same
-        read, and it puts `q_pre[0]` in the batch of the block that opens there.
+        `(sealed set, queries)`, and this rank owns `q_pre[0]`, so the owed site's batch is
+        recomputed here over the inherited set rather than shipped. That leaves the walk in
+        exactly the state an undivided walk is in at that layer — the outgoing block's last
+        site batched, the live stream not yet sealed — so `open_layer(0)` takes the ordinary
+        path: read, seal, batch the next block. The read is then the undivided walk's own
+        computation, bit for bit. (Sealing first and scoring the owed site as a closed site of
+        the next block's batch is the same mixture, but a different reduction: measured on 8x4
+        it moved half the read's elements by 1-3 bf16 ulps and doubled its error against an
+        fp32 oracle — tt_metal_tracker-ao3i.9.) Ownership of the tensor transfers in.
         """
         self.op = op
         self.block_size = block_size
@@ -209,7 +211,9 @@ class TtAttnResWalk(object):
         self._blocks = iter(_block_sites(num_layers, q_pre, q_post, q_out, block_size))
         self._pending = iter(())
         self._partials = self._shifts = self._masses = None
-        self._owed = q_pre[0] if inherited_block_residual is not None else None
+        if inherited_block_residual is not None:
+            self._partials, self._shifts, self._masses = op.inter_block(self.stream.sealed, [q_pre[0]])
+            self._pending = enumerate([q_pre[0]])
 
     def read(self):
         """The next read site, in the order the schedule issues them."""
@@ -227,9 +231,6 @@ class TtAttnResWalk(object):
         the live stream itself and the caller must not free what it got — every later layer
         owns its `h`.
         """
-        if self._owed is not None:
-            return self._open_owing(), False
-
         borrowed = self.stream.num_sealed == 0
         h = self.stream.running_sum if borrowed else self.read()
 
@@ -239,22 +240,9 @@ class TtAttnResWalk(object):
             # here strands nothing.
             queries = next(self._blocks)
             self._free_batches()
-            self._partials, self._shifts, self._masses, _ = self.op.inter_block(self.stream.sealed, queries)
+            self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.sealed, queries)
             self._pending = enumerate(queries)
         return h, borrowed
-
-    def _open_owing(self):
-        """The rank's first layer: seal the inherited live stream, then batch the owed read
-        with the block it opens. With nothing live left to fold in, the owed read is closed.
-        """
-        self.stream.seal()
-        queries = next(self._blocks)
-        self._partials, self._shifts, self._masses, owed = self.op.inter_block(
-            self.stream.sealed, [self._owed, *queries], num_closed=1
-        )
-        self._owed = None
-        self._pending = enumerate(queries)
-        return owed
 
     def finish(self):
         """The single model-level read, and the end of the walk.

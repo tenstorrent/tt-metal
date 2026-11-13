@@ -15,13 +15,12 @@ The walk starts where the last pipeline rank starts (24/24/24/21 over 4 Galaxies
 upstream ranks hand over. Two layer kinds cover what AttnRes costs across the model:
 
   * **Boundary layer** (the rank's first): the most expensive AttnRes layer of the stack, and every AttnRes
-    program it has — the seal of the inherited live stream, the 25-site `inter_block` at the largest sealed
-    count of any full block, which carries the read that straddles the rank boundary as its first site and
-    returns it whole, and the post-attention read. The last block has one more snapshot but only 9 layers, so
-    it batches 19 sites, not 24.
+    program it has — the one-site `inter_block` over the inherited set and the read that straddles the rank
+    boundary, taken from it exactly as the undivided walk takes it (tt_metal_tracker-ao3i.9); the seal of the
+    inherited live stream; the 24-site `inter_block` at the largest sealed count of any full block; and the
+    post-attention read. The last block has one more snapshot but only 9 layers, so it batches 19 sites, not 24.
   * **Ordinary layer** (the ones after it): two reads, each settling the module write the walk deferred into
-    it. 85 of the 93 layers are this, and it is about 60% of AttnRes time over the model, which the boundary
-    layer alone weights at under 10%.
+    it. 85 of the 93 layers are this, and it is about 60% of AttnRes time over the model.
 
 AttnRes runs through the production code path: `TtAttnResResidual` over `TtAttnResWalk`, built the way
 `TtKimiK3Transformer`'s residual factory builds it on a non-first rank, and driven in `TtKimiK3Block.forward`'s
@@ -91,15 +90,26 @@ _WALL_SAMPLES = 30
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 _LOUDBOX_PERF_SKU = "bh_loudbox"
 _GALAXY = "SP8xTP4"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from runs 41501648694,
-# 41501662481 and 41501677551. Production prefill runs untraced, so untraced is held to the traced reference where
-# it reaches it. The untraced ordinary layer does not: its reads are host-dispatch bound on the 8x4 mesh, so it has
-# its own reference and, following the host CPU, a wider band. Untraced timings carry the host's dispatch jitter, so
-# the untraced boundary layer takes the wider band too (run 41946792821 read it at 372 us). Galaxies off the pool can
-# sit outside the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+# Galaxy end-to-end time (us) of each layer's AttnRes. The ordinary layer's references are from the CI pool
+# (bh_sc1_high_power), runs 41501648694, 41501662481 and 41501677551. Production prefill runs untraced, and untraced
+# reads are host-dispatch bound on the 8x4 mesh, so each untraced layer has its own reference and, following the host
+# CPU, the wider band; untraced timings also carry the host's dispatch jitter. Galaxies off the pool can sit outside
+# the band; run them with ATTN_RES_PERF_REPORT_ONLY=1.
+#
+# The boundary layer was 394 us traced and untraced (run 41946792821 read untraced at 372 us) while it scored the
+# straddling read as a closed site of the next block's batch. Taking that read as the undivided walk does (a one-site
+# `inter_block` over the inherited set, then the read) makes a split stack bit-identical to the undivided one and
+# costs three more programs (a stats/mix pair and a read), so untraced no longer reaches traced and has its own
+# reference. The traced boundary reference is derived, not measured on the pool: the pool's old-code reading (run
+# 42340900388 at dbc10eb0a4c, bh-glx-120-d08u08: 388.8 us) times the new/old ratio measured at that same old commit on
+# one off-pool Galaxy at 130 W (bh-glx-120-b07u08, 2026-11-08, interleaved medians 411.7 -> 621.8 us). That Galaxy runs
+# this layer ~6% slower than the pool; an earlier A/B on bh-glx-110-c10u14 (392.9 -> 591.8 us) agrees.
+# The untraced boundary reference stays 645 us, the c10u14 A/B reading (374.8 -> 644.6 us): untraced follows the
+# host's dispatch, and the two Galaxies' new/old ratios disagree (c10u14 1.72, b07u08 398.0 -> 631.8 us = 1.59), so
+# the pool's value (382.1 us old) scales to ~657 or ~607 us by one or the other; the band covers both.
 _GALAXY_REFERENCE_E2E_US = {
-    "traced": {"boundary": 394.0, "ordinary": 118.0},
-    "untraced": {"boundary": 394.0, "ordinary": 150.0},
+    "traced": {"boundary": 587.0, "ordinary": 118.0},
+    "untraced": {"boundary": 645.0, "ordinary": 150.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.

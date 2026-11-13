@@ -38,13 +38,19 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state, device_scalar
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
+    KdaContractGeometry,
+    KdaStates,
+    allocate_native_state,
+    device_scalar,
+)
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, decode_tail
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, decode_tail, encode_tail
 
 
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
@@ -781,3 +787,58 @@ def read_slab_layer(mesh_device, slabs: KdaStates, slot: int, layer_idx: int) ->
     slabs.import_layer(state, index, layer_idx)
     ttnn.deallocate(index)
     return state
+
+
+def kda_state_patterns(geometry: KdaContractGeometry, slot: int, layer_idx: int):
+    """Global recurrent ``[H, D, D]`` and golden-order convolution ``[K-1, 3*H*D]`` with a per-(slot, layer) offset,
+    so a wrong head, band, branch, half, slot or layer reads back as a mismatch."""
+    tag = 1000.0 * (slot * 10 + layer_idx)
+    heads, dim = geometry.num_heads, geometry.head_dim
+    recurrent = (torch.arange(heads * dim * dim, dtype=torch.float32).reshape(heads, dim, dim) + tag).float()
+    width = 3 * heads * dim
+    convolution = (
+        torch.arange(geometry.conv_history * width, dtype=torch.int32).remainder(509) + slot * 7 + layer_idx
+    ).to(torch.bfloat16)
+    return recurrent, convolution.reshape(geometry.conv_history, width)
+
+
+def per_chip_convolution(geometry: KdaContractGeometry, convolution: torch.Tensor, tp_col: int) -> torch.Tensor:
+    """The chip's ``[q_local | k_local | v_local]`` row from the golden-order global tensor."""
+    heads, dim, local = geometry.num_heads, geometry.head_dim, geometry.local_heads
+    parts = [
+        convolution[:, branch * heads * dim + tp_col * local * dim : branch * heads * dim + (tp_col + 1) * local * dim]
+        for branch in range(3)
+    ]
+    return torch.cat(parts, dim=-1)
+
+
+def native_state_from_global(
+    mesh_device, geometry: KdaContractGeometry, recurrent, convolution, tp_axis: int
+) -> KdaState:
+    """TP-shard heads, replicate across SP, in the layout the layer itself produces."""
+    tp = geometry.tensor_parallel_size
+    rec_dims, conv_dims = [None, None], [None, None]
+    rec_dims[tp_axis], conv_dims[tp_axis] = 1, 1
+    stacked_conv = encode_tail(
+        torch.cat([per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1),
+        KDA_CONVOLUTION_PAGE_CHANNELS,
+    )
+    mesh_shape = tuple(mesh_device.shape)
+    return KdaState(
+        recurrent=ttnn.from_torch(
+            recurrent.unsqueeze(0),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(rec_dims), mesh_shape=mesh_shape),
+        ),
+        convolution=ttnn.from_torch(
+            stacked_conv.unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(conv_dims), mesh_shape=mesh_shape),
+        ),
+    )
