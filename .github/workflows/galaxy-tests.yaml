@@ -1,6 +1,14 @@
 name: "Galaxy tests"
 
 on:
+  workflow_call:  # UMD bump prototype: lets umd-bump-tests.yaml call this workflow
+    inputs:
+      run-unit-tests: {required: false, type: boolean, default: true}
+      run-integration-tests: {required: false, type: boolean, default: true}
+      run-e2e-tests: {required: false, type: boolean, default: false}
+      run-multi-user-isolation-tests: {required: false, type: boolean, default: false}
+      wormhole: {required: false, type: boolean, default: true}
+      blackhole: {required: false, type: boolean, default: true}
   workflow_dispatch:
     inputs:
       # These 4 inputs shape a dispatch only. A scheduled run ignores them and

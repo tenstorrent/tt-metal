@@ -1,0 +1,20 @@
+# PROTOTYPE: replaces the "Running 1/2/3" retry logic of umd_bump_metal.sh.
+# When the UMD bump run fails, rerun only its failed jobs, up to 3 attempts in total.
+name: "UMD bump retry"
+
+on:
+  workflow_run:
+    workflows: ["UMD bump tests"]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  retry:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt < 3 }}
+    runs-on: ubuntu-slim
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run rerun ${{ github.event.workflow_run.id }} --failed --repo ${{ github.repository }}
