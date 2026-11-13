@@ -1790,6 +1790,7 @@ class MTPBlockEngine(MTPSpecEngine):
         self._step_pending = None  # the one-enqueue verify whose drafts the next propose returns
         self.one_enqueue_steps = 0  # verifies that ran the device acceptance and the drafter
         self.verify_steps = 0  # every verify after capture
+        self.one_enqueue_host_proposes = 0  # one-enqueue verifies whose propose decided differently and drafted again
 
     def prepare_prefill(self, page_table):
         """Allocate the engine buffers and compile the drafter's prompt programs (the drafter KV warm and the last-row
@@ -1875,7 +1876,10 @@ class MTPBlockEngine(MTPSpecEngine):
         return self._acc_trace is not None and not self._timing
 
     def shutdown(self):
-        logger.info(f"[spec_engine] one-enqueue steps: {self.one_enqueue_steps} of {self.verify_steps} verifies")
+        logger.info(
+            f"[spec_engine] one-enqueue steps: {self.one_enqueue_steps} of {self.verify_steps} verifies; "
+            f"{self.one_enqueue_host_proposes} of them drafted again on the host"
+        )
         if self._acc_trace is not None:
             ttnn.release_trace(self.mesh, self._acc_trace)
             self._acc_trace = None
@@ -2077,8 +2081,10 @@ class MTPBlockEngine(MTPSpecEngine):
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
     ):
         """After a one-enqueue verify: the drafts the device made, once the runner's commit is the one the device
-        accepted (every live row's count and committed tokens give the drafter pack the device built); a different
-        commit raises ValueError, because those drafts continue the device's. A propose that decides differently from
+        accepted (every live row's count and committed tokens give the drafter pack the device built). A different
+        commit raises ValueError: the runner proposes with the counts of its own greedy walk over this verify's ids,
+        drafts and valid-draft counts (it trims only what it publishes and writes), so a difference is a wrong device
+        acceptance, and its drafts continue a wrong commit. A propose that decides differently from
         the verify's plan (another table, other declined rows, positions that do not follow the verify) runs the base
         propose, whose drafter rewrites the same drafter KV slots from the runner's commit."""
         step, self._step_pending = self._step_pending, None
@@ -2094,6 +2100,7 @@ class MTPBlockEngine(MTPSpecEngine):
                 f"[spec_engine] propose after a one-enqueue verify decides differently (table changed {other_table}, "
                 f"rows off their verify {moved}, declined {q.decline} vs {plan.declined}); drafting on the host path"
             )
+            self.one_enqueue_host_proposes += 1
             return super().propose_draft_tokens(*args)
         m = (q.acc - 1).tolist()
         want = drafter_pack(

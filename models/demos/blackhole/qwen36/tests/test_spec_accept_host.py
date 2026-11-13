@@ -214,7 +214,7 @@ def test_a_greedy_step_runs_verify_acceptance_and_drafter_in_one_enqueue(step):
     starts, nv = [100, 200, -1, 300], [3, 3, 0, 2]
     res = _verify(eng, tokens, starts, nv)
     assert log["traced"] == [] and log["traces"] == ["step", "drafter"]
-    assert eng.one_enqueue_steps == eng.verify_steps == 1
+    assert eng.one_enqueue_steps == eng.verify_steps == 1 and eng.one_enqueue_host_proposes == 0
     acc = log["enqueue"][-1].accept
     assert acc[STEP_NUM_VALID] == [3, 3, 0, 2] and acc[STEP_P0] == [100, 200, 0, 300]
     assert acc[STEP_DECLINED] == [0, 0, 1, 0] and acc[STEP_KEEP] == [0, 0, 0, 0] and acc[STEP_DRAWN] == [0] * B
@@ -329,3 +329,89 @@ def test_a_propose_that_declines_other_rows_drafts_on_the_host(step):
     eng._no_draft.clear()
     out, _ = _walk_and_propose(eng, res, tokens, starts, nv)
     assert log["traces"] == ["step", "drafter", "drafter"] and out.num_valid.tolist() == [eng.K] * eng.B
+    assert eng.one_enqueue_host_proposes == 1
+
+
+def test_the_runners_commit_proposes_with_the_walks_counts(step):
+    """The plugin runner's commit (TTModelRunner.commit_spec_acceptance, vllm-tt-plugin bfdb4d0) after a one-enqueue
+    verify: a row that reaches max_model_len inside its accepted run has its written tokens trimmed, a padding row
+    commits 1, and the propose still gets every row's walk count, so the device's drafts are returned without a
+    mismatch. (EOS, stop strings and max_tokens are trimmed by vLLM's scheduler from the published tokens, after this.)
+    """
+    import inspect
+    import types
+
+    import numpy as np
+
+    mr = pytest.importorskip("vllm_tt_plugin.model_runner")
+    from vllm_tt_plugin.spec_decode import DraftOutput
+
+    Runner = mr.TTModelRunner
+    params = list(inspect.signature(Runner.commit_spec_acceptance).parameters)
+    if params != ["self", "model_input", "committed", "counts", "spec_hidden", "skip_req_ids"]:
+        pytest.skip("the plugin on the path is not the bfdb4d0 runner")
+    eng, log, state = step
+    B, T, K, max_len = eng.B, eng.T, eng.K, 400
+    state["ids"] = torch.tensor([[7, 8, 9, 10], [11, 12, 13, 14], [21, 22, 23, 24], [0, 0, 0, 0]])
+    tokens = torch.tensor([[1, 7, 8, 9], [2, 11, 5, 5], [3, 21, 22, 23], [0, 0, 0, 0]])
+    starts, nv = [max_len - 3, 200, 300, -1], [3, 3, 3, 0]
+    res = _verify(eng, tokens, starts, nv)
+    committed, counts = accept_greedy_drafts(res.argmax_ids, tokens[:, 1:].to(torch.int32), torch.tensor(nv))
+    assert counts.tolist() == [4, 2, 4, 1]
+    seen = []
+
+    def propose(num_drafts, c, positions, k, hidden=None):
+        seen.append(k.clone())
+        out = eng.propose_draft_tokens(num_drafts, c, positions, k, hidden=hidden)
+        return DraftOutput(draft_token_ids=out.draft_token_ids, num_valid=out.num_valid)
+
+    reqs = ["r0", "r1", "r2"]
+    sampling = SimpleNamespace(
+        logprobs=None,
+        structured_outputs=None,
+        allowed_token_ids=None,
+        bad_words_token_ids=None,
+        min_tokens=0,
+        all_stop_token_ids=set(),
+    )
+    runner = SimpleNamespace(
+        model=SimpleNamespace(propose_draft_tokens=propose, model_capabilities={}),
+        model_config=SimpleNamespace(max_model_len=max_len),
+        input_batch=SimpleNamespace(
+            req_id_to_index={r: u for u, r in enumerate(reqs)},
+            num_tokens=np.array([s + 1 for s in starts[:3]]),
+            token_ids_cpu=np.zeros((3, max_len), dtype=np.int64),
+            req_output_token_ids=[[] for _ in reqs],
+            vocab_size=VOCAB,
+        ),
+        requests={r: SimpleNamespace(output_token_ids=[], sampling_params=sampling) for r in reqs},
+        _req_state_slot={r: u for u, r in enumerate(reqs)},
+        _req_accepted_counts={},
+        _spec_drafts_from_model=True,
+        _num_speculative_tokens=K,
+        _proposed_draft_token_ids={},
+        _spec_accept_modes=("argmax_ids", "logits"),
+    )
+    for name in (
+        "_apply_committed_spec_tokens_to_state",
+        "_propose_model_drafts",
+        "_publish_draft",
+        "_request_is_speculable",
+        "_request_is_argmax_certifiable",
+    ):
+        setattr(runner, name, types.MethodType(getattr(Runner, name), runner))
+    runner._committed_positions = Runner._committed_positions
+    positions = torch.tensor([[s + j if s >= 0 else -1 for j in range(T)] for s in starts])
+    model_input = SimpleNamespace(
+        row_req_ids=reqs,
+        live_rows=None,
+        spec_mode="argmax_ids",
+        input_positions=positions,
+        perform_device_sampling=False,
+    )
+    Runner.commit_spec_acceptance(runner, model_input, committed, counts, None)
+    assert [k.tolist() for k in seen] == [[4, 2, 4, 1]], "the propose gets the walk's counts, untrimmed"
+    assert runner._req_accepted_counts == {"r0": 2, "r1": 2, "r2": 4}, "the runner writes r0 up to max_model_len only"
+    assert int(runner.input_batch.num_tokens[0]) == max_len and eng.one_enqueue_host_proposes == 0
+    assert "r0" not in runner._proposed_draft_token_ids, "no room left for r0's drafts"
+    assert runner._proposed_draft_token_ids["r1"] == [int(state["drafts"][k][1]) for k in range(K)]
