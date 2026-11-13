@@ -241,7 +241,7 @@ FORCE_INLINE void dfb_clear_packer_remapper_window(
     constexpr std::uint32_t dfb_trisc_mask = (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8)) |
                                              (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Sfpu) * 8));
     while ((*neo_sync & dfb_trisc_mask) != 0u) {
-        asm volatile("fence" ::: "memory");  // drop the low cache so the next poll reads L1
+        invalidate_l1_cache();
     }
     for (uint32_t i = lo; i < hi; i++) {
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(i), 0u);
@@ -278,7 +278,7 @@ extern "C" std::uint32_t _start1() {
 
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {
-        asm volatile("fence" ::: "memory");  // drop the low cache so the next poll reads L1
+        invalidate_l1_cache();
     }
     // Initialize GPRs to all 0s
 #pragma GCC unroll 0
@@ -295,7 +295,7 @@ extern "C" std::uint32_t _start1() {
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
-            asm volatile("fence" ::: "memory");  // drop the low cache so the next poll reads L1
+            invalidate_l1_cache();
             if constexpr (COMPILE_FOR_TRISC == 0) {
                 if (*trisc_run == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
                     init_sync_registers();
