@@ -9,7 +9,6 @@
 #include "cce_test_status_abi.h"
 
 // cce_cache_ops kernel ABI. The kernel (cce_cache_ops.cpp) and the host (dram/test_mimir_dm_cache.cpp) both include it.
-// Args, modes and codes are append-only: a later stage adds fields after the last one and never renumbers.
 namespace cce_cache_ops_abi {
 
 using cce_test_status_abi::kLineBytes;
@@ -26,11 +25,10 @@ using cce_test_status_abi::kLineBytes;
 // kArgDataWindowCycles bounds a mode's second, shorter data poll (rdcycle cycles, nonzero). kArgPeerStatusOffset (own
 // TL1, 64 B aligned, 0 for none) and kArgPeerMagic name another kernel's status line and done magic that
 // kModeExternalReader waits for.
-// Every region a mode touches (status line, data, flag lines, trace, aux lines up to aux + (count - 1) * stride, other
-// words) must lie inside the test TL1 area, from the end of the harts' kernel text to the end of the hart-cacheable
-// port (4 MiB), computed in 64 bits; flag and trace offsets a mode uses must be nonzero. Otherwise the code is
-// kCodeBadArgs (MM41 modes). A status offset that is not a 64 B aligned line in that area gets no
-// status line at all, so the host deadline reports it.
+// Every region a mode touches (data, flag lines, trace, aux lines up to aux + (count - 1) * stride, other words) must
+// lie inside the test TL1 area, from the end of the harts' kernel text to the end of the hart-cacheable port (4 MiB),
+// computed in 64 bits; flag and trace offsets a mode uses must be nonzero. Otherwise the code is kCodeBadArgs (MM41
+// modes).
 inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgDataOffset = 2, kArgNumWords = 3, kArgValue = 4,
                           kArgOldValue = 5, kArgFlagOffset = 6, kArgPollBudgetLo = 7, kArgPollBudgetHi = 8,
                           kArgStrideBytes = 9, kArgCount = 10, kArgAuxOffset = 11, kArgSeed = 12, kArgPattern = 13,
@@ -116,16 +114,15 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgDataOffset = 2
 // words at kArgDataOffset + s * kArgStrideBytes cached, then `fence`, the L2 range flush of its words;
 // kStatusCachedBefore counts its words reading its last-pass values cached.
 // kModeExternalReader (ExternalWriters, CrossCce, CrossD2d): reads the old values cached (kStatusWarmOld), sets the
-// flag to kFlagWarmed when kArgFlagOffset is nonzero, then polls the data through the uncached alias until every word
-// is new (kStatusUncachedBefore counts new words when the poll ended). When kArgPeerStatusOffset is nonzero it then
-// waits, with uncached loads, for kArgPeerMagic there: a writer whose destination is larger than the data writes its
-// done magic only after its whole destination has landed (kCodePeerTimeout otherwise). With kStepDiscriminate it reads
-// cached (kStatusStaleBefore counts old words) and, if any was old, runs cdiscard.d.l1 per line and reads cached again
-// (kStatusRegisterA counts new words; kStatusRegisterB is 1 when that re-read ran). With kStepL2Invalidate it runs
-// INVALIDATE64 per line. A final cached read follows (kStatusMatches). It makes no store while the writer may be
-// writing.
-// kModeSpaWriter: waits for kFlagWarmed at kArgFlagOffset of CCE kArgTargetCce by SPA load (when kArgFlagOffset is
-// nonzero), then stores the new values to kArgDataOffset of that CCE by SPA store, then `fence`.
+// flag to kFlagWarmed, then polls the data through the uncached alias until every word is new (kStatusUncachedBefore
+// counts new words when the poll ended). When kArgPeerStatusOffset is nonzero it then waits, with uncached loads, for
+// kArgPeerMagic there: a writer whose destination is larger than the data writes its done magic only after its whole
+// destination has landed (kCodePeerTimeout otherwise). With kStepDiscriminate it reads cached (kStatusStaleBefore
+// counts old words) and, if any was old, runs cdiscard.d.l1 per line and reads cached again (kStatusRegisterA counts
+// new words; kStatusRegisterB is 1 when that re-read ran). With kStepL2Invalidate it runs INVALIDATE64 per line. A
+// final cached read follows (kStatusMatches). It makes no store while the writer may be writing.
+// kModeSpaWriter: waits for kFlagWarmed at kArgFlagOffset of CCE kArgTargetCce by SPA load, then stores the new
+// values to kArgDataOffset of that CCE by SPA store, then `fence`.
 // kModeSpaReader: stores kFlagWarmed to kArgFlagOffset of CCE kArgTargetCce by SPA store, waits for kFlagReady there
 // by SPA load, then reads the data there by SPA load (kStatusMatches).
 // kModeDirtyRace (DirtyLineRace): stores the new values to its words (kArgDataOffset, kArgNumWords, all on one line)
@@ -154,12 +151,12 @@ inline constexpr uint32_t kModeNoFlush = 0, kModeL1FlushLine = 1, kModeL1FlushFu
                           kModeInvalidateFreshRead = 8, kModeProducer = 9, kModeConsumer = 10,
                           kModeWriteUncached1B = 11, kModeWriteUncached8B = 12, kModeWriteCachedRangeFlush = 13,
                           kModeWriteCachedFastFlush = 14, kModeL1InvalidateFull = 15, kModeL2InvalidateFreshRead = 16,
-                          kModeNull = 17, kModeReadConfig = 18, kModeDiscardFull = 20, kModeWipeFull = 21,
-                          kModeOrderingProducer = 22, kModeOrderingConsumer = 23, kModePartialLineEvict = 24,
-                          kModeL1FlushLineTarget = 25, kModeL1FlushFullTarget = 26, kModeSharedWriter = 27,
-                          kModeSharedReader = 28, kModeSharedConcurrentWriter = 29, kModeExternalReader = 30,
-                          kModeSpaWriter = 31, kModeSpaReader = 32, kModeDirtyRace = 33, kModeThrash = 34,
-                          kModeChurnConsumer = 35, kNumModes = 36;
+                          kModeNull = 17, kModeReadConfig = 18, kModeDiscardFull = 19, kModeWipeFull = 20,
+                          kModeOrderingProducer = 21, kModeOrderingConsumer = 22, kModePartialLineEvict = 23,
+                          kModeL1FlushLineTarget = 24, kModeL1FlushFullTarget = 25, kModeSharedWriter = 26,
+                          kModeSharedReader = 27, kModeSharedConcurrentWriter = 28, kModeExternalReader = 29,
+                          kModeSpaWriter = 30, kModeSpaReader = 31, kModeDirtyRace = 32, kModeThrash = 33,
+                          kModeChurnConsumer = 34, kNumModes = 35;
 inline constexpr uint32_t kMaxEvictCount = 32;
 // kModePartialLineEvict's eviction reads (1 MiB of lines) and kModeDirtyRace's actions.
 inline constexpr uint32_t kMaxSweepLines = 16 * 1024;
@@ -168,11 +165,10 @@ inline constexpr uint32_t kMaxRaceActions = 1u << 24;
 inline constexpr uint32_t kMaxWords = 48 * 1024;
 inline constexpr uint32_t kFlagReady = 0xF1A60001u, kFlagWarmed = 0xF1A60002u;
 
-// kModeOrdering* legs (kArgSteps): bare FLUSH64 per line and the flag with no fence; a fence and the flag with no
-// flush; cflush.d.l1 per line then the L2 range flush; cflush.d.l1 x0 then flush_l2_cache_full(). The two cflush legs
-// run cdiscard.d.l1 per data line before the L2 flush, so data a cflush left in L1 D$ is lost.
-inline constexpr uint32_t kOrderingLegFlushNoFence = 0, kOrderingLegFenceNoFlush = 1, kOrderingLegL1ThenL2 = 2,
-                          kOrderingLegFullHierarchy = 3;
+// kModeOrdering* legs (kArgSteps): bare FLUSH64 per line and the flag with no fence; cflush.d.l1 per line then the L2
+// range flush; cflush.d.l1 x0 then flush_l2_cache_full(). The two cflush legs run cdiscard.d.l1 per data line before
+// the L2 flush, so data a cflush left in L1 D$ is lost.
+inline constexpr uint32_t kOrderingLegFlushNoFence = 0, kOrderingLegL1ThenL2 = 1, kOrderingLegFullHierarchy = 2;
 // kModeExternalReader / kModeChurnConsumer steps (kArgSteps bits).
 inline constexpr uint32_t kStepDiscriminate = 1u << 0, kStepL2Invalidate = 1u << 1;
 // kModeDirtyRace actions (kArgSteps & kRaceActionMask): cached reads of kArgCount lines at kArgAuxOffset + i *

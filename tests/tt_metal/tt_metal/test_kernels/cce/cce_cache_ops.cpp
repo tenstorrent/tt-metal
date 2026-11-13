@@ -13,18 +13,11 @@
 
 namespace abi = cce_cache_ops_abi;
 using cce_test::arg_u64;
+using cce_test::cached_tl1_words;
+using cce_test::invalidate_l1_lines;
 using cce_test::kTestAreaBegin;
 using cce_test::kTestAreaEnd;
-
-template <typename T>
-static volatile T* cached(uint32_t offset) {
-    return reinterpret_cast<volatile T*>(static_cast<uint64_t>(offset));
-}
-
-template <typename T>
-static volatile T* uncached(uint32_t offset) {
-    return reinterpret_cast<volatile T*>(static_cast<uint64_t>(offset) + static_cast<uint64_t>(MEM_L1_UNCACHED_BASE));
-}
+using cce_test::own_tl1_words;
 
 struct Check {
     uint32_t matches = 0;
@@ -59,10 +52,6 @@ static void for_each_line(uint32_t data_offset, uint32_t num_bytes, LineOp line_
     for (uint32_t line = data_offset; line < data_offset + num_bytes; line += abi::kLineBytes) {
         line_op(line);
     }
-}
-
-static void invalidate_l1_lines(uint32_t data_offset, uint32_t num_bytes) {
-    for_each_line(data_offset, num_bytes, [](uint32_t line) { invalidate_l1_dcache(line); });
 }
 
 static void invalidate_lines(uint32_t data_offset, uint32_t num_bytes) {
@@ -130,15 +119,15 @@ static void run_write_path(uint32_t mode, uint32_t data_offset, uint32_t num_wor
     const uint32_t num_bytes = num_words * sizeof(uint32_t);
     for (uint32_t pass = 0; pass < 2; ++pass) {
         if (mode == abi::kModeWriteUncached1B) {
-            volatile uint8_t* bytes = uncached<uint8_t>(data_offset);
+            volatile uint8_t* bytes = own_tl1_words<uint8_t>(data_offset);
             for (uint32_t byte = 0; byte < num_bytes; ++byte) {
                 bytes[byte] = static_cast<uint8_t>(pass_word(pass, value, byte / 4) >> (8 * (byte % 4)));
             }
             asm volatile("fence" ::: "memory");
             continue;
         }
-        volatile uint64_t* doublewords =
-            mode == abi::kModeWriteUncached8B ? uncached<uint64_t>(data_offset) : cached<uint64_t>(data_offset);
+        volatile uint64_t* doublewords = mode == abi::kModeWriteUncached8B ? own_tl1_words<uint64_t>(data_offset)
+                                                                           : cached_tl1_words<uint64_t>(data_offset);
         for (uint32_t index = 0; index < num_words / 2; ++index) {
             doublewords[index] = (static_cast<uint64_t>(pass_word(pass, value, 2 * index + 1)) << 32) |
                                  pass_word(pass, value, 2 * index);
@@ -163,14 +152,9 @@ static void run_write_path(uint32_t mode, uint32_t data_offset, uint32_t num_wor
 static bool wait_for_flag(uint32_t flag_offset, uint32_t flag_value, uint64_t budget_cycles) {
     uint32_t wait_cycles = 0;
     return cce_test::poll_bounded(
-        [flag_offset, flag_value] { return *uncached<uint32_t>(flag_offset) == flag_value; },
+        [flag_offset, flag_value] { return *own_tl1_words<uint32_t>(flag_offset) == flag_value; },
         budget_cycles,
         wait_cycles);
-}
-
-template <typename T>
-static volatile T* spa(uint32_t cce_index, uint32_t offset) {
-    return reinterpret_cast<volatile T*>(experimental::cce_sram_address(cce_index, offset));
 }
 
 static bool wait_for_value(const volatile uint32_t* word, uint32_t value, uint64_t budget_cycles) {
@@ -412,9 +396,10 @@ static WipeResult clean_and_wipe(
     return {static_cast<uint32_t>(warm_old), static_cast<uint32_t>(stale_before), wiped != 0};
 }
 
-// FLUSH64 has no completion register: an uncached read of the range's last line and a fence, as chippy drains it.
+// FLUSH64 has no completion register. The helper reads once (chippy spins) and fences; by RTL the fence after FLUSH64
+// already waits for completion, so the read is kept only until K3 settles it.
 static void drain_flushed_range(uint32_t data_offset, uint32_t num_bytes) {
-    (void)*uncached<uint32_t>(data_offset + num_bytes - sizeof(uint32_t));
+    (void)*own_tl1_words<uint32_t>(data_offset + num_bytes - sizeof(uint32_t));
     asm volatile("fence" ::: "memory");
 }
 
@@ -423,7 +408,7 @@ static void run_discard_full(const Args& args, Report& report) {
     volatile uint64_t* flush_register = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
     for_each_line(args.data_offset, args.num_bytes(), [flush_register](uint32_t line) { *flush_register = line; });
     asm volatile("fence" ::: "memory");
-    report.check = check_words(uncached<uint32_t>(args.data_offset), args.num_words, args.value);
+    report.check = check_words(own_tl1_words<uint32_t>(args.data_offset), args.num_words, args.value);
 }
 
 // Drops every line of [offset, offset + num_bytes) from L1 D$ and L2 without write-back, so the next cached access
@@ -436,7 +421,7 @@ static void drop_cached_lines(uint32_t offset, uint32_t num_bytes) {
 // Words of [offset, offset + num_words) that a cached read sees as other than old_value + i before drop_cached_lines:
 // lines an earlier leg or launch left cached (recorded only).
 static uint32_t carried_over_words(uint32_t offset, uint32_t num_words, uint32_t old_value) {
-    return num_words - check_words(cached<uint32_t>(offset), num_words, old_value).matches;
+    return num_words - check_words(cached_tl1_words<uint32_t>(offset), num_words, old_value).matches;
 }
 
 static void run_wipe_full(const Args& args, Report& report) {
@@ -447,16 +432,16 @@ static void run_wipe_full(const Args& args, Report& report) {
     report.warm_old = wipe.warm_old;
     report.stale_before = wipe.stale_before;
     report.register_a = wipe.wiped ? 1 : 0;
-    report.check = check_words(cached<uint32_t>(args.data_offset), args.num_words, args.value);
+    report.check = check_words(cached_tl1_words<uint32_t>(args.data_offset), args.num_words, args.value);
     if (!wipe.wiped) {
         report.code = abi::kCodeWipeTimeout;
     }
 }
 
 static void run_ordering_producer(const Args& args, Report& report) {
-    const volatile uint32_t* ack = uncached<uint32_t>(args.flag_offset + abi::kLineBytes);
-    volatile uint32_t* flag = uncached<uint32_t>(args.flag_offset);
-    volatile uint32_t* cached_words = cached<uint32_t>(args.data_offset);
+    const volatile uint32_t* ack = own_tl1_words<uint32_t>(args.flag_offset + abi::kLineBytes);
+    volatile uint32_t* flag = own_tl1_words<uint32_t>(args.flag_offset);
+    volatile uint32_t* cached_words = cached_tl1_words<uint32_t>(args.data_offset);
     volatile uint64_t* flush_register = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
     uint64_t leg_cycles = 0;
     for (uint32_t pass = 0; pass < args.passes; ++pass) {
@@ -471,7 +456,6 @@ static void run_ordering_producer(const Args& args, Report& report) {
                 for_each_line(
                     args.data_offset, args.num_bytes(), [flush_register](uint32_t line) { *flush_register = line; });
                 break;
-            case abi::kOrderingLegFenceNoFlush: asm volatile("fence rw, rw" ::: "memory"); break;
             case abi::kOrderingLegL1ThenL2:
                 for_each_line(args.data_offset, args.num_bytes(), [](uint32_t line) { flush_l1_dcache(line); });
                 invalidate_l1_lines(args.data_offset, args.num_bytes());
@@ -498,9 +482,9 @@ static void run_ordering_producer(const Args& args, Report& report) {
 }
 
 static void run_ordering_consumer(const Args& args, Report& report) {
-    volatile uint32_t* ack = uncached<uint32_t>(args.flag_offset + abi::kLineBytes);
-    const volatile uint32_t* flag = uncached<uint32_t>(args.flag_offset);
-    const volatile uint32_t* uncached_words = uncached<uint32_t>(args.data_offset);
+    volatile uint32_t* ack = own_tl1_words<uint32_t>(args.flag_offset + abi::kLineBytes);
+    const volatile uint32_t* flag = own_tl1_words<uint32_t>(args.flag_offset);
+    const volatile uint32_t* uncached_words = own_tl1_words<uint32_t>(args.data_offset);
     uint32_t complete_at_flag = 0;
     bool incomplete_seen = false;
     for (uint32_t pass = 0; pass < args.passes; ++pass) {
@@ -571,7 +555,7 @@ static PartialCheck check_partial_lines(const Args& args) {
     constexpr uint32_t kWordsPerLine = abi::kLineBytes / sizeof(uint32_t);
     PartialCheck result;
     bool mismatch_seen = false;
-    const volatile uint32_t* observed_words = uncached<uint32_t>(args.data_offset);
+    const volatile uint32_t* observed_words = own_tl1_words<uint32_t>(args.data_offset);
     for (uint32_t line = 0; line < args.num_words / kWordsPerLine; ++line) {
         alignas(8) uint32_t expected[kWordsPerLine];
         for (uint32_t word = 0; word < kWordsPerLine; ++word) {
@@ -606,11 +590,11 @@ static void run_partial_line_evict(const Args& args, Report& report) {
     report.cached_before = carried_over_words(args.data_offset, args.num_words, args.old_value);
     drop_cached_lines(args.data_offset, args.num_bytes());
     for (uint32_t line = 0; line < args.num_bytes() / abi::kLineBytes; ++line) {
-        store_partial(cached<uint8_t>(args.data_offset + line * abi::kLineBytes), args.value + line);
+        store_partial(cached_tl1_words<uint8_t>(args.data_offset + line * abi::kLineBytes), args.value + line);
     }
     asm volatile("fence rw, rw" ::: "memory");
     for (uint32_t line = 0; line < args.count; ++line) {
-        (void)*cached<uint32_t>(args.aux_offset + line * args.stride_bytes);
+        (void)*cached_tl1_words<uint32_t>(args.aux_offset + line * args.stride_bytes);
     }
     asm volatile("fence rw, rw" ::: "memory");
     const PartialCheck before_flush = check_partial_lines(args);
@@ -624,8 +608,8 @@ static void run_partial_line_evict(const Args& args, Report& report) {
 }
 
 static void run_l1_flush_target(const Args& args, Report& report) {
-    volatile uint32_t* cached_words = cached<uint32_t>(args.data_offset);
-    volatile uint32_t* uncached_words = uncached<uint32_t>(args.data_offset);
+    volatile uint32_t* cached_words = cached_tl1_words<uint32_t>(args.data_offset);
+    volatile uint32_t* uncached_words = own_tl1_words<uint32_t>(args.data_offset);
     store_words(cached_words, args.num_words, args.value);
     asm volatile("fence rw, rw" ::: "memory");
     report.cached_before = check_words(cached_words, args.num_words, args.value).matches;
@@ -650,15 +634,15 @@ static void run_shared_writer(const Args& args, Report& report) {
         report.code = abi::kCodeFlagTimeout;
         return;
     }
-    volatile uint32_t* cached_words = cached<uint32_t>(args.data_offset);
+    volatile uint32_t* cached_words = cached_tl1_words<uint32_t>(args.data_offset);
     store_words(cached_words, args.num_words, args.value);
     asm volatile("fence w, w" ::: "memory");
-    *uncached<uint32_t>(args.flag_offset) = abi::kFlagReady;
-    report.uncached_before = check_words(uncached<uint32_t>(args.data_offset), args.num_words, args.value).matches;
+    *own_tl1_words<uint32_t>(args.flag_offset) = abi::kFlagReady;
+    report.uncached_before = check_words(own_tl1_words<uint32_t>(args.data_offset), args.num_words, args.value).matches;
     report.cached_before = check_words(cached_words, args.num_words, args.value).matches;
     for_each_line(first_line, line_span_bytes, [](uint32_t line) { flush_l1_dcache(line); });
     const uint32_t shared_l2_flag_offset = args.flag_offset + 2 * abi::kLineBytes;
-    *uncached<uint32_t>(shared_l2_flag_offset) = abi::kFlagReady;
+    *own_tl1_words<uint32_t>(shared_l2_flag_offset) = abi::kFlagReady;
     if (!wait_for_flag(shared_l2_flag_offset, abi::kFlagWarmed, args.budget_cycles)) {
         report.code = abi::kCodeFlagTimeout;
         return;
@@ -666,7 +650,7 @@ static void run_shared_writer(const Args& args, Report& report) {
     flush_l2_cache_range(args.data_offset, args.num_bytes());
     drain_flushed_range(args.data_offset, args.num_bytes());
     asm volatile("fence w, w" ::: "memory");
-    *uncached<uint32_t>(args.flag_offset + abi::kLineBytes) = abi::kFlagReady;
+    *own_tl1_words<uint32_t>(args.flag_offset + abi::kLineBytes) = abi::kFlagReady;
 }
 
 // The reader's cached read of the region: the writer's words new, every other word old.
@@ -679,7 +663,7 @@ static Check check_shared_region(const Args& args) {
         const bool written = address >= args.other_offset && address < other_end;
         const uint32_t expected =
             written ? args.value + (address - args.other_offset) / sizeof(uint32_t) : args.old_value + word;
-        const uint32_t observed = *cached<uint32_t>(address);
+        const uint32_t observed = *cached_tl1_words<uint32_t>(address);
         if (observed == expected) {
             check.matches++;
         } else if (!mismatch_seen) {
@@ -695,12 +679,12 @@ static void run_shared_reader(const Args& args, Report& report) {
     report.cached_before = carried_over_words(args.aux_offset, args.count, args.old_value);
     drop_cached_lines(args.aux_offset, args.count * sizeof(uint32_t));
     report.warm_old = check_words(
-                          cached<uint32_t>(args.data_offset),
+                          cached_tl1_words<uint32_t>(args.data_offset),
                           args.num_words,
                           args.old_value + (args.data_offset - args.aux_offset) / sizeof(uint32_t))
                           .matches;
     asm volatile("fence r, w" ::: "memory");
-    *uncached<uint32_t>(args.flag_offset) = abi::kFlagWarmed;
+    *own_tl1_words<uint32_t>(args.flag_offset) = abi::kFlagWarmed;
     report.flag_ready = wait_for_flag(args.flag_offset, abi::kFlagReady, args.budget_cycles) ? 1 : 0;
     if (report.flag_ready == 0) {
         report.code = abi::kCodeFlagTimeout;
@@ -708,7 +692,7 @@ static void run_shared_reader(const Args& args, Report& report) {
     }
     asm volatile("fence r, rw" ::: "memory");
     report.register_b = check_shared_region(args).matches;
-    report.register_a = check_words(uncached<uint32_t>(args.other_offset), args.other_words, args.value).matches;
+    report.register_a = check_words(own_tl1_words<uint32_t>(args.other_offset), args.other_words, args.value).matches;
     const uint32_t shared_l2_flag_offset = args.flag_offset + 2 * abi::kLineBytes;
     if (!wait_for_flag(shared_l2_flag_offset, abi::kFlagReady, args.budget_cycles)) {
         report.code = abi::kCodeFlagTimeout;
@@ -718,7 +702,7 @@ static void run_shared_reader(const Args& args, Report& report) {
     invalidate_l1_lines(args.aux_offset, args.count * sizeof(uint32_t));
     report.register_c = check_shared_region(args).matches;
     asm volatile("fence r, w" ::: "memory");
-    *uncached<uint32_t>(shared_l2_flag_offset) = abi::kFlagWarmed;
+    *own_tl1_words<uint32_t>(shared_l2_flag_offset) = abi::kFlagWarmed;
     if (!wait_for_flag(args.flag_offset + abi::kLineBytes, abi::kFlagReady, args.budget_cycles)) {
         report.code = abi::kCodeFlagTimeout;
         return;
@@ -730,12 +714,12 @@ static void run_shared_reader(const Args& args, Report& report) {
 
 static void run_shared_concurrent_writer(const Args& args, Report& report) {
     drop_cached_lines(args.data_offset + args.hart_slot * args.stride_bytes, args.num_bytes());
-    *uncached<uint32_t>(args.flag_offset + args.hart_slot * abi::kLineBytes) = abi::kFlagReady;
+    *own_tl1_words<uint32_t>(args.flag_offset + args.hart_slot * abi::kLineBytes) = abi::kFlagReady;
     uint32_t wait_cycles = 0;
     const bool every_hart_ready = cce_test::poll_bounded(
         [&args] {
             for (uint32_t slot = 0; slot < args.num_harts; ++slot) {
-                if (*uncached<uint32_t>(args.flag_offset + slot * abi::kLineBytes) != abi::kFlagReady) {
+                if (*own_tl1_words<uint32_t>(args.flag_offset + slot * abi::kLineBytes) != abi::kFlagReady) {
                     return false;
                 }
             }
@@ -749,7 +733,7 @@ static void run_shared_concurrent_writer(const Args& args, Report& report) {
         return;
     }
     const uint32_t own_offset = args.data_offset + args.hart_slot * args.stride_bytes;
-    volatile uint32_t* own_words = cached<uint32_t>(own_offset);
+    volatile uint32_t* own_words = cached_tl1_words<uint32_t>(own_offset);
     const uint32_t slot_value = args.value + (args.hart_slot << 16);
     for (uint32_t pass = 0; pass < args.passes; ++pass) {
         store_words(own_words, args.num_words, slot_value + (pass << 8));
@@ -761,15 +745,13 @@ static void run_shared_concurrent_writer(const Args& args, Report& report) {
 }
 
 static void run_external_reader(const Args& args, Report& report) {
-    volatile uint32_t* cached_words = cached<uint32_t>(args.data_offset);
-    const volatile uint32_t* uncached_words = uncached<uint32_t>(args.data_offset);
+    volatile uint32_t* cached_words = cached_tl1_words<uint32_t>(args.data_offset);
+    const volatile uint32_t* uncached_words = own_tl1_words<uint32_t>(args.data_offset);
     report.cached_before = carried_over_words(args.data_offset, args.num_words, args.old_value);
     drop_cached_lines(args.data_offset, args.num_bytes());
     report.warm_old = check_words(cached_words, args.num_words, args.old_value).matches;
-    if (args.flag_offset != 0) {
-        asm volatile("fence r, w" ::: "memory");
-        *uncached<uint32_t>(args.flag_offset) = abi::kFlagWarmed;
-    }
+    asm volatile("fence r, w" ::: "memory");
+    *own_tl1_words<uint32_t>(args.flag_offset) = abi::kFlagWarmed;
     uint32_t poll_cycles = 0;
     const bool landed = cce_test::poll_bounded(
         [&] { return all_new(uncached_words, args.num_words, args.value); }, args.budget_cycles, poll_cycles);
@@ -780,7 +762,7 @@ static void run_external_reader(const Args& args, Report& report) {
         return;
     }
     if (args.peer_status_offset != 0 &&
-        !wait_for_value(uncached<uint32_t>(args.peer_status_offset), args.peer_magic, args.budget_cycles)) {
+        !wait_for_value(own_tl1_words<uint32_t>(args.peer_status_offset), args.peer_magic, args.budget_cycles)) {
         report.code = abi::kCodePeerTimeout;
         return;
     }
@@ -800,23 +782,21 @@ static void run_external_reader(const Args& args, Report& report) {
 }
 
 static void run_spa_writer(const Args& args, Report& report) {
-    if (args.flag_offset != 0) {
-        const bool warmed =
-            wait_for_value(spa<uint32_t>(args.target_cce, args.flag_offset), abi::kFlagWarmed, args.budget_cycles);
-        report.flag_ready = warmed ? 1 : 0;
-        if (report.flag_ready == 0) {
-            report.code = abi::kCodeFlagTimeout;
-            return;
-        }
+    const bool warmed = wait_for_value(
+        cce_test::peer_tl1_word(args.target_cce, args.flag_offset), abi::kFlagWarmed, args.budget_cycles);
+    report.flag_ready = warmed ? 1 : 0;
+    if (report.flag_ready == 0) {
+        report.code = abi::kCodeFlagTimeout;
+        return;
     }
-    volatile uint32_t* target_words = spa<uint32_t>(args.target_cce, args.data_offset);
+    volatile uint32_t* target_words = cce_test::peer_tl1_word(args.target_cce, args.data_offset);
     store_words(target_words, args.num_words, args.value);
     asm volatile("fence" ::: "memory");
     report.check = check_words(target_words, args.num_words, args.value);
 }
 
 static void run_spa_reader(const Args& args, Report& report) {
-    volatile uint32_t* target_flag = spa<uint32_t>(args.target_cce, args.flag_offset);
+    volatile uint32_t* target_flag = cce_test::peer_tl1_word(args.target_cce, args.flag_offset);
     *target_flag = abi::kFlagWarmed;
     asm volatile("fence" ::: "memory");
     report.flag_ready = wait_for_value(target_flag, abi::kFlagReady, args.budget_cycles) ? 1 : 0;
@@ -825,14 +805,14 @@ static void run_spa_reader(const Args& args, Report& report) {
         return;
     }
     asm volatile("fence r, r" ::: "memory");
-    report.check = check_words(spa<uint32_t>(args.target_cce, args.data_offset), args.num_words, args.value);
+    report.check = check_words(cce_test::peer_tl1_word(args.target_cce, args.data_offset), args.num_words, args.value);
 }
 
 static void run_race_action(const Args& args, uint32_t line) {
     switch (args.steps & abi::kRaceActionMask) {
         case abi::kRaceActionEvict:
             for (uint32_t index = 0; index < args.count; ++index) {
-                (void)*cached<uint32_t>(args.aux_offset + index * args.stride_bytes);
+                (void)*cached_tl1_words<uint32_t>(args.aux_offset + index * args.stride_bytes);
             }
             break;
         case abi::kRaceActionFlush: *reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR) = line; break;
@@ -842,14 +822,14 @@ static void run_race_action(const Args& args, uint32_t line) {
 }
 
 static void run_dirty_race(const Args& args, Report& report) {
-    volatile uint32_t* hart_words = cached<uint32_t>(args.data_offset);
-    const volatile uint32_t* external_words = uncached<uint32_t>(args.other_offset);
+    volatile uint32_t* hart_words = cached_tl1_words<uint32_t>(args.data_offset);
+    const volatile uint32_t* external_words = own_tl1_words<uint32_t>(args.other_offset);
     const uint32_t line = args.data_offset & ~(abi::kLineBytes - 1);
     report.cached_before = carried_over_words(line, abi::kLineBytes / sizeof(uint32_t), args.old_value);
     drop_cached_lines(line, abi::kLineBytes);
     store_words(hart_words, args.num_words, args.value);
     asm volatile("fence w, w" ::: "memory");
-    *uncached<uint32_t>(args.flag_offset) = abi::kFlagReady;
+    *own_tl1_words<uint32_t>(args.flag_offset) = abi::kFlagReady;
     const cce_test::WaitDeadline deadline(args.budget_cycles);
     bool external_seen = false;
     while (!external_seen && report.passes < args.passes && !deadline.expired()) {
@@ -866,7 +846,8 @@ static void run_dirty_race(const Args& args, Report& report) {
         report.code = abi::kCodeRaceUnresolved;
     }
     report.register_a = check_words(hart_words, args.num_words, args.value).matches;
-    report.register_b = check_words(cached<uint32_t>(args.other_offset), args.other_words, args.other_value).matches;
+    report.register_b =
+        check_words(cached_tl1_words<uint32_t>(args.other_offset), args.other_words, args.other_value).matches;
     flush_l2_cache_line(line);
 }
 
@@ -904,7 +885,7 @@ static void for_each_pattern_line(const Args& args, Visit visit) {
 
 static void run_thrash(const Args& args, Report& report) {
     constexpr uint32_t kWordsPerLine = abi::kLineBytes / sizeof(uint32_t);
-    volatile uint32_t* cached_words = cached<uint32_t>(args.data_offset);
+    volatile uint32_t* cached_words = cached_tl1_words<uint32_t>(args.data_offset);
     uint32_t pass_cycles[abi::kMaxPasses] = {};
     bool mismatch_seen = false;
     for (uint32_t pass = 0; pass < args.passes; ++pass) {
@@ -929,7 +910,7 @@ static void run_thrash(const Args& args, Report& report) {
         report.passes = pass + 1;
     }
     flush_l2_cache_range(args.data_offset, args.num_bytes());
-    const volatile uint32_t* uncached_words = uncached<uint32_t>(args.data_offset);
+    const volatile uint32_t* uncached_words = own_tl1_words<uint32_t>(args.data_offset);
     for (uint32_t word = 0; word < args.num_words; ++word) {
         const uint32_t observed = uncached_words[word];
         report.register_b ^= observed;
@@ -937,17 +918,15 @@ static void run_thrash(const Args& args, Report& report) {
             report.check.matches++;
         }
     }
-    if (args.trace_offset != 0) {
-        volatile uint32_t* trace = uncached<uint32_t>(args.trace_offset);
-        for (uint32_t pass = 0; pass < args.passes; ++pass) {
-            trace[pass] = pass_cycles[pass];
-        }
+    volatile uint32_t* trace = own_tl1_words<uint32_t>(args.trace_offset);
+    for (uint32_t pass = 0; pass < args.passes; ++pass) {
+        trace[pass] = pass_cycles[pass];
     }
 }
 
 static void run_churn_consumer(const Args& args, Report& report) {
-    volatile uint32_t* cached_words = cached<uint32_t>(args.data_offset);
-    const volatile uint32_t* uncached_words = uncached<uint32_t>(args.data_offset);
+    volatile uint32_t* cached_words = cached_tl1_words<uint32_t>(args.data_offset);
+    const volatile uint32_t* uncached_words = own_tl1_words<uint32_t>(args.data_offset);
     report.cached_before = carried_over_words(args.data_offset, args.num_words, args.old_value);
     drop_cached_lines(args.data_offset, args.num_bytes());
     report.warm_old = check_words(cached_words, args.num_words, args.old_value).matches;
@@ -958,7 +937,7 @@ static void run_churn_consumer(const Args& args, Report& report) {
     for (uint32_t round = 0; round < args.passes; ++round) {
         const uint32_t round_value = abi::churn_word(args.value, round, 0);
         asm volatile("fence rw, w" ::: "memory");
-        *uncached<uint32_t>(args.flag_offset) = round + 1;
+        *own_tl1_words<uint32_t>(args.flag_offset) = round + 1;
         uint32_t poll_cycles = 0;
         if (!cce_test::poll_bounded(
                 [&] { return all_new(uncached_words, args.num_words, round_value); },
@@ -1006,8 +985,6 @@ static bool strided_lines_in_test_area(uint64_t offset, uint64_t count, uint64_t
            (offset % abi::kLineBytes == 0 && in_test_area(offset, (count - 1) * stride_bytes + abi::kLineBytes));
 }
 
-static bool status_line_valid(uint32_t status_offset) { return lines_in_test_area(status_offset, 1); }
-
 static bool mm41_args_valid(const Args& args) {
     const uint64_t data_bytes = static_cast<uint64_t>(args.num_words) * sizeof(uint32_t);
     const bool words = args.data_offset % sizeof(uint32_t) == 0 && args.num_words != 0 &&
@@ -1015,7 +992,6 @@ static bool mm41_args_valid(const Args& args) {
     const bool whole_lines =
         words && args.data_offset % abi::kLineBytes == 0 && args.num_words % (abi::kLineBytes / 4) == 0;
     const bool budget = args.budget_cycles != 0;
-    const bool optional_flag = args.flag_offset == 0 || lines_in_test_area(args.flag_offset, 1);
     switch (args.mode) {
         case abi::kModeDiscardFull:
         case abi::kModeWipeFull:
@@ -1051,12 +1027,12 @@ static bool mm41_args_valid(const Args& args) {
                    in_test_area(
                        args.data_offset, static_cast<uint64_t>(args.num_harts - 1) * args.stride_bytes + data_bytes);
         case abi::kModeExternalReader:
-            return whole_lines && budget && optional_flag &&
+            return whole_lines && budget && lines_in_test_area(args.flag_offset, 1) &&
                    (args.peer_status_offset == 0 || lines_in_test_area(args.peer_status_offset, 1));
         case abi::kModeChurnConsumer:
             return whole_lines && budget && lines_in_test_area(args.flag_offset, 1) && args.passes != 0 &&
                    args.passes <= abi::kMaxPasses;
-        case abi::kModeSpaWriter: return words && budget && optional_flag;
+        case abi::kModeSpaWriter: return words && budget && lines_in_test_area(args.flag_offset, 1);
         case abi::kModeSpaReader: return words && budget && lines_in_test_area(args.flag_offset, 1);
         case abi::kModeDirtyRace:
             return words && budget && lines_in_test_area(args.flag_offset, 1) && args.passes != 0 &&
@@ -1071,8 +1047,7 @@ static bool mm41_args_valid(const Args& args) {
                    strided_lines_in_test_area(args.aux_offset, args.count, args.stride_bytes);
         case abi::kModeThrash:
             return whole_lines && args.passes != 0 && args.passes <= abi::kMaxPasses &&
-                   args.pattern <= abi::kThrashRandom &&
-                   (args.trace_offset == 0 || lines_in_test_area(args.trace_offset, 1)) &&
+                   args.pattern <= abi::kThrashRandom && lines_in_test_area(args.trace_offset, 1) &&
                    (args.pattern != abi::kThrashConflictStride ||
                     (args.stride_bytes % abi::kLineBytes == 0 && args.stride_bytes != 0));
         default: return false;
@@ -1107,9 +1082,6 @@ static void run_mm41_mode(const Args& args, Report& report) {
 // dirty data lines that kModeL1InvalidateLine expects the discard to drop.
 static __attribute__((noinline)) void run_mm41_kernel() {
     const Args args = read_args();
-    if (!status_line_valid(args.status_offset)) {
-        return;
-    }
     Report report;
     if (!mm41_args_valid(args)) {
         report.code = abi::kCodeBadArgs;
@@ -1119,7 +1091,7 @@ static __attribute__((noinline)) void run_mm41_kernel() {
         report.cycles = static_cast<uint32_t>(get_timestamp() - start);
     }
 
-    volatile uint32_t* status = uncached<uint32_t>(args.status_offset);
+    volatile uint32_t* status = own_tl1_words<uint32_t>(args.status_offset);
     status[abi::kStatusCode] = report.code;
     status[abi::kStatusUncachedBefore] = report.uncached_before;
     status[abi::kStatusStaleBefore] = report.stale_before;
@@ -1134,8 +1106,7 @@ static __attribute__((noinline)) void run_mm41_kernel() {
     status[abi::kStatusRegisterB] = report.register_b;
     status[abi::kStatusRegisterC] = report.register_c;
     status[abi::kStatusPasses] = report.passes;
-    asm volatile("fence w, w" ::: "memory");
-    status[abi::kStatusMagic] = abi::kDoneMagic;
+    cce_test::publish_done_magic(status, abi::kDoneMagic);
 }
 
 static bool args_valid(uint32_t mode, uint32_t data_offset, uint32_t num_words, uint32_t flag_offset, uint64_t budget) {
@@ -1162,9 +1133,6 @@ void kernel_main() {
         return;
     }
     const uint32_t status_offset = get_arg_val<uint32_t>(abi::kArgStatusOffset);
-    if (!status_line_valid(status_offset)) {
-        return;
-    }
     const uint32_t data_offset = get_arg_val<uint32_t>(abi::kArgDataOffset);
     const uint32_t num_words = get_arg_val<uint32_t>(abi::kArgNumWords);
     const uint32_t value = get_arg_val<uint32_t>(abi::kArgValue);
@@ -1201,50 +1169,50 @@ void kernel_main() {
             if (mode == abi::kModeL1InvalidateFull) {
                 flush_l1_dcache(0);
             }
-            store_words(cached<uint32_t>(data_offset), num_words, value);
+            store_words(cached_tl1_words<uint32_t>(data_offset), num_words, value);
             asm volatile("fence rw, rw" ::: "memory");
-            cached_before = check_words(cached<uint32_t>(data_offset), num_words, value).matches;
-            uncached_before = check_words(uncached<uint32_t>(data_offset), num_words, value).matches;
+            cached_before = check_words(cached_tl1_words<uint32_t>(data_offset), num_words, value).matches;
+            uncached_before = check_words(own_tl1_words<uint32_t>(data_offset), num_words, value).matches;
             run_store_mode(mode, data_offset, num_bytes);
             if (mode == abi::kModeProducer) {
                 asm volatile("fence w, w" ::: "memory");
-                *uncached<uint32_t>(flag_offset) = abi::kFlagReady;
+                *own_tl1_words<uint32_t>(flag_offset) = abi::kFlagReady;
             }
-            check = check_words(uncached<uint32_t>(data_offset), num_words, value);
+            check = check_words(own_tl1_words<uint32_t>(data_offset), num_words, value);
             if (mode == abi::kModeNoFlush) {
                 invalidate_lines(data_offset, num_bytes);
             }
         } else if (is_fresh_read_mode(mode) || mode == abi::kModeConsumer) {
-            warm_old = check_words(cached<uint32_t>(data_offset), num_words, old_value).matches;
+            warm_old = check_words(cached_tl1_words<uint32_t>(data_offset), num_words, old_value).matches;
             if (mode == abi::kModeConsumer) {
                 asm volatile("fence r, w" ::: "memory");
-                *uncached<uint32_t>(flag_offset) = abi::kFlagWarmed;
+                *own_tl1_words<uint32_t>(flag_offset) = abi::kFlagWarmed;
                 flag_ready = wait_for_flag(flag_offset, abi::kFlagReady, budget_cycles) ? 1 : 0;
                 asm volatile("fence r, rw" ::: "memory");
             } else {
-                store_words(uncached<uint32_t>(data_offset), num_words, value);
+                store_words(own_tl1_words<uint32_t>(data_offset), num_words, value);
                 asm volatile("fence rw, rw" ::: "memory");
                 flag_ready = 1;
             }
             if (flag_ready == 0) {
                 code = abi::kCodeFlagTimeout;
             } else {
-                stale_before = check_words(cached<uint32_t>(data_offset), num_words, old_value).matches;
+                stale_before = check_words(cached_tl1_words<uint32_t>(data_offset), num_words, old_value).matches;
                 if (mode == abi::kModeL2InvalidateFreshRead) {
                     for_each_line(data_offset, num_bytes, [](uint32_t line) { invalidate_l2_cache_line(line); });
                 } else {
                     invalidate_lines(data_offset, num_bytes);
                 }
-                check = check_words(cached<uint32_t>(data_offset), num_words, value);
+                check = check_words(cached_tl1_words<uint32_t>(data_offset), num_words, value);
             }
         } else {
             run_write_path(mode, data_offset, num_words, value);
-            check = check_words(uncached<uint32_t>(data_offset), num_words, value);
+            check = check_words(own_tl1_words<uint32_t>(data_offset), num_words, value);
         }
         cycles = static_cast<uint32_t>(get_timestamp() - start);
     }
 
-    volatile uint32_t* status = uncached<uint32_t>(status_offset);
+    volatile uint32_t* status = own_tl1_words<uint32_t>(status_offset);
     status[abi::kStatusCode] = code;
     status[abi::kStatusUncachedBefore] = uncached_before;
     status[abi::kStatusStaleBefore] = stale_before;
@@ -1259,6 +1227,5 @@ void kernel_main() {
     status[abi::kStatusRegisterB] = register_b;
     status[abi::kStatusRegisterC] = register_c;
     status[abi::kStatusPasses] = 0;
-    asm volatile("fence w, w" ::: "memory");
-    status[abi::kStatusMagic] = abi::kDoneMagic;
+    cce_test::publish_done_magic(status, abi::kDoneMagic);
 }
