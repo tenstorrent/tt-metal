@@ -100,7 +100,7 @@ ttsl::hash::hash_t PackScaledFp8KvCacheDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<PackScaledFp8KvCacheDeviceOperation>(
         attrs,
         // Whole specs: all three inputs are row-major, and each accessor bakes in an aligned page size that
-        // follows the padded width (untilize's fromPaddedShape output records over-padding as Alignment).
+        // follows the padded width (untilize's output layout records extra padding as Alignment).
         args.latent.tensor_spec(),
         args.scales.tensor_spec(),
         args.rope.tensor_spec());

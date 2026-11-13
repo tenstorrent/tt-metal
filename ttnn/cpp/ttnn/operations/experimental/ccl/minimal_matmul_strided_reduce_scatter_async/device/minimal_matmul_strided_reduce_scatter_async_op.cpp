@@ -329,7 +329,7 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         // need build-time information (resolved worker count, chosen core placement); these cover
         // what validation can know.
         const auto validate_counter_array = [&tensor_args](const Tensor& t, const char* name, uint32_t min_row_slots) {
-            // The factory embeds t.buffer()->address() into kernels running on the input's device;
+            // The factory embeds t.mesh_buffer().address() into kernels running on the input's device;
             // a counter allocated on a different device would pass the layout checks below while
             // pointing the kernels at an unrelated local L1 address.
             TT_FATAL(

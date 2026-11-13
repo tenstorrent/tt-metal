@@ -76,8 +76,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
 
     // Input page-based addressing
     uint32_t num_input_pages_in_row = 1;
-    uint32_t input_page_size = a.buffer()->page_size();
-    uint32_t size_of_valid_data_in_last_input_page_in_row = a.buffer()->page_size();
+    uint32_t input_page_size = a.mesh_buffer().page_size();
+    uint32_t size_of_valid_data_in_last_input_page_in_row = a.mesh_buffer().page_size();
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
@@ -87,8 +87,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
 
     // Output page-based addressing
     uint32_t num_output_pages_in_row = 1;
-    uint32_t output_page_size = output.buffer()->page_size();
-    uint32_t size_of_valid_data_in_last_output_page_in_row = output.buffer()->page_size();
+    uint32_t output_page_size = output.mesh_buffer().page_size();
+    uint32_t size_of_valid_data_in_last_output_page_in_row = output.mesh_buffer().page_size();
     if (output.is_sharded()) {
         uint32_t output_shard_width = output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
                                                                       : output.nd_shard_spec().value().shard_shape[-1];

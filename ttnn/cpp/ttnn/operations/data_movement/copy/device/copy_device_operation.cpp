@@ -9,6 +9,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 
@@ -35,7 +36,7 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
         input_unit_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
     }
 
-    const uint32_t input_alignment = input_tensor.buffer()->alignment();
+    const uint32_t input_alignment = input_tensor.mesh_buffer().alignment();
     const uint32_t aligned_input_unit_size = tt::align(input_unit_size, input_alignment);
     constexpr uint32_t num_input_units = 2;
     uint32_t total_cb_size = num_input_units * aligned_input_unit_size;
@@ -167,7 +168,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
                                         // padded_shape due to having a different shard_spec.
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             operation_attributes.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

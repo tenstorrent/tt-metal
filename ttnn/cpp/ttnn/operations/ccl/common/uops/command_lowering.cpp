@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -93,10 +94,10 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
     TT_FATAL(tensor.is_sharded(), "Only tensor slices for sharded tensors are able to be lowered to noc reads/writes");
 
     ttnn::ccl::cmd::HostCclCommandNocTransferBurst noc_transfer_burst;
-    noc_transfer_burst.bank_base_address = tensor.buffer()->address();
+    noc_transfer_burst.bank_base_address = tensor.mesh_buffer().address();
 
     const auto& tensor_slice = std::get<ttnn::ccl::v2::TensorSlice>(command.command_args);
-    auto page_size = tensor.buffer()->page_size();
+    auto page_size = tensor.mesh_buffer().page_size();
 
     auto coord_lookup = tt::tt_metal::address_generators::VirtualCoordWormholeWorkerToNocLookup();
 
@@ -114,7 +115,7 @@ ttnn::ccl::cmd::CclHostLowLevelWorkerCommand lower_tensor_slice_command_to_noc_c
     // Only page aligned for now since tensor slice is page based at the moment
     // Future work to migrate tensor slice to be element based and then at that
     // point we can
-    switch (tensor.buffer()->buffer_layout()) {
+    switch (tensor.mesh_buffer().device_local_config().sharding_args.buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: {
             auto address_generator = build_sharded_addr_gen<TensorMemoryLayout::BLOCK_SHARDED>(
                 coord_lookup,

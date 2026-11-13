@@ -493,6 +493,47 @@ TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
     }
 }
 
+TEST(MeshBufferTest, GetDeviceBufferWithoutMeshDevice) {
+    // A device buffer fetched before its MeshDevice is destroyed is not returned after it: its Device is gone.
+    auto mesh_device = MeshDevice::create(
+        MeshDeviceConfig(MeshShape(1, 1)),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreType::WORKER);
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto buffer = MeshBuffer::create(ReplicatedBufferConfig{.size = 2048}, device_local_config, mesh_device.get());
+    const MeshCoordinate coord(0, 0);
+    EXPECT_NE(buffer->get_device_buffer(coord), nullptr);
+
+    mesh_device.reset();
+    EXPECT_ANY_THROW(buffer->get_device_buffer(coord));
+}
+
+TEST(MeshBufferTest, GetDeviceBufferAfterCloseWithTwoDevices) {
+    // Fetching another entry after the close does not make the one fetched before it trusted again.
+    if (tt::tt_metal::GetNumAvailableDevices() < 2) {
+        GTEST_SKIP() << "Needs two devices";
+    }
+    auto mesh_device = MeshDevice::create(
+        MeshDeviceConfig(MeshShape(1, 2)),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreType::WORKER);
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto buffer = MeshBuffer::create(ReplicatedBufferConfig{.size = 2048}, device_local_config, mesh_device.get());
+    const MeshCoordinate fetched(0, 1);
+    const MeshCoordinate other(0, 0);
+    EXPECT_NE(buffer->get_device_buffer(fetched), nullptr);
+
+    mesh_device.reset();
+    EXPECT_ANY_THROW(buffer->get_device_buffer(other));
+    EXPECT_ANY_THROW(buffer->get_device_buffer(fetched));
+}
+
 TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};

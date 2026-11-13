@@ -5,6 +5,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
@@ -73,6 +74,7 @@ void py_module_types(nb::module_& m) {
         auto py_rope = m.def_submodule("rope");
         nb::class_<ttml::ops::RopeScalingParams>(py_rope, "RopeScalingParams");
         nb::class_<ttml::ops::RotaryEmbeddingParams>(py_rope, "RotaryEmbeddingParams");
+        nb::class_<ttml::ops::RotaryEmbeddingPositions>(py_rope, "RotaryEmbeddingPositions");
     }
 
     m.def_submodule("matmul");
@@ -468,7 +470,24 @@ void py_module(nb::module_& m) {
 
     {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
-        py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
+        py_rope.def(
+            "rope",
+            nb::overload_cast<const autograd::TensorPtr&, const ttml::ops::RotaryEmbeddingParams&, const uint32_t>(
+                &ttml::ops::rope),
+            nb::arg("input"),
+            nb::arg("rope_params"),
+            nb::arg("token_position") = 0);
+        py_rope.def(
+            "rope",
+            nb::overload_cast<
+                const autograd::TensorPtr&,
+                const ttml::ops::RotaryEmbeddingParams&,
+                const ttml::ops::RotaryEmbeddingPositions&>(&ttml::ops::rope),
+            nb::arg("input"),
+            nb::arg("rope_params"),
+            nb::arg("rope_positions"),
+            "RoPE with per-row positions. rope_positions: [B, S] UINT32 ROW_MAJOR. "
+            "Every id must be < rope_params.sequence_length; this is not checked on device.");
         py_rope.def(
             "mla_q_rope",
             &ttml::ops::mla_q_rope,
@@ -524,6 +543,13 @@ void py_module(nb::module_& m) {
             py_rotary_embedding_params.def_rw("theta", &ttml::ops::RotaryEmbeddingParams::theta);
             py_rotary_embedding_params.def_rw(
                 "rope_scaling_params", &ttml::ops::RotaryEmbeddingParams::rope_scaling_params);
+        }
+        {
+            auto py_rope_positions =
+                static_cast<nb::class_<ttml::ops::RotaryEmbeddingPositions>>(py_rope.attr("RotaryEmbeddingPositions"));
+            py_rope_positions.def(nb::init<autograd::TensorPtr>(), nb::arg("ids"));
+            py_rope_positions.def("update", &ttml::ops::RotaryEmbeddingPositions::update, nb::arg("ids"));
+            py_rope_positions.def("get_ids", &ttml::ops::RotaryEmbeddingPositions::get_ids);
         }
     }
 

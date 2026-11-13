@@ -29,7 +29,7 @@ void bind_reduction_ema_operation(nb::module_& mod) {
         with \mathrm{{output}}_0 = \mathrm{{input}}_0
 
         Args:
-            input (ttnn.Tensor): input tensor of shape [1, B, C, T]. Must be on the device.
+            input_tensor (ttnn.Tensor): input tensor of shape [1, B, C, T]. Must be on the device.
             alpha (float): the smoothing factor, typically between 0 and 1.
 
         Keyword Args:

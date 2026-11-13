@@ -254,7 +254,8 @@ static Tensor reduce_impl(
         if (dim.size() == 1 || linear_type) {
             output_tensor = reduce_nd_loop(/*use_reduce_type=*/true, scalar);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
-            int reduced_volume = 1;
+            // 64-bit, as in the single-step path below: an int overflows from 2^31 elements and flips the mean's sign.
+            uint64_t reduced_volume = 1;
             for (int axis : dim) {
                 reduced_volume *= input_shape[axis];
             }

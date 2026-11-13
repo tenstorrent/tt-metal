@@ -230,6 +230,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         std::optional<LLKMetadata> metadata;
         uint8_t pap;
         uint8_t cap;
+        std::vector<experimental::NodeRange> watcher_node_ranges;
     };
     vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
@@ -240,9 +241,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             uint8_t prefetcher_pipe_id,
             const std::optional<LLKMetadata>& metadata,
             uint8_t pap,
-            uint8_t cap) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap});
-        });
+            uint8_t cap) { dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap, {}}); });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
@@ -253,6 +252,23 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             sem_entries.push_back({name, id, scope, total_binder_harts});
         });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
+    // Watcher: the nodes each DFB and semaphore exists on, emitted next to its token for checking multicasts into it.
+    const auto attach_node_ranges =
+        [](auto& entries, const std::string& name, const std::vector<experimental::NodeRange>& node_ranges) {
+            if (auto it = std::find_if(
+                    entries.begin(), entries.end(), [&name](const auto& entry) { return entry.name == name; });
+                it != entries.end()) {
+                it->watcher_node_ranges = node_ranges;
+            }
+        };
+    settings.process_watcher_node_ranges(
+        [&](const std::string& name, const std::vector<experimental::NodeRange>& node_ranges) {
+            attach_node_ranges(dfb_entries, name, node_ranges);
+        },
+        [&](const std::string& name, const std::vector<experimental::NodeRange>& node_ranges) {
+            attach_node_ranges(sem_entries, name, node_ranges);
+        });
 
     // Get the tensor binding handles from the settings callback
     // Tensor bindings come from a std::vector populated in user-specified order, so no sort is needed here.
@@ -397,6 +413,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     }
 
     // Emit DFB bindings
+    tt::tt_metal::emit_watcher_node_ranges(content, "dfb", dfb_entries);
     content << "namespace dfb {\n";
     for (const auto& entry : dfb_entries) {
         if (entry.is_relay) {
@@ -411,14 +428,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         } else {
             // Both sides' access patterns ride on the token so the device DataflowBuffer can
             // specialize on the pattern pair at compile time; LLK metadata, when the host set it,
-            // rides as the second constructor argument.
+            // rides as the second constructor argument, and Watcher node ranges after it.
+            const string node_ranges =
+                tt::tt_metal::watcher_node_ranges_args("dfb", entry.name, entry.watcher_node_ranges);
             content << "constexpr DFBBindingToken<" << dfb_access_name(entry.pap) << ", " << dfb_access_name(entry.cap)
                     << "> " << entry.name << "{" << entry.id;
             if (entry.metadata.has_value()) {
                 content << ", ";
                 content << serialize_llk_metadata(*entry.metadata);
             }
-            content << "};\n";
+            content << node_ranges << "};\n";
         }
     }
     emit_programmatic_binding_token_getter(
