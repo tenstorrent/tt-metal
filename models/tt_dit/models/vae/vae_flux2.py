@@ -49,6 +49,7 @@ class Flux2VaeDecoder(Module):
         device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
         use_conv3d: bool = False,
+        fused_spatial_decode: bool = False,
     ) -> None:
         super().__init__()
 
@@ -61,6 +62,10 @@ class Flux2VaeDecoder(Module):
             w_mesh_axis=parallel_config.w_parallel.mesh_axis if parallel_config.w_parallel is not None else None,
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
             use_conv3d=use_conv3d,
+            external_halo=fused_spatial_decode,
+            norm_fusion=fused_spatial_decode,
+            norm_prologue=fused_spatial_decode,
+            local_attention=fused_spatial_decode,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -133,19 +138,21 @@ class Flux2VaeDecoder(Module):
         m = self.bn_running_mean.data
         return z * s + m
 
-    def preprocess_and_unpatchify(self, z: ttnn.Tensor, *, height: int, width: int) -> ttnn.Tensor:
+    def preprocess_and_unpatchify(
+        self, z: ttnn.Tensor, *, height: int, width: int, h_factor: int | None = None
+    ) -> ttnn.Tensor:
         # N, (H / P) * (W / P), C * P * P -> N, H/h_factor, W, C
         # Input may be H-sharded (h_factor rows per device) or fully replicated.
+        # h_factor: the H shards of the input if not the decoder's own (1 = all rows on every device).
         # W-sharding is applied by the caller after this call, once the spatial layout
         # is restored (H/W are interleaved in patchified tokens so W can't be split here).
         p = self._PATCH_SIZE
-        assert (
-            height % (p * self._ctx.h_factor) == 0
-        ), f"height {height} must be divisible by patch {p} * h_factor {self._ctx.h_factor}"
+        h_factor = self._ctx.h_factor if h_factor is None else h_factor
+        assert height % (p * h_factor) == 0, f"height {height} must be divisible by patch {p} * h_factor {h_factor}"
         assert (
             width % (p * self._ctx.w_factor) == 0
         ), f"width {width} must be divisible by patch {p} * w_factor {self._ctx.w_factor}"
-        height_local = height // self._ctx.h_factor
+        height_local = height // h_factor
 
         z = self._inv_normalize(z)
         z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
@@ -156,7 +163,7 @@ class Flux2VaeDecoder(Module):
         return z
 
     @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
-    def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
+    def forward(self, z: ttnn.Tensor, /, *, gather_hw: bool = True) -> ttnn.Tensor:
         # Input arrives H-sharded when SP is active (preprocess_and_unpatchify uses per-device
         # H), or replicated when SP is off — both cases work for post_quant_conv (per-position
         # Linear) and the SP-aware conv pyramid below.
@@ -174,7 +181,7 @@ class Flux2VaeDecoder(Module):
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
         z = self.conv_out.forward(z)
-        return _all_gather_hw(self._ctx, z)
+        return _all_gather_hw(self._ctx, z) if gather_hw else z
 
 
 # https://github.com/black-forest-labs/flux2/blob/6bb103559da75b67d75bf77cebba0027ba412ebc/src/flux2/autoencoder.py#L189
