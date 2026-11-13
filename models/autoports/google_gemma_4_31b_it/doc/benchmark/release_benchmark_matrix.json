@@ -1,0 +1,51 @@
+{
+  "source": "main 7a51c2f20f51e7508d8ea365d09092d00bbd5fcb release_model_spec.json google/gemma-4-31B-it P300X2 tt_transformers (matrix only; autoport runtime unchanged)",
+  "source_sha256": "7694f3f1c17fcea82eeae1490ef3a8506abe1f22752272bda2b2e33afbf92c58",
+  "rows": [
+    {
+      "isl": 128,
+      "osl": 128,
+      "max_concurrency": 1,
+      "num_prompts": 8,
+      "predicted_seconds": 28.486100881834215,
+      "prediction_basis": "Pre-measurement plan.json row release-b1-i128; ceil(requests/concurrency)*(predicted TTFT +127 predicted steps).",
+      "prediction_written_unix": 1794602326.0941556
+    },
+    {
+      "isl": 128,
+      "osl": 128,
+      "max_concurrency": 32,
+      "num_prompts": 256,
+      "predicted_seconds": 42.86130093048713,
+      "prediction_basis": "Pre-measurement plan.json row release-b32-i128; ceil(requests/concurrency)*(predicted TTFT +127 predicted steps).",
+      "prediction_written_unix": 1794602326.094158
+    },
+    {
+      "isl": 2048,
+      "osl": 128,
+      "max_concurrency": 1,
+      "num_prompts": 4,
+      "predicted_seconds": 16.222140388007052,
+      "prediction_basis": "Pre-measurement plan.json row release-b1-i2048; ceil(requests/concurrency)*(predicted TTFT +127 predicted steps).",
+      "prediction_written_unix": 1794602326.0941596
+    },
+    {
+      "isl": 8192,
+      "osl": 128,
+      "max_concurrency": 1,
+      "num_prompts": 2,
+      "predicted_seconds": 11.277614109347443,
+      "prediction_basis": "Pre-measurement plan.json row release-b1-i8192; ceil(requests/concurrency)*(predicted TTFT +127 predicted steps).",
+      "prediction_written_unix": 1794602326.094161
+    },
+    {
+      "isl": 32768,
+      "osl": 128,
+      "max_concurrency": 1,
+      "num_prompts": 1,
+      "predicted_seconds": 11.971894885361552,
+      "prediction_basis": "Pre-measurement plan.json row release-b1-i32768; ceil(requests/concurrency)*(predicted TTFT +127 predicted steps).",
+      "prediction_written_unix": 1794602326.0941627
+    }
+  ]
+}

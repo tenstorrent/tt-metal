@@ -1,0 +1,47 @@
+[
+  {
+    "name": "evidence_check",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "benchmark_stage.check",
+      "--model-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it",
+      "--hf-model",
+      "google/gemma-4-31B-it"
+    ],
+    "exit_code": 0,
+    "finished_unix": 1794611426.3559535
+  },
+  {
+    "name": "context_check",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/scripts/check_context_contract.py",
+      "--model-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it",
+      "--hf-model",
+      "google/gemma-4-31B-it",
+      "--stage",
+      "benchmark",
+      "--require-contract"
+    ],
+    "exit_code": 0,
+    "finished_unix": 1794611429.527126
+  },
+  {
+    "name": "agentic_check",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/scripts/check_agentic_serving.py",
+      "--model-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it",
+      "--hf-model",
+      "google/gemma-4-31B-it",
+      "--stage",
+      "benchmark"
+    ],
+    "exit_code": 0,
+    "finished_unix": 1794611429.548364
+  }
+]

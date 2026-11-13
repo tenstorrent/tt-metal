@@ -1,0 +1,16 @@
+{
+  "commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+  "files": {
+    "llm_module/drivers/vllm.py": "483b78634f5e23bcf423e9e029af4496d0c5a875e1914f494463ea8ed48e81f0",
+    "reference_config/evals/eval_config.py": "84dcaf63a41b52ea1e43c2736f629d5cb8b1a0432777a34a2f7f57076f201aac",
+    "release_model_spec.json": "7694f3f1c17fcea82eeae1490ef3a8506abe1f22752272bda2b2e33afbf92c58",
+    "llm_module/vllm_bench_cache_off.py": "de3ec0a70613cda873bc512d0c418acb972451c9eb70ea79437106ec64ff65cb"
+  },
+  "worktree_clean": true,
+  "client": {
+    "version": "0.26.0+empty",
+    "root": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/benchmark-perf-client/lib/python3.10/site-packages",
+    "record_sha256": "5f1e276a2e8d05d1b812263f0462e51213cd17a9d499bc74483b7c9a9e63f37d",
+    "endpoint_request_func_sha256": "e9ab4df19c5d89e1b73f116b4e21f2cc6c7da077266367c4b1b2bd7e015fda59"
+  }
+}

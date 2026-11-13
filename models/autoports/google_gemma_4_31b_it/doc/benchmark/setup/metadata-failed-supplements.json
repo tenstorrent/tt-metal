@@ -1,0 +1,35 @@
+{
+  "started_unix": 1794606794.3417683,
+  "actions": [
+    {
+      "name": "release_b1",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_grid.py",
+        "--run-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run",
+        "--concurrency",
+        "1",
+        "--action",
+        "collect",
+        "--grid-only",
+        "--release-only",
+        "--deadline-seconds",
+        "8100"
+      ],
+      "started_monotonic": 1550548.754653056,
+      "finished_monotonic": 1550700.212620585,
+      "exit_code": 0
+    },
+    {
+      "name": "anomaly_run",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_anomalies.py"
+      ],
+      "started_monotonic": 1550700.212789877,
+      "finished_monotonic": 1550743.191429338,
+      "exit_code": 1
+    }
+  ]
+}

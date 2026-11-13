@@ -1,0 +1,15 @@
+{
+  "model": "google/gemma-4-31B-it",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Design an algorithm for planning deliveries when travel times vary and some destinations have time windows. Derive the approach from first principles, work through a substantial example, consider failure cases and prove what guarantees do and do not hold."
+    }
+  ],
+  "max_tokens": 32768,
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 32,
+  "seed": 43,
+  "stream": false
+}

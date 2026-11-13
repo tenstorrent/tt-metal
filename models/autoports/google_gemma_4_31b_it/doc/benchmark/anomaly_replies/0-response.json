@@ -1,0 +1,42 @@
+{
+  "id": "chatcmpl-a309d547e483b66a",
+  "object": "chat.completion",
+  "created": 1794606981,
+  "model": "google/gemma-4-31B-it",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "This design focuses on a **Distributed Library Lending System** where the primary goal is to maintain strict consistency for book availability while ensuring high availability for borrowing and returning operations.\n\n---\n\n### 1. Data Model\nTo achieve fault tolerance and concurrency control, we avoid a single \"Books\" table. Instead, we use a **normalized, event-sourced approach** with a state-snapshot layer.\n\n#### Entities:\n*   **`BookInventory` (Static/Slow):** `BookID (PK), Title, ISBN, TotalCopies`.\n*   **`BookCopies` (State):** `CopyID (PK), BookID (FK), Status (Available, Loaned, Reserved, Maintenance), CurrentHolderID (Nullable)`.\n*   **`Loans` (Immutable Log):** `LoanID (PK), CopyID (FK), UserID, CheckoutDate, DueDate, ReturnDate (Nullable), Version`.\n*   **`Reservations` (Queue):** `ReservationID (PK), BookID, UserID, Timestamp, Status (Pending, Fulfilled, Expired)`.\n\n**Key Design Decision:** We treat the `Loans` table as the \"Source of Truth.\" The `Status` in `BookCopies` is a materialized view for fast querying.\n\n---\n\n### 2. Concurrency Invariants\nThe system must prevent \"Double Lending\" (one copy lent to two people) and \"Phantom Availability\" (a book marked available but actually reserved).\n\n#### Invariants:\n1.  **Availability Invariant:** A `BookCopy` can transition to `Loaned` if and only if its current state is `Available`.\n2.  **Reservation Invariant:** A user cannot checkout a book if there are pending reservations for that `BookID` created before their request, unless they are the reservation holder.\n\n#### Implementation: Optimistic Concurrency Control (OCC)\nWe use **Version Tracking** on the `BookCopies` record.\n```sql\nUPDATE BookCopies \nSET Status = 'Loaned', CurrentHolderID = :userId, Version = Version + 1\nWHERE CopyID = :copyId AND Version = :currentVersion AND Status = 'Available';\n```\nIf `rows_affected == 0`, another process has modified the copy; the system retries or fails.\n\n---\n\n### 3. Recovery after Partial Failures\nPartial failures occur when a transaction spans multiple services (e.g., updating the loan record succeeds, but updating the user's profile fails).\n\n#### The Outbox Pattern & Idempotency\nTo ensure atomicity across distributed components, we use a **Transactional Outbox**:\n1.  **Local Transaction:** The system updates the `Loans` and `BookCopies` tables and inserts a \"CheckoutEvent\" into an `Outbox` table in the *same* database transaction.\n2.  **Relay:** A separate process polls the `Outbox` and pushes events to a message broker (Kafka/RabbitMQ) to notify the Billing or Notification services.\n3.  **Idempotency:** Every request is tagged with a `RequestID`. If the \"Checkout\" call is retried due to a timeout, the system checks if `Loan` with `RequestID` already exists before processing.\n\n#### Recovery Logic:\n*   **Crash during Checkout:** If the DB transaction commits but the Relay fails, the Relay restarts and resumes from the last processed `Outbox` ID.\n*   **Crash during Return:** If the book is marked \"Returned\" but the \"Reservation-Notify\" event isn't sent, a periodic **Consistency Checker** (Cron) compares `BookCopies(Available)` against `Reservations(Pending)` and triggers missing notifications.\n\n---\n\n### 4. Concrete Example Walkthrough\n\n**Scenario: User A and User B both try to borrow the last copy of \"The Republic\" simultaneously.**\n\n1.  **T1 (User A):** Reads `BookCopy(ID: 101, Status: Available, Version: 5)`.\n2.  **T2 (User B):** Reads `BookCopy(ID: 101, Status: Available, Version: 5)`.\n3.  **T1:** Sends `UPDATE ... SET Status='Loaned', Version=6 WHERE CopyID=101 AND Version=5`.\n    *   *Result: Success. Rows updated = 1.*\n4.  **T2:** Sends `UPDATE ... SET Status='Loaned', Version=6 WHERE CopyID=101 AND Version=5`.\n    *   *Result: Failure. Rows updated = 0 (Version is now 6).*\n5.  **T2 Recovery:** The system catches the failure, re-reads the state, sees `Status='Loaned'`, and offers User B the option to \"Reserve\" the book instead.\n\n---\n\n### 5. Test Cases for Rigorous Validation\n\n| Test Case | Setup | Action | Expected Outcome |\n| :--- | :--- | :--- | :--- |\n| **Race Condition** | 1 Copy available | 10 concurrent requests to borrow | Exactly 1 success, 9 \"unavailable\" errors. |\n| **Partial Failure** | DB Transactional | Crash system after `Loan` record created but before `Outbox` event sent | On reboot, Outbox relay sends event; User notified. |\n| **Idempotency** | Valid Request | Submit \"Return Book\" request twice | First succeeds; second returns \"Already Returned\" (200 OK). |\n| **Reservation Leak** | 1 Reservation pending | Copy returned to inventory | Copy status changes to `Available` $\\rightarrow$ immediately triggers \"Ready for Pickup\" for Reservation holder. |\n\n---\n\n### 6. Trade-offs\n\n1.  **Consistency vs. Latency (CP over AP):**\n    *   I chose **Strong Consistency** (OCC/ACID) over Eventual Consistency. In a library, lending the same physical book to two people is a critical failure. The trade-off is slightly higher latency during peak loads due to transaction retries.\n2.  **Normalization vs. Performance:**\n    *   Storing `Status` in `BookCopies` is technically redundant (it can be derived from `Loans`), but it prevents expensive joins on every search. I accepted this redundancy for $O(1)$ availability checks.\n3.  **Optimistic vs. Pessimistic Locking:**\n    *   **Optimistic** was chosen because \"contention\" for a single specific book copy is relatively low compared to the total volume of reads. Pessimistic locking (`SELECT FOR UPDATE`) would cause unnecessary database deadlocks.",
+        "refusal": null,
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "reasoning": null
+      },
+      "logprobs": null,
+      "finish_reason": "stop",
+      "stop_reason": 106,
+      "token_ids": null,
+      "routed_experts": null
+    }
+  ],
+  "service_tier": null,
+  "system_fingerprint": "vllm-0.31.0-da0128bd",
+  "usage": {
+    "prompt_tokens": 55,
+    "total_tokens": 1468,
+    "completion_tokens": 1413,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  },
+  "prompt_logprobs": null,
+  "prompt_token_ids": null,
+  "prompt_text": null,
+  "kv_transfer_params": null,
+  "ec_transfer_params": null,
+  "metrics": null
+}

@@ -1,0 +1,8 @@
+{
+  "pid": 12375,
+  "command": "python models/autoports/google_gemma_4_31b_it/doc/benchmark/setup/finish_measurements.py ",
+  "start_ticks": "155080278",
+  "paused_unix": 1794607160.1326525,
+  "purpose": "Let current anomaly child finish, add a longer natural-ending generic sample serially, then resume grid coordinator.",
+  "resumed_unix": 1794607308.0679617
+}

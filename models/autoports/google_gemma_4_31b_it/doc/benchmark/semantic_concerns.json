@@ -1,0 +1,30 @@
+[
+  {
+    "reply_index": 1,
+    "source": "anomaly_replies/1-response.json",
+    "kind": "semantic_quality",
+    "claim": "Temperature/salinity difference shifts a stationary acoustic source frequency via a Doppler-like effect.",
+    "concern": "The response does not establish relative motion or another mechanism for the claimed frequency shift; treat this proposed confounder as unsupported.",
+    "status": "Recorded for stage12 under benchmark-only anomaly handoff; no precision or model change.",
+    "control": "No matching HF sample generated in this benchmark-only stage; not attributed to TT numerics."
+  },
+  {
+    "reply_index": 2,
+    "source": "anomaly_replies/2-response.json",
+    "kind": "semantic_quality",
+    "claim": "Per-stop margin sigma guarantees feasibility for any per-leg travel-time deviation at most sigma.",
+    "concern": "Successive positive deviations accumulate unless waiting or larger downstream buffers absorb them.",
+    "counterexample": "No waiting/service times; baseline arrivals10,20; latest arrivals11,21; sigma1. Two legs each delayed1 give arrivals11,22, violating the second window despite each baseline margin1.",
+    "status": "Recorded for stage12 under benchmark-only anomaly handoff; no precision or model change.",
+    "control": "Constructive arithmetic counterexample to the stated guarantee; no matching HF sample, so not attributed to TT numerics."
+  },
+  {
+    "reply_index": 3,
+    "source": "anomaly_replies/3-response.json",
+    "kind": "semantic_quality",
+    "claim": "Calibration formula includes detector gain, but later worked examples omit the stated gain1.2.",
+    "concern": "Section11 reports5204.1ADU without applying gain; the final case repeats the inconsistency with the earlier S_cal definition.",
+    "status": "Recorded for stage12 under benchmark-only anomaly handoff; no precision/model change.",
+    "control": "Internal formula/example comparison; no matching HF sample, so not attributed to TT numerics."
+  }
+]

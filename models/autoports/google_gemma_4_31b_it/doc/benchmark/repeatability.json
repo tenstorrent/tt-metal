@@ -1,0 +1,22 @@
+{
+  "workload": {
+    "batch": 32,
+    "concurrency": 32,
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "requests": 96,
+    "sampling": "T1/p0.95/k20/seed42"
+  },
+  "original": "attempts/budget-handoff/perf-b32.json",
+  "fresh": "run/perf-b32.json",
+  "ttft_ms": [
+    6595.17703633901,
+    6560.479437190224
+  ],
+  "step_ms": [
+    233.38415298156113,
+    232.2350032116165
+  ],
+  "relative_step_difference": -0.0049238551772425865,
+  "scope": "One repeated B32 burst across clean server restart; not an all-row variance estimate."
+}

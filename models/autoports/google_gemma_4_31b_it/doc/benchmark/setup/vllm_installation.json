@@ -1,0 +1,15 @@
+{
+  "version": "0.31.0+empty",
+  "commit": null,
+  "missing_reason": "Installed distribution has no direct_url.json, uv_build.json is empty, and version suffix is empty; no defensible Git SHA is exposed. Preserve installation fingerprint instead of inferring a commit from unrelated source trees.",
+  "package_root": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm",
+  "python_source_files": 2570,
+  "python_source_tree_sha256": "1e57e815b1d037522b0ce3ff1754905dca3cffd09e90efbf0fce1c6c0a897ec0",
+  "distribution_record_sha256": "3ed45121924d3a77d8838ab2aa7cf0fe2993c1681db593a4d03e195322d36d09",
+  "metadata_sha256": "e775e1efc430149219e436e6cc198a60969afbd71c5e103d1d22f8c4494c4a88",
+  "critical_files": {
+    "entrypoints/serve/middleware/log_response.py": "79d1a8111c2b19bcd2f110224acb2346caccd829557c61d8c25f3a98b7c66df8",
+    "entrypoints/openai/api_server.py": "470ff555bdc19f8e17edf4ee7b6ec3f49ff5af0f773e2a7f91bab536e2239109",
+    "v1/engine/async_llm.py": "ff933ed78aa3195782cf1c6d18c53897adfa5bf920421bd2bcc330f2adc84d1e"
+  }
+}

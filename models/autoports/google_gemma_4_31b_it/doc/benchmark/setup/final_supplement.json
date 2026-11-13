@@ -1,0 +1,79 @@
+{
+  "observed_unix": 1794610847.3808265,
+  "original_stage_deadline": 1555999.297087911,
+  "measurement_deadline": 1555279.297087911,
+  "closure_reserve_seconds": 720,
+  "observed_prior_startup_seconds": 240.28711529797874,
+  "startup_margin_seconds": 60,
+  "predicted_whole_row_seconds": 289.5350732610837,
+  "row_margin_seconds": 60,
+  "remaining_seconds": 709.5362098319456,
+  "actions": [
+    {
+      "name": "final_b32_server",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_server.py",
+        "--max-num-seqs",
+        "32",
+        "--base-url",
+        "http://127.0.0.1:8000",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/supplement-b32/perf-b32-server.json"
+      ],
+      "started_monotonic": 1554569.761015661,
+      "finished_monotonic": 1554812.1468857,
+      "exit_code": 0
+    },
+    {
+      "name": "final_b32_check",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/collect_benchmark_roofline.py",
+        "--run-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/supplement-b32",
+        "--concurrency",
+        "32",
+        "--action",
+        "check"
+      ],
+      "started_monotonic": 1554812.147114005,
+      "finished_monotonic": 1554812.436260181,
+      "exit_code": 0
+    },
+    {
+      "name": "final_b32_grid",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_grid.py",
+        "--run-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/supplement-b32",
+        "--concurrency",
+        "32",
+        "--action",
+        "collect",
+        "--grid-only",
+        "--deadline-seconds",
+        "10080",
+        "--closure-reserve-seconds",
+        "720"
+      ],
+      "started_monotonic": 1554812.436466164,
+      "finished_monotonic": 1555087.327118287,
+      "exit_code": 0
+    },
+    {
+      "name": "final_b32_stop",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_server.py",
+        "--stop"
+      ],
+      "started_monotonic": 1555087.327331995,
+      "finished_monotonic": 1555094.389359664,
+      "exit_code": 0
+    }
+  ],
+  "admitted": true,
+  "completed_unix": 1794611372.0095499
+}

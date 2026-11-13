@@ -1,0 +1,6 @@
+# AutoFix: buffered streaming measurements
+
+Failing contract: HTTP TTFT and token cadence must describe streamed generation; full nonstream eval bodies must remain available to reply_digest.
+Observation: first exact4096/128 B32 warmup mean TTFT36.734s, TPOT0.044ms; actual engine work continues throughout this interval. Native debug middleware consumes the entire body iterator before returning. AUTODEBUG_logging.md confirms this causal chain against current source.
+Repair: native buffering debug flag=false; model-owned pure ASGI ResponseLoggingMiddleware awaits downstream send immediately, bypasses SSE storage, and logs complete successful nonstream JSON only after delivery. No vLLM/plugin edits or device synchronization. Main's unchanged generic cache-salt client wrapper is selected explicitly, including per-request cache isolation.
+Validation: four host tests pass, including streaming first-chunk delivery before app completion, split-UTF8 complete bodies, propagation of send errors, and non-HTTP pass-through. Benchmark rerun must demonstrate realistic cadence and complete phase evidence. The previous attempt stays in attempts/buffered-logging, excluded from reported rates. Chain stopped between requests and owned idle server shut down cleanly; no reset.

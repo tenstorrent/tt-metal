@@ -1,0 +1,7 @@
+{
+  "files": 931,
+  "parts": 18,
+  "restore_verified": true,
+  "verified_unix": 1794611472.0307887,
+  "basis": "archive_benchmark_evidence.py --restore validated part and per-file SHA256 before writing byte-exact originals; includes run, attempts and setup logs"
+}

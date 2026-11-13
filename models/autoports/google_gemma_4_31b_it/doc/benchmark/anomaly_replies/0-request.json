@@ -1,0 +1,15 @@
+{
+  "model": "google/gemma-4-31B-it",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Develop a rigorous design for a fault-tolerant library lending system. Explain the data model, concurrency invariants, recovery after partial failures, test cases, and tradeoffs. Work through concrete examples and check the reasoning carefully."
+    }
+  ],
+  "max_tokens": 32768,
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 32,
+  "seed": 17,
+  "stream": false
+}

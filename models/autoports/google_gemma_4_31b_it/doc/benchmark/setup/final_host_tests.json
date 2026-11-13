@@ -1,0 +1,7 @@
+{
+  "command": "python -m pytest -q models/autoports/google_gemma_4_31b_it/tests/test_benchmark_phases.py models/autoports/google_gemma_4_31b_it/tests/test_response_logging.py",
+  "result": "17 passed",
+  "elapsed_seconds": 2.86,
+  "recorded_unix": 1794605567.4660397,
+  "scope": "host-only accounting and ASGI response logging; no device opened"
+}

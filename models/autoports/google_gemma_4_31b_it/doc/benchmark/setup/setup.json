@@ -1,0 +1,14 @@
+{
+  "setup_unix": 1794601237.6290596,
+  "supplied_server": false,
+  "devices_available": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "device_owners": [],
+  "budget_hours": 3,
+  "prior_results_reused": false,
+  "initial_commit": "a12a2675ccd670bb648b26c86760a44a2f822fc6"
+}

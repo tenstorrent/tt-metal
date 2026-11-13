@@ -1,0 +1,9 @@
+{
+  "verdict": "no active integration bug found",
+  "reviewer": "benchmark_host_audit",
+  "main_commit": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+  "findings": [
+    "Main source clean; GPQA seed42 versus SWE omitted; usage-count validation; server batch versus concurrency phase mapping valid."
+  ],
+  "limitation": "Client wrapper port8000 is fixed; current launch uses8000."
+}

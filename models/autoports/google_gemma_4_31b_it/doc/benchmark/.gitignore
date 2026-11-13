@@ -1,0 +1,12 @@
+# Raw evidence remains local and is committed byte-exact in raw_archive/.
+# Restore with: python tools/archive_benchmark_evidence.py --restore
+/run/*
+!/run/REPORT.md
+!/run/runner-REPORT.md
+!/run/final_timing.json
+/attempts/
+
+# The enclosing multigoal runner updates these throughout/after the turn.
+# device_timeline_snapshot.jsonl preserves the state at stage closure.
+/device_timeline.alive
+/device_timeline.jsonl

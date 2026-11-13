@@ -1,0 +1,7 @@
+{
+  "pid": 4818,
+  "process_started_monotonic": 1545702.56,
+  "budget_seconds": 5400,
+  "recorded_monotonic": 1547586.540382847,
+  "basis": "Linux /proc process start ticks; conservative start before benchmark_stage.run begins."
+}

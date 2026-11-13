@@ -1,0 +1,670 @@
+[
+  {
+    "id": "shared_0",
+    "prompt": "Write a haiku about machine learning.",
+    "request": {
+      "model": "google/gemma-4-31B-it",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a haiku about machine learning."
+        }
+      ],
+      "max_tokens": 128,
+      "temperature": 0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "stream": false
+    },
+    "prompt_format": {
+      "rendered_prompt": "<bos><|turn>user\nWrite a haiku about machine learning.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        6974,
+        496,
+        678,
+        20517,
+        1003,
+        5464,
+        4735,
+        236761,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "reference_prompt_tokens": 21,
+      "served_prompt_tokens": 21,
+      "count_matches": true,
+      "basis": "Pinned local tokenizer renders the submitted messages and identical template kwargs; request sends messages once through native chat endpoint."
+    },
+    "response": {
+      "id": "chatcmpl-8dd1f3983c02c2d7",
+      "object": "chat.completion",
+      "created": 1794607173,
+      "model": "google/gemma-4-31B-it",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Data feeds the code,\nPatterns emerge from the noise,\nThe machine now learns.",
+            "refusal": null,
+            "annotations": null,
+            "audio": null,
+            "function_call": null,
+            "reasoning": null
+          },
+          "logprobs": null,
+          "finish_reason": "stop",
+          "stop_reason": 106,
+          "token_ids": null,
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.31.0-da0128bd",
+      "usage": {
+        "prompt_tokens": 21,
+        "total_tokens": 40,
+        "completion_tokens": 19,
+        "prompt_tokens_details": null,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "prompt_logprobs": null,
+      "prompt_token_ids": null,
+      "prompt_text": null,
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    },
+    "completion": "Data feeds the code,\nPatterns emerge from the noise,\nThe machine now learns.",
+    "digest": {
+      "id": "chatcmpl-8dd1f3983c02c2d7",
+      "prompt_tokens": 21,
+      "tokens": 19,
+      "finish": "stop",
+      "capped": false,
+      "chars": 76,
+      "tail_ratio": 0.9868,
+      "tail_distinct": 23,
+      "head_ratio": 0.9868,
+      "head_distinct": 23,
+      "flag": false,
+      "action": "text: ...Data feeds the code, Patterns emerge from the noise, The machine now learns.",
+      "_tail": "Data feeds the code,\nPatterns emerge from the noise,\nThe machine now learns."
+    }
+  },
+  {
+    "id": "shared_1",
+    "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+    "request": {
+      "model": "google/gemma-4-31B-it",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain the difference between supervised and unsupervised learning in simple terms."
+        }
+      ],
+      "max_tokens": 128,
+      "temperature": 0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "stream": false
+    },
+    "prompt_format": {
+      "rendered_prompt": "<bos><|turn>user\nExplain the difference between supervised and unsupervised learning in simple terms.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        155122,
+        506,
+        4954,
+        1534,
+        52660,
+        532,
+        124155,
+        4735,
+        528,
+        3606,
+        3755,
+        236761,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "reference_prompt_tokens": 25,
+      "served_prompt_tokens": 25,
+      "count_matches": true,
+      "basis": "Pinned local tokenizer renders the submitted messages and identical template kwargs; request sends messages once through native chat endpoint."
+    },
+    "response": {
+      "id": "chatcmpl-9dff4685732629ba",
+      "object": "chat.completion",
+      "created": 1794607174,
+      "model": "google/gemma-4-31B-it",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "The simplest way to understand the difference is to think of it as **learning with a teacher** versus **learning by discovery.**\n\n### 1. Supervised Learning (Learning with a Teacher)\nIn supervised learning, you give the computer a dataset where the \"answer\" is already provided. This answer is called a **label**.\n\nImagine you are teaching a child to identify fruit using flashcards. On the front of the card is a picture, and on the back is the name of the fruit.\n*   **The Process:** You show the child a picture of an apple and say, *\"This is an apple.\"*",
+            "refusal": null,
+            "annotations": null,
+            "audio": null,
+            "function_call": null,
+            "reasoning": null
+          },
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": null,
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.31.0-da0128bd",
+      "usage": {
+        "prompt_tokens": 25,
+        "total_tokens": 153,
+        "completion_tokens": 128,
+        "prompt_tokens_details": null,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "prompt_logprobs": null,
+      "prompt_token_ids": null,
+      "prompt_text": null,
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    },
+    "completion": "The simplest way to understand the difference is to think of it as **learning with a teacher** versus **learning by discovery.**\n\n### 1. Supervised Learning (Learning with a Teacher)\nIn supervised learning, you give the computer a dataset where the \"answer\" is already provided. This answer is called a **label**.\n\nImagine you are teaching a child to identify fruit using flashcards. On the front of the card is a picture, and on the back is the name of the fruit.\n*   **The Process:** You show the child a picture of an apple and say, *\"This is an apple.\"*",
+    "digest": {
+      "id": "chatcmpl-9dff4685732629ba",
+      "prompt_tokens": 25,
+      "tokens": 128,
+      "finish": "length",
+      "capped": true,
+      "chars": 557,
+      "tail_ratio": 0.5925,
+      "tail_distinct": 40,
+      "head_ratio": 0.5925,
+      "head_distinct": 40,
+      "flag": false,
+      "action": "text: ...ocess:** You show the child a picture of an apple and say, *\"This is an apple.\"*",
+      "_tail": "The simplest way to understand the difference is to think of it as **learning with a teacher** versus **learning by discovery.**\n\n### 1. Supervised Learning (Learning with a Teacher)\nIn supervised learning, you give the computer a dataset where the \"answer\" is already provided. This answer is called a **label**.\n\nImagine you are teaching a child to identify fruit using flashcards. On the front of the card is a picture, and on the back is the name of the fruit.\n*   **The Process:** You show the child a picture of an apple and say, *\"This is an apple.\"*"
+    }
+  },
+  {
+    "id": "shared_2",
+    "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+    "request": {
+      "model": "google/gemma-4-31B-it",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered"
+        }
+      ],
+      "max_tokens": 128,
+      "temperature": 0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "stream": false
+    },
+    "prompt_format": {
+      "rendered_prompt": "<bos><|turn>user\nComplete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        25146,
+        672,
+        3925,
+        236787,
+        9920,
+        3324,
+        496,
+        990,
+        236764,
+        528,
+        496,
+        236365,
+        21880,
+        236764,
+        993,
+        11742,
+        496,
+        23210,
+        3184,
+        70418,
+        1015,
+        11788,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "reference_prompt_tokens": 35,
+      "served_prompt_tokens": 35,
+      "count_matches": true,
+      "basis": "Pinned local tokenizer renders the submitted messages and identical template kwargs; request sends messages once through native chat endpoint."
+    },
+    "response": {
+      "id": "chatcmpl-8c35056c380b2d24",
+      "object": "chat.completion",
+      "created": 1794607177,
+      "model": "google/gemma-4-31B-it",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered a shimmering, brass clockwork heart hidden inside the hollow of an ancient oak tree.\n\nThe inventor, a girl named Elara with grease-smudged cheeks and a mind that raced faster than her gears, had spent her youth tinkering with broken toasters and rusted weather vanes. But this object was different. It didn't just tick; it hummed a low, melodic frequency that seemed to vibrate in tune with the earth itself.\n\nWhen Elara wound the tiny key on the side, the heart didn't start a machine\u2014",
+            "refusal": null,
+            "annotations": null,
+            "audio": null,
+            "function_call": null,
+            "reasoning": null
+          },
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": null,
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.31.0-da0128bd",
+      "usage": {
+        "prompt_tokens": 35,
+        "total_tokens": 163,
+        "completion_tokens": 128,
+        "prompt_tokens_details": null,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "prompt_logprobs": null,
+      "prompt_token_ids": null,
+      "prompt_text": null,
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    },
+    "completion": "Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered a shimmering, brass clockwork heart hidden inside the hollow of an ancient oak tree.\n\nThe inventor, a girl named Elara with grease-smudged cheeks and a mind that raced faster than her gears, had spent her youth tinkering with broken toasters and rusted weather vanes. But this object was different. It didn't just tick; it hummed a low, melodic frequency that seemed to vibrate in tune with the earth itself.\n\nWhen Elara wound the tiny key on the side, the heart didn't start a machine\u2014",
+    "digest": {
+      "id": "chatcmpl-8c35056c380b2d24",
+      "prompt_tokens": 35,
+      "tokens": 128,
+      "finish": "length",
+      "capped": true,
+      "chars": 578,
+      "tail_ratio": 0.6328,
+      "tail_distinct": 38,
+      "head_ratio": 0.6328,
+      "head_distinct": 38,
+      "flag": false,
+      "action": "text: ...lf. When Elara wound the tiny key on the side, the heart didn't start a machine\u2014",
+      "_tail": "Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered a shimmering, brass clockwork heart hidden inside the hollow of an ancient oak tree.\n\nThe inventor, a girl named Elara with grease-smudged cheeks and a mind that raced faster than her gears, had spent her youth tinkering with broken toasters and rusted weather vanes. But this object was different. It didn't just tick; it hummed a low, melodic frequency that seemed to vibrate in tune with the earth itself.\n\nWhen Elara wound the tiny key on the side, the heart didn't start a machine\u2014"
+    }
+  },
+  {
+    "id": "shared_3",
+    "prompt": "What are the three laws of thermodynamics?",
+    "request": {
+      "model": "google/gemma-4-31B-it",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What are the three laws of thermodynamics?"
+        }
+      ],
+      "max_tokens": 128,
+      "temperature": 0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "stream": false
+    },
+    "prompt_format": {
+      "rendered_prompt": "<bos><|turn>user\nWhat are the three laws of thermodynamics?<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        3689,
+        659,
+        506,
+        1806,
+        9734,
+        529,
+        67280,
+        236881,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "reference_prompt_tokens": 21,
+      "served_prompt_tokens": 21,
+      "count_matches": true,
+      "basis": "Pinned local tokenizer renders the submitted messages and identical template kwargs; request sends messages once through native chat endpoint."
+    },
+    "response": {
+      "id": "chatcmpl-87416d38cb3f8095",
+      "object": "chat.completion",
+      "created": 1794607181,
+      "model": "google/gemma-4-31B-it",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "While there are technically four laws (including the \"0th Law\"), the three primary laws of thermodynamics describe how energy, heat, and entropy behave in a physical system.\n\nHere they are in simple terms:\n\n### 1. The First Law: The Law of Conservation of Energy\n**The Concept:** Energy cannot be created or destroyed; it can only be transferred or changed from one form to another.\n\n*   **What it means:** The total amount of energy in an isolated universe remains constant. If a system gains energy, it must have come from its surroundings.\n*   **Example:** When you rub your hands together",
+            "refusal": null,
+            "annotations": null,
+            "audio": null,
+            "function_call": null,
+            "reasoning": null
+          },
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": null,
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.31.0-da0128bd",
+      "usage": {
+        "prompt_tokens": 21,
+        "total_tokens": 149,
+        "completion_tokens": 128,
+        "prompt_tokens_details": null,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "prompt_logprobs": null,
+      "prompt_token_ids": null,
+      "prompt_text": null,
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    },
+    "completion": "While there are technically four laws (including the \"0th Law\"), the three primary laws of thermodynamics describe how energy, heat, and entropy behave in a physical system.\n\nHere they are in simple terms:\n\n### 1. The First Law: The Law of Conservation of Energy\n**The Concept:** Energy cannot be created or destroyed; it can only be transferred or changed from one form to another.\n\n*   **What it means:** The total amount of energy in an isolated universe remains constant. If a system gains energy, it must have come from its surroundings.\n*   **Example:** When you rub your hands together",
+    "digest": {
+      "id": "chatcmpl-87416d38cb3f8095",
+      "prompt_tokens": 21,
+      "tokens": 128,
+      "finish": "length",
+      "capped": true,
+      "chars": 592,
+      "tail_ratio": 0.6199,
+      "tail_distinct": 43,
+      "head_ratio": 0.6199,
+      "head_distinct": 43,
+      "flag": false,
+      "action": "text: ...have come from its surroundings. * **Example:** When you rub your hands together",
+      "_tail": "While there are technically four laws (including the \"0th Law\"), the three primary laws of thermodynamics describe how energy, heat, and entropy behave in a physical system.\n\nHere they are in simple terms:\n\n### 1. The First Law: The Law of Conservation of Energy\n**The Concept:** Energy cannot be created or destroyed; it can only be transferred or changed from one form to another.\n\n*   **What it means:** The total amount of energy in an isolated universe remains constant. If a system gains energy, it must have come from its surroundings.\n*   **Example:** When you rub your hands together"
+    }
+  },
+  {
+    "id": "shared_4",
+    "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+    "request": {
+      "model": "google/gemma-4-31B-it",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Translate the following to French: \"Hello, how are you today?\""
+        }
+      ],
+      "max_tokens": 128,
+      "temperature": 0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "stream": false
+    },
+    "prompt_format": {
+      "rendered_prompt": "<bos><|turn>user\nTranslate the following to French: \"Hello, how are you today?\"<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        40414,
+        506,
+        2269,
+        531,
+        7830,
+        236787,
+        623,
+        9259,
+        236764,
+        1217,
+        659,
+        611,
+        3124,
+        7462,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "reference_prompt_tokens": 27,
+      "served_prompt_tokens": 27,
+      "count_matches": true,
+      "basis": "Pinned local tokenizer renders the submitted messages and identical template kwargs; request sends messages once through native chat endpoint."
+    },
+    "response": {
+      "id": "chatcmpl-8dc0f6c346da8412",
+      "object": "chat.completion",
+      "created": 1794607184,
+      "model": "google/gemma-4-31B-it",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Depending on who you are speaking to, there are two ways to say this:\n\n**Informal (friends, family, peers):**\n\"Salut, comment \u00e7a va aujourd'hui ?\"\n\n**Formal (boss, strangers, elders):**\n\"Bonjour, comment allez-vous aujourd'hui ?\"",
+            "refusal": null,
+            "annotations": null,
+            "audio": null,
+            "function_call": null,
+            "reasoning": null
+          },
+          "logprobs": null,
+          "finish_reason": "stop",
+          "stop_reason": 106,
+          "token_ids": null,
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.31.0-da0128bd",
+      "usage": {
+        "prompt_tokens": 27,
+        "total_tokens": 90,
+        "completion_tokens": 63,
+        "prompt_tokens_details": null,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "prompt_logprobs": null,
+      "prompt_token_ids": null,
+      "prompt_text": null,
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    },
+    "completion": "Depending on who you are speaking to, there are two ways to say this:\n\n**Informal (friends, family, peers):**\n\"Salut, comment \u00e7a va aujourd'hui ?\"\n\n**Formal (boss, strangers, elders):**\n\"Bonjour, comment allez-vous aujourd'hui ?\"",
+    "digest": {
+      "id": "chatcmpl-8dc0f6c346da8412",
+      "prompt_tokens": 27,
+      "tokens": 63,
+      "finish": "stop",
+      "capped": false,
+      "chars": 229,
+      "tail_ratio": 0.7348,
+      "tail_distinct": 41,
+      "head_ratio": 0.7348,
+      "head_distinct": 41,
+      "flag": false,
+      "action": "text: ...*Formal (boss, strangers, elders):** \"Bonjour, comment allez-vous aujourd'hui ?\"",
+      "_tail": "Depending on who you are speaking to, there are two ways to say this:\n\n**Informal (friends, family, peers):**\n\"Salut, comment \u00e7a va aujourd'hui ?\"\n\n**Formal (boss, strangers, elders):**\n\"Bonjour, comment allez-vous aujourd'hui ?\""
+    }
+  },
+  {
+    "id": "shared_5",
+    "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+    "request": {
+      "model": "google/gemma-4-31B-it",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a Python function to calculate the Fibonacci sequence."
+        }
+      ],
+      "max_tokens": 128,
+      "temperature": 0,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "stream": false
+    },
+    "prompt_format": {
+      "rendered_prompt": "<bos><|turn>user\nWrite a Python function to calculate the Fibonacci sequence.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        6974,
+        496,
+        17856,
+        1292,
+        531,
+        9279,
+        506,
+        123466,
+        7501,
+        236761,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "reference_prompt_tokens": 23,
+      "served_prompt_tokens": 23,
+      "count_matches": true,
+      "basis": "Pinned local tokenizer renders the submitted messages and identical template kwargs; request sends messages once through native chat endpoint."
+    },
+    "response": {
+      "id": "chatcmpl-94173c912dd82653",
+      "object": "chat.completion",
+      "created": 1794607186,
+      "model": "google/gemma-4-31B-it",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Depending on your needs, there are several ways to implement this. Below are the three most common methods: **Iterative** (best for performance), **Recursive** (simplest logic), and **Generator** (best for memory).\n\n### 1. The Iterative Approach (Recommended)\nThis is the most efficient way to get a list of Fibonacci numbers up to $n$. It has a time complexity of $O(n)$ and is easy to understand.\n\n```python\ndef fibonacci_sequence(n):\n    \"\"\"Returns a list containing the Fibonacci sequence up to n terms.\"\"\"\n    if n <= ",
+            "refusal": null,
+            "annotations": null,
+            "audio": null,
+            "function_call": null,
+            "reasoning": null
+          },
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": null,
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.31.0-da0128bd",
+      "usage": {
+        "prompt_tokens": 23,
+        "total_tokens": 151,
+        "completion_tokens": 128,
+        "prompt_tokens_details": null,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "prompt_logprobs": null,
+      "prompt_token_ids": null,
+      "prompt_text": null,
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    },
+    "completion": "Depending on your needs, there are several ways to implement this. Below are the three most common methods: **Iterative** (best for performance), **Recursive** (simplest logic), and **Generator** (best for memory).\n\n### 1. The Iterative Approach (Recommended)\nThis is the most efficient way to get a list of Fibonacci numbers up to $n$. It has a time complexity of $O(n)$ and is easy to understand.\n\n```python\ndef fibonacci_sequence(n):\n    \"\"\"Returns a list containing the Fibonacci sequence up to n terms.\"\"\"\n    if n <= ",
+    "digest": {
+      "id": "chatcmpl-94173c912dd82653",
+      "prompt_tokens": 23,
+      "tokens": 128,
+      "finish": "length",
+      "capped": true,
+      "chars": 523,
+      "tail_ratio": 0.6348,
+      "tail_distinct": 48,
+      "head_ratio": 0.6348,
+      "head_distinct": 48,
+      "flag": false,
+      "action": "text: ...): \"\"\"Returns a list containing the Fibonacci sequence up to n terms.\"\"\" if n <=",
+      "_tail": "Depending on your needs, there are several ways to implement this. Below are the three most common methods: **Iterative** (best for performance), **Recursive** (simplest logic), and **Generator** (best for memory).\n\n### 1. The Iterative Approach (Recommended)\nThis is the most efficient way to get a list of Fibonacci numbers up to $n$. It has a time complexity of $O(n)$ and is easy to understand.\n\n```python\ndef fibonacci_sequence(n):\n    \"\"\"Returns a list containing the Fibonacci sequence up to n terms.\"\"\"\n    if n <= "
+    }
+  }
+]

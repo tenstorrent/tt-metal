@@ -1,0 +1,21 @@
+{
+  "scope": "Shared qualitative sanity check, not an accuracy or exact-token parity verdict",
+  "status": "qualitative_sanity_pass",
+  "source": "qualitative_outputs.json",
+  "hf_control": "../datatype_sweep/selected_default/qualitative_hf.json",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "prompt_counts_match": 6,
+  "prompts_checked": 6,
+  "observations": [
+    "Haiku follows topic and5/7/5form; final wording differs from HF.",
+    "Supervised/unsupervised explanation uses labelled-data/teacher distinction, as HF does.",
+    "Story continuation is coherent; different invented object is not a correctness failure.",
+    "Thermodynamics explanation starts with conservation of energy; both TT and HF hit128-token cap before full answer.",
+    "French translation provides valid formal/informal variants.",
+    "Fibonacci code is cut at the128-token cap; pinned HF control ends at the same if n <= fragment. No claim of executable complete code."
+  ],
+  "limits": [
+    "Four shared replies are cap-limited continuations; no full-answer accuracy score.",
+    "Long generic outputs have separately recorded semantic concerns despite no mechanical degeneration flags."
+  ]
+}

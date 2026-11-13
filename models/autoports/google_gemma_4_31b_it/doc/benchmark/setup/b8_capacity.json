@@ -1,0 +1,6 @@
+{
+  "tokens": 548143,
+  "server_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/supplement-b8/server-b8/server.log",
+  "observed_unix": 1794609547.2158647,
+  "prediction_fields_unchanged": true
+}

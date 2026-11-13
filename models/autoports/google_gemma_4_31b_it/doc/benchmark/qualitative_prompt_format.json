@@ -1,0 +1,9 @@
+{
+  "hf_model": "google/gemma-4-31B-it",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "endpoint": "/v1/chat/completions",
+  "shared_suite": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/vllm_prompts.txt",
+  "shared_control": "doc/datatype_sweep/selected_default/qualitative_hf.json; same revision/native default nonthinking/greedy128. Long samples are anomaly detection only, not an accuracy verdict."
+}

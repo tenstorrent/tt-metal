@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""Pause only the owned grid process group at a parsed completion boundary."""
+import json
+import os
+import signal
+import time
+from pathlib import Path
+
+base = Path(__file__).resolve().parents[1] / "doc/benchmark"
+marker = base / "run/grid/b32-c1-i28672-swe/complete.json"
+pid = 5627
+proc = Path(f"/proc/{pid}")
+original = proc.joinpath("stat").read_text().split(") ", 1)[1].split()[19]
+end = json.loads((base / "setup/runner_clock.json").read_text())["process_started_monotonic"] + 4500
+while time.monotonic() < end:
+    if not proc.exists():
+        break
+    if proc.joinpath("stat").read_text().split(") ", 1)[1].split()[19] != original or os.getpgid(pid) != pid:
+        raise RuntimeError("Grid ownership identity changed")
+    try:
+        complete = json.loads(marker.read_text())
+    except (OSError, ValueError):
+        complete = {}
+    if complete.get("row", {}).get("id") == "b32-c1-i28672-swe":
+        command = proc.joinpath("cmdline").read_bytes().replace(b"\0", b" ").decode()
+        if "benchmark_grid.py" not in command or "--concurrency 32" not in command:
+            raise RuntimeError("Grid command identity changed")
+        os.killpg(pid, signal.SIGSTOP)
+        record = dict(event="paused_owned_grid_at_complete_row", pid=pid, process_group=pid,
+                      start_ticks=original, command=command, completed_marker=str(marker),
+                      monotonic=time.monotonic(), unix=time.time(), server_signalled=False)
+        (base / "setup/budget_handoff.json").write_text(json.dumps(record, indent=2) + "\n")
+        print(json.dumps(record), flush=True)
+        break
+    time.sleep(0.2)

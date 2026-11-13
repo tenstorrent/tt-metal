@@ -1,0 +1,15 @@
+{
+  "model": "google/gemma-4-31B-it",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Write a self-contained, approximately 8000-word engineering handbook on designing a reliable community observatory's data collection and analysis system. Develop twelve substantial sections covering requirements, mathematical models of measurement error, storage design, concurrent ingestion, calibration, missing observations, anomaly detection, recovery, reproducibility, access control, worked numerical examples, and verification. Include original concrete examples, pseudocode, derivations, failure scenarios and their remedies throughout. Fully develop each section rather than providing an outline or a summary. Finish with a rigorous end-to-end worked case that connects all twelve sections."
+    }
+  ],
+  "max_tokens": 32768,
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 32,
+  "seed": 59,
+  "stream": false
+}

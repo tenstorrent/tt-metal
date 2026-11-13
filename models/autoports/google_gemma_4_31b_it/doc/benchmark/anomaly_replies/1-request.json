@@ -1,0 +1,15 @@
+{
+  "model": "google/gemma-4-31B-it",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain how to compare three competing scientific explanations using limited noisy observations. Construct an original quantitative example, derive the calculations, examine confounding and uncertainty, and discuss what further experiment would distinguish the explanations."
+    }
+  ],
+  "max_tokens": 32768,
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "top_k": 32,
+  "seed": 29,
+  "stream": false
+}
