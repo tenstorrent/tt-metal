@@ -9,6 +9,7 @@
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -17,8 +18,6 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "emule_deferred_mesh_dispatch.hpp"
@@ -206,7 +205,7 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
-    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+    auto& context = mesh_device_->impl().metal_context();
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
@@ -218,7 +217,7 @@ void SDMeshCommandQueue::wait_for_cores_idle() {
 }
 
 void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking) {
-    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+    auto& context = mesh_device_->impl().metal_context();
     const auto& program_cores = program.impl().logical_cores();
 
     // Collect local devices for this program, handling async idle checks
@@ -304,7 +303,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
                     // Device had active cores before this program was launched
                     // Merge the active cores from the previous program with the active cores from the current
                     // program
-                    const auto& hal = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
+                    const auto& hal = mesh_device_->impl().metal_env().get_hal();
                     auto program_cores = program.impl().logical_cores();
                     for (uint32_t core_type_index = 0; core_type_index < hal.get_programmable_core_type_count();
                          core_type_index++) {
@@ -462,9 +461,8 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
         IDevice* device = mesh_device_->impl().get_device(target.device_coord);
         // target.address is the full device destination (caller pre-applies the
         // DRAM L1 NOC offset). write_core is synchronous, so `blocking` is moot.
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .write_core(&value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
+        mesh_device_->impl().metal_env().get_cluster().write_core(
+            &value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
     }
 }
 
@@ -475,11 +473,10 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
     auto lock = lock_api_function_();
     drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
+    auto& cluster = mesh_device_->impl().metal_env().get_cluster();
     for (auto device_id : mesh_device_->get_device_ids()) {
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .dram_barrier(device_id);
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().l1_barrier(device_id);
+        cluster.dram_barrier(device_id);
+        cluster.l1_barrier(device_id);
     }
 
     // Barrier across all active hosts of the mesh

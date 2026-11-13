@@ -47,6 +47,7 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local
 from ....utils.test import skip_if_unsupported_num_links
 from .common import (
     GALAXY_RING,
+    GALAXY_RING_AND_LINE,
     REAL_BLOCK_CONFIG,
     ROPE_FREQ_DIM,
     ROPE_THETA,
@@ -1054,7 +1055,7 @@ def test_minimax_h3_transformer_block(
     assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
 
 
-@GALAXY_RING
+@GALAXY_RING_AND_LINE
 def test_minimax_h3_transformer_block_dynamic_length(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -1188,6 +1189,11 @@ def test_minimax_h3_transformer_block_perf(
     sizes = _packed_sizes(duration_s, num_text_tokens)
     seq_len = sizes["seq_len"]
     padded_len = padded_sequence_length(seq_len, sp_factor * SIM) // SIM
+    # H3_BLOCK_PADDED_LEN: the padded length a bucketed pipeline runs (its rung, e.g. 111616 at 15 s on the 4x8
+    # ladder), which the natural padding above does not reproduce; the dynamic-length path runs the natural one.
+    if os.environ.get("H3_BLOCK_PADDED_LEN"):
+        padded_len = int(os.environ["H3_BLOCK_PADDED_LEN"])
+        assert padded_len >= seq_len and padded_len % (sp_factor * ttnn.TILE_SIZE) == 0, padded_len
     logger.info(
         f"{duration_s:g}s @ {sizes['height']}x{sizes['width']}: {sizes['num_frames']} frames -> "
         f"{sizes['latent_frames']} latent frames x {sizes['grid_h']}x{sizes['grid_w']} patches = "
@@ -1230,6 +1236,8 @@ def test_minimax_h3_transformer_block_perf(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
         dynamic_length=dynamic_length,
+        # H3_BLOCK_PERSISTENT=0: transient CCL buffers, as the 4x8 pipeline preset runs the DiT.
+        use_persistent_ccl_buffers=os.environ.get("H3_BLOCK_PERSISTENT", "1") == "1",
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
@@ -1318,6 +1326,12 @@ def test_minimax_h3_transformer_block_perf(
     local = local_device_to_torch(tt_out).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
     logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")
+    # H3_BLOCK_DUMP: save every device's output shard (bf16), to compare two code paths on the same seeded
+    # weights and inputs, e.g. a fused op against the unfused one it replaces.
+    if os.environ.get("H3_BLOCK_DUMP"):
+        torch.save(
+            [ttnn.to_torch(t).to(torch.bfloat16) for t in ttnn.get_device_tensors(tt_out)], os.environ["H3_BLOCK_DUMP"]
+        )
 
 
 # ---- the token refiner ----
