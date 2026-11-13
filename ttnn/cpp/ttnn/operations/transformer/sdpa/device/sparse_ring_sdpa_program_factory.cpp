@@ -335,9 +335,12 @@ BalanceConfig make_balance_config(const SparseRingSDPAParams& args, const Sparse
     c.swappable = q_tiles / args.block_tiles();
     const auto core = choose_balance_core(args, tensor_args);
     // Unit tables hold 15-bit unit indices and kMaxCoreUnits units; the reader stages a core's costs in its second plan
-    // page.
+    // page; the balance kernel's local scratch fits its budget, a head's bins a byte.
+    const sparse_balance::StaticSplit split{c.units, c.cores, c.q_blocks};
     if (!core.has_value() || c.units >= (1u << 15) || c.q_blocks > sparse_balance::kMaxUnitsPerHead ||
-        max_q > sparse_balance::kMaxCoreUnits || c.cost_words * sizeof(uint32_t) + 63 > 64 + mask_row_bytes) {
+        max_q > sparse_balance::kMaxCoreUnits || c.cost_words * sizeof(uint32_t) + 63 > 64 + mask_row_bytes ||
+        split.max_bins() > sparse_balance::kMaxBins ||
+        sparse_balance::local_scratch_bytes(c.q_blocks, split.max_bins()) > sparse_balance::kMaxLocalScratchBytes) {
         return c;
     }
     constexpr uint32_t kMaxScratchBytes = 512 * 1024;  // the balance core's L1 holds the cost pages and the plan
@@ -2225,7 +2228,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         ring_balance.block_tiles = block_tiles;
         ring_balance.mask_rows = mask_nqb_pad;
         ring_balance.mask_row_bytes = mask_row_bytes;
-        ring_balance.table_page_bytes = balancing.cores * balancing.cost_words * sizeof(uint32_t);
+        ring_balance.table_page_bytes =
+            sparse_balance::table_page_words(balancing.cores, balancing.cost_words, balancing.q_blocks) *
+            sizeof(uint32_t);
         ring_balance.q_page_bytes = q_buf->page_size();
         ring_balance.out_page_bytes = out_buf->page_size();
     }
@@ -2394,7 +2399,9 @@ tt::tt_metal::WorkloadDescriptor SparseRingSDPAProgramFactory::create_workload_d
         };
         balance_res.emplace();
         // One page per device (indexed by rank) even when only this device's is read.
-        balance_res->table = words(static_cast<uint32_t>(args.ring_size), balancing.cores * balancing.cost_words);
+        balance_res->table = words(
+            static_cast<uint32_t>(args.ring_size),
+            sparse_balance::table_page_words(balancing.cores, balancing.cost_words, balancing.q_blocks));
         if (balancing.remote) {
             balance_res->partner = words(1, tt::round_up(balancing.q_blocks, 16u));
             balance_res->import_q =
