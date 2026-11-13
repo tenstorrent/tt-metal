@@ -38,6 +38,7 @@ from models.demos.blackhole.qwen36.tt.spec_step import (
     reseed_real_rows,
     reseed_table,
 )
+from models.demos.blackhole.qwen36.tt.tp_common import aliases
 
 
 def greedy_counts(ids, tokens, num_valid):
@@ -158,17 +159,22 @@ class TorchOps:
 
 
 class _DeviceOps:
-    """``graph``'s op set in ttnn: float32 TILE tensors; every intermediate is collected in ``owned``."""
+    """``graph``'s op set in ttnn: float32 TILE tensors; every intermediate is collected in ``owned``, except a tensor
+    that aliases an input: a slice over a whole tensor (the ids or draws at B * T = 32) returns its input, which
+    the step trace must not free."""
 
     def __init__(self, accept):
         self.__dict__.update(
             {n: getattr(accept, n) for n in ("ids", "draws", "step", "pt_rows", "iota_t", "iota_k", "user_rows")}
         )
         self.top, self.scratch = accept.c_top, accept.c_scratch
+        self.inputs = [t for t in (self.ids, self.draws, self.step, self.pt_rows) if t is not None]
+        self.inputs += [self.iota_t, self.iota_k, self.user_rows, self.top, self.scratch]
         self.owned = []
 
     def _keep(self, t):
-        self.owned.append(t)
+        if not any(t is s or aliases(t, s) for s in self.inputs):
+            self.owned.append(t)
         return t
 
     def _float(self, t):
