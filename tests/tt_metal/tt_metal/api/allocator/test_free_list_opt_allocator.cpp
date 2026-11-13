@@ -510,3 +510,29 @@ TEST(FreeListOptTest, CPU_AddressesAPIWithNonzeroOffset) {
     ASSERT_EQ(available_addresses[0].first, 3_KiB + offset);
     ASSERT_EQ(available_addresses[0].second, alloc_size - 2_KiB + offset);
 }
+
+TEST(FreeListOptTest, PreserveAddressAlignmentAfterExplicitReservation) {
+    using tt::tt_metal::allocator::FreeListOpt;
+    for (const auto alignment : {32u, 64u}) {
+        // Configure pool with minimum allocation size and alignment both = alignment
+        FreeListOpt allocator(3 * alignment, 0, alignment, alignment);
+        // Explicit reservation at address alignment + 16 (unaligned w.r.t default alignment)
+        auto fixed = allocator.allocate_at_address(alignment + 16, alignment);
+        ASSERT_TRUE(fixed.has_value());
+        ASSERT_EQ(fixed.value(), alignment + 16);
+
+        // Ordinary top-down allocation must retain the allocator's default address alignment
+        auto automatic_top_down = allocator.allocate(alignment, /*bottom_up=*/false);
+        ASSERT_TRUE(automatic_top_down.has_value());
+        EXPECT_EQ(automatic_top_down.value() % alignment, 0u);
+        EXPECT_EQ(automatic_top_down.value(), 0u);
+
+        // Ordinary bottom-up allocation in a fresh allocator with unaligned leading block
+        FreeListOpt allocator_bu(3 * alignment, 0, alignment, alignment);
+        auto fixed_bu = allocator_bu.allocate_at_address(16, alignment);
+        ASSERT_TRUE(fixed_bu.has_value());
+        auto automatic_bu = allocator_bu.allocate(alignment, /*bottom_up=*/true);
+        ASSERT_TRUE(automatic_bu.has_value());
+        EXPECT_EQ(automatic_bu.value() % alignment, 0u);
+    }
+}
