@@ -67,6 +67,7 @@ class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+enum class DramSenderPlacement : uint8_t;
 namespace streaming_profiler {
 class Receiver;
 }
@@ -212,6 +213,11 @@ private:
     // if the MeshDevice closes before their owning pipes are destroyed (mirrors
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
+    // Where this mesh runs DRAM-sender endpoints, or nullopt when it runs none. Set by initialize_impl().
+    std::optional<::tt::tt_metal::DramSenderPlacement> dram_sender_placement_;
+    // True when DRAM-sender endpoints run on the dispatch engine, where an endpoint names a role of
+    // `bank_id` rather than a DRAM core. TT_FATALs on a bank `device` does not have.
+    bool dram_senders_on_dispatch_engine(const IDevice* device, uint32_t bank_id) const;
 
     // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call
     // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
@@ -396,6 +402,10 @@ public:
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
 
+    // Where this mesh runs the sender endpoints of DRAM-sender PrefetcherPipes, or nullopt when it can run
+    // none (impl/buffers/dram_sender_topology.hpp). Fixed for the mesh's lifetime.
+    std::optional<::tt::tt_metal::DramSenderPlacement> dram_sender_placement() const { return dram_sender_placement_; }
+
     // Lazily-constructed Tensor prefetcher (DRISC) subsystem. The first call materializes
     // the manager bound to this mesh device; subsequent calls return the same instance.
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
@@ -427,12 +437,6 @@ public:
     // coords through the device they mean.
     std::vector<CoreCoord> dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const;
 
-private:
-    // True when this mesh places DRAM-sender endpoints on its dispatch engine, where an endpoint names a
-    // role of `bank_id` rather than a DRAM core. TT_FATALs on a bank `device` does not have.
-    bool dram_senders_on_dispatch_engine(const IDevice* device, uint32_t bank_id) const;
-
-public:
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     static uint64_t close_count();  // MeshDevice closes so far.

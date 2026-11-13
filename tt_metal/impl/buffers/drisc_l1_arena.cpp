@@ -30,12 +30,15 @@ DriscL1Arena::DriscL1Arena(ContextId context_id) {
         drisc_unreserved_size_);
 }
 
-DriscL1Arena::DriscL1Arena(DeviceAddr zone_base, uint32_t zone_size, EndpointL1 endpoint_l1) :
-    unreserved_base_(zone_base), drisc_unreserved_size_(zone_size), zone_size_(zone_size), endpoint_l1_(endpoint_l1) {}
+DriscL1Arena::DriscL1Arena(DeviceAddr zone_base, uint32_t zone_size) :
+    unreserved_base_(zone_base),
+    drisc_unreserved_size_(zone_size),
+    zone_size_(zone_size),
+    endpoint_l1_(EndpointL1::Shared) {}
 
 std::shared_ptr<DriscL1Arena> DriscL1Arena::for_dispatch_engine(DeviceAddr zone_base, uint32_t zone_size) {
     TT_FATAL(zone_size > 0, "Dispatch-engine sender-state zone is empty");
-    return std::shared_ptr<DriscL1Arena>(new DriscL1Arena(zone_base, zone_size, EndpointL1::Shared));
+    return std::shared_ptr<DriscL1Arena>(new DriscL1Arena(zone_base, zone_size));
 }
 
 std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_on(const CoreCoord& core, uint32_t size, uint32_t alignment) {

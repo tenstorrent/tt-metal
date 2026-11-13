@@ -18,13 +18,19 @@ namespace tt::tt_metal {
 
 namespace fifo = tensor_prefetcher_fifo;
 
+bool dispatch_engine_hosts_tensor_prefetcher(
+    CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map) {
+    return dispatch_core_type == CoreType::DISPATCH && num_hw_cqs == 1 &&
+           dispatch_mem_map.unused_l1_size() >= fifo::kMinRegionBytes;
+}
+
 TensorPrefetcherKernel::TensorPrefetcherKernel(
     int node_id,
     ChipId device_id,
     ChipId servicing_device_id,
     uint8_t cq_id,
     noc_selection_t noc_selection,
-    Role role,
+    DispatchWorkerType type,
     const ContextDescriptor& descriptor,
     dispatch_core_manager& dispatch_core_manager,
     const GetControlPlaneFn& get_control_plane,
@@ -41,7 +47,8 @@ TensorPrefetcherKernel::TensorPrefetcherKernel(
         get_control_plane,
         get_dispatch_query_manager,
         get_reads_dispatch_cores),
-    role_(role) {
+    type_(type) {
+    TT_ASSERT(type_ == TENSOR_PREFETCHER_READER || type_ == TENSOR_PREFETCHER_PUSHER);
     TT_FATAL(
         GetCoreType() == CoreType::DISPATCH,
         "Tensor prefetcher FD kernels run only on a dispatch engine (device {})",
@@ -54,29 +61,24 @@ TensorPrefetcherKernel::TensorPrefetcherKernel(
 
 void TensorPrefetcherKernel::GenerateStaticConfigs() {
     const DispatchMemMap& mem_map = get_dispatch_mem_map();
-    region_base_ = mem_map.tensor_prefetcher_region_base();
-    TT_FATAL(
-        mem_map.tensor_prefetcher_region_size() >= fifo::kMinRegionBytes,
-        "Device {}: {} B of dispatch-engine L1 is left above the CQ zones; the Tensor prefetcher kernels need {} B",
-        device_id_,
-        mem_map.tensor_prefetcher_region_size(),
-        fifo::kMinRegionBytes);
+    region_base_ = mem_map.unused_l1_base();
+    // The topology adds these kernels only where dispatch_engine_hosts_tensor_prefetcher holds.
+    TT_ASSERT(mem_map.unused_l1_size() >= fifo::kMinRegionBytes);
 }
 
 void TensorPrefetcherKernel::CreateKernel() {
     const std::map<std::string, std::string> defines = {
         {"TENSOR_PREFETCHER_REGION_BASE", std::to_string(region_base_)},
         {"TENSOR_PREFETCHER_STAGE_RING_SIZE",
-         std::to_string(fifo::stage_ring_bytes(get_dispatch_mem_map().tensor_prefetcher_region_size()))},
+         std::to_string(fifo::stage_ring_bytes(get_dispatch_mem_map().unused_l1_size()))},
     };
-    const DispatchWorkerType type = role_ == Role::Reader ? TENSOR_PREFETCHER_READER : TENSOR_PREFETCHER_PUSHER;
-    configure_kernel_variant(dispatch_kernel_file_names[type], {}, defines);
+    configure_kernel_variant(dispatch_kernel_file_names[type_], {}, defines);
 }
 
 void TensorPrefetcherKernel::ConfigureCore() {
     // Both kernels share the region; the reader's node clears it once per launch. Nothing is in flight:
     // fast dispatch has not launched either kernel yet.
-    if (role_ != Role::Reader) {
+    if (type_ != TENSOR_PREFETCHER_READER) {
         return;
     }
     const CoreCoord core(logical_core_.x, logical_core_.y);

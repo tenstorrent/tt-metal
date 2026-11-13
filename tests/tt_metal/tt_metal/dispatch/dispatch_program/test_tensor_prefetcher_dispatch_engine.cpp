@@ -7,11 +7,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -22,9 +20,10 @@
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
-#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -36,18 +35,6 @@ namespace fifo = tensor_prefetcher_fifo;
 // The emulator runs a dispatch-engine poll loop orders of magnitude slower than silicon.
 constexpr auto kRetireTimeout = std::chrono::seconds(300);
 
-uint32_t read_word(distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t addr) {
-    std::vector<uint32_t> word;
-    slow_dispatch::ReadFromL1(mesh_device, core, addr, sizeof(uint32_t), word, CoreType::DISPATCH);
-    return word.at(0);
-}
-
-void write_words(
-    distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t addr, std::vector<uint32_t> words) {
-    slow_dispatch::WriteToL1(mesh_device, core, addr, words, CoreType::DISPATCH);
-    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids()[0]);
-}
-
 std::vector<uint32_t> read_words(
     distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t addr, uint32_t bytes, CoreType core_type) {
     std::vector<uint32_t> words;
@@ -55,10 +42,18 @@ std::vector<uint32_t> read_words(
     return words;
 }
 
+uint32_t read_word(distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t addr) {
+    return read_words(mesh_device, core, addr, sizeof(uint32_t), CoreType::DISPATCH).at(0);
+}
+
+void write_words(
+    distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t addr, std::vector<uint32_t> words) {
+    slow_dispatch::WriteToL1(mesh_device, core, addr, words, CoreType::DISPATCH);
+    mesh_device.impl().metal_env().get_cluster().l1_barrier(mesh_device.get_device_ids()[0]);
+}
+
 bool dram_senders_on_dispatch_engine(const distributed::MeshDevice& mesh_device) {
-    return std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr &&
-           dram_sender_placement(mesh_device.impl().get_context_id(), mesh_device.num_hw_cqs()) ==
-               DramSenderPlacement::DispatchEngine;
+    return mesh_device.impl().dram_sender_placement() == DramSenderPlacement::DispatchEngine;
 }
 
 }  // namespace
@@ -70,16 +65,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsR
     if (!dram_senders_on_dispatch_engine(this->device())) {
         GTEST_SKIP() << "Requires fast dispatch on a dispatch engine serving one CQ";
     }
-    auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
-
-    const DispatchMemMap& mem_map = MetalContext::instance().dispatch_mem_map();
-    ASSERT_GE(mem_map.tensor_prefetcher_region_size(), fifo::kMinRegionBytes);
-    const uint32_t base = mem_map.tensor_prefetcher_region_base();
-
-    const ChipId chip = this->device().get_device_ids()[0];
-    const uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip);
-    const tt_cxy_pair dispatch_engine = dispatch_core_manager.dispatcher_core(chip, channel, 0);
-    const CoreCoord core(dispatch_engine.x, dispatch_engine.y);
+    const DispatchMemMap& mem_map = this->device().impl().metal_context().dispatch_mem_map();
+    ASSERT_GE(mem_map.unused_l1_size(), fifo::kMinRegionBytes);
+    const uint32_t base = mem_map.unused_l1_base();
+    const CoreCoord core =
+        dram_sender_dispatch_engine(this->device().impl().get_context_id(), this->device().get_device_ids()[0]);
 
     auto slots_retired_by_both = [&]() {
         return std::min(

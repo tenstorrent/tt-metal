@@ -17,6 +17,8 @@
 
 #include <stdint.h>
 
+#include "tensor_prefetcher_request.hpp"
+
 namespace tt::tt_metal::tensor_prefetcher_fifo {
 
 inline constexpr uint32_t kLineBytes = 64;
@@ -36,7 +38,7 @@ inline constexpr uint32_t kControlBytes = 4 * kLineBytes;
 // endpoint; a bank's endpoint is implied by the H2D socket a page arrives on when the sender is a DRAM
 // core, so here the bank travels in the header instead.
 inline constexpr uint32_t kMaxLanes = 8;
-inline constexpr uint32_t kLanePageBytes = 128;
+inline constexpr uint32_t kLanePageBytes = kRequestPageBytes;
 inline constexpr uint32_t kSlotHeaderBytes = kLineBytes;
 inline constexpr uint32_t kSlotBytes = kSlotHeaderBytes + kMaxLanes * kLanePageBytes;
 inline constexpr uint32_t kFifoSlots = 16;
@@ -50,18 +52,24 @@ inline constexpr uint32_t kStagedOffset = kFifoOffset + kFifoBytes;
 inline constexpr uint32_t kPushedOffset = kStagedOffset + kMaxReceivers * kLineBytes;
 
 // PrefetcherPipe sender config pages of the DRAM-bank endpoints placed on this dispatch engine. Fixed
-// size, so carving a pipe never moves the stage ring under a running kernel.
+// size, so carving a pipe never moves the stage ring under a running kernel. Four endpoints (two DRAM
+// banks of two endpoints each) with the 1 KiB a DRAM core keeps for its one endpoint's pages
+// (DriscL1Arena::kSenderStateZoneSize); a carve past that fails with the arena's zone-full error.
 inline constexpr uint32_t kSenderStateZoneOffset = kPushedOffset + kMaxReceivers * kLineBytes;
-inline constexpr uint32_t kSenderStateZoneBytes = 4096;
+inline constexpr uint32_t kSenderStateZoneBytes = 4 * 1024;
 
-// The rest of the region stages blocks between the reader and the pusher. While a tensor streams,
-// the ring is split evenly between that tensor's receivers, kStageSlotsPerReceiver blocks each, so
-// the reader can keep reading for every receiver whichever one the pusher is waiting on. One slot
-// per receiver is the minimum that cannot deadlock; the second overlaps a read with a push.
+// The rest of the region stages blocks between the reader and the pusher. It is split evenly between a
+// request's receivers, kStageSlotsPerReceiver slots each, so the reader can keep reading for every
+// receiver whichever one the pusher is waiting on. One slot per receiver is the minimum that cannot
+// deadlock; the second overlaps a read with a push. Slot size depends on the receiver count alone, not
+// on the block size, so the reader stages the next tensor or request while the pusher is still sending
+// the last; it waits for the pusher to empty the ring only when the receiver count changes.
 inline constexpr uint32_t kStageRingOffset = kSenderStateZoneOffset + kSenderStateZoneBytes;
-inline constexpr uint32_t kMinStageRingBytes = 64 * 1024;
-inline constexpr uint32_t kMinRegionBytes = kStageRingOffset + kMinStageRingBytes;
 inline constexpr uint32_t kStageSlotsPerReceiver = 2;
+// The smallest stage ring the kernels are run with: both stage slots of every receiver a slot can name,
+// at 1 KiB per block.
+inline constexpr uint32_t kMinStageRingBytes = kMaxReceivers * kStageSlotsPerReceiver * 1024;
+inline constexpr uint32_t kMinRegionBytes = kStageRingOffset + kMinStageRingBytes;
 
 enum SlotCommand : uint32_t {
     // Retired by both kernels with no other effect. Lets the host check that the FIFO is serviced.
@@ -88,7 +96,10 @@ constexpr uint32_t stage_ring_bytes(uint32_t region_bytes) {
     return region_bytes < kStageRingOffset ? 0 : (region_bytes - kStageRingOffset) / kLineBytes * kLineBytes;
 }
 
-// TensorPrefetcherTensorLayout::layout_mode of a receiver-contiguous weight, the only layout these kernels serve.
-inline constexpr uint32_t kReceiverContiguousLayout = 1;
+// Bytes of one stage slot when a ring of `ring_bytes` serves `num_receivers` receivers, whole cache lines.
+// A block must fit in one slot.
+constexpr uint32_t stage_slot_bytes(uint32_t ring_bytes, uint32_t num_receivers) {
+    return ring_bytes / (num_receivers * kStageSlotsPerReceiver) / kLineBytes * kLineBytes;
+}
 
 }  // namespace tt::tt_metal::tensor_prefetcher_fifo

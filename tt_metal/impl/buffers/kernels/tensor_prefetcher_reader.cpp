@@ -12,6 +12,10 @@
 // that needs all of its receivers to progress together from deadlocking against a sender that is
 // waiting on one of them.
 //
+// A receiver's stage slots stay put from one tensor and request to the next as long as the receiver
+// count does (tensor_prefetcher_fifo.hpp), so the reader runs on into the next tensor while the pusher
+// is still sending the last one's blocks.
+//
 // Compile-time defines (set by TensorPrefetcherKernel):
 //   TENSOR_PREFETCHER_REGION_BASE      L1 base of the region described in tensor_prefetcher_fifo.hpp
 //   TENSOR_PREFETCHER_STAGE_RING_SIZE  bytes of that region's stage ring
@@ -26,7 +30,6 @@
 namespace fifo = tt::tt_metal::tensor_prefetcher_fifo;
 using tensor_prefetcher::FifoConsumer;
 using tensor_prefetcher::LanePage;
-using tensor_prefetcher::region_ptr;
 using tensor_prefetcher::TensorStream;
 
 constexpr uint32_t region_base = TENSOR_PREFETCHER_REGION_BASE;
@@ -36,14 +39,14 @@ constexpr uint32_t stage_ring_size = TENSOR_PREFETCHER_STAGE_RING_SIZE;
 namespace {
 
 FORCE_INLINE volatile tt_l1_ptr uint32_t* staged_ptr(uint32_t i) {
-    return region_ptr<uint32_t>(region_base, fifo::kStagedOffset + i * fifo::kLineBytes);
+    return tensor_prefetcher::staged_ptr(region_base, i);
 }
 FORCE_INLINE volatile tt_l1_ptr uint32_t* pushed_ptr(uint32_t i) {
-    return region_ptr<uint32_t>(region_base, fifo::kPushedOffset + i * fifo::kLineBytes);
+    return tensor_prefetcher::pushed_ptr(region_base, i);
 }
 
-// Waits until the pusher has sent everything staged for receivers [0, num_receivers), so the next
-// tensor may lay the stage ring out for its own block size. False if termination was requested first.
+// Waits until the pusher has sent everything staged for receivers [0, num_receivers), so the stage ring
+// may be laid out for a different receiver count. False if termination was requested first.
 bool wait_for_pusher(const FifoConsumer& requests, uint32_t num_receivers) {
     WAYPOINT("TRPW");
     for (uint32_t i = 0; i < num_receivers; ++i) {
@@ -59,7 +62,6 @@ bool wait_for_pusher(const FifoConsumer& requests, uint32_t num_receivers) {
 
 // Stages every block of one tensor. False if termination was requested first.
 bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream) {
-    ASSERT(stream.num_receivers * fifo::kStageSlotsPerReceiver * stream.block_bytes <= stage_ring_size);
     uint32_t staged[fifo::kMaxReceivers];
     uint32_t next_block[fifo::kMaxReceivers];
     for (uint32_t i = 0; i < stream.num_receivers; ++i) {
@@ -92,22 +94,29 @@ bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream) {
     return true;
 }
 
-// Stages every tensor of a PREFETCH slot, one tensor at a time. False if termination was requested.
-bool stage_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot) {
-    const uint32_t num_lanes = slot->num_lanes;
-    ASSERT(num_lanes > 0 && num_lanes <= fifo::kMaxLanes);
+// Stages every tensor of a PREFETCH slot, one tensor at a time. `layout_receivers` is the receiver count
+// the stage ring is laid out for (0 before the first request); a request for a different count first waits
+// for the pusher to empty the ring. False if termination was requested.
+bool stage_request(
+    const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t& layout_receivers) {
     LanePage pages[fifo::kMaxLanes];
-    for (uint32_t l = 0; l < num_lanes; ++l) {
-        tensor_prefetcher::copy_lane_page(slot, l, pages[l]);
-    }
+    tensor_prefetcher::copy_lane_pages(slot, pages);
     if (pages[0].header().base.cmd_id != tt::tt_metal::DRAM_PREFETCHER_CMD_PREFETCH) {
         return true;  // DRAIN is the pusher's alone.
     }
     const uint32_t num_tensors = pages[0].header().prefetch.num_entries;
     TensorStream stream;
     for (uint32_t e = 0; e < num_tensors; ++e) {
-        tensor_prefetcher::plan_tensor(slot, pages, e, stream);
-        if (!stage_tensor(requests, stream) || !wait_for_pusher(requests, stream.num_receivers)) {
+        tensor_prefetcher::plan_tensor(slot, pages, e, stage_ring_size, stream);
+        if (stream.num_receivers != layout_receivers) {
+            // Every tensor of a request has the same receivers, so this is its first tensor.
+            ASSERT(e == 0);
+            if (!wait_for_pusher(requests, layout_receivers)) {
+                return false;
+            }
+            layout_receivers = stream.num_receivers;
+        }
+        if (!stage_tensor(requests, stream)) {
             return false;
         }
     }
@@ -117,21 +126,11 @@ bool stage_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHe
 }  // namespace
 
 void kernel_main() {
-    FifoConsumer requests(region_base, fifo::kReaderRdOffset);
-    while (true) {
-        volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot();
-        if (slot == nullptr) {
-            break;
-        }
-        switch (slot->command) {
-            case fifo::kSlotNop: break;
-            case fifo::kSlotRequest:
-                if (!stage_request(requests, slot)) {
-                    return;
-                }
-                break;
-            default: ASSERT(false); break;
-        }
-        requests.retire_slot();
-    }
+    uint32_t layout_receivers = 0;
+    tensor_prefetcher::serve_requests(
+        region_base,
+        fifo::kReaderRdOffset,
+        [&](const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot) {
+            return stage_request(requests, slot, layout_receivers);
+        });
 }

@@ -11,10 +11,12 @@
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -24,6 +26,7 @@
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -35,12 +38,6 @@ namespace {
 
 namespace fifo = tensor_prefetcher_fifo;
 
-uint32_t read_region_word(IDevice* device, const CoreCoord& dispatch_engine, uint32_t addr) {
-    std::vector<uint32_t> word;
-    ::tt::tt_metal::detail::ReadFromDeviceL1(device, dispatch_engine, addr, sizeof(uint32_t), word, CoreType::DISPATCH);
-    return word.at(0);
-}
-
 const TensorPrefetcherRequestHeader& header_of(const std::vector<uint8_t>& page) {
     return *reinterpret_cast<const TensorPrefetcherRequestHeader*>(page.data());
 }
@@ -48,33 +45,34 @@ const TensorPrefetcherRequestHeader& header_of(const std::vector<uint8_t>& page)
 }  // namespace
 
 void TensorPrefetcherManager::start_on_dispatch_engine() {
-    auto& metal = MetalContext::instance(mesh_device_->impl().get_context_id());
+    auto& metal = mesh_device_->impl().metal_context();
     const DispatchMemMap& mem_map = metal.dispatch_mem_map();
-    fifo_region_base_ = mem_map.tensor_prefetcher_region_base();
+    fifo_region_base_ = mem_map.unused_l1_base();
 
     // The request serializer sizes layouts from the stage ring as the DRAM-core kernel splits it (halves
     // and thirds). The dispatch-engine kernels split it per receiver instead, which queue time checks.
-    const uint32_t l1_alignment = metal.hal().get_alignment(HalMemType::L1);
-    const uint32_t ring_size_align = 6u * l1_alignment;
-    stage_ring_base_ = fifo_region_base_ + fifo::kStageRingOffset;
-    stage_ring_size_ =
-        fifo::stage_ring_bytes(mem_map.tensor_prefetcher_region_size()) / ring_size_align * ring_size_align;
-    ring_half_ = stage_ring_size_ / 2;
-    stage_third_ = stage_ring_size_ / 3;
+    set_stage_ring_size(fifo::stage_ring_bytes(mem_map.unused_l1_size()), metal.hal().get_alignment(HalMemType::L1));
 
     // The kernels run for as long as fast dispatch does and keep their counters across prefetcher runs,
     // so a run resumes at the device's count. An earlier run's stop waited for them to go idle.
-    fifo_slots_written_.assign(devices_.size(), 0);
+    fifos_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        const CoreCoord dispatch_engine =
+        DeviceFifo& device_fifo = fifos_.emplace_back();
+        device_fifo.dispatch_engine =
             dram_sender_dispatch_engine(mesh_device_->impl().get_context_id(), devices_[d]->id());
-        fifo_slots_written_[d] =
-            read_region_word(devices_[d], dispatch_engine, fifo_region_base_ + fifo::kFifoWrOffset);
+        uint32_t written = 0;
+        ::tt::tt_metal::detail::ReadFromDeviceL1(
+            devices_[d],
+            device_fifo.dispatch_engine,
+            fifo_region_base_ + fifo::kFifoWrOffset,
+            std::span(reinterpret_cast<uint8_t*>(&written), sizeof(written)),
+            CoreType::DISPATCH);
+        device_fifo.written = written;
         TT_FATAL(
-            fifo_slots_retired(d) == fifo_slots_written_[d],
+            fifo_slots_retired(d) == written,
             "Device {}: the Tensor prefetcher kernels have {} unserved requests from an earlier run",
             devices_[d]->id(),
-            fifo_slots_written_[d] - fifo_slots_retired(d));
+            written - fifo_slots_retired(d));
     }
 
     stop_requested_.store(false);
@@ -83,107 +81,124 @@ void TensorPrefetcherManager::start_on_dispatch_engine() {
     active_ = true;
 }
 
-void TensorPrefetcherManager::validate_dispatch_engine_request(const Request& request, uint32_t total_receivers) const {
+void TensorPrefetcherManager::validate_dispatch_engine_requests(
+    const std::vector<std::shared_ptr<const Request>>& requests,
+    const RequestTarget& target,
+    const MeshCommandQueue* trace_capture_cq) const {
     TT_FATAL(
-        request.target_sender_indices.size() <= fifo::kMaxLanes,
+        trace_capture_cq == nullptr,
+        "QueueTensorPrefetcherRequest: trace capture is not supported when fast dispatch runs the Tensor "
+        "prefetcher (#65545)");
+    TT_FATAL(
+        target.mapping.size() <= fifo::kMaxLanes,
         "Tensor prefetcher request names {} DRAM-sender endpoints; fast dispatch's prefetcher serves at most {}",
-        request.target_sender_indices.size(),
+        target.mapping.size(),
         fifo::kMaxLanes);
     TT_FATAL(
-        total_receivers <= fifo::kMaxReceivers,
+        target.total_receivers <= fifo::kMaxReceivers,
         "Tensor prefetcher request has {} receivers; fast dispatch's prefetcher serves at most {}",
-        total_receivers,
+        target.total_receivers,
         fifo::kMaxReceivers);
-    for (const auto& page : request.sender_pages) {
-        const TensorPrefetcherRequestHeader& header = header_of(page);
-        if (header.base.cmd_id != DRAM_PREFETCHER_CMD_PREFETCH) {
-            continue;
-        }
-        const auto* entries =
-            reinterpret_cast<const TensorPrefetcherEntry*>(page.data() + sizeof(TensorPrefetcherRequestHeader));
-        for (uint32_t e = 0; e < header.prefetch.num_entries; ++e) {
-            const TensorPrefetcherEntry& entry = entries[e];
-            TensorPrefetcherTensorLayout layout;
-            std::memcpy(&layout, page.data() + entry.layout_offset, sizeof(layout));
-            TT_FATAL(
-                layout.layout_mode == fifo::kReceiverContiguousLayout,
-                "Fast dispatch's Tensor prefetcher serves receiver-contiguous weights only; tensor {} is K-row-major",
-                e);
-            TT_FATAL(
-                layout.streaming == 0, "Fast dispatch's Tensor prefetcher does not stream (tensor {} is streaming)", e);
-            TT_FATAL(
-                entry.num_groups == 1 && entry.selector_mode == TENSOR_PREFETCHER_SELECTOR_NONE,
-                "Fast dispatch's Tensor prefetcher does not serve grouped or selected weights (tensor {})",
-                e);
-            const uint64_t stage_bytes =
-                static_cast<uint64_t>(total_receivers) * fifo::kStageSlotsPerReceiver * layout.page_bytes_per_recv;
-            TT_FATAL(
-                stage_bytes <= stage_ring_size_,
-                "Tensor {} needs {} B of stage ring ({} receivers x {} blocks of {} B); the dispatch engine has {} B",
-                e,
-                stage_bytes,
-                total_receivers,
-                fifo::kStageSlotsPerReceiver,
-                layout.page_bytes_per_recv,
-                stage_ring_size_);
+    // The stage slot each of this target's blocks lands in, exactly as the kernels size it.
+    const uint32_t stage_slot_bytes = fifo::stage_slot_bytes(
+        fifo::stage_ring_bytes(mesh_device_->impl().metal_context().dispatch_mem_map().unused_l1_size()),
+        target.total_receivers);
+    for (const auto& request : requests) {
+        for (const auto& page : request->sender_pages) {
+            const TensorPrefetcherRequestHeader& header = header_of(page);
+            if (header.base.cmd_id != DRAM_PREFETCHER_CMD_PREFETCH) {
+                continue;
+            }
+            const auto* entries =
+                reinterpret_cast<const TensorPrefetcherEntry*>(page.data() + sizeof(TensorPrefetcherRequestHeader));
+            for (uint32_t e = 0; e < header.prefetch.num_entries; ++e) {
+                const TensorPrefetcherEntry& entry = entries[e];
+                TensorPrefetcherTensorLayout layout;
+                std::memcpy(&layout, page.data() + entry.layout_offset, sizeof(layout));
+                TT_FATAL(
+                    layout.layout_mode == static_cast<uint32_t>(TensorPrefetcherLayoutMode::ReceiverContiguous),
+                    "Fast dispatch's Tensor prefetcher serves receiver-contiguous weights only; tensor {} is "
+                    "K-row-major (#65545)",
+                    e);
+                TT_FATAL(
+                    layout.streaming == 0,
+                    "Fast dispatch's Tensor prefetcher does not stream (tensor {} is streaming; #65545)",
+                    e);
+                TT_FATAL(
+                    entry.num_groups == 1 && entry.selector_mode == TENSOR_PREFETCHER_SELECTOR_NONE,
+                    "Fast dispatch's Tensor prefetcher does not serve grouped or selected weights (tensor {}; #65545)",
+                    e);
+                TT_FATAL(
+                    layout.page_bytes_per_recv <= stage_slot_bytes,
+                    "Tensor {} has {} B blocks; the dispatch engine stages {} receivers' blocks in {} slots of {} B "
+                    "each",
+                    e,
+                    layout.page_bytes_per_recv,
+                    target.total_receivers,
+                    fifo::kStageSlotsPerReceiver,
+                    stage_slot_bytes);
+            }
         }
     }
 }
 
 uint32_t TensorPrefetcherManager::fifo_slots_retired(uint32_t d) const {
-    const CoreCoord dispatch_engine =
-        dram_sender_dispatch_engine(mesh_device_->impl().get_context_id(), devices_[d]->id());
-    return std::min(
-        read_region_word(devices_[d], dispatch_engine, fifo_region_base_ + fifo::kReaderRdOffset),
-        read_region_word(devices_[d], dispatch_engine, fifo_region_base_ + fifo::kPusherRdOffset));
+    // The reader's and the pusher's counts, one cache line apart, in one read.
+    constexpr uint32_t kRdWords = (fifo::kPusherRdOffset - fifo::kReaderRdOffset) / sizeof(uint32_t) + 1;
+    std::array<uint32_t, kRdWords> rd{};
+    ::tt::tt_metal::detail::ReadFromDeviceL1(
+        devices_[d],
+        fifos_[d].dispatch_engine,
+        fifo_region_base_ + fifo::kReaderRdOffset,
+        std::span(reinterpret_cast<uint8_t*>(rd.data()), sizeof(rd)),
+        CoreType::DISPATCH);
+    return std::min(rd.front(), rd.back());
 }
 
-void TensorPrefetcherManager::write_fifo_slot(uint32_t d, const std::vector<uint32_t>& slot) {
+void TensorPrefetcherManager::write_fifo_slot(uint32_t d, std::span<const uint8_t> slot) {
     IDevice* device = devices_[d];
-    const CoreCoord dispatch_engine = dram_sender_dispatch_engine(mesh_device_->impl().get_context_id(), device->id());
-    auto& cluster = MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster();
-    uint32_t& written = fifo_slots_written_[d];
+    DeviceFifo& device_fifo = fifos_[d];
+    auto& cluster = mesh_device_->impl().metal_env().get_cluster();
     // A slot is free once both kernels have retired it; they may still be pushing to receivers that
     // only drain after the caller's next workload launches, so wait without holding any API lock.
-    while (written - fifo_slots_retired(d) >= fifo::kFifoSlots) {
+    while (device_fifo.written - fifo_slots_retired(d) >= fifo::kFifoSlots) {
         std::this_thread::yield();
     }
-    std::vector<uint32_t> words(slot);
     ::tt::tt_metal::detail::WriteToDeviceL1(
-        device, dispatch_engine, fifo_region_base_ + fifo::slot_offset(written), words, CoreType::DISPATCH);
+        device,
+        device_fifo.dispatch_engine,
+        fifo_region_base_ + fifo::slot_offset(device_fifo.written),
+        slot,
+        CoreType::DISPATCH);
     cluster.l1_barrier(device->id());
     // The slot is visible before the count that publishes it.
-    std::vector<uint32_t> count = {++written};
+    const uint32_t count = ++device_fifo.written;
     ::tt::tt_metal::detail::WriteToDeviceL1(
-        device, dispatch_engine, fifo_region_base_ + fifo::kFifoWrOffset, count, CoreType::DISPATCH);
+        device,
+        device_fifo.dispatch_engine,
+        fifo_region_base_ + fifo::kFifoWrOffset,
+        std::span(reinterpret_cast<const uint8_t*>(&count), sizeof(count)),
+        CoreType::DISPATCH);
     cluster.l1_barrier(device->id());
 }
 
 void TensorPrefetcherManager::wait_for_fifo_idle() const {
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        while (fifo_slots_retired(d) != fifo_slots_written_[d]) {
+        while (fifo_slots_retired(d) != fifos_[d].written) {
             std::this_thread::yield();
         }
     }
 }
 
 void TensorPrefetcherManager::worker_loop_dispatch_engine() {
-    constexpr uint32_t kSlotWords = fifo::kSlotBytes / sizeof(uint32_t);
-    constexpr uint32_t kLaneWords = fifo::kLanePageBytes / sizeof(uint32_t);
-    // One slot per request and device. A PREFETCH request becomes one slot whose lanes are its senders'
-    // pages, so the kernels serve all of its receivers together. A DRAIN request's lanes are independent,
-    // so it may take several slots. STOP pages are dropped: the kernels outlive the prefetcher run.
-    const auto slots_for = [&](const Request& request) {
-        std::vector<std::vector<uint32_t>> slots;
-        if (request.target_sender_indices.empty()) {
-            TT_FATAL(
-                header_of(request.sender_pages.front()).base.cmd_id == DRAM_PREFETCHER_CMD_STOP,
-                "Tensor prefetcher: a request for every sender must be STOP when fast dispatch runs the prefetcher");
-            return slots;
-        }
+    // One slot per request and device: the header, then the request page of each lane in use. A PREFETCH
+    // request becomes one slot whose lanes are its senders' pages, so the kernels serve all of its
+    // receivers together. A DRAIN request's lanes are independent, so it may take several slots.
+    const auto slots_for = [this](const Request& request) {
+        std::vector<std::vector<uint8_t>> slots;
         for (size_t first = 0; first < request.target_sender_indices.size(); first += fifo::kMaxLanes) {
             const size_t num_lanes = std::min<size_t>(fifo::kMaxLanes, request.target_sender_indices.size() - first);
-            std::vector<uint32_t> slot(kSlotWords, 0);
+            std::vector<uint8_t> slot(fifo::kSlotHeaderBytes + num_lanes * fifo::kLanePageBytes, 0);
             fifo::SlotHeader header{};
             header.command = fifo::kSlotRequest;
             header.num_lanes = static_cast<uint32_t>(num_lanes);
@@ -191,11 +206,9 @@ void TensorPrefetcherManager::worker_loop_dispatch_engine() {
                 const uint32_t sender = request.target_sender_indices[first + l];
                 header.lane_bank_id[l] = static_cast<uint32_t>(sender_logical_cores_[sender].x);
                 const auto& page = request.sender_pages[request.sender_pages.size() == 1 ? 0 : first + l];
-                TT_FATAL(page.size() >= fifo::kLanePageBytes, "Tensor prefetcher request page is {} B", page.size());
+                // validate_request_pages holds every page to exactly one lane.
                 std::memcpy(
-                    slot.data() + fifo::kSlotHeaderBytes / sizeof(uint32_t) + l * kLaneWords,
-                    page.data(),
-                    fifo::kLanePageBytes);
+                    slot.data() + fifo::kSlotHeaderBytes + l * fifo::kLanePageBytes, page.data(), fifo::kLanePageBytes);
             }
             std::memcpy(slot.data(), &header, sizeof(header));
             slots.push_back(std::move(slot));

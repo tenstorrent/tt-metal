@@ -115,11 +115,11 @@ public:
     // WORKER_COMPLETION_SEMAPHORES L1 region.
     uint32_t get_completion_counter_offset(uint8_t cq_id) const;
 
-    // L1 above every CQ zone of a dispatch engine that hosts a single CQ, left to the Tensor prefetcher
-    // kernels fast dispatch runs beside the CQ kernels (layout: impl/buffers/tensor_prefetcher_fifo.hpp).
-    // Size 0 on any other dispatch core, which has no such region.
-    uint32_t tensor_prefetcher_region_base() const;
-    uint32_t tensor_prefetcher_region_size() const;
+    // L1 above every CQ zone on the dispatch core, which fast dispatch's CQ kernels do not use. On a
+    // dispatch engine serving one CQ, the Tensor prefetcher kernels take it
+    // (dispatch_engine_hosts_tensor_prefetcher, layout: impl/buffers/tensor_prefetcher_fifo.hpp).
+    uint32_t unused_l1_base() const;
+    uint32_t unused_l1_size() const;
 
 private:
     uint32_t cmddat_q_base_ = 0;
@@ -127,8 +127,8 @@ private:
     uint32_t dispatch_buffer_base_ = 0;
     uint32_t dispatch_s_device_print_l1_cache_size_ = 0;
     uint32_t dispatch_s_buffer_end_ = 0;
-    uint32_t tensor_prefetcher_region_base_ = 0;
-    uint32_t tensor_prefetcher_region_size_ = 0;
+    uint32_t unused_l1_base_ = 0;
+    uint32_t unused_l1_size_ = 0;
 
     uint32_t dispatch_buffer_block_size_pages_ = 0;
     std::vector<uint32_t> device_cq_addrs_;

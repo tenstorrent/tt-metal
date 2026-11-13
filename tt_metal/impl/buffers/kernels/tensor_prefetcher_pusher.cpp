@@ -32,19 +32,19 @@ using experimental::DramSenderConfigPage;
 using experimental::PrefetcherPipe;
 using tensor_prefetcher::FifoConsumer;
 using tensor_prefetcher::LanePage;
-using tensor_prefetcher::region_ptr;
 using tensor_prefetcher::TensorStream;
 
 constexpr uint32_t region_base = TENSOR_PREFETCHER_REGION_BASE;
 constexpr uint32_t stage_ring_base = region_base + fifo::kStageRingOffset;
+constexpr uint32_t stage_ring_size = TENSOR_PREFETCHER_STAGE_RING_SIZE;
 
 namespace {
 
 FORCE_INLINE volatile tt_l1_ptr uint32_t* staged_ptr(uint32_t i) {
-    return region_ptr<uint32_t>(region_base, fifo::kStagedOffset + i * fifo::kLineBytes);
+    return tensor_prefetcher::staged_ptr(region_base, i);
 }
 FORCE_INLINE volatile tt_l1_ptr uint32_t* pushed_ptr(uint32_t i) {
-    return region_ptr<uint32_t>(region_base, fifo::kPushedOffset + i * fifo::kLineBytes);
+    return tensor_prefetcher::pushed_ptr(region_base, i);
 }
 
 // The PrefetcherPipe of each lane, alive for one tensor. Constructing one applies that tensor's block
@@ -124,8 +124,8 @@ void drain(const LanePage& page) {
         reinterpret_cast<const uint32_t*>(page.bytes() + sizeof(tt::tt_metal::TensorPrefetcherRequestHeader));
     for (uint32_t t = 0; t < num_targets; ++t) {
         // Keep the entry size the pipe last applied, so draining never re-grids it.
-        const uint32_t applied_entry_size =
-            *region_ptr<uint32_t>(targets[t], PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE * sizeof(uint32_t));
+        const uint32_t applied_entry_size = experimental::load_prefetcher_pipe_config_word(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(targets[t]), PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE);
         PrefetcherPipe pipe(DramSenderConfigPage{targets[t]}, applied_entry_size);
         WAYPOINT("TPDW");
         pipe.barrier();
@@ -135,12 +135,8 @@ void drain(const LanePage& page) {
 
 // Serves one request slot. False if termination was requested first.
 bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot) {
-    const uint32_t num_lanes = slot->num_lanes;
-    ASSERT(num_lanes > 0 && num_lanes <= fifo::kMaxLanes);
     LanePage pages[fifo::kMaxLanes];
-    for (uint32_t l = 0; l < num_lanes; ++l) {
-        tensor_prefetcher::copy_lane_page(slot, l, pages[l]);
-    }
+    const uint32_t num_lanes = tensor_prefetcher::copy_lane_pages(slot, pages);
     if (pages[0].header().base.cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_DRAIN) {
         for (uint32_t l = 0; l < num_lanes; ++l) {
             drain(pages[l]);
@@ -151,7 +147,7 @@ bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHea
     const uint32_t num_tensors = pages[0].header().prefetch.num_entries;
     TensorStream stream;
     for (uint32_t e = 0; e < num_tensors; ++e) {
-        tensor_prefetcher::plan_tensor(slot, pages, e, stream);
+        tensor_prefetcher::plan_tensor(slot, pages, e, stage_ring_size, stream);
         if (!push_tensor(requests, pages, num_lanes, stream)) {
             return false;
         }
@@ -161,22 +157,4 @@ bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHea
 
 }  // namespace
 
-void kernel_main() {
-    FifoConsumer requests(region_base, fifo::kPusherRdOffset);
-    while (true) {
-        volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot();
-        if (slot == nullptr) {
-            break;
-        }
-        switch (slot->command) {
-            case fifo::kSlotNop: break;
-            case fifo::kSlotRequest:
-                if (!push_request(requests, slot)) {
-                    return;
-                }
-                break;
-            default: ASSERT(false); break;
-        }
-        requests.retire_slot();
-    }
-}
+void kernel_main() { tensor_prefetcher::serve_requests(region_base, fifo::kPusherRdOffset, push_request); }
