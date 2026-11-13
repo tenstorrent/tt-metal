@@ -12,6 +12,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     AffineTransform,
     DeviceMismatch,
@@ -26,7 +27,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry, _sp_links
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, reset_persistent_semaphores
 from tt_py_test_utils_common.realtime_profiler_utils import require_realtime_profiler
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = run_for_blackhole()
 

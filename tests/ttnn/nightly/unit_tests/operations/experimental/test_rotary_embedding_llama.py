@@ -130,7 +130,9 @@ def test_rotary_embedding_llama(
 
     # shift input/output tensor by creating very small tensor between loop
     inp = torch.randn(1, 1, 32, 32)
-    test_tensor = ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
+    test_tensor = (
+        ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
+    )
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")

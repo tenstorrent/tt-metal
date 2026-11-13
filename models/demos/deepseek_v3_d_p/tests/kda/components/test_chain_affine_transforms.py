@@ -7,16 +7,16 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    make_actual_start,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     AffineTransform,
     distributed_prefix,
     kda_device_params,
     pack_transform,
-)
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
-    assert_accurate,
-    assert_bit_identical,
-    make_actual_start,
 )
 
 pytestmark = run_for_blackhole()
