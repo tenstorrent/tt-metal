@@ -579,8 +579,6 @@ trace (`_trace_continuation`), after checking that the trace starts with the poo
   storage) and each host's device map (`PREFILL_PD_DEVICE_MAP`), and runs `migration_driver` in KVM mode in
   place of the producer, with pairs `0:1` and `PREFILL_VERIFY_MIGRATION=off`. It needs
   `PREFILL_MIGRATION_KVM_URL`, `MIGRATION_DONE_FILE` and `PREFILL_MIGRATION_HANDOFF_PATH`.
-- The K3.1 runner env sets `TT_SPARSE_MLA_OVERLAP_PROFILE=off`: the sparse-MLA overlap profile crashes or
-  hangs trace capture.
 
 The driver's own `--verify-migration` reads destination slots through the loopback table, so it is off here.
 Check the destination with the byte digest below instead.
