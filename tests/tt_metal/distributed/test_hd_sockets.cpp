@@ -31,6 +31,7 @@
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <tt-metalium/experimental/operation_timeout.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
 #include <tt-metalium/math.hpp>
@@ -383,11 +384,16 @@ void test_h2d_host_push_ordering_stress(
     }
     // A failed read leaves the writer waiting for space, which it gives up on after kStallTimeout.
     write_thread.join();
-    if (write_error) {
-        std::rethrow_exception(write_error);
-    }
-    if (read_error) {
-        std::rethrow_exception(read_error);
+    if (write_error || read_error) {
+        // The loopback kernel is still waiting for pages that will never come, and fixture teardown waits for it
+        // to finish. Bound that wait: with an operation timeout set, closing the device gives up once dispatch
+        // stops progressing, instead of hanging the job. Teardown's wait starts after this, so it sees the new
+        // value; a shorter timeout already configured (e.g. TT_METAL_OPERATION_TIMEOUT_SECONDS) is kept.
+        const auto current_timeout = experimental::GetOperationTimeout(*mesh_device);
+        if (current_timeout.count() == 0 || current_timeout > kStallTimeout) {
+            experimental::SetOperationTimeout(*mesh_device, kStallTimeout);
+        }
+        std::rethrow_exception(write_error ? write_error : read_error);
     }
     input_socket.barrier(10000);
     output_socket.barrier(10000);
