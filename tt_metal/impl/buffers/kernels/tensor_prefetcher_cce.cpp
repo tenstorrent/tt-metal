@@ -199,7 +199,7 @@ RequestOutcome deliver_tensor(
             return outcome;
         }
         uint32_t round_blocks = layout.target_per_visit_pages;
-        const uint32_t free_blocks = remote_cb::min_free(sender) / units_per_block;
+        const uint32_t free_blocks = sender.last_min_free_units / units_per_block;
         const uint32_t remaining_blocks = layout.block_count - blocks_sent;
         const uint32_t blocks_to_wrap = (sender.fifo_limit_page_aligned - sender.fifo_wr_ptr) / page_bytes;
         round_blocks = round_blocks < free_blocks ? round_blocks : free_blocks;

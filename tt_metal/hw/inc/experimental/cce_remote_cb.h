@@ -196,6 +196,8 @@ struct Sender {
     volatile uint32_t* receiver_table;
     // The receiver with the least free space at the last min_free, so a caller can report whose acks it waited on.
     uint32_t slowest_receiver;
+    // The free credit units at the last min_free.
+    uint32_t last_min_free_units;
 };
 
 // Word `field_offset` of a sender state block. Word accesses, not the packed struct's, which the compiler
@@ -224,6 +226,7 @@ FORCE_INLINE Sender sender_init(uint32_t state_addr) {
     sender.receiver_table =
         cce_hart::own_tl1_words(*state_block_word(state_addr, offsetof(DramSenderStateBlock, receiver_noc_xy_ptr)));
     sender.slowest_receiver = 0;
+    sender.last_min_free_units = 0;
     return sender;
 }
 
@@ -249,7 +252,8 @@ FORCE_INLINE uint32_t receiver_pages_acked(const Sender& sender, uint32_t receiv
     return sender.pages_acked[kCreditStrideWords * receiver];
 }
 
-// Free credit units at the most backed-up receiver, without waiting, and that receiver in slowest_receiver.
+// Free credit units at the most backed-up receiver, without waiting, and that receiver in slowest_receiver. The
+// result is also kept in last_min_free_units.
 // Clamped, because resize padding can credit past a free-space check. The fence keeps the next FIFO stores
 // behind the ack reads.
 FORCE_INLINE uint32_t min_free(Sender& sender) {
@@ -264,6 +268,7 @@ FORCE_INLINE uint32_t min_free(Sender& sender) {
             sender.slowest_receiver = receiver;
         }
     }
+    sender.last_min_free_units = min_free_units;
     asm volatile("fence r, w" ::: "memory");
     return min_free_units;
 }
