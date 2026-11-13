@@ -228,7 +228,13 @@ ttnn::Tensor slice(
     };
 
     bool one_dimensional = input_rank == 1;
-    bool handled_tile_alignment = one_dimensional ? true : check_handled_tile_alignment();
+    // A begin row inside a tile (begin column still tile-aligned) stays on the tile path for inputs whose factory
+    // can shift rows across tiles, instead of converting the whole input to ROW_MAJOR and back.
+    const bool tile_row_shift =
+        input_tensor.layout() == Layout::TILE && no_step && !one_dimensional &&
+        modified_begins[input_rank - 1] % tile_shape[1] == 0 && modified_begins[input_rank - 2] % tile_shape[0] != 0 &&
+        operations::data_movement::tile_slice_supports_row_shift(input_tensor, output_memory_config);
+    bool handled_tile_alignment = one_dimensional ? true : (check_handled_tile_alignment() || tile_row_shift);
 
     // Use the RM path when input isn't TILE, or TILE input has strided/1D/non-tile-aligned begins
     // (ends are padded downstream, so only begin alignment matters).
@@ -383,7 +389,14 @@ ttnn::Tensor slice(
     }
 
     ttsl::SmallVector<uint32_t> padded_ends = modified_ends;
-    if (input.layout() == Layout::TILE) {
+    if (input.layout() == Layout::TILE && tile_row_shift) {
+        // Whole output tile rows from the begin row, clamped to the input; the factory fills rows past the input.
+        padded_ends[input_rank - 2] = std::min(
+            modified_begins[input_rank - 2] +
+                tt::round_up(modified_ends[input_rank - 2] - modified_begins[input_rank - 2], tile_shape[0]),
+            input.padded_shape()[input_rank - 2]);
+        padded_ends[input_rank - 1] = std::max(tt::round_up(padded_ends[input_rank - 1], tile_shape[1]), tile_shape[1]);
+    } else if (input.layout() == Layout::TILE) {
         padded_ends[input_rank - 2] = std::max(tt::round_up(padded_ends[input_rank - 2], tile_shape[0]), tile_shape[0]);
         padded_ends[input_rank - 1] = std::max(tt::round_up(padded_ends[input_rank - 1], tile_shape[1]), tile_shape[1]);
     }
@@ -406,6 +419,11 @@ ttnn::Tensor slice(
         }
         actual_shape_vec.push_back(val);
         final_padded_shape_vec.push_back(std::max(output_dim_i(i, padded_ends), static_cast<uint32_t>(1)));
+    }
+    if (tile_row_shift && !empty) {
+        // The clamped end can leave the device output's logical height short of a whole tile; its padded height is
+        // still the tile-rounded output height.
+        final_padded_shape_vec[input_rank - 2] = tt::round_up(actual_shape_vec[input_rank - 2], tile_shape[0]);
     }
     ttnn::Shape actual_shape(actual_shape_vec);
     ttnn::Shape final_padded_shape(final_padded_shape_vec);
