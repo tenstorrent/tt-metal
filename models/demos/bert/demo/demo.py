@@ -98,8 +98,9 @@ def run_bert_question_and_answering_inference(
             }
             preprocessed_inputs.append(single_input)
 
-        bert_input = tokenizer.batch_encode_plus(
-            zip(question, context),
+        bert_input = tokenizer(
+            text=question,
+            text_pair=context,
             max_length=sequence_size,
             padding="max_length",
             truncation=True,
