@@ -614,9 +614,13 @@ void kernel_main() {
             for (uint32_t i = n; i < num_active; ++i) {
                 ids[i] = 0;  // the weight region for these slots was zeroed above
             }
+#if !defined(FE_PERSISTENT)
+            // The persistent op's readers take only the num_active hits, their weights and their addresses, so it skips
+            // this (~1 us of stores on the route's critical path).
             for (uint32_t i = (n > num_active ? n : num_active); i < num_weights; ++i) {
                 ids[i] = sentinel;  // never read by the fetch loop; keeps the broadcast buffer well defined
             }
+#endif
 #if defined(FE_PERSISTENT)
             CoreLocalMem<volatile uint32_t> layer_addrs(routing_l1 + addr_table_offset);
             for (uint32_t i = 0; i < num_active; ++i) {
