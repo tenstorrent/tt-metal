@@ -87,16 +87,6 @@ def prep_data(
         width=width_for_unp,
     )
 
-    # W-sharding can only be applied after unpatchify because H and W are interleaved
-    # in the patchified token dimension.
-    if vae_parallel_config.w_parallel is not None:
-        tt_latents = ttnn.mesh_partition(
-            tt_latents,
-            dim=2,
-            cluster_axis=vae_parallel_config.w_parallel.mesh_axis,
-            memory_config=tt_latents.memory_config(),
-        )
-
     return tt_latents
 
 
@@ -114,8 +104,8 @@ def prep_data(
 )
 @pytest.mark.parametrize(
     ("batch_size", "height", "width"),
-    [(1, 1024, 1024)],
-    ids=["1024"],
+    [(1, 1024, 1024), (1, 1024, 1184)],
+    ids=["1024", "1024x1184"],
 )
 # Rows on mesh axis 1, and channels (tp_h) or columns (h_w) on axis 0.
 @pytest.mark.parametrize("split", ["tp_h", "h_w"])

@@ -682,7 +682,7 @@ class Flux2Pipeline:
             #
             # H (token dim=1): gather SP, then re-shard to H axis if on a different axis.
             # W (spatial dim=2): can only be applied after unpatchify since H/W are interleaved
-            #   in patchified tokens; mesh_partition is applied right after the reshape below.
+            #   in patchified tokens; preprocess_and_unpatchify splits it.
             if self._vae_parallel.h_parallel is not None and self._vae_parallel.h_parallel.mesh_axis == sp_axis:
                 tt_latents = state.latents.data
             else:
@@ -703,14 +703,6 @@ class Flux2Pipeline:
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
                 tt_latents, height=latents_height, width=latents_width
             )
-
-            if self._vae_parallel.w_parallel is not None:
-                tt_latents = ttnn.mesh_partition(
-                    tt_latents,
-                    dim=2,
-                    cluster_axis=self._vae_parallel.w_parallel.mesh_axis,
-                    memory_config=tt_latents.memory_config(),
-                )
 
             tracer = self._vae_decoder_tracers.get((width, height))
             if tracer is None:

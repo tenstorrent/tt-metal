@@ -134,17 +134,17 @@ class Flux2VaeDecoder(Module):
         return z * s + m
 
     def preprocess_and_unpatchify(self, z: ttnn.Tensor, *, height: int, width: int) -> ttnn.Tensor:
-        # N, (H / P) * (W / P), C * P * P -> N, H/h_factor, W, C
-        # Input may be H-sharded (h_factor rows per device) or fully replicated.
-        # W-sharding is applied by the caller after this call, once the spatial layout
-        # is restored (H/W are interleaved in patchified tokens so W can't be split here).
+        # N, (H / P) * (W / P), C * P * P -> N, H/h_factor, W/w_factor, C
+        # Input may be H-sharded (h_factor rows per device) or fully replicated. W is split here,
+        # once the spatial layout is restored (H and W are interleaved in the patchified tokens),
+        # and before tilizing: a tiled split needs each device's W to be whole tiles.
         p = self._PATCH_SIZE
         assert (
             height % (p * self._ctx.h_factor) == 0
         ), f"height {height} must be divisible by patch {p} * h_factor {self._ctx.h_factor}"
-        assert (
-            width % (p * self._ctx.w_factor) == 0
-        ), f"width {width} must be divisible by patch {p} * w_factor {self._ctx.w_factor}"
+        # H is split on token rows, before unpatchifying, and W on pixel columns, after it.
+        assert width % p == 0, f"width {width} must be divisible by patch {p}"
+        assert width % self._ctx.w_factor == 0, f"width {width} must be divisible by w_factor {self._ctx.w_factor}"
         height_local = height // self._ctx.h_factor
 
         z = self._inv_normalize(z)
@@ -152,6 +152,8 @@ class Flux2VaeDecoder(Module):
         z = z.reshape([z.shape[0], height_local // p, width // p, -1, p, p])
         z = ttnn.permute(z, [0, 1, 4, 2, 5, 3])
         z = z.reshape([z.shape[0], height_local, width, -1])
+        if self._ctx.w_factor > 1:
+            z = ttnn.mesh_partition(z, dim=2, cluster_axis=self._ctx.w_mesh_axis)
         z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
         return z
 
