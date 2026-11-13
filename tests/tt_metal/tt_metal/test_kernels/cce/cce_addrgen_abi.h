@@ -9,20 +9,17 @@
 #include "cce_test_status_abi.h"
 
 // cce_addrgen kernel ABI. The kernel (cce_addrgen.cpp) and the host (dram/test_mimir_dm_addrgen.cpp) both include it.
-// Args, modes, patterns and codes are append-only: a later stage adds fields after the last one and never renumbers.
 namespace cce_addrgen_abi {
 
 using cce_test_status_abi::kLineBytes;
 
 // Runtime args. kArgStatusOffset and kArgResultOffset are 64 B aligned offsets in the kernel's own TL1, on separate
 // lines. kArgSrcStrideEnable / kArgDestStrideEnable select whether that side programs its loops (upstream's
-// src_stride_en / dst_stride_en); a side without loops stays at its base.
-inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgResultOffset = 2, kArgPattern = 3,
-                          kArgSrcStrideEnable = 4, kArgDestStrideEnable = 5, kArgNumAddresses = 6, kNumArgs = 7;
-
-// kModePattern: program address generator 0 with kPatterns[kArgPattern], pop kArgNumAddresses source and destination
-// addresses and store each pair at kArgResultOffset through the uncached alias.
-inline constexpr uint32_t kModePattern = 0;
+// src_stride_en / dst_stride_en); a side without loops stays at its base. The kernel programs address generator 0 with
+// kPatterns[kArgPattern], pops kArgNumAddresses source and destination addresses and stores each pair at
+// kArgResultOffset through the uncached alias.
+inline constexpr uint32_t kArgStatusOffset = 0, kArgResultOffset = 1, kArgPattern = 2, kArgSrcStrideEnable = 3,
+                          kArgDestStrideEnable = 4, kArgNumAddresses = 5, kNumArgs = 6;
 
 // Result entry i: source address, destination address, as 64-bit values.
 inline constexpr uint32_t kResultSrc = 0, kResultDest = 1, kResultEntryWords64 = 2;
