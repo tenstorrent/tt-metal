@@ -46,7 +46,9 @@ from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import (
 
 pytestmark = pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 
-REPS = 6
+REPS = int(os.environ.get("SPARSE_PERF_REPS", "6"))  # PROFILE (local only): replays per case
+# PROFILE (local only): skip the dense-op and gather baselines, so only the sparse op runs (and is profiled).
+SKIP_BASELINES = os.environ.get("SPARSE_PERF_SKIP_BASELINES") == "1"
 TRACE_REGION_SIZE = 200_000_000
 WORKING_POINTS = {4736: "5s", 9184: "10s", 13664: "15s"}
 DENSE_CHUNKS = {4736: (320, 384), 9184: (256, 512), 13664: (256, 512)}  # dense op (q_chunk, k_chunk)
@@ -222,6 +224,8 @@ class Bench:
     def baseline(self, rows, logical_n=None):
         """(dense, gather) replay times for `rows` (and `logical_n`) with bf16 inputs, timed on first use."""
         self.shape(rows, logical_n)
+        if SKIP_BASELINES:
+            return None, None
         if self.key not in self.baselines:
             mesh = self.rt.mesh_device
             self.baselines[self.key] = (traced_ms(mesh, self.dense()), traced_ms(mesh, self.gather()))

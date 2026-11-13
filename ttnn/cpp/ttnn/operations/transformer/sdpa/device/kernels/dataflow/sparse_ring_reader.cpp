@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"  // PROFILE (local only)
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
@@ -467,34 +468,41 @@ void kernel_main() {
         const uint32_t row_addr = cb_plan.get_write_ptr() + 64;
         const uint32_t costs_addr = (cb_plan.get_write_ptr() + 64 + mask_row_bytes + 63) & ~63u;
         volatile tt_l1_ptr uint32_t* costs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(costs_addr);
-        for (uint32_t f = static_q_start; f < static_q_end; ++f) {
-            noc.async_read(
-                mask_reader,
-                CoreLocalMem<uint32_t>(row_addr),
-                mask_row_bytes,
-                {.page_id = (f / num_q_chunks) * mask_nqb_pad + f % num_q_chunks},
-                {});
-            noc.async_read_barrier();
-            invalidate_l1_cache();
-            const uint32_t c = sparse_ring_bits::row_cost<has_block_counts>(row_addr, geo, counts_table, ring_size) +
-                               sparse_balance::kUnitCost;
-            costs[f - static_q_start] = c < sparse_balance::kMaxUnitCost ? c : sparse_balance::kMaxUnitCost;
+        {
+            DeviceZoneScopedN("R-COST");  // PROFILE (local only): the static units' costs, written and signalled
+            for (uint32_t f = static_q_start; f < static_q_end; ++f) {
+                noc.async_read(
+                    mask_reader,
+                    CoreLocalMem<uint32_t>(row_addr),
+                    mask_row_bytes,
+                    {.page_id = (f / num_q_chunks) * mask_nqb_pad + f % num_q_chunks},
+                    {});
+                noc.async_read_barrier();
+                invalidate_l1_cache();
+                const uint32_t c =
+                    sparse_ring_bits::row_cost<has_block_counts>(row_addr, geo, counts_table, ring_size) +
+                    sparse_balance::kUnitCost;
+                costs[f - static_q_start] = c < sparse_balance::kMaxUnitCost ? c : sparse_balance::kMaxUnitCost;
+            }
+            if (static_q_end > static_q_start) {
+                (void)costs[static_q_end - static_q_start - 1];  // the RISC stores land before the NoC reads them
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(costs_addr),
+                    TensorAccessor(balance_table_args, get_arg_val<uint32_t>(balance_base + 1)),
+                    cost_words * sizeof(uint32_t),
+                    {},
+                    {.page_id = ring_index,
+                     .offset_bytes = get_arg_val<uint32_t>(balance_base) * cost_words * sizeof(uint32_t)});
+                noc.async_write_barrier();
+                Semaphore<>(get_named_compile_time_arg_val("balance_sem_costs"))
+                    .up(noc, get_arg_val<uint32_t>(balance_base + 2), get_arg_val<uint32_t>(balance_base + 3), 1);
+                noc.async_atomic_barrier();
+            }
+        }  // PROFILE R-COST
+        {
+            DeviceZoneScopedN("R-RANGE");  // PROFILE (local only): wait for the balance kernel's unit table
+            Semaphore<>(get_named_compile_time_arg_val("balance_sem_table")).wait_min(1);
         }
-        if (static_q_end > static_q_start) {
-            (void)costs[static_q_end - static_q_start - 1];  // the RISC stores land before the NoC reads them
-            noc.async_write(
-                CoreLocalMem<uint32_t>(costs_addr),
-                TensorAccessor(balance_table_args, get_arg_val<uint32_t>(balance_base + 1)),
-                cost_words * sizeof(uint32_t),
-                {},
-                {.page_id = ring_index,
-                 .offset_bytes = get_arg_val<uint32_t>(balance_base) * cost_words * sizeof(uint32_t)});
-            noc.async_write_barrier();
-            Semaphore<>(get_named_compile_time_arg_val("balance_sem_costs"))
-                .up(noc, get_arg_val<uint32_t>(balance_base + 2), get_arg_val<uint32_t>(balance_base + 3), 1);
-            noc.async_atomic_barrier();
-        }
-        Semaphore<>(get_named_compile_time_arg_val("balance_sem_table")).wait_min(1);
         CircularBuffer cb_table(get_named_compile_time_arg_val("cb_balance"));
         cb_table.reserve_back(1);
         unit_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_table.get_write_ptr());
@@ -601,6 +609,7 @@ void kernel_main() {
                     if constexpr (balance_remote) {
                         if (imported(i)) {
                             if (!imports_ready) {
+                                DeviceZoneScopedN("R-IMPORT");  // PROFILE (local only): swapped-in blocks arrived
                                 Semaphore<>(get_named_compile_time_arg_val("balance_sem_import")).wait_min(1);
                                 imports_ready = true;
                             }
@@ -1172,36 +1181,40 @@ void kernel_main() {
         };
     // The ring order before any iteration, replayed by the passes after the first.
     const auto ring_seq_start = fused_op_receiver.seq;
-    for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
-        // This pass's blocks: the core's [q_pass, q_pass + 1) share of [global_q_start, global_q_end).
-        const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
-        const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
-        auto ring_seq_replay = ring_seq_start;
-        q_pushed = false;
-        pooled_pending = true;
-        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            const bool ring_iter_is_active = ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
-            const uint32_t ring_id = [&]() -> uint32_t {
-                if (q_pass > 0) {
-                    // Every shard arrived (and was read) in the first pass: replay the ring order without waits.
+    {
+        DeviceZoneScopedN("R-RING");  // PROFILE (local only): the passes' ring loops
+        for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
+            // This pass's blocks: the core's [q_pass, q_pass + 1) share of [global_q_start, global_q_end).
+            const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
+            const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
+            auto ring_seq_replay = ring_seq_start;
+            q_pushed = false;
+            pooled_pending = true;
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                const bool ring_iter_is_active = ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
+                const uint32_t ring_id = [&]() -> uint32_t {
+                    if (q_pass > 0) {
+                        // Every shard arrived (and was read) in the first pass: replay the ring order without waits.
+                        return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                            ring_seq_replay.get_next_ring_id([](uint32_t, uint32_t) {}),
+                            mesh_rows,
+                            mesh_cols,
+                            snake_orientation);
+                    }
+                    DeviceZoneScopedN("R-KVWAIT");  // PROFILE (local only): wait for the shard's gathered K/V
                     return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                        ring_seq_replay.get_next_ring_id([](uint32_t, uint32_t) {}),
-                        mesh_rows,
-                        mesh_cols,
-                        snake_orientation);
+                        fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+                }();
+                // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
+                // still advances above so reader stays aligned with compute, writer, and all-gather.
+                if (!ring_iter_is_active) {
+                    continue;
                 }
-                return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                    fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-            }();
-            // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
-            // still advances above so reader stays aligned with compute, writer, and all-gather.
-            if (!ring_iter_is_active) {
-                continue;
+                run_iteration(ring_id, pass_q_start, pass_q_end, nullptr);
+                pooled_pending = false;
             }
-            run_iteration(ring_id, pass_q_start, pass_q_end, nullptr);
-            pooled_pending = false;
         }
-    }
+    }  // PROFILE R-RING
 
     // Dense units, after every pass (every shard has arrived; the dense-Q slabs may still be on their way): per batch
     // the Q blocks, the plan and the local pieces (run_iteration), then each unit's arriving partials (- side, then +

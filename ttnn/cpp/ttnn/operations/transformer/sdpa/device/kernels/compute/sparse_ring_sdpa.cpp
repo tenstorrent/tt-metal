@@ -12,6 +12,7 @@
 #define LLK_ZEROFLAG_OUTLINE 1
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/debug/kernel_profiler.hpp"  // PROFILE (local only)
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
 #include "api/tile_constants.h"
@@ -235,36 +236,39 @@ void kernel_main() {
             block_counts,
             unit_table);
     };
-    for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
-        const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
-        const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
-        RingSDPAOpIndexer fused_op_indexer(
-            ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
-        // Which resident chunks have state in their slot, carried across the pass's ring iterations.
-        uint32_t initialized_slots = 0;
-        // The pass's first active iteration starts with fresh slots.
-        bool seen_active_iter = false;
-        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            const uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
-            // Host precomputes which ring iterations have useful work; the ring-id sequencing above still advances so
-            // compute stays aligned with the reader, the writer and the all-gather.
-            if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
-                continue;
-            }
-            const bool is_first_active_iter = !seen_active_iter;
-            seen_active_iter = true;
-            const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+    {
+        DeviceZoneScopedN("C-RING");  // PROFILE (local only): the passes' ring loops
+        for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
+            const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
+            const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
+            RingSDPAOpIndexer fused_op_indexer(
+                ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
+            // Which resident chunks have state in their slot, carried across the pass's ring iterations.
+            uint32_t initialized_slots = 0;
+            // The pass's first active iteration starts with fresh slots.
+            bool seen_active_iter = false;
+            for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+                const uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+                // Host precomputes which ring iterations have useful work; the ring-id sequencing above still advances
+                // so compute stays aligned with the reader, the writer and the all-gather.
+                if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+                    continue;
+                }
+                const bool is_first_active_iter = !seen_active_iter;
+                seen_active_iter = true;
+                const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
 
-            run_ring_iteration(
-                ring_id,
-                pass_q_start,
-                pass_q_end,
-                num_q_chunks,
-                initialized_slots,
-                is_last_ring_iter,
-                is_first_active_iter);
+                run_ring_iteration(
+                    ring_id,
+                    pass_q_start,
+                    pass_q_end,
+                    num_q_chunks,
+                    initialized_slots,
+                    is_last_ring_iter,
+                    is_first_active_iter);
+            }
         }
-    }
+    }  // PROFILE C-RING
     // Dense units: per batch the local pieces' steps (a fresh first, not last, iteration), then the merges and the
     // normalization or emit (res_dense_finish). The reader and the writer walk the same batches.
     constexpr uint32_t dense_owners = get_named_compile_time_arg_val("dense_owners");
