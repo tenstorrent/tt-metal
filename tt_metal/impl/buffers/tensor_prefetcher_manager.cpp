@@ -948,10 +948,11 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     }
 
     const auto& hal = mesh_device_->impl().metal_env().get_hal();
+    placement_ = dram_sender_placement(mesh_device_->impl().get_context_id(), mesh_device_->num_hw_cqs());
     TT_FATAL(
-        hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
+        placement_.has_value(),
         "Tensor prefetcher requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0");
+        ">= 19.12.0.0, or fast dispatch on a dispatch engine serving one command queue");
 
     // Populate devices_ before resolving sender slots: enumerate_dram_senders checks the slots
     // against every device's DRAM topology. Build the coord->index map at the same time so
@@ -965,6 +966,10 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     }
     enumerate_dram_senders();
     drain_targets_per_sender_.assign(num_senders_, {});
+    if (on_dispatch_engine()) {
+        start_on_dispatch_engine();
+        return;
+    }
 
     // DRISC L1 layout: the kernel working region (above the arena's sender-state zone) holds the
     // CQ signal slots, the request socket and the ping-pong stage ring. Each pipe's NOC XY table,
@@ -1472,7 +1477,21 @@ void TensorPrefetcherManager::queue(
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherRequest");
-    send_or_capture(build_requests(target, device_subset, tensors), trace_capture_cq);
+    auto requests = build_requests(target, device_subset, tensors);
+    if (on_dispatch_engine()) {
+        TT_FATAL(
+            trace_capture_cq == nullptr,
+            "QueueTensorPrefetcherRequest: trace capture is not supported when fast dispatch runs the Tensor "
+            "prefetcher");
+        uint32_t total_receivers = 0;
+        for (const auto& [sender, receivers] : target.mapping) {
+            total_receivers += receivers.num_cores();
+        }
+        for (const auto& request : requests) {
+            validate_dispatch_engine_request(*request, total_receivers);
+        }
+    }
+    send_or_capture(requests, trace_capture_cq);
 }
 
 void TensorPrefetcherManager::validate_own_cq(const MeshCommandQueue* cq, std::string_view api_name) const {
@@ -1578,8 +1597,8 @@ std::vector<TensorPrefetcherManager::Request> TensorPrefetcherManager::build_dra
 }
 
 void TensorPrefetcherManager::validate_request_pages(const std::vector<std::vector<uint8_t>>& sender_pages) const {
-    // allocate_sockets gives every socket the same page size.
-    const uint32_t socket_page_bytes = sockets_.front()->get_page_size();
+    // allocate_sockets gives every socket the same page size; a dispatch-engine FIFO lane holds one page.
+    const uint32_t socket_page_bytes = on_dispatch_engine() ? kRequestPageBytes : sockets_.front()->get_page_size();
     for (const auto& page : sender_pages) {
         TT_FATAL(
             page.size() == socket_page_bytes,
@@ -1597,6 +1616,10 @@ void TensorPrefetcherManager::capture(
     const RequestTarget target = target_for(prefetcher_pipes);
     auto lock = lock_api_function_();
     TT_FATAL(active_, "CommandListBuilder::add_tensor_prefetcher_request called before StartTensorPrefetcher");
+    TT_FATAL(
+        !on_dispatch_engine(),
+        "CommandListBuilder::add_tensor_prefetcher_request is not supported when fast dispatch runs the Tensor "
+        "prefetcher");
     TT_FATAL(
         captured.requests.empty() || captured.run_id == run_id_,
         "CommandListBuilder::add_tensor_prefetcher_request: the builder holds requests from a Tensor prefetcher that "
@@ -1673,6 +1696,9 @@ uint32_t TensorPrefetcherManager::signal_address(uint32_t signal_id) {
 void TensorPrefetcherManager::queue_wait_for_signal(uint32_t signal_id, MeshCommandQueue* trace_capture_cq) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherWaitForSignal called before StartTensorPrefetcher");
+    TT_FATAL(
+        !on_dispatch_engine(),
+        "QueueTensorPrefetcherWaitForSignal is not supported when fast dispatch runs the Tensor prefetcher");
     validate_signal_id(signal_id, "QueueTensorPrefetcherWaitForSignal");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherWaitForSignal");
 
@@ -1714,6 +1740,10 @@ bool TensorPrefetcherManager::enqueue_cq_signal_and_wait_if_active(MeshCommandQu
 void TensorPrefetcherManager::enqueue_cq_signal_and_wait_locked(
     MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset) {
     validate_own_cq(&cq, "WaitForCqOnTensorPrefetcher");
+    TT_FATAL(
+        !on_dispatch_engine(),
+        "WaitForCqOnTensorPrefetcher is not supported when fast dispatch runs the Tensor prefetcher; create "
+        "PrefetcherPipes before StartTensorPrefetcher");
     const uint32_t cq_id = cq.id();
     TT_FATAL(
         cq_id < cq_signal_counter_.size(),
@@ -1999,8 +2029,14 @@ void TensorPrefetcherManager::stop() {
     // lock. With the device profiler off the read is a no-op, so this only deadlocks under
     // tracy. Nothing is lost by skipping it — the read covers worker/eth cores, not the DRAM
     // cores this program runs on, and the profiler still drains on Finish and at device close.
-    for (uint32_t d = 0; d < devices_.size(); ++d) {
-        ::tt::tt_metal::slow_dispatch::WaitProgramDone(*devices_[d], *programs_[d]);
+    if (on_dispatch_engine()) {
+        // The kernels outlive this run (fast dispatch owns them); wait until they have served every
+        // request, the drains included, so no receiver is still acking into this run's pipes.
+        wait_for_fifo_idle();
+    } else {
+        for (uint32_t d = 0; d < devices_.size(); ++d) {
+            ::tt::tt_metal::slow_dispatch::WaitProgramDone(*devices_[d], *programs_[d]);
+        }
     }
     active_lifetime_timer_.reset();
 
@@ -2014,6 +2050,8 @@ void TensorPrefetcherManager::stop() {
     drain_holds_.clear();
     num_senders_ = 0;
     num_banks_ = 0;
+    placement_.reset();
+    fifo_slots_written_.clear();
     active_ = false;
 }
 
@@ -2034,14 +2072,15 @@ bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
     if (env.get_rtoptions().get_streaming_profiler_enabled()) {
         return false;
     }
-    return env.get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    return dram_sender_placement(mesh_device.impl().get_context_id(), mesh_device.num_hw_cqs()).has_value();
 }
 
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config) {
     TT_FATAL(
         IsTensorPrefetcherSupported(mesh_device),
-        "Tensor prefetcher is not supported on this mesh device. Either programmable DRAM cores are "
-        "unavailable (they auto-enable on Blackhole with firmware >= 19.12.0.0), or the streaming profiler "
+        "Tensor prefetcher is not supported on this mesh device. Either it cannot run DRAM-sender endpoints "
+        "(that takes Blackhole with firmware >= 19.12.0.0, or Quasar fast dispatch with one command queue), or "
+        "the streaming profiler "
         "is enabled (TT_METAL_STREAMING_PROFILER=1) and holds the DRISCs the prefetcher needs. Unset "
         "TT_METAL_STREAMING_PROFILER to use the prefetcher, or call IsTensorPrefetcherSupported() first to "
         "skip the prefetcher path.");

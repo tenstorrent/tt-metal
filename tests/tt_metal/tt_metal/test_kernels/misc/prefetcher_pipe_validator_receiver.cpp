@@ -73,6 +73,7 @@ void kernel_main() {
         page_bytes,
         tile_bytes);
 
+    const uint64_t validate_start = get_timestamp();
     uint32_t global_iter = 0;
     for (uint32_t layer = 0; layer < num_layers; ++layer) {
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
@@ -105,7 +106,12 @@ void kernel_main() {
 
             if (prefetcher_validator::should_log(global_iter, num_layers * num_blocks, print_stride)) {
                 DPRINT(
-                    "PIPE_VALIDATOR ok layer={} blk={} bank={} recv_idx={}\n", layer, blk, bank_id, recv_idx_in_bank);
+                    "PIPE_VALIDATOR ok layer={} blk={} bank={} recv_idx={} cycles={}\n",
+                    layer,
+                    blk,
+                    bank_id,
+                    recv_idx_in_bank,
+                    get_timestamp() - validate_start);
             }
 
             pipe.pop_front(1, noc);
@@ -116,14 +122,18 @@ void kernel_main() {
     DPRINT("PIPE_VALIDATOR_LOOP_DONE bank={} recv_idx={}\n", bank_id, recv_idx_in_bank);
 
     // Bounded-poll for an entry the sender pushed past the last one this receiver consumed.
-    for (uint32_t spin = 0; spin < prefetcher_validator::kExtraPollCycles; ++spin) {
-        if (pipe.has_unconsumed_entries()) {
-            DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry past the expected last one\n");
-            while (true) {
-                ;
-            }
+    const uint64_t poll_start = get_timestamp();
+    if (prefetcher_validator::extra_entry_within_poll_window([&] { return pipe.has_unconsumed_entries(); })) {
+        DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry past the expected last one\n");
+        while (true) {
+            ;
         }
     }
 
-    DPRINT("PIPE_VALIDATOR_DONE ok bank={} recv_idx={}\n", bank_id, recv_idx_in_bank);
+    DPRINT(
+        "PIPE_VALIDATOR_DONE ok bank={} recv_idx={} validate_cycles={} poll_cycles={}\n",
+        bank_id,
+        recv_idx_in_bank,
+        poll_start - validate_start,
+        get_timestamp() - poll_start);
 }

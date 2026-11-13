@@ -427,6 +427,12 @@ public:
     // coords through the device they mean.
     std::vector<CoreCoord> dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const;
 
+private:
+    // True when this mesh places DRAM-sender endpoints on its dispatch engine, where an endpoint names a
+    // role of `bank_id` rather than a DRAM core. TT_FATALs on a bank `device` does not have.
+    bool dram_senders_on_dispatch_engine(const IDevice* device, uint32_t bank_id) const;
+
+public:
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     static uint64_t close_count();  // MeshDevice closes so far.

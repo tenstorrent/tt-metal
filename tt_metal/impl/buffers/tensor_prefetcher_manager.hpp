@@ -27,6 +27,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 
 #include "tt_metal/common/scoped_timer.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/buffers/tensor_prefetcher_request.hpp"
 
 namespace tt::tt_metal {
@@ -268,6 +269,23 @@ private:
         const std::vector<std::shared_ptr<const Request>>& requests, MeshCommandQueue* trace_capture_cq);
     MeshCoordinateRangeSet full_mesh_subset() const;
 
+    // DRAM-sender endpoints on the dispatch engine (DramSenderPlacement::DispatchEngine). Fast dispatch
+    // already runs the reader and pusher that serve them, and requests go into a FIFO in the engine's L1
+    // instead of one H2D socket per sender. Defined in tensor_prefetcher_manager_dispatch_engine.cpp.
+    bool on_dispatch_engine() const { return placement_ == DramSenderPlacement::DispatchEngine; }
+    // The rest of start() for this placement: stage-ring geometry, FIFO state, the worker.
+    void start_on_dispatch_engine();
+    // Rejects at queue time what the dispatch-engine kernels do not serve. `total_receivers` is the
+    // request target's receiver count, every lane together.
+    void validate_dispatch_engine_request(const Request& request, uint32_t total_receivers) const;
+    void worker_loop_dispatch_engine();
+    // Writes one FIFO slot to device `d`, waiting for a free slot first.
+    void write_fifo_slot(uint32_t d, const std::vector<uint32_t>& slot);
+    // Slots both kernels on device `d` have retired.
+    uint32_t fifo_slots_retired(uint32_t d) const;
+    // Waits until both kernels on every device have retired every slot written to them.
+    void wait_for_fifo_idle() const;
+
     MeshDevice* mesh_device_;
     // Grabs the owning MeshDevice's api_mutex_ for the duration of an API call.
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
@@ -333,6 +351,11 @@ private:
 
     // sockets_[d * num_senders_ + s] = socket for (device d, sender s).
     std::vector<std::unique_ptr<H2DSocket>> sockets_;
+    // Where this run's DRAM-sender endpoints are; set by start().
+    std::optional<DramSenderPlacement> placement_;
+    // DispatchEngine placement: the engine's L1 region base, and per device the FIFO slots written.
+    uint32_t fifo_region_base_ = 0;
+    std::vector<uint32_t> fifo_slots_written_;
 
     // MeshCoordinate -> index into devices_, populated once at start() so
     // worker_loop fan-out is O(targets) instead of O(targets * devices).

@@ -439,8 +439,10 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
         "n_col_start",
         "lead_block"};
     receiver.hw_config = metal_exp::DataMovementHardwareConfig{
-        .config_1xx = metal_exp::DataMovementHardwareConfig::DataMovement1XXConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
+        .config_1xx =
+            metal_exp::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+        .config_2xx = metal_exp::DataMovementHardwareConfig::DataMovement2XXConfig{}};
     metal_exp::ProgramSpec spec{
         .name = "tensor_prefetcher_pipe_validator",
         .kernels = {std::move(receiver)},
