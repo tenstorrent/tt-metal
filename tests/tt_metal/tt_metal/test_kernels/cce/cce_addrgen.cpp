@@ -34,8 +34,7 @@ static void setup_pattern(const abi::PatternSpec& pattern, bool src_strided, boo
     }
 }
 
-// Pops pass an explicit count of 1: the count-less pop encodes rs1 = x1 with xs1 set, so the hardware pops as many
-// addresses as ra holds.
+// Pops pass an explicit count of 1, as the count-less form does.
 static void pop_one(volatile uint64_t* entry) {
     entry[abi::kResultSrc] = overlay::pop_src_addrgen<ADDRGEN_0>(1);
     entry[abi::kResultDest] = overlay::pop_dest_addrgen<ADDRGEN_0>(1);
@@ -65,16 +64,15 @@ static void pop_pattern(
 }
 
 void kernel_main() {
-    const uint32_t mode = get_arg_val<uint32_t>(abi::kArgMode);
     const uint32_t status_offset = get_arg_val<uint32_t>(abi::kArgStatusOffset);
     const uint32_t result_offset = get_arg_val<uint32_t>(abi::kArgResultOffset);
     const uint32_t pattern_index = get_arg_val<uint32_t>(abi::kArgPattern);
     const bool src_strided = get_arg_val<uint32_t>(abi::kArgSrcStrideEnable) != 0;
     const bool dest_strided = get_arg_val<uint32_t>(abi::kArgDestStrideEnable) != 0;
     const uint32_t num_addresses = get_arg_val<uint32_t>(abi::kArgNumAddresses);
-    const bool args_valid = mode == abi::kModePattern && pattern_index < abi::kNumPatterns &&
-                            num_addresses <= abi::kMaxAddresses && status_offset % abi::kLineBytes == 0 &&
-                            result_offset % abi::kLineBytes == 0 && status_offset != result_offset;
+    const bool args_valid = pattern_index < abi::kNumPatterns && num_addresses <= abi::kMaxAddresses &&
+                            status_offset % abi::kLineBytes == 0 && result_offset % abi::kLineBytes == 0 &&
+                            status_offset != result_offset;
 
     uint32_t code = abi::kCodeDone;
     uint32_t pop_cycles = 0;
@@ -91,6 +89,5 @@ void kernel_main() {
     volatile uint32_t* status = own_tl1_words(status_offset);
     status[abi::kStatusCode] = code;
     status[abi::kStatusPopCycles] = pop_cycles;
-    asm volatile("fence w, w" ::: "memory");
-    status[abi::kStatusMagic] = abi::kDoneMagic;
+    cce_test::publish_done_magic(status, abi::kDoneMagic);
 }

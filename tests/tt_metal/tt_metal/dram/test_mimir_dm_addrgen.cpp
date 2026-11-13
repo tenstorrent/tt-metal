@@ -118,7 +118,6 @@ void run_case(const AddrgenCase& addrgen_case) {
     write_cce_tl1(device, kCce, result_offset, std::vector<uint32_t>(result_words, kResultPoison));
 
     std::vector<uint32_t> args(abi::kNumArgs, 0);
-    args[abi::kArgMode] = abi::kModePattern;
     args[abi::kArgStatusOffset] = static_cast<uint32_t>(status_offset);
     args[abi::kArgResultOffset] = static_cast<uint32_t>(result_offset);
     args[abi::kArgPattern] = addrgen_case.pattern;
