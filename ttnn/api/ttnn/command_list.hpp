@@ -112,7 +112,7 @@ private:
     tt::tt_metal::experimental::CommandListBuilder metal_builder_;
     bool recording_ = false;
     std::vector<BindScope> bind_scopes_;
-    std::vector<ActiveBind> binds_;  // innermost scope last
+    std::vector<ActiveBind> binds_;  // the binds of every scope in bind_scopes_, in push order
     detail::CmdListLayout layout_;
 };
 
