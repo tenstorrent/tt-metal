@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -29,6 +30,7 @@
 #include <atomic>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/small_vector.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "core_coord.hpp"
@@ -233,13 +235,90 @@ void validate_per_device_runtime_args_mode() {
 }
 }  // namespace
 
-PerDeviceRuntimeArgsField* MeshWorkloadImpl::find_per_device_runtime_args_field(
-    const MeshCoordinateRange& program_range,
+namespace {
+// The kernel's runtime args words on `core` (its common args when nullopt) that a per-device field may cover.
+uint32_t per_device_runtime_args_words(
+    Kernel& kernel, KernelHandle kernel_handle, const std::optional<CoreCoord>& core) {
+    if (core.has_value()) {
+        TT_FATAL(
+            kernel.is_on_logical_core(*core),
+            "Per-device runtime args: kernel {} is not placed on core {}",
+            kernel_handle,
+            *core);
+        return static_cast<uint32_t>(kernel.logical_runtime_arg_count(*core));
+    }
+    const auto& common = kernel.common_runtime_args();
+    return common.size() > kernel.watcher_count_word_offset()
+               ? static_cast<uint32_t>(common.size() - kernel.watcher_count_word_offset())
+               : 0;
+}
+
+void check_per_device_field_bounds(
+    uint32_t logical_words,
     KernelHandle kernel_handle,
     const std::optional<CoreCoord>& core,
     uint32_t first_word,
-    uint32_t num_words,
-    bool metal2) {
+    uint32_t num_words) {
+    TT_FATAL(num_words > 0, "Per-device runtime args: a field needs at least one word");
+    TT_FATAL(
+        first_word <= logical_words && num_words <= logical_words - first_word,
+        "Per-device runtime args: words [{}, {}) of kernel {}{} lie outside its {} runtime args (set the program's "
+        "runtime args first)",
+        first_word,
+        first_word + num_words,
+        kernel_handle,
+        core.has_value() ? fmt::format(" on core {}", *core) : std::string(" common"),
+        logical_words);
+}
+
+// The field at `first_word` of its slot, or null when there is none; fails on another length or an overlap with a
+// neighbouring field. A hash lookup and a binary search over the slot's fields.
+PerDeviceRuntimeArgsField* find_per_device_field(
+    const PerDeviceRuntimeArgs& per_device,
+    KernelHandle kernel_handle,
+    const std::optional<CoreCoord>& core,
+    uint32_t first_word,
+    uint32_t num_words) {
+    const auto slot_it = per_device.fields_by_slot.find({kernel_handle, core});
+    if (slot_it == per_device.fields_by_slot.end()) {
+        return nullptr;
+    }
+    const auto& slot = slot_it->second;
+    const auto it = std::lower_bound(slot.begin(), slot.end(), first_word, [](const auto* field, uint32_t word) {
+        return field->first_word < word;
+    });
+    auto check_disjoint = [&](const PerDeviceRuntimeArgsField& field) {
+        TT_FATAL(
+            first_word + num_words <= field.first_word || field.first_word + field.num_words <= first_word,
+            "Per-device runtime args: words [{}, {}) of kernel {} overlap the field at words [{}, {})",
+            first_word,
+            first_word + num_words,
+            kernel_handle,
+            field.first_word,
+            field.first_word + field.num_words);
+    };
+    if (it != slot.end()) {
+        if ((*it)->first_word == first_word) {
+            TT_FATAL(
+                (*it)->num_words == num_words,
+                "Per-device runtime args: the field at word {} of kernel {} has {} words, not {}",
+                first_word,
+                kernel_handle,
+                (*it)->num_words,
+                num_words);
+            return *it;
+        }
+        check_disjoint(**it);
+    }
+    if (it != slot.begin()) {
+        check_disjoint(**std::prev(it));
+    }
+    return nullptr;
+}
+}  // namespace
+
+std::pair<Program*, PerDeviceRuntimeArgs*> MeshWorkloadImpl::per_device_target(
+    const MeshCoordinateRange& program_range, bool metal2) {
     validate_per_device_runtime_args_mode();
     const auto program_it = programs_.find(program_range);
     TT_FATAL(
@@ -254,89 +333,51 @@ PerDeviceRuntimeArgsField* MeshWorkloadImpl::find_per_device_runtime_args_field(
         metal2 ? "experimental::SetProgramRunArgsPerDevice requires a Metal 2.0 (ProgramSpec) program"
                : "Metal 2.0 (ProgramSpec) programs set per-device values of named run args with "
                  "experimental::SetProgramRunArgsPerDevice");
-    TT_FATAL(num_words > 0, "Per-device runtime args: a field needs at least one word");
     TT_FATAL(
         !program_range.wraparound_shape().has_value(),
         "Per-device runtime args are not supported for wraparound program ranges ({})",
         program_range);
-    const auto kernel = program.impl().get_kernel(kernel_handle);
-    TT_FATAL(
-        kernel != nullptr,
-        "Per-device runtime args: the program on range {} has no kernel {}",
-        program_range,
-        kernel_handle);
-    uint32_t logical_words = 0;
-    if (core.has_value()) {
-        TT_FATAL(
-            kernel->is_on_logical_core(*core),
-            "Per-device runtime args: kernel {} is not placed on core {}",
-            kernel_handle,
-            *core);
-        logical_words = static_cast<uint32_t>(kernel->logical_runtime_arg_count(*core));
-    } else {
-        const auto& common = kernel->common_runtime_args();
-        logical_words = common.size() > kernel->watcher_count_word_offset()
-                            ? static_cast<uint32_t>(common.size() - kernel->watcher_count_word_offset())
-                            : 0;
-    }
-    TT_FATAL(
-        first_word <= logical_words && num_words <= logical_words - first_word,
-        "Per-device runtime args: words [{}, {}) of kernel {}{} lie outside its {} runtime args (set the program's "
-        "runtime args first)",
-        first_word,
-        first_word + num_words,
-        kernel_handle,
-        core.has_value() ? fmt::format(" on core {}", *core) : std::string(" common"),
-        logical_words);
-
     const auto per_device_it = per_device_runtime_args_.find(program_range);
     if (per_device_it == per_device_runtime_args_.end() || per_device_it->second.fields.empty()) {
-        return nullptr;
+        return {&program, nullptr};
     }
-    auto& per_device = per_device_it->second;
     TT_FATAL(
-        holds_program(per_device, program),
+        holds_program(per_device_it->second, program),
         "Per-device runtime args of range {} were set for another program, or the program was moved to another "
         "workload that set per-device args of it",
         program_range);
-    for (auto& field : per_device.fields) {
-        if (field->kernel != kernel_handle || field->core != core) {
-            continue;
-        }
-        if (field->first_word == first_word) {
-            TT_FATAL(
-                field->num_words == num_words,
-                "Per-device runtime args: the field at word {} of kernel {} has {} words, not {}",
-                first_word,
-                kernel_handle,
-                field->num_words,
-                num_words);
-            return field.get();
-        }
-        TT_FATAL(
-            first_word + num_words <= field->first_word || field->first_word + field->num_words <= first_word,
-            "Per-device runtime args: words [{}, {}) of kernel {} overlap the field at words [{}, {})",
-            first_word,
-            first_word + num_words,
-            kernel_handle,
-            field->first_word,
-            field->first_word + field->num_words);
-    }
-    return nullptr;
+    return {&program, &per_device_it->second};
 }
 
-PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
+PerDeviceRuntimeArgsField* MeshWorkloadImpl::find_per_device_runtime_args_field(
     const MeshCoordinateRange& program_range,
     KernelHandle kernel_handle,
     const std::optional<CoreCoord>& core,
     uint32_t first_word,
     uint32_t num_words,
     bool metal2) {
-    if (auto* existing =
-            find_per_device_runtime_args_field(program_range, kernel_handle, core, first_word, num_words, metal2)) {
-        return *existing;
-    }
-    auto& program = programs_.at(program_range);
+    const auto [program, per_device] = per_device_target(program_range, metal2);
+    TT_FATAL(num_words > 0, "Per-device runtime args: a field needs at least one word");
+    const auto kernel = program->impl().get_kernel(kernel_handle);
+    TT_FATAL(
+        kernel != nullptr,
+        "Per-device runtime args: the program on range {} has no kernel {}",
+        program_range,
+        kernel_handle);
+    check_per_device_field_bounds(
+        per_device_runtime_args_words(*kernel, kernel_handle, core), kernel_handle, core, first_word, num_words);
+    return per_device != nullptr ? find_per_device_field(*per_device, kernel_handle, core, first_word, num_words)
+                                 : nullptr;
+}
+
+PerDeviceRuntimeArgsField& MeshWorkloadImpl::add_per_device_runtime_args_field(
+    Program& program,
+    const MeshCoordinateRange& program_range,
+    KernelHandle kernel_handle,
+    const std::optional<CoreCoord>& core,
+    uint32_t first_word,
+    uint32_t num_words,
+    bool metal2) {
     auto& per_device = per_device_runtime_args_[program_range];
     if (per_device.fields.empty()) {
         per_device.program_id = program.impl().get_id();
@@ -356,10 +397,33 @@ PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
         // A program-level set or update of this arg now drops its per-device values.
         program.impl().track_per_device_run_arg({kernel_handle, core, first_word});
     }
+    auto& slot = per_device.fields_by_slot[{kernel_handle, core}];
+    slot.insert(
+        std::lower_bound(
+            slot.begin(),
+            slot.end(),
+            first_word,
+            [](const auto* existing, uint32_t word) { return existing->first_word < word; }),
+        field.get());
     per_device.fields.push_back(std::move(field));
     per_device.generation++;
     per_device.dirty = true;
     return *per_device.fields.back();
+}
+
+PerDeviceRuntimeArgsField& MeshWorkloadImpl::per_device_runtime_args_field(
+    const MeshCoordinateRange& program_range,
+    KernelHandle kernel_handle,
+    const std::optional<CoreCoord>& core,
+    uint32_t first_word,
+    uint32_t num_words,
+    bool metal2) {
+    if (auto* existing =
+            find_per_device_runtime_args_field(program_range, kernel_handle, core, first_word, num_words, metal2)) {
+        return *existing;
+    }
+    return add_per_device_runtime_args_field(
+        programs_.at(program_range), program_range, kernel_handle, core, first_word, num_words, metal2);
 }
 
 void MeshWorkloadImpl::set_per_device_runtime_args(
@@ -401,24 +465,6 @@ void MeshWorkloadImpl::set_per_device_runtime_args(
     per_device_runtime_args_.at(program_range).dirty = true;
 }
 
-void MeshWorkloadImpl::set_per_device_named_runtime_args(
-    const MeshCoordinateRange& program_range,
-    const MeshCoordinate& device,
-    KernelHandle kernel,
-    const std::optional<CoreCoord>& core,
-    uint32_t first_word,
-    ttsl::Span<const uint32_t> values) {
-    TT_FATAL(
-        program_range.contains(device), "Per-device runtime args: device {} is not in range {}", device, program_range);
-    auto& field = per_device_runtime_args_field(
-        program_range, kernel, core, first_word, static_cast<uint32_t>(values.size()), /*metal2=*/true);
-    const uint32_t index = coordinate_index_in_range(program_range, device);
-    std::copy(values.begin(), values.end(), field.values.begin() + static_cast<size_t>(index) * field.num_words);
-    field.present[index] = 1;
-    field.dirty = true;
-    per_device_runtime_args_.at(program_range).dirty = true;
-}
-
 void MeshWorkloadImpl::clear_per_device_runtime_args(
     const MeshCoordinateRange& program_range,
     const MeshCoordinate& device,
@@ -431,12 +477,18 @@ void MeshWorkloadImpl::clear_per_device_runtime_args(
     if (it == per_device_runtime_args_.end()) {
         return;
     }
-    for (auto& field : it->second.fields) {
-        if (field->kernel == kernel && field->core == core && field->first_word == first_word) {
-            field->present[coordinate_index_in_range(program_range, device)] = 0;
-            field->dirty = true;
-            it->second.dirty = true;
-        }
+    const auto slot_it = it->second.fields_by_slot.find({kernel, core});
+    if (slot_it == it->second.fields_by_slot.end()) {
+        return;
+    }
+    const auto& slot = slot_it->second;
+    const auto field_it = std::lower_bound(slot.begin(), slot.end(), first_word, [](const auto* field, uint32_t word) {
+        return field->first_word < word;
+    });
+    if (field_it != slot.end() && (*field_it)->first_word == first_word) {
+        (*field_it)->present[coordinate_index_in_range(program_range, device)] = 0;
+        (*field_it)->dirty = true;
+        it->second.dirty = true;
     }
 }
 
@@ -484,6 +536,75 @@ void MeshWorkloadImpl::apply_per_device_run_arg_drops(const MeshCoordinateRange&
     }
 }
 
+void MeshWorkloadImpl::set_per_device_named_runtime_args(
+    const MeshCoordinateRange& program_range,
+    const MeshCoordinate& device,
+    ttsl::Span<const NamedArgWords> args,
+    ttsl::Span<const uint32_t> words) {
+    TT_FATAL(
+        program_range.contains(device), "Per-device runtime args: device {} is not in range {}", device, program_range);
+    if (args.empty()) {
+        return;
+    }
+    auto [program, per_device] = per_device_target(program_range, /*metal2=*/true);
+    // All or nothing: check every arg before anything changes (no entry, ownership or drops yet). The fields found
+    // are kept for the set below (null: added there); fields are neither added nor removed in between.
+    const auto& program_impl = program->impl();
+    std::optional<KernelHandle> kernel_handle;
+    std::shared_ptr<Kernel> kernel;
+    uint32_t common_words = 0;
+    ttsl::SmallVector<PerDeviceRuntimeArgsField*, 8> fields;
+    fields.reserve(args.size());
+    for (const auto& arg : args) {
+        TT_FATAL(arg.offset + arg.num_words <= words.size(), "Per-device runtime args: arg words out of range");
+        if (kernel_handle != arg.kernel) {
+            kernel = program_impl.get_kernel(arg.kernel);
+            TT_FATAL(
+                kernel != nullptr,
+                "Per-device runtime args: the program on range {} has no kernel {}",
+                program_range,
+                arg.kernel);
+            kernel_handle = arg.kernel;
+            common_words = per_device_runtime_args_words(*kernel, arg.kernel, std::nullopt);
+        }
+        check_per_device_field_bounds(
+            arg.core.has_value() ? per_device_runtime_args_words(*kernel, arg.kernel, arg.core) : common_words,
+            arg.kernel,
+            arg.core,
+            arg.first_word,
+            arg.num_words);
+        fields.push_back(
+            per_device != nullptr
+                ? find_per_device_field(*per_device, arg.kernel, arg.core, arg.first_word, arg.num_words)
+                : nullptr);
+    }
+    // Drops recorded by earlier program-level sets / updates apply before these values, never to them.
+    if (per_device != nullptr) {
+        apply_run_arg_drops(*per_device, *program);
+    }
+    const uint32_t index = coordinate_index_in_range(program_range, device);
+    for (size_t i = 0; i < args.size(); ++i) {
+        const auto& arg = args[i];
+        PerDeviceRuntimeArgsField* field = fields[i];
+        if (field == nullptr && per_device != nullptr) {
+            // Added by an earlier arg of this call (the same arg listed twice), or not there yet.
+            field = find_per_device_field(*per_device, arg.kernel, arg.core, arg.first_word, arg.num_words);
+        }
+        if (field == nullptr) {
+            field = &add_per_device_runtime_args_field(
+                *program, program_range, arg.kernel, arg.core, arg.first_word, arg.num_words, /*metal2=*/true);
+            per_device = &per_device_runtime_args_.at(program_range);
+        }
+        std::copy_n(
+            words.begin() + arg.offset,
+            arg.num_words,
+            field->values.begin() + static_cast<size_t>(index) * field->num_words);
+        field->present[index] = 1;
+        field->dirty = true;
+    }
+    per_device->dirty = true;
+}
+
 const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const MeshCoordinateRange& program_range) {
     if (per_device_runtime_args_.empty()) {
         return nullptr;
@@ -514,6 +635,13 @@ const PerDeviceRuntimeArgs* MeshWorkloadImpl::per_device_runtime_args(const Mesh
             return false;
         }
         program.impl().untrack_per_device_run_arg({field->kernel, field->core, field->first_word});
+        // Drop the field from the index now: remove_if may destroy it once this returns.
+        const auto slot_it = per_device.fields_by_slot.find({field->kernel, field->core});
+        TT_ASSERT(slot_it != per_device.fields_by_slot.end(), "Per-device runtime args index out of sync");
+        std::erase(slot_it->second, field.get());
+        if (slot_it->second.empty()) {
+            per_device.fields_by_slot.erase(slot_it);
+        }
         return true;
     });
     if (unused != per_device.fields.end()) {
@@ -1002,16 +1130,13 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-// One named run arg of one device: words [first_word, first_word + values.size()) of a kernel's runtime args on
-// `core` (common runtime args when nullopt).
-struct NamedArgWords {
-    KernelHandle kernel = 0;
-    std::optional<CoreCoord> core;
-    uint32_t first_word = 0;
-    std::vector<uint32_t> values;
+// One device's named run args resolved to runtime-arg words: an entry per arg, its words in one buffer.
+struct ResolvedNamedArgs {
+    std::vector<distributed::MeshWorkloadImpl::NamedArgWords> args;
+    std::vector<uint32_t> words;
 };
 
-std::vector<NamedArgWords> resolve_named_args(const Program& program, const ProgramRunArgs& args) {
+ResolvedNamedArgs resolve_named_args(const Program& program, const ProgramRunArgs& args) {
     const auto& program_impl = program.impl();
     TT_FATAL(
         program_impl.created_from_spec() || program_impl.has_metal2_registry(),
@@ -1022,7 +1147,12 @@ std::vector<NamedArgWords> resolve_named_args(const Program& program, const Prog
             args.advanced_options.prefetcher_pipe_args.empty(),
         "Per-device run args hold named kernel run args only (no tensor args, DFB overrides or advanced program "
         "args)");
-    std::vector<NamedArgWords> out;
+    ResolvedNamedArgs out;
+    auto add = [&](KernelHandle kernel, const std::optional<CoreCoord>& core, uint32_t slot, auto&& fill, size_t n) {
+        const auto offset = static_cast<uint32_t>(out.words.size());
+        fill(out.words);
+        out.args.push_back({kernel, core, slot, offset, static_cast<uint32_t>(n)});
+    };
     for (const auto& kernel_args : args.kernel_run_args) {
         const std::string& kernel_name = kernel_args.kernel.get();
         TT_FATAL(
@@ -1038,7 +1168,7 @@ std::vector<NamedArgWords> resolve_named_args(const Program& program, const Prog
             TT_FATAL(it != slots.end(), "{} '{}' is not declared by kernel '{}'", what, name, kernel_name);
             return static_cast<uint32_t>(it->second);
         };
-        auto array_slots_of = [&](const auto& slots, const std::string& name, const ArrayArgValue& value) {
+        auto array_slot_of = [&](const auto& slots, const std::string& name, const ArrayArgValue& value) {
             const auto it = slots.find(name);
             TT_FATAL(it != slots.end(), "Array argument '{}' is not declared by kernel '{}'", name, kernel_name);
             TT_FATAL(
@@ -1048,31 +1178,46 @@ std::vector<NamedArgWords> resolve_named_args(const Program& program, const Prog
                 kernel_name,
                 value.size(),
                 it->second.size);
-            std::vector<uint32_t> words(value.size());
-            for (size_t i = 0; i < value.size(); ++i) {
-                words[i] = value[i].to_uint32();
-            }
-            return std::pair{static_cast<uint32_t>(it->second.first_slot), std::move(words)};
+            return static_cast<uint32_t>(it->second.first_slot);
+        };
+        auto scalar = [](const ArgValue& value) {
+            return [&value](std::vector<uint32_t>& words) { words.push_back(value.to_uint32()); };
+        };
+        auto array = [](const ArrayArgValue& value) {
+            return [&value](std::vector<uint32_t>& words) {
+                for (size_t i = 0; i < value.size(); ++i) {
+                    words.push_back(value[i].to_uint32());
+                }
+            };
         };
         for (const auto& [name, per_node] : kernel_args.runtime_arg_values) {
             const uint32_t slot = slot_of(schema->runtime_arg_name_to_slot, name, "Runtime argument");
             for (const auto& [node, value] : per_node) {
-                out.push_back({kernel, node, slot, {value.to_uint32()}});
+                add(kernel, node, slot, scalar(value), 1);
             }
         }
         for (const auto& [name, per_node] : kernel_args.runtime_array_arg_values) {
             for (const auto& [node, value] : per_node) {
-                auto [slot, words] = array_slots_of(schema->runtime_array_arg_slots, name, value);
-                out.push_back({kernel, node, slot, std::move(words)});
+                add(kernel,
+                    node,
+                    array_slot_of(schema->runtime_array_arg_slots, name, value),
+                    array(value),
+                    value.size());
             }
         }
         for (const auto& [name, value] : kernel_args.common_runtime_arg_values) {
-            const uint32_t slot = slot_of(schema->common_runtime_arg_name_to_slot, name, "Common runtime argument");
-            out.push_back({kernel, std::nullopt, slot, {value.to_uint32()}});
+            add(kernel,
+                std::nullopt,
+                slot_of(schema->common_runtime_arg_name_to_slot, name, "Common runtime argument"),
+                scalar(value),
+                1);
         }
         for (const auto& [name, value] : kernel_args.common_runtime_array_arg_values) {
-            auto [slot, words] = array_slots_of(schema->common_runtime_array_arg_slots, name, value);
-            out.push_back({kernel, std::nullopt, slot, std::move(words)});
+            add(kernel,
+                std::nullopt,
+                array_slot_of(schema->common_runtime_array_arg_slots, name, value),
+                array(value),
+                value.size());
         }
     }
     return out;
@@ -1097,23 +1242,7 @@ void SetProgramRunArgsPerDevice(
     const distributed::MeshCoordinate& device,
     const ProgramRunArgs& values) {
     const auto resolved = resolve_named_args(program_at(workload, program_range, device), values);
-    auto& impl = workload.impl();
-    // All or nothing: check every arg first, so setting them cannot fail half-way.
-    for (const auto& words : resolved) {
-        (void)impl.find_per_device_runtime_args_field(
-            program_range,
-            words.kernel,
-            words.core,
-            words.first_word,
-            static_cast<uint32_t>(words.values.size()),
-            /*metal2=*/true);
-    }
-    // Drops recorded by earlier program-level sets / updates apply before these values, never to them.
-    impl.apply_per_device_run_arg_drops(program_range);
-    for (const auto& words : resolved) {
-        impl.set_per_device_named_runtime_args(
-            program_range, device, words.kernel, words.core, words.first_word, words.values);
-    }
+    workload.impl().set_per_device_named_runtime_args(program_range, device, resolved.args, resolved.words);
 }
 
 void SetRuntimeArgs(

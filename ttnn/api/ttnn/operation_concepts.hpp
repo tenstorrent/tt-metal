@@ -22,6 +22,8 @@
 
 namespace ttnn::device_operation {
 
+struct RangeRunArgs;  // ttnn/metal_v2_artifacts.hpp
+
 template <typename T>
 concept ProgramFactoryConcept = requires {
     typename T::cached_program_t;
@@ -113,6 +115,16 @@ concept HasSpecRuntimeArgsOverride = requires {
         typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
         tt::tt_metal::experimental::ProgramRunArgs>;
 };
+
+// True iff T has a single static override_runtime_arguments returning RangeRunArgs: the cache-hit form of a
+// MeshWorkloadSpecFactoryConcept factory with per-device run args. Kept apart from HasSpecRuntimeArgsOverride, which
+// also routes SPMD spec factories, so a mis-typed SPMD factory cannot land in the mesh adapter.
+template <typename T>
+concept HasRangeRunArgsOverride = requires {
+    requires std::same_as<
+        typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
+        ttnn::device_operation::RangeRunArgs>;
+};
 }  // namespace detail
 
 // A factory whose programs vary across the mesh: one call returns the workload-scoped resources
@@ -126,6 +138,11 @@ concept HasSpecRuntimeArgsOverride = requires {
 //       const ttnn::MeshCoordinateRange& range);
 // One Program backs a whole range, so the override is called once per range and takes the range
 // rather than a coordinate: what it returns applies to every device the range covers.
+// A factory whose devices differ only in a few named kernel run args declares
+//   static constexpr bool uses_per_device_run_args = true;
+// returns per-device values in PerCoordProgram::per_device_run_params, and overrides with
+//   static RangeRunArgs override_runtime_arguments(..., const ttnn::MeshCoordinateRange& range);
+// (see MeshWorkloadSpecFactoryAdapter).
 template <typename T>
 concept MeshWorkloadSpecFactoryConcept = requires {
     &T::create_mesh_workload_artifacts;
