@@ -42,7 +42,7 @@ class FabricBuilderContext;
  * FabricBuilder is only constructed via fabric_init.cpp (never embedded in other
  * structs or passed across shared library boundaries by value), so the ABI impact
  * is limited to callers that previously constructed FabricBuilder directly. The
- * register_fabric_builder_factory() API is the intended extension point.
+ * register_fabric_build_session_factory() API is the intended extension point.
  */
 class FabricBuilder {
 public:
@@ -81,14 +81,15 @@ public:
     virtual void create_kernels();
 
     /**
-     * Check if any routers were created.
+     * Check if any routers were created. Virtual so a builder that does not keep its routers in
+     * routers_ (e.g. a plugin that emits kernels from its own graph) is not mistaken for an empty one.
      */
-    bool has_routers() const { return !routers_.empty(); }
+    virtual bool has_routers() const { return !routers_.empty(); }
 
     /**
      * Get the number of routers created.
      */
-    size_t get_num_routers() const { return routers_.size(); }
+    virtual size_t get_num_routers() const { return routers_.size(); }
 
 protected:
     /**
@@ -147,32 +148,59 @@ protected:
     chan_id_t master_router_chan_ = 0;
 };
 
-// ============ Plugin Factory Registration ============
+// ============ Plugin Registration ============
 
 /**
- * Factory function type for creating custom FabricBuilder implementations.
+ * FabricBuildSession
  *
- * External code (e.g., custom fabric builder plugins) can register a factory function
- * that will be called instead of constructing the default FabricBuilder. This enables
- * out-of-tree builder implementations without compile-time coupling.
+ * Holds a builder's state for one fabric launch. Fabric init creates one session per launch,
+ * once and on one thread, before it compiles any device, and destroys it when fabric is torn
+ * down. A builder that needs a whole-system view (e.g. lowering a topology graph and allocating
+ * every router before emitting any kernel) does that work when its session is created; the
+ * per-device builders then only read it. Tearing fabric down and launching it again, with the
+ * same or a different config, gets a fresh session.
  *
- * The factory receives the same arguments as the FabricBuilder constructor and must
- * return a non-null, fully-functional FabricBuilder (or subclass) that implements all
- * build phases: discover_channels, create_routers, connect_routers,
- * compile_ancillary_kernels, create_kernels.
+ * make_device_builder() is called once per device, concurrently from the per-device compile
+ * tasks, so it must be safe to call from several threads at once.
+ */
+class FabricBuildSession {
+public:
+    virtual ~FabricBuildSession() = default;
+
+    virtual std::unique_ptr<FabricBuilder> make_device_builder(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        FabricContext& fabric_context,
+        CoreType dispatch_core_type) const = 0;
+};
+
+/**
+ * Creates the session for one fabric launch. Receives the launch's FabricContext and must
+ * return a non-null session.
+ */
+using FabricBuildSessionFactory = std::function<std::unique_ptr<FabricBuildSession>(FabricContext&)>;
+
+/**
+ * Register a build session factory. When set, every fabric launch builds through the session it
+ * creates instead of the default FabricBuilder. Pass nullptr to clear. Asserts if a factory is
+ * already registered (clear first). Must be called before fabric init, not during it.
  *
- * Thread safety: Registration must happen before any call to
- * create_and_compile_tt_fabric_program(). This is a program-startup operation.
- * Concurrent registration or registration during fabric init is a programming error.
- * Double-registration without clearing (nullptr) first will assert.
- *
- * Note: This header is currently internal (not in the public api/ install set).
- * Out-of-tree consumers must include it from the tt-metal source tree. A public
- * forwarding header under api/tt-metalium/experimental/fabric/ may be added in the
- * future if this API stabilizes.
+ * Note: This header is internal (not in the public api/ install set). Out-of-tree consumers
+ * include it from the tt-metal source tree.
+ */
+void register_fabric_build_session_factory(FabricBuildSessionFactory factory);
+
+/**
+ * Create the build session for one fabric launch: the registered factory's, or a session that
+ * builds with the default FabricBuilder when none is registered.
+ */
+std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& fabric_context);
+
+/**
+ * Per-device factory. Kept for builders that need no launch-wide state: registering a factory
+ * registers a session factory whose sessions call it for each device.
  *
  * Usage:
- *   // In plugin initialization (before fabric init):
  *   tt::tt_fabric::register_fabric_builder_factory(
  *       [](tt::tt_metal::IDevice* device, tt::tt_metal::Program& program,
  *          tt::tt_fabric::FabricContext& ctx, CoreType dispatch_core_type)
@@ -184,16 +212,9 @@ using FabricBuilderFactory = std::function<std::unique_ptr<FabricBuilder>(
     tt::tt_metal::IDevice*, tt::tt_metal::Program&, FabricContext&, CoreType)>;
 
 /**
- * Register a custom FabricBuilder factory. When set, fabric initialization will use this
- * factory instead of constructing the default FabricBuilder. Pass nullptr to clear.
- * Asserts if a factory is already registered (clear first with nullptr before re-registering).
- * Must be called before any fabric init. The factory must return a non-null pointer.
+ * Register a per-device factory (see FabricBuilderFactory). Same rules as
+ * register_fabric_build_session_factory(), which it calls: pass nullptr to clear.
  */
 void register_fabric_builder_factory(FabricBuilderFactory factory);
-
-/**
- * Returns the currently registered factory, or nullptr if none is registered.
- */
-const FabricBuilderFactory& get_fabric_builder_factory();
 
 }  // namespace tt::tt_fabric
