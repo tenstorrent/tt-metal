@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Kimi-K3.1's PP4 deployment as the K3.1 tests share it: the runner's mesh, context, chunk and stage
-split, the recorded capacity of each stage, and PP4 rank 0 built with the K3 manifest's knobs."""
+split, the measured PP4 user capacity, and PP4 rank 0 built with the K3 manifest's knobs."""
 
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ TRACE_REGION_SIZE = 256 * 1024 * 1024  # the runner's PREFILL_TRACE_REGION_SIZE 
 STAGES = compute_layer_split(
     KimiK31Config.NUM_LAYERS, NUM_STAGES, ADAPTER.layer_split_boundaries(KimiK31Config.NUM_LAYERS)
 )
-# Measured on bh-glx-110-c10u14 (tt_metal_tracker-ao3i.1.6), each stage built and traced as the runner builds
-# it: the most users each stage fits at MAX_SEQ_LEN; one more fails. The PP4 system maximum is their minimum, 76.
-STAGE_MAX_USERS = {0: 76, 1: 77, 2: 77, 3: 93}
+# The most users PP4 fits at MAX_SEQ_LEN, measured on bh-glx-110-c10u14 with each stage built and traced as the
+# runner builds it (one more fails): stage 0 is the bound at 76; stages 1-3 fit 77 / 77 / 93.
+PP4_MAX_USERS = 76
 
 # The runner's mesh: 8x4 torus, the adapter's fabric payload and L1_SMALL, the default trace region.
 PLACEMENT = [
