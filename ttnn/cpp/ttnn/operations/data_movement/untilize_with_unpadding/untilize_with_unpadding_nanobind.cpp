@@ -27,7 +27,11 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor
-            output_tensor_end (shape): End indices of input tensor in output tensor.
+            output_tensor_end (shape): Inclusive end indices, one per input dimension, below the padded input extents.
+                Empty inputs may use UINT32_MAX for a zero output extent.
+
+        Raises:
+            RuntimeError: If the end rank differs from the input rank or an end exceeds the padded input.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
