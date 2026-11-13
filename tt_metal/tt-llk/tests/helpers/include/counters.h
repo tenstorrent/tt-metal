@@ -472,7 +472,7 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
 #endif
         const BankRegsRef regs = llk::perf::bank_regs(static_cast<Bank>(bank_id));
         // No mux write: it is fixed once by configure_hardware and cannot be re-aimed afterwards.
-        // SELECT_POLL_LIMIT: 1 on Quasar (local window, RISC-V ordering guarantees the write is visible), 1024 otherwise.
+        // On a miss (SELECT_POLL_LIMIT retries exhausted) the sentinel is stored; see SELECT_POLL_LIMIT above.
         const bool selected     = llk::perf::select<SELECT_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
         counter_counts[out_idx] = selected ? llk::perf::read_count(regs) : COUNTER_SELECT_MISSED;
         ++out_idx;
