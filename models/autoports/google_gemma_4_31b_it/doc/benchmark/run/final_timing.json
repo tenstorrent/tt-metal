@@ -5,5 +5,8 @@
   "deadline_monotonic": 1555999.297087911,
   "boot_id": "aa08a540-457f-4725-a941-9f3f5bdfa036",
   "elapsed_seconds_through_report": 9921.734216156881,
-  "within_budget": true
+  "within_budget": true,
+  "elapsed_seconds_through_review_and_evidence_commit": 10145.047179960879,
+  "evidence_commit": "45d940bf7233bb52824243f268a23cb70f57f75c",
+  "review_verdict": "clean-pass"
 }
