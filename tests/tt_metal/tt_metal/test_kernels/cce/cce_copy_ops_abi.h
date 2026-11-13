@@ -16,7 +16,9 @@ inline constexpr uint32_t kOpSrcKind = 0, kOpSrcSelector = 1, kOpSrcOffsetLo = 2
 constexpr uint32_t op_arg_index(uint32_t op_index, uint32_t field) {
     return kHeaderWords + kOpWords * op_index + field;
 }
-inline constexpr uint32_t kKindOwnTl1 = 0, kKindGddr = 1, kKindSramSpa = 2;
+using cce_test_status_abi::kKindGddr;
+using cce_test_status_abi::kKindOwnTl1;
+using cce_test_status_abi::kKindSramSpa;
 // Gddr selector: the target Mimir. The CCE's host-written route table picks the D2D port.
 // Done block: after the last op the kernel writes the XOR, then the magic. An early return leaves the host's poison.
 inline constexpr uint32_t kDoneMagicWord = 0, kDoneXorWord = 1, kDoneWords = 2;
