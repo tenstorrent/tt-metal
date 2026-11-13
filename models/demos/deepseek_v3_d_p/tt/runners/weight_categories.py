@@ -196,6 +196,11 @@ def format_missing(missing: dict[str, list[int]]) -> str:
 # ---------------------------------------------------------------------------------------------------------------
 
 
+def checkpoint_available(path: str | Path) -> bool:
+    """Whether ``path`` holds a sharded safetensors checkpoint to convert from. A config-only directory does not."""
+    return bool(path) and (Path(path) / "model.safetensors.index.json").is_file()
+
+
 class _Checkpoint:
     """Tensor-level reader over a sharded HF safetensors checkpoint. Opens only the shards a request touches."""
 
