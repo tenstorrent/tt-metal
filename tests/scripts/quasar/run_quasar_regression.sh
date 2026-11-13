@@ -30,6 +30,15 @@ fi
 EMU_HOSTNAME_RETRY_DELAY="${QUASAR_EMU_HOSTNAME_RETRY_DELAY:-30}"
 EMU_MONITOR_POLL_INTERVAL="${QUASAR_EMU_HOSTNAME_POLL_INTERVAL:-2}"
 EMU_LOG_GLOB='emu_*_.log'
+# Stall watchdog (opt-in): QUASAR_STALL_TIMEOUT=<seconds>. A test process that prints no progress line (gtest
+# [ RUN ]/[ OK ]/[ FAILED ]/[ SKIPPED ], or a pytest node id) for that long while its emulator job is running is
+# treated as hung: the test that was running is recorded as a failure, the job is stopped, and the remaining tests
+# run again without it. Time spent waiting in the emulator queue does not count.
+STALL_TIMEOUT="${QUASAR_STALL_TIMEOUT:-0}"
+if [[ ! "$STALL_TIMEOUT" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: QUASAR_STALL_TIMEOUT must be a non-negative integer (seconds)"
+    exit 1
+fi
 EMU_HOSTNAME_CONFLICT_REGEX='zServer : ERROR.* is used by'
 SIMULATOR_PID_REGEX='Simulator process spawned with PID: ([0-9]+)'
 
@@ -517,6 +526,8 @@ run_cmd_with_emu_monitor() {
 
     gtest_emu_hostname_conflict=0
     gtest_emu_conflict_lines=""
+    gtest_stalled=0
+    local stall_progress="-1" stall_ts=$SECONDS
     tracked_sim_pids=()
     active_tracked_sim_pids=()
     refresh_emu_logs_baseline
@@ -553,6 +564,28 @@ run_cmd_with_emu_monitor() {
                 fi
                 emu_log_offsets["$f"]=$offset_slot
             done
+        fi
+
+        if [[ ${STALL_TIMEOUT:-0} -gt 0 && -n "${emu_capture_file:-}" && -f "$emu_capture_file" ]]; then
+            local progress newest_log="" job_running=0
+            progress="$(grep -cE '^\[ +(RUN|OK|FAILED|SKIPPED) +\]|^[^ ]+::[^ ]+' "$emu_capture_file" 2>/dev/null || true)"
+            for f in "${!emu_log_offsets[@]}"; do
+                if [[ -z "$newest_log" || "$f" -nt "$newest_log" ]]; then newest_log="$f"; fi
+            done
+            # The emulator job is running once its log shows the test collected; before that it is queued or booting.
+            if [[ -n "$newest_log" ]] && grep -q "collected 1 item" "$newest_log" 2>/dev/null; then job_running=1; fi
+            if [[ "$progress" != "$stall_progress" || $job_running -eq 0 ]]; then
+                stall_progress="$progress"
+                stall_ts=$SECONDS
+            elif (( SECONDS - stall_ts >= STALL_TIMEOUT )); then
+                echo "  STALL: no test progress for ${STALL_TIMEOUT}s while the emulator job is running; stopping the test"
+                gtest_stalled=1
+                cleanup_emu_attempt "$cmd_pid" "${tracked_sim_pids[@]}"
+                active_gtest_pid=""
+                active_tracked_sim_pids=()
+                tracked_sim_pids=()
+                break
+            fi
         fi
 
         if [[ $gtest_emu_hostname_conflict -eq 1 ]]; then
@@ -964,9 +997,14 @@ ttsim_handle_stop() {
     local runner="$1" config="$2" group="$3"
     [[ -n "$ttsim_capture" && -s "$ttsim_capture" ]] || return 1
     [[ -z "$result_file" || ! -f "$result_file" ]] || return 1
-    local err
-    err="$(grep -m1 -E '\[[0-9]+\] ERROR: [A-Za-z]+: ' "$ttsim_capture" | sed -E 's/^.*\] ERROR: //' || true)"
-    [[ -n "$err" ]] || return 1
+    local err why="ttsim stopped"
+    if [[ ${gtest_stalled:-0} -eq 1 ]]; then
+        err="no test progress for ${STALL_TIMEOUT}s"
+        why="stalled"
+    else
+        err="$(grep -m1 -E '\[[0-9]+\] ERROR: [A-Za-z]+: ' "$ttsim_capture" | sed -E 's/^.*\] ERROR: //' || true)"
+        [[ -n "$err" ]] || return 1
+    fi
 
     local status name tm crashed="" shown parser
     if [[ "$runner" == "pytest" ]]; then parser=ttsim_parse_pytest_output; else parser=ttsim_parse_gtest_output; fi
@@ -983,7 +1021,7 @@ ttsim_handle_stop() {
         fi
         if [[ "$status" == CRASH ]]; then
             crashed="$name"
-            ttsim_record FAIL "$shown" "ttsim stopped: $err"
+            ttsim_record FAIL "$shown" "$why: $err"
         else
             ttsim_record "$status" "$shown" "${tm:-from output}"
         fi
@@ -991,7 +1029,7 @@ ttsim_handle_stop() {
     done < <($parser "$ttsim_capture")
     [[ -n "$crashed" ]] || return 1
     ttsim_rounds=$((ttsim_rounds + 1))
-    echo "  TTSIM STOPPED in $crashed: $err"
+    echo "  ${why^^} in $crashed: $err"
     echo "  recorded as FAIL; running the remaining tests without the ones already run (round $ttsim_rounds)"
     return 0
 }
@@ -1146,7 +1184,7 @@ run_test_invocation() {
     ttsim_exclude=()
     ttsim_rounds=0
     local ttsim_capture=""
-    if [[ -n "${TTSIM_LIB:-}" ]]; then
+    if [[ -n "${TTSIM_LIB:-}" || ${STALL_TIMEOUT:-0} -gt 0 ]]; then
         ttsim_capture="$(mktemp "${TMPDIR:-/tmp}/ttsim_out.XXXXXX")"
     fi
 
