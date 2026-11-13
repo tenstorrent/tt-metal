@@ -1271,7 +1271,9 @@ bool isGalaxyMMIODevice(const Cluster& cluster, distributed::MeshDevice* mesh_de
 
 bool useFastDispatch(MetalContext& ctx, distributed::MeshDevice* mesh_device, IDevice* device) {
     auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    // An emulated device runs no dispatch firmware to read and write its cores through; the host does it directly.
     return env.get_rtoptions().get_fast_dispatch() && ctx.device_manager()->is_dispatch_firmware_active() &&
+           env.get_cluster().get_target_device_type() != tt::TargetDevice::Emule &&
            !isGalaxyMMIODevice(env.get_cluster(), mesh_device, device);
 }
 
