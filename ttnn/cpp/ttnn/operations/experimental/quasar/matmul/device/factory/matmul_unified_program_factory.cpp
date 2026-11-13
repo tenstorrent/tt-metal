@@ -98,12 +98,12 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     }
 
     // ---- Prefetcher pipes of B: one parameter per pipe, which the reader binds under one accessor ----
-    Group<PrefetcherPipeParameter> B_pipe_parameters;
-    Group<PrefetcherPipeParamName> B_pipe_names;
+    Group<tt::tt_metal::experimental::PrefetcherPipeParameter> B_pipe_parameters;
+    Group<tt::tt_metal::experimental::PrefetcherPipeParamName> B_pipe_names;
     for (size_t p = 0; p < operation_attributes.prefetcher_pipes.size(); ++p) {
         const tt::tt_metal::experimental::PrefetcherPipe& pipe = *operation_attributes.prefetcher_pipes[p];
-        B_pipe_names.push_back(PrefetcherPipeParamName{fmt::format("B_pipe_{}", p)});
-        B_pipe_parameters.push_back(PrefetcherPipeParameter{
+        B_pipe_names.push_back(tt::tt_metal::experimental::PrefetcherPipeParamName{fmt::format("B_pipe_{}", p)});
+        B_pipe_parameters.push_back(tt::tt_metal::experimental::PrefetcherPipeParameter{
             .unique_id = B_pipe_names.back(),
             .receivers = pipe.receiver_cores(),
             .ring_size = pipe.ring_size(),
@@ -499,7 +499,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     }
     for (size_t p = 0; p < operation_attributes.prefetcher_pipes.size(); ++p) {
         run_args.advanced_options.prefetcher_pipe_args.emplace(
-            B_pipe_names[p], PrefetcherPipeArgument{*operation_attributes.prefetcher_pipes[p]});
+            B_pipe_names[p],
+            tt::tt_metal::experimental::PrefetcherPipeArgument{*operation_attributes.prefetcher_pipes[p]});
     }
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
