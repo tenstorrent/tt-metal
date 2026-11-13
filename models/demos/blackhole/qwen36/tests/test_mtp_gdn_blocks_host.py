@@ -228,6 +228,27 @@ def test_verify_tables_are_bound_per_mambaspec_group(copies):
         assert torch.equal(ctrl, want[0]) and torch.equal(idx, want[1])
 
 
+def test_unchanged_verify_tables_are_not_copied_again(copies):
+    """A table the device already holds is not copied: a second verify of the same blocks copies nothing, and a row
+    whose start block moves (a new accepted count) copies only the ctrl pages. Clearing the tables restages all."""
+    st, plugin = _block_state()
+    blocks = SpecBlocks(plugin, 3, "none")
+    blocks.admit(0)
+    blocks.prefill(0, 0, 100)
+    sel = {0: blocks.decode(0, 100, 4)}
+    st.set_verify_blocks(blocks.state(sel, 4))
+    copies.clear()
+    st.set_verify_blocks(blocks.state(sel, 4))
+    assert copies == []
+    blocks.commit(0, 2)
+    sel = {0: blocks.decode(0, 102, 4)}
+    st.set_verify_blocks(blocks.state(sel, 4))
+    assert {id(dev) for _, dev in copies} <= {id(t) for t in st._verify_ctrl} and len(copies) == plugin.num_groups
+    copies.clear()
+    st.clear_verify_blocks()
+    assert len(copies) == 2 * plugin.num_groups
+
+
 def test_verify_tables_refuse_other_groupings_and_short_windows(copies, expect_error):
     st, plugin = _block_state()
     blocks = SpecBlocks(plugin, 3, "none")
