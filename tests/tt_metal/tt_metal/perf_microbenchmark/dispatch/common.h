@@ -1227,12 +1227,12 @@ protected:
         uint32_t avail = 0;
         while (avail < total_expected_cq_payload) {
             const auto [completion_q_write_ptr_16B, completion_q_write_toggle] =
-                split_ptr_toggle(mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition));
+                split_ptr_toggle(mgr_->cq(fdcq_->id()).completion_queue_wait_front(exit_condition));
             const uint32_t completion_q_write_ptr = completion_q_write_ptr_16B << 4;
-            const uint32_t completion_q_read_ptr = mgr_->get_completion_queue_read_ptr(fdcq_->id());
-            const uint32_t completion_q_read_toggle = mgr_->get_completion_queue_read_toggle(fdcq_->id());
-            const uint32_t completion_q_base = mgr_->get_issue_queue_limit(fdcq_->id());
-            const uint32_t limit = mgr_->get_completion_queue_limit(fdcq_->id());  // offset of end, in bytes
+            const uint32_t completion_q_read_ptr = mgr_->cq(fdcq_->id()).completion_queue_read_ptr();
+            const uint32_t completion_q_read_toggle = mgr_->cq(fdcq_->id()).completion_queue_read_toggle();
+            const uint32_t completion_q_base = mgr_->cq(fdcq_->id()).issue_queue_limit();
+            const uint32_t limit = mgr_->cq(fdcq_->id()).completion_queue_limit();  // offset of end, in bytes
 
             if (completion_q_write_toggle == completion_q_read_toggle) {
                 avail = (completion_q_write_ptr > completion_q_read_ptr)
@@ -1316,7 +1316,7 @@ protected:
         // PHASE 3: Reserve and write commands
         // Reserve a continuous block in the system memory issue queue for all commands across all iterations
         // This memory is mapped and visible to the device's prefetcher kernel
-        void* cmd_buffer_base = mgr_->issue_queue_reserve(total_cmd_bytes, fdcq_->id());
+        void* cmd_buffer_base = mgr_->cq(fdcq_->id()).issue_queue_reserve(total_cmd_bytes);
 
         // Use DeviceCommand helper (HugepageDeviceCommand) to write to the issue queue memory
         // Two stage command construction:
@@ -1360,15 +1360,15 @@ protected:
         // PHASE 4: Submit and execute commands
         // Update host-side write pointer
         // Tells the SystemMemoryManager that valid data exists in the issue queue upto this point
-        mgr_->issue_queue_push_back(dc.write_offset_bytes(), fdcq_->id());
+        mgr_->cq(fdcq_->id()).issue_queue_push_back(dc.write_offset_bytes());
 
         // Write the commands to the device-side fetch queue
         // This updates the read/write pointers in the Device's L1 memory, effectively
         // Signals to the prefetcher kernel that new commands are available to fetch
         const auto start = std::chrono::steady_clock::now();
         for (const uint32_t sz : entry_sizes) {
-            mgr_->fetch_queue_reserve_back(fdcq_->id());
-            mgr_->fetch_queue_write(sz, fdcq_->id());
+            mgr_->cq(fdcq_->id()).fetch_queue_reserve_back();
+            mgr_->cq(fdcq_->id()).fetch_queue_write(sz, /*stall_prefetcher=*/false);
         }
 
         // Wait for completion of the issued commands

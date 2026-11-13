@@ -326,7 +326,7 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
             pointers.resize(cq_start / sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 // Reset the host manager's pointer for this command queue
-                this->sysmem_manager_->reset(cq_id);
+                this->sysmem_manager_->cq(cq_id).reset();
 
                 const uint32_t cq_offset =
                     this->sysmem_manager_->is_dram_backed()
@@ -337,9 +337,9 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                 pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
                 pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
                 pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+                    (cq_start + this->sysmem_manager_->cq(cq_id).issue_queue_size() + cq_offset) >> 4;
                 pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+                    (cq_start + this->sysmem_manager_->cq(cq_id).issue_queue_size() + cq_offset) >> 4;
 
                 if (this->sysmem_manager_->is_dram_backed()) {
                     // With DRAM-backed CQs, each device stores its command queue in its own DRAM. The CQ

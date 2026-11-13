@@ -330,7 +330,7 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         bool all_devices_completed = true;
         for (const auto& coord : event.impl().device_range()) {
             auto* physical_device = event.device()->impl().get_device(coord);
-            if (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
+            if (physical_device->sysmem_manager().cq(event.impl().mesh_cq_id()).last_completed_event() <
                 event.impl().id()) {
                 all_devices_completed = false;
                 break;

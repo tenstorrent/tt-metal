@@ -165,7 +165,7 @@ void write_rt_profiler_flush(
     calculator.add_dispatch_rt_profiler_flush();
     uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    void* cmd_region = sysmem_manager.cq(cq_id).issue_queue_reserve(cmd_sequence_sizeB);
 
     HugepageDeviceCommand flush_cmd_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     const uint32_t wait_stream = metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id);
@@ -173,8 +173,6 @@ void write_rt_profiler_flush(
 
     TT_ASSERT(flush_cmd_sequence.size_bytes() == flush_cmd_sequence.write_offset_bytes());
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-    sysmem_manager.fetch_queue_reserve_back(cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    sysmem_manager.cq(cq_id).publish(cmd_sequence_sizeB);
 }
 }  // namespace tt::tt_metal::distributed

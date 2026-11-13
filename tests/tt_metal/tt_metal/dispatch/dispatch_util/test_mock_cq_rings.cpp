@@ -47,11 +47,11 @@ protected:
     // every reservation stays inside [region_start, region_start + kMockIssueQueueSize).
     void write_laps(uint8_t cq_id, char* region_start, uint32_t laps, char fill) {
         for (uint32_t i = 0; i < laps * kChunksPerLap; i++) {
-            auto* cmd = static_cast<char*>(manager_->issue_queue_reserve(kChunkSize, cq_id));
+            auto* cmd = static_cast<char*>(manager_->cq(cq_id).issue_queue_reserve(kChunkSize));
             EXPECT_GE(cmd, region_start) << "CQ " << int(cq_id) << " chunk " << i;
             EXPECT_LE(cmd + kChunkSize, region_start + kMockIssueQueueSize) << "CQ " << int(cq_id) << " chunk " << i;
             std::memset(cmd, fill, kChunkSize);
-            manager_->issue_queue_push_back(kChunkSize, cq_id);
+            manager_->cq(cq_id).issue_queue_push_back(kChunkSize);
         }
     }
 
@@ -65,17 +65,17 @@ TEST_F(MockTwoCqRingsTest, CPU_EachCqHasItsOwnRing) {
     std::vector<uint32_t> start_ptrs;
     for (uint8_t cq_id = 0; cq_id < kNumCqs; cq_id++) {
         // Sizes and free space match the stubs the mock backing replaced.
-        EXPECT_EQ(manager_->get_issue_queue_size(cq_id), kMockIssueQueueSize);
-        EXPECT_EQ(manager_->get_completion_queue_size(cq_id), kMockIssueQueueSize);
-        const uint32_t write_ptr = manager_->get_issue_queue_write_ptr(cq_id);
+        EXPECT_EQ(manager_->cq(cq_id).issue_queue_size(), kMockIssueQueueSize);
+        EXPECT_EQ(manager_->cq(cq_id).completion_queue_size(), kMockIssueQueueSize);
+        const uint32_t write_ptr = manager_->cq(cq_id).issue_queue_write_ptr();
         // Each CQ is idle at the start of its region, so the first reservation is the region start.
-        ASSERT_EQ(manager_->get_issue_queue_limit(cq_id) - write_ptr, kMockIssueQueueSize)
+        ASSERT_EQ(manager_->cq(cq_id).issue_queue_limit() - write_ptr, kMockIssueQueueSize)
             << "CQ " << int(cq_id) << " wasn't idle at the start";
         EXPECT_EQ(
-            manager_->get_completion_queue_limit(cq_id) - manager_->get_completion_queue_read_ptr(cq_id),
+            manager_->cq(cq_id).completion_queue_limit() - manager_->cq(cq_id).completion_queue_read_ptr(),
             kMockIssueQueueSize);
         start_ptrs.push_back(write_ptr);
-        region_starts.push_back(static_cast<char*>(manager_->issue_queue_reserve(kChunkSize, cq_id)));
+        region_starts.push_back(static_cast<char*>(manager_->cq(cq_id).issue_queue_reserve(kChunkSize)));
     }
 
     // The two issue queues don't overlap.
@@ -86,7 +86,7 @@ TEST_F(MockTwoCqRingsTest, CPU_EachCqHasItsOwnRing) {
     for (uint8_t cq_id = 0; cq_id < kNumCqs; cq_id++) {
         write_laps(cq_id, region_starts[cq_id], /*laps=*/2, static_cast<char>(cq_id + 1));
         // After whole laps the write pointer is back at the CQ's own start.
-        EXPECT_EQ(manager_->get_issue_queue_write_ptr(cq_id), start_ptrs[cq_id]);
+        EXPECT_EQ(manager_->cq(cq_id).issue_queue_write_ptr(), start_ptrs[cq_id]);
     }
 
     // Neither CQ wrote into the other's queue.
@@ -101,9 +101,9 @@ TEST_F(MockTwoCqRingsTest, CPU_CqsCanBeWrittenFromTwoThreads) {
     for (uint8_t cq_id = 0; cq_id < kNumCqs; cq_id++) {
         // Each CQ is idle at the start of its region, so the first reservation is the region start.
         ASSERT_EQ(
-            manager_->get_issue_queue_limit(cq_id) - manager_->get_issue_queue_write_ptr(cq_id), kMockIssueQueueSize)
+            manager_->cq(cq_id).issue_queue_limit() - manager_->cq(cq_id).issue_queue_write_ptr(), kMockIssueQueueSize)
             << "CQ " << int(cq_id) << " wasn't idle at the start";
-        region_starts.push_back(static_cast<char*>(manager_->issue_queue_reserve(kChunkSize, cq_id)));
+        region_starts.push_back(static_cast<char*>(manager_->cq(cq_id).issue_queue_reserve(kChunkSize)));
     }
 
     // One thread per CQ, as with a dispatch thread per mesh command queue.

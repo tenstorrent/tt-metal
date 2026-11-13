@@ -156,7 +156,7 @@ void EventSynchronize(const MeshEvent& event) {
     TT_FATAL(mesh_cq != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
+        while (physical_device->sysmem_manager().cq(event.impl().mesh_cq_id()).last_completed_event() <
                event.impl().id()) {
             mesh_cq->throw_if_reader_failed();
         }
@@ -176,7 +176,7 @@ bool EventQuery(const MeshEvent& event) {
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
         event_completed &=
-            physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) >= event.impl().id();
+            physical_device->sysmem_manager().cq(event.impl().mesh_cq_id()).last_completed_event() >= event.impl().id();
     }
     return event_completed;
 }
