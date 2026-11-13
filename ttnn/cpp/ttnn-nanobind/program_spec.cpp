@@ -213,15 +213,65 @@ m2::Table<m2::TensorParamName, m2::TensorArgument> make_tensor_args(const nb::di
     return tensor_args;
 }
 
-// A plain dict with the entries of tensor_args, read with PyDict_Next as make_tensor_args reads them, so a dict
-// subclass's copy() or __iter__ cannot change them. ProgramRunArgs builds its C++ table from this copy and keeps the
-// copy as the owner of the tensors, so the two always name the same tensors.
+// A plain dict with the entries of tensor_args, made without calling a dict subclass's copy(). ProgramRunArgs builds
+// its C++ table from this copy and keeps the copy as the owner of the tensors, so the two always name the same tensors.
 nb::dict copy_tensor_args(const nb::dict& tensor_args) {
     nb::dict copy;
-    for (const auto& [name, tensor] : tensor_args) {
-        copy[name] = tensor;
-    }
+    copy.update(tensor_args);
     return copy;
+}
+
+// The attribute in which a Python ProgramRunArgs holds its tensor_args dict. The C++ object refers to the tensors'
+// MeshTensors, so the dict keeps them alive.
+constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
+
+// Another value, or none, in the attribute that holds the tensors, or in the instance dict that holds it, would leave
+// the C++ object referring to tensors that nothing keeps alive.
+void check_not_tensor_owners(nb::handle self, const nb::str& name) {
+    if (name.equal(nb::str(TENSOR_ARGS_ATTRIBUTE)) || name.equal(nb::str("__dict__"))) {
+        throw nb::attribute_error(fmt::format(
+                                      "'{}' object attribute '{}' is read-only",
+                                      nb::cast<std::string>(self.type().attr("__name__")),
+                                      nb::cast<std::string>(name))
+                                      .c_str());
+    }
+}
+
+// __setattr__ for the classes that keep their tensors alive in a Python attribute (and so need nb::dynamic_attr()).
+// On an instance of bound_type itself it sets the class's own attributes and rejects any other name with
+// AttributeError, as the classes without dynamic_attr do; a Python subclass may set attributes of its own. The
+// attribute that holds the tensors (_tensor_args) and the instance __dict__ that holds it cannot be assigned or
+// deleted, for both: only set_tensor_owners writes them. Code that edits either dict in place can still drop the
+// tensors, as with any private Python state.
+void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type) {
+    check_not_tensor_owners(self, name);
+    if (self.type().is(bound_type) && !nb::hasattr(bound_type, name)) {
+        throw nb::attribute_error(fmt::format(
+                                      "'{}' object has no attribute '{}'",
+                                      nb::cast<std::string>(self.type().attr("__name__")),
+                                      nb::cast<std::string>(name))
+                                      .c_str());
+    }
+    if (PyObject_GenericSetAttr(self.ptr(), name.ptr(), value.ptr()) != 0) {
+        throw nb::python_error();
+    }
+}
+
+// __delattr__ for the same classes: deleting _tensor_args or __dict__ raises AttributeError, as assigning them does.
+void delete_known_attribute(nb::handle self, const nb::str& name) {
+    check_not_tensor_owners(self, name);
+    if (PyObject_GenericSetAttr(self.ptr(), name.ptr(), nullptr) != 0) {
+        throw nb::python_error();
+    }
+}
+
+// Stores owners, the Python objects that keep the tensors of a run args object alive, in its _tensor_args attribute.
+// PyObject_GenericSetAttr skips type(self).__setattr__, so a Python subclass's __setattr__ cannot drop them. Call it
+// before the C++ object refers to the new tensors: if it fails, the object is unchanged.
+void set_tensor_owners(nb::handle self, nb::handle owners) {
+    if (PyObject_GenericSetAttr(self.ptr(), nb::str(TENSOR_ARGS_ATTRIBUTE).ptr(), owners.ptr()) != 0) {
+        throw nb::python_error();
+    }
 }
 
 void bind_enums(nb::module_& mod) {
@@ -1026,46 +1076,7 @@ void bind_program_run_args(nb::module_& mod) {
         .def_rw("dfb_run_overrides", &m2::ProgramRunArgs::dfb_run_overrides, COPY);
 }
 
-// Another value, or none, in the attribute that holds the tensors, or in the instance dict that holds it, would leave
-// the C++ object referring to tensors that nothing keeps alive.
-void check_not_tensor_owners(nb::handle self, const nb::str& name) {
-    if (name.equal(nb::str(TENSOR_ARGS_ATTRIBUTE)) || name.equal(nb::str("__dict__"))) {
-        throw nb::attribute_error(fmt::format(
-                                      "'{}' object attribute '{}' is read-only",
-                                      nb::cast<std::string>(self.type().attr("__name__")),
-                                      nb::cast<std::string>(name))
-                                      .c_str());
-    }
-}
-
 }  // namespace
-
-void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type) {
-    check_not_tensor_owners(self, name);
-    if (self.type().is(bound_type) && !nb::hasattr(bound_type, name)) {
-        throw nb::attribute_error(fmt::format(
-                                      "'{}' object has no attribute '{}'",
-                                      nb::cast<std::string>(self.type().attr("__name__")),
-                                      nb::cast<std::string>(name))
-                                      .c_str());
-    }
-    if (PyObject_GenericSetAttr(self.ptr(), name.ptr(), value.ptr()) != 0) {
-        throw nb::python_error();
-    }
-}
-
-void delete_known_attribute(nb::handle self, const nb::str& name) {
-    check_not_tensor_owners(self, name);
-    if (PyObject_GenericSetAttr(self.ptr(), name.ptr(), nullptr) != 0) {
-        throw nb::python_error();
-    }
-}
-
-void set_tensor_owners(nb::handle self, nb::handle owners) {
-    if (PyObject_GenericSetAttr(self.ptr(), nb::str(TENSOR_ARGS_ATTRIBUTE).ptr(), owners.ptr()) != 0) {
-        throw nb::python_error();
-    }
-}
 
 void py_module_types(nb::module_& mod) {
     bind_enums(mod);
