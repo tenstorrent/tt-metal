@@ -20,6 +20,7 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES, FusedShardArgmax
 from models.demos.blackhole.qwen36.tt.spec_sample import VerifySampler, with_draws
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
@@ -596,18 +597,22 @@ class Qwen36Model:
             ccl_kw = dict(dtype=out_dtype)
         logits = ttnn.linear(x, self.lm_head_weight, **kw)
         if self._lmhead_vocab_sharded:
-            from models.tt_transformers.tt.ccl import tt_all_gather
-
-            logits = tt_all_gather(
-                logits,
-                self.mesh_device,
-                self.tt_ccl,
-                cluster_axis=None,
-                dim=len(logits.shape) - 1,
-                topology=self.args.ccl_topology(),
-                **ccl_kw,
-            )
+            logits = self._gather_vocab(logits, **ccl_kw)
         return logits
+
+    def _gather_vocab(self, shard, **ccl_kw):
+        """All-gather of a vocab-sharded LM-head output to the full replicated vocab row (frees ``shard``)."""
+        from models.tt_transformers.tt.ccl import tt_all_gather
+
+        return tt_all_gather(
+            shard,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=None,
+            dim=len(shard.shape) - 1,
+            topology=self.args.ccl_topology(),
+            **ccl_kw,
+        )
 
     def _final_norm_decode(self, x):
         """Final RMSNorm before the LM head (TP decode).
@@ -1337,15 +1342,28 @@ class Qwen36Model:
         The bucket is exactly the R real rows, so there is no row-select. ``feed`` is the post-norm
         drafter feed (spec_feed_rows); its programs are the inner norm's, already compiled by the
         self.norm call."""
+        logits, feed, _ = self._spec_tail_ids(x, None)
+        return logits, feed
+
+    def _spec_tail_ids(self, x, shard_ids):
+        """_spec_tail, and ``shard_ids(shard)`` run on this device's vocab shard of the logits before the vocab all-gather
+        (vocab-sharded head only). Returns (logits, feed, ids): ids is shard_ids' result, or None without a sharded
+        head or ``shard_ids``."""
         rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,R,dim]
-        logits = self._lm_head(normed)
+        ids = None
+        if shard_ids is not None and self._lmhead_vocab_sharded:
+            shard = ttnn.linear(normed, self.lm_head_weight)
+            ids = shard_ids(shard)
+            logits = self._gather_vocab(shard)
+        else:
+            logits = self._lm_head(normed)
         ttnn.deallocate(normed)
         feed = self.spec_feed_rows(rows)
         if feed is not rows:
             ttnn.deallocate(rows)
-        return logits, feed
+        return logits, feed, ids
 
     def _forward_verify_bucket_tp(self, n_users):
         """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
@@ -1401,17 +1419,28 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
-        logits, rows_out = self._spec_tail(x)  # [1,1,B*T,vocab] replicated, drafter feed [1,1,B*T,dim/tp]
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
-        # B*T uint32 instead of B*T x 151936 floats. ttnn.argmax needs ROW_MAJOR input (a TILE tensor
-        # takes a single-core internal untilize that is hopeless at this vocab width), so untilize first.
-        # No 32-row pad: the multicore argmax is correct below a full tile of rows, and padding would
-        # multiply the bytes untilize and argmax touch (see mtp.argmax_last).
+        # B*T uint32 instead of B*T x vocab floats. The fused per-shard argmax (tt/spec_argmax_fused.py) takes the ids
+        # from each device's vocab shard before the all-gather: [1,1,1,32] uint32 ROW_MAJOR, lane r = row r.
+        logits, rows_out, ids = self._spec_tail_ids(x, self._vfy_shard_ids)  # [1,1,B*T,vocab] replicated, feed
+        # The logits readback of a logits-mode verify reads the ROW_MAJOR copy. Without a fused shard argmax, ttnn.argmax
+        # needs ROW_MAJOR input too (a TILE tensor takes a single-core internal untilize that is hopeless at this vocab
+        # width). No 32-row pad: the multicore argmax is correct below a full tile of rows, and padding would multiply
+        # the bytes untilize and argmax touch (see mtp.argmax_last).
         u = ttnn.untilize(logits, use_multicore=True)
-        ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
+        if ids is None:
+            ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
         # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The sampling path
         # reads THAT back instead of the TILE `logits`, which costs an untilize on host.
         return logits, rows_out, ids, u
+
+    def _vfy_shard_ids(self, shard):
+        """The verify's argmax ids from this device's vocab shard of the logits (fused per-shard argmax), or None when
+        the shard cannot take it; the verify body then argmaxes the gathered logits."""
+        fused = getattr(self, "_vfy_argmax_fused", None)
+        if fused is None:
+            fused = self._vfy_argmax_fused = FusedShardArgmax(self.mesh_device, self.vocab_size, self.num_devices)
+        return fused(shard, LANES) if fused.supports(shard) is None else None
 
     def _vfy_row_positions(self, positions):
         """Per-ROW absolute positions for the user-major bucket: row u*T + j is positions[u] + j."""

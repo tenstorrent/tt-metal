@@ -244,3 +244,31 @@ def test_a_moved_row_keeps_its_requests_delta_and_sampling(engine):
     )
     assert log[-1]["rope_deltas"] == [5, 0, 0, -12], "row 0 now holds slot 3's request, row 3 slot 0's"
     assert log[-1]["sample_plan"].sampled[: 4 * T] == [True] * T + [False] * (3 * T)
+
+
+def test_a_mixed_verify_reads_shard_argmax_ids_and_device_draws(monkeypatch):
+    """The verify trace's ids are the fused per-shard argmax lanes ([1,1,1,32] uint32, lane r = row r, zeros past the
+    B * T rows), and the sampler trace draws from the gathered logits. In a step with a greedy and a sampled row, the
+    greedy row keeps its argmax ids and the sampled row gets its draws; both traces replay."""
+    B, T = 2, 4
+    m = Qwen36Model.__new__(Qwen36Model)
+    m._vfy_trace_id, m._vfy_sample_trace_id, m._vfy_T, m._vfy_B, m._vfy_kv_grouped = "verify", "sample", T, B, False
+    m._vfy_pt_host, m.gdn_blocks, m.device, m.vocab_size = torch.zeros(B, 4, dtype=torch.int32), object(), None, 64
+    for name in ("_vfy_token_buf", "_vfy_kvpos_buf", "_vfy_cos_buf", "_vfy_sin_buf", "_vfy_rows_out"):
+        setattr(m, name, MagicMock())
+    m._vfy_ids_out = "ids"
+    m._rope_tp_cos_sin_decode_torch = lambda pos, deltas=None: (None, None)
+    lanes = torch.cat([torch.arange(100, 100 + B * T), torch.zeros(32 - B * T, dtype=torch.int64)]).to(torch.int32)
+    staged = []
+    m._vfy_sampler = SimpleNamespace(stage=staged.append, read=lambda: torch.arange(500, 500 + B * T))
+    replays = []
+    monkeypatch.setattr(ttnn, "execute_trace", lambda dev, trace, **kw: replays.append(trace))
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: [t])
+    monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: lanes.reshape(1, 1, 1, 32) if t == "ids" else torch.zeros(1))
+    plan = sampling_plan(_params(temperature=[0.0, 1.0], top_k=[1, 20]), [10, 20], T, fresh_seed=lambda: 7)
+    ids, _, _ = m.verify_traced([[1] * T] * B, [10, 20], [0] * B, sample_plan=plan)
+    assert ids == [100, 101, 102, 103, 504, 505, 506, 507]
+    assert replays == ["verify", "sample"] and staged == [plan]
+    replays.clear()
+    ids, _, _ = m.verify_traced([[1] * T] * B, [10, 20], [0] * B)
+    assert ids == list(range(100, 108)) and replays == ["verify"]

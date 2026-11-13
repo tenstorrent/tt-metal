@@ -17,7 +17,9 @@ from loguru import logger
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
+from models.demos.blackhole.qwen36.tt.spec_argmax_fused import ROWS, FusedShardArgmax
 from models.tt_transformers.tt.common import Mode
 
 
@@ -46,8 +48,13 @@ def draft_argmax(mtp, logits):
     QWEN36_DRAFT_SHARDED_ARGMAX (resolved once in Qwen36MTP.__init__) selects the sharded form, in
     which ``logits`` is THIS device's [1,1,B,vocab/tp] fp32 shard and the vocab all-gather never
     happened; off, ``logits`` is the gathered full-vocab row and this is exactly argmax_last.
+    The sharded form takes the fused per-shard argmax (tt/spec_argmax_fused.py: the same ids in two kernels and one
+    all-gather) for every shard it supports, and _argmax_sharded otherwise.
     """
     if mtp._sharded_argmax:
+        fused = getattr(mtp, "_fused_argmax", None)
+        if fused is not None and fused.supports(logits) is None:
+            return fused(logits, ROWS)
         return mtp._argmax_sharded(logits)  # per-shard argmax + device-only winner pick
     return argmax_last(logits)  # full-vocab gathered row: untilize + argmax
 
@@ -155,6 +162,7 @@ class Qwen36MTP:
         # whenever this resolves to False. The attributes are always defined so draft_argmax can
         # test `mtp._sharded_argmax` without a getattr dance.
         self._sharded_argmax = False
+        self._fused_argmax = None  # FusedShardArgmax over the drafter's logit shards (set by _init_sharded_argmax)
         self._shard_off = None  # [1,1,B,_LANES] int32, per device: d * vocab_shard in every lane
         self._sel_lane = None  # [1,1,B,_LANES*num_devices] int32 replicated: lane j holds j
         self._fp32_cfg = None
@@ -231,6 +239,7 @@ class Qwen36MTP:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
         self._sharded_argmax = True
+        self._fused_argmax = FusedShardArgmax(self.mesh_device, vocab, nd)
         logger.info(
             f"MTP drafter: per-shard argmax enabled (B={B}, vocab {vocab} = {nd} x {shard}, "
             f"maxval grid {self._maxval_r}x{self._maxval_c})"
@@ -417,6 +426,34 @@ class Qwen36MTP:
         ttnn.deallocate(cat)
         return fused
 
+    def _embed_rows(self, token_ids):
+        """The token embedding of ``token_ids`` ([B,1] or [1,B] uint32) as [1,1,B,dim/tp] TILE in DRAM: a row-major
+        lookup viewed as one [1,1,B,dim/tp] row block, zero-padded to whole 32-row tiles in row major (a pad of B < 32
+        rows inside the tilize takes a slow path), tilized, and viewed back to B logical rows (a metadata view). A TILE
+        lookup would pad every id to a tile of its own and need a reshape copy to gather the rows; both give the same
+        bf16 rows (pure data movement)."""
+        rows = int(token_ids.shape[0]) * int(token_ids.shape[-1])
+        rm = ttnn.embedding(
+            token_ids, self.embd.weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        width = int(rm.shape[-1])
+        view = ttnn.reshape(rm, (1, 1, rows, width))
+        pad_rows = -rows % ttnn.TILE_SIZE
+        if pad_rows:
+            full = ttnn.pad(view, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
+            tiled = ttnn.to_layout(full, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.reshape(tiled, ttnn.Shape([1, 1, rows, width]), ttnn.Shape([1, 1, rows + pad_rows, width]))
+            if out is not tiled and not tpc.aliases(out, tiled):
+                ttnn.deallocate(tiled)
+            ttnn.deallocate(full)
+        else:
+            out = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # A reshape is a metadata alias or a copy; deallocate is a no-op on an already-freed buffer, so freeing both
+        # handles frees each buffer once.
+        ttnn.deallocate(view)
+        ttnn.deallocate(rm)
+        return out
+
     def forward_decode(
         self,
         hidden_states,
@@ -441,14 +478,16 @@ class Qwen36MTP:
         those rows carry (rows are user-major, u*T + i); the batched reseed passes B, so the write
         goes out as T calls of B rows. 1 keeps the per-row loop. Returns (logits, next_hidden), both fractured
         [1,1,B,dim/tp]. need_logits=True: next_hidden is mtp.norm's output re-fractured to dim/tp
-        (chain value). need_logits=False skips the head norm and returns RAW block output — KV maintenance only (reseed / catch-up); callers discard it, so it is not a valid chain value.
+        (chain value). need_logits=False is KV maintenance only (reseed / catch-up): under TP with a page table the
+        layer stops after its paged KV write and this returns (None, None); otherwise it skips the head norm and
+        returns the RAW block output, which callers discard (not a valid chain value).
         """
         mode = Mode.DECODE
-        tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
-        tok_emb = ttnn.reshape(tok_emb, (1, 1, tok_emb.shape[0] * tok_emb.shape[1], tok_emb.shape[-1]))
+        tok_emb = self._embed_rows(token_ids)  # [1,1,B,dim/tp]
         fused = self._fuse(tok_emb, hidden_states, mode)
         ttnn.deallocate(tok_emb)
 
+        kv_only = not need_logits and self.num_devices > 1 and page_table is not None
         next_hidden = self.decoder.forward(
             fused,
             cos=cos,
@@ -458,8 +497,11 @@ class Qwen36MTP:
             page_table=page_table,
             alias_kv_write=alias_kv_write,
             n_users=spec_n_users,
+            kv_only=kv_only,
         )
         ttnn.deallocate(fused)
+        if kv_only:
+            return None, None
 
         if not need_logits:
             # KV-maintenance step (reseed / catch-up): the caller only needs the drafter's KV written
