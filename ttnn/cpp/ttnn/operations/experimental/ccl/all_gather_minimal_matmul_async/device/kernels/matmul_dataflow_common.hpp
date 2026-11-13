@@ -741,6 +741,17 @@ void write_block_sync_granular(
     }
 }
 
+#ifdef GROUPED_N
+// linear1 grouped N split: a core's virtual N range is [A part (GRP_A_PER_CORE) | B part (GRP_B_PER_CORE)]; map a
+// virtual column to the physical weight / output column (A at c * A_pc, B at GRP_A_TILES + c * B_pc).
+FORCE_INLINE uint32_t grp_phys_n(uint32_t v) {
+    constexpr uint32_t per_core = GRP_A_PER_CORE + GRP_B_PER_CORE;
+    const uint32_t c = v / per_core;
+    const uint32_t l = v - c * per_core;
+    return l < GRP_A_PER_CORE ? c * GRP_A_PER_CORE + l : GRP_A_TILES + c * GRP_B_PER_CORE + (l - GRP_A_PER_CORE);
+}
+#endif
+
 /**
  * Helper: dispatch to correct tuple element using fold expression.
  * Each branch calls noc.async_write with the concrete TensorAccessor type.

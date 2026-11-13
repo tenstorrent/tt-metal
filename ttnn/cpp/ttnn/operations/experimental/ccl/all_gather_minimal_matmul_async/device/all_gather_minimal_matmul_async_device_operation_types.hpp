@@ -53,6 +53,15 @@ struct AllGatherMinimalMatmulAsyncParams {
     // fused_activation / ternary.
     bool fuse_swiglu = false;
 
+    // linear1 (one AGMM for QKV + MLP-in): index of the chunk that gets the fused SwiGLU epilogue (its weight columns
+    // are the tile-pair-interleaved [gate|up]; output width halves). It must be the last chunk; the chunks before it
+    // form N group A, it forms group B, and each N core computes an equal share of both (grouped N split). -1 = off.
+    int32_t swiglu_chunk = -1;
+
+    // Overlap the SwiGLU epilogue (fuse_swiglu, or linear1's SwiGLU chunk) with the next subblock's matmul: the SiLU
+    // and multiply run on the PACK-thread SFPU. Same SFPU code, outputs identical. Off: serial SwiGLU.
+    bool swiglu_overlap = false;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -78,7 +87,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool using_persistent_weight_buffer,
         ttnn::ccl::Topology fsdp_topology,
         bool fuse_swiglu = false,
-        std::vector<uint32_t> chunk_sizes = {}) :
+        std::vector<uint32_t> chunk_sizes = {},
+        int32_t swiglu_chunk = -1,
+        bool swiglu_overlap = false) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -103,7 +114,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_semaphore(std::move(fsdp_semaphore)),
         using_persistent_weight_buffer(using_persistent_weight_buffer),
         fsdp_topology(fsdp_topology),
-        fuse_swiglu(fuse_swiglu) {}
+        fuse_swiglu(fuse_swiglu),
+        swiglu_chunk(swiglu_chunk),
+        swiglu_overlap(swiglu_overlap) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -123,6 +136,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
         "fuse_swiglu",
+        "swiglu_chunk",
+        "swiglu_overlap",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -144,6 +159,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
             this->fuse_swiglu,
+            this->swiglu_chunk,
+            this->swiglu_overlap,
             this->compute_kernel_config);
     }
 };
