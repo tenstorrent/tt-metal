@@ -19,6 +19,7 @@
 #include "device/device_manager.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
+#include "impl/drisc_service/seat_lock.hpp"
 #include "profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
@@ -146,6 +147,24 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
     return res.dram_programmable_cores;
 }
 
+// Takes the seat lock of every DRAM core metal programs and resets, so no DRISC service can start on one while this
+// env exists. Returns the first seat another process holds, holding none; otherwise holds them all in `held`.
+std::optional<std::string> hold_dram_core_seats(const Cluster& cluster, std::vector<drisc_service::SeatLock>& held) {
+    for (const ChipId chip : cluster.all_chip_ids()) {
+        const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
+        for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
+            auto lock = drisc_service::SeatLock::try_acquire(
+                {.asic_id = asic_id, .noc0_x = static_cast<uint32_t>(core.x), .noc0_y = static_cast<uint32_t>(core.y)});
+            if (!lock.has_value()) {
+                held.clear();
+                return fmt::format("chip {} DRAM core {} (ASIC {})", chip, core.str(), asic_id);
+            }
+            held.push_back(std::move(*lock));
+        }
+    }
+    return std::nullopt;
+}
+
 // The qsr.s1 emulator model only routes device NoC traffic through the boot-programmed
 // address-translation tables, so tt-metal defaults it to the grendel_qsr1 ATT map.
 // Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
@@ -200,6 +219,24 @@ void MetalEnvImpl::initialize_base_objects() {
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
     // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
     const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
+    bool enable_dram_cores = should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_);
+    if (enable_dram_cores && platform_arch == tt::ARCH::BLACKHOLE &&
+        cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
+        if (const auto busy = hold_dram_core_seats(*this->cluster_, this->dram_core_seat_locks_)) {
+            TT_FATAL(
+                !this->rtoptions_->get_blackhole_dram_programmable_cores_override().has_value(),
+                "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1, but another process (a DRISC service client, "
+                "tt-d-gen or metal) holds the seat of {}, which metal would reset. Unset the variable to run with the "
+                "DRAM programmable cores off.",
+                *busy);
+            log_warning(
+                tt::LogMetal,
+                "Another process (a DRISC service client, tt-d-gen or metal) holds the seat of {}; disabling Blackhole "
+                "DRAM programmable cores for this process",
+                *busy);
+            enable_dram_cores = false;
+        }
+    }
     this->hal_ = std::make_unique<Hal>(
         platform_arch,
         is_base_routing_fw_enabled,
@@ -207,7 +244,7 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
+        enable_dram_cores,
         this->rtoptions_->get_eth_ptp_trace(),
         // just take the descriptor of the first device
         this->cluster_->get_quasar_ip_variant());
