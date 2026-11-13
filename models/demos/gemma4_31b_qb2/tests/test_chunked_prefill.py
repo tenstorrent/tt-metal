@@ -65,7 +65,18 @@ def test_resumed_prefill_matches_hf(qb2_mesh, layer_index, ends, cached_prefix=F
             previous = tuple(t[:, :, begin:valid, :] for t in history) if valid else None
         if cached_prefix and previous_end:
             generator = object.__new__(Gemma4Generator)
-            generator.model = SimpleNamespace(layers=[layer])
+            # _restore_prefill_history uploads its slice bounds through the model's tensor helper.
+            generator.model = SimpleNamespace(
+                layers=[layer],
+                tensor=lambda x, dtype=None, layout=ttnn.TILE_LAYOUT: ttnn.from_torch(
+                    x.contiguous(),
+                    device=qb2_mesh,
+                    dtype=dtype,
+                    layout=layout,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(qb2_mesh),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            )
             state = SimpleNamespace(kv=[cache])
             previous = generator._restore_prefill_history(state, {0: table}, 0, aligned_start)[0]
         x = inputs[:, aligned_start:end]
