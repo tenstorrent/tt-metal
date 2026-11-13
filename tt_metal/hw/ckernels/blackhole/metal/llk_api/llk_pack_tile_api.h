@@ -44,6 +44,20 @@ inline void llk_pack_init(
     if constexpr (pack_mode == PackMode::Tilize) {
         is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
     }
+    if constexpr (
+        pack_mode == PackMode::Default &&
+        ckernel::packer::llk_pack_init_live<pack_mode, DST_SYNC_MODE>(pack_src_format, pack_dst_format)) {
+        if (!LLK_PACK_OTHER_PROGRAM_ACTIVE()) {
+            llk_pack_init_impl<pack_mode, zero_output, true, true, true>(
+                pack_src_format[output_id],
+                get_output_face_r_dim(output_id),
+                get_output_tile_c_dim(output_id),
+                get_output_num_faces(output_id),
+                num_tiles,
+                is_input_8bit_format);
+            return;
+        }
+    }
     llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         pack_src_format[output_id],
         get_output_face_r_dim(output_id),

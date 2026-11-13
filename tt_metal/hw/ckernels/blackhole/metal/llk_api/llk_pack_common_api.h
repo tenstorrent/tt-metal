@@ -70,6 +70,13 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
         num_faces,
         partial_face,
         0 /*relu_config*/);
+    // Where llk_pack_init_live holds, default inits leave the address modes and X counter to this.
+    if constexpr (ckernel::packer::llk_pack_init_live<is_fp32_dest_acc_en, DST_SYNC_MODE>(pack_src_format, pack_dst_format)) {
+        if (!LLK_PACK_OTHER_PROGRAM_ACTIVE()) {
+            _llk_pack_configure_addrmod_<PackMode::Default>();
+            TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        }
+    }
 }
 
 /**

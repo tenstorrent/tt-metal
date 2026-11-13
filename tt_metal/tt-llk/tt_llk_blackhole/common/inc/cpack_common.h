@@ -729,6 +729,45 @@ constexpr std::uint32_t llk_pack_reconfig_skip_all(
     return any ? (skip | LLK_PACK_RECONFIG_SKIP_ALL) : skip;
 }
 
+// A header that writes the pack address modes or X counter without the other-program mark specializes its tag.
+template <int tag>
+inline constexpr bool pack_init_writer = false;
+
+// Every pack input of one datum width and no other writer of the default program's address modes, strides or X counter
+// linked: hw_configure leaves them live and a default init programs the MOP alone. Programs that mark themselves
+// (LLK_PACK_OTHER_PROGRAM_SET) are checked at run time. dep: a template argument of the caller, so the tags are read at
+// its instantiation.
+template <auto dep, DstSync sync, std::size_t n>
+constexpr bool llk_pack_init_live(const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n])
+{
+    if (pack_fast_tilize_linked<sync> || pack_fast_untilize_linked<sync> || pack_strides_writer<1> || pack_strides_writer<2> ||
+        pack_strides_writer<3> || pack_strides_writer<4> || pack_strides_writer<5> || pack_strides_writer<6> || pack_strides_writer<7> ||
+        pack_strides_writer<8> || pack_strides_writer<9> || pack_strides_writer<10> || pack_init_writer<1> || pack_init_writer<2>)
+    {
+        return false;
+    }
+    bool any            = false;
+    std::uint32_t size0 = 0;
+    for (std::size_t i = 0; i < n; i++)
+    {
+        const std::uint32_t src = pack_src_format[i];
+        if (src == to_underlying(DataFormat::Invalid) || pack_dst_format[i] == to_underlying(DataFormat::Invalid))
+        {
+            continue;
+        }
+        if (!any)
+        {
+            any   = true;
+            size0 = datum_size_in_bytes(src);
+        }
+        else if (datum_size_in_bytes(src) != size0)
+        {
+            return false;
+        }
+    }
+    return any;
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t num_faces = 4, const bool partial_face = false)

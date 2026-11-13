@@ -38,7 +38,12 @@ inline constexpr bool llk_pack_rmw_per_tile = pack_mode == PackMode::Default && 
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
 // already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
 // (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+template <
+    PackMode pack_mode       = PackMode::Default,
+    bool zero_output         = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false,
+    bool live                = false>
 inline void llk_pack_init_impl(
     const std::uint32_t pack_src_reg_format,
     const std::uint32_t face_r_dim,
@@ -58,7 +63,7 @@ inline void llk_pack_init_impl(
         StateDiscard<bool>(is_input_8bit_format),
         StateVal<OperationPack::NumTiles>(num_tiles)));
 
-    _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+    _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false, live>(
         pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
 }
 
