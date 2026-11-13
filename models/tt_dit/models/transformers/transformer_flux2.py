@@ -53,7 +53,9 @@ class Flux2SingleTransformerBlock(Module):
         padding_config: PaddingConfig | None,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        row_capacity: int | None = None,
     ) -> None:
+        """`row_capacity`: see `Flux2Transformer`."""
         super().__init__()
 
         tp_axis = parallel_config.tensor_parallel.mesh_axis
@@ -77,6 +79,7 @@ class Flux2SingleTransformerBlock(Module):
             per_head_norm=True,
             is_fsdp=is_fsdp,
             shard_prompt=shard_prompt,
+            row_capacity=row_capacity,
         )
 
         self.norm = DistributedLayerNorm(
@@ -87,6 +90,7 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             mesh_device=device,
             ccl_manager=ccl_manager,
+            row_capacity=row_capacity,
         )
 
         # Shard output, since size of input dimension << size of output dimension.
@@ -214,7 +218,12 @@ class Flux2Transformer(Module):
         is_fsdp: bool = False,
         shard_prompt: bool = False,
         guidance_embeds: bool = True,
+        row_capacity: int | None = None,
     ) -> None:
+        """`row_capacity` is the largest per-device row count of the single blocks' input (spatial,
+        reference and prompt tokens, a multiple of 32), which no other stream exceeds. With it, the
+        norms and the attention's head split and merge take the row count at run time, so a new image
+        size compiles none of them; None keeps one program per row count."""
         super().__init__()
 
         inner_dim = num_attention_heads * attention_head_dim
@@ -251,6 +260,7 @@ class Flux2Transformer(Module):
                 mesh_device=device,
                 is_fsdp=is_fsdp,
                 shard_prompt=shard_prompt,
+                row_capacity=row_capacity,
             )
             for i in range(num_layers)
         )
@@ -266,6 +276,7 @@ class Flux2Transformer(Module):
                 device=device,
                 is_fsdp=is_fsdp,
                 shard_prompt=shard_prompt,
+                row_capacity=row_capacity,
             )
             for i in range(num_single_layers)
         )
@@ -288,6 +299,7 @@ class Flux2Transformer(Module):
             mesh_device=device,
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
+            row_capacity=row_capacity,
         )
 
         self.proj_out = RowParallelLinear(

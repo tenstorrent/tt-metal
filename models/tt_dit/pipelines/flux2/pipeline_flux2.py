@@ -43,6 +43,9 @@ _T = TypeVar("_T")
 # latents, a whole number of tiles of pixels.
 _DEFAULT_RESOLUTIONS = ((1024, 1024), (2048, 2048))
 
+# The prompt's token count, padded to it whatever the prompt.
+_PROMPT_SEQUENCE_LENGTH = 512
+
 # The parallel layout per mesh shape: the DiT's SP and TP axes, the text encoder's TP axis, the VAE's
 # row (H) and column (W) axes, and the CCL links and topology. The VAE splits the image only, not the
 # channels: a channel split adds a reduce-scatter and all-gathers whose programs compile at every new
@@ -244,6 +247,7 @@ class Flux2Pipeline:
             is_fsdp=self.is_fsdp,
             shard_prompt=self._shard_prompt,
             guidance_embeds=self._guidance_embeds,
+            row_capacity=self._transformer_row_capacity(),
         )
 
         self._pos_embed = self._torch_transformer.pos_embed
@@ -314,7 +318,7 @@ class Flux2Pipeline:
         self.ts = Flux2TransformerState()
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
-        text_ids = _prepare_ids(text_sequence_length=512)  # matches sequence_length=512 in encode
+        text_ids = _prepare_ids(text_sequence_length=_PROMPT_SEQUENCE_LENGTH)
         prompt_rope_cos, prompt_rope_sin = self._pos_embed.forward(text_ids)
         # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
         # need to reshape per-call (2800 ops per inference). SP sharding is on dim 2 (seq).
@@ -569,7 +573,7 @@ class Flux2Pipeline:
             prompt_embeds, _mask = self._prompt_encoder.encode(
                 prompts,
                 num_images_per_prompt=num_images_per_prompt,
-                sequence_length=512,
+                sequence_length=_PROMPT_SEQUENCE_LENGTH,
                 traced=traced,
             )
             _, prompt_sequence_length, _ = prompt_embeds.shape
@@ -729,6 +733,30 @@ class Flux2Pipeline:
             self._denoise_states[width, height, edit] = state
         return state
 
+    def _reference_size(self, *, width: int, height: int) -> tuple[int, int]:
+        """The size (width, height) a reference image is encoded at for an output of the given size:
+        the output size scaled down to at most one megapixel, rounded down to whole tokens."""
+        scale = min(1.0, math.sqrt(1024 * 1024 / (width * height)))
+        multiple = self._vae_scale_factor * self._patch_size
+        return int(width * scale) // multiple * multiple, int(height * scale) // multiple * multiple
+
+    def _transformer_row_capacity(self) -> int:
+        """The most tokens per device the transformer sees over all resolutions, rounded up to whole
+        tiles: the single blocks' spatial, reference and prompt tokens of an edit, or without a
+        reference when dynamic loading rules out editing."""
+        sp_factor = self._parallel_config.sequence_parallel.factor
+        token_size = self._vae_scale_factor * self._patch_size
+        prompt_rows = -(-_PROMPT_SEQUENCE_LENGTH // sp_factor) if self._shard_prompt else _PROMPT_SEQUENCE_LENGTH
+        rows = 0
+        for width, height in self._resolutions:
+            reference_width, reference_height = self._reference_size(width=width, height=height)
+            spatial_tokens = (height // token_size) * (width // token_size)
+            reference_tokens = (
+                0 if self.dynamic_load else (reference_height // token_size) * (reference_width // token_size)
+            )
+            rows = max(rows, -(-spatial_tokens // sp_factor) + -(-reference_tokens // sp_factor) + prompt_rows)
+        return -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
     def _encode_reference(
         self, image: Image.Image, *, width: int, height: int, traced: bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -739,10 +767,8 @@ class Flux2Pipeline:
         """
         assert self._vae_encoder is not None
 
-        scale = min(1.0, math.sqrt(1024 * 1024 / (width * height)))
         multiple = self._vae_scale_factor * self._patch_size
-        reference_width = int(width * scale) // multiple * multiple
-        reference_height = int(height * scale) // multiple * multiple
+        reference_width, reference_height = self._reference_size(width=width, height=height)
 
         image = image.convert("RGB")
         crop_width = min(image.width, round(image.height * width / height))

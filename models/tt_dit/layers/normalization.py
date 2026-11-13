@@ -338,6 +338,7 @@ class DistributedLayerNorm(Module):
         mesh_axis=0,
         mesh_device=None,
         ccl_manager=None,
+        row_capacity: int | None = None,
     ):
         super().__init__()
 
@@ -350,6 +351,9 @@ class DistributedLayerNorm(Module):
         self.ccl_manager = ccl_manager
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
+        # Largest per-device row count (batch * N, multiple of 32) one cached program and stats buffer
+        # serve; None keeps one per input shape.
+        self.row_capacity = row_capacity
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -431,6 +435,11 @@ class DistributedLayerNorm(Module):
             weight = self.weight.data if self.weight is not None else None
             bias = self.bias.data if self.bias is not None else None
 
+        # A pinned capacity sizes the stats buffer, so every row count up to it shares one; the
+        # input's width is in the key because it sets the stats geometry too.
+        row_capacity = self.row_capacity
+        stats_key = ("ln", x.shape[-1], row_capacity) if row_capacity is not None else ("ln", shape_tuple(x.shape))
+
         # Fused Welford LayerNorm device op. weight/bias (static or adaLN, bf16 or fp32) are
         # consumed natively in-op — fp32 affine keeps the modulation precision adaLN needs.
         return ttnn.experimental.dit_fused_distributed_layernorm(
@@ -440,12 +449,13 @@ class DistributedLayerNorm(Module):
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
-                ("ln", shape_tuple(x.shape)),
+                stats_key,
                 lambda: ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
                     num_links=self.ccl_manager.num_links,
+                    row_capacity=row_capacity,
                 ),
             ),
             epsilon=self.norm_eps,
@@ -455,6 +465,7 @@ class DistributedLayerNorm(Module):
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             dtype=dtype,
             reciprocals=self._ensure_fused_ln_recip(x),
+            row_capacity=row_capacity,
         )
 
 
