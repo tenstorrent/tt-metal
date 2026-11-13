@@ -5,7 +5,7 @@
   "tt_metal_release": "v0.81.1",
   "tt_metal_commit": "d80d9482a418cf04ddcbeecf6adb67010d3091e6",
   "skills_branch": "mvasiljevic/stage12-v5",
-  "skills_commit": "8b579a09",
+  "skills_commit": "299cf8bd",
   "codex_home": "/home/mvasiljevic/v5-agentic/codex-home",
   "model": "gpt-6-astra",
   "effort": "medium",
