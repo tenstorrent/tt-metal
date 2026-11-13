@@ -74,6 +74,12 @@ class Gemma4ForCausalLM:
             raise ValueError("Gemma4 QB2 requires TP4, DP1, and batch 1..32")
         if not 128 <= max_seq_len <= 262144 or max_seq_len % 128:
             raise ValueError("Serving context must be 128..262144, aligned to 128-token pages")
+        if max_seq_len % 1024:
+            # Chunked prefill attention reads its start from a tensor (flexible chunked SDPA), which needs the page-table row
+            # (max_seq_len / 128 int32 entries) to be a multiple of 32 bytes: a multiple of 8 pages.
+            raise ValueError(
+                "Serving context must be a multiple of 1024 tokens (a page-table row of whole 32-byte groups)"
+            )
         if hf_config.text_config.hidden_size != 5376 or hf_config.text_config.num_hidden_layers != 60:
             raise ValueError("Expected the Gemma4 31B checkpoint")
         torch.set_num_threads(8)

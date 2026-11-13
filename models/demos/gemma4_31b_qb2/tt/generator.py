@@ -428,7 +428,9 @@ class Gemma4Generator:
                             "Prefill history does not match the scheduler continuation: "
                             f"key={key}, saved_end={previous['end']}, start={start}"
                         )
-                    rewind = start - aligned_start
+                    # The saved tails end at tail_end: the logical end, or the page-padded end when the chunk ran
+                    # with runtime-valued inputs (rows after the logical end are replaced by this continuation).
+                    rewind = previous.get("tail_end", start) - aligned_start
                     histories = []
                     for tail in previous["layers"]:
                         if tail is None:
@@ -440,10 +442,14 @@ class Gemma4Generator:
                             continue
                         begin = max(0, valid - 1024)
                         histories.append(tuple(t[:, :, begin:valid, :] for t in tail))
-            ids = torch.zeros(1, (chunk_length + 31) // 32 * 32, dtype=torch.int32)
+            # Runtime-valued chunk inputs (see Decoder.prefill_chunk_inputs) need whole cache pages; the programs then
+            # depend on the padded length only, not on the logical length or the start position.
+            runtime_inputs = not return_all_logits
+            padded = (chunk_length + Decoder.PAGE_SIZE - 1) // Decoder.PAGE_SIZE * Decoder.PAGE_SIZE
+            ids = torch.zeros(1, padded if runtime_inputs else (chunk_length + 31) // 32 * 32, dtype=torch.int32)
             ids[0, :chunk_length] = tokens[row, aligned_start:length]
             tt_ids = self._upload(ids, ttnn.uint32)
-            tables, uploaded_rows = {}, {}
+            tables, uploaded_rows, host_rows, rows_by_kind = {}, {}, {}, {}
             for kind, table in page_table.items():
                 sentinel = state.vllm_owned and self.model.layers[kind].kind == "sliding_attention"
                 key = (id(table), sentinel)
@@ -455,25 +461,33 @@ class Gemma4Generator:
                         # persistent decode tables retain independent storage.
                         row_table = row_table.masked_fill(row_table == 0, -1)
                     uploaded_rows[key] = self._upload(row_table)
+                    host_rows[key] = row_table
                     self.counters["prefill_table_uploads"] += 1
                 tables[kind] = uploaded_rows[key]
+                rows_by_kind[kind] = host_rows[key]
             out = self.model.prefill_device(
                 tt_ids,
-                sequence_length=chunk_length,
+                sequence_length=padded if runtime_inputs else chunk_length,
                 page_tables=tables,
                 kv_cache=state.kv,
                 all_logits=return_all_logits,
                 start_pos=aligned_start,
                 histories=histories,
+                host_rows=rows_by_kind if runtime_inputs else None,
+                valid_length=chunk_length if runtime_inputs else None,
             )
             if history_keys is not None:
-                state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
+                state.prefill_history[history_keys[row]] = {
+                    "end": length,
+                    "tail_end": aligned_start + padded if runtime_inputs else length,
+                    "layers": histories,
+                }
             outputs.append(
                 out if return_device else self._host_logits(out).reshape(1, -1, self.model.config.vocab_size)
             )
             # Device-return outputs retain their own owners in outputs. Host
             # mode has consumed out; do not carry it into the next prefill.
-            del out, tt_ids, tables, uploaded_rows
+            del out, tt_ids, tables, uploaded_rows, host_rows, rows_by_kind
         compiled = self.mesh.num_program_cache_entries() - programs
         if compiled:
             logger.debug(
@@ -514,7 +528,7 @@ class Gemma4Generator:
         """Consume compact prefill rows with the canonical sampling trace."""
         batch = len(outputs)
         self.configure_sampling(batch=batch, **sampling_params)
-        # The concat/pad programs of a new batch size compile here, with decode traces live and outside prefill_forward's
+        # The concat/pad programs of a new batch size compile here, with decode traces live, outside prefill_forward's
         # count: they are counted too (warm_prefill_shapes compiles every batch size, so this normally adds none).
         programs = self.mesh.num_program_cache_entries()
         merged = self._merge_prefill_rows(outputs)
@@ -553,16 +567,66 @@ class Gemma4Generator:
         ttnn.plus_one(self.sampler.seeds_tt_tensor)
 
     def warm_prefill_shapes(self, state, page_table, max_tokens):
-        """Prefill every 32-token length (the tile-padded prompt shapes) from position 0 once.
+        """Compile the prefill programs of every length class before serving.
 
-        Programs are keyed by the padded chunk length, so a warmed length compiles nothing when a request first
-        arrives with it. Continuations (a chunk starting at a later position) are separate signatures and are
-        not covered. Uses blocks 1.. of the (still empty) pool; nothing there is read afterwards.
+        Prefill runs on whole cache pages (runtime-valued inputs, see Decoder.prefill_chunk_inputs), so programs are keyed
+        by the page-padded chunk length only. Warmed here: every padded length from position 0, the logical lengths 1..32
+        and 129..160 (the selectable last-token rows at both widths), for every padded length a continuation after a full
+        1024-token sliding window (from an aligned and from an unaligned previous end), and in the serving cache the
+        prefix-cache history restore for every page count. A continuation at any other start or logical length then
+        compiles nothing. Not covered, so each still compiles once and retires the decode traces: a continuation after
+        fewer than 1024 sliding tokens (a history of 128..896 rows: a chunked prompt whose first chunk was short, or a
+        prefix hit at a short aligned start), and a continuation chunk of more than max_tokens - 1152 padded rows (7041..8320
+        rows for the 8192-token limit, since an unaligned start adds up to a page). Uses blocks 1.. of the (still empty) pool;
+        nothing there is read afterwards.
         """
-        pages = max_tokens // 32
-        for length in range(32, max_tokens + 1, 32):
-            tokens = torch.ones(1, length, dtype=torch.int32)
-            self.prefill_forward(tokens, page_table=page_table, kv_cache=state, prompt_lens=[length], slots=[0])
+        page = Decoder.PAGE_SIZE
+        window = 1024 + page
+        lengths = list(range(page, max_tokens + 1, page))
+        for length in lengths:
+            self.prefill_forward(
+                torch.ones(1, length, dtype=torch.int32),
+                page_table=page_table,
+                kv_cache=state,
+                prompt_lens=[length],
+                slots=[0],
+            )
+        # The 32 last-token rows, at both residual widths (prompts of at most 128 tokens run at width 5376, longer at 1344).
+        for length in (*range(1, 33), *range(page + 1, page + 33)):
+            self.prefill_forward(
+                torch.ones(1, length, dtype=torch.int32),
+                page_table=page_table,
+                kv_cache=state,
+                prompt_lens=[length],
+                slots=[0],
+            )
+        key = -1
+        for chunk in range(page, max_tokens - window + 1, page):
+            for previous_end in (window, window + 1):
+                tokens = torch.ones(1, window + chunk, dtype=torch.int32)
+                self.prefill_forward(
+                    tokens,
+                    page_table=page_table,
+                    kv_cache=state,
+                    prompt_lens=[previous_end],
+                    slots=[0],
+                    history_keys=[key],
+                )
+                self.prefill_forward(
+                    tokens,
+                    page_table=page_table,
+                    kv_cache=state,
+                    prompt_lens=[window + chunk],
+                    slots=[0],
+                    start_positions=[previous_end],
+                    history_keys=[key],
+                )
+        state.prefill_history.pop(key, None)
+        if getattr(state, "vllm_owned", False):
+            # A request whose first chunk starts after cached pages restores its sliding history from the pages (slice, concat and
+            # typecast programs per page count); the first prefix hit after start-up would compile them and retire the traces.
+            for start in range(page, 1024 + page, page):
+                self._restore_prefill_history(state, page_table, 0, start)
         # Every prefill batch size of sample_prefill_outputs (the row merge compiles per size).
         for batch in range(2, 33):
             rows = [
@@ -571,8 +635,9 @@ class Gemma4Generator:
             ]
             self._merge_prefill_rows(rows)
             del rows
+        state.prefill_history.pop(key, None)
         self._retire_traces(keep_entries=True)
-        logger.info("Warmed {} prefill lengths up to {} tokens", pages, max_tokens)
+        logger.info("Warmed {} prefill length classes up to {} tokens", len(lengths), max_tokens)
 
     def _entry(self, state):
         key = id(state)
