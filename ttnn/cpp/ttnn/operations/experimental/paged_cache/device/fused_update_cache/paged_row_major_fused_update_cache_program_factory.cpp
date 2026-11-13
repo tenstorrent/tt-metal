@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/mesh_device_operation_utils.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -786,21 +787,24 @@ PagedRowMajorFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload_artifacts
     const PagedFusedUpdateCacheInputs& tensor_args,
     PagedFusedUpdateCacheResult& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    // One program per coordinate, which is what the ported-from descriptor path built. A coordinate
-    // outside mesh_coords contributes no program at all, the way that path returned an empty
-    // ProgramDescriptor for it.
+    // The program is the same on every selected coordinate, so one program covers each rectangle of selected
+    // coordinates. A coordinate outside mesh_coords gets no program at all, the way the ported-from descriptor
+    // path returned an empty ProgramDescriptor for it.
     ttnn::device_operation::MeshWorkloadArtifacts artifacts;
-    for (const auto& coord : tensor_coords.coords()) {
-        if (operation_attributes.mesh_coords.has_value() && !operation_attributes.mesh_coords->contains(coord)) {
-            continue;
+    for (const auto& tensor_range : tensor_coords.ranges()) {
+        for (const auto& range : ttnn::device_operation::mesh_device_operation_utils::coalesce_coordinates(
+                 tensor_range, [&](const ttnn::MeshCoordinate& coord) {
+                     return !operation_attributes.mesh_coords.has_value() ||
+                            operation_attributes.mesh_coords->contains(coord);
+                 })) {
+            auto per_range = PagedRowMajorFusedUpdateCacheProgramFactory::create_program_artifacts(
+                operation_attributes, tensor_args, tensor_return_value);
+            artifacts.programs.push_back({
+                .range = range,
+                .spec = std::move(per_range.spec),
+                .run_params = std::move(per_range.run_params),
+            });
         }
-        auto per_coord = PagedRowMajorFusedUpdateCacheProgramFactory::create_program_artifacts(
-            operation_attributes, tensor_args, tensor_return_value);
-        artifacts.programs.push_back({
-            .range = ttnn::MeshCoordinateRange(coord),
-            .spec = std::move(per_coord.spec),
-            .run_params = std::move(per_coord.run_params),
-        });
     }
     return artifacts;
 }

@@ -32,8 +32,9 @@ struct PagedUpdateCacheProgramFactory {
 };
 
 struct PagedUpdateCacheMeshWorkloadFactory {
-    // Per-coord program build. A coordinate outside mesh_coords gets no program at all, which is
-    // what the ported-from path expressed by returning an empty ProgramDescriptor for it.
+    // One program per rectangle of selected coordinates (the program is the same on all of them). A
+    // coordinate outside mesh_coords gets no program at all, which is what the ported-from path
+    // expressed by returning an empty ProgramDescriptor for it.
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const PagedUpdateCacheParams& operation_attributes,
         const PagedUpdateCacheInputs& tensor_args,

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <functional>
 #include <unordered_map>
+#include <vector>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program_cache.hpp>
@@ -153,6 +154,21 @@ void update_output_tensor_topologies(
             tensor.get().update_tensor_topology(topology);
         }
     }
+}
+
+// The coordinates of `range` for which `selected(coord)` holds, merged into as few rectangles as
+// MeshCoordinateRangeSet::merge finds (non-overlapping, in lexicographical order). A factory whose programs are
+// identical on a set of devices emits one program per rectangle instead of one per device.
+template <typename Predicate>
+std::vector<ttnn::MeshCoordinateRange> coalesce_coordinates(
+    const ttnn::MeshCoordinateRange& range, Predicate selected) {
+    ttnn::MeshCoordinateRangeSet set;
+    for (const auto& coord : range) {
+        if (selected(coord)) {
+            set.merge(ttnn::MeshCoordinateRange(coord));
+        }
+    }
+    return set.ranges();
 }
 
 }  // namespace ttnn::device_operation::mesh_device_operation_utils

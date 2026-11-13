@@ -31,17 +31,17 @@ struct PagedFillCacheProgramFactory {
 };
 
 struct PagedFillCacheMeshWorkloadFactory {
-    // Per-coord program build. When mesh_coords is provided and the dispatch coordinate is not in
-    // it, the resulting program is a noop (early-exits in kernels) so the cache slot is still
-    // populated for that coord.
+    // One program per rectangle of coordinates that share `noop`. When mesh_coords is provided,
+    // coordinates outside it get a noop program (kernels early-exit) so the cache slot is still
+    // populated for them.
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const PagedFillCacheParams& operation_attributes,
         const PagedFillCacheInputs& tensor_args,
         Tensor& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
-    // Called once per coordinate range on a cache hit. Every range this factory emits covers a
-    // single coordinate, so the range's start coordinate decides `noop`.
+    // Called once per coordinate range on a cache hit. Every coordinate of a range this factory
+    // emits shares `noop`, so the range's start coordinate decides it.
     static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const PagedFillCacheParams& operation_attributes,
         const PagedFillCacheInputs& tensor_args,
