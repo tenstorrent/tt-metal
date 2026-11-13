@@ -20,6 +20,7 @@
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
 #include "sparse_dense_units.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
 
 // Output slice of one local Q chunk (the op has no joint tokens).
 inline Slice q_chunk_out_slice(uint32_t q_chunk, uint32_t nb, uint32_t nq, uint32_t Sq_chunk_t, uint32_t DHt) {
@@ -66,14 +67,23 @@ void kernel_main() {
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // The static split's units; with load balancing, the positions of the core's unit table (see the reader).
+    uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     argidx++;  // logical_nt (unused: the writer only follows the ring order)
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     argidx++;  // single-valid-K-chunk mask (only the save / restore path needs it)
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
+    // Load balancing (cross-device): [swapped-in units' output buffer (laid out as the output, by local slot), balance
+    // core NoC x, y].
+    constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
+    constexpr bool balance_remote = get_named_compile_time_arg_val("balance_remote") == 1;
+    [[maybe_unused]] const uint32_t balance_base = argidx;
+    if constexpr (balance_remote) {
+        argidx += 3;
+    }
     // dense_blocks: the ranges (start, end), then (dense_owners > 0) [first unit, end unit, partials buffer, ready
     // semaphore + , ready semaphore -] and the sparse_dense::Owner records.
     constexpr uint32_t dense_n_ranges = get_named_compile_time_arg_val("dense_n_ranges");
@@ -120,6 +130,18 @@ void kernel_main() {
             out_subblock_h,
             /*flush_trid=*/0);
     };
+    // A block swapped in from another device: into the export buffer (same layout), from where it goes home.
+    [[maybe_unused]] const auto export_q_block = [&](uint32_t q_chunk, uint32_t nb, uint32_t nq) {
+        write_block_row_grouped_trid<output_has_no_padding>(
+            noc,
+            PaddedAddrGenerator(TensorAccessor(out_args, get_arg_val<uint32_t>(balance_base)), output_tile_logical),
+            q_chunk_out_slice(q_chunk, nb, nq, Sq_chunk_t, vDHt),
+            /*end_seq_tile=*/q_local_padded_Nt,
+            cb_out,
+            tile_bytes,
+            out_subblock_h,
+            /*flush_trid=*/0);
+    };
 
     {
         // Zero the identity tile first: generate_bcast_col_scalar writes column 0 only, and the compute step
@@ -150,6 +172,19 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
+    // Load balancing: the unit table the balance kernel writes into cb_balance (the reader passes it on to compute).
+    // A unit swapped in from another device has its output go to the export buffer, counted on the balance core, which
+    // has the gather writers send it home.
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* unit_table = nullptr;
+    if constexpr (balance) {
+        Semaphore<>(get_named_compile_time_arg_val("balance_sem_table")).wait_min(1);
+        unit_table = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            CircularBuffer(get_named_compile_time_arg_val("cb_balance")).get_write_ptr());
+        invalidate_l1_cache();
+        global_q_start = 0;
+        global_q_end = unit_table[0];
+    }
+
     // Passes split the core's Q blocks evenly (see the reader); each replays the ring order from the start (the
     // writer never waits on the all-gather, so a fresh copy of the receiver is enough).
     constexpr uint32_t num_q_passes = get_named_compile_time_arg_val("num_q_passes");
@@ -167,14 +202,33 @@ void kernel_main() {
                 !is_last_active_ring_iter(active_ring_iter_mask, ring_iter)) {
                 continue;
             }
-            for (uint32_t q_flat = pass_q_start; q_flat < pass_q_end; ++q_flat) {
+            [[maybe_unused]] uint32_t n_exported = 0;
+            for (uint32_t pos = pass_q_start; pos < pass_q_end; ++pos) {
+                const uint32_t q_flat = balance ? unit_table[1 + pos] & sparse_balance::kUnitMask : pos;
                 const auto decoded_q = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing);
                 const uint32_t q_chunk =
                     res_remap ? sparse_dense::resident_block(shard, decoded_q.q_chunk, mask_nb, mask_nb_pad, in_dense)
                               : decoded_q.q_chunk;
+                if constexpr (balance_remote) {
+                    if ((unit_table[1 + pos] & sparse_balance::kImported) != 0) {
+                        export_q_block(q_chunk, decoded_q.nb, decoded_q.nq);
+                        ++n_exported;
+                        continue;
+                    }
+                }
                 write_q_block(q_chunk, decoded_q.nb, decoded_q.nq);
             }
             noc.async_write_barrier();
+            if constexpr (balance_remote) {
+                if (n_exported > 0) {
+                    Semaphore<>(get_named_compile_time_arg_val("balance_sem_outputs"))
+                        .up(noc,
+                            get_arg_val<uint32_t>(balance_base + 1),
+                            get_arg_val<uint32_t>(balance_base + 2),
+                            n_exported);
+                    noc.async_atomic_barrier();
+                }
+            }
         }
     }
 
