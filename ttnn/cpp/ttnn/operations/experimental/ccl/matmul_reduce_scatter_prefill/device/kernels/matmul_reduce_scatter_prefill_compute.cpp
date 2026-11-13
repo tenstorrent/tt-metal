@@ -122,7 +122,8 @@ void kernel_main() {
     constexpr uint32_t kb = get_compile_time_arg_val(KB);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(NUM_K_BLOCKS);
     // Blackhole row MOP (api/compute/matmul.h): one MOP per inner-dim step instead of one per tile; bit-identical.
-    constexpr bool row_mop = true;
+    // Set by the factory from the arch: the row MOP does not build on Wormhole.
+    constexpr bool row_mop = get_compile_time_arg_val(ROW_MOP) != 0;
     constexpr uint32_t P = get_compile_time_arg_val(mrs::compute_ct::P);     // slot tiles (the largest wave)
     constexpr uint32_t num_entries = get_compile_time_arg_val(NUM_ENTRIES);  // G x num_waves
     constexpr uint32_t num_waves = get_compile_time_arg_val(NUM_WAVES);
@@ -279,7 +280,7 @@ void kernel_main() {
                             ca.fifo_rd_ptr = pa;
                             cw.fifo_rd_ptr = pw;
                         }));
-                        // All kb inner-dim steps of the window in one call (one MOP per step with the row MOP).
+                        // All kb inner-dim steps of the window in one call.
                         ckernel::matmul_block_k<row_mop>(
                             cb_act_k_window,
                             cb_weight_k_window,
