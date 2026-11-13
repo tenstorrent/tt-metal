@@ -804,9 +804,10 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
     "perf_sfpu_ternary": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "approx_mode",
+            "clobber_lregs",
             "dest_acc",
             "dest_sync",
             "formats.input_A",
@@ -828,6 +829,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
+            "vector_mode",
         ],
         "aliases": {
             "formats.sfpu_math": "formats.sfpu_src",

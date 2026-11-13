@@ -310,11 +310,14 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 class SFPU_CLOBBER_LREGS(TemplateParameter):
     """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
 
-    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it.
+    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it. ``clobber_lregs`` is
+    also a perf CSV column, so a perf row states whether it clobbered; False emits nothing.
     """
 
+    clobber_lregs: bool = True
+
     def convert_to_cpp(self) -> str:
-        return "#define SFPU_CLOBBER_LREGS"
+        return "#define SFPU_CLOBBER_LREGS" if self.clobber_lregs else ""
 
 
 @dataclass
