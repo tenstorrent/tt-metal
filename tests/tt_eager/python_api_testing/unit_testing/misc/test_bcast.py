@@ -326,3 +326,75 @@ def test_bcast_hw_sharded_multi_row_col(device, orientation):
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
     logger.info(pcc_msg)
     assert passing, pcc_msg
+
+
+@pytest.mark.parametrize(
+    "orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR], ids=["row_major", "col_major"]
+)
+@pytest.mark.parametrize(
+    "b_batch", [1, 2], ids=["optimised", "non_optimised"]
+)
+def test_bcast_h_width_sharded_subgrid_and_offset(device, orientation, b_batch):
+    torch.manual_seed(0)
+    N, C, H, W = b_batch, 1, 64, 128
+    a_torch = torch.rand([N, C, H, W], dtype=torch.bfloat16)
+    b_torch = torch.rand([b_batch, 1, 1, W], dtype=torch.bfloat16)
+    torch_ref_output = a_torch + b_torch
+
+    a_tt = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2))})
+    shard_shape = [N * C * H, W // grid.num_cores()]
+    in_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, orientation)
+    )
+    a_tt = ttnn.to_memory_config(a_tt, in_sharded_mem_config)
+    b_tt = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    tt_output = ttnn.bcast(
+        a_tt,
+        b_tt,
+        ttnn.BcastOpMath.ADD,
+        ttnn.BcastOpDim.H,
+        memory_config=ttnn.get_memory_config(a_tt),
+    )
+    output_tensor = ttnn.to_torch(tt_output).float()
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
+    logger.info(pcc_msg)
+    assert passing, pcc_msg
+
+
+@pytest.mark.parametrize(
+    "orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR], ids=["row_major", "col_major"]
+)
+@pytest.mark.parametrize(
+    "b_batch", [1, 2], ids=["optimised", "non_optimised"]
+)
+def test_bcast_h_block_sharded_offset_core_grid(device, orientation, b_batch):
+    torch.manual_seed(0)
+    N, C, H, W = b_batch, 1, 64, 64
+    a_torch = torch.rand([N, C, H, W], dtype=torch.bfloat16)
+    b_torch = torch.rand([b_batch, 1, 1, W], dtype=torch.bfloat16)
+    torch_ref_output = a_torch + b_torch
+
+    a_tt = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2))})
+    shard_shape = [(N * C * H) // 2, W // 2]
+    in_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, orientation)
+    )
+    a_tt = ttnn.to_memory_config(a_tt, in_sharded_mem_config)
+    b_tt = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    tt_output = ttnn.bcast(
+        a_tt,
+        b_tt,
+        ttnn.BcastOpMath.ADD,
+        ttnn.BcastOpDim.H,
+        memory_config=ttnn.get_memory_config(a_tt),
+    )
+    output_tensor = ttnn.to_torch(tt_output).float()
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
+    logger.info(pcc_msg)
+    assert passing, pcc_msg

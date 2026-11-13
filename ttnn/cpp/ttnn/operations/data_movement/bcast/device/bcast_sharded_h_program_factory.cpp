@@ -67,8 +67,9 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     const std::uint32_t num_tile_per_core = ntiles_along_width * ntiles_along_height;
 
     std::uint32_t Wt, Ht;
+    const auto bbox = all_cores.bounding_box();
     if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        ncores_x = all_cores.ranges().begin()->end_coord.y + 1;
+        ncores_x = bbox.end_coord.y - bbox.start_coord.y + 1;
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
     } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -182,28 +183,25 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     KernelRunArgs compute_args{.kernel = COMPUTE};
 
     const std::uint32_t ncores_y = ncores / ncores_x;
+    const auto sharded_cores =
+        corerange_to_cores(all_cores, ncores, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     for (std::uint32_t i = 0; i < ncores; i++) {
         CoreCoord core;
         std::uint32_t offset = 0;
         std::uint32_t Ht_per_core = 0;
         if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            core = {i / ncores_x, i % ncores_x};
+            const std::uint32_t local_x = i / ncores_x;
+            const std::uint32_t local_y = i % ncores_x;
+            core = {bbox.start_coord.x + local_x, bbox.start_coord.y + local_y};
             Ht_per_core = Wt * Ht;
             if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
-                offset = Wt * (i / ncores_x) + Wt * ncores_y * ((i % ncores_x) / (ncores_x / bN));
+                offset = Wt * local_x + Wt * ncores_y * (local_y / (ncores_x / bN));
             } else {
-                offset = Wt * (i % ncores_x) + Wt * ncores_x * ((i / ncores_x) / (ncores_y / bN));
+                offset = Wt * local_y + Wt * ncores_x * (local_x / (ncores_y / bN));
             }
         } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            core = {i % ncores_x, i / ncores_x};
-            if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
-                offset = Wt * (core.x + core.y * ncores_x);
-            } else {
-                offset = Wt * (ncores_y * core.x + core.y);
-                if (core.y == ncores_y) {
-                    offset = Wt * (ncores_y * ncores_x + core.x);
-                }
-            }
+            core = sharded_cores[i];
+            offset = Wt * i;
             Ht_per_core = Ht / bN;
         }
         const std::uint32_t tile_offset = Wt * ncores;  // used in multi batch weight for block sharded
