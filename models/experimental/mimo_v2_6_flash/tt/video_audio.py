@@ -15,8 +15,15 @@ the same from the item's ``video_audio_n_segs`` / ``video_audio_seg_lens``. vLLM
   resampled to 24 kHz mono (vLLM's resampler, as its parser does for audio items) and kept in the video's loader
   metadata (``mimo_audio``), which goes into the item's hash and survives vLLM's processor cache with the frames
   (tt/video_input.py). A video without an audio track (or whose track fails to decode) stays a plain video (logged).
-* ``_get_hf_mm_inputs``: a call's videos go to the checkpoint's processor as ``video_audio`` items when every one of
-  them has its audio (the processor lists plain videos before video_audio ones, so a mix would reorder the items).
+  A request's videos take their audio only when every one of them has a track (``uniform_audio``): the checkpoint's
+  processor lists plain videos before video_audio ones, so a mix would reorder the items. The decision is made here,
+  on the whole request and before the items are hashed, and not on the items one processor call happens to hold:
+  vLLM's processor cache hands ``_get_hf_mm_inputs`` only the items it misses, so deciding there made a video's
+  result depend on what was cached (a video first seen next to a silent one was cached as a plain video under the
+  hash of its audio, and then served without its track when asked alone). With the track removed from the metadata
+  of every video of a mixed request, a video with and without its audio are two cache entries.
+* ``_get_hf_mm_inputs``: a call's videos go to the checkpoint's processor as ``video_audio`` items when they carry
+  their audio (all of a request's do, or none).
 * ``_apply_hf_processor_main``: each item's mel is recomputed in fp32 (vLLM casts the processor's to bf16) and, as
   tt/audio/processor.py does for audio items, follows MIMO_AUDIO_TOKENIZER: with ``device`` (the default) the item
   carries the whole track's fp32 mel as its int32 bits, ``va_audio_mel_bits`` [T, 128] (a video field; 51 KB a
@@ -146,6 +153,34 @@ def attach_audio(video_items):
             meta[AUDIO_KEY] = cover_frames(wave, meta, len(frames))
 
 
+def _video_entries(video_items):
+    """(the (media, metadata dict) entries of a request's parsed video items, the number of its video items)."""
+    entries = list(getattr(video_items, "data", [])) if video_items is not None else []
+    return [e for e in entries if isinstance(e, tuple) and len(e) == 2 and isinstance(e[1], dict)], len(entries)
+
+
+def uniform_audio(video_items):
+    """After ``attach_audio``: when some of a request's videos have a track and others do not, none keeps it (module
+    docstring). Returns whether the request's videos take their audio."""
+    entries, total = _video_entries(video_items)
+    with_track = [meta for _, meta in entries if AUDIO_KEY in meta]
+    if not with_track:
+        return False
+    if len(with_track) == total:
+        return True
+    logger.warning("MiMo video audio: some videos of the request have no audio track; none takes its audio")
+    for meta in with_track:
+        del meta[AUDIO_KEY]
+    return False
+
+
+def strip_audio(video_items):
+    """Remove tracks already in these metadata dicts: a request that does not ask for video audio must not get it, or
+    its cache entry, because an earlier use of the same items attached it."""
+    for _, meta in _video_entries(video_items)[0]:
+        meta.pop(AUDIO_KEY, None)
+
+
 def _video_audio_input(video, wave):
     from vllm.transformers_utils.processors.mimo_v2_omni import VideoAudioInput
 
@@ -163,8 +198,12 @@ class VideoAudioMixin:
     """For a MiMoV2OmniMultiModalProcessor subclass placed before VideoTimestampsMixin (module docstring)."""
 
     def apply(self, inputs, *args, **kwargs):
+        videos = inputs.mm_data_items.get("video")
         if wanted(getattr(inputs, "hf_processor_mm_kwargs", None)):
-            attach_audio(inputs.mm_data_items.get("video"))
+            attach_audio(videos)
+            uniform_audio(videos)
+        else:
+            strip_audio(videos)
         return super().apply(inputs, *args, **kwargs)
 
     def _get_hf_mm_inputs(self, mm_items, hf_kwargs):
@@ -175,8 +214,12 @@ class VideoAudioMixin:
             return inputs
         waves = _waves(mm_items, len(videos))
         if any(w is None for w in waves):
+            # ``apply`` leaves a request's videos all with or all without their track (uniform_audio); a mix here is
+            # items that did not come through it. Plain videos, as before, and say so.
             if any(w is not None for w in waves):
-                logger.warning("MiMo video audio: some videos of the request have no audio track; none takes its audio")
+                logger.warning(
+                    "MiMo video audio: a processor call mixes videos with and without a track; none takes it"
+                )
             return inputs
         del data["videos"]
         data["video_audio"] = [_video_audio_input(v, w) for v, w in zip(videos, waves)]

@@ -132,6 +132,62 @@ def test_loader_times(processors, which, monkeypatch):
     assert len(up_ids) == len(ids)
 
 
+@pytest.mark.parametrize(
+    "fps, frame_step, want_late_s",
+    [
+        (30000 / 1001, 15, 2.4),  # NTSC at 2 fps: a true interval of 0.5005 s, labelled 0.5 s
+        (30.0, 15.5, 5.0),  # 0.51667 s, labelled 0.515625 s
+        (25.0, 12.5, 0.0),  # 0.5 s: exact
+    ],
+)
+def test_loader_times_drift_is_bounded(fps, frame_step, want_late_s):
+    """The labels are uniform (vLLM rebuilds them from a start and an interval) with the interval rounded to bf16, so
+    frame j's label is off by j times the interval's rounding error: it grows along the clip and stays within bf16's
+    half unit in the last place, 0.39 % of the elapsed time (tt/video_input.py's docstring). 4800 frames: a 40-minute
+    clip at 2 fps."""
+    from models.experimental.mimo_v2_6_flash.tt.video_input import loader_timestamps
+
+    n = 4800
+    indices = np.floor(np.arange(n) * frame_step).astype(int)
+    times = loader_timestamps({"frames_indices": indices.tolist(), "fps": fps}, n).double()
+    true = torch.from_numpy(indices / fps)
+    steps = times[1:] - times[:-1]
+    assert float(steps.max() - steps.min()) == 0.0  # uniform, and exact in fp32: every label is start + j * step
+    late = true - times
+    assert abs(float(late[-1]) - want_late_s) < 0.1, float(late[-1])
+    assert float(late.abs().max()) <= 2**-8 * float(true[-1]) + 0.05
+    # The error is the interval's, times the frame index: no worse anywhere than at the end.
+    assert float(late.abs().max()) <= abs(float(late[-1])) + 0.05
+
+
+def test_frame_cap(monkeypatch, expect_error):
+    """A clip sampled into more frames than MIMO_VIDEO_MAX_FRAMES is refused with a message: by vLLM's loader as soon
+    as it has chosen the frame indices (before it decodes a frame), and by ``mimo_video`` for frames from elsewhere."""
+    from vllm.multimodal.video import VideoBackend, VideoSourceMetadata, VideoTargetMetadata
+
+    from models.experimental.mimo_v2_6_flash.tt import video_input
+
+    assert video_input.FRAME_CAP_INSTALLED and video_input.install_frame_cap()  # installed once
+    assert video_input.VIDEO_MAX_FRAMES == 7200
+    source = VideoSourceMetadata(total_frames_num=3000, original_fps=30.0, duration=100.0)
+
+    def sample(num_frames, fps):
+        target = VideoTargetMetadata(num_frames=num_frames, fps=fps, max_duration=300)
+        return VideoBackend.compute_frames_index_to_sample(source, target)
+
+    assert len(sample(-1, 2)) == 200
+    monkeypatch.setattr(video_input, "VIDEO_MAX_FRAMES", 64)
+    with expect_error(ValueError, r"\(100 s long\) is sampled into 200 frames, more than the 64"):
+        sample(-1, 2)
+    assert len(sample(64, 2)) == 64 and len(sample(-1, 0.5)) == 50
+    frames = np.zeros((66, 8, 8, 3), dtype=np.uint8)
+    with expect_error(ValueError, "sampled into 66 frames"):
+        video_input.mimo_video(frames, None)
+    assert video_input.mimo_video(frames[:64], None)[0].shape[0] == 64
+    monkeypatch.setattr(video_input, "VIDEO_MAX_FRAMES", 0)  # no limit
+    assert len(sample(-1, 2)) == 200 and video_input.mimo_video(frames, None)[0].shape[0] == 66
+
+
 def test_vllm_timestamps_switch(processors, monkeypatch):
     from models.experimental.mimo_v2_6_flash.tt import video_input
 

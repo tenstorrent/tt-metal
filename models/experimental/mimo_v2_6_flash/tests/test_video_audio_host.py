@@ -311,6 +311,57 @@ def test_without_audio(processor):
         assert "va_audio_codes" not in item and "va_audio_mel_bits" not in item
 
 
+def test_a_videos_audio_does_not_depend_on_the_processor_cache(cached_processor):
+    """Whether a video takes its audio is decided on its request (all of the request's videos have a track, or none
+    takes it), before vLLM hashes the items. The processor cache then holds a video with and without its track as
+    two entries, so the same request gets the same answer whatever was asked before: a video first seen next to a
+    silent one is not served without its track when asked alone, and one cached with its track is not mixed into a
+    request with a silent video."""
+    from vllm.multimodal.media import MediaConnector
+
+    connector = MediaConnector(media_io_kwargs={"video": {"num_frames": -1}})
+    talk, silent = clip(audio_seconds=SECONDS - 0.2), clip(with_audio=False)  # bytes no other test has cached
+
+    def with_audio(*videos):
+        fetched = [connector.fetch_video("data:video/mp4;base64," + base64.b64encode(v).decode()) for v in videos]
+        prompt = PROMPT.replace(vi.VIDEO_PLACEHOLDER, vi.VIDEO_PLACEHOLDER * len(videos))
+        out = cached_processor(
+            prompt,
+            cached_processor.info.parse_mm_data({"video": fetched}),
+            None,
+            hf_processor_mm_kwargs={"mimo_video_audio": True},
+        )
+        return ["va_audio_mel_bits" in item or "va_audio_codes" in item for item in out["mm_kwargs"]["video"]]
+
+    assert with_audio(talk, silent) == [False, False]
+    assert with_audio(talk) == [True]  # not the plain entry the mixed request cached
+    assert with_audio(talk, silent) == [False, False]  # not the entry with audio next to a plain video
+    assert with_audio(silent, talk) == [False, False]
+    assert with_audio(talk) == [True] and with_audio(silent) == [False]
+    assert with_audio(talk, talk) == [True, True]
+
+
+def test_uniform_audio_and_strip():
+    from models.experimental.mimo_v2_6_flash.tt import video_audio as va
+
+    class Items:
+        def __init__(self, metas):
+            self.data = [(object(), meta) for meta in metas]
+
+    wave = np.zeros(8, dtype=np.float32)
+    mixed = Items([{va.AUDIO_KEY: wave}, {}, {va.AUDIO_KEY: wave}])
+    assert va.uniform_audio(mixed) is False and all(va.AUDIO_KEY not in meta for _, meta in mixed.data)
+    full = Items([{va.AUDIO_KEY: wave}, {va.AUDIO_KEY: wave}])
+    assert va.uniform_audio(full) is True and all(va.AUDIO_KEY in meta for _, meta in full.data)
+    # An item without loader metadata (frames handed in directly) has no track: it counts as a silent video.
+    bare = Items([{va.AUDIO_KEY: wave}])
+    bare.data.append(np.zeros((2, 4, 4, 3), dtype=np.uint8))
+    assert va.uniform_audio(bare) is False and va.AUDIO_KEY not in bare.data[0][1]
+    assert va.uniform_audio(Items([{}, {}])) is False and va.uniform_audio(None) is False
+    va.strip_audio(full)
+    assert all(va.AUDIO_KEY not in meta for _, meta in full.data)
+
+
 def test_audio_track_shorter_than_the_picture(processor):
     """A track that ends 0.6 s before the last frame (seen on real clips: the processor's last segment came out empty
     and the request failed) is padded with silence: every grid gets a non-empty segment, the last one included."""

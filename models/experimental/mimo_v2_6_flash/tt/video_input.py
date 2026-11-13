@@ -17,8 +17,19 @@ most N frames) and returns them with their source indices and fps (``frames_indi
   ``second_per_grid_ts`` (``get_video_replacement``: ``start + j * spt``), fields it may hold in bf16, while the
   checkpoint's processor writes them from the per-frame times; the two must give the same tokens. So the times are
   made uniform: the first sampled frame's time and the sampled frames' mean interval, each rounded so it and a
-  grid's span (two frames) are exact in bf16 (and so in every fp32 / fp64 sum both sides make): within 0.4 % of the
-  true times. ``vllm`` keeps upstream's 1 fps labels.
+  grid's span (two frames) are exact in bf16 (and so in every fp32 / fp64 sum both sides make). ``vllm`` keeps
+  upstream's 1 fps labels.
+
+  What the rounding costs: bf16 keeps 8 significant bits, so the interval is off by up to 0.39 % (half a unit in the
+  last place), and frame j's time is off by j times that: the error grows with the position in the clip, up to 0.39 %
+  of the elapsed time. An NTSC source (29.97 fps) sampled at 2 fps has a true interval of 0.5005 s, labelled 0.5 s:
+  2.4 s early at 40 minutes; a 15.5-frame interval at 30 fps is 5.0 s early there (9.4 s is the bound). The labels
+  are whole seconds (``mm:ss``), so the first minutes of a clip read the same as with exact times. The checkpoint's processor also cuts a video's audio track by these
+  times (tt/video_audio.py), so the segments shift by the same amount and the track's last seconds past the last
+  label's interval are not used. Exact per-frame times from the indices are not an option while vLLM rebuilds the
+  tokens from two numbers per video (start, interval): a non-uniform or unrounded series gives different tokens on
+  the two sides and the prompt update fails.
+  ``tests/test_video_input_host.py::test_loader_times_drift_is_bounded`` pins the bound.
 * ``VideoInfoMixin`` also applies Xiaomi's API's frame sizes (measured on its token counts, which these reproduce
   exactly): every frame at most MIMO_VIDEO_MAX_PIXELS (307200: a 1280x720 frame becomes 736x384, 276 merged tokens a
   frame pair; the checkpoint allows 8388608, 880) and at most MIMO_VIDEO_TOTAL_MAX_PIXELS / frames (268435456, the
@@ -27,6 +38,12 @@ most N frames) and returns them with their source indices and fps (``frames_indi
 * ``mimo_video`` resizes the frames to the size the processor will give them before turning them into floats, a few
   at a time, with the processor's own interpolation (the processor's resize is then the identity): a long clip's
   frames as floats at full size (4800 frames of a 40-minute 720p clip at 2 fps: 53 GB) never exist.
+* A clip may be sampled into at most MIMO_VIDEO_MAX_FRAMES frames (7200: an hour at 2 fps; ``0``: no limit). vLLM's
+  loader holds every sampled frame as uint8 at the source's size before anything here sees them (1280x720: 2.8 MB a
+  frame, 13 GB for 4800 frames, 30 GB at 1080p), per request, and ``{"num_frames": -1, "fps": F}`` puts no bound on
+  the count. ``install_frame_cap`` checks the count the loader has just computed, before it decodes a frame, and a
+  longer clip fails the request with a message (vLLM answers 400); ``mimo_video`` checks again for frames that came
+  another way.
 
 Frame sampling is vLLM's loader's: Xiaomi's is ``--media-io-kwargs '{"video": {"num_frames": -1, "fps": 2}}'``.
 """
@@ -54,12 +71,51 @@ RESIZE_CHUNK = 32  # frames turned into floats and resized at a time (torch)
 RESIZE = os.environ.get("MIMO_VIDEO_RESIZE", "cv2")
 RESIZE_THREADS = int(os.environ.get("MIMO_VIDEO_RESIZE_THREADS", "8"))
 EVEN_FRAMES = os.environ.get("MIMO_VIDEO_EVEN_FRAMES", "1") == "1"
+VIDEO_MAX_FRAMES = int(os.environ.get("MIMO_VIDEO_MAX_FRAMES", "7200"))  # sampled frames of one clip; 0: no limit
+
+
+def check_frame_count(num_frames, duration=None):
+    """Refuse a clip sampled into more than MIMO_VIDEO_MAX_FRAMES frames (module docstring). A ValueError: vLLM
+    answers the request with 400 and this message."""
+    if VIDEO_MAX_FRAMES and num_frames > VIDEO_MAX_FRAMES:
+        length = "" if not duration else f" ({duration:.0f} s long)"
+        raise ValueError(
+            f"video{length} is sampled into {num_frames} frames, more than the {VIDEO_MAX_FRAMES} one video may have "
+            "(MIMO_VIDEO_MAX_FRAMES); send a shorter clip, or sample fewer frames with media_io_kwargs "
+            '{"video": {"num_frames": N}} or a lower "fps"'
+        )
+
+
+def install_frame_cap():
+    """Make vLLM's video loader (the ``opencv`` backend and its subclasses that keep its sampling) check
+    ``check_frame_count`` on the frame indices it has chosen, before it decodes them. True when installed (once)."""
+    try:
+        from vllm.multimodal.video import VideoBackend
+
+        inner = VideoBackend.__dict__["compute_frames_index_to_sample"].__func__
+    except (ImportError, AttributeError, KeyError):
+        return False  # no vLLM (host tests), or a loader this was not written for: mimo_video still checks
+    if getattr(inner, "mimo_frame_cap", False):
+        return True
+
+    def compute_frames_index_to_sample(cls, source, target, **kwargs):
+        indices = inner(cls, source, target, **kwargs)
+        check_frame_count(len(indices), getattr(source, "duration", None))
+        return indices
+
+    compute_frames_index_to_sample.mimo_frame_cap = True
+    VideoBackend.compute_frames_index_to_sample = classmethod(compute_frames_index_to_sample)
+    return True
+
+
+FRAME_CAP_INSTALLED = install_frame_cap()
 
 
 def loader_timestamps(metadata, num_frames):
     """Times (s, float32 [num_frames]) of the frames vLLM's loader sampled, from its metadata (``frames_indices`` into
     the source at ``fps``), uniform and rounded so vLLM and the checkpoint's processor write the same timestamp tokens
-    (module docstring). None when the metadata does not describe these frames."""
+    (module docstring). Frame j's time is ``start + j * step`` with the step rounded to bf16: its error grows with j,
+    up to 0.39 % of the elapsed time. None when the metadata does not describe these frames."""
     if not isinstance(metadata, dict):
         return None
     indices, fps = metadata.get("frames_indices"), metadata.get("fps")
@@ -182,6 +238,7 @@ def mimo_video(video, metadata=None, resize=None):
         return video
     if isinstance(video, tuple) and len(video) == 2 and (video[1] is None or isinstance(video[1], dict)):
         video, metadata = video
+    check_frame_count(len(video) if hasattr(video, "__len__") else 0)
     video, metadata = even_frames(video, metadata)
     shape = tuple(getattr(video, "shape", ()))
     if resize is not None and len(shape) == 4 and shape[-1] in (1, 3, 4):
