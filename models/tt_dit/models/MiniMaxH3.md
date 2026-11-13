@@ -377,9 +377,11 @@ instead; the norms' worker split (`row_capacity`) is sized once at `max_sequence
 and the ring attention's K/V gather pair, which holds the whole gathered sequence on every device, at
 `max_sequence_length` rows. Eager only: a trace freezes the length, so the quad preset
 stays bucketed and traced, and the Wormhole 4x8 preset stays bucketed (dynamic length is unmeasured there).
-Ring only, too: the fused AGMM / MMRS pins that give each length class one program set exist for a ring, so
-on a line topology (a `FABRIC_1D` fabric or `MINIMAX_H3_TOPOLOGY=linear`) the preset default yields to the
-bucketed path and an explicit `dynamic_length=True` raises.
+A line topology (a `FABRIC_1D` fabric or `MINIMAX_H3_TOPOLOGY=linear`) takes the dynamic path too: there the
+projections run unfused (all-gather + matmul, matmul + reduce-scatter). The reduce-scatter keys its program
+without the row count when its worker and chunk counts are pinned (`CCLManager` pins both), the all-gathers key
+without it on their default path (the op's byte-derived worker count is 4 at every served length), and the gated
+residual's `addcmul` keys on its width alone.
 No stage of a dynamic-length pipeline is traced: the preset's `trace_audio` is ignored on that path (an
 explicit `trace_audio=True` raises), so the audio decoder runs eagerly too (about 0.3 s per request).
 A dynamic-length `task="ref2va"` pipeline also defaults to `dit_fsdp=True` when its preset has no `dit_fsdp`
