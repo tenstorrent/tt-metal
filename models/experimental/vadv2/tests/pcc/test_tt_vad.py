@@ -17,7 +17,7 @@ from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
 from models.experimental.vadv2.tt.model_preprocessing import (
     create_vadv2_model_parameters_vad,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import comp_pcc
 from models.experimental.vadv2.common import load_torch_model
 
 
@@ -745,8 +745,95 @@ def test_vadv2(
         "map_all_pts_preds": 0.99,  # observed 0.998
         "ego_fut_preds": 0.99,  # observed 0.999
     }
-    for key in keys_to_check:
-        a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
-        b = tt_model._last_outs[key]
-        _, msg = assert_with_pcc(a, b, pcc_floors[key])
-        logger.info(f"{key}: {msg}")
+
+    failures = []
+
+    def check_outputs(frame, floors):
+        for key in keys_to_check:
+            a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
+            b = tt_model._last_outs[key]
+            passed, msg = comp_pcc(a, b, floors[key])
+            logger.info(f"{frame} {key}: {msg}")
+            if not passed:
+                failures.append(f"{frame} {key}: {msg} < {floors[key]}")
+
+    check_outputs("frame 1", pcc_floors)
+
+    task_inputs = {
+        key: input_dict[key]
+        for key in (
+            "gt_bboxes_3d",
+            "gt_labels_3d",
+            "fut_valid_flag",
+            "ego_his_trajs",
+            "ego_fut_trajs",
+            "ego_fut_cmd",
+            "ego_lcf_feat",
+            "gt_attr_labels",
+        )
+    }
+
+    def run_both(img_metas, frame_img):
+        with torch.no_grad():
+            torch_model(return_loss=False, img=[frame_img], img_metas=copy.deepcopy(img_metas), **task_inputs)
+        tt_img = [ttnn.from_torch(frame_img, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)]
+        tt_model(return_loss=False, img=tt_img, img_metas=copy.deepcopy(img_metas), **task_inputs)
+
+    # Parameter preprocessing ran the reference once more, so restart both models' scene history at
+    # frame 1. Then the next frame of the same scene: the encoder takes the previous BEV, rotated by
+    # the ego motion.
+    for model in (torch_model, tt_model):
+        model.prev_frame_info = copy.deepcopy(pristine_prev_frame_info)
+    run_both(pristine_img_metas, torch_img)
+    img_metas = copy.deepcopy(pristine_img_metas)
+    meta = img_metas[0][0][0]
+    meta["can_bus"][:3] += [1.0, 0.2, 0.0]
+    meta["can_bus"][-1] += 1.0
+    run_both(img_metas, torch.randn(1, 6, 3, 384, 640))
+    # The previous BEV carries frame 1's error (bev_embed PCC 0.98) into this frame.
+    temporal_pcc_floors = {
+        "bev_embed": 0.91,  # observed 0.940
+        "all_cls_scores": 0.84,  # observed 0.876
+        "all_bbox_preds": 0.99,  # observed 0.999
+        "all_traj_preds": 0.89,  # observed 0.925
+        "all_traj_cls_scores": 0.82,  # observed 0.857
+        "map_all_cls_scores": 0.86,  # observed 0.896
+        "map_all_bbox_preds": 0.98,  # observed 0.993
+        "map_all_pts_preds": 0.99,  # observed 0.997
+        "ego_fut_preds": 0.99,  # observed 1.000
+    }
+    check_outputs("frame 2 (temporal)", temporal_pcc_floors)
+
+    # A new scene seen through other camera intrinsics: the camera projection must not come from the
+    # previous calls.
+    img_metas = copy.deepcopy(pristine_img_metas)
+    meta = img_metas[0][0][0]
+    meta["scene_token"] = "another-scene"
+    meta["lidar2img"] = [np.diag([0.9, 0.9, 1.0, 1.0]) @ m for m in meta["lidar2img"]]
+    run_both(img_metas, torch.randn(1, 6, 3, 384, 640))
+    check_outputs("frame 3 (new scene, new cameras)", pcc_floors)
+
+    # Random images keep every map score below 0.1, so no map passes map_thresh=0.5 and the
+    # motion-map cross-attention sees only its fixed pad key. A flat gray image lifts one or two maps
+    # above 0.2; at map_thresh=0.2 they are selected and each agent masks the ones farther than
+    # dis_thresh. Frame 1 had no map, so this also checks that the selection is redone per frame.
+    for model in (torch_model, tt_model):
+        model.pts_bbox_head.map_thresh = 0.2
+    mean = torch.tensor([123.675, 116.28, 103.53]).view(1, 1, 3, 1, 1)
+    std = torch.tensor([58.395, 57.12, 57.375]).view(1, 1, 3, 1, 1)
+    img_metas = copy.deepcopy(pristine_img_metas)
+    img_metas[0][0][0]["scene_token"] = "gray-scene"
+    run_both(img_metas, (128 + 8 * torch.randn(1, 6, 3, 384, 640) - mean) / std)
+    map_scores = torch.load("models/experimental/vadv2/reference/dumps/map_all_cls_scores.pt")[-1].sigmoid()
+    assert (map_scores.amax(-1) > 0.2).any(), "frame 4 selects no map, so it does not test map selection"
+    check_outputs("frame 4 (maps selected)", pcc_floors)
+    # Each map decoder layer refines the map reference points with its own map_reg_branches. A
+    # layer that skips the refinement, or uses the detection branches, drops to about 0.998.
+    a = torch.load("models/experimental/vadv2/reference/dumps/map_all_pts_preds.pt")
+    b = tt_model._last_outs["map_all_pts_preds"]
+    for layer in range(a.shape[0]):
+        passed, msg = comp_pcc(a[layer], b[layer].reshape(a[layer].shape), 0.999)  # observed 0.9998
+        logger.info(f"frame 4 map_all_pts_preds layer {layer}: {msg}")
+        if not passed:
+            failures.append(f"frame 4 map_all_pts_preds layer {layer}: {msg} < 0.999")
+    assert not failures, failures

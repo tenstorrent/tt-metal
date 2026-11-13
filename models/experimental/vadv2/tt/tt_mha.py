@@ -153,6 +153,15 @@ class TtMultiheadAttention:
         else:
             attn_output_weights = ttnn.matmul(q_scaled, key_transposed, **mm_kw)
 
+        if key_padding_mask is not None:
+            # A finite fill matches -inf while a row keeps one key. A fully masked row averages its
+            # keys here but is NaN in the reference; it needs motion_det_score, which is unset.
+            key_mask = ttnn.multiply(ttnn.gtz(key_padding_mask), -1e9)
+            key_mask = ttnn.reshape(key_mask, (bsz, 1, 1, src_len))
+            attn_output_weights = ttnn.reshape(attn_output_weights, (bsz, self.num_heads, Nt, src_len))
+            attn_output_weights = ttnn.add(attn_output_weights, key_mask)
+            attn_output_weights = ttnn.reshape(attn_output_weights, (B, Nt, src_len))
+
         attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1)
 
         attn_output = ttnn.matmul(attn_output_weights, value, **mm_kw)
