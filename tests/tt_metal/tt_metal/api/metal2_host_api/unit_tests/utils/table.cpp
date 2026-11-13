@@ -20,12 +20,12 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/workload/utils/table.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 using StrIntTable = m2::Table<std::string, int>;
 

@@ -38,7 +38,7 @@ void hash_combine(std::size_t& seed, const T& value);  // NOLINT(readability-red
 
 }  // namespace ttsl::hash
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // A key -> value map with unique keys.
 //
@@ -246,14 +246,14 @@ private:
     Storage entries_;
 };
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal
 
 // Makes Table hashable via std::hash, and therefore via ttsl::hash, which dispatches to it. Like
 // operator==, the result ignores the entries' storage order. A translation unit that hashes a Table
 // must include <tt_stl/reflection.hpp> so this specialization can be instantiated.
 template <typename K, typename V>
-struct std::hash<tt::tt_metal::experimental::Table<K, V>> {
-    std::size_t operator()(const tt::tt_metal::experimental::Table<K, V>& table) const {
+struct std::hash<tt::tt_metal::Table<K, V>> {
+    std::size_t operator()(const tt::tt_metal::Table<K, V>& table) const {
         using ttsl::hash::hash_t;
 
         // Hash each entry on its own, recursing through K and V via ttsl::hash.
