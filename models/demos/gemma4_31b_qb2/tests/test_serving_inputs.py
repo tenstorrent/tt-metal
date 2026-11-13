@@ -17,6 +17,7 @@ from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM
 def adapter():
     model = object.__new__(Gemma4ForCausalLM)
     model.sub_caches, model.verify_caches, model.row_sizes, model.verify_shapes, model.cur_state = {}, {}, (), (), None
+    model.full_layers = frozenset()
     model.cache = SimpleNamespace(
         batch=4, kv=[None, None], page_tables={i: torch.zeros(4, 8, dtype=torch.int32) for i in range(2)}, columns=1
     )
@@ -228,6 +229,7 @@ def spec_adapter(slots, spec_k):
     model.spec_k = spec_k
     model.max_batch_size = model.rows = slots
     model.sub_caches, model.verify_caches, model.row_sizes, model.cur_state = {}, {}, (), None
+    model.full_layers = frozenset()
     model.verify_shapes = verify_shapes(slots, spec_k)
     model.prefill_slot_keys = {}
     model.cache = SimpleNamespace(prefill_history={})
