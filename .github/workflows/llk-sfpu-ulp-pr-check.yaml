@@ -30,17 +30,14 @@ defaults:
 
 env:
   TESTS: tt_metal/tt-llk/tests/python_tests
-  # What the sweep's kernels are built from: the harness's include roots and the SFPI pin, less
-  # what only Quasar builds.
+  # The SFPU kernels: each architecture's files named *sfpu*, or under a directory so named, in
+  # tt-llk and in the metal LLK API. A change to the harness, the golden or SFPI alone is left
+  # to the nightly sweep.
   KERNEL_PATHS: >-
-    tt_metal/tt-llk/tt_llk_wormhole_b0 tt_metal/tt-llk/tt_llk_blackhole tt_metal/tt-llk/common tt_metal/tt-llk/tools
-    tt_metal/tt-llk/tests :!tt_metal/tt-llk/tests/python_tests/quasar
-    :!tt_metal/tt-llk/tests/python_tests/fuser/quasar :!tt_metal/tt-llk/tests/python_tests/fuser/tests/quasar
-    :!tt_metal/tt-llk/tests/sources/quasar
-    tt_metal/hw/inc :!tt_metal/hw/inc/internal/tt-2xx/quasar
-    tt_metal/hw/ckernels/wormhole_b0 tt_metal/hw/ckernels/blackhole tt_metal/hostdevcommon/api
-    ttnn/cpp/ttnn/operations/experimental :!ttnn/cpp/ttnn/operations/experimental/quasar
-    tt_metal/sfpi-version
+    :(glob)tt_metal/tt-llk/tt_llk_wormhole_b0/**/*sfpu* :(glob)tt_metal/tt-llk/tt_llk_wormhole_b0/**/*sfpu*/**
+    :(glob)tt_metal/tt-llk/tt_llk_blackhole/**/*sfpu* :(glob)tt_metal/tt-llk/tt_llk_blackhole/**/*sfpu*/**
+    :(glob)tt_metal/hw/ckernels/wormhole_b0/**/*sfpu* :(glob)tt_metal/hw/ckernels/wormhole_b0/**/*sfpu*/**
+    :(glob)tt_metal/hw/ckernels/blackhole/**/*sfpu* :(glob)tt_metal/hw/ckernels/blackhole/**/*sfpu*/**
   # The check itself: a change here runs every cell.
   CHECK_PATHS: .github/workflows/llk-sfpu-ulp-pr-check.yaml tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml
 
@@ -63,11 +60,13 @@ jobs:
       - id: diff
         # HEAD is the merge the PR proposes, or the queue's commit; HEAD^1 is what it lands on.
         run: |
+          set -f # the pathspecs' globs are git's
           # shellcheck disable=SC2086
           if git diff --quiet HEAD^1 HEAD -- $CHECK_PATHS; then check=false; else check=true; fi
-          # shellcheck disable=SC2086
-          if [[ $check == false ]] && git diff --quiet HEAD^1 HEAD -- $KERNEL_PATHS; then kernels=false; else kernels=true; fi
           tables=$(git diff --name-only HEAD^1 HEAD -- "$TESTS/helpers/sfpu_accuracy_budget_*.yaml" | xargs -r -n1 basename | xargs)
+          # A changed table runs Budgets, and the cells whose row changed.
+          # shellcheck disable=SC2086
+          if [[ $check == false && -z $tables ]] && git diff --quiet HEAD^1 HEAD -- $KERNEL_PATHS; then kernels=false; else kernels=true; fi
           echo "kernels=$kernels" >> "$GITHUB_OUTPUT"
           echo "check=$check" >> "$GITHUB_OUTPUT"
           echo "tables=$tables" >> "$GITHUB_OUTPUT"
