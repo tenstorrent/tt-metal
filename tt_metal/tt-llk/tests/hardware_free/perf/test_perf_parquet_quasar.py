@@ -67,7 +67,8 @@ def test_quasar_schema_is_not_wh_bh_schema():
     # The split: Quasar-only columns must not land in the WH/BH published table.
     qsr_only = {c.name for c in QSR_SCHEMA} - {c.name for c in WH_BH_SCHEMA}
     assert "unpacker_engine_sel" in qsr_only
-    assert "vector_mode" in qsr_only
+    # vector_mode is emitted by both architectures (ternary SFPU on WH/BH), so it is shared.
+    assert "vector_mode" not in qsr_only
     assert "enable_2x_format" in qsr_only
     assert "enable_direct_indexing" in qsr_only
     assert stat_column("L1_TO_L1[FPU]", MEAN) in qsr_only
