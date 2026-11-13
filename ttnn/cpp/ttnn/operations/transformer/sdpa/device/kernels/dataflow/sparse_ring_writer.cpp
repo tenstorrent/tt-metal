@@ -94,10 +94,10 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
     constexpr bool output_has_no_padding = q_local_padded_Nt % Sq_chunk_t == 0;
-    using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
 #ifdef SPARSE_RING_OUT_TOKEN_MAJOR
     using OutputTileShape = TokenMajorTileShape;
 #else
+    using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
 #endif
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
