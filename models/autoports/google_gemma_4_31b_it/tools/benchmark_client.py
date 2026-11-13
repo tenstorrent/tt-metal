@@ -9,9 +9,11 @@ import sys
 import time
 from pathlib import Path
 
+from serving_paths import snapshot_path
+
 ROOT = Path(__file__).resolve().parents[4]
 CLIENT = ROOT / "bringup/artifacts/benchmark-perf-client/bin/vllm"
-TOKENIZER = "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+TOKENIZER = str(snapshot_path())
 
 
 def exchange(path, command):

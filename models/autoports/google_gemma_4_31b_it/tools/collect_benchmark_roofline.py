@@ -37,7 +37,7 @@ def healthy(value):
 
 
 def check(args, server):
-    endpoint = socket_path(args.run_dir / f"phase-b{args.concurrency}.jsonl")
+    endpoint = socket_path(server["phase_log"])
     before = exchange(endpoint, "check")
     healthy(before)
     identity = before["identity"]
@@ -174,7 +174,7 @@ def collect(args, server):
     start_path, end_path = [directory / f"phase-b{batch}-window-{part}.json" for part in ("start", "end")]
     start, end = [json.loads(p.read_text()) for p in (start_path, end_path)]
     # Collector runs before server stop: verify the same exporter is still alive.
-    live = exchange(socket_path(directory / f"phase-b{batch}.jsonl"), "check")
+    live = exchange(socket_path(server["phase_log"]), "check")
     healthy(live)
     if live["pid"] != end["pid"] or live["identity"] != end["identity"]:
         raise ValueError("Running observer changed since measured profile")

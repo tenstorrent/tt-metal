@@ -18,6 +18,8 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
+from serving_paths import plugin_root, snapshot_path
+
 MODEL = Path(__file__).resolve().parents[1]
 ROOT = MODEL.parents[2]
 STATE = MODEL / "doc/benchmark/owned_server.json"
@@ -196,10 +198,12 @@ def observe(state, output, requested):
     current_hashes = source_hashes()
     if state.get("source_sha256_at_launch") != current_hashes:
         raise RuntimeError("Runtime source changed since server launch or launch hashes are absent; relaunch required")
-    plugin = Path("/home/mvasiljevic/gemma4-31b-pipeline-v3/vllm-tt-plugin-stage09")
+    plugin = plugin_root()
 
     def commit(path):
-        return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+        return subprocess.check_output(
+            ["git", "-c", f"safe.directory={path}", "-C", str(path), "rev-parse", "HEAD"], text=True
+        ).strip()
 
     commits = {"tt-metal": commit(ROOT), "vllm-tt-plugin": commit(plugin)}
     if state.get("tt_metal_commit_at_launch") != commits["tt-metal"]:
@@ -323,7 +327,7 @@ def main():
             "--output-dir",
             str(server_dir),
         ]
-        snapshot = "/home/bringup/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/" + REVISION
+        snapshot = str(snapshot_path())
         # Retain the upstream underscore spelling and add the equivalent
         # canonical CLI flag so the benchmark validator sees the actual argv.
         extras = [
@@ -333,6 +337,11 @@ def main():
             REVISION,
             "--language-model-only",
             "--async-scheduling",
+            "--reasoning-parser",
+            "gemma4",
+            "--tool-call-parser",
+            "gemma4",
+            "--enable-auto-tool-choice",
             "--override-generation-config",
             '{"top_k":32}',
             "--served-model-name",
