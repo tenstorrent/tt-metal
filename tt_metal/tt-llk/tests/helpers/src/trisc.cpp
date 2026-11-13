@@ -59,8 +59,9 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
 }
 
 // G2h: a production key of compile-time block keys whose class polls runs the ttsync unpack on its cell (llk_matmul_forms.h
-// matmul_kernel_ttsync_block, as the front end's matmul_fe_ttsync_cell); in1 is the test's A operand, in0 its B
-#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && !defined(MATMUL_TTSYNC_BLOCK_PROD)
+// matmul_kernel_ttsync_block, as the front end's matmul_fe_ttsync_cell); in1 is the test's A operand, in0 its B. minimal_matmul
+// (MATMUL_PACK_TILES) passes run-time dims and keeps the class rule
+#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && !defined(MATMUL_PACK_TILES) && !defined(MATMUL_TTSYNC_BLOCK_PROD)
 #define MATMUL_TTSYNC_BLOCK_PROD                                                                                                           \
     ckernel::matmul_kernel_ttsync_block(                                                                                                   \
         MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS, MATMUL_PK_IN_B, MATMUL_PK_IN_A, \
