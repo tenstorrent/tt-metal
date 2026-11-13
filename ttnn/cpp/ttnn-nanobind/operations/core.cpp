@@ -388,7 +388,7 @@ void py_module(nb::module_& mod) {
            const std::vector<HostRegion>& regions,
            bool blocking,
            std::optional<ttnn::QueueId> cq_id,
-           nb::object host_buffer) {
+           const nb::object& host_buffer) {
             TT_FATAL(
                 device_tensor.storage_type() == StorageType::DEVICE,
                 "copy_device_to_host_regions needs a device tensor");
@@ -440,7 +440,7 @@ void py_module(nb::module_& mod) {
            const std::vector<HostRegion>& regions,
            bool blocking,
            std::optional<ttnn::QueueId> cq_id,
-           nb::object host_buffer) {
+           const nb::object& host_buffer) {
             TT_FATAL(
                 device_tensor.storage_type() == StorageType::DEVICE,
                 "copy_host_to_device_regions needs a device tensor");
