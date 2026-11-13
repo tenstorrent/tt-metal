@@ -15,6 +15,10 @@
 #ifndef FE_SHARED_SPLIT
 #define FE_SHARED_SPLIT 1u
 #endif
+// The routed gate_up's K-split (see the program factory's routed_split): 1 = off.
+#ifndef FE_ROUTED_SPLIT
+#define FE_ROUTED_SPLIT 1u
+#endif
 
 namespace {
 
@@ -183,6 +187,9 @@ void kernel_main() {
 #endif
     const uint32_t agg_noc_x = get_arg_val<uint32_t>(kAggArg);
     const uint32_t agg_noc_y = get_arg_val<uint32_t>(kAggArg + 1);
+    // The routed split's peer (FE_ROUTED_SPLIT): a producer's partner, or a partner's producer.
+    const uint32_t peer_noc_x = get_arg_val<uint32_t>(kAggArg + 2);
+    const uint32_t peer_noc_y = get_arg_val<uint32_t>(kAggArg + 3);
     const bool down_core = down_local != 0xFFFFFFFFu;
     (void)down_core;
 
@@ -352,6 +359,35 @@ void kernel_main() {
 
         if constexpr (num_expert_groups > 1) {
             const uint32_t scatter_tiles = i_shards_per_core * swiglu_tiles;
+#if FE_ROUTED_SPLIT > 1
+            {
+                // The routed gate_up's K-split: a partner sends its [gate | up] partial (cb_wtmp) into its producer's
+                // cb_wtmp, at the same address there; the producer publishes it to its compute, which adds it before
+                // the SwiGLU.
+                constexpr uint32_t kPartTiles = 2u * swiglu_tiles;
+                const uint32_t half = cores_per_expert / 2u;
+                CircularBuffer cb_wtmp(FE_CB_WTMP);
+                if (swiglu_core) {
+                    cb_wtmp.reserve_back(kPartTiles);
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_SHARED_PART)), iter + 1u);
+                    cb_wtmp.push_back(kPartTiles);
+                } else if (local_idx >= half && local_idx < half + num_producers) {
+                    const auto& wtmp_if = get_local_cb_interface(FE_CB_WTMP);
+                    cb_wtmp.wait_front(kPartTiles);
+                    noc.async_write(
+                        cb_wtmp,
+                        UnicastEndpoint{},
+                        kPartTiles * out_tile_bytes,
+                        {.offset_bytes = 0},
+                        {.noc_x = peer_noc_x, .noc_y = peer_noc_y, .addr = wtmp_if.fifo_limit - wtmp_if.fifo_size});
+                    noc.async_write_barrier();
+                    noc_semaphore_inc(get_noc_addr(peer_noc_x, peer_noc_y, get_semaphore(FE_SEM_SHARED_PART)), 1);
+                    noc_async_atomic_barrier();
+                    cb_wtmp.pop_front(kPartTiles);
+                }
+            }
+#endif
             if (swiglu_core) {
                 {
                     DeviceZoneScopedN("FE_W_SCATTER_WAIT");
