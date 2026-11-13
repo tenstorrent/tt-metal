@@ -32,7 +32,7 @@ from unittest import mock
 
 import ttnn
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers.grpo_trainer.remote_rollout.ttt_presets import bf16_attn_bfp8_mlp_optimizations, stop_and_pad
 from ttml.trainers.grpo_trainer.remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
@@ -180,10 +180,11 @@ def main() -> None:
         mesh_shape=args.mesh_shape,
     )
 
-    # Boot every model once first, so a model that fails to load does so before the long generation runs.
+    # Read every model's config and tokenizer first, so a bad path or repo id fails before the long generation runs.
     for path, display in models:
         print(f"[preflight] {display} ({path})")
-        generate_on_tt(path, [], **gen_kwargs)
+        AutoConfig.from_pretrained(path, trust_remote_code=True)
+        stop_and_pad(path)
 
     ks = [k for k in (1, 2, 4, 8, 16) if k <= args.n_samples]
     rows: List[Tuple[str, List[List[List[bool]]]]] = []
