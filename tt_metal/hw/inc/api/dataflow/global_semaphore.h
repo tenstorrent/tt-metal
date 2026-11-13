@@ -31,38 +31,11 @@
 #endif
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
-// Destination chips for the fabric calls: hop counts on a 1D line or ring, device and mesh ids on a 2D mesh.
-#if defined(FABRIC_2D)
-struct ToChip {
-    uint8_t dst_dev_id;
-    uint16_t dst_mesh_id;
-};
-struct ToChips {
-    uint8_t dst_dev_id;
-    uint16_t dst_mesh_id;
-    uint8_t e;
-    uint8_t w;
-    uint8_t n;
-    uint8_t s;
-};
-#else
-struct ToChip {
-    uint8_t num_hops;
-};
-struct ToChips {
-    uint8_t start_distance;
-    uint8_t range;
-};
-#endif
-
 namespace global_semaphore_detail {
 template <typename T>
 inline constexpr bool is_fabric_sender_v = tt::tt_fabric::common::experimental::is_edm_sender_v<T> ||
                                            tt::tt_fabric::common::experimental::is_mux_sender_v<T> ||
                                            tt::tt_fabric::common::experimental::is_fabric_mux_v2_sender_v<T>;
-
-template <typename T>
-inline constexpr bool is_chip_target_v = std::is_same_v<T, ToChip> || std::is_same_v<T, ToChips>;
 
 #if defined(FABRIC_2D)
 namespace fabric_api = tt::tt_fabric::mesh::experimental;
@@ -99,7 +72,8 @@ public:
     // Adds v atomically.
     FORCE_INLINE void up(uint32_t v = 1) { semaphore_detail::up<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
-    // Waits until the value is at least v, then subtracts v atomically.
+    // Waits until the value is at least v, then subtracts v atomically. On Quasar, only one thread may call
+    // down() on a given semaphore.
     FORCE_INLINE void down(uint32_t v = 1) {
 #if defined(ARCH_QUASAR)
         // The Quasar program-semaphore down() takes a lock in the program's semaphore region, which does not
@@ -162,15 +136,44 @@ public:
 
 #if defined(GLOBAL_SEMAPHORE_FABRIC)
     // ---- Another chip (fabric) ----
+
+    // Destination chips: hop counts on a 1D line or ring, device and mesh ids on a 2D mesh.
+#if defined(FABRIC_2D)
+    struct ToChip {
+        uint8_t dst_dev_id;
+        uint16_t dst_mesh_id;
+    };
+    struct ToChips {
+        uint8_t dst_dev_id;
+        uint16_t dst_mesh_id;
+        uint8_t e;
+        uint8_t w;
+        uint8_t n;
+        uint8_t s;
+    };
+#else
+    struct ToChip {
+        uint8_t num_hops;
+    };
+    struct ToChips {
+        uint8_t start_distance;
+        uint8_t range;
+    };
+#endif
+
+private:
+    template <typename T>
+    static constexpr bool is_chip_target_v = std::is_same_v<T, ToChip> || std::is_same_v<T, ToChips>;
+
+public:
     // Like the NoC up(), but for core (noc_x, noc_y) on another chip. Pass ToChip for one chip or ToChips for
     // several. noc_x and noc_y are coordinates on `noc`.
 
     template <
         typename FabricSender,
         typename ChipTarget,
-        typename = std::enable_if_t<
-            global_semaphore_detail::is_fabric_sender_v<FabricSender> &&
-            global_semaphore_detail::is_chip_target_v<ChipTarget>>>
+        typename =
+            std::enable_if_t<global_semaphore_detail::is_fabric_sender_v<FabricSender> && is_chip_target_v<ChipTarget>>>
     FORCE_INLINE void up(
         FabricSender& sender,
         volatile PACKET_HEADER_TYPE* hdr,
@@ -242,9 +245,8 @@ public:
         typename ChipTarget,
         typename Src,
         typename Dst,
-        typename = std::enable_if_t<
-            global_semaphore_detail::is_fabric_sender_v<FabricSender> &&
-            global_semaphore_detail::is_chip_target_v<ChipTarget>>>
+        typename =
+            std::enable_if_t<global_semaphore_detail::is_fabric_sender_v<FabricSender> && is_chip_target_v<ChipTarget>>>
     FORCE_INLINE void write_and_up(
         FabricSender& sender,
         volatile PACKET_HEADER_TYPE* hdr,
@@ -285,7 +287,7 @@ public:
     }
 
     // For loops that signal many times: fill the packet header once here, then send it with up_with_state().
-    template <typename ChipTarget, typename = std::enable_if_t<global_semaphore_detail::is_chip_target_v<ChipTarget>>>
+    template <typename ChipTarget, typename = std::enable_if_t<is_chip_target_v<ChipTarget>>>
     FORCE_INLINE void up_set_state(
         volatile PACKET_HEADER_TYPE* hdr,
         ChipTarget chip,
@@ -315,24 +317,39 @@ public:
 #endif
     }
 
-    // Submits a header prepared by up_set_state().
+    // Submits a header prepared by up_set_state(). Pass the same ChipTarget given to up_set_state():
+    // up_with_state<ToChips>(sender, hdr) after a multicast set-state.
     template <
+        typename ChipTarget = ToChip,
         typename FabricSender,
-        typename = std::enable_if_t<global_semaphore_detail::is_fabric_sender_v<FabricSender>>>
+        typename =
+            std::enable_if_t<is_chip_target_v<ChipTarget> && global_semaphore_detail::is_fabric_sender_v<FabricSender>>>
     FORCE_INLINE void up_with_state(FabricSender& sender, volatile PACKET_HEADER_TYPE* hdr) {
-        global_semaphore_detail::fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
-            UnicastAtomicIncUpdateMask::None>(&sender, hdr);
+        if constexpr (std::is_same_v<ChipTarget, ToChip>) {
+            global_semaphore_detail::fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
+                UnicastAtomicIncUpdateMask::None>(&sender, hdr);
+        } else {
+            global_semaphore_detail::fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<
+                UnicastAtomicIncUpdateMask::None>(&sender, hdr);
+        }
     }
 
     // Same, but changes the target core on each send.
     template <
+        typename ChipTarget = ToChip,
         typename FabricSender,
-        typename = std::enable_if_t<global_semaphore_detail::is_fabric_sender_v<FabricSender>>>
+        typename =
+            std::enable_if_t<is_chip_target_v<ChipTarget> && global_semaphore_detail::is_fabric_sender_v<FabricSender>>>
     FORCE_INLINE void up_with_state(
         FabricSender& sender, volatile PACKET_HEADER_TYPE* hdr, const Noc& noc, uint32_t noc_x, uint32_t noc_y) {
-        global_semaphore_detail::fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
-            UnicastAtomicIncUpdateMask::DstAddr>(
-            &sender, hdr, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{fabric_noc_addr(noc_x, noc_y, noc), 0});
+        const tt::tt_fabric::NocUnicastAtomicIncCommandHeader cmd{fabric_noc_addr(noc_x, noc_y, noc), 0};
+        if constexpr (std::is_same_v<ChipTarget, ToChip>) {
+            global_semaphore_detail::fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
+                UnicastAtomicIncUpdateMask::DstAddr>(&sender, hdr, cmd);
+        } else {
+            global_semaphore_detail::fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<
+                UnicastAtomicIncUpdateMask::DstAddr>(&sender, hdr, cmd);
+        }
     }
 #endif
 

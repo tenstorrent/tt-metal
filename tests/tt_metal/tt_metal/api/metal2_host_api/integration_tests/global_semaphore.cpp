@@ -559,11 +559,10 @@ TEST_F(GlobalSemaphoreMetal2Test, UnknownGlobalSemaphoreArgFails) {
 }
 
 TEST_F(GlobalSemaphoreMetal2Test, SemaphoreFromAnotherMeshDeviceFails) {
-    if (devices_.size() < 2) {
-        GTEST_SKIP() << "Skipping: test needs two mesh devices";
-    }
     auto& mesh_device = *devices_.at(0);
-    auto other_sem = CreateGlobalSemaphore(*devices_.at(1), kHubAndSenders, 0);
+    // A submesh is a separate MeshDevice, so this needs only one chip.
+    auto other_mesh = mesh_device.create_submesh(distributed::MeshShape{1, 1});
+    auto other_sem = CreateGlobalSemaphore(*other_mesh, kHubAndSenders, 0);
     Program program = experimental::MakeProgramFromSpec(mesh_device, MakeCounterSpec(HubMode::NONE));
     EXPECT_THAT(
         [&] { experimental::SetProgramRunArgs(program, MakeCounterRunArgs(mesh_device, HubMode::NONE, other_sem)); },
