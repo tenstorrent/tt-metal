@@ -150,12 +150,28 @@ jobs:
           fi
 
           # SKU coverage spanning every L2 nightly test yaml entry.
+          #
+          # TEMPORARY: every CIv1 SKU is commented out below, which is how this pipeline
+          # disables CIv1 tests while there are no CIv1 runners. A CIv1 SKU is one whose
+          # sku_config.yaml `runs_on` is the multi-label bare-metal/VM pool (in-service +
+          # arch-* / pipeline-* / box label); a CIv2 SKU is one single `tt-ubuntu-2204-*`
+          # label. prepare_test_matrix.py intersects this list against each tests yaml's
+          # own `skus:` map, so dropping a SKU here removes exactly its matrix rows from
+          # every impl that takes enabled-skus from this output, with no change needed in
+          # the impls or the tests yamls. Uncomment to restore (same pattern as #65434).
+          #
+          # The one exception is ttnn-p100-tests, which hard-codes enabled-skus: "bh_p100"
+          # instead of reading this output; it is gated off separately below. Any other
+          # suite that loses its last SKU here needs the same treatment, because an empty
+          # intersection against a non-empty tests yaml is a hard error, not a no-op.
           l2_nightly_skus=()
           if [[ "$run_wormhole" == "true" ]]; then
-            l2_nightly_skus+=("wh_n150" "wh_n300" "wh_n150_civ2" "wh_n300_civ2" "sim_wh_n150" "wh_galaxy")
+            # CIv1 -- temporarily disabled: "wh_n150" "wh_n300" "wh_galaxy"
+            l2_nightly_skus+=("wh_n150_civ2" "wh_n300_civ2" "sim_wh_n150")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            l2_nightly_skus+=("bh_p100" "bh_p150b_civ2" "bh_p150b_civ2_viommu" "sim_bh_p150" "bh_p300" "bh_quietbox_2" "bh_loudbox" "bh_galaxy")
+            # CIv1 -- temporarily disabled: "bh_p100" "bh_p300" "bh_quietbox_2" "bh_loudbox" "bh_galaxy"
+            l2_nightly_skus+=("bh_p150b_civ2" "bh_p150b_civ2_viommu" "sim_bh_p150")
           fi
           l2_nightly_skus_str=$(IFS=,; echo "${l2_nightly_skus[*]}")
           echo "l2-nightly-skus=$l2_nightly_skus_str" >> $GITHUB_OUTPUT
@@ -337,9 +353,14 @@ jobs:
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: cnn_pipeline,cnn_builder
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  # TEMPORARY: killed outright by the leading `false &&`. This suite pins
+  # enabled-skus to "bh_p100", a CIv1 SKU (cloud-virtual-machine + P100 + in-service),
+  # and ttnn_sanity_tests.yaml has no CIv2 P100 (bh_p100a_civ2_viommu) legs, so with
+  # no CIv1 runners there is nothing for it to run. Remove `false &&` together with
+  # the CIv1 SKU block in generate-arch-matrix.
   ttnn-p100-tests:
     needs: [check-harbor, build-artifact]
-    if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
+    if: ${{ false && (github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests)) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     with:
