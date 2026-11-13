@@ -140,6 +140,11 @@ def test_prefix_history_gathers_retained_pages_in_logical_order(monkeypatch, exp
     state = SimpleNamespace(kv=[(cache, cache + 1), None])
     monkeypatch.setattr(ttnn, "concat", torch.cat)
     monkeypatch.setattr(ttnn, "typecast", lambda tensor, dtype: tensor)
+    # The page id travels as device tensors (host tensors here); the slice takes the page [start, end) along dim 0.
+    generator._upload = lambda values, dtype: values
+    monkeypatch.setattr(
+        ttnn, "slice", lambda cache, begin, end, slice_dim, num_devices: cache[int(begin[0]) : int(end[0])]
+    )
     histories = generator._restore_prefill_history(state, {0: table}, 0, start)
     expected = torch.cat([cache[p : p + 1] for p in table[0, -8:]], dim=2)
     assert torch.equal(histories[0][0], expected)
