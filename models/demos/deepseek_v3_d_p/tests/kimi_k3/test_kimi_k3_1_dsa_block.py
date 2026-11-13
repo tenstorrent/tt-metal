@@ -9,7 +9,10 @@ CPU truth by `sparse_mla/test_sparse_mla.py`; this test covers the seam K3.1 add
 `TtKimiK3Transformer` threading the sparse cache format and the index cache through
 `TtKimiK3Block` to `TtK3MlaAttention`, in the rank-local slot space K3's schedule assigns.
 
-There is no K3.1 CPU reference or golden, so the bar is the K3 layer tests' structural one: two
+K3.1's accuracy against vLLM is gated by its golden (`test_transformer_depth.py::
+test_k31_depth_ladder_matches_golden`, rungs L24 and L24-128k: layers 0-23). This test checks what that
+golden does not: a repeated request bit-identical, a pipeline stage's KV-only last layer, and a DSA-only
+window reading the earlier chunk from its caches. The bar is the K3 layer tests' structural one: two
 5120-token chunks of chunked prefill (the second chunk's indexer selects its top-2048 from a 10240
 token prefix and reads the first chunk's cache), every output and cache finite, and a second run of
 the same sequence bit-identical to the first. In the DSA-only window, chunk 1's output must change when only
@@ -21,10 +24,10 @@ suite, `k3_accuracy_suite` section [5/5] `k31_dsa_mla`, in tests/pipeline_reorg/
 Synthetic weights from `synthetic.py`, with its one substitution: every layer's FFN is K3's dense FFN
 (a synthetic LatentMoE layer is ~59 GB; the MoE is unchanged from K3 and covered by K3's tests).
 
-Windows: the first DSA layer alone (layer 3, a first rank with its embedding); the same layer as a
-pipeline stage's KV-only last layer (layer 92's role); layers 3-7, two DSA layers in KV slots 0 and 1
-of both caches, so a slot collision leaves a zero row; and layers 0-3, so the KDA carries and the DSA
-index cache meet in one forward.
+Windows: the first DSA layer alone (layer 3, a first rank with its embedding), the one DSA-only window,
+so the only one that runs the prefix-from-caches check; the same layer as a pipeline stage's KV-only last
+layer (layer 92's role); and layers 3-7, two DSA layers in KV slots 0 and 1 of both caches, so a slot
+collision leaves a zero row.
 
 The caches and KDA slabs come from the serving allocator (`KimiK31Adapter.allocate_kv_cache`: TP-deduped
 scaled-FP8 KVPE and bf8 index-key caches, one slot per DSA layer of the rank). The capacity must be a
@@ -38,9 +41,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
-    CACHE_LEN,
     CHUNK,
-    HF_CONFIGS,
     build_stack,
     compose,
     placements,
@@ -56,7 +57,6 @@ WINDOWS = {
     "dsa_L3": (3, 1, False),
     "dsa_L3_kv_only": (3, 1, True),
     "dsa_L3_L7": (3, 5, False),
-    "hybrid_L0_3": (0, 4, False),
 }
 
 
@@ -89,16 +89,14 @@ def _run_sequence(model, mesh_device, ids, kvpe, index) -> list[torch.Tensor | N
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize(
-    "model, mesh_device, device_params", placements(["kimi_k3_1"]), indirect=["mesh_device", "device_params"]
-)
+@pytest.mark.parametrize("mesh_device, device_params", placements(), indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("window", list(WINDOWS), ids=list(WINDOWS))
-def test_k31_dsa_block_finite_and_deterministic(model, mesh_device, device_params, window):
+def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, window):
     first_layer_idx, num_layers, kv_only = WINDOWS[window]
     logger.info(f"{window}: building synthetic weights for layers [{first_layer_idx}, {first_layer_idx + num_layers})")
-    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), first_layer_idx, num_layers)
+    state_dict = synthetic_state_dict(first_layer_idx, num_layers)
     logger.info(f"{window}: building the model")
-    stack, caches = build_stack(mesh_device, model, state_dict, first_layer_idx, num_layers, kv_only_last_layer=kv_only)
+    stack, caches = build_stack(mesh_device, state_dict, first_layer_idx, num_layers, kv_only_last_layer=kv_only)
     dsa_layers = [layer for layer in stack.layers if layer.attention.writes_kv]
     assert dsa_layers and all(layer.attention.mla._has_indexer for layer in dsa_layers), "K3.1 layers must be DSA"
     kvpe, index = caches.kvpe, caches.index

@@ -37,9 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
-    CACHE_LEN,
     CHUNK,
-    HF_CONFIGS,
     build_stack,
     compose,
     placements,
@@ -48,7 +46,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     token_ids,
     upload_tokens,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_kimi_k3_1_dsa_block import WINDOWS, _shards
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_kimi_k3_1_dsa_block import _shards
 from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
@@ -66,7 +64,8 @@ CHUNKS = [
 NUM_REQUESTS = 3
 # A few layers' capture fits well inside the runner's 256 MB trace region.
 TRACE_REGION_SIZE = 64 * 1024 * 1024
-TRACE_WINDOWS = ["dsa_L3", "dsa_L3_L7", "hybrid_L0_3"]
+# (first_layer_idx, num_layers): one DSA layer, two DSA layers (KV slots 0 and 1), and KDA + DSA layers 0-3.
+TRACE_WINDOWS = {"dsa_L3": (3, 1), "dsa_L3_L7": (3, 5), "hybrid_L0_3": (0, 4)}
 
 
 def _scalar(mesh_device, value: int) -> ttnn.Tensor:
@@ -83,16 +82,15 @@ def _scalar(mesh_device, value: int) -> ttnn.Tensor:
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
-    "model, mesh_device, device_params",
-    placements(["kimi_k3_1"], trace_region_size=TRACE_REGION_SIZE),
+    "mesh_device, device_params",
+    placements(trace_region_size=TRACE_REGION_SIZE),
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("window", TRACE_WINDOWS, ids=TRACE_WINDOWS)
-def test_k31_dsa_traced_replay_matches_eager(model, mesh_device, device_params, window):
-    first_layer_idx, num_layers, kv_only = WINDOWS[window]
-    assert not kv_only
-    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), first_layer_idx, num_layers)
-    stack, caches = build_stack(mesh_device, model, state_dict, first_layer_idx, num_layers, num_users=NUM_USERS)
+@pytest.mark.parametrize("window", list(TRACE_WINDOWS), ids=list(TRACE_WINDOWS))
+def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window):
+    first_layer_idx, num_layers = TRACE_WINDOWS[window]
+    state_dict = synthetic_state_dict(first_layer_idx, num_layers)
+    stack, caches = build_stack(mesh_device, state_dict, first_layer_idx, num_layers, num_users=NUM_USERS)
     kvpe, index = caches.kvpe, caches.index
     # Fresh caches, restored in place before the traced pass so both passes start from the same state.
     pristine = (kvpe.storage.cpu(), index.cpu())

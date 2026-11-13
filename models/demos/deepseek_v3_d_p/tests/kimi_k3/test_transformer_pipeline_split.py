@@ -38,8 +38,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_mode
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
-    CACHE_LEN,
-    HF_CONFIGS,
     build_stack,
     cache_rows,
     compose,
@@ -254,9 +252,10 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
     )
 
 
-# --- Synthetic weights: split against undivided (K3 and K3.1) ---------------------------------------
+# --- Synthetic weights: split against undivided (K3.1) ----------------------------------------------
 #
-# K3.1 has no golden, so its oracle is the undivided stack on the same weights, cut at the layer-12 seal.
+# The K3.1 golden runs one stage, so the split's oracle is the undivided stack on the same weights, cut at the
+# layer-12 seal.
 # The split is exact: the handoff is a lossless bf16 concat/slice, and the second rank takes the read that
 # straddles the boundary the way the undivided walk takes it (an open site over the inherited set, read
 # before the seal). So every layer, the final output and every cache must be bit-identical, on both ranks.
@@ -265,7 +264,6 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
 #
 # Layers 0-15: the boundary at 12 gives rank 1 one inherited sealed block, and layer 15 is its one
 # full-attention layer (slot 0 of rank 1's kvpe and index caches, slot 3 of the undivided ones).
-# K3 runs the identical path.
 SP_SHARDS = 8  # the 8x4 mesh's SP ranks; tokens are contiguous per rank
 
 
@@ -279,7 +277,7 @@ def _worst_shard_pcc(want, got) -> float:
 SYNTHETIC_LAYERS = 16
 
 
-def _run_window(mesh_device, model, state_dict, ids):
+def _run_window(mesh_device, state_dict, ids):
     """The undivided stack, then the two ranks: per-GLOBAL-layer outputs, final output, caches by global layer."""
 
     def run(ranks):
@@ -287,7 +285,6 @@ def _run_window(mesh_device, model, state_dict, ids):
         for first, num, is_first, is_last in ranks:
             stack, caches = build_stack(
                 mesh_device,
-                model,
                 window(state_dict, first, num),
                 first,
                 num,
@@ -329,14 +326,14 @@ def _run_window(mesh_device, model, state_dict, ids):
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
-    "model, mesh_device, device_params",
+    "mesh_device, device_params",
     placements(),
     indirect=["mesh_device", "device_params"],
 )
-def test_synthetic_split_matches_undivided(model, mesh_device, device_params):
-    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), 0, SYNTHETIC_LAYERS)
+def test_synthetic_split_matches_undivided(mesh_device, device_params):
+    state_dict = synthetic_state_dict(0, SYNTHETIC_LAYERS)
     (whole_layers, whole_out, whole_kv), (split_layers, split_out, split_kv) = _run_window(
-        mesh_device, model, state_dict, token_ids(SEQ_LEN)
+        mesh_device, state_dict, token_ids(SEQ_LEN)
     )
 
     failures = []
@@ -354,5 +351,5 @@ def test_synthetic_split_matches_undivided(model, mesh_device, device_params):
     for (name, layer), want in sorted(whole_kv.items()):
         assert want[:SEQ_LEN].abs().amax(dim=-1).gt(0).all(), f"{name} cache of layer {layer}: a row is unwritten"
         check(f"{name} cache of layer {layer}", want, split_kv[(name, layer)])
-    logger.info(f"  {model} split vs undivided: {len(failures)} mismatches")
+    logger.info(f"  split vs undivided: {len(failures)} mismatches")
     assert not failures, "split diverged from undivided: " + "; ".join(failures)
