@@ -4,13 +4,17 @@
 
 """Sharded row-major WH transpose (TransposeWHShardedRMProgramFactory), including output rows narrower than a tile.
 
-Runs both the mainline op and its experimental/quasar copy."""
+Runs both the mainline op and its experimental/quasar copy, on Quasar only. The WH/BH sharded row-major path is
+covered by tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py."""
 
 import pytest
 import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp
+from tt_py_test_utils_common.utility_functions import is_quasar
+
+pytestmark = pytest.mark.skipif(not is_quasar(), reason="Quasar test")
 
 
 def _height_sharded(device, num_cores, shard_shape):
@@ -36,11 +40,6 @@ def _height_sharded(device, num_cores, shard_shape):
 def test_quasar_transpose_wh_sharded_rm(device, transpose, n, c, h, w):
     # Shards hold a whole number of tiles' worth of elements, so the op takes the sharded factory rather than the
     # interleaved fallback.
-    is_quasar = device.arch() == ttnn.device.Arch.QUASAR
-    if not is_quasar and h > 16 and h % 32 != 0:
-        # WH/BH narrow-row pack: rows wider than 16 datums are written wrong (#59752), and with Ht > 1 rows are
-        # strided by Ht * (H % 32) datums instead of H.
-        pytest.skip("WH/BH narrow-row transpose is only correct for H <= 16")
     # Two cores, two HxW blocks per core, so each core runs more than one block.
     num_cores = 2
     blocks_per_core = n * c // num_cores
