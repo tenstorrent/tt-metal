@@ -1,0 +1,32 @@
+--- a/test_k31_weight_cache.py	2026-11-13 12:36:37.456819324 +0000
++++ b/test_k31_weight_cache.py	2026-11-13 12:36:37.474819292 +0000
+@@ -30,7 +30,7 @@
+ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
+ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
+ from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
+-    cache_root,
++    _checkpoint_identity,
+     layer_is_cached,
+     load_layer_state_dict_cached,
+     load_tensors,
+@@ -72,7 +72,19 @@
+     checkpoint = Path(os.getenv(KimiK31Adapter.env_var) or KimiK31Adapter.hf_model_default)
+     if not (checkpoint / "model.safetensors.index.json").is_file():
+         pytest.skip(f"K3.1 checkpoint not on this box ({checkpoint}); set ${KimiK31Adapter.env_var}")
+-    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS, KimiK31Adapter)
++    # The PR's cache_root is K3-only; compute K3.1's root as cache_root(..., KimiK31Adapter) did at e376caa411d.
++    rows, columns = tuple(mesh_device.shape)
++    override = os.getenv(KimiK31Adapter.ttnn_cache_env)
++    root = None if override == "" else Path(override or KimiK31Adapter.ttnn_cache_default)
++    cache = None
++    if root is not None:
++        cache = (
++            root
++            / f"{KimiK31Adapter.name}_bh_{rows * columns}dev"
++            / _checkpoint_identity(checkpoint)
++            / f"mesh{rows}x{columns}.tpaxis{TP_AXIS}"
++        )
++        cache.mkdir(parents=True, exist_ok=True)
+     assert cache is not None, f"caching is disabled (${KimiK31Adapter.ttnn_cache_env} is empty)"
+     logger.info(f"K3.1 weight cache: building layer {layer} into {cache}")
+ 
