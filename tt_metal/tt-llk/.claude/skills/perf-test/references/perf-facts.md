@@ -113,14 +113,14 @@ comparison.
   update its entries and say so in the PR.
 - The perf gates and `perf_compare_commits.sh` share
   `perf/regression_compare.py`: a point regresses only when it is slower by
-  both more than the threshold and more than 30 cycles. The threshold depends
-  on the architecture and the gate:
-  - Blackhole: 2% on every gate; also the `perf_compare_commits.sh` default.
-  - Wormhole PR gate (`llk-perf-gate.yaml`): 13%.
-  - Wormhole merge gate (`merge-gate.yaml`): 13%, and 25% for `perf_matmul`
-    and `perf_math_matmul`.
-  - Wormhole nightly gate (`llk-perf-gate.yaml`): 10%, and 25% for the two
-    matmul modules.
+  both more than the threshold and more than the cycle floor. Both differ by
+  architecture and gate, and some modules have their own threshold:
+  - PR and nightly gates: the per-architecture `include` matrices in
+    `.github/workflows/llk-perf-gate.yaml` (`threshold`,
+    `module_thresholds`, `min_cycles`).
+  - Merge gate: the `thresholds` output and `min_cycles` in
+    `.github/workflows/merge-gate.yaml`.
+  - Local comparisons: the `perf_compare_commits.sh` defaults (`--help`).
 
-  Pass `--threshold` to `perf_compare_commits.sh` to match the gate when
-  reproducing a Wormhole verdict locally (`0.25` for the matmul modules).
+  When reproducing a gate verdict locally, pass that gate's values to
+  `perf_compare_commits.sh` with `--threshold` and `--min-cycles`.
