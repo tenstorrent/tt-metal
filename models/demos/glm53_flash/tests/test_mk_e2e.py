@@ -344,6 +344,43 @@ def _first_mismatch(gen, tok, prompt, plain, sids):
     return first, gap
 
 
+def _spec_sampled(gen, backend, mesh_device, tok, prompts, plain_timing, plain_ms, K, sampling) -> None:
+    """GLM53_SPEC_SAMPLED with GLM53_MK_TEMP (the served AgentX traffic: temperature 1.0 / top-p 0.95): the same prompts
+    through the speculative step with the SAMPLED verify head (one user, or G on the group bases) after the plain sampled
+    run; logs tau per user (committed tokens per step), the accept histogram, the effective tok/s per user against the
+    plain sampled step, user 0's text; asserts the step ran, every user got OSL tokens in vocab, and tau >=
+    GLM53_MK_SPEC_MIN_TAU (default 1.0: a draw never commits fewer than the bonus)"""
+    G = len(prompts)
+    souts = gen.generate_batch([list(p) for p in prompts], OSL, sampling=sampling, stop_on_eos=False,
+                               enable_trace=True, spec_k=K)  # fmt: skip
+    ttnn.synchronize_device(mesh_device)
+    st = gen.last_batch_timing
+    steps = int(st.get("spec_steps", 0))
+    spec_ms = st["decode_s"] / max(1, steps) * 1e3
+    eff = st["decode_steps"] / st["decode_s"] if st["decode_s"] > 0 else 0.0
+    committed = st.get("spec_committed_u") or [st.get("spec_emitted", 0)] * G
+    taus = [c / max(1, steps) for c in committed]
+    accepts = st.get("spec_accepts_u") or [st.get("spec_accepts")] * G
+    vocab = int(getattr(tok, "vocab_size", 1 << 30))
+    for u in range(G):
+        logger.info(f"MK_SPEC_SAMPLED user {u}: tau {taus[u]:.2f} (committed {committed[u]}, accepts n=0..K "
+                    f"{accepts[u]}); {len(souts[u])} tokens; ids {souts[u][:16]}")  # fmt: skip
+    logger.info(
+        f"MK_SPEC_SAMPLED: G {G} K {K} temp {sampling[0].temperature} top_p {sampling[0].top_p} tau mean "
+        f"{sum(taus) / max(1, G):.2f} per user {[round(t, 2) for t in taus]} ({steps} steps), spec step {spec_ms:.1f} ms, "
+        f"effective {eff:.1f} tok/s/u, plain sampled {plain_ms:.1f} ms/step = {1e3 / plain_ms:.1f} tok/s/u, speedup "
+        f"{eff * plain_ms / 1e3:.2f}x; TTFT spec {st['prefill_s'] * 1e3:.0f} ms vs plain "
+        f"{plain_timing['prefill_s'] * 1e3:.0f} ms"
+    )
+    logger.info(f"MK_SPEC_SAMPLED_TEXT user 0: {tok.decode([t for t in souts[0] if 0 <= t < vocab])!r}")
+    logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
+    assert steps > 0, "the sampled speculative path ran no step"
+    assert all(len(o) == OSL for o in souts), [len(o) for o in souts]
+    assert all(0 <= t < vocab for o in souts for t in o), "a sampled spec token outside the vocabulary"
+    min_tau = float(os.environ.get("GLM53_MK_SPEC_MIN_TAU", "1.0") or 1.0)
+    assert min(taus) >= min_tau, f"tau per user {taus} below the floor {min_tau}"
+
+
 def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing, plain_ms, K, stop) -> None:
     """GLM53_SPEC_MULTI: the G prompts through the backend's multi-user step (generate_batch(spec_k=K) places them on
     the group bases) after the plain run on the same build; per user the ids == its plain ids up to its first near-tie
@@ -579,6 +616,10 @@ def test_mk_e2e(mesh_device, monkeypatch):
         G = gen.spec_groups()  # GLM53_SPEC_MULTI: the backend's step serves G users (0: one user)
         if G and live == G and sampling is None and mm_in is None:
             _spec_ab_multi(gen, backend, mesh_device, tok, prompts, outs, timing, step_ms, spec_k, stop)
+        elif sampling is not None and gen.spec_samples() and live == max(1, G) and mm_in is None:
+            # GLM53_SPEC_SAMPLED + GLM53_MK_TEMP: the sampled verify speculates on sampled requests (no ids gate: a draw
+            # differs from the plain run's by construction; the distribution is the host Monte Carlo's)
+            _spec_sampled(gen, backend, mesh_device, tok, prompts, timing, step_ms, spec_k, sampling)
         elif not G and live == 1 and sampling is None and mm_in is None:
             _spec_ab(gen, backend, mesh_device, tok, prompts[0], outs[0], timing, step_ms, spec_k, stop)
         else:  # (an image prompt never speculates: the MTP-cache prefill embeds token ids, not the feature rows)

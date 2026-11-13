@@ -3110,8 +3110,8 @@ class Glm53Generator(_ReadinessGenerator):
                            f"(GLM53_SPEC_MULTI; slots {list(slots)})")  # fmt: skip
         elif list(slots) != [0]:
             why.append(f"one prompt in slot 0 (slots {list(slots)})")
-        if not all(p.is_greedy for p in params):
-            why.append("greedy sampling (the verify accepts on the top-1)")
+        if not all(p.is_greedy for p in params) and not self.spec_samples():
+            why.append("greedy sampling (the verify accepts on the top-1; GLM53_SPEC_SAMPLED: the sampled verify)")
         if next_input is not None:
             why.append("no teacher forcing")
         if self.host_sampling:
