@@ -209,6 +209,19 @@ class V4CheckpointLayers(Sequence):
     def __len__(self) -> int:
         return self.num_layers
 
+    def load_light(self, local_idx: int) -> dict:
+        """Layer ``local_idx``'s entry for a layer BUILT FROM THE WEIGHT CACHE: no attention module, no mHC weights,
+        none of the MoE. The only host weight such a layer still needs is a hash layer's expert table, which no
+        cache holds; it is read alone (and widened to int64, as the reference module's buffer is)."""
+        if not 0 <= local_idx < self.num_layers:
+            raise IndexError(f"local layer {local_idx} outside a {self.num_layers}-layer slice")
+        layer_idx = self.first_layer_idx + local_idx
+        block = {}
+        if self.config.mlp_layer_types[layer_idx] == "hash_moe":
+            key = f"layers.{layer_idx}.ffn.gate.tid2eid"
+            block["hash_table"] = load_checkpoint_tensors(self.checkpoint_dir, [key])[key].long()
+        return {"block": block, "attn_reference": None, "mhc_weights": None}
+
     def __getitem__(self, local_idx: int) -> dict:
         from models.demos.deepseek_v3_d_p.reference.deepseek_v4.model import v4_layer_weights
 

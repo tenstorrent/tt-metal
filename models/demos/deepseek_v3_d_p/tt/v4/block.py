@@ -20,10 +20,12 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap
 from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import TtCSA
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
 _ATTENTION = {
     "sliding_attention": TtSWA,
@@ -36,6 +38,11 @@ _ATTENTION = {
 _HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
 
 _SUBLAYER_DTYPE = ttnn.bfloat16
+
+# V4's routed experts are MXFP4 in the checkpoint, scaled per 32 inputs; transposed tiles put bfloat4_b's shared
+# exponents along the same axis (see TtRoutedExpert). Shared by the constructor and ``moe_cache_complete``, which
+# must ask for exactly what the constructor will request.
+DEFAULT_ROUTED_EXPERT_WEIGHTS_TILE_TRANSPOSED = True
 
 
 class TtV4Block(LightweightModule):
@@ -65,6 +72,140 @@ class TtV4Block(LightweightModule):
     whole model's worth of these.
     """
 
+    @staticmethod
+    def _mhc_config(config) -> MHCConfig:
+        return MHCConfig(
+            dim=config.hidden_size,
+            n=config.hc_mult,
+            sinkhorn_iters=config.hc_sinkhorn_iters,
+            eps=config.hc_eps,
+            norm_eps=config.rms_norm_eps,
+        )
+
+    @staticmethod
+    def check_cache_complete(
+        cache_path: Optional[Path],
+        layer_idx: int,
+        config: PretrainedConfig,
+        model_cfg: type,
+        experts_per_chip: int,
+        *,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        routed_expert_weights_tile_transposed: bool = DEFAULT_ROUTED_EXPERT_WEIGHTS_TILE_TRANSPOSED,
+    ) -> bool:
+        """True iff everything this layer caches is there: both norms, the attention (with its compressor and, for
+        CSA, its indexer), both mHC sites and the MoE (gate, routed and shared experts).
+
+        The dtype and layout arguments are the ones the constructor will request: they are part of the file names,
+        and a cache that does not match them must not count as complete, or a build from ``None`` would write the
+        empty placeholder out as the weights. Takes a fresh directory listing, which is all the checkers read."""
+        if cache_path is None:
+            return False
+        cache_path = Path(cache_path)
+        init_checker(cache_path)
+        prefix = f"layer_{layer_idx}"
+        attn_kind = config.layer_types[layer_idx]
+        attn_cls = _ATTENTION[attn_kind]
+        if attn_kind == "compressed_sparse_attention":
+            attn_complete = attn_cls.check_cache_complete(cache_path, f"{prefix}.attn", layer_idx)
+        else:
+            attn_complete = attn_cls.check_cache_complete(cache_path, f"{prefix}.attn")
+        return (
+            TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm")
+            and attn_complete
+            and TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm")
+            and TtMHCWrap.check_cache_complete(cache_path, f"{prefix}.mhc_attn")
+            and TtMHCWrap.check_cache_complete(cache_path, f"{prefix}.mhc_ffn")
+            and TtMoe.check_cache_complete(
+                cache_path,
+                layer_idx,
+                experts_per_chip,
+                routed_expert_weights_dtype=routed_expert_weights_dtype,
+                gate_bias_centered=gate_bias_centered(model_cfg),
+                routed_expert_weights_tile_transposed=routed_expert_weights_tile_transposed,
+            )
+        )
+
+    @staticmethod
+    def build_ttnn_cache(
+        state_dict: dict,
+        attn_reference,
+        mhc_weights: dict,
+        layer_idx: int,
+        cache_path: Path,
+        mesh_device: ttnn.MeshDevice,
+        config: PretrainedConfig,
+        model_cfg: type,
+        *,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        shared_expert_weights_dtype=ttnn.bfloat8_b,
+        routed_expert_weights_tile_transposed: bool = DEFAULT_ROUTED_EXPERT_WEIGHTS_TILE_TRANSPOSED,
+    ) -> None:
+        """Write this layer's whole weight cache without putting any of it on the device (the V4 counterpart of
+        ``TtPrefillBlock.build_ttnn_cache``): both norms, the attention, both mHC sites and the MoE.
+
+        The dtype and layout arguments must be the ones the layer will be built with."""
+        cache_path = Path(cache_path)
+        prefix = f"layer_{layer_idx}"
+        attn_kind = config.layer_types[layer_idx]
+        emb_dim = config.hidden_size
+        logger.info(f"Building TTNN cache for TtV4Block layer {layer_idx} ({attn_kind})")
+
+        TtDistributedRmsNorm.build_ttnn_cache(
+            torch_weight=state_dict["attn_norm_weight"],
+            emb_dim=emb_dim,
+            mesh_device=mesh_device,
+            cache_path=cache_path,
+            cache_name_prefix=f"{prefix}.attn_norm",
+        )
+        attn_extra = {"layer_idx": layer_idx} if attn_kind == "compressed_sparse_attention" else {}
+        _ATTENTION[attn_kind].build_ttnn_cache(
+            attn_reference,
+            config,
+            mesh_device,
+            cache_path,
+            f"{prefix}.attn",
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            **attn_extra,
+        )
+        TtDistributedRmsNorm.build_ttnn_cache(
+            torch_weight=state_dict["ffn_norm_weight"],
+            emb_dim=emb_dim,
+            mesh_device=mesh_device,
+            cache_path=cache_path,
+            cache_name_prefix=f"{prefix}.ffn_norm",
+        )
+        mhc_cfg = TtV4Block._mhc_config(config)
+        for site in ("attn", "ffn"):
+            TtMHCWrap.build_ttnn_cache(
+                *mhc_weights[site], mhc_cfg, mesh_device, cache_path, f"{prefix}.mhc_{site}", tp_axis=tp_axis
+            )
+        n_devices = mesh_device.get_num_devices()
+        assert model_cfg.NUM_ROUTED_EXPERTS % n_devices == 0, (model_cfg.NUM_ROUTED_EXPERTS, n_devices)
+        TtMoe.build_ttnn_cache(
+            gate_weights=state_dict.get("gate_weights"),
+            routed_expert_weights=state_dict.get("routed_expert_weights"),
+            shared_expert_weights=state_dict.get("shared_expert_weights"),
+            experts_per_chip=model_cfg.NUM_ROUTED_EXPERTS // n_devices,
+            emb_dim=emb_dim,
+            hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
+            mesh_device=mesh_device,
+            routed_expert_weights_dtype=routed_expert_weights_dtype,
+            shared_expert_weights_dtype=shared_expert_weights_dtype,
+            cache_path=cache_path,
+            layer_idx=layer_idx,
+            # Must match TtPrefillBlock._build_moe's reads: a shared expert cached at the wrong intermediate size
+            # regenerates as a plausible-but-wrong cache rather than an error.
+            shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+            routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+            gate_bias_centered=gate_bias_centered(model_cfg),
+            routed_expert_weights_tile_transposed=routed_expert_weights_tile_transposed,
+            gate_router_logits_dtype=getattr(model_cfg, "GATE_ROUTER_LOGITS_DTYPE", None),
+        )
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -91,7 +232,7 @@ class TtV4Block(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
         slot_num: int = 1,
-        routed_expert_weights_tile_transposed: bool = True,
+        routed_expert_weights_tile_transposed: bool = DEFAULT_ROUTED_EXPERT_WEIGHTS_TILE_TRANSPOSED,
     ):
         """``seq_len`` is the padded per-chunk length; ``max_seq_len`` the full per-user length the
         attention state must span, defaulting to one chunk. ``attn_reference`` is the torch attention
@@ -149,11 +290,23 @@ class TtV4Block(LightweightModule):
         # slot count; SWA and HCA state is one tensor set per slot, held below.
         attn_kwargs = {"slot_num": slot_num} if is_csa else {}
         # The full per-axis topology: the attention's SP-axis gather needs the SP element and its
-        # other collectives the TP one. Its weights come off the torch module, not a state dict, so
-        # there is nothing for a weight cache to hold for this half of the block.
-        self.attn = _ATTENTION[attn_kind].from_reference(
-            mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology, **attn_kwargs
-        )
+        # other collectives the TP one. Its weights come off the torch module, ``attn_reference``, or, with
+        # none, off the weight cache (which then has to be complete: a missing file raises).
+        if weight_cache_path is not None:
+            attn_kwargs.update(weight_cache_path=weight_cache_path, cache_name_prefix=f"layer_{layer_idx}.attn")
+            if is_csa:
+                attn_kwargs["layer_idx"] = layer_idx  # names the indexer's files, which are keyed by GLOBAL layer
+        if attn_reference is None:
+            assert (
+                weight_cache_path is not None
+            ), "no attn_reference and no weight cache: nothing to build the attention from"
+            self.attn = _ATTENTION[attn_kind].from_cache(
+                mesh_device, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology, **attn_kwargs
+            )
+        else:
+            self.attn = _ATTENTION[attn_kind].from_reference(
+                mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology, **attn_kwargs
+            )
         # Tables once, then one state per user slot. Each state's shape is the same for every chunk,
         # only its contents advance.
         # TODO once a V4 transformer owns this state instead of the block, forward() needs the chunk
@@ -188,23 +341,24 @@ class TtV4Block(LightweightModule):
             routed_expert_weights_tile_transposed=routed_expert_weights_tile_transposed,
         )
 
-        assert mhc_weights is not None and set(mhc_weights) >= {
+        assert mhc_weights is not None or weight_cache_path is not None, "no mhc_weights and no weight cache"
+        assert mhc_weights is None or set(mhc_weights) >= {
             "attn",
             "ffn",
         }, f"both sites need an (fn, base, scale) triple; got keys {sorted(mhc_weights or ())}"
-        mhc_cfg = MHCConfig(
-            dim=config.hidden_size,
-            n=config.hc_mult,
-            sinkhorn_iters=config.hc_sinkhorn_iters,
-            eps=config.hc_eps,
-            norm_eps=config.rms_norm_eps,
-        )
-        self.attn_res = TtMHCWrap(
-            mesh_device, mhc_cfg, *mhc_weights["attn"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
-        )
-        self.ffn_res = TtMHCWrap(
-            mesh_device, mhc_cfg, *mhc_weights["ffn"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
-        )
+        mhc_cfg = self._mhc_config(config)
+
+        def _mhc(site: str) -> TtMHCWrap:
+            cache = {}
+            if weight_cache_path is not None:
+                cache = {"weight_cache_path": weight_cache_path, "cache_name_prefix": f"layer_{layer_idx}.mhc_{site}"}
+            kwargs = dict(tp_axis=tp_axis, num_links=num_links, topology=tp_topology, **cache)
+            if mhc_weights is None:
+                return TtMHCWrap.from_cache(mesh_device, mhc_cfg, **kwargs)
+            return TtMHCWrap(mesh_device, mhc_cfg, *mhc_weights[site], **kwargs)
+
+        self.attn_res = _mhc("attn")
+        self.ffn_res = _mhc("ffn")
 
     def reset_state(self, slot: int) -> None:
         """Start a new request in user slot ``slot``: its attention state goes back to an empty cache at

@@ -15,6 +15,11 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
+from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import (
+    attention_cache_complete,
+    build_attention_weights_cache,
+    upload_attention_weights,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
@@ -41,14 +46,14 @@ class TtSWA(LightweightModule):
         self,
         device,
         *,
-        q_a_proj_weight: torch.Tensor,
-        q_a_norm_weight: torch.Tensor,
-        q_b_proj_weight: torch.Tensor,
-        kv_proj_weight: torch.Tensor,
-        kv_norm_weight: torch.Tensor,
-        sinks: torch.Tensor,
-        o_a_proj_weight: torch.Tensor,
-        o_b_proj_weight: torch.Tensor,
+        q_a_proj_weight: torch.Tensor | None = None,
+        q_a_norm_weight: torch.Tensor | None = None,
+        q_b_proj_weight: torch.Tensor | None = None,
+        kv_proj_weight: torch.Tensor | None = None,
+        kv_norm_weight: torch.Tensor | None = None,
+        sinks: torch.Tensor | None = None,
+        o_a_proj_weight: torch.Tensor | None = None,
+        o_b_proj_weight: torch.Tensor | None = None,
         rotary_emb,
         num_heads: int,
         head_dim: int,
@@ -62,7 +67,11 @@ class TtSWA(LightweightModule):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        weight_cache_path=None,
+        cache_name_prefix: str | None = None,
     ):
+        """The weights are the reference module's, or all ``None`` to read them from the weight cache at
+        ``<weight_cache_path>/<cache_name_prefix>.*`` (``from_cache``)."""
         self.device = device
         self.dtype = dtype
         self.weights_dtype = weights_dtype
@@ -94,26 +103,33 @@ class TtSWA(LightweightModule):
             dtype=dtype,
             weights_dtype=weights_dtype,
             memory_config=memory_config,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=cache_name_prefix,
         )
 
-        # SDPA scales the sink along with QK, so the division here cancels that.
-        sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
-        self.sinks_sdpa = self.ops.from_torch(sinks_host, mesh_mapper=self.ops.mesh_mapper(tp_dim=1))
-
-        self.wq_a = self.ops.to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
-        self.wq_b = self.ops.to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
-        self.q_a_norm_weight = self.ops.from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
+        weights = upload_attention_weights(
+            self.ops,
+            num_heads=self.num_heads,
+            head_dim=self.head_dim,
+            o_groups=self.o_groups,
+            q_a_proj_weight=q_a_proj_weight,
+            q_a_norm_weight=q_a_norm_weight,
+            q_b_proj_weight=q_b_proj_weight,
+            kv_proj_weight=kv_proj_weight,
+            kv_norm_weight=kv_norm_weight,
+            sinks=sinks,
+            o_a_proj_weight=o_a_proj_weight,
+            o_b_proj_weight=o_b_proj_weight,
+        )
+        self.sinks_sdpa = weights["sinks_sdpa"]
+        self.wq_a = weights["wq_a"]
+        self.wq_b = weights["wq_b"]
+        self.q_a_norm_weight = weights["q_a_norm_weight"]
         self.q_b_norm_weight = self.ops.from_torch(torch.ones(1, 1, 1, self.head_dim))
-        self.wkv = self.ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
-        self.kv_norm_weight = self.ops.from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
-
-        # Block-diagonal over o_groups, and a TP chip owns whole groups, so one batched matmul serves it.
-        in_per_group = self.num_heads * self.head_dim // self.o_groups
-        o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
-        self.wo_a = self.ops.from_torch(
-            o_a_grouped, mesh_mapper=self.ops.mesh_mapper(tp_dim=1), dtype=self.weights_dtype
-        )
-        self.wo_b = self.ops.to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
+        self.wkv = weights["wkv"]
+        self.kv_norm_weight = weights["kv_norm_weight"]
+        self.wo_a = weights["wo_a"]
+        self.wo_b = weights["wo_b"]
 
         self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
 
@@ -152,6 +168,33 @@ class TtSWA(LightweightModule):
             rms_norm_eps=config.rms_norm_eps,
             **kwargs,
         )
+
+    @classmethod
+    def from_cache(cls, device, config, **kwargs) -> "TtSWA":
+        """Build from the weight cache alone (``weight_cache_path`` and ``cache_name_prefix`` in ``kwargs``): no
+        torch module, so nothing of this layer's weights is read from the checkpoint. A missing file raises."""
+        return cls(
+            device,
+            rotary_emb=DeepseekV4RotaryEmbedding(config),
+            num_heads=config.num_attention_heads,
+            head_dim=config.head_dim,
+            rope_head_dim=config.qk_rope_head_dim,
+            sliding_window=config.sliding_window,
+            o_groups=config.o_groups,
+            rms_norm_eps=config.rms_norm_eps,
+            **kwargs,
+        )
+
+    @staticmethod
+    def build_ttnn_cache(reference, config, mesh_device, cache_path, cache_name_prefix: str, **kwargs) -> None:
+        """Write this layer's attention weights to the cache without putting any of them on the device (``kwargs``:
+        sp_axis, tp_axis, dtype, weights_dtype, memory_config, which must match the layer's)."""
+        build_attention_weights_cache(reference, config, mesh_device, cache_path, cache_name_prefix, **kwargs)
+
+    @staticmethod
+    def check_cache_complete(cache_path, cache_name_prefix: str) -> bool:
+        """True iff every attention weight is cached. Needs ``init_checker(cache_path)`` first."""
+        return attention_cache_complete(cache_path, cache_name_prefix)
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtSWAState:
         """Build every host tensor forward will need, so forward builds none."""

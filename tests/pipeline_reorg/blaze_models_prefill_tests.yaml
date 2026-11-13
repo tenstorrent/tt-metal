@@ -1059,10 +1059,13 @@
 # one does not stop the other. Pro runs as three sections in one leg: layers 0-9 graded per layer, then
 # the end-to-end tail graded at the last layer; each section after the first reads the streams the one
 # before it writes to generated/v4_depth_handoff.
-# Weight cache: each leg exports its variant's TT_DSV4_*_PREFILL_TTNN_CACHE (weka scratch). The first run writes the
-# norms' and the MoE's ttnn tensors under <root>/<name>_bh_32dev/<checkpoint>/8x4 and later runs load them instead of
-# converting from the checkpoint. The first run also pays for the writes, which the leg timeouts below were not
-# measured with (Flash ~156 GB, Pro ~870 GB of routed experts at bf4), so raise them for that run if needed.
+# Weight cache: each leg exports its variant's TT_DSV4_*_PREFILL_TTNN_CACHE (weka scratch). Like the other models'
+# tests, the leg checks whether the cache is complete for its layers, builds it host-only one layer at a time from the
+# checkpoint if not, and builds the model from the cache either way: <root>/<name>_bh_32dev/<checkpoint>/8x4.
+# Timing, measured on a two-layer Flash slice: ~21 s/layer to build the cache and ~1 s/layer to load it, against
+# ~35 s/layer to build from the checkpoint with no cache, so a Flash first run should fit the timeouts below and later
+# runs skip nearly all of the build. Pro has not been timed: its layers are dominated by reading the checkpoint, which
+# the first run still does, plus writing ~870 GB of routed experts, so raise the Pro timeouts for that run if needed.
 - name: "(DeepSeek-V4-Flash) transformer full-depth chunked accuracy 55k@5k vs vLLM golden"
   fabric_profile: torus_xy
   cmd: |

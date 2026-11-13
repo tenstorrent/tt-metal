@@ -1162,9 +1162,10 @@ class TtCsaIndexer(TtIndexerBase):
                 result[name] = state_dict[key]
         return result
 
-    @classmethod
-    def from_reference(cls, reference, **kwargs) -> "TtCsaIndexer":
-        idx_host = {
+    @staticmethod
+    def host_weights(reference) -> dict:
+        """The reference indexer's weights, keyed the way the converter and the cache build read them."""
+        return {
             "compressor.indexer.q_b_proj": reference.q_b_proj.weight,
             "compressor.indexer.kv_proj": reference.kv_proj.weight,
             "compressor.indexer.gate_proj": reference.gate_proj.weight,
@@ -1172,7 +1173,18 @@ class TtCsaIndexer(TtIndexerBase):
             "compressor.indexer.kv_norm": reference.kv_norm.weight,
             "compressor.indexer.scorer.weights_proj": reference.scorer.weights_proj.weight,
         }
-        return cls(idx_host, rotary_emb=reference.rotary_emb, **kwargs)
+
+    @classmethod
+    def from_reference(cls, reference, **kwargs) -> "TtCsaIndexer":
+        return cls(cls.host_weights(reference), rotary_emb=reference.rotary_emb, **kwargs)
+
+    @classmethod
+    def from_cache(cls, **kwargs) -> "TtCsaIndexer":
+        """Build from the weight cache alone: no torch indexer. The converter raises unless the cache is complete,
+        so an incomplete one can never be loaded as placeholders."""
+        from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4RotaryEmbedding
+
+        return cls({}, rotary_emb=DeepseekV4RotaryEmbedding(kwargs["config"]), **kwargs)
 
     @classmethod
     def _convert_and_cache_weights(

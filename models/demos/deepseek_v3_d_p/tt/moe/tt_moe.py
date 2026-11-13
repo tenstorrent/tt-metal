@@ -83,8 +83,13 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         gate_bias_centered: bool = False,
+        routed_expert_weights_tile_transposed: bool = False,
     ) -> bool:
         """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
+
+        ``routed_expert_weights_tile_transposed`` must match the model's: tile-transposed experts cache under
+        their own ``_tileT`` names, so a plain cache must not satisfy them (nor the other way round) -- the
+        empty placeholder would be loaded, and re-dumped, as the weights.
 
         ``gate_bias_centered`` (MOE_GATE_BIAS_CENTERED) must match the model's, or a cache missing the
         centred gate bias reports complete.
@@ -101,7 +106,11 @@ class TtMoe(LightweightModule):
         if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate", bias_centered=gate_bias_centered):
             return False
         if not TtRoutedExpert.check_cache_complete(
-            cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
+            cache_path,
+            f"{prefix}.routed_expert",
+            experts_per_chip,
+            routed_expert_weights_dtype,
+            weights_tile_transposed=routed_expert_weights_tile_transposed,
         ):
             return False
         if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
@@ -130,8 +139,17 @@ class TtMoe(LightweightModule):
         latent_weights: dict | None = None,
         latent_use_norm: bool = True,
         gate_bias_centered: bool = False,
+        routed_expert_weights_tile_transposed: bool = False,
+        gate_router_logits_dtype: str | None = None,
     ):
         """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy.
+
+        ``gate_router_logits_dtype`` must be the model's (``TtMoEGateConfig.router_logits_dtype``): a gate with it
+        set caches its correction bias at fp32 and asks for that name, so a cache built without it holds a bf16
+        bias that the model would not load as built.
+
+        ``routed_expert_weights_tile_transposed`` caches the experts tile-transposed under their ``_tileT``
+        names (see TtRoutedExpert); it must match the model that will load the cache.
 
         ``shared_hidden_dim`` defaults to ``hidden_dim``; pass it separately when the shared expert's
         intermediate differs from the routed experts' (Kimi-K3: 6144 vs 3072). Note the routed-expert
@@ -149,6 +167,7 @@ class TtMoe(LightweightModule):
                 dim=emb_dim,
                 n_routed_experts=gate_weights["weight"].shape[0],
                 bias_centered=gate_bias_centered,
+                router_logits_dtype=gate_router_logits_dtype,
             )
 
             TtMoEGatePrefill.build_ttnn_cache(
@@ -169,6 +188,7 @@ class TtMoe(LightweightModule):
                 routed_expert_weights_dtype,
                 cache_path,
                 f"layer_{layer_idx}.routed_expert",
+                weights_tile_transposed=routed_expert_weights_tile_transposed,
             )
 
         # Build shared expert cache

@@ -21,6 +21,135 @@ from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCompressorUtils
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 
+#: Cache names of the attention weights, as ``<prefix>.<name>``. One list for the upload, the host-only build and
+#: the completeness check, so they cannot disagree about what a complete cache is.
+ATTENTION_WEIGHT_CACHE_NAMES = ("sinks", "wq_a", "wq_b", "q_a_norm", "wkv", "kv_norm", "wo_a", "wo_b")
+
+
+def attention_cache_complete(cache_path, cache_name_prefix: str) -> bool:
+    """True iff every attention weight's tensorbin exists. Needs ``init_checker(cache_path)`` first."""
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
+    for name in ATTENTION_WEIGHT_CACHE_NAMES:
+        if not pattern_exists(f"{cache_name_prefix}.{name}_dtype*.tensorbin", "V4Attention"):
+            return False
+    return True
+
+
+def upload_attention_weights(
+    ops,
+    *,
+    num_heads: int,
+    head_dim: int,
+    o_groups: int,
+    q_a_proj_weight,
+    q_a_norm_weight,
+    q_b_proj_weight,
+    kv_proj_weight,
+    kv_norm_weight,
+    sinks,
+    o_a_proj_weight,
+    o_b_proj_weight,
+    on_device: bool = True,
+) -> dict:
+    """Every attention weight, on device (or host-only with ``on_device=False``, for the cache build).
+
+    The weights are the V4 reference module's, or ALL None to read them from ``ops``' weight cache. Shared by
+    ``TtV4AttentionBase`` and ``TtSWA`` so there is one list of what an attention layer caches."""
+
+    def host(weight, fn):
+        return None if weight is None else fn(weight.detach())
+
+    scaling = head_dim**-0.5
+    # Pre-divided by scale: SDPA scales BOTH QK and the sink internally, the reference scales only QK --
+    # dividing here cancels the kernel's extra multiply. TP-sharded to match the query heads.
+    sinks_host = host(sinks, lambda w: w.reshape(1, num_heads, 1, 1) / scaling)
+    in_per_group = num_heads * head_dim // o_groups
+    # o_a_proj is block-diagonal over o_groups. Groups partition the heads, so a TP chip owns whole groups:
+    # keep it as ONE batched weight sharded on the group axis and run a single batched matmul -- each chip
+    # applies only its own groups, no collective.
+    o_a_grouped = host(o_a_proj_weight, lambda w: w.view(o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0))
+    return {
+        "sinks_host": sinks_host,
+        "sinks_sdpa": ops.from_torch(
+            sinks_host, mesh_mapper=ops.mesh_mapper(tp_dim=1), cache_name="sinks", on_device=on_device
+        ),
+        "wq_a": ops.to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2, cache_name="wq_a", on_device=on_device),
+        "wq_b": ops.to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3, cache_name="wq_b", on_device=on_device),
+        "q_a_norm_weight": ops.from_torch(
+            host(q_a_norm_weight, lambda w: w.reshape(1, 1, 1, -1)), cache_name="q_a_norm", on_device=on_device
+        ),
+        "wkv": ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2, cache_name="wkv", on_device=on_device),
+        "kv_norm_weight": ops.from_torch(
+            host(kv_norm_weight, lambda w: w.reshape(1, 1, 1, head_dim)), cache_name="kv_norm", on_device=on_device
+        ),
+        "wo_a": ops.from_torch(
+            o_a_grouped,
+            mesh_mapper=ops.mesh_mapper(tp_dim=1),
+            dtype=ops.weights_dtype,
+            cache_name="wo_a",
+            on_device=on_device,
+        ),
+        "wo_b": ops.to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2, cache_name="wo_b", on_device=on_device),
+    }
+
+
+def build_attention_weights_cache(
+    reference,
+    config,
+    mesh_device,
+    cache_path,
+    cache_name_prefix: str,
+    *,
+    sp_axis: int = 0,
+    tp_axis: int = 1,
+    dtype=ttnn.bfloat16,
+    weights_dtype=ttnn.bfloat8_b,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+) -> None:
+    """Write an attention layer's weights to the cache without putting any of them on the device. The dtypes must
+    be the ones the layer will be built with: they are part of the file name."""
+    ops = TtCompressorUtils(
+        mesh_device,
+        rotary_emb=None,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        dtype=dtype,
+        weights_dtype=weights_dtype,
+        memory_config=memory_config,
+        weight_cache_path=cache_path,
+        cache_name_prefix=cache_name_prefix,
+    )
+    upload_attention_weights(
+        ops,
+        num_heads=config.num_attention_heads,
+        head_dim=config.head_dim,
+        o_groups=config.o_groups,
+        q_a_proj_weight=reference.q_a_proj.weight,
+        q_a_norm_weight=reference.q_a_norm.weight,
+        q_b_proj_weight=reference.q_b_proj.weight,
+        kv_proj_weight=reference.kv_proj.weight,
+        kv_norm_weight=reference.kv_norm.weight,
+        sinks=reference.sinks,
+        o_a_proj_weight=reference.o_a_proj.weight,
+        o_b_proj_weight=reference.o_b_proj.weight,
+        on_device=False,
+    )
+
+
+#: What a compressed-attention layer forwards to its compressor.
+_COMPRESSOR_KEYS = ("sp_axis", "tp_axis", "topology", "dtype", "weights_dtype", "memory_config")
+
+
+def compressor_kwargs(kwargs: dict) -> dict:
+    """The attention layer's constructor kwargs that its compressor takes too, with the compressor's cache under
+    ``<attention prefix>.compressor``."""
+    out = {k: kwargs[k] for k in _COMPRESSOR_KEYS if k in kwargs}
+    if kwargs.get("weight_cache_path") is not None:
+        out["weight_cache_path"] = kwargs["weight_cache_path"]
+        out["cache_name_prefix"] = f"{kwargs['cache_name_prefix']}.compressor"
+    return out
+
 
 class TtV4AttentionBase(LightweightModule):
     """V4 attention core. Block I/O is ``[B, 1, S/sp, hidden/tp]``, so layers chain without a reshard."""
@@ -30,14 +159,14 @@ class TtV4AttentionBase(LightweightModule):
         device,
         *,
         compressor,
-        q_a_proj_weight: torch.Tensor,
-        q_a_norm_weight: torch.Tensor,
-        q_b_proj_weight: torch.Tensor,
-        kv_proj_weight: torch.Tensor,
-        kv_norm_weight: torch.Tensor,
-        sinks: torch.Tensor,
-        o_a_proj_weight: torch.Tensor,
-        o_b_proj_weight: torch.Tensor,
+        q_a_proj_weight: torch.Tensor | None = None,
+        q_a_norm_weight: torch.Tensor | None = None,
+        q_b_proj_weight: torch.Tensor | None = None,
+        kv_proj_weight: torch.Tensor | None = None,
+        kv_norm_weight: torch.Tensor | None = None,
+        sinks: torch.Tensor | None = None,
+        o_a_proj_weight: torch.Tensor | None = None,
+        o_b_proj_weight: torch.Tensor | None = None,
         rotary_emb,
         num_heads: int,
         head_dim: int,
@@ -51,7 +180,11 @@ class TtV4AttentionBase(LightweightModule):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        weight_cache_path=None,
+        cache_name_prefix: str | None = None,
     ):
+        """The weights are the reference module's, or all ``None`` to read them from the weight cache at
+        ``<weight_cache_path>/<cache_name_prefix>.*`` (``from_cache``)."""
         self.device = device
         self.dtype = dtype
         self.weights_dtype = weights_dtype
@@ -82,33 +215,41 @@ class TtV4AttentionBase(LightweightModule):
             dtype=dtype,
             weights_dtype=weights_dtype,
             memory_config=memory_config,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=cache_name_prefix,
         )
 
-        # Pre-divided by scale: SDPA scales BOTH QK and the sink internally, the reference scales only
-        # QK -- dividing here cancels the kernel's extra multiply. TP-sharded to match the query heads.
+        self.o_groups = int(o_groups)
+        weights = upload_attention_weights(
+            self.ops,
+            num_heads=self.num_heads,
+            head_dim=self.head_dim,
+            o_groups=self.o_groups,
+            q_a_proj_weight=q_a_proj_weight,
+            q_a_norm_weight=q_a_norm_weight,
+            q_b_proj_weight=q_b_proj_weight,
+            kv_proj_weight=kv_proj_weight,
+            kv_norm_weight=kv_norm_weight,
+            sinks=sinks,
+            o_a_proj_weight=o_a_proj_weight,
+            o_b_proj_weight=o_b_proj_weight,
+        )
         # sparse_sdpa documents the same convention but wants another shape, so the host copy is kept for
-        # _sparse_sinks to reshape rather than recomputed from a weight this class does not keep.
-        self._sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
-        self.sinks_sdpa = self.ops.from_torch(self._sinks_host, mesh_mapper=self.ops.mesh_mapper(tp_dim=1))
+        # _sparse_sinks to reshape rather than recomputed from a weight this class does not keep. Read from the
+        # cache there is no torch weight at all: _sparse_sinks then takes it back off the (bf16) device tensor,
+        # which is exact, since it converts to bf16 itself.
+        self._sinks_host = weights["sinks_host"]
+        self.sinks_sdpa = weights["sinks_sdpa"]
         self._sinks_sparse = None
 
-        self.wq_a = self.ops.to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
-        self.wq_b = self.ops.to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
-        self.q_a_norm_weight = self.ops.from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
+        self.wq_a = weights["wq_a"]
+        self.wq_b = weights["wq_b"]
+        self.q_a_norm_weight = weights["q_a_norm_weight"]
         self.q_b_norm_weight = self.ops.from_torch(torch.ones(1, 1, 1, self.head_dim))
-        self.wkv = self.ops.to_tt_linear_weight(kv_proj_weight, tp_shard_dim=2)
-        self.kv_norm_weight = self.ops.from_torch(kv_norm_weight.detach().reshape(1, 1, 1, self.head_dim))
-
-        # o_a_proj is block-diagonal over o_groups. Groups partition the heads, so a TP chip owns whole
-        # groups: keep it as ONE batched weight sharded on the group axis and run a single batched
-        # matmul -- each chip applies only its own groups, no collective
-        self.o_groups = int(o_groups)
-        in_per_group = self.num_heads * self.head_dim // self.o_groups
-        o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
-        self.wo_a = self.ops.from_torch(
-            o_a_grouped, mesh_mapper=self.ops.mesh_mapper(tp_dim=1), dtype=self.weights_dtype
-        )
-        self.wo_b = self.ops.to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
+        self.wkv = weights["wkv"]
+        self.kv_norm_weight = weights["kv_norm_weight"]
+        self.wo_a = weights["wo_a"]
+        self.wo_b = weights["wo_b"]
 
         self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
         # Everything below comes from build_tables, which every caller has to run (directly or through
@@ -158,6 +299,15 @@ class TtV4AttentionBase(LightweightModule):
             cluster_axis=self.tp_axis,
         )
 
+    def _sinks_host_from_device(self) -> torch.Tensor:
+        """``[1, H, 1, 1]`` sinks back off ``sinks_sdpa`` (TP-sharded on the head dim, replicated on SP)."""
+        if not self.is_mesh:
+            return ttnn.to_torch(self.sinks_sdpa)
+        composer = ttnn.create_mesh_composer(
+            self.device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, self.tp_factor))
+        )
+        return ttnn.to_torch(self.sinks_sdpa, mesh_composer=composer)
+
     def _sparse_sinks(self):
         """The sink in the shape ``sparse_sdpa`` wants: ``[1, 1, 1, H]``, ROW_MAJOR, unpadded, DRAM.
 
@@ -169,8 +319,9 @@ class TtV4AttentionBase(LightweightModule):
         Built on demand so HCA, which never calls it, allocates nothing."""
         if self._sinks_sparse is None:
             mapper = None if self.needs_head_to_seq_reshard else self.ops.mesh_mapper(tp_dim=3)
+            sinks_host = self._sinks_host if self._sinks_host is not None else self._sinks_host_from_device()
             self._sinks_sparse = self.ops.from_torch(
-                self._sinks_host.reshape(1, 1, 1, self.num_heads),
+                sinks_host.reshape(1, 1, 1, self.num_heads),
                 mesh_mapper=mapper,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )

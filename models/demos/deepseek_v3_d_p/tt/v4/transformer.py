@@ -15,6 +15,7 @@ Activations between layers, and across a pipeline boundary, are the packed resid
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, Optional
 
 import torch
@@ -22,13 +23,21 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4.hf_config import v4_hf_config
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCHead, mhc_expand
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.tt.v4.block import _HASH_GATE_MODES, TtV4Block
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+
+#: The block constructor arguments that decide what its cache files are called, and so what a cache check asks for.
+_CACHE_NAMING_KWARGS = ("routed_expert_weights_dtype", "routed_expert_weights_tile_transposed")
+
+
+def _cache_naming(block_kwargs: dict) -> dict:
+    return {k: block_kwargs[k] for k in _CACHE_NAMING_KWARGS if block_kwargs.get(k) is not None}
 
 
 class TtV4Transformer(LightweightModule):
@@ -48,9 +57,115 @@ class TtV4Transformer(LightweightModule):
         routed_expert_weights_dtype=None,
         mtp_levels: int = 0,
     ) -> bool:
-        """Always False: V4 attention reads its weights off torch modules and writes no ttnn cache, so a
-        model can only be built from source weights."""
-        return False
+        """True iff the weight cache holds this slice: the embedding on the first rank, every layer's block (norms,
+        attention, mHC sites, MoE) and, on the last rank, the final norm and the hyper-connection head.
+
+        Same signature as ``TtPrefillTransformer.check_cache_complete``, which the runtime calls. ``model_cfg`` is
+        required: it says what kind of attention each layer has, and so which files to look for. The dtype must be the
+        one the experts will be BUILT at, or a cache at another dtype would report complete."""
+        if not cache_path or not Path(cache_path).exists():
+            logger.debug(f"TTNN cache path does not exist: {cache_path}")
+            return False
+        assert model_cfg is not None, "V4's cache check needs model_cfg to know each layer's attention kind"
+        cache_path = Path(cache_path)
+        config = v4_hf_config(model_cfg, first_layer_idx + num_layers)
+        naming = _cache_naming({"routed_expert_weights_dtype": routed_expert_weights_dtype})
+        if is_first_rank:
+            init_checker(cache_path)
+            if not TtParallelEmbedding.check_cache_complete(cache_path):
+                return False
+        for layer_idx in range(first_layer_idx, first_layer_idx + num_layers):
+            if not TtV4Block.check_cache_complete(cache_path, layer_idx, config, model_cfg, experts_per_chip, **naming):
+                return False
+        if is_last_rank:
+            init_checker(cache_path)
+            if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
+                return False
+            if not TtMHCHead.check_cache_complete(cache_path, "hc_head"):
+                return False
+        logger.info(f"TTNN cache complete at {cache_path} ({num_layers} layers)")
+        return True
+
+    @staticmethod
+    def build_ttnn_cache(
+        *,
+        mesh_device,
+        config,
+        model_cfg: type,
+        state_dict: dict,
+        num_layers: int,
+        cache_path,
+        first_layer_idx: int = 0,
+        is_first_rank: bool = True,
+        is_last_rank: bool = True,
+        sp_axis: int = 0,
+        tp_axis: int = 1,
+        **block_kwargs,
+    ) -> None:
+        """Write the weight cache for this slice without putting any of it on the device, one layer at a time: each
+        layer's weights are read from ``state_dict["layers"]``, written, and dropped. A layer whose block cache is
+        already complete is skipped, so a half-written cache only costs what is missing from it.
+
+        ``block_kwargs`` are the dtype and layout arguments the model will be built with (routed_expert_weights_dtype,
+        shared_expert_weights_dtype, routed_expert_weights_tile_transposed): they are part of the file names."""
+        cache_path = Path(cache_path)
+        cache_path.mkdir(parents=True, exist_ok=True)
+        naming = _cache_naming(block_kwargs)
+        n_devices = mesh_device.get_num_devices()
+        assert model_cfg.NUM_ROUTED_EXPERTS % n_devices == 0, (model_cfg.NUM_ROUTED_EXPERTS, n_devices)
+        experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // n_devices
+        if is_first_rank:
+            init_checker(cache_path)
+            if not TtParallelEmbedding.check_cache_complete(cache_path):
+                TtParallelEmbedding.build_ttnn_cache(
+                    torch_weight=state_dict["embed_weight"],
+                    vocab_size=config.vocab_size,
+                    emb_dim=config.hidden_size,
+                    mesh_device=mesh_device,
+                    cache_path=cache_path,
+                    tp_axis=tp_axis,
+                )
+        layers = state_dict["layers"]
+        assert len(layers) == num_layers, f"state_dict holds {len(layers)} layers, the slice is {num_layers}"
+        for local_idx in range(num_layers):
+            layer_idx = first_layer_idx + local_idx
+            if TtV4Block.check_cache_complete(cache_path, layer_idx, config, model_cfg, experts_per_chip, **naming):
+                logger.info(f"layer {layer_idx}: weight cache already complete, skipping")
+                continue
+            weights = layers[local_idx]
+            TtV4Block.build_ttnn_cache(
+                weights["block"],
+                weights["attn_reference"],
+                weights["mhc_weights"],
+                layer_idx,
+                cache_path,
+                mesh_device,
+                config,
+                model_cfg,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                **{k: v for k, v in block_kwargs.items() if v is not None},
+            )
+            del weights
+        if is_last_rank:
+            init_checker(cache_path)
+            if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
+                TtDistributedRmsNorm.build_ttnn_cache(
+                    torch_weight=state_dict["norm_weight"],
+                    emb_dim=config.hidden_size,
+                    mesh_device=mesh_device,
+                    cache_path=cache_path,
+                    cache_name_prefix="norm",
+                )
+            if not TtMHCHead.check_cache_complete(cache_path, "hc_head"):
+                TtMHCHead.build_ttnn_cache(
+                    *state_dict["hc_head"],
+                    TtV4Block._mhc_config(config),
+                    mesh_device,
+                    cache_path,
+                    "hc_head",
+                    tp_axis=tp_axis,
+                )
 
     def __init__(
         self,
@@ -144,13 +259,25 @@ class TtV4Transformer(LightweightModule):
 
         layers = state_dict["layers"]
         assert len(layers) == num_layers, f"state_dict holds {len(layers)} layers, the slice is {num_layers}"
+        naming = _cache_naming(block_kwargs)
+        experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // mesh_device.get_num_devices()
         self.layers = []
         for local_idx, layer_idx in enumerate(layer_ids):
             hash_layer = config.mlp_layer_types[layer_idx] == "hash_moe"
             mode_matches_layer_kind = (gate_fallback_mode in _HASH_GATE_MODES) == hash_layer
             # None lets the block pick the gate its layer kind routes with.
             layer_gate = gate_fallback_mode if mode_matches_layer_kind else None
-            weights = layers[local_idx]
+            # A layer whose whole cache is complete is built from it: none of its weights are read off the checkpoint
+            # (a hash layer's expert table apart, which no cache holds). Any other layer is built from its torch
+            # weights, which also writes whatever its cache is missing.
+            from_cache = hasattr(layers, "load_light") and TtV4Block.check_cache_complete(
+                weight_cache_path, layer_idx, config, model_cfg, experts_per_chip, **naming
+            )
+            if from_cache:
+                logger.info(f"layer {layer_idx}: weight cache complete, building from it")
+                weights = layers.load_light(local_idx)
+            else:
+                weights = layers[local_idx]
             self.layers.append(
                 TtV4Block(
                     mesh_device=mesh_device,
@@ -178,15 +305,21 @@ class TtV4Transformer(LightweightModule):
         self.hc_head = None
         self.norm = None
         if is_last_rank:
-            mhc_cfg = MHCConfig(
-                dim=config.hidden_size,
-                n=config.hc_mult,
-                sinkhorn_iters=config.hc_sinkhorn_iters,
-                eps=config.hc_eps,
-                norm_eps=config.rms_norm_eps,
-            )
+            head_weights = state_dict.get("hc_head")
+            assert (
+                head_weights is not None or weight_cache_path is not None
+            ), "no hc_head weights and no weight cache to read them from"
+            head_cache = {}
+            if weight_cache_path is not None:
+                head_cache = {"weight_cache_path": weight_cache_path, "cache_name_prefix": "hc_head"}
             self.hc_head = TtMHCHead(
-                mesh_device, mhc_cfg, *state_dict["hc_head"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
+                mesh_device,
+                TtV4Block._mhc_config(config),
+                *(head_weights if head_weights is not None else (None, None, None)),
+                tp_axis=tp_axis,
+                num_links=num_links,
+                topology=tp_topology,
+                **head_cache,
             )
             self.norm = TtDistributedRmsNorm(
                 mesh_device=mesh_device,
