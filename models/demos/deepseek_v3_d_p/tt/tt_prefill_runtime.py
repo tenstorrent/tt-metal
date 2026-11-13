@@ -1516,8 +1516,8 @@ class TtPrefillRuntime:
 
         The table maps each natural KV position to its true block-cyclic storage chip + offset
         (the MLA chunked-prefill cache layout), so the migration worker copies the right chunks.
-        The runner publishes the serialized table to the worker — this method only describes the
-        cache layout; it issues no migration comms.
+        The runner writes the serialized table to a file and migration_driver publishes it to the
+        worker — this method only describes the cache layout; it issues no migration comms.
 
         Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
         num_my_layers). The runner runs the all-ranks all-gathers and passes `stage_layouts` — one

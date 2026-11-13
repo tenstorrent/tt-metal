@@ -583,8 +583,7 @@ class TtPrefillRuntime:
         stage_layouts=None,
     ) -> str:
         """Build + serialize M3's multi-config KV chunk address table (k_h0..N, v_h0..N, index_k) to
-        ``path`` and return it. This issues no comms; the runner then either publishes the table to the
-        migration worker (PREFILL_ENABLE_MIGRATION=1) or leaves it on disk.
+        ``path`` and return it. This issues no comms.
 
         Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
         num_my_layers). The runner all-gathers one layout per ``kv_migration_stages`` entry (k, v,

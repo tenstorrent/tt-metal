@@ -36,6 +36,7 @@ migration:
   timeout_ms: 3600000
   done_file: /tmp/m3_migration_done.sentinel   # driver-side only; no runner counterpart
   table_path: /tmp/m3_kv_chunk_table.pb        # [MATCH RUNNER]
+  device_map_path: /tmp/m3_kv_device_map.txt   # [MATCH RUNNER]
   cmd_queue: /mig_ep1_cmd                      # [MATCH ENDPOINT]
   table_queue: /mig_ep1_table
   resp_queue: /mig_ep1_resp

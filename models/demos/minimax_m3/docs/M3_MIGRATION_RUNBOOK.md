@@ -195,8 +195,8 @@ grep -a -E "FAILED_TO_MAP|already filled" $(ls -t /tmp/mig_logs_$(id -u)/launch_
 For endpoint 1, `/data/philei/tt-metal/m3_gate2_endpoint.sh` wraps the launch with a 2-rank
 placement preflight and `/data/philei/tt-metal/m3_gate2_check.sh` runs the readiness checks above.
 
-**One endpoint launch per runner launch.** A worker exits on a second `SET_TABLE`, and the runner
-publishes a table at startup, so a second runner against a live endpoint kills both workers.
+**One endpoint launch per driver launch.** A worker exits on a second `SET_TABLE`, and the driver
+publishes the table at startup, so a second driver against a live endpoint kills both workers.
 
 ### 0.6 Cleanup between runs (Ctrl-C the endpoint terminal first)
 
@@ -204,7 +204,7 @@ publishes a table at startup, so a second runner against a live endpoint kills b
 pkill -f migration_endpoint; pkill prun; pkill prted; pkill prte
 rm -f /dev/shm/mig_ep[01]_* /dev/shm/ep_[01]_[ab]_* /dev/shm/ttmig.* \
       /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* \
-      /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map*.json /tmp/m3_migration_done.sentinel* \
+      /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.txt* /tmp/m3_migration_done.sentinel* \
       /data/philei/tmp/m3_kv_chunk_table_pp.pb \
       /data/philei/tmp/m3_pd/migration_done.sentinel* /data/philei/tmp/m3_pd/prefill_migration_handoff.json
 ```
@@ -226,13 +226,15 @@ Checked-in config: `$M3/m3_binding_loopback_migration_1rank.yaml` (runner) and
 # ---- Terminal A — endpoint id 1 (0.3, 0.4, then 0.5 prefill line). Confirm READY:
 /data/philei/tt-metal/m3_gate2_check.sh
 
-# ---- Terminal B — runner (0.3). WORKER_READY comes after minutes of silence: the 9-config,
+# ---- Terminal B — runner (0.3). The table comes after minutes of silence: the 9-config,
 #      691200-entry table is built one Python call at a time.
 $RUN $M3/m3_binding_loopback_migration_1rank.yaml $HOST:1
-#   wait for:  [migration] WORKER_READY: table=/tmp/m3_kv_chunk_table.pb
+#   wait for:  [migration] merged KV chunk table -> /tmp/m3_kv_chunk_table.pb
+#   after:     [migration] device map (32 chips, ranks [0]) exported to /tmp/m3_kv_device_map.txt
 #              [migration] layer-completion routing up: rank=0/1 master=0 ring=/tt_prefill_layer_completion_ring_0 source=host on_layer_complete callback (owns scheduler shm /tt_prefill_layer_completions_m3_prefill)
 
-# ---- Terminal C — prefill + migrate + verify (0.3). Every verdict lands HERE.
+# ---- Terminal C — prefill + migrate + verify (0.3). Every verdict lands HERE; it first sends the table
+#      and device map to endpoint 1 and logs [migration] WORKER_READY: table=/tmp/m3_kv_chunk_table.pb
 PREFILL_SEND_SHUTDOWN=1 python -m models.demos.common.prefill.runners.migration_driver \
   --manifest $M3/m3_producer_loopback_migration.yaml
 ```
@@ -271,7 +273,7 @@ python -m models.demos.common.prefill.runners.prefill_producer \
 ### 1.2 Variant — 2-stage intragalaxy pipeline loopback (P2)
 
 Same three terminals; the runner spans two Z-linked 4×4 sub-meshes (rank 0 = layers 0–29, rank 1 =
-30–59) and rank 0 publishes one merged 60-layer table. Differences from §1:
+30–59) and rank 0 writes one merged 60-layer table. Differences from §1:
 
 ```bash
 # Terminal B needs 0.4 (Slurm detach) because it is 2 ranks on one host, and the sub-mesh weight cache:
@@ -283,8 +285,8 @@ PREFILL_SEND_SHUTDOWN=1 python -m models.demos.common.prefill.runners.migration_
   --manifest $M3/m3_producer_loopback_migration_2rank.yaml
 ```
 
-Expect both ranks to log their device maps (`/tmp/m3_kv_device_map_r{0,1}.json`), rank 0 to
-publish `/data/philei/tmp/m3_kv_chunk_table_pp.pb` (roughly twice the Gate 2 build time), and the
+Expect one device map for the host (`/tmp/m3_kv_device_map.txt`, 32 chips), rank 0 to
+write `/data/philei/tmp/m3_kv_chunk_table_pp.pb` (roughly twice the Gate 2 build time), and the
 same three verdict lines in C, with source PCC over `60/60 local layers`.
 
 ### 1.3 Variant — two galaxies, 2 stages (validated 2026-08-25, b08u02 + b09u02)
@@ -397,7 +399,7 @@ the prefill host: `tt-llm-engine`'s launch harness, scenario `pd_migration`, con
   the M3 config). Without the blaze change every decode stage skips or the golden check fails.
 - The tt-blaze submodule is at its pin and rebuilt (`git submodule status tt-metal` shows no `+`).
 - The harness does not detach from Slurm; the shell launching it must (§0.4), or the endpoint workers
-  fail to map and the prefill runner times out in `wait_ready` while the launcher still reports
+  fail to map and the prefill side times out in `wait_ready` while the launcher still reports
   `ENDPOINT_ALIVE`.
 - `TT_METAL_HOME` in the harness shell reaches only the endpoint step; set it to the engine submodule
   (§0.5). The prefill steps get `prefill.tree` from the yaml.
@@ -633,7 +635,6 @@ sets:
 
 | Setting | Why |
 |---|---|
-| `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1` | write the table and device map to files instead of handing them to a migration endpoint |
 | `PREFILL_MIGRATION_TABLE_PATH=${M3_KVM_TABLE_DIR}/m3_prefill_kv_chunk_table.pb` | expanded from the runner's environment |
 | `PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/prefill_device_map.txt` | the device map holds host-local ASIC ids |
 | `M3_INDEX_CACHE_BF16=0` | decode stores index_k in bfp8 and the KVM copies raw bytes; the table builder rejects a bf16 index_k |
