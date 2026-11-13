@@ -76,6 +76,14 @@ from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_mini
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3 import convert_comfy_minimax_h3 as comfy_h3
+from ...models.transformers.minimax_h3.adaln_schedule_minimax_h3 import (
+    ADALN_PRECOMPUTE_ENV,
+    AdalnRowPlan,
+    AdalnSchedule,
+    AdalnSegment,
+    adaln_capacity_rows,
+    adaln_precompute_enabled,
+)
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
@@ -86,7 +94,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
-from ...utils.tracing import StateTensor
+from ...utils.tracing import StateTensor, Tracer
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
@@ -751,6 +759,12 @@ class MiniMaxH3Pipeline:
         self._tt_timestep = StateTensor()
         self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
+        # Resident AdaLN schedule tables (`adaln_schedule_minimax_h3`): the row plan of the transformer that holds
+        # them, and the per-forward step selector, one state per slot count.
+        self._adaln_precompute = adaln_precompute_enabled()
+        self._adaln_plan: AdalnRowPlan | None = None
+        self._adaln_plan_owner: MiniMaxH3Transformer3DModel | None = None
+        self._tt_adaln_selector: dict[int, StateTensor] = {}
         # True during `warmup`, whose output is discarded.
         self._warming = False
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
@@ -3085,6 +3099,90 @@ class MiniMaxH3Pipeline:
         tracers = run_blocks._tracers_keyed.get(transformer, {})
         return any(key[0] == rung and tracer.trace_captured for key, tracer in tracers.items())
 
+    def _timestep_inputs(
+        self, levels: tuple[torch.Tensor, torch.Tensor | None]
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """The transformer's `timestep` / `endpoint_timestep` host values for one step's per-slot levels."""
+        timestep, endpoint = levels
+        if self._adaln_t_table is None:
+            timestep_value = timestep.reshape(1, 1, -1, 1)
+        else:
+            # Pruned ComfyUI weights: the AdaLN input is the table's curve at these timesteps.
+            curve = comfy_h3.adaln_curve_embedding(self._adaln_t_table, timestep.flatten())
+            timestep_value = comfy_h3.pad_curve(curve).reshape(1, 1, -1, comfy_h3.CURVE_PAD)
+        return timestep_value, None if endpoint is None else endpoint.reshape(1, 1, -1, 1)
+
+    def _adaln_segment(
+        self,
+        transformer: MiniMaxH3Transformer3DModel,
+        slot_roles: tuple[str, ...],
+        levels: list[tuple[torch.Tensor, torch.Tensor | None]],
+    ) -> AdalnSegment | None:
+        """Where this request's schedule sits in the resident AdaLN tables, writing it there first if needed.
+
+        None keeps the request on the on-device projection: `MINIMAX_H3_ADALN_PRECOMPUTE=0`, a non-coresident
+        preset (the tables would outlive the DiT's eviction), tables that could not be allocated before a trace
+        was captured, or a schedule larger than the tables. The tables are allocated once, only while no trace
+        is live (#59645), and rewritten in place for a new schedule.
+        """
+        if not (self._adaln_precompute and self.coresident):
+            return None
+        if self._adaln_plan_owner is not transformer:
+            if transformer.adaln_tables_allocated:
+                raise RuntimeError("this transformer's AdaLN tables belong to another row plan")
+            if Tracer._traces_live.get(self.mesh_device.id(), 0):
+                self._host_log(
+                    "adaLN tables not allocated: a trace is already live, and a buffer allocated after its capture "
+                    f"can be overwritten by its replay; AdaLN stays on device (set {ADALN_PRECOMPUTE_ENV}=0 to silence)"
+                )
+                self._adaln_precompute = False
+                return None
+            capacity = adaln_capacity_rows()
+            transformer.allocate_adaln_tables(capacity)
+            self._adaln_plan = AdalnRowPlan(capacity, self.adaln_slot_roles)
+            self._adaln_plan_owner = transformer
+        plan = self._adaln_plan
+        full = self.adaln_slot_roles
+        if tuple(slot_roles) != full:
+            # The tables carry every pinned role; a request routes its own slots onto them through the selector.
+            index = [slot_roles.index(role) if role in slot_roles else None for role in full]
+            if any(i is None for i in index):
+                return None
+            levels = [(t[index], None if r is None else r[index]) for t, r in levels]
+        has_endpoints = levels[0][1] is not None if levels else False
+        schedule = AdalnSchedule(
+            roles=full,
+            levels=tuple(t for t, _ in levels),
+            endpoints=tuple(r for _, r in levels) if has_endpoints else None,
+        )
+        segment = plan.find(schedule)
+        if segment is not None:
+            return segment
+        segments = plan.placed(schedule)
+        if segments is None:
+            self._log(
+                f"adaLN schedule of {schedule.num_steps} steps needs more rows than the {plan.capacity}-row tables "
+                f"({ADALN_PRECOMPUTE_ENV}_ROWS); AdaLN stays on device for this request"
+            )
+            return None
+        step_inputs = []
+        for step_levels_, step_endpoints, row in plan.step_inputs(segments):
+            timestep_value, endpoint_value = self._timestep_inputs((step_levels_, step_endpoints))
+            endpoint = None
+            if endpoint_value is not None:
+                endpoint = from_torch(endpoint_value, device=self.mesh_device, dtype=ttnn.float32)
+            step_inputs.append(
+                (
+                    from_torch(timestep_value, device=self.mesh_device, dtype=ttnn.float32),
+                    endpoint,
+                    from_torch(plan.placement(row), device=self.mesh_device, dtype=ttnn.bfloat16),
+                )
+            )
+        transformer.write_adaln_tables(step_inputs)
+        plan.segments = segments
+        self._log(f"adaLN tables: wrote {len(segments)} schedule(s), {sum(s.rows for s in segments)} rows")
+        return plan.find(schedule)
+
     def release_traces(self) -> None:
         decoder = self._audio_decoder
         if decoder is not None:
@@ -3303,21 +3401,27 @@ class MiniMaxH3Pipeline:
             }
             return slot_levels(slot_roles, **level_kwargs), slot_levels(slot_roles, **endpoint_kwargs)
 
-        def upload_levels(levels: tuple[torch.Tensor, torch.Tensor | None]) -> None:
-            timestep, endpoint = levels
-            if self._adaln_t_table is None:
-                timestep_value = timestep.reshape(1, 1, -1, 1)
-            else:
-                # Pruned ComfyUI weights: the AdaLN input is the table's curve at these timesteps.
-                curve = comfy_h3.adaln_curve_embedding(self._adaln_t_table, timestep.flatten())
-                timestep_value = comfy_h3.pad_curve(curve).reshape(1, 1, -1, comfy_h3.CURVE_PAD)
-            self._tt_timestep.update(timestep_value, traced=traced, dtype=ttnn.float32, device=self.mesh_device)
-            if endpoint is not None:
-                self._tt_endpoint_timestep.update(
-                    endpoint.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
-                )
+        # Resident AdaLN tables for this schedule, or None: every block then projects `temb` on device.
+        adaln_segment = self._adaln_segment(transformer, slot_roles, [step_levels(i) for i in range(len(timesteps))])
 
-        upload_levels(step_levels(0))
+        def upload_levels(i: int) -> None:
+            timestep_value, endpoint_value = self._timestep_inputs(step_levels(i))
+            self._tt_timestep.update(timestep_value, traced=traced, dtype=ttnn.float32, device=self.mesh_device)
+            if endpoint_value is not None:
+                self._tt_endpoint_timestep.update(
+                    endpoint_value, traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                )
+            if adaln_segment is not None:
+                selector = self._adaln_plan.selector(adaln_segment, i, slot_roles)
+                state = self._tt_adaln_selector.setdefault(selector.shape[0], StateTensor())
+                state.update(selector, traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
+
+        def adaln_selector_kwargs() -> dict:
+            if adaln_segment is None:
+                return {}
+            return {"adaln_step_selector": self._tt_adaln_selector[len(slot_roles) * MINIMAX_H3_MODALITY_NUM].value}
+
+        upload_levels(0)
         pdd_steps = None
         if self._pdd is not None and self._pdd_active is not None:
             pdd_steps = self._pdd_device_heads(transformer, *self._pdd_active)
@@ -3363,6 +3467,7 @@ class MiniMaxH3Pipeline:
                         pad_to=rung,
                         traced=traced,
                         **tilerow_kwargs,
+                        **adaln_selector_kwargs(),
                         **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
                     )
                 except RuntimeError as err:
@@ -3376,7 +3481,7 @@ class MiniMaxH3Pipeline:
                 ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_audio.value, audio_velocity)
                 if i + 1 < len(timesteps):
-                    upload_levels(step_levels(i + 1))
+                    upload_levels(i + 1)
                 ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()

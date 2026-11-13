@@ -277,6 +277,11 @@ class MiniMaxH3TransformerBlock(Module):
             tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
         return tables
 
+    def select_modulation_tables(self, selector: ttnn.Tensor, resident: list[ttnn.Tensor]) -> list[ttnn.Tensor]:
+        """The six tables `_modulation_tables` returns, gathered from this block's resident schedule tables
+        (`adaln_schedule_minimax_h3`) through a `[rows, capacity]` one-hot step selector."""
+        return [self._gather_rows(table, selector) for table in resident]
+
     def _gather_rows(self, table: ttnn.Tensor, selector: ttnn.Tensor) -> ttnn.Tensor:
         """One table row per row of the bf16 one-hot selector (exact); the dynamic-length path runs it through
         minimal_matmul, whose program does not depend on the row count."""
@@ -351,6 +356,7 @@ class MiniMaxH3TransformerBlock(Module):
         rope_sin: ttnn.Tensor,
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        modulation_tables: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -361,10 +367,11 @@ class MiniMaxH3TransformerBlock(Module):
 
         onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
             pair from `tilerow_tables`; without the pair the norms take the per-token gather.
+        modulation_tables: this forward's six tables from `select_modulation_tables`; None projects `temb` here.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        tables = self._modulation_tables(temb)
+        tables = self._modulation_tables(temb) if modulation_tables is None else modulation_tables
 
         if onehot is None:
             onehot = self.onehot_table(adaln_indices, temb.shape[2])

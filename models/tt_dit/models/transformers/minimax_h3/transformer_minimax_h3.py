@@ -20,7 +20,12 @@ from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
-from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
+from .transformer_block_minimax_h3 import (
+    MODALITY_NUM,
+    NUM_MODULATION_PARAMS,
+    MiniMaxH3TransformerBlock,
+    onehot_identity,
+)
 
 # shift, scale -- the order `norm_out.linear` emits them in.
 NUM_OUT_MODULATION_PARAMS = 2
@@ -253,6 +258,9 @@ class MiniMaxH3Transformer3DModel(Module):
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}  # traced path only, keyed by padded length
         self._eye_states: dict[int, StateTensor] = {}
+        # Resident AdaLN schedule tables, [block][param] -> [capacity, hidden_local] (`adaln_schedule_minimax_h3`):
+        # allocated once by `allocate_adaln_tables`, rewritten in place by `write_adaln_tables`.
+        self._adaln_tables: list[list[ttnn.Tensor]] | None = None
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
         # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
         # by concat every step: a fragmented heap cannot supply a table-sized block each step. Allocated on
@@ -476,6 +484,7 @@ class MiniMaxH3Transformer3DModel(Module):
         traced: bool = False,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        adaln_step_selector: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -498,6 +507,8 @@ class MiniMaxH3Transformer3DModel(Module):
             capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
+        adaln_step_selector: `[slots * 3, capacity]` bf16 one-hot (`AdalnRowPlan.selector`): the blocks take this
+            step's modulation tables from the resident schedule tables instead of projecting `temb`. Keys the trace.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -528,6 +539,8 @@ class MiniMaxH3Transformer3DModel(Module):
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
         if self._static_prefix_rows == 0:
             raise RuntimeError("prepare_static_sources must run before forward: the source-table prefix is unbound")
+        if adaln_step_selector is not None and self._adaln_tables is None:
+            raise RuntimeError("adaln_step_selector needs the resident AdaLN tables: allocate_adaln_tables first")
 
         def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
             t = ttnn.reshape(t, (1, t.shape[-1]))
@@ -557,16 +570,7 @@ class MiniMaxH3Transformer3DModel(Module):
         if not indices_already_sharded:
             hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
-        if self.adaln_curve:
-            # Pruned ComfyUI weights: `timestep` already carries the curve embedding.
-            temb = timestep
-        else:
-            temb = self.time_embedder(self.time_proj(timestep))
-        if self.two_time is not None:
-            if endpoint_timestep is None:
-                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
-            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
-            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+        temb = self.time_embedding(timestep, endpoint_timestep)
         self._temb_state.update(temb, traced=traced)
         temb = self._temb_state.value
 
@@ -602,8 +606,9 @@ class MiniMaxH3Transformer3DModel(Module):
             eye=eye,
             adaln_tile_map=adaln_tile_map,
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
+            adaln_selector=adaln_step_selector,
             traced=traced,
-            tracer_trace_key=(pad_to, adaln_tile_map is not None),
+            tracer_trace_key=(pad_to, adaln_tile_map is not None, adaln_step_selector is not None),
         )
 
         hidden = self.norm_out(
@@ -649,10 +654,16 @@ class MiniMaxH3Transformer3DModel(Module):
         eye: ttnn.Tensor | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        adaln_selector: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
-        for block in self.transformer_blocks:
+        for index, block in enumerate(self.transformer_blocks):
+            modulation_tables = (
+                None
+                if adaln_selector is None
+                else block.select_modulation_tables(adaln_selector, self._adaln_tables[index])
+            )
             hidden = block(
                 hidden,
                 logical_n,
@@ -662,11 +673,85 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_sin=rope_sin,
                 onehot=onehot,
                 tilerow=tilerow,
+                modulation_tables=modulation_tables,
             )
         ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
+
+    def time_embedding(self, timestep: ttnn.Tensor, endpoint_timestep: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """`temb` for `forward`'s `timestep` / `endpoint_timestep` inputs: `[1, 1, num_slots, time_embed_dim]`."""
+        if self.adaln_curve:
+            # Pruned ComfyUI weights: `timestep` already carries the curve embedding.
+            temb = timestep
+        else:
+            temb = self.time_embedder(self.time_proj(timestep))
+        if self.two_time is not None:
+            if endpoint_timestep is None:
+                raise ValueError("two-time conditioning is set, so every forward needs endpoint_timestep")
+            endpoint = self.two_time.embedder(self.time_proj(endpoint_timestep))
+            temb = ttnn.add(temb, ttnn.multiply(ttnn.subtract(endpoint, temb), self.two_time.gate))
+        return temb
+
+    @property
+    def adaln_tables_allocated(self) -> bool:
+        return self._adaln_tables is not None
+
+    def allocate_adaln_tables(self, capacity: int) -> None:
+        """Allocate the resident AdaLN schedule tables, `[capacity, hidden_local]` per block and parameter.
+
+        Call only while no trace is live on the device: a live trace's replay may overwrite buffers allocated
+        after its capture (#59645). The tables are never reallocated; `write_adaln_tables` fills them in place.
+        """
+        if self._adaln_tables is not None:
+            raise RuntimeError("the AdaLN tables are already allocated; rewrite them with write_adaln_tables")
+        self._adaln_tables = [
+            [
+                ttnn.zeros(
+                    (capacity, block.hidden_local),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                )
+                for _ in range(NUM_MODULATION_PARAMS)
+            ]
+            for block in self.transformer_blocks
+        ]
+
+    def write_adaln_tables(self, step_inputs: list[tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor]]) -> None:
+        """Rewrite the resident tables in place: every step's rows where its placement puts them, zeros elsewhere.
+
+        `step_inputs` are `(timestep, endpoint_timestep, placement)` per step: `forward`'s inputs carrying every
+        role, and the `[capacity, rows]` one-hot (`AdalnRowPlan.placement`) that puts the step's rows at its offset.
+        The rows are the block's own `_modulation_tables` of that step's `temb`, so they match the on-device path.
+        Runs eagerly, outside any trace; nothing it allocates outlives the call, and every op has the same shapes for
+        any schedule (one-hot placement matmuls and adds of disjoint rows, both exact), so no new program is
+        compiled while a trace may be live.
+        """
+        if self._adaln_tables is None:
+            raise RuntimeError("allocate_adaln_tables must run before write_adaln_tables")
+        if not step_inputs:
+            raise ValueError("write_adaln_tables needs at least one step")
+        tembs = [(self.time_embedding(timestep, endpoint), placement) for timestep, endpoint, placement in step_inputs]
+        for block, resident in zip(self.transformer_blocks, self._adaln_tables):
+            content: list[ttnn.Tensor | None] = [None] * NUM_MODULATION_PARAMS
+            for temb, placement in tembs:
+                for param, table in enumerate(block._modulation_tables(temb)):
+                    placed = block._gather_rows(table, placement)
+                    ttnn.deallocate(table)
+                    if content[param] is None:
+                        content[param] = placed
+                    else:
+                        total = ttnn.add(content[param], placed)
+                        ttnn.deallocate(content[param])
+                        ttnn.deallocate(placed)
+                        content[param] = total
+            for param, table in enumerate(content):
+                ttnn.copy(table, resident[param])
+                ttnn.deallocate(table)
+        for temb, _ in tembs:
+            ttnn.deallocate(temb)
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
