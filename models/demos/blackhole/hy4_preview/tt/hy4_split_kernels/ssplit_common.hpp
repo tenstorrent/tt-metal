@@ -107,6 +107,7 @@ enum : uint32_t {
     QROWS_R,
     QLAY,
     KSPLIT,
+    IDX_MOD,
     END,
 };
 }  // namespace reader_ct_arg
@@ -155,6 +156,8 @@ enum : uint32_t {
     CB_M_OUT,
     CB_L_OUT,
     CB_STAT_SCR,
+    OWNER_S,
+    STAT_SCALE_BITS,
     END,
 };
 }  // namespace writer_ct_arg

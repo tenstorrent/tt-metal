@@ -95,6 +95,19 @@ void kernel_main() {
         sink_args_q.next_compile_time_args_offset(),
         sink_args_q.next_common_runtime_args_offset()>();
     constexpr bool emit_stats = get_compile_time_arg_val(ssplit::writer_ct_arg::EMIT_STATS) != 0;
+    // EMIT_STATS == 2: the stats ride in the output rows: head-row page = [V_DIM bf16 o | raw max | sum | 30 zeros]
+    // (page V_DIM+32 elements, 64 B tail)
+    // OWNER_S > 0 (emit_cols only): head-row pages are written in the cross-column owner layout [NC, 1, 8*S_users,
+    // V_DIM+32]: query row tok = j*S_users + s is the OWNER column j's block of rows (h, s); only the first 8 heads are
+    // written (the rest are zero pad). STAT_SCALE_BITS: float bits of the softmax scale; the tail max is stored
+    // premultiplied (scaled-logit domain), col V_DIM+2 = 1.0 (so the merge's weighted sum also yields the denominator).
+    constexpr uint32_t owner_s = get_compile_time_arg_val(ssplit::writer_ct_arg::OWNER_S);
+    constexpr uint32_t stat_scale_bits = get_compile_time_arg_val(ssplit::writer_ct_arg::STAT_SCALE_BITS);
+    constexpr uint32_t out_heads = owner_s ? 8 : H;
+    constexpr bool emit_tile = get_compile_time_arg_val(ssplit::writer_ct_arg::EMIT_STATS) ==
+                               3;  // owner-layout TILE output [NC, S_users, 8(32), V_DIM+32]: tile id = tok*(vDHt+3) +
+                                   // ct, tail tiles [ms | l | 1.0] at ct = vDHt..vDHt+2
+    constexpr bool emit_cols = get_compile_time_arg_val(ssplit::writer_ct_arg::EMIT_STATS) >= 2;
     constexpr uint32_t cb_m_out = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_M_OUT);
     constexpr uint32_t cb_l_out = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_L_OUT);
     constexpr uint32_t cb_stat_scr = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_STAT_SCR);
@@ -164,6 +177,13 @@ void kernel_main() {
         }
     }
 
+    auto out_page = [&](uint32_t h, uint32_t tok) -> uint32_t {
+        if constexpr (owner_s != 0) {
+            return (tok / owner_s) * (8 * owner_s) + h * owner_s + (tok % owner_s);
+        } else {
+            return h * S + tok;
+        }
+    };
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
         // K-gather phase: process this token's active chunks (reader signals per chunk; is_last ends the token).
         // Gather rows [0,split) on the writer's NoC into the reader-reserved destination, then ack.
@@ -322,14 +342,77 @@ void kernel_main() {
             }
             const auto stats =
                 TensorAccessor(stats_args, get_common_arg_val<uint32_t>(ssplit::writer_common_arg::STATS_ADDRESS));
-            noc.async_write(scr, stats, 2 * H * sizeof(uint16_t), {.offset_bytes = 0}, {.page_id = tok});
-            noc.async_write_barrier();
+            if constexpr (emit_cols) {
+                // scr is a 2048 B scratch page: rebuild it as H x 64 B tails [m, l, 0 ...]; one 64 B write per head row
+                // (page h*S+tok, byte offset row_bytes)
+                volatile tt_l1_ptr uint32_t* sp32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr.get_write_ptr());
+                union FU {
+                    uint32_t u;
+                    float f;
+                };
+                FU scu;
+                scu.u = stat_scale_bits;
+                const float sc = scu.f;
+                if constexpr (emit_tile) {
+                    for (uint32_t k = 0; k < 2 * 512; ++k) {
+                        sp32[k] = 0;
+                    }
+                }
+                for (uint32_t h = 0; h < out_heads; ++h) {
+                    uint16_t mv = row_empty ? neg_inf_bf16 : mt[ssplit::tile_col0_offset(h)];
+                    const uint16_t lv = row_empty ? (uint16_t)0 : lt[ssplit::tile_col0_offset(h)];
+                    if (!row_empty) {
+                        FU x;
+                        x.u = (uint32_t)mv << 16;
+                        x.f = x.f * sc;
+                        const uint32_t u = x.u;
+                        mv = (uint16_t)((u + 0x7FFFu + ((u >> 16) & 1u)) >> 16);
+                    }
+                    if constexpr (emit_tile) {
+                        // ms tile (tile 0 of the tail) col 0 / l tile (tile 1) col 0 of head row h (h < 8: face 0 row h
+                        // = word h*8)
+                        sp32[h * 8] = (uint32_t)mv;
+                        sp32[512 + h * 8] = (uint32_t)lv;
+                    } else {
+                        sp32[h * 16] = (uint32_t)mv | ((uint32_t)lv << 16);
+                        sp32[h * 16 + 1] = 0x3F80u;
+                        for (uint32_t k = 2; k < 16; ++k) {
+                            sp32[h * 16 + k] = 0;
+                        }
+                    }
+                }
+                if constexpr (emit_tile) {
+                    for (uint32_t t = 0; t < 2; ++t) {
+                        noc.async_write(
+                            scr, stats, 2048, {.offset_bytes = t * 2048}, {.page_id = tok * (vDHt + 2) + vDHt + t});
+                    }
+                } else {
+                    for (uint32_t h = 0; h < out_heads; ++h) {
+                        noc.async_write(
+                            scr,
+                            stats,
+                            64,
+                            {.offset_bytes = h * 64},
+                            {.page_id = out_page(h, tok), .offset_bytes = row_bytes});
+                    }
+                }
+            } else {
+                noc.async_write(scr, stats, 2 * H * sizeof(uint16_t), {.offset_bytes = 0}, {.page_id = tok});
+                noc.async_write_barrier();
+            }
             m_cb.pop_front(1);
             l_cb.pop_front(1);
         }
-        for (uint32_t h = 0; h < H; ++h) {
-            // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
-            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+        if constexpr (emit_tile) {
+            for (uint32_t ct = 0; ct < vDHt; ++ct) {
+                noc.async_write(out_cb, out, 2048, {.offset_bytes = ct * 2048}, {.page_id = tok * (vDHt + 2) + ct});
+            }
+        } else {
+            for (uint32_t h = 0; h < out_heads; ++h) {
+                // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok (owner layout:
+                // out_page).
+                noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = out_page(h, tok)});
+            }
         }
         {
             DeviceZoneScopedN("W_OUTWR");
