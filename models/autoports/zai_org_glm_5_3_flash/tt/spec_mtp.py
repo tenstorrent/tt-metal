@@ -684,7 +684,9 @@ class SpecMTP:
                                             mesh_mapper=_repl(mesh))  # fmt: skip
             self.dbg_ids = [ids(cu)] + [ids(ch) for _ in range(K - 1)]
         dsa = [i for i, e in enumerate(be.seq) if e["sparse"] == "dsa"]
-        share = be.seq[dsa[0]]["tp"] if dsa else None
+        # (dsa_tp: the first main sparse_dsa layer's TP module, which the MTP layer shares; NOT the share= parameter = the
+        # primary step a GLM53_SPEC_MULTI_ALT step reuses -- the old local of this name shadowed it)
+        dsa_tp = be.seq[dsa[0]]["tp"] if dsa else None
         self.mtp = self.mtp_cache = self.eh = self.w_mtp = None
         self.pf_scratch, self._pfw = (0, 0), None
         self.mtp_cap_blocks = 0  # (GLM53_SPEC_MULTI + the private MTP cache: the blocks of each user's)
@@ -701,7 +703,7 @@ class SpecMTP:
             # (GLM53_SPEC_MULTI: a width t > 4 other than the full width has no sparse_dsa fabric phase of its own -- it
             # runs on the full width's, TPMla.fabric -- so only the shared phases are named)
             mts = tuple(sorted({cu, ch})) if not G else tuple(sorted(t for t in {cu, ch} if t <= 4 or t == be.chunk))
-            self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=mts, share=share, sparse=self.mtp_sparse)
+            self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=mts, share=dsa_tp, sparse=self.mtp_sparse)
             l1_debug("after MtpLayer", self.mesh)
             # (+ scratch pages past the request blocks: the TP prefill's in-trace MTP fill writes an unarmed chunk's
             # rows there -- TPPrefill._mtp_write; one bucket's worth of the largest GLM53_PREFILL_BUCKETS bucket)
