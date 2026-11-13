@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
+from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural
 
 SP_AXIS, TP_AXIS = 0, 1
@@ -176,6 +177,19 @@ def build_stack(
         sparse_kv_cache_format=adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
         tp_shard_kv=True,
     )
+    if is_first_rank and first_layer_idx > 0:
+        # The transformer reads a first rank past layer 0 as a capacity probe (PREFILL_PP_LAYER_OFFSET) and
+        # gives it a one-tile random stand-in table, into which every id >= 32 clamps to one row. These windows
+        # are real first ranks that embed their tokens, so they take the layer-0 rank's embedding instead.
+        ttnn.deallocate(transformer.embed.weight)
+        transformer.embed = TtParallelEmbedding(
+            mesh_device=mesh_device,
+            vocab_size=config.vocab_size,
+            emb_dim=config.hidden_size,
+            torch_weight=state_dict["embed_weight"],
+            sp_axis=SP_AXIS,
+            tp_axis=TP_AXIS,
+        )
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=config, params=params)
     transformer.kda_states = caches.kda_states
     return transformer, caches
