@@ -9,6 +9,7 @@ from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
+    DestSync,
     PerfRunType,
 )
 from helpers.param_config import (
@@ -176,6 +177,7 @@ def test_pack_untilize_quasar(
     run_types,
     loop_factor,
     *,
+    block_ct_dim=None,
     is_perf=False,
     perf_report=None,
 ):
@@ -217,7 +219,10 @@ def test_pack_untilize_quasar(
         "formats": formats,
         "templates": [
             generate_input_dim(
-                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+                input_dimensions,
+                input_dimensions,
+                block_ct_dim=block_ct_dim,
+                tile_dimensions=tile_dimensions,
             ),
             DEST_SYNC(dest_sync_mode),
             UNPACKER_ENGINE_SEL(),
@@ -268,6 +273,63 @@ def test_pack_untilize_quasar(
         tile_shape=tile_shape,
     ), "Assert against golden failed"
 
+
+
+MULTI_BLOCK_PACK_UNTILIZE_CASES = [
+    (
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        DestSync.Half,
+        [64, 512],
+        (32, 32),
+        8,
+    ),
+    (
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        DestSync.Half,
+        [4, 512],
+        (2, 32),
+        8,
+    ),
+    (
+        InputOutputFormat(DataFormat.Int32, DataFormat.Int32),
+        DestAccumulation.Yes,
+        DestSync.Half,
+        [64, 256],
+        (32, 32),
+        4,
+    ),
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    multi_block_case=MULTI_BLOCK_PACK_UNTILIZE_CASES,
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
+)
+def test_pack_untilize_quasar_multi_block(
+    multi_block_case,
+    run_types,
+    loop_factor,
+):
+    if len(multi_block_case) == 1 and isinstance(multi_block_case[0], tuple):
+        multi_block_case = multi_block_case[0]
+    (
+        formats,
+        dest_acc,
+        dest_sync_mode,
+        input_dimensions,
+        tile_dimensions,
+        block_ct_dim,
+    ) = multi_block_case
+    test_pack_untilize_quasar(
+        (formats, dest_acc, dest_sync_mode, input_dimensions, tile_dimensions),
+        run_types=run_types,
+        loop_factor=loop_factor,
+        block_ct_dim=block_ct_dim,
+    )
 
 @pytest.mark.quasar
 @parametrize(
