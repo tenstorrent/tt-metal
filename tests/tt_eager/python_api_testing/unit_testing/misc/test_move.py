@@ -180,3 +180,26 @@ def test_move_op_overlap_row_major_unaligned_page_size(device, move_op, buffer_t
     # Regression: a 48 B page (16 mod 32) was rounded differently from the CB's total size.
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
     run_move_op(0, [1, 1, 64, 24], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, mem_config, mem_config, device, move_op)
+
+
+@pytest.mark.parametrize("move_op", MOVE_OPS)
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize("width", [8, 16, 24, 32, 40, 72])
+@pytest.mark.parametrize("extra_rows", [1, 3])
+def test_move_op_overlap_row_major_multi_page_per_core(device, move_op, buffer_type, width, extra_rows):
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+    grid = device.compute_with_storage_grid_size()
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, grid.x * grid.y + extra_rows, width).to(torch.bfloat16)
+
+    dummy = ttnn.from_torch(
+        torch.zeros(TINY_DUMMY, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
+    ttnn.deallocate(dummy)
+
+    output = move_op(tensor, memory_config=mem_config)
+    assert torch.equal(ttnn.to_torch(output).view(torch.int16), torch_input.view(torch.int16))
