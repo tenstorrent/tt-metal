@@ -223,7 +223,7 @@ inline PrefetcherPipe PipeSpaceOwner::MakePipeFor(
         },
         param.receivers);
     spaces_.push_back(CreatePrefetcherPipeSpace(
-        device,
+        device.mesh_command_queue(0),
         PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = receivers,

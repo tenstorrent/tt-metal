@@ -308,7 +308,7 @@ PrefetcherPipes make_prefetcher_pipes(const TestInfo& info, MeshDevice& mesh_dev
     }
     // Kernels are nullified, so nothing moves through a ring: the smallest legal ring, one L1-aligned entry, is enough.
     prefetcher_pipes.space = tt_metal::experimental::CreatePrefetcherPipeSpace(
-        mesh_device,
+        mesh_device.mesh_command_queue(0),
         {.sender_cores = senders,
          .receiver_domain = prefetcher_pipes.receivers,
          .ring_size = tt_metal::hal::get_l1_alignment(),

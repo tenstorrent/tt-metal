@@ -96,7 +96,7 @@ PipeSet make_pipe_set(
         max_receivers = std::max(max_receivers, receivers.num_cores());
     }
     set.space.emplace(experimental::CreatePrefetcherPipeSpace(
-        mesh_device,
+        mesh_device.mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = {},
             .num_dram_senders = static_cast<uint32_t>(2 * bank_to_receivers.size()),
@@ -508,7 +508,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, RejectsDuplicateBank) {
 TEST_F(PrefetcherPipeDramSenderFixture, InvalidBatchLeavesSpaceReusable) {
     const CoreRangeSet receiver_domain(CoreRange({0, 0}, {1, 0}));
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device_,
+        mesh_device_->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = {},
             .num_dram_senders = 2,
@@ -535,7 +535,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, InvalidBatchLeavesSpaceReusable) {
 
 TEST_F(PrefetcherPipeDramSenderFixture, DirectSenderReservationRejectsInvalidDramCoordinate) {
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device_,
+        mesh_device_->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = {},
             .num_dram_senders = 1,

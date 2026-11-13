@@ -129,7 +129,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device,
+        mesh_device->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -548,7 +548,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     auto space = experimental::CreatePrefetcherPipeSpace(
-        mesh_device,
+        mesh_device.mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -576,7 +576,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1AcrossSubmeshes) 
     // A pipe reserves persistent L1 on the mesh it is created on; the other mesh must still see it.
     for (const auto& [owner, viewer] : {std::pair{parent, submesh}, std::pair{submesh, parent}}) {
         auto space = experimental::CreatePrefetcherPipeSpace(
-            *owner,
+            owner->mesh_command_queue(0),
             experimental::PrefetcherPipeSpaceConfig{
                 .sender_cores = CoreRangeSet(CoreRange(sender)),
                 .receiver_domain = CoreRangeSet(CoreRange(receiver)),

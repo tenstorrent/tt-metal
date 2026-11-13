@@ -224,6 +224,33 @@ def test_spaces_created_together_share_addresses(device, expect_error):
         assert (pipe.buffer_address(), pipe.config_address()) == shared_addresses
 
 
+@pytest.mark.requires_grid_size((2, 1))
+def test_spaces_use_the_selected_command_queue(device, expect_error):
+    """A space keeps the queue selected with ttnn.command_queue. The default device has a single command queue, so
+    selecting queue 1 must fail the lookup rather than silently use queue 0."""
+    L1Source = ttnn.experimental.PrefetcherPipeL1Source
+    config = ttnn.experimental.PrefetcherPipeSpaceConfig(
+        sender_cores=_cores((0, 0)),
+        receiver_domain=_cores((1, 0)),
+        ring_size=RING_SIZE,
+        max_receivers_per_pipe=1,
+        l1_source=L1Source.Allocator,
+    )
+
+    with ttnn.command_queue(1):
+        with expect_error(RuntimeError, "out of range"):
+            ttnn.experimental.create_prefetcher_pipe_space(
+                device,
+                sender_cores=_cores((0, 0)),
+                receiver_domain=_cores((1, 0)),
+                ring_size=RING_SIZE,
+                max_receivers_per_pipe=1,
+                l1_source=L1Source.Allocator,
+            )
+        with expect_error(RuntimeError, "out of range"):
+            ttnn.experimental.create_prefetcher_pipe_spaces(device, [config])
+
+
 @pytest.mark.requires_grid_size((3, 1))
 def test_carve_rejects(device, expect_error):
     # Space over (0,0) sender and (1,0)-(2,0) receivers, one receiver per pipe.
