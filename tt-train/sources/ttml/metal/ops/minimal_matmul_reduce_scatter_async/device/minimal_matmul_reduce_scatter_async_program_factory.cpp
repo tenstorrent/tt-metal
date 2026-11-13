@@ -35,6 +35,7 @@ constexpr uint32_t kRtLandedSemIdx = 14;
 constexpr uint32_t kRtSenderBufferAddrIdx = 0;
 constexpr uint32_t kRtSenderLandedSemIdx = 1;
 constexpr uint32_t kMaxSendSlots = 16;
+constexpr uint32_t kSendSlotHeaderBytes = 192;
 constexpr uint32_t kSendSlotAlignBytes = 64;
 constexpr uint32_t kReadyStrideBytes = 16;
 
@@ -240,7 +241,18 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     const auto max_producers = static_cast<uint32_t>(producers_by_link.front().size());
     const uint32_t ready_bytes = max_producers * kReadyStrideBytes;
     const uint32_t tiles_per_packet = send_tiles_per_packet(out_tile_size);
-    const uint64_t slot_bytes = static_cast<uint64_t>(tiles_per_packet) * out_tile_size;
+    TT_FATAL(
+        tiles_per_packet >= 2,
+        "The fabric packet payload ({} B) must hold at least 2 output tiles of {} B",
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        out_tile_size);
+    const uint64_t slot_bytes = kSendSlotHeaderBytes + (static_cast<uint64_t>(tiles_per_packet) * out_tile_size);
+    TT_FATAL(
+        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() <= kSendSlotHeaderBytes &&
+            slot_bytes % kSendSlotAlignBytes == 0,
+        "Fabric packet header ({} B) or send slot ({} B) does not fit the senders' slot layout",
+        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
+        slot_bytes);
     const uint64_t matmul_cb_bytes = tt::tt_metal::calculate_total_cb_size(program);
     const uint64_t free_l1 = ttml::metal::available_l1_bytes(*device);
     TT_FATAL(
@@ -573,7 +585,7 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
                 out_tile_size,
                 tiles_per_packet,
                 grid_send_slots,
-                tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+                kSendSlotHeaderBytes,
                 N_tiles,
                 layout.slice_tiles,
                 layout.m_piece,

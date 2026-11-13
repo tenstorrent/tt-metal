@@ -4,18 +4,18 @@
 
 #include <stdint.h>
 
-#include "api/core_local_mem.h"
+#include <array>
+#include <type_traits>
+
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_common.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "dataflow_common.hpp"
-#include "tt_metal/fabric/hw/inc/api_common.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 
 namespace {
+namespace fabric_api = tt::tt_fabric::linear::experimental;
+
 constexpr uint32_t kReadyStrideBytes = 16;
 
 volatile tt_l1_ptr uint32_t* ready_counter(uint32_t ready_base, uint32_t producer) {
@@ -132,16 +132,56 @@ private:
     bool done_ = false;
 };
 
+using Header = volatile tt_l1_ptr PACKET_HEADER_TYPE*;
+
+template <uint32_t tile_size, uint32_t tiles_per_packet, uint32_t header_bytes>
+struct SendSlots {
+    static constexpr uint32_t kSlotBytes = header_bytes + (tiles_per_packet * tile_size);
+    static_assert(sizeof(PACKET_HEADER_TYPE) <= header_bytes);
+
+    uint32_t base;
+
+    uint32_t payload(uint32_t slot) const {
+        return base + (slot * kSlotBytes) + header_bytes;
+    }
+    Header header(uint32_t slot) const {
+        return reinterpret_cast<Header>(payload(slot) - sizeof(PACKET_HEADER_TYPE));
+    }
+    static uint32_t packet_bytes(uint32_t tiles) {
+        return sizeof(PACKET_HEADER_TYPE) + (tiles * tile_size);
+    }
+};
+
+constexpr uint32_t kFusedIncMaxTiles = NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS;
+
+template <uint32_t tile_size>
+void set_scatter(Header header, uint32_t count, uint64_t landed) {
+    using tt::tt_fabric::NocScatterWriteChunkEncoding;
+    auto& scatter = header->command_fields.unicast_scatter_write;
+    for (uint32_t i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1; i++) {
+        scatter.chunk_size[i] = tile_size;
+    }
+    uint32_t encoding =
+        tt::tt_fabric::expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
+    if (landed != 0) {
+        scatter.noc_address[count] = landed;
+        scatter.chunk_size[count] = 1;
+        encoding = (encoding & ~(0x3U << (2 * count))) |
+                   (NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH << (2 * count));
+    }
+    scatter.chunk_encoding = static_cast<uint8_t>(encoding);
+    scatter.chunk_count = static_cast<uint8_t>(count + (landed != 0 ? 1 : 0));
+    header->payload_size_bytes = static_cast<uint16_t>(count * tile_size);
+}
 }  // namespace
 
 void kernel_main() {
-    Noc noc;
     constexpr uint32_t slots_cb = tt::CBIndex::c_4;
     constexpr uint32_t ready_cb = tt::CBIndex::c_6;
     constexpr uint32_t tile_size = get_compile_time_arg_val(0);
     constexpr uint32_t tiles_per_packet = get_compile_time_arg_val(1);
     constexpr uint32_t slot_packets = get_compile_time_arg_val(2);
-    constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t slot_header_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t slice_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t m_piece = get_compile_time_arg_val(6);
@@ -151,11 +191,12 @@ void kernel_main() {
     constexpr uint32_t dir = get_compile_time_arg_val(10);
     constexpr uint32_t ring_size = get_compile_time_arg_val(11);
     constexpr uint32_t go_semaphore_id = get_compile_time_arg_val(12);
-    constexpr uint32_t packet_bytes = tiles_per_packet * tile_size;
     constexpr uint32_t packets_per_batch = slot_packets / 2;
     constexpr ccl_routing_utils::line_unicast_route_info_t route =
         ccl_routing_utils::get_line_unicast_route_info_from_args<13>();
     constexpr auto buffer_args = TensorAccessorArgs<13 + ccl_routing_utils::num_line_unicast_args>();
+    static_assert(tiles_per_packet >= NOC_SCATTER_WRITE_MIN_CHUNKS && tiles_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+    constexpr bool trailing_incs = tiles_per_packet > kFusedIncMaxTiles;
 
     size_t argidx = 0;
     const uint32_t buffer_addr = get_arg_val<uint32_t>(argidx++);
@@ -168,8 +209,9 @@ void kernel_main() {
 
     const auto buffer = TensorAccessor(buffer_args, buffer_addr, tile_size);
     const uint32_t ready_base = CircularBuffer(ready_cb).get_write_ptr();
+    using Slots = SendSlots<tile_size, tiles_per_packet, slot_header_bytes>;
     constexpr uint32_t kAlign = NOC_DRAM_READ_ALIGNMENT_BYTES;
-    const uint32_t slots_base = (CircularBuffer(slots_cb).get_write_ptr() + kAlign - 1) & ~(kAlign - 1);
+    const Slots slots{.base = (CircularBuffer(slots_cb).get_write_ptr() + kAlign - 1) & ~(kAlign - 1)};
 
     for (uint32_t p = 0; p < num_producers; p++) {
         *ready_counter(ready_base, p) = 0;
@@ -180,76 +222,116 @@ void kernel_main() {
             get_noc_addr(producers[p].noc_x, producers[p].noc_y, go_sem_addr), ready_base + (p * kReadyStrideBytes));
     }
 
-    FabricWriter<tile_size, packet_size_bytes, tt::tt_fabric::WorkerToFabricEdmSender> fabric(
-        noc, &connection.get(0).sender, route.dst_chip_id, route.dst_mesh_id);
+    auto route_header = [&](Header header) {
+        if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
+            fabric_set_unicast_route(
+                reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(header),
+                route.dst_chip_id,
+                route.dst_mesh_id);
+        }
+    };
+    for (uint32_t s = 0; s < slot_packets; s++) {
+        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::None>(
+            slots.header(s), 1, nullptr, 0);
+        route_header(slots.header(s));
+    }
+    Header inc_header = nullptr;
+    if constexpr (trailing_incs) {
+        inc_header = PacketHeaderPool::allocate_header(1);
+        fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            inc_header, 1, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+        route_header(inc_header);
+    }
+
+    auto& router = connection.get(0).sender;
+    router.setup_stateful_send_cmd_bufs();
+    uint32_t free_router_slots = 0;
+    auto send_packet = [&](uint32_t header_addr, uint32_t bytes) {
+        while (free_router_slots == 0) {
+            free_router_slots = router.get_num_free_write_slots();
+        }
+        router.send_current_slot_stateful_non_blocking_from_address(header_addr, bytes);
+        --free_router_slots;
+    };
 
     using Cursor = UnitCursor<ring_size, slice_tiles, m_piece, M_blocks, N_blocks, num_dirs, dir, tiles_per_packet>;
     Cursor reader(producers, num_producers, ring_index, N_tiles);
-    Cursor sender(producers, num_producers, ring_index, N_tiles);
+    std::array<uint32_t, slot_packets> slot_tiles{};
+    std::array<uint64_t, trailing_incs ? slot_packets : 1> slot_trailing_inc{};
     uint32_t read_slot = 0;
     uint32_t send_slot = 0;
-    uint32_t unsent = 0;
 
-    auto read_batch = [&]() -> uint32_t {
+    auto read_batch = [&](uint32_t unsent) -> uint32_t {
         uint32_t issued = 0;
-        while (!reader.done() && issued < packets_per_batch && unsent < slot_packets) {
+        while (!reader.done() && issued < packets_per_batch && unsent + issued < slot_packets) {
             if (reader.unit_begin()) {
                 invalidate_l1_cache();
                 if (*ready_counter(ready_base, reader.producer()) < reader.ready_target()) {
                     break;
                 }
             }
-            uint32_t l1 = slots_base + (read_slot * packet_bytes);
+            const Header header = slots.header(read_slot);
+            auto& scatter = header->command_fields.unicast_scatter_write;
             const uint32_t count = reader.count();
+            uint32_t l1 = slots.payload(read_slot);
             for (uint32_t i = 0; i < count; ++i, l1 += tile_size) {
-                noc.async_read(buffer, CoreLocalMem<uint32_t>(l1), tile_size, {.page_id = reader.page()}, {});
+                const uint32_t page = reader.page();
+                noc_async_read_one_packet(buffer.get_noc_addr(page), l1, tile_size);
+                scatter.noc_address[i] = buffer.get_noc_addr(page, 0, edm_to_local_chip_noc);
                 reader.next_tile();
             }
-            read_slot = (read_slot + 1) % slot_packets;
-            ++unsent;
-            ++issued;
+            uint64_t landed_inc = 0;
+            if (reader.unit_end()) {
+                const auto& producer = reader.producer_args();
+                landed_inc = safe_get_noc_addr(producer.noc_x, producer.noc_y, landed_sem_addr, edm_to_local_chip_noc);
+            }
+            if constexpr (trailing_incs) {
+                slot_trailing_inc[read_slot] = count > kFusedIncMaxTiles ? landed_inc : 0;
+                if (count > kFusedIncMaxTiles) {
+                    landed_inc = 0;
+                }
+            }
+            set_scatter<tile_size>(header, count, landed_inc);
+            slot_tiles[read_slot] = count;
             reader.next_packet();
+            read_slot = read_slot + 1 == slot_packets ? 0 : read_slot + 1;
+            ++issued;
         }
         return issued;
     };
 
-    auto send_batch = [&](uint32_t n) {
-        for (; n > 0; --n) {
-            uint32_t l1 = slots_base + (send_slot * packet_bytes);
-            const uint32_t count = sender.count();
-            for (uint32_t i = 0; i < count; ++i, l1 += tile_size) {
-                fabric.async_write(
-                    l1, tt::tt_fabric::linear::addrgen_detail::get_noc_address(buffer, sender.page(), 0));
-                sender.next_tile();
+    uint32_t landed = 0;
+    while (true) {
+        if (landed == 0) {
+            if (reader.done()) {
+                break;
             }
-            fabric.async_writes_flushed();
-            if (sender.unit_end()) {
-                const auto& producer = sender.producer_args();
-                fabric.atomic_inc(
-                    safe_get_noc_addr(
-                        static_cast<uint8_t>(producer.noc_x), static_cast<uint8_t>(producer.noc_y), landed_sem_addr, 0),
-                    1);
-            }
-            send_slot = (send_slot + 1) % slot_packets;
-            --unsent;
-            sender.next_packet();
-        }
-    };
-
-    uint32_t landed = read_batch();
-    noc.async_read_barrier();
-    while (!sender.done()) {
-        const uint32_t in_flight = read_batch();
-        send_batch(landed);
-        noc.async_read_barrier();
-        landed = in_flight;
-        if (landed == 0 && !sender.done()) {
             noc_semaphore_wait_min(ready_counter(ready_base, reader.producer()), reader.ready_target());
+            noc_async_writes_flushed();
+            landed = read_batch(0);
+            noc_async_read_barrier();
         }
+        noc_async_writes_flushed();
+        const uint32_t in_flight = read_batch(landed);
+        for (uint32_t n = landed; n > 0; --n) {
+            send_packet(
+                reinterpret_cast<uint32_t>(slots.header(send_slot)), Slots::packet_bytes(slot_tiles[send_slot]));
+            if constexpr (trailing_incs) {
+                if (slot_trailing_inc[send_slot] != 0) {
+                    noc_async_writes_flushed();
+                    inc_header->command_fields.unicast_seminc.noc_address = slot_trailing_inc[send_slot];
+                    send_packet(reinterpret_cast<uint32_t>(inc_header), sizeof(PACKET_HEADER_TYPE));
+                }
+            }
+            send_slot = send_slot + 1 == slot_packets ? 0 : send_slot + 1;
+        }
+        noc_async_read_barrier();
+        landed = in_flight;
     }
 
-    noc.async_write_barrier();
-    noc.async_atomic_barrier();
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
     tt::tt_fabric::common::experimental::close_connections(connection);
-    noc.async_write_barrier();
+    noc_async_write_barrier();
 }
