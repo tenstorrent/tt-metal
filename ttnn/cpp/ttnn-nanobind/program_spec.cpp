@@ -21,8 +21,8 @@
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -62,8 +62,8 @@ struct type_caster<ttsl::StrongType<std::string, Tag>> {
 
 // Kernel argument values are uint32_t on the device; Python passes and reads them as int.
 template <>
-struct type_caster<tt::tt_metal::experimental::ArgValue> {
-    NB_TYPE_CASTER(tt::tt_metal::experimental::ArgValue, const_name("int"))
+struct type_caster<tt::tt_metal::ArgValue> {
+    NB_TYPE_CASTER(tt::tt_metal::ArgValue, const_name("int"))
 
     bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
         make_caster<uint32_t> caster;
@@ -74,28 +74,26 @@ struct type_caster<tt::tt_metal::experimental::ArgValue> {
         return true;
     }
 
-    static handle from_cpp(
-        const tt::tt_metal::experimental::ArgValue& arg, rv_policy policy, cleanup_list* cleanup) noexcept {
+    static handle from_cpp(const tt::tt_metal::ArgValue& arg, rv_policy policy, cleanup_list* cleanup) noexcept {
         return make_caster<uint32_t>::from_cpp(arg.to_uint32(), policy, cleanup);
     }
 };
 
 // An array argument's value is a list of ints in Python.
 template <>
-struct type_caster<tt::tt_metal::experimental::ArrayArgValue> {
-    NB_TYPE_CASTER(tt::tt_metal::experimental::ArrayArgValue, const_name("list[int]"))
+struct type_caster<tt::tt_metal::ArrayArgValue> {
+    NB_TYPE_CASTER(tt::tt_metal::ArrayArgValue, const_name("list[int]"))
 
     bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
         make_caster<std::vector<uint32_t>> caster;
         if (!caster.from_python(src, flags, cleanup)) {
             return false;
         }
-        value = tt::tt_metal::experimental::ArrayArgValue(caster.value);
+        value = tt::tt_metal::ArrayArgValue(caster.value);
         return true;
     }
 
-    static handle from_cpp(
-        const tt::tt_metal::experimental::ArrayArgValue& array, rv_policy policy, cleanup_list* cleanup) noexcept {
+    static handle from_cpp(const tt::tt_metal::ArrayArgValue& array, rv_policy policy, cleanup_list* cleanup) noexcept {
         std::vector<uint32_t> values;
         values.reserve(array.size());
         for (std::size_t i = 0; i < array.size(); ++i) {
@@ -107,9 +105,8 @@ struct type_caster<tt::tt_metal::experimental::ArrayArgValue> {
 
 // Table<K, V> is a map with unique keys; Python passes and reads it as a dict.
 template <typename K, typename V>
-struct type_caster<tt::tt_metal::experimental::Table<K, V>>
-    : dict_caster<tt::tt_metal::experimental::Table<K, V>, K, V> {
-    using Base = dict_caster<tt::tt_metal::experimental::Table<K, V>, K, V>;
+struct type_caster<tt::tt_metal::Table<K, V>> : dict_caster<tt::tt_metal::Table<K, V>, K, V> {
+    using Base = dict_caster<tt::tt_metal::Table<K, V>, K, V>;
 
     bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
         if (!Base::from_python(src, flags, cleanup)) {
@@ -131,7 +128,7 @@ NAMESPACE_END(NB_NAMESPACE)
 
 namespace ttnn::program_spec {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace {
 
@@ -292,21 +289,21 @@ void bind_tensor_parameter(nb::module_& mod) {
 }
 
 void bind_resources(nb::module_& mod) {
-    const m2::DFBAdvancedOptions dfb_advanced_defaults{};
-    nb::class_<m2::DFBAdvancedOptions>(
+    const m2::experimental::DFBAdvancedOptions dfb_advanced_defaults{};
+    nb::class_<m2::experimental::DFBAdvancedOptions>(
         mod,
         "DFBAdvancedOptions",
         "Rarely used DataflowBufferSpec options. Python has alias_with only; the others are C++ only. See "
         "advanced_options.hpp.")
         .def(
             "__init__",
-            [](m2::DFBAdvancedOptions* self, std::vector<m2::DFBSpecName> alias_with) {
-                new (self) m2::DFBAdvancedOptions{};
+            [](m2::experimental::DFBAdvancedOptions* self, std::vector<m2::DFBSpecName> alias_with) {
+                new (self) m2::experimental::DFBAdvancedOptions{};
                 self->alias_with = std::move(alias_with);
             },
             nb::kw_only(),
             nb::arg("alias_with") = dfb_advanced_defaults.alias_with)
-        .def_rw("alias_with", &m2::DFBAdvancedOptions::alias_with, COPY);
+        .def_rw("alias_with", &m2::experimental::DFBAdvancedOptions::alias_with, COPY);
 
     const m2::DataflowBufferSpec dfb_defaults{};
     nb::class_<m2::DataflowBufferSpec>(
@@ -327,7 +324,7 @@ void bind_resources(nb::module_& mod) {
                std::optional<ttnn::DataType> data_format_metadata,
                std::optional<tt::tt_metal::Tile> tile_format_metadata,
                std::optional<m2::TensorParamName> borrowed_from,
-               m2::DFBAdvancedOptions advanced_options) {
+               m2::experimental::DFBAdvancedOptions advanced_options) {
                 new (self) m2::DataflowBufferSpec{
                     .unique_id = std::move(unique_id),
                     .entry_size = entry_size,
