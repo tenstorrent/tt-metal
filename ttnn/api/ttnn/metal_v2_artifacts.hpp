@@ -35,6 +35,13 @@ struct ProgramArtifacts {
     std::vector<tt::tt_metal::MeshTensor> op_owned_tensors;
 };
 
+// One device's values of named kernel run args (runtime or common, scalar or array) that differ from the
+// range's base run args. Only named kernel run args: no tensor args, DFB overrides, varargs or advanced args.
+struct DeviceRunArgs {
+    ttnn::MeshCoordinate device;
+    tt::tt_metal::experimental::ProgramRunArgs values;
+};
+
 // Build product of a MeshWorkloadSpecFactoryConcept factory: the workload-scoped resources the
 // factory allocates, plus the per-coordinate programs that reference them. Splits the same way
 // tt::tt_metal::WorkloadDescriptor does, for the same reasons.
@@ -47,8 +54,19 @@ struct MeshWorkloadArtifacts {
         ttnn::MeshCoordinateRange range;
         tt::tt_metal::experimental::ProgramSpec spec;
         tt::tt_metal::experimental::ProgramRunArgs run_params;
+        // Per-device values of named kernel run args (factories with `uses_per_device_run_args`, see
+        // MeshWorkloadSpecFactoryAdapter): the range runs one program, and each listed device gets these values
+        // on top of run_params. Every arg listed here must also be listed in run_params.
+        std::vector<DeviceRunArgs> per_device_run_params;
     };
     std::vector<PerCoordProgram> programs;
+};
+
+// Cache-hit product of a MeshWorkloadSpecFactoryConcept factory with `uses_per_device_run_args`: the run args of
+// every device of the range, and the per-device values of the devices that differ (see PerCoordProgram).
+struct RangeRunArgs {
+    tt::tt_metal::experimental::ProgramRunArgs base;
+    std::vector<DeviceRunArgs> per_device;
 };
 
 }  // namespace ttnn::device_operation

@@ -27,6 +27,7 @@ set(TTNN_CORE_SRCS
     core/global_circular_buffer.cpp
     core/global_semaphore.cpp
     core/per_device_program_merge.cpp
+    core/per_device_run_args.cpp
     core/operation.cpp
     core/graph/graph_processor.cpp
     core/graph/graph_trace_utils.cpp
@@ -231,6 +232,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/metal_v2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
+    api/ttnn/per_device_run_args.hpp
     api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/d2d_pipeline_descriptor.hpp
