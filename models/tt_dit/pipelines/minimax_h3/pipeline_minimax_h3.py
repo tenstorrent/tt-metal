@@ -3119,6 +3119,10 @@ class MiniMaxH3Pipeline:
             self._warm_vision_merge_lengths(seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host)
 
     def _warm_vision_merge_lengths(self, seq_lens, tower_sizes, encoder, tower, merge, hidden, zeros, host) -> None:
+        # The text rows are sharded on the text encoder's SP factor (merge_vision multiplies the shard back by it), which
+        # differs from the DiT's when the encoder runs on swapped mesh axes (MINIMAX_H3_ENCODER_TP8).
+        encoder_sp = self.encoder_parallel_config.sequence_parallel
+        encoder_sp_factor = encoder_sp.factor if encoder_sp is not None else 1
         for seq_len in tqdm.tqdm(
             seq_lens,
             desc="Warming vision merge sequence lengths",
@@ -3126,7 +3130,7 @@ class MiniMaxH3Pipeline:
             file=sys.stderr,
             bar_format=_TQDM_BAR_FORMAT,
         ):
-            text = zeros((1, seq_len // self.sp_factor, hidden))
+            text = zeros((1, seq_len // encoder_sp_factor, hidden))
             below = 0
             for size in tower_sizes:
                 if below // merge >= seq_len:
