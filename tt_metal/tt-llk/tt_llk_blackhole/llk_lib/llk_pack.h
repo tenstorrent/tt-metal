@@ -663,6 +663,9 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     ckernel::ckernel_template::run();
 
+    // Every pack program leaves Z at 0 (the default MOP's last PACR, ADDR_MOD_1, clears it; the others reset it) and the
+    // pack dest init resets it at kernel start, so the byte-wise form leaves the reset out.
+    if constexpr (!(rmw_dest && pack_mode == PackMode::Default))
     {
         T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
         TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
