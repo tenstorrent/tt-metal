@@ -16,7 +16,7 @@ This suite is built in two stacked PRs. This document is the map; each PR fills 
 ## Part 1 — tt-run, the launcher (PR #65121, base)
 
 *Does tt-run address each MPI/launcher failure, and does the MPI install meet what tt-run needs?* The fault rows
-launch the raw C++ probe (`sanity_mpi_probe.cpp`) **through tt-run** (no ttnn import, seconds per row) and assert
+launch the raw C++ probe (`sanity_mpi_probe.cpp`) **through tt-run** (no heavy Python import, seconds per row) and assert
 tt-run ends the job correctly: the right exit code, every rank gone, nothing left in `/dev/shm`. The multi-host
 group (D) runs the same probe across hosts on the production `mpirun` line. The install group (E) queries the
 OpenMPI / PRRTE build directly. Files: `test_teardown_sanity_mpi.py`, `sanity_mpi_probe.cpp`,
@@ -48,7 +48,7 @@ never a hang, never a leak — whatever the transport config does.
 | `test_scripts_tcp_only` | static check, no job launched | every multihost script in the repo carries `--mca btl self,tcp` |
 
 ### Group C — tt-run unit tests
-`tests/ttnn/distributed/test_ttrun.py`, class `TestJobOwnership`: the launcher logic in isolation — the clock is
+`test_ttrun.py` (under `tests/.../distributed/`), class `TestJobOwnership`: the launcher logic in isolation — the clock is
 off by default, a user `--timeout` in `--mpi-args` is passed through, the timeout exit code is preserved, signals
 are forwarded, a leftover rank makes the job fail, and the pre-launch stale-segment sweep removes an unmapped
 `/dev/shm` segment while keeping a mapped one.
