@@ -43,7 +43,7 @@ template <
     bool zero_output         = false,
     bool skip_addrmod_config = false,
     bool skip_packer_strides = false,
-    bool live                = false>
+    std::uint32_t live       = 0>
 inline void llk_pack_init_impl(
     const std::uint32_t pack_src_reg_format,
     const std::uint32_t face_r_dim,

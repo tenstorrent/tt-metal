@@ -444,6 +444,11 @@ inline std::uint32_t llk_pack_context()
 // inits write pack_other_program_seen, so kernels without one fold the test, and without llk_pack_block keep no flag.
 [[maybe_unused]] static bool pack_other_program_seen = false;
 [[maybe_unused]] static bool pack_other_program      = false;
+// A default init with a MOP other than hw_configure's (zero output, more than one tile) wrote it: inits rewrite it from then on.
+[[maybe_unused]] static bool pack_mop_dirty = false;
+// The packer input width (bytes) whose default strides are live, 0 for another program's: read only by the default inits of a
+// kernel whose pack CBs differ in width (llk_pack_width_single), so elsewhere its stores drop.
+[[maybe_unused]] static std::uint8_t pack_strides_width = 0;
 #define LLK_PACK_OTHER_PROGRAM_SET() (pack_other_program_seen = true, pack_other_program = true)
 #define LLK_PACK_OTHER_PROGRAM_CLEAR() (pack_other_program = false)
 #define LLK_PACK_OTHER_PROGRAM_ACTIVE() (pack_other_program_seen && pack_other_program)
@@ -476,12 +481,13 @@ inline constexpr PackMode llk_pack_default_mode = PackMode::Default;
 template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true, bool zero_ch1 = false, bool ch1_u2d = false>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
-    // The state store first: behind the config writes it waits for them.
+    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
+    // The state stores first: behind the config writes they wait for them.
     if constexpr (store_state)
     {
         llk_pack_state_store<zero_ch1 || (ch1_u2d && pack_strides_u2d<pack_mode>)>(reconfigured ? 0x100 : 0);
+        pack_strides_width = pack_mode == PackMode::Default ? x_stride : 0;
     }
-    std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 
@@ -750,9 +756,9 @@ constexpr std::uint32_t llk_pack_reconfig_skip_all(
 template <int tag>
 inline constexpr bool pack_init_writer = false;
 
-// Every pack input of one datum width and no other writer of the default program's address modes, strides or X counter
-// linked: hw_configure leaves them live and a default init programs the MOP alone. Programs that mark themselves
-// (LLK_PACK_OTHER_PROGRAM_SET) are checked at run time. dep: a template argument of the caller, so the tags are read at
+// No other writer of the default program's address modes, strides or X counter linked: hw_configure leaves the address
+// modes and X counter live, and a default init writes the strides only where they differ (llk_pack_width_single, else
+// pack_strides_width). Programs that mark themselves (LLK_PACK_OTHER_PROGRAM_SET) are checked at run time. dep: a template argument of the caller, so the tags are read at
 // its instantiation.
 template <auto dep, DstSync sync, std::size_t n>
 constexpr bool llk_pack_init_live(const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n])
@@ -763,6 +769,20 @@ constexpr bool llk_pack_init_live(const unsigned char (&pack_src_format)[n], con
     {
         return false;
     }
+    for (std::size_t i = 0; i < n; i++)
+    {
+        if (pack_src_format[i] != to_underlying(DataFormat::Invalid) && pack_dst_format[i] != to_underlying(DataFormat::Invalid))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Every pack CB of one packer input width: the strides hw_configure wrote stay those of every default init.
+template <std::size_t n>
+constexpr bool llk_pack_width_single(const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n])
+{
     bool any            = false;
     std::uint32_t size0 = 0;
     for (std::size_t i = 0; i < n; i++)
@@ -778,6 +798,38 @@ constexpr bool llk_pack_init_live(const unsigned char (&pack_src_format)[n], con
             size0 = datum_size_in_bytes(src);
         }
         else if (datum_size_in_bytes(src) != size0)
+        {
+            return false;
+        }
+    }
+    return any;
+}
+
+// llk_pack_init_live and every pack CB of one face height and face count, with no other MOP writer linked (pack_init_writer<3>,
+// the contiguous block MOP): hw_configure's default MOP stays live too, so a default init of one tile writes no MOP.
+template <auto dep, DstSync sync, std::size_t n, typename F, typename N>
+constexpr bool llk_pack_mop_live(
+    const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n], const F (&face_r_dim)[n], const N (&num_faces)[n])
+{
+    if (!llk_pack_init_live<dep, sync>(pack_src_format, pack_dst_format) || pack_init_writer<3>)
+    {
+        return false;
+    }
+    bool any            = false;
+    std::uint32_t face0 = 0, faces0 = 0;
+    for (std::size_t i = 0; i < n; i++)
+    {
+        if (pack_src_format[i] == to_underlying(DataFormat::Invalid) || pack_dst_format[i] == to_underlying(DataFormat::Invalid))
+        {
+            continue;
+        }
+        if (!any)
+        {
+            any    = true;
+            face0  = face_r_dim[i];
+            faces0 = num_faces[i];
+        }
+        else if (face_r_dim[i] != face0 || num_faces[i] != faces0)
         {
             return false;
         }
@@ -998,6 +1050,10 @@ inline void reconfig_packer_data_format_and_state(
     const bool partial_face)
 {
     reconfig_packer_data_format<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES))
+    {
+        pack_strides_width = datum_size_in_bytes(pack_src_format);
+    }
     llk_pack_state_store<!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES) && is_fp32_dest_acc_en && pack_strides_u2d<llk_pack_default_mode<skip>>>(0x100);
 }
 
@@ -1222,6 +1278,10 @@ TT_ALWAYS_INLINE void reconfig_packer_data_format_imm_and_state()
         pack_cfg_rmw_imm<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32, zwstride_mask, pack_cfg_zwstride_word(pack_src_format)>();
     }
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    if constexpr (strides_full || ystride_mask != 0 || zwstride_mask != 0)
+    {
+        pack_strides_width = datum_size_in_bytes(pack_src_format);
+    }
     llk_pack_state_store<strides_full && is_fp32_dest_acc_en && pack_strides_u2d<llk_pack_default_mode<format_mask>>>(0x100);
 }
 

@@ -14,6 +14,13 @@
 #include "llk_defs.h"
 #include "llk_pack_common.h"
 
+// Writes a MOP of its own: default inits keep writing theirs.
+namespace ckernel::packer
+{
+template <>
+inline constexpr bool pack_init_writer<3> = true;
+} // namespace ckernel::packer
+
 using namespace ckernel;
 using namespace ckernel::packer;
 

@@ -42,6 +42,15 @@ inline void llk_pack_wait_fp32_dest_acc(bool enable) {
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  pack_output         Output circular buffer / operand index.
  */
+// llk_pack_init_live for this kernel: CBs of different widths keep the full init at half sync with fp32 DEST and an unpack to
+// DEST, the contention class. dep: a template argument of the caller.
+template <auto dep, DstSync sync = DST_SYNC_MODE>
+constexpr bool llk_pack_init_live_kernel() {
+    return ckernel::packer::llk_pack_init_live<dep, sync>(pack_src_format, pack_dst_format) &&
+           (ckernel::packer::llk_pack_width_single(pack_src_format, pack_dst_format) ||
+            !(DST_ACCUM_MODE && sync == DstSync::SyncHalf && ckernel::packer::pack_reconfig_u2d<sync>));
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -71,9 +80,13 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
         partial_face,
         0 /*relu_config*/);
     // Where llk_pack_init_live holds, default inits leave the address modes and X counter to this.
-    if constexpr (ckernel::packer::llk_pack_init_live<is_fp32_dest_acc_en, DST_SYNC_MODE>(pack_src_format, pack_dst_format)) {
+    if constexpr (llk_pack_init_live_kernel<is_fp32_dest_acc_en>()) {
         if (!LLK_PACK_OTHER_PROGRAM_ACTIVE()) {
             _llk_pack_configure_addrmod_<PackMode::Default>();
+            if constexpr (ckernel::packer::llk_pack_mop_live<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+                              pack_src_format, pack_dst_format, pack_tile_face_r_dim, pack_tile_num_faces)) {
+                _llk_pack_mop_config_<PackMode::Default, false>(face_r_dim, tile_c_dim, num_faces, 1);
+            }
             TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
         }
     }

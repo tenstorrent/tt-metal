@@ -384,7 +384,7 @@ namespace llk_pack_internal_bh
  * @note mutex_ADC has to match the value given to @ref _llk_pack_ ; guarding only one of the two
  *       leaves unguarded SETADC issues. Supported for PackMode::Default only.
  */
-template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool mutex_ADC, bool live = false>
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool mutex_ADC, std::uint32_t live = 0>
 inline void pack_init_apply(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -398,11 +398,23 @@ inline void pack_init_apply(
         "which the mutex cannot cover");
     static_assert(!live || pack_mode == PackMode::Default, "only the default program is kept live");
 
-    // live (llk_pack_init_live): the address modes, strides and X counter are hw_configure's; the state store stays.
-    if constexpr (live)
+    // live bit 0 (llk_pack_init_live): the address modes, strides and X counter are hw_configure's; the state store stays.
+    // Bit 1 (llk_pack_mop_live): its one-tile MOP too, unless an init wrote another (pack_mop_dirty, set by llk_pack_init).
+    // Bit 2: the CBs differ in width, so the strides are written where pack_strides_width differs.
+    if constexpr (live != 0)
     {
-        llk_pack_state_set_half(0);
-        _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+        if ((live & 4) != 0 && datum_size_in_bytes(pack_src_format) != pack_strides_width)
+        {
+            set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
+        }
+        else
+        {
+            llk_pack_state_set_half(0);
+        }
+        if ((live & 2) == 0 || zero_output || num_tiles != 1 || pack_mop_dirty)
+        {
+            _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+        }
         return;
     }
     // The flag store first: behind the config writes it waits for them.
@@ -538,7 +550,7 @@ template <
     bool skip_addrmod_config = false,
     bool skip_packer_strides = false,
     bool mutex_ADC           = false,
-    bool live                = false>
+    std::uint32_t live       = 0>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
