@@ -18,7 +18,7 @@ import pytest
 from models.demos.common.prefill.adapter import get_adapter
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import MAX_SEQ_LEN, NUM_STAGES, STAGE_MAX_USERS
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import MAX_SEQ_LEN, NUM_STAGES, PP4_MAX_USERS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
@@ -116,4 +116,4 @@ def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
     # stage built as the runner builds it. Provisional until a full four-stage runner run (layer acks and
     # migration export included) serves this many users.
     assert int(k31["PREFILL_MAX_SEQ_LEN"]) == MAX_SEQ_LEN
-    assert int(k31["PREFILL_NUM_USERS"]) == min(STAGE_MAX_USERS.values()) == 76
+    assert int(k31["PREFILL_NUM_USERS"]) == PP4_MAX_USERS
