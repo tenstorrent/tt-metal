@@ -237,21 +237,25 @@ def test_all_reduce_async_one_shot_latency(mesh_device):
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         return tid, prev
 
-    def time_us(tid):
-        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-        t0 = time.perf_counter()
-        for _ in range(REPLAYS):
-            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
-        return (time.perf_counter() - t0) * 1e6 / (ITERS * REPLAYS)
-
-    traces = {name: capture(one_shot) for name, one_shot in (("default", False), ("one_shot", True))}
-    try:
-        best = {name: min(time_us(traces[name][0]) for _ in range(2)) for name in traces}
-    finally:
-        for tid, last in traces.values():
+    def time_us(one_shot):
+        # One trace alive at a time: a buffer allocated after a capture and alive at its replay is unsafe.
+        tid, last = capture(one_shot)
+        try:
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+            t0 = time.perf_counter()
+            for _ in range(REPLAYS):
+                ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            return (time.perf_counter() - t0) * 1e6 / (ITERS * REPLAYS)
+        finally:
             ttnn.release_trace(mesh_device, tid)
             ttnn.deallocate(last)
+
+    runs = {"default": [], "one_shot": []}
+    for _ in range(2):
+        for name, one_shot in (("default", False), ("one_shot", True)):
+            runs[name].append(time_us(one_shot))
+    best = {name: min(v) for name, v in runs.items()}
     logger.info(
         f"all_reduce_async [1,1,32,{DIM}] bf16 + residual, 10x4 cores, 2 links: "
         f"default {best['default']:.2f} us, one_shot {best['one_shot']:.2f} us per call"
