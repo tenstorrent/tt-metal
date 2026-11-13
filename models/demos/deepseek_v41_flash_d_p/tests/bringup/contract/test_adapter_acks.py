@@ -68,7 +68,7 @@ def test_adapter_acks(mesh_device, tmp_path):
 
     R.self_check()
     _, kvc, _ = R.harness()
-    gk = C.GoldenKV(window="drift")  # FIX.19 (owner 2026-11-01): every position vs the official drift on the same rows
+    gk = gk_full = C.GoldenKV(window="drift")  # FIX.19 (owner 2026-11-01): every position vs the official drift
     tokens = gk.tokens().numpy()
     thr = R.state_threshold()
     layers = C.served_prefix()
@@ -88,12 +88,15 @@ def test_adapter_acks(mesh_device, tmp_path):
     def on_layer(layer_idx, chunk):
         acks.append((int(layer_idx), chunk))
         s, lo, hi = cur["slot"], cur["start"], cur["end"]
+        gk = cur.get("gk") or gk_full  # (FIX.28: the decode requests' golden also holds the handoff snapshots)
         reader.where = f"ack layer {layer_idx} slot {s} [{lo}, {hi})"
         for cfg in cfgs:
             if layer_idx not in cfg["layers"]:
                 continue
             recs = reader.records(cfg["name"], s, [layer_idx], lo, hi)
             cur["reads"][(cfg["name"], layer_idx)] = recs
+            if cfg.get("snapshot") and layer_idx in cur.get("unsnap", ()):
+                continue  # (FIX.28: DECODER_SKIP=decode never writes the decoder's snapshot; decode does not read it)
             if cfg.get("snapshot"):  # P.42: the 128-row snapshot at the chunk end's cap
                 cur["fails"] += C.snapshot_failures(
                     kvc, gk, cfg, recs, layer_idx, C.snapshot_cap(hi), thr, f"ack slot {s} [{lo}, {hi})"
@@ -127,7 +130,7 @@ def test_adapter_acks(mesh_device, tmp_path):
     runtime.set_layer_completion_sink(Sink())
     ends = {}
 
-    def run_chunk(k, p):
+    def run_chunk(k, p, **header):
         inp = C.payload_tensor(mesh_device, R.server_payload(tokens[p.start : p.start + R.CHUNK], p.start, p.end))
         n0 = len(acks)
         out = []
@@ -141,6 +144,7 @@ def test_adapter_acks(mesh_device, tmp_path):
                 request_id=k,
                 d2h_service=None,
                 metadata_msg=None,
+                **header,  # (FIX.28: DECODER_SKIP=decode's global_write_start, last=False)
             )
         except Exception as err:
             pytest.fail(f"not built: chunk {k} slot {p.slot} [{p.start}, {p.end}) rejected: {err}", pytrace=False)
@@ -209,6 +213,7 @@ def test_adapter_acks(mesh_device, tmp_path):
         short = R.Push(slot=1, chunk_idx=0, start=0, end=100, is_last=True, turn=len(R.ACK_TURNS[1]))
         cur.update(slot=1, start=0, end=100, turn=short.turn, fails=[], reads={})
         fails += run_chunk(len(plan), short)
+    fails += decoder_skip_requests(mesh_device, runtime, reader, cfgs, layers, cur, run_chunk, kvc, thr)
     if reader.replica_mismatch:
         print(
             f"[adapter acks] replica mismatches (config, slot, layer, pos, chips, group, where): {reader.replica_detail}"
@@ -225,3 +230,80 @@ def test_adapter_acks(mesh_device, tmp_path):
     )
     print(f"[adapter acks] layers {layers}, configs {[c['name'] for c in cfgs]}: {len(fails)} failures")
     assert not fails, "\n".join(fails[:40])
+
+
+def decoder_skip_requests(mesh_device, runtime, reader, cfgs, layers, cur, run_chunk, kvc, thr) -> list[str]:
+    """FIX.28 (OWNER 2026-11-13): DECODER_SKIP=decode (P.51, Kartik's cut) as tt-d-gen sends it, on the model this test
+    built (loaded with the shipped DECODER_SKIP, off; ``use_decoder_skip("decode")``, back to the loaded value after).
+    A prompt of N = MAX_SEQ - 32 golden tokens (the contract's request) stops at P = (N - 128) // 64 x 64
+    (tt/attention.decoder_skip_stop); every chunk [k chunk, min((k + 1) chunk, end)) carries the header's
+    global_write_start = actual_start and last=False. Two requests, cold:
+      slot 0  end = P            (what tt-d-gen sends)
+      slot 1  end = P + 40       (an actual_end not a multiple of 64: serving_contract.md P.49's rule, which P.51 keeps:
+                                  the runtime stops at decode's cap = end // 64 x 64 = P)
+    Checked: every ack as in the default plan (one per layer in order naming the engine's chunk, each layer's history
+    rows of the chunk below its served end vs the golden at the ack, re-read after the chunk: same bytes) with layers
+    0-19's snapshot at the chunk end's cap and layers 20-39's snapshot not read (decode never writes it and does not
+    read it); the served end = decode's cap of the request's end = P; at the end the history caches over [0, P) and
+    layers 0-19's snapshot at P vs the golden (layers without dumps: the golden's handoff snapshot at P, reference/
+    handoff.py; caches.GoldenKV(handoffs=True)), every (config, layer) decode is served compared at least once; and no
+    history record of [P, N) written (the same bytes before and after the request). Metrics decode_acks_failures,
+    decode_served_end, decode_unwritten_records_changed (asserted 0 through the test's failures)."""
+    from models.demos.common.bringup.core import metrics
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import decoder_skip_stop
+
+    model = runtime.model
+    gkd = C.GoldenKV(window="drift", handoffs=True)
+    n = R.MAX_SEQ - 32
+    p_stop = decoder_skip_stop(n)
+    hist = [c for c in cfgs if not c.get("snapshot")]
+    out, changed, checked = [], 0, 0
+    model.use_decoder_skip("decode")
+    try:
+        enc = [i for i in layers if i not in model.decoder]
+        dec = [i for i in layers if i in model.decoder]
+        served = [dict(c, layers=enc) if c.get("snapshot") else c for c in cfgs]
+        for slot, end in ((0, p_stop), (1, p_stop + 40)):
+            cap = C.served_end(end)
+            what = f"decode slot {slot} [0, {end})"
+            if cap != C.snapshot_cap(end) or cap != p_stop:
+                out.append(f"{what}: served end {cap}, decode's cap {C.snapshot_cap(end)}, P {p_stop}")
+            lo_w = -(-cap // 32) * 32
+            before = {c["name"]: reader.records(c["name"], slot, c["layers"], lo_w, n) for c in hist}
+            bounds = [(a, min(a + R.CHUNK, end)) for a in range(0, end, R.CHUNK)]
+            for k, (a, b) in enumerate(bounds):
+                push = R.Push(slot=slot, chunk_idx=k, start=a, end=b, is_last=k == len(bounds) - 1, turn=100 + slot)
+                cur.update(slot=slot, start=a, end=b, turn=push.turn, fails=[], reads={}, gk=gkd, unsnap=set(dec))
+                out += [f"{what}: {x}" for x in run_chunk(1000 + k, push, global_write_start=a, last=False)]
+            cur.update(gk=None, unsnap=set())
+            for c in hist:
+                after = reader.records(c["name"], slot, c["layers"], lo_w, n)
+                diff = sorted(key for key in before[c["name"]] if after.get(key) != before[c["name"]][key])
+                changed += len(diff)
+                checked += len(before[c["name"]])
+                if diff:
+                    out.append(f"{what}: {c['name']} records of [{lo_w}, {n}) written past the stop: {diff[:6]}")
+            for c in served:
+                recs = reader.records(c["name"], slot, c["layers"], 0, cap)
+                for layer in c["layers"]:
+                    if c.get("snapshot"):
+                        mine = {key: b for key, b in recs.items() if key[0] == layer}
+                        out += C.snapshot_failures(kvc, gkd, c, mine, layer, cap, thr, f"{what} final")
+                        continue
+                    got, _ = C.valid_and_pad(recs, c, layer, 0, cap)
+                    out += C.golden_failures(kvc, gkd, c, got, layer, 0, cap, thr, f"{what} final [0, {cap})")
+                    if c.get("fp8"):
+                        rb, pb = C.valid_and_pad(recs, c, layer, 0, cap, raw_rows=True)
+                        out += C.fp8_row_failures(rb, pb, c, layer, f"{what} final [0, {cap})")
+            print(f"[adapter acks] DECODER_SKIP=decode slot {slot} [0, {end}): served end {cap} (P {p_stop})")
+    finally:
+        model.use_decoder_skip(model.loaded_skip)
+    out += gkd.coverage_failures(served, "decode golden")
+    print(f"[adapter acks] DECODER_SKIP=decode golden comparison per config and mode: {gkd.coverage_summary()}")
+    print(f"[adapter acks] DECODER_SKIP=decode window KV, worst range per channel: {gkd.drift_summary()}")
+    metrics.record("decode_acks_failures", len(out))
+    metrics.record("decode_served_end", p_stop)
+    metrics.record("decode_unwritten_records_changed", changed)
+    metrics.record("decode_unwritten_records_checked", checked)
+    print(f"[adapter acks] DECODER_SKIP=decode: {checked} records past P checked unwritten, {len(out)} failures")
+    return out
