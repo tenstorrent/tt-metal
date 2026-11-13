@@ -130,6 +130,7 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintBasicTypes) {
         "bf16_t: {0,w}\n"sv,
         "Reordered args: {3,?} {2,h} {1,i} {0,q}\n"sv,
         "Reordered args: {3,?} {2,h} {1,i} {0,q}\n"sv,
+        "Repeated args: {0,I} {1,h} {0,I:#x} {1,h}\n"sv,
     };
 
     TestFormatUpdate(

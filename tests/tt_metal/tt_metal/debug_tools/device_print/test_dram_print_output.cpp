@@ -119,6 +119,7 @@ TEST_F(DevicePrintDramFixture, DramPrintBasicTypes) {
         "bf16_t: 0.122558594",
         "Reordered args: true -16 -32 -64",
         "Reordered args: true -16 -32 -64",
+        "Repeated args: 32 -16 0x20 -16",
     };
     TestDramOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_basic_types.cpp", messages);
 }
