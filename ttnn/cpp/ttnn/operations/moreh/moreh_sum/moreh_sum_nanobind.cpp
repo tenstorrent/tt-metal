@@ -14,7 +14,9 @@
 
 namespace ttnn::operations::moreh::moreh_sum {
 void bind_moreh_sum_operation(nb::module_& mod) {
-    const auto* doc = "Moreh Sum Operation";
+    const auto* doc =
+        "Deprecated in favor of ttnn.sum. Will be removed after 2026-12-11. With keepdim=False, moreh_sum keeps "
+        "reduced H/W dims as size 1; ttnn.sum removes them.";
 
     ttnn::bind_function<"moreh_sum">(
         mod,

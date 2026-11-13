@@ -18,7 +18,8 @@ namespace ttnn::operations::moreh::moreh_mean {
 void bind_moreh_mean_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_mean">(
         mod,
-        "Moreh Mean Operation",
+        "Deprecated in favor of ttnn.mean. Will be removed after 2026-12-11. With keepdim=False, moreh_mean keeps "
+        "reduced H/W dims as size 1; ttnn.mean removes them.",
         &ttnn::moreh_mean,
         nb::arg("input"),
         nb::kw_only(),

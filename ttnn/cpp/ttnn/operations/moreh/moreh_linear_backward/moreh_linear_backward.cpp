@@ -6,7 +6,9 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
@@ -161,7 +163,14 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
             TT_FATAL(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
             ttsl::SmallVector<int64_t> dims = operations::moreh::moreh_linear_backward::find_reduce_dim(
                 temp_weight_grad.padded_shape(), weight_grad.value().padded_shape());
-            ttnn::moreh_sum(temp_weight_grad, dims, true, weight_grad, weight_grad_memory_config, compute_kernel);
+            // The grad drops the leading broadcast dims that the keepdim sum leaves as size 1.
+            const auto reduced = ttnn::sum(
+                temp_weight_grad,
+                ttsl::SmallVector<int>(dims.begin(), dims.end()),
+                /*keepdim=*/true,
+                weight_grad_memory_config,
+                compute_kernel);
+            ttnn::assign(ttnn::reshape(reduced, weight_grad.value().logical_shape()), weight_grad.value());
         }
         result[1] = weight_grad_tensor;
     }

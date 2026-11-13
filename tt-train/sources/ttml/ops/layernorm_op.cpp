@@ -19,8 +19,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm.hpp"
 #include "ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward.hpp"
-#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttml::ops {
 
@@ -122,25 +121,31 @@ autograd::TensorPtr composite_layernorm(
 
     auto shape = ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
     auto mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
-    ttnn::moreh_mean(
+    ttnn::mean(
         tensor->get_value(),
-        3,  // last dimension
-        true,
-        std::nullopt,
-        mean,
-        std::nullopt,
-        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+        /* dim */ 3,
+        /* keepdim */ true,
+        /* memory_config */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::precise(),
+        /* scalar */ 1.0F,
+        /* sub_core_grids */ std::nullopt,
+        /* fast_and_approximate_mode */ false,
+        /* output_layout */ std::nullopt,
+        /* output */ mean);
 
     auto tensor_squared = ttnn::square(tensor->get_value());
     auto mean_squared = core::zeros_like(mean);
-    ttnn::moreh_mean(
+    ttnn::mean(
         tensor_squared,
-        3,  // last dimension
-        true,
-        std::nullopt,
-        mean_squared,
-        std::nullopt,
-        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+        /* dim */ 3,
+        /* keepdim */ true,
+        /* memory_config */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::precise(),
+        /* scalar */ 1.0F,
+        /* sub_core_grids */ std::nullopt,
+        /* fast_and_approximate_mode */ false,
+        /* output_layout */ std::nullopt,
+        /* output */ mean_squared);
     auto variance = ttnn::subtract(mean_squared, ttnn::square(mean));
 
     const float eps = 1e-6F;
@@ -160,12 +165,11 @@ autograd::TensorPtr composite_layernorm(
         // recalculate normalized tensor to save memory and avoid storing it
         auto normalized_tensor = ttnn::multiply(ttnn::subtract(tensor->get_value(), mean), rstd);
 
-        auto dgamma = ttnn::moreh_sum(
+        auto dgamma = ttnn::sum(
             ttnn::multiply(dout, normalized_tensor),
-            /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output */ std::nullopt,
-            /* output_mem_config */ std::nullopt,
+            /* dim */ ttsl::SmallVector<int>{0, 1, 2},
+            /* keepdim */ true,
+            /* memory_config */ std::nullopt,
             /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
         auto dtensor_normalized = ttnn::multiply(dout, gamma->get_value());
@@ -176,26 +180,32 @@ autograd::TensorPtr composite_layernorm(
         auto dnorm_shape = dtensor_normalized.logical_shape();
         auto shape = ttnn::Shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
         auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
-        ttnn::moreh_mean(
+        ttnn::mean(
             dtensor_normalized,
             /* dim */ 3,
-            /* keep_dim */ true,
-            /* divisor */ std::nullopt,
-            /* output */ dnorm_mean,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+            /* keepdim */ true,
+            /* memory_config */ std::nullopt,
+            /* compute_kernel_config */ core::ComputeKernelConfig::precise(),
+            /* scalar */ 1.0F,
+            /* sub_core_grids */ std::nullopt,
+            /* fast_and_approximate_mode */ false,
+            /* output_layout */ std::nullopt,
+            /* output */ dnorm_mean);
 
         // dnorm.mean(-1, keepdim=True)
         auto dnorm_norm = ttnn::multiply(dtensor_normalized, normalized_tensor);
         auto dnorm_norm_mean = core::zeros_like(dnorm_mean);
-        ttnn::moreh_mean(
+        ttnn::mean(
             dnorm_norm,
             /* dim */ 3,
-            /* keep_dim */ true,
-            /* divisor */ std::nullopt,
-            /* output */ dnorm_norm_mean,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());
+            /* keepdim */ true,
+            /* memory_config */ std::nullopt,
+            /* compute_kernel_config */ core::ComputeKernelConfig::precise(),
+            /* scalar */ 1.0F,
+            /* sub_core_grids */ std::nullopt,
+            /* fast_and_approximate_mode */ false,
+            /* output_layout */ std::nullopt,
+            /* output */ dnorm_norm_mean);
 
         // norm * (dnorm * norm).mean(-1, keepdim=True)
         auto norm_dnorm_norm_mean = ttnn::multiply(normalized_tensor, dnorm_norm_mean);
@@ -206,12 +216,11 @@ autograd::TensorPtr composite_layernorm(
         gamma->add_grad(dgamma);
 
         if (beta_opt.has_value()) {
-            auto dbeta = ttnn::moreh_sum(
+            auto dbeta = ttnn::sum(
                 dout,
-                /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
-                /* keep_dim */ true,
-                /* output */ std::nullopt,
-                /* output_mem_config */ std::nullopt,
+                /* dim */ ttsl::SmallVector<int>{0, 1, 2},
+                /* keepdim */ true,
+                /* memory_config */ std::nullopt,
                 /*compute_kernel_config */ core::ComputeKernelConfig::precise());
 
             beta_opt.value()->add_grad(dbeta);

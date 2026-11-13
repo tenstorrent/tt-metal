@@ -281,6 +281,17 @@ def test_mean_full_tensor_bf16(device, dim, shape, layout):
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())
 
 
+# The H stage applies the C share of 1/27; a bf8_b input to it scales by a bf16-rounded factor.
+def test_mean_bf8b_nc_then_h(device):
+    input_tensor = ttnn.from_torch(
+        torch.ones(1, 3, 9, 32), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=[1, 2], keepdim=True))
+
+    assert torch.equal(output_tensor, torch.ones(1, 1, 1, 32))
+
+
 # A mean over several dims counted its elements in an int, which overflows at 2^31 and flipped the mean's sign.
 @pytest.mark.skipif(
     bool(os.environ.get("TT_METAL_SIMULATOR")), reason="a 4 GiB tensor is too slow on the ttsim simulator"
@@ -294,3 +305,101 @@ def test_mean_multi_dim_2_31_elements(device):
     input_tensor.deallocate()
 
     assert ttnn.to_torch(output_tensor).flatten().tolist() == [1.0]
+
+
+@pytest.mark.parametrize(
+    "shape, dim, dtype, keepdim, scalar",
+    [
+        ((8, 16, 64, 64), [0], ttnn.bfloat16, True, 1.0),
+        ((8, 16, 64, 64), [1], ttnn.float32, False, 3.0),
+        ((7, 9, 64, 64), [0, 1], ttnn.bfloat16, True, 3.0),
+        ((7, 9, 64, 64), [0, 1], ttnn.float32, False, 1.0),
+        ((64, 4, 32, 64), [0], ttnn.bfloat8_b, False, 3.0),
+        ((3, 7, 100, 100), [1], ttnn.bfloat16, True, 3.0),
+        ((3, 7, 100, 100), [1], ttnn.bfloat8_b, True, 1.0),
+        ((8, 16, 64, 64), [0, 3], ttnn.float32, True, 3.0),
+        ((8, 16, 64, 64), [1, 2, 3], ttnn.bfloat16, False, 1.0),
+    ],
+)
+def test_mean_nc(device, shape, dim, dtype, keepdim, scalar):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape) * 0.25 + 1.0
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, float("nan"))
+    # Reference from the device-rounded input so bf8_b's block rounding is not counted as op error.
+    torch_output = torch.mean(ttnn.to_torch(input_tensor).float(), dim=dim, keepdim=keepdim) * scalar
+
+    output = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim, scalar=scalar)
+    assert output.dtype == dtype
+    output_tensor = ttnn.to_torch(output)
+
+    if dtype == ttnn.float32:
+        assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
+    else:
+        assert_allclose(torch_output, output_tensor.float(), rtol=3e-2 if dtype == ttnn.bfloat8_b else 1e-2, atol=0)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, dtype, keepdim",
+    [
+        ((2, 1, 64, 64), [0, 1], ttnn.float32, True),
+        ((1, 3, 1, 64), [0, 2], ttnn.bfloat16, False),
+        ((4, 1, 32, 64), [1, 3], ttnn.float32, False),
+    ],
+)
+def test_mean_size_one_dims(device, shape, dim, dtype, keepdim):
+    torch.manual_seed(0)
+    scalar = 3.0
+    torch_input = torch.randn(shape) * 0.25 + 1.0
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_output = torch.mean(ttnn.to_torch(input_tensor).float(), dim=dim, keepdim=keepdim) * scalar
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=keepdim, scalar=scalar))
+
+    assert output_tensor.shape == torch_output.shape
+    if dtype == ttnn.float32:
+        assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
+    else:
+        assert_allclose(torch_output, output_tensor.float(), rtol=1e-2, atol=0)
+
+
+@pytest.mark.parametrize("shape, dim", [((8, 16, 64, 64), [0]), ((3, 7, 37, 63), 3), ((2, 3, 32, 64), None)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_mean_preallocated_output(device, shape, dim, dtype):
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    input_tensor = ttnn.from_torch(
+        torch.randn(shape).to(torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    expected = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=True))
+
+    output = ttnn.from_torch(
+        torch.zeros(expected.shape, dtype=torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    result = ttnn.mean(input_tensor, dim=dim, keepdim=True, output=output)
+
+    assert result.buffer_address() == output.buffer_address()
+    assert torch.equal(ttnn.to_torch(output), expected.to(torch_dtype))
+
+
+def test_mean_preallocated_output_shape_mismatch(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.zeros(8, 16, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    output = ttnn.from_torch(torch.zeros(1, 16, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not match the reduced shape"):
+        ttnn.mean(input_tensor, dim=0, keepdim=True, output=output)
+
+
+@pytest.mark.parametrize("shape, dim", [((2, 4, 64, 100), 3), ((2, 4, 64, 768), 3), ((2, 4, 100, 64), 2)])
+def test_mean_bf16_scaler_unbiased(device, shape, dim):
+    torch.manual_seed(0)
+    input_tensor = ttnn.from_torch(
+        (torch.randn(shape) * 0.25 + 1).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    torch_output = ttnn.to_torch(input_tensor).double().mean(dim=dim, keepdim=True)
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=True)).double()
+
+    # A 1/N truncated to bf16 biases every output by the same relative amount, up to ~5e-3.
+    assert ((output_tensor - torch_output) / torch_output).mean().abs() < 1e-3

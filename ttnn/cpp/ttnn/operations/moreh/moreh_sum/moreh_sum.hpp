@@ -13,6 +13,7 @@
 
 namespace ttnn {
 
+[[deprecated("moreh_sum is deprecated and will be removed after 2026-12-11. Use ttnn::sum instead.")]]
 Tensor moreh_sum(
     const Tensor& input,
     const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim = std::nullopt,
