@@ -16,8 +16,9 @@
 // sender carries the row's L-th part -- its output cores own those columns, and stage their partials here,
 // in column order, in the iteration's half of the staging -- to sum core L of every chip of the iteration's
 // requester (the control core writes the requester into this core's source ring before the go): into this
-// chip's slot of that core's partials buffer, then a ready flag in this chip's flag word after the slots. The
-// flag goes on the same route as the slot, after it, so it lands after it. The requester clears its flags
+// chip's slot of that core's partials buffer, then +1 on this chip's flag word after the slots (0 -> 1, the ready
+// flag), fused into the slot's last packet after its write, so it counts only once the slot has
+// landed. Every sub-part's packets go out back to back (a ring of headers). The requester clears its flags
 // once it has summed them, before it sends its next request, so a slot is free whenever a row of that
 // requester is sent.
 //
@@ -28,8 +29,8 @@
 // The link-0 sender also carries the sharded router's candidate exchange (router_reduce.cpp, num_exchange_routes >
 // 0): the reducer leaves this chip's candidates of each iteration in its slot of the candidate slots here and bumps
 // the ready count; whenever this kernel waits, it forwards every candidate slot it has not yet forwarded, in order,
-// along the whole-mesh branches to the same slot of every other chip's route merge core, each slot followed on the
-// same branch by an increment of that core's sem_router, then bumps the reducer's forwarded count. The router stage
+// along the whole-mesh branches to the same slot of every other chip's route merge core, each slot one fused
+// write + increment of that core's sem_router per branch, then bumps the reducer's forwarded count. The router stage
 // runs a row ahead of the grid and this stage a row behind it, so it is idle on its own work when candidates come.
 //
 // Compile-time args:
@@ -61,6 +62,8 @@ constexpr uint32_t sem_router_id = get_compile_time_arg_val(9);
 constexpr uint32_t sub_parts = get_compile_time_arg_val(10);
 constexpr uint32_t sub_bytes = part_bytes / sub_parts;
 constexpr uint32_t kMaxExchangeRoutes = 4;
+// The partials' header ring: with the exchange's kMaxExchangeRoutes, within a RISC's 12 pool headers.
+constexpr uint32_t kSendHeaders = 6;
 constexpr uint32_t kStopBit = 0x80000000u;
 
 void kernel_main() {
@@ -112,9 +115,33 @@ void kernel_main() {
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_idx);
-    auto* header = PacketHeaderPool::allocate_header();
-    auto* exchange_header = PacketHeaderPool::allocate_header();
+    // The partials' packets: each sub-part is one fused write + flag increment per route, issued back to back.
+    D2DHeaderRing<kSendHeaders> send_headers;
+    send_headers.init();
     const uint32_t staging_addr = get_write_ptr(cb_scratch_id);
+
+    // The candidate exchange: one header per route, built once (route, sem_router increment, payload size), so a
+    // forward is one fused write + increment packet per route, every route's in flight at once. The increment is
+    // flushed behind the write at the merge core, so the slot has landed when sem_router counts it. Only the slot
+    // address (the iteration's half) changes from one forward to the next.
+    namespace fabric_api = tt::tt_fabric::mesh::experimental;
+    using tt::tt_fabric::common::experimental::UnicastFusedAtomicIncUpdateMask;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* exchange_header[kMaxExchangeRoutes];
+    for (uint32_t r = 0; r < num_exchange_routes; ++r) {
+        const D2DRoute& route = exchange_route[r];
+        exchange_header[r] = PacketHeaderPool::allocate_header();
+        fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UnicastFusedAtomicIncUpdateMask::All>(
+            exchange_header[r],
+            route.dst_chip,
+            route.dst_mesh,
+            route.range,
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                safe_get_noc_addr(merge_x, merge_y, cand_addr, 0),
+                safe_get_noc_addr(merge_x, merge_y, get_semaphore(sem_router_id), 0),
+                1,
+                true},
+            cand_slot_bytes);
+    }
 
     // Forwards every candidate slot the reducer has left here and this kernel has not yet forwarded.
     uint32_t num_forwarded = 0;
@@ -125,29 +152,19 @@ void kernel_main() {
             while (num_forwarded < ready) {
                 DeviceZoneScopedN("FE_RED_EXCHANGE");
                 const uint32_t slot = cand_addr + ((num_forwarded & 1u) * num_slots + my_chip) * cand_slot_bytes;
+                // The headers are rewritten in place, so the previous forward's (and the partials') must have left.
+                noc_async_writes_flushed();
                 for (uint32_t r = 0; r < num_exchange_routes; ++r) {
-                    auto* sender = &fabric_connection.get(exchange_connection[r]).sender;
-                    const D2DRoute& route = exchange_route[r];
-                    noc_async_writes_flushed();
-                    tt::tt_fabric::mesh::experimental::fabric_multicast_noc_unicast_write(
-                        sender,
-                        exchange_header,
-                        route.dst_chip,
-                        route.dst_mesh,
-                        route.range,
+                    fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
+                        UnicastFusedAtomicIncUpdateMask::WriteDstAddr>(
+                        &fabric_connection.get(exchange_connection[r]).sender,
+                        exchange_header[r],
                         slot,
-                        cand_slot_bytes,
-                        tt::tt_fabric::NocUnicastCommandHeader{safe_get_noc_addr(merge_x, merge_y, slot, 0)});
-                    noc_async_writes_flushed();
-                    tt::tt_fabric::mesh::experimental::fabric_multicast_noc_unicast_atomic_inc(
-                        sender,
-                        exchange_header,
-                        route.dst_chip,
-                        route.dst_mesh,
-                        route.range,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            safe_get_noc_addr(merge_x, merge_y, get_semaphore(sem_router_id), 0), 1, true});
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            safe_get_noc_addr(merge_x, merge_y, slot, 0), 0, 0, true});
                 }
+                // The slot's bytes have left before the reducer may refill it (two forwards on).
+                noc_async_writes_flushed();
                 ++num_forwarded;
                 noc_semaphore_inc(get_noc_addr(reducer_x, reducer_y, forwarded_addr), 1);
                 noc_async_atomic_barrier();
@@ -192,14 +209,12 @@ void kernel_main() {
         const uint32_t flag = partials_addr[k] + num_slots * sub_bytes + my_chip * 4u;
         auto* sender = &fabric_connection.get(connection[k]).sender;
         size_t idx = route_args[k];
+        send_headers.reset();
         for (uint32_t r = 0; r < num_routes[k]; ++r) {
             const D2DRoute route = read_d2d_route(idx);
             for (uint32_t p = 0; p < sub_parts; ++p) {
-                d2d_send<max_payload>(
-                    sender, header, route, src + p * sub_bytes, sub_bytes, sum_x[k][p], sum_y[k][p], slot);
-            }
-            for (uint32_t p = 0; p < sub_parts; ++p) {
-                d2d_send_word(sender, header, route, sum_x[k][p], sum_y[k][p], flag, 1u);
+                d2d_send_flagged<max_payload>(
+                    sender, send_headers, route, src + p * sub_bytes, sub_bytes, sum_x[k][p], sum_y[k][p], slot, flag);
             }
         }
         // The staging half is refilled two iterations on, so every packet has to have left it.

@@ -117,3 +117,90 @@ void d2d_send_word(
         fabric_api::fabric_unicast_noc_unicast_inline_write(sender, header, route.dst_chip, route.dst_mesh, cmd);
     }
 }
+
+// A ring of packet headers, so a burst of packets does not wait for each one to leave L1 before building the
+// next: a header is rewritten only after the ring wraps, behind one flush for the whole ring.
+template <uint32_t N>
+struct D2DHeaderRing {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[N];
+    uint32_t next = 0;
+
+    void init() {
+        for (uint32_t i = 0; i < N; ++i) {
+            headers[i] = PacketHeaderPool::allocate_header();
+        }
+    }
+    // Before a burst: every header of the previous one has left.
+    void reset() {
+        noc_async_writes_flushed();
+        next = 0;
+    }
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* take() {
+        if (next == N) {
+            noc_async_writes_flushed();
+            next = 0;
+        }
+        return headers[next++];
+    }
+};
+
+// `size` bytes from `src` to `dst` on core (x, y) of the route's chips, then +1 on `flag` there: the last
+// chunk carries the increment as one fused packet, issued after its write by the destination router, so the
+// flag counts only once every byte has landed (the route's packets, and a packet's write and increment, arrive
+// in order). Each packet takes its own
+// header from `ring`, so the burst's packets are issued back to back.
+template <uint32_t max_payload, uint32_t N, typename Sender>
+void d2d_send_flagged(
+    Sender* sender,
+    D2DHeaderRing<N>& ring,
+    const D2DRoute& route,
+    uint32_t src,
+    uint32_t size,
+    uint32_t x,
+    uint32_t y,
+    uint32_t dst,
+    uint32_t flag) {
+    namespace fabric_api = tt::tt_fabric::mesh::experimental;
+    using tt::tt_fabric::common::experimental::UnicastFusedAtomicIncUpdateMask;
+    using tt::tt_fabric::common::experimental::UnicastWriteUpdateMask;
+    for (uint32_t left = size; left > 0;) {
+        const uint32_t chunk = left > max_payload ? max_payload : left;
+        auto* header = ring.take();
+        if (chunk == left) {
+            // No flush at the destination: like the separate flag packet this replaces (and ar_sender's fused
+            // packets), the increment follows the write from the same router to the same core in order; a flush
+            // there would hold the router for each write's ack and serialize the burst.
+            const tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader cmd{
+                safe_get_noc_addr(x, y, dst, 0), safe_get_noc_addr(x, y, flag, 0), 1, false};
+            if (route.multicast) {
+                fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                    sender, header, route.dst_chip, route.dst_mesh, route.range, src, chunk, cmd);
+            } else if (route.steer != kD2DNoSteer) {
+                fabric_api::fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<
+                    UnicastFusedAtomicIncUpdateMask::All>(header, route.dst_chip, route.dst_mesh, cmd, chunk);
+                steer_d2d_unicast(header, route);
+                fabric_api::fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(sender, header, src);
+            } else {
+                fabric_api::fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                    sender, header, route.dst_chip, route.dst_mesh, src, chunk, cmd);
+            }
+        } else {
+            const tt::tt_fabric::NocUnicastCommandHeader cmd{safe_get_noc_addr(x, y, dst, 0)};
+            if (route.multicast) {
+                fabric_api::fabric_multicast_noc_unicast_write(
+                    sender, header, route.dst_chip, route.dst_mesh, route.range, src, chunk, cmd);
+            } else if (route.steer != kD2DNoSteer) {
+                fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
+                    header, route.dst_chip, route.dst_mesh, cmd, chunk);
+                steer_d2d_unicast(header, route);
+                fabric_api::fabric_unicast_noc_unicast_write_with_state(sender, header, src);
+            } else {
+                fabric_api::fabric_unicast_noc_unicast_write(
+                    sender, header, route.dst_chip, route.dst_mesh, src, chunk, cmd);
+            }
+        }
+        src += chunk;
+        dst += chunk;
+        left -= chunk;
+    }
+}
