@@ -168,3 +168,32 @@ def test_dsa_pool_borrows_the_kda_pool(monkeypatch):
     with plain:
         p = [req(plain, (1, 1, 16, 4096), BF) for _ in range(2)]
     assert all(t not in k_bf for t in p) and len(made) == n1 + 2
+    # GLM53_KDA_POOL_BORROW: the two pools lend to each other (stack_model._dsa_pools: KDA <- DSA without the KDA child)
+    made.clear()
+    kda2, dsa2 = MS.AllocPool(), MS.AllocPool()
+    kda2.child()  # (the KDA stacks' persistent hand-offs: exists before the DSA builds)
+    with kda2:  # the dense KDA stack: the bf16 trio
+        k2 = [req(kda2, (1, 1, 16, 4096), BF) for _ in range(3)]
+    dsa2.lend_from(kda2)
+    kda2.lend_from(dsa2, child=False)
+    with dsa2:  # the first DSA layer: 4 bf16 (3 lent + its own), its MoE keys (router / latent: DSA-only so far)
+        d2 = [req(dsa2, (1, 1, 16, 4096), BF) for _ in range(4)]
+        d_lat = req(dsa2, (1, 1, 16, 512), FP)
+        d_ids = req(dsa2, (1, 1, 16, 8), "u16")
+    n2 = len(made)
+    assert d2[:3] == k2 and d2[3] not in k2 and n2 == 3 + 3, "DSA <- KDA first, then its own"
+    with kda2:  # the sparse KDA stack: the DSA MoE's keys again + one more bf16
+        s2 = [req(kda2, (1, 1, 16, 4096), BF) for _ in range(4)]
+        s_lat = req(kda2, (1, 1, 16, 512), FP)
+        s_ids = req(kda2, (1, 1, 16, 8), "u16")
+    assert s_lat is d_lat and s_ids is d_ids and s2[3] is d2[3], "KDA <- DSA: the DSA-only keys and its own bf16"
+    assert s2[:3] == k2 and len(made) == n2, "no new L1: the sparse KDA stack's requests are all served"
+    with kda2:  # a fifth bf16: the lender's lent-in tensors are never borrowed back (each serves one request per build)
+        again = [req(kda2, (1, 1, 16, 4096), BF) for _ in range(5)]
+    assert len({id(t) for t in again}) == 5 and len(made) == n2 + 1, "a family's tensor never comes back to it"
+    with kda2.child():  # the KDA child (persistent hand-offs, state across programs) never borrows
+        h = req(kda2.child(), (1, 1, 16, 512), FP)
+    assert h is not d_lat and len(made) == n2 + 2
+    with dsa2.child():  # the DSA child (s1) borrows the KDA pool's, never a DSA tensor lent to it
+        s1b = req(dsa2.child(), (1, 1, 16, 512), FP)
+    assert s1b is not d_lat and len(made) == n2 + 3

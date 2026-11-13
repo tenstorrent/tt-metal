@@ -955,7 +955,22 @@ def test_agk_launch_matches_rev65(lanes, tl, case):
 
 def test_agk_count_is_the_local_select_count():
     """the AGK count (min(512, n_closed_local(p, q))) = the local top-512's record count on every chip at every lane
-    count, across pool-page / unit boundaries, below / at / above 512 local pools (the key page carries no count)"""
+    count, across pool-page / unit boundaries, below / at / above 512 local pools (the key page carries no count); and
+    the same DSA state under speculative verify + rollback (SP.spec_ring_emulate: ix_dm1.cpp MLA_DSA_ONE_SLOT /
+    MLA_DSA_GROUP_ROWS ring rows + pooled keys, spec_ctl.cpp ACCEPT's per-group ring move, plain steps between verifies)
+    == sequential decode of the committed tokens; Zoe Carver's regen trap (a rejected row closing a pool reused a stale
+    open-pool record) is the "save_if_open" control, ACCEPT without the move the "no_move" one -- both must fail"""
+    for K, G in ((1, 1), (1, 4), (1, 8), (2, 1), (3, 1), (3, 4)):
+        r = SP.spec_ring_emulate(K, G, 300, seed=10 * K + G, plain_p=0.05)
+        assert r["checks"] > 1500 and not r["mismatches"], (K, G, r["mismatches"][:5])
+        for variant in ("save_if_open", "no_move"):
+            bad = SP.spec_ring_emulate(K, G, 300, seed=10 * K + G, plain_p=0.05, variant=variant)["mismatches"]
+            assert bad, (K, G, variant)
+    # the trap's exact case: prompt 6 -> verify base 6 (= 2 mod 4), K 1: row 7 (= 3 mod 4) closes pool 1, draft rejected
+    trap = dict(starts=[6], forced={(0, 0): 0, (1, 0): 1, (2, 0): 1})
+    assert not SP.spec_ring_emulate(1, 1, 3, **trap)["mismatches"]
+    bad = SP.spec_ring_emulate(1, 1, 3, variant="save_if_open", **trap)["mismatches"]
+    assert (0, 0, "open_row", 6) in bad and (1, 0, "scored_pool", 1) in bad, bad
     gen = torch.Generator().manual_seed(66)
     for p in (2051, 2052, 4095, 4096 + 127, 4096 + 128 + 3, 32767, 65535 - 128, 65535, 65535 + 129, 262143):
         keys = torch.randint(1, 1 << 31, ((p + 1) // 4,), generator=gen, dtype=torch.int64)
@@ -1379,24 +1394,6 @@ def test_sel2_knobs(monkeypatch):
     with open(os.path.join(os.path.dirname(SP.KDIR), "mk_mla.py")) as fh:
         src = fh.read()
     assert '("MLA_DSA_SHARD_SEL2", "1")' in src
-
-
-@pytest.mark.parametrize("K,G", [(1, 1), (1, 4), (1, 8), (2, 1), (3, 1), (3, 4)])
-def test_spec_ring_rollback(K, G):
-    """The DSA open-pool record under speculative verify + rollback (SP.spec_ring_emulate: ix_dm1.cpp MLA_DSA_ONE_SLOT
-    / MLA_DSA_GROUP_ROWS ring rows + pooled keys, spec_ctl.cpp ACCEPT's per-group ring move, plain steps between
-    verifies) == sequential decode of the committed tokens; Zoe Carver's regen trap (a rejected row closing a pool
-    reused a stale open-pool record) is the "save_if_open" control, ACCEPT without the move the "no_move" one -- both
-    must fail, so the check has teeth"""
-    r = SP.spec_ring_emulate(K, G, 300, seed=10 * K + G, plain_p=0.05)
-    assert r["checks"] > 1500 and not r["mismatches"], r["mismatches"][:5]
-    for variant in ("save_if_open", "no_move"):
-        assert SP.spec_ring_emulate(K, G, 300, seed=10 * K + G, plain_p=0.05, variant=variant)["mismatches"], variant
-    # the trap's exact case: prompt 6 -> verify base 6 (= 2 mod 4), K 1: row 7 (= 3 mod 4) closes pool 1, draft rejected
-    trap = dict(starts=[6], forced={(0, 0): 0, (1, 0): 1, (2, 0): 1})
-    assert not SP.spec_ring_emulate(1, 1, 3, **trap)["mismatches"]
-    bad = SP.spec_ring_emulate(1, 1, 3, variant="save_if_open", **trap)["mismatches"]
-    assert (0, 0, "open_row", 6) in bad and (1, 0, "scored_pool", 1) in bad, bad
 
 
 def test_zz_no_ttnn_was_imported_by_the_suite():

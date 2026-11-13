@@ -1012,6 +1012,16 @@ class StackBackend(ModelBackend):
             # stack built), estimated: s1 20 KB, the (1,1,t,4096) bf16 trio 12 KB, post / comb / coef 12 KB per bank
             if os.environ.get("GLM53_DSA_POOL_BORROW", "0") == "1" and kv.extra.get("pool") is not None:
                 kv.extra["dsa_pool"].lend_from(kv.extra["pool"])
+            # GLM53_KDA_POOL_BORROW=1 (the other direction, 2026-11-13): the KDA stacks' pool -- NOT its persistent
+            # hand-off child -- takes the DSA pool's tensors of the same key before allocating. The sparse KDA stacks
+            # after the first DSA layer request the DSA MoE's keys again ((1,1,t,512) fp32 / bf16, (1,1,t,288), (1,1,t,8)
+            # bf16 / uint16: ~12 KB per bank at t 16; the B 16 x 1 M narrow t = 1 MoE clash of 3,264 B, chain_mmtp_k1b
+            # mmtp5_g4k3_1m_128_nn census). The verify stacks of the speculative step build in these same two pools.
+            # Only keys the KDA pool requests itself enter its lists (its prefix-alias picks see the keys / shapes they
+            # see without it: the 2026-11-08 trap was DSA-only keys in its lists); the family guard (AllocPool.fam) keeps
+            # a tensor from coming back to its own pool through the other's lists
+            if os.environ.get("GLM53_KDA_POOL_BORROW", "0") == "1" and kv.extra.get("pool") is not None:
+                kv.extra["pool"].lend_from(kv.extra["dsa_pool"], child=False)
         kv.extra["dsa_pool"].alias = kv.extra["pool"].alias
         return kv.extra["dsa_pool"]
 

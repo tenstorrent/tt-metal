@@ -91,28 +91,36 @@ class AllocPool:
         # lend_from (GLM53_DSA_POOL_BORROW): another pool whose tensors this one takes before allocating its own, and
         # the claims set (tensor ids) it shares with every other borrower of that lender (its child included)
         self.lender, self.claims = None, None
+        # GLM53_KDA_POOL_BORROW (two pools lending to each other): the ids of the tensors this pool FAMILY (it + its
+        # child) allocated itself -- a tensor never comes back to its own family through the other pool's lists (it
+        # would serve two requests of one build); lend_child: lend_from reaches the child too (the DSA side's s1)
+        self.fam, self.lend_child = set(), True
 
     def child(self) -> "AllocPool":
         """a separate pool (the layers' persistent hand-off buffers: never aliased with a build's intermediates)"""
         if self._child is None:
             self._child = AllocPool()
-            if self.lender is not None:  # the same lender; the shared claims keep the two pools' takes disjoint
+            self._child.fam = self.fam  # (one family: the child's own tensors never come back to the parent either)
+            if self.lender is not None and self.lend_child:  # the same lender; shared claims keep the takes disjoint
                 self._child.lend_from(self.lender, self.claims)
         self._child.alias = self.alias
         return self._child
 
-    def lend_from(self, lender: "AllocPool", claims: set | None = None) -> None:
+    def lend_from(self, lender: "AllocPool", claims: set | None = None, child: bool = True) -> None:
         """GLM53_DSA_POOL_BORROW (stack_model._dsa_pools): a request this pool has no tensor of its own for takes an
         UNCLAIMED tensor of the same key from `lender`'s lists before it allocates. Sound when the two pools' programs
         never overlap in time and every tensor of both is a pure build intermediate (written before it is read inside
         each program): the KDA stacks' pool (its persistent hand-offs live in its CHILD, never lent) and the sparse_dsa
         MLA / MoE programs, which run between the stacks, never inside one. The lender's state (lists, counts, alias
         bases) is never touched; `claims` (shared with this pool's child) hands each lent tensor to ONE borrower, so the
-        MLA -> MoE hand-off s1 (the child's) never shares a buffer with an MLA / MoE intermediate."""
+        MLA -> MoE hand-off s1 (the child's) never shares a buffer with an MLA / MoE intermediate. child=False
+        (GLM53_KDA_POOL_BORROW, the KDA stacks' pool borrowing the DSA pool's): the child -- the KDA stacks' persistent
+        hand-offs, state across programs -- never borrows."""
         assert lender is not self
         self.lender = lender
         self.claims = claims if claims is not None else set()
-        if self._child is not None and self._child.lender is None:
+        self.lend_child = bool(child)
+        if child and self._child is not None and self._child.lender is None:
             self._child.lend_from(lender, self.claims)
 
     def _borrow(self, k):
@@ -120,10 +128,15 @@ class AllocPool:
         if self.lender is None:
             return None
         for b in self.lender.lists.get(k, ()):
-            if id(b) not in self.claims:
+            if id(b) not in self.claims and id(b) not in self.fam:  # (fam: lent onward to the lender by this family)
                 self.claims.add(id(b))
                 return b
         return None
+
+    def _own(self, t):
+        """a tensor this pool allocated itself (the family's: never borrowed back from the other pool)"""
+        self.fam.add(id(t))
+        return t
 
     @staticmethod
     def _padded(shape, a, kw) -> tuple:
@@ -149,7 +162,7 @@ class AllocPool:
         lst = self.lists.setdefault(k, [])
         if i == len(lst):
             b = self._borrow(k)
-            lst.append(b if b is not None else self.orig(shape, *a, **kw))
+            lst.append(b if b is not None else self._own(self.orig(shape, *a, **kw)))
         self._take(lst[i])
         return lst[i]
 
@@ -177,7 +190,7 @@ class AllocPool:
             if vk is not None:
                 self.prefix_slots[pk] = vk
                 return self._take_prefix(vk)
-            lst.append(self.orig(pad if pad != want else shape, *a, **kw))  # a tensor of its own
+            lst.append(self._own(self.orig(pad if pad != want else shape, *a, **kw)))  # a tensor of its own
         self.real[k] = j + 1
         base = lst[j]
         self._take(base)
