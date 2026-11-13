@@ -39,29 +39,33 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 # The image sizes (width, height) a pipeline supports by default: the square sizes the inference
-# server offers. Other aspect ratios would need padding the latents to whole tiles per device.
+# server offers. Other sizes work where each device's share of the latents passes the decoder's
+# checks: whole tiles of tokens where the VAE rows are not on the SP axis, and a whole number of
+# tiles of pixels per device in the fused group norm.
 _DEFAULT_RESOLUTIONS = ((1024, 1024), (2048, 2048))
 
 # The parallel layout per mesh shape: the DiT's SP and TP axes, the text encoder's TP axis, the VAE's
-# channel (TP) and row (H) axes, and the CCL links and topology.
+# row (H) and column (W) axes, and the CCL links and topology. The VAE splits the image only, not the
+# channels: a channel split adds a reduce-scatter and all-gathers whose programs compile at every new
+# image size. Rows go on the longer mesh axis.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (1, 8): {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
-        "vae_h_axis": 0,
+        "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 1,
         "topology": ttnn.Topology.Linear,
     },
-    # SP4/TP2 denoised Klein 1% faster than SP2/TP4 at 1024². TP2 + H4 decoded faster than H2xW4 or H4xW2
-    # without TP (0.47 s against 0.78 and 0.56).
+    # SP4/TP2 denoised Klein 1% faster than SP2/TP4 at 1024². H4xW2 decoded faster than H2xW4 (0.56 s
+    # against 0.78); a channel split TP2 + H4 was faster still (0.47 s).
     (2, 4): {
         "sp_axis": 1,
         "tp_axis": 0,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 0,
         "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 1,
         "topology": ttnn.Topology.Linear,
     },
@@ -72,8 +76,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
         "vae_h_axis": 0,
+        "vae_w_axis": 1,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
@@ -81,8 +85,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 1,
-        "vae_h_axis": 0,
+        "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
@@ -90,8 +94,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 0,
         "tp_axis": 1,
         "encoder_tp_axis": 1,
-        "vae_tp_axis": 0,
         "vae_h_axis": 1,
+        "vae_w_axis": 0,
         "num_links": 2,
         "topology": ttnn.Topology.Linear,
     },
@@ -468,8 +472,8 @@ class Flux2Pipeline:
         num_links = from_preset("num_links", num_links)
         topology = from_preset("topology", topology)
         if vae_tp_axis is None and vae_h_axis is None and vae_w_axis is None:
-            vae_tp_axis = from_preset("vae_tp_axis", vae_tp_axis)
             vae_h_axis = from_preset("vae_h_axis", vae_h_axis)
+            vae_w_axis = from_preset("vae_w_axis", vae_w_axis)
 
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
