@@ -2749,6 +2749,9 @@ inline constexpr matmul_ttsync_off_cell matmul_ttsync_off_cells[] = {
     {MathFidelity::HiFi2, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1},
     // LoFi half sync Bfp8_b 1x2 block of 2 k steps: 0.45 slower than the polling production block at 10 of 10 points (G2 census)
     {MathFidelity::LoFi, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 1, 2},
+    // LoFi half sync 32-bit DEST Tf32 output 1x2 blocks of 2 k steps: slower at 10 of 10 points (G2 census)
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Tf32, 2, 1, 2},
+    {MathFidelity::LoFi, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Tf32, 2, 1, 2},
 };
 
 // Whether the ttsync unpack (unpack_auto_ttsync) is kept for a block: the cells where it measured 0 slower than the context poll (matmul_prod_keys.py
@@ -2830,7 +2833,9 @@ constexpr bool matmul_kernel_ttsync_block(
     {
         return false;
     }
-    if (fidelity == MathFidelity::LoFi)
+    // a polling LoFi call that pairs a 32-bit operand with a fast one at full sync holds its operand by run time (matmul_api_reuse_dir 3)
+    // on both threads; at half sync a plain call runs direction 0 either way
+    if (fidelity == MathFidelity::LoFi && full_sync)
     {
         bool wide = false, fast = false;
         for (const std::uint8_t f : formats)
