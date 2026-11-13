@@ -224,20 +224,20 @@ void kernel_main() {
         }
         // Each core's table (swapped-in units flagged) into its cb_balance page, at the address the CB has on every
         // core of the program (this one included), then the release each core waits on.
-        const uint32_t table_addr = CircularBuffer(cb_table).get_write_ptr();
+        const uint32_t unit_table_addr = CircularBuffer(cb_table).get_write_ptr();
         for (uint32_t i = 0; i < cores; ++i) {
-            volatile uint32_t* const table = unit_tables + i * sparse_balance::kTableWords;
-            const uint32_t n = table[0];
+            volatile uint32_t* const unit_table = unit_tables + i * sparse_balance::kTableWords;
+            const uint32_t n = unit_table[0];
             if constexpr (remote) {
                 for (uint32_t k = 1; k <= n; ++k) {
-                    const bool imported = partners[me * q_blocks + table[k] % q_blocks] != sparse_balance::kHome;
-                    table[k] = table[k] | (imported ? sparse_balance::kImported : 0u);
+                    const bool imported = partners[me * q_blocks + unit_table[k] % q_blocks] != sparse_balance::kHome;
+                    unit_table[k] = unit_table[k] | (imported ? sparse_balance::kImported : 0u);
                 }
             }
-            (void)table[n];  // the RISC stores land before the NoC reads them
+            (void)unit_table[n];  // the RISC stores land before the NoC reads them
             noc_async_write(
-                reinterpret_cast<uint32_t>(table),
-                get_noc_addr(core_x(i), core_y(i), table_addr),
+                reinterpret_cast<uint32_t>(unit_table),
+                get_noc_addr(core_x(i), core_y(i), unit_table_addr),
                 (n + 1) * sizeof(uint32_t));
         }
         noc_async_write_barrier();
