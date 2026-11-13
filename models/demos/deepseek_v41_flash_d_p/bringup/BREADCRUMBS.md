@@ -812,3 +812,44 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - stock ttnn.matmul instead of ttnn.bringup.mhc_post: tests/test_moe_fill_piggyback.py only, a timing lead (100
   matmuls 4096^3 on 11 x 10 = 110 cores ahead of each profiled window), not a model path. Cores of the change: none
   added (the combine's 8 port cores a chip; the 110-core cap holds).
+
+## P.55a (perf, attempt 1): MoE exact replicas, step 1 (go/no-go): the bound and the copy deadline
+- Expected per chunk (written before the device run; perf_guide 1-2): this step changes no model code, so 0 ms device
+  and 0 ms host for the model. The bound it measures: the brief's replica table saved ~24.5 ms device a chunk with
+  32 learned copies (novel), so the exact split should reach ~25-35 ms at most (the busiest chip down to ~1.1-1.2x
+  the mean; the ceiling is busiest - mean, ~70 ms with the CPU model on P.45's chunk-10 counts), and the copy deadline
+  should cut that by roughly the receivers' wait for a 0.71+ ms copy (light chips reach their replica at ~0.5-0.7 ms).
+- Design as built (no model code changed; MOE_REPLICAS stays off, nothing to A/B): tests/test_moe_exact_bound.py
+  loads the model with MOE_COUNTS=on (read back, no files) and wraps the MoE block's three ops (fused_head,
+  sparse_dispatch_2d, routed_experts_combine) to know each call's device-operation ids. Per workload it runs chunk 10
+  (tokens [51200, 56320)) three times under the real-time profiler (no device profiler, no op mode): novel and code
+  after a device prefill of chunks 0-9 (the real chunk 10, then two re-runs on the profile's steady path), random ids
+  (the p51200 position profile's tokens, fresh state: one compile run, then three). Per run and layer: every slot's
+  tokens and the program's per-chip device time. tests/moe_exact_model.py (CPU, numpy) fits the per-chip expert time
+  and plans the exact split per layer, max mode and deadline mode (definitions in its docstring; DS41-244 detail).
+  720 layer plans run in a spawn pool (~7 s; spawn, not fork, so no child inherits the open mesh).
+- Prefix: the device's own chunks 0-9, not the golden prefix, for both prompts (the code prompt has no golden; P.45's
+  count files were made the same way). The quick rung's chunk is chunk 10 at 51,200, so "quick" and "51,200" are the
+  same tokens; the third workload is the position profile's random ids at 51,200 (DS41-228: not a prompt's routing).
+- Results (gate unit P.55a, PASS; medians of 3 runs, ms a chunk; save = busiest chip's experts time before - after):
+
+  | workload (p51200) | measured rec (slowest / model) | max save | ceiling | deadline save | copies on time | 2 paths |
+  |---|---|---|---|---|---|---|
+  | novel | 56.3 / 49.9 | 21.9 | 23.0 | 10.1 | 0 of 335 | 20.9 |
+  | code | 47.0 / 38.7 | 10.6 | 11.9 | 2.9 | 0 of 87 | 10.1 |
+  | randids | 63.2 / 58.1 | 30.9 | 32.0 | 16.5 | 5 of 524 | 27.7 |
+
+  Fit: A 38.9 us (DRAM rate, fixed), B 7.55 us a row tile, C0 0.235 ms, R^2 0.966, rmse 0.068 ms (360 layer calls).
+  Three gate runs of the unit (same code but the output format) agreed within ~0.3 ms on every number.
+  Per-layer tables (measured, model, busiest, mean, max, deadline, every chip's own finish, every expert's tokens):
+  results/P.55a_exact_bound.json and the unit log.
+- Verdict (owner's line, < ~5 ms a chunk surviving = NO-GO): novel GO (10.1), code NO-GO (2.9), random ids GO (16.5).
+  The test does not decide for the owner; step 2 was not started.
+- What limits it (DS41-244): the light chips sit on the DRAM floor (12 experts x 38.9 us = 0.467 ms) and reach their
+  replica before any whole-expert copy can land (>= 0.75 ms on one link pair), so the receivers idle ~0.3 ms; most
+  of the loss comes back if a copy is split over two paths. Also: ~94 % of the copies outlast the home's own compute
+  of the expert (the zero-extra-read source window); the dispatch's imbalance and the combine's link traffic are not
+  modelled. The max-mode bound sits at the floor too: a perfect split leaves ~0.47 ms a layer, the ceiling 23.0 ms
+  (novel) is about what the brief's learned 32-copy table measured (~24.5 ms device a chunk).
+- Gotcha: record_json writes indent=1 (a number a line); per-chip lists went in as strings to stay under 500 KB.
+- Re-run: `gate P.55a --spec <spec> --check --unit P.55a` (~4 min on the 8x4, devjob).

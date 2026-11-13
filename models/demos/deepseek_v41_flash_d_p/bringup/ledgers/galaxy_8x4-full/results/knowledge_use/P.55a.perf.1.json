@@ -1,0 +1,66 @@
+{
+ "used": [
+  {
+   "id": "DS41-243",
+   "how": "the experts+combine time fitted is the shortest chip's (the last to reach the start barrier), not the slowest chip's, which carries the host-dispatch wait",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-228",
+   "how": "the routing-dependent bound is taken on chunk 10 of the real prompts; the position profile's random ids are a third, labelled workload, not the answer",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-242",
+   "how": "no copy (serial or piggyback) is run on the device in this step; the copy is costed from P.47's measured rates only",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "per-chip finish time of the experts inside the fused routed_experts_combine program: the real-time profiler gives only each chip's program start / end (all chips end together at the combine), so the per-chip timeline has to come from a model fitted to the layer times"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel, op or weight touched; nothing padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the test only wraps three existing ttnn.bringup.moe_block_main ops to read their device-operation ids"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run; only the new test test_moe_exact_bound.py (gate unit P.55a) ran on the 8x4"
+  }
+ ],
+ "cited_only": [
+  "DS41-244"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.55a",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-13T22:21:45",
+  "head": "42cacfff801",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.55a.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.55a_exact_bound.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.55a.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/moe_exact_model.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_bound.py"
+  ]
+ }
+}

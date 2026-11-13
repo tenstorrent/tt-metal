@@ -1264,3 +1264,24 @@ the owner decides from P.50's A/B).
   load cold): off - code max |diff| per chunk run 1 [0.0156, 0.0156, 0.051, 0.079], run 2 [0.090, 0.154, 0.097, 0.219]
   (1443-1956 rows of 5120), novel 0 this time (DS41-233's cold chunk 0 difference is the same race, it does not show
   every run); on - 0 everywhere.
+
+## A light chip finishes its own experts at the DRAM floor, 0.467 ms, before any whole-expert copy lands
+- Measured (8x4, chunk 10 = tokens [51200, 56320), MOE_REPLICAS=off, 3 profiled runs a workload, real-time profiler):
+  routed_experts_combine (experts + combine, one program a chip) summed over 40 layers, slowest chip / shortest chip:
+  novel 56.3 / ~50 ms, code 47.0 / ~39 ms, random ids (the p51200 position profile) 63.2 / ~58 ms. The shortest
+  chip is the one that started last at the start barrier (DS41-243), so it is the work without host-dispatch skew.
+- Per-chip time model, fitted on those 360 layer calls (tests/moe_exact_model.py `fit`):
+  `reach_k = max(A x active experts, B x row tiles)`, layer = C0 + max_k reach_k; A = 19.9 MB / 512 GB/s = 38.9 us
+  (rmse 0.068 ms at A, 0.073 at 1.5 A, 0.100 at 2 A: the data prefer the DRAM rate), B = 7.55 us a 32-row tile,
+  C0 = 0.235 ms, R^2 0.966. With 12 experts a chip the floor is 0.467 ms: the median chip sits on it (busiest / mean
+  ~4.4 in tokens, but only ~2.3 in time).
+- Exact split (greedy planner; one replica a receiving chip, the 13th slot; a hot expert may get several), max mode
+  (copies free) vs deadline mode (each copy = 19.9 MB at P.47's 0.71 ms a link pair + 18 us an extra hop, store and
+  forward along the axis-0-then-axis-1 path, one copy at a time a link, starting one weight read after the home
+  starts the expert): novel 21.9 -> 10.1 ms a chunk, code 10.6 -> 2.9, random ids 30.9 -> 16.5. 0 of 335 (novel)
+  copies land before the receiver reaches the replica: they land at >= 0.75 ms, the receivers reach it at ~0.47.
+  Halving the copy time (two paths a copy) keeps 20.9 / 10.1 / 27.7 ms. Three gate runs agreed within ~0.3 ms.
+- Not modelled: the dispatch's own imbalance (it also moves rows to replicas), the combine rows on the same links
+  (~10 % of a link), and the home's L1 window: in ~94 % of the planned copies the copy outlasts the home's compute of
+  that expert (+ one weight read), so the source would need to hold the blocks or re-read them from DRAM
+  (`src_window_short`, results/P.55a_exact_bound.json).

@@ -619,5 +619,13 @@
   "err_state_window_kv_L38_limit": 0.319442,
   "err_state_window_kv_L39": 0.0893733,
   "err_state_window_kv_L39_limit": 0.214677
+ },
+ "P.55a": {
+  "exact_save_ms_deadline_code_p51200": 2.93,
+  "exact_save_ms_deadline_novel_p51200": 10.12,
+  "exact_save_ms_deadline_randids_p51200": 16.51,
+  "exact_save_ms_max_code_p51200": 10.55,
+  "exact_save_ms_max_novel_p51200": 21.87,
+  "exact_save_ms_max_randids_p51200": 30.94
  }
 }

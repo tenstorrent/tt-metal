@@ -1,0 +1,201 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-13T22:25:20",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-13T22:25:20",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-13T22:25:20",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-13T22:25:20",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-13T22:25:20",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-13T22:25:20",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-13T22:25:20",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-13T22:25:20",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-13T22:25:20",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-13T22:25:20",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-13T22:25:20",
+   "value": 92.2
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-13T22:25:20",
+   "value": 0.0
+  },
+  "exact_busy_over_mean_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 1.551
+  },
+  "exact_busy_over_mean_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 2.302
+  },
+  "exact_busy_over_mean_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 2.7
+  },
+  "exact_ceiling_ms_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 11.87
+  },
+  "exact_ceiling_ms_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 23.01
+  },
+  "exact_ceiling_ms_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 31.96
+  },
+  "exact_fit_A_us": {
+   "t": "2026-11-13T22:20:53",
+   "value": 38.88
+  },
+  "exact_fit_B_us": {
+   "t": "2026-11-13T22:20:53",
+   "value": 7.555
+  },
+  "exact_fit_C0_ms": {
+   "t": "2026-11-13T22:20:53",
+   "value": 0.235
+  },
+  "exact_fit_r2": {
+   "t": "2026-11-13T22:20:53",
+   "value": 0.966
+  },
+  "exact_fit_rmse_ms": {
+   "t": "2026-11-13T22:20:53",
+   "value": 0.0677
+  },
+  "exact_lever_ms_2path_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 10.08
+  },
+  "exact_lever_ms_2path_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 20.91
+  },
+  "exact_lever_ms_2path_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 27.74
+  },
+  "exact_measured_rec_ms_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 46.97
+  },
+  "exact_measured_rec_ms_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 56.3
+  },
+  "exact_measured_rec_ms_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 63.21
+  },
+  "exact_model_rec_ms_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 38.67
+  },
+  "exact_model_rec_ms_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 49.86
+  },
+  "exact_model_rec_ms_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 58.11
+  },
+  "exact_on_time_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 0.0
+  },
+  "exact_on_time_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 0.0
+  },
+  "exact_on_time_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 5.0
+  },
+  "exact_replicas_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 87.0
+  },
+  "exact_replicas_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 335.0
+  },
+  "exact_replicas_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 524.0
+  },
+  "exact_save_ms_deadline_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 2.93
+  },
+  "exact_save_ms_deadline_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 10.12
+  },
+  "exact_save_ms_deadline_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 16.51
+  },
+  "exact_save_ms_max_code_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 10.55
+  },
+  "exact_save_ms_max_novel_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 21.87
+  },
+  "exact_save_ms_max_randids_p51200": {
+   "t": "2026-11-13T22:20:53",
+   "value": 30.94
+  }
+ },
+ "task": "P.55a"
+}
