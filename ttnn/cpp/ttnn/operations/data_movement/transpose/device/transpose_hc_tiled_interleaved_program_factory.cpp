@@ -11,6 +11,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+
+#include <array>
+#include <utility>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
@@ -113,6 +116,131 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
 
     MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+
+    // Block path: when the channel count fills whole tiles, the 32 input tiles (n, c, ht, wt) of one channel tile
+    // hold exactly the rows of the 32 output tiles (n, h, ct, wt) of that h tile. Compute untilizes the 32 tiles as
+    // one row (row h of every tile lands in one [c][w] line) and tilizes each line back into one output tile, so the
+    // data moves as whole tiles instead of the 64 face-row NoC writes per tile of the generic path below.
+    // Below one full channel tile most of every block would be pad fill, and the generic path is cheaper.
+    const bool block_path = tile_shape[0] == 32 && tile_shape[1] == 32 && face_shape[0] == 16 && face_shape[1] == 16 &&
+                            (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32) &&
+                            input_tensor.padded_shape().rank() == 4 && input_tensor.physical_volume() > 0 &&
+                            C >= tile_shape[1];
+    if (block_path) {
+        const DFBSpecName SRC{"src"};
+        const DFBSpecName MID{"mid"};
+        const DFBSpecName OUT{"out"};
+        const KernelSpecName COMPUTE{"compute"};
+        const bool fp32 = input_tensor.dtype() == DataType::FLOAT32;
+        const uint32_t N = input_tensor.padded_shape()[0];
+        const uint32_t H = input_tensor.logical_shape()[2];
+        const uint32_t Ht = input_tensor.padded_shape()[2] / tile_shape[0];
+        const uint32_t Wt = input_tensor.padded_shape()[3] / tile_shape[1];
+        const uint32_t num_blocks = N * tt::div_up(C, tile_shape[1]) * Ht * Wt;
+        // Channels past C in the last channel tile become output rows that hold the pad value.
+        const uint32_t pad_packed = fp32 ? std::bit_cast<uint32_t>(pad_value)
+                                         : pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+        auto [b_num_cores, b_all_cores, b_group_1, b_group_2, b_per_core_1, b_per_core_2] =
+            split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+
+        constexpr uint32_t block_tiles = 32;
+        // One input block, its row-major image and a 16-tile output ring (the writer drains groups of 8): 80 tiles
+        // per core. The reader refills the input block while compute tilizes the previous one.
+        constexpr uint32_t out_entries = 16;
+        ProgramSpec spec{.name = "transpose_hc_tiled_blocks"};
+        const std::array<std::pair<DFBSpecName, uint32_t>, 3> dfbs = {
+            {{SRC, block_tiles}, {MID, block_tiles}, {OUT, out_entries}}};
+        for (const auto& [name, entries] : dfbs) {
+            spec.dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = name,
+                .entry_size = single_tile_size,
+                .num_entries = entries,
+                .data_format_metadata = dfb_data_format,
+            });
+        }
+        spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()});
+        spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()});
+
+        KernelSpec reader{
+            .unique_id = READER,
+            .source =
+                "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+                "reader_transpose_hc_tiled_blocks.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = SRC,
+                .accessor_name = "src",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            }},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+            .compile_time_args = {{"C", C}, {"Ht", Ht}, {"Wt", Wt}, {"pad_packed", pad_packed}},
+            .runtime_arg_schema = {.runtime_arg_names = {"start_block", "num_blocks"}},
+            .hw_config = create_reader_datamovement_config(),
+        };
+        KernelSpec writer{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+                "writer_transpose_hc_tiled_blocks.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = OUT,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            }},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+            .compile_time_args = {{"C", C}, {"H", H}, {"Ht", Ht}, {"Wt", Wt}},
+            .runtime_arg_schema = {.runtime_arg_names = {"start_block", "num_blocks"}},
+            .hw_config = create_writer_datamovement_config(),
+        };
+        // FP32 passes through DEST unchanged only with 32-bit DEST and unpack-to-DEST on both unpacked buffers.
+        ComputeHardwareConfig compute_hw;
+        compute_hw.enable_32_bit_dest = fp32;
+        if (fp32) {
+            compute_hw.unpack_modes.emplace(SRC, UnpackMode::UnpackToDest);
+            compute_hw.unpack_modes.emplace(MID, UnpackMode::UnpackToDest);
+        }
+        KernelSpec compute{
+            .unique_id = COMPUTE,
+            .source =
+                "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/"
+                "transpose_hc_tiled_blocks.cpp",
+            .dfb_bindings =
+                {DFBBinding{.dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{.dfb_spec_name = MID, .accessor_name = "mid", .endpoint_type = DFBEndpointType::PRODUCER},
+                 DFBBinding{.dfb_spec_name = MID, .accessor_name = "mid", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .runtime_arg_schema = {.runtime_arg_names = {"num_blocks"}},
+            .hw_config = std::move(compute_hw),
+        };
+        spec.kernels.push_back(std::move(reader));
+        spec.kernels.push_back(std::move(writer));
+        spec.kernels.push_back(std::move(compute));
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "main",
+            .kernels = {READER, WRITER, COMPUTE},
+            .target_nodes = b_all_cores,
+        });
+
+        ProgramRunArgs run_args;
+        ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER};
+        ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER};
+        ProgramRunArgs::KernelRunArgs compute_run_args{.kernel = COMPUTE};
+        uint32_t start_block = 0;
+        for (const auto& core : corerange_to_cores(b_all_cores, std::nullopt)) {
+            const uint32_t blocks_here = b_group_1.contains(core) ? b_per_core_1 : b_per_core_2;
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values, core, {{"start_block", start_block}, {"num_blocks", blocks_here}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values, core, {{"start_block", start_block}, {"num_blocks", blocks_here}});
+            AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"num_blocks", blocks_here}});
+            start_block += blocks_here;
+        }
+        run_args.kernel_run_args.push_back(std::move(reader_run_args));
+        run_args.kernel_run_args.push_back(std::move(writer_run_args));
+        run_args.kernel_run_args.push_back(std::move(compute_run_args));
+        run_args.tensor_args.emplace(INPUT, input);
+        run_args.tensor_args.emplace(OUTPUT, output);
+        return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    }
 
     auto tile_hw = tile_shape[0] * tile_shape[1];
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
