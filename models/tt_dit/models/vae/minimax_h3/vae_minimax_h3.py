@@ -1305,6 +1305,9 @@ class MiniMaxH3Vae:
 
         canvases = []
         pending: list = []
+        # The decoder call (group) each pending readback belongs to, and the group being issued (see readback()).
+        pending_groups: list[int] = []
+        issuing = [0]
         held_strips: list = []
         held_edges: list = []
 
@@ -1336,6 +1339,7 @@ class MiniMaxH3Vae:
                 ttnn.deallocate(canvas_rows)
                 read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
                 pending.append(self._yuv_finish_pool.submit(finish))
+                pending_groups.append(issuing[0])
             else:
                 patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
                 out = fast_device_to_host(patch, self.mesh_device, [3, 4], ccl_manager=self.ccl_manager).float()
@@ -1349,10 +1353,17 @@ class MiniMaxH3Vae:
             profile["shape"] = canvas_shape
             profile["dtype"] = dtype_name
             profile["readback_mb"] += read_bytes / 1e6
-            if len(pending) > 1:
+            # Keep the device fed: with one wave per decoder call, wait for the previous readback (the device still
+            # has this wave queued). With two, wait only for readbacks of earlier calls: a readback of this call
+            # completes only after its whole decoder call, and the host would then dispatch the next call while
+            # the device sits idle.
+            while len(pending) > 1 and (self.strip_units_per_device == 1 or pending_groups[0] < issuing[0]):
                 mark = time.perf_counter()
                 canvases.append(pending.pop(0).result())
+                pending_groups.pop(0)
                 profile["readback_join"] += time.perf_counter() - mark
+                if self.strip_units_per_device == 1:
+                    break
 
         # strip_units_per_device=2 (MINIMAX_H3_VAE_UNITS_PER_DEVICE=2): merge consecutive entries of the wave list above, dense
         # packing included, into one batch-2 decoder call. Every wave keeps its own stitch / flush, in order, so the
@@ -1366,6 +1377,7 @@ class MiniMaxH3Vae:
         for group_index, group in enumerate(groups):
             n_units, (num_frames, height, width), tokens = staged
             staged = None
+            issuing[0] = group_index
 
             mark = time.perf_counter()
             decoded_group = decoder(tokens)
@@ -1421,6 +1433,7 @@ class MiniMaxH3Vae:
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)
             pending.clear()
+            pending_groups.clear()
             profile["readback_join"] += time.perf_counter() - mark
         return canvases
 
