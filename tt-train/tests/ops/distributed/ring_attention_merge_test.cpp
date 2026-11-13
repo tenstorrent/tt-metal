@@ -31,15 +31,16 @@ namespace {
 constexpr float kNegInf = -std::numeric_limits<float>::infinity();
 constexpr uint32_t kIntermediatesWidth = 32U;
 
-// Row kinds, cycled over the (B, H, S) rows so every tile holds all of them.
+// Row kinds, cycled over the (B, H, S) rows (s % kRowKindCycle) so every tile holds all of them.
+// Rows whose index falls past the named kinds are default rows: both lse uniform in [-5, 15].
 enum RowKind : uint32_t {
     kFirstMerge = 0,      // running lse = -inf, accumulator = 0 (the first ring step)
     kSkippedStep = 1,     // step lse = -inf (a step the causal schedule skips)
     kLargeLse = 2,        // both lse ~ 100..200: exp() of either overflows FP32
     kStepNegligible = 3,  // step lse 40 below the running one
     kStepDominates = 4,   // step lse 40 above the running one
-    kNumRowKinds = 8,     // remaining kinds: both lse uniform in [-5, 15]
 };
+constexpr uint32_t kRowKindCycle = 8U;
 
 struct MergeInputs {
     xt::xarray<float> accum;          // (B, H, S, D)
@@ -83,7 +84,7 @@ MergeInputs make_inputs(uint32_t B, uint32_t H, uint32_t S, uint32_t D, uint32_t
                 float& running = in.running_lse(b, h, s, 0);
                 float& step = in.intermediates(b, h, s, 0);
                 step = step_lse(b, h, s, 0);
-                switch (s % kNumRowKinds) {
+                switch (s % kRowKindCycle) {
                     case kFirstMerge:
                         running = kNegInf;
                         for (uint32_t d = 0; d < D; ++d) {
@@ -116,6 +117,29 @@ DeviceMergeInputs upload(MergeInputs& in) {
     };
     in.step_output = ttml::core::to_xtensor<float>(dev.step_output);
     return dev;
+}
+
+// The inputs of one ring step, already on device: a random bf16 step output and intermediates
+// whose column 0 is step_lse (columns 1..31 junk). step_output holds the bf16 values the device has.
+struct RingStepInputs {
+    xt::xarray<float> step_output;  // (B, H, S, D)
+    ttnn::Tensor dev_step_output;
+    ttnn::Tensor dev_intermediates;
+};
+
+RingStepInputs make_ring_step_inputs(const xt::xarray<float>& step_lse, uint32_t D, uint32_t seed) {
+    using ttml::test_utils::make_uniform_xarray;
+    const auto& lse_shape = step_lse.shape();
+    const std::array<size_t, 4> full_shape{lse_shape[0], lse_shape[1], lse_shape[2], D};
+    const std::array<size_t, 4> inter_shape{lse_shape[0], lse_shape[1], lse_shape[2], kIntermediatesWidth};
+    auto intermediates = make_uniform_xarray<float>(inter_shape, -1.0e6F, 1.0e6F, seed + 1U);
+    xt::view(intermediates, xt::all(), xt::all(), xt::all(), xt::range(0, 1)) = step_lse;
+
+    RingStepInputs in;
+    in.dev_step_output = to_device_bf16(make_uniform_xarray<float>(full_shape, -1.0F, 1.0F, seed));
+    in.dev_intermediates = to_device_fp32(intermediates);
+    in.step_output = ttml::core::to_xtensor<float>(in.dev_step_output);
+    return in;
 }
 
 double logaddexp(double a, double b) {
@@ -166,14 +190,23 @@ struct ErrorStats {
 ErrorStats compare(const xt::xarray<float>& actual, const xt::xarray<double>& expected) {
     EXPECT_EQ(actual.size(), expected.size());
     ErrorStats stats;
+    size_t non_finite = 0;
+    size_t first_non_finite = 0;
     for (size_t i = 0; i < expected.size(); ++i) {
         const double a = actual.flat(i);
         const double e = expected.flat(i);
-        EXPECT_TRUE(std::isfinite(a)) << "non-finite result at flat index " << i << ": " << a;
+        if (!std::isfinite(a)) {
+            if (non_finite++ == 0) {
+                first_non_finite = i;
+            }
+            continue;
+        }
         const double err = std::abs(a - e);
         stats.max_abs = std::max(stats.max_abs, err);
         stats.max_rel = std::max(stats.max_rel, err / std::max(std::abs(e), 1.0));
     }
+    EXPECT_EQ(non_finite, 0U) << non_finite << " non-finite results, first at flat index " << first_non_finite << ": "
+                              << actual.flat(first_non_finite);
     return stats;
 }
 
@@ -267,7 +300,7 @@ TEST_P(RingAttentionMergeTest, SingleMergeMatchesReference) {
     // "No contribution" rows must be passed through untouched, bit for bit.
     for (uint32_t b = 0; b < B; ++b) {
         for (uint32_t h = 0; h < H; ++h) {
-            for (uint32_t s = kSkippedStep; s < S; s += kNumRowKinds) {
+            for (uint32_t s = kSkippedStep; s < S; s += kRowKindCycle) {
                 ASSERT_EQ(lse(b, h, s, 0), in.running_lse(b, h, s, 0)) << "b " << b << " h " << h << " s " << s;
                 for (uint32_t d = 0; d < D; ++d) {
                     ASSERT_EQ(accum(b, h, s, d), in.accum(b, h, s, d))
@@ -293,7 +326,6 @@ TEST_P(RingAttentionMergeTest, RingOfMergesMatchesDirectCombination) {
     std::vector<xt::xarray<float>> step_outputs;
     std::vector<xt::xarray<float>> step_lses;
     for (uint32_t step = 0; step < kSteps; ++step) {
-        MergeInputs in = make_inputs(B, H, S, D, /*seed=*/100U + 10U * step);
         // Only the first step contributes to every row; later steps skip a row with
         // probability ~1/4, the way the causal schedule skips whole steps per device.
         auto skip = ttml::test_utils::make_uniform_xarray<float>(lse_shape, 0.0F, 1.0F, 1000U + step);
@@ -303,11 +335,11 @@ TEST_P(RingAttentionMergeTest, RingOfMergesMatchesDirectCombination) {
                 step_lse.flat(i) = kNegInf;
             }
         }
-        xt::view(in.intermediates, xt::all(), xt::all(), xt::all(), xt::range(0, 1)) = step_lse;
-        DeviceMergeInputs dev = upload(in);
+        const RingStepInputs in = make_ring_step_inputs(step_lse, D, /*seed=*/102U + 10U * step);
         step_outputs.push_back(in.step_output);
         step_lses.push_back(step_lse);
-        ttml::ops::distributed::detail::online_softmax_merge(accum, running_lse, dev.step_output, dev.intermediates);
+        ttml::ops::distributed::detail::online_softmax_merge(
+            accum, running_lse, in.dev_step_output, in.dev_intermediates);
     }
 
     xt::xarray<double> ref_accum = xt::zeros<double>(full_shape);

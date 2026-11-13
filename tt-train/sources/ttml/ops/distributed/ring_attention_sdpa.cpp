@@ -26,10 +26,10 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -62,8 +62,9 @@ namespace detail {
 //   O' = O + w * (O_i - O)        a lerp, since the usual weight on O, exp(L - L'), is 1 - w
 //
 // A logsumexp of -inf means no contribution: the first merge (L = -inf) gives O' = O_i, and a
-// step the causal schedule skips (l_i = -inf) leaves O and L unchanged. Both can't be -inf,
-// since every device computes its diagonal block at step 0.
+// step the causal schedule skips (l_i = -inf) leaves O and L unchanged. Both -inf would make the
+// row NaN (w = exp(-inf - (-inf))); the ring caller never passes that, since every device
+// computes its diagonal block at step 0.
 // O_i must be finite even on skipped steps (0 * inf = NaN). In the ring caller, step 0 writes
 // every row of the reused output buffer on every device, so a skipped step re-merges an
 // earlier finite output with weight 0.
@@ -88,12 +89,12 @@ void online_softmax_merge(
         "online_softmax_merge: step_intermediates must be (B, H, S, 32), got {}",
         step_intermediates.logical_shape());
 
-    // 1. lse of this step: column 0 of the (B, H, S, 32) FP32 intermediates.
+    // 1. lse of this step: column 0 of the (B, H, S, 32) FP32 intermediates, as a (B, H, S, 1)
+    //    view of the same tiles. Columns 1..31 become tile padding. No copy and no dispatch: this
+    //    is the tensor ttnn::slice would return, without slice's copy of every tile.
     const auto [batch, heads, seq_len, width] = step_intermediates.logical_shape().to_array_4D();
-    const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-    const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
-    const ttsl::SmallVector<uint32_t> lse_end = {batch, heads, seq_len, 1};
-    const ttnn::Tensor lse_chunk = ttnn::slice(step_intermediates, lse_start, lse_end, slice_step);
+    const ttnn::Tensor lse_chunk = ttnn::experimental::view(
+        step_intermediates, ttnn::Shape{batch, heads, seq_len, 1U}, step_intermediates.padded_shape());
 
     // 2. L' = logaddexp(L, l_i). A single fused SFPU kernel evaluating the stable form
     //    max(a, b) + log1p(exp(-|a - b|)) (no overflow for large lse), with

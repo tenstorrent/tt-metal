@@ -63,6 +63,9 @@ namespace detail {
  *             every row, including rows whose lse is -inf (they are weighted by 0, and 0 * inf = NaN)
  * @param step_intermediates (B, H, S, 32) FP32 SDPA intermediates, logsumexp in column 0
  *             (-inf = the step contributes nothing)
+ *
+ * Either lse may be -inf in a row, but not both: logaddexp(-inf, -inf) is -inf, so the step weight
+ * exp(-inf - (-inf)) is NaN and so is the merged row.
  */
 void online_softmax_merge(
     ttnn::Tensor& output_accum,
