@@ -101,17 +101,22 @@ def test_plain(md, mod):
                 ttnn.deallocate(t)
 
 
-def column_partials(md, mod, q, kv_nat, ids_global, n_pages, G=8, kc=128, S=None):
+def column_partials(md, mod, q, kv_nat, ids_global, n_pages, G=8, kc=128, S=None, scaled=False):
     """ids_global [S,K] natural positions (SENT tail). Runs the 8 column shards one after the other on the chip. -> list over columns of (o [HR,S,V] f32, m [HR,S] scaled max, l [HR,S]), plus valid count per column [8,S]"""
     S = q.shape[1]
     kv_cols = SQ.shard_kv(kv_nat.float().numpy(), n_pages)  # [8, n_pages*64, D]
     loc, cnt = SQ.split_ids(ids_global.numpy().astype(np.int64))  # [8,S,K] uint32 , [8,S]
     parts = []
+    kv_deqs = []
     for c in range(8):
         kvc = torch.from_numpy(kv_cols[c]).to(torch.bfloat16)
         ix = torch.from_numpy(loc[c].astype(np.int64))
         ix = torch.where(ix == SQ.SENTINEL, torch.full_like(ix, -1), ix)
         q_dev, kv_dev, i_dev, _ = dev_inputs(md, q, kvc, ix)
+        if scaled:
+            ttnn.deallocate(kv_dev)
+            kv_dev, kv_deq = pack_scaled(md, kvc)
+            kv_deqs.append(kv_deq)
         out, stats = mod.sparse_sdpa_split(q_dev, kv_dev, i_dev, V, SCALE, kc, G, ckc_of(md), None, emit_stats=True)
         o = ttnn.to_torch(out)[0, :HR].float()
         st = ttnn.to_torch(stats).reshape(S, 64).float()
@@ -120,7 +125,7 @@ def column_partials(md, mod, q, kv_nat, ids_global, n_pages, G=8, kc=128, S=None
         parts.append((o, m, l))
         for t in (q_dev, kv_dev, i_dev, out, stats):
             ttnn.deallocate(t)
-    return parts, cnt
+    return (parts, cnt, kv_deqs) if scaled else (parts, cnt)
 
 
 def merge_cpu(parts, sink_logit, s):
@@ -200,6 +205,37 @@ def pack_scaled(md, kv):
     return kv_dev, torch.cat([rec.to(torch.bfloat16), kv[:, V:]], dim=-1)
 
 
+def test_merge_scaled(md, mod):
+    """SCALED_FP8 column shards + stats: merged result vs the dequantised full-softmax reference"""
+    for kind in ("random", "real"):
+        ctx, S = 65536, 2
+        n_pages = ctx // 512
+        T = n_pages * 512
+        kv, q = gen_data(kind, T, S, seed=2)
+        ids = torch.stack([torch.randperm(ctx)[:TOPK] for _ in range(S)])
+        q = align_q_to_keys(kind, q, kv, ids)
+        sl = torch.linspace(-2, 2, HR)
+        parts, cnt, deqs = column_partials(md, mod, q, kv, ids, n_pages, scaled=True)
+        # dequantised natural pool for the reference: undo the column sharding
+        kv_cols = torch.stack(deqs).float().numpy()
+        t = np.arange(T)
+        _, col, loc = SQ.locate(t)
+        kv_deq_nat = torch.from_numpy(kv_cols[col, loc]).to(torch.bfloat16)
+        ref = ref_sparse(q, kv_deq_nat, ids, sl)
+        merged = torch.stack([torch.from_numpy(merge_cpu(parts, sl, s)).float() for s in range(S)], dim=1)
+        c = pcc(merged, ref)
+        emit(
+            {
+                "test": "merge_scaled_fp8",
+                "data": kind,
+                "S": S,
+                "pcc_merged_vs_dequant_full": round(c, 5),
+                "pcc_vs_bf16_full": round(pcc(merged, ref_sparse(q, kv, ids, sl)), 5),
+                "pass": c >= GATE,
+            }
+        )
+
+
 def test_scaled(md, mod):
     for kind in ("random", "real"):
         for S, G, kc in [(1, 8, 128), (4, 8, 128), (4, 4, 256), (8, 4, 256)]:
@@ -248,17 +284,16 @@ def test_lat(md, mod):
         for S in (1, 2, 4, 8):
             T = 65536
             kv, q = gen_data("random", T, S)
-            kv_dev = kvs = None
+            if fmt == "scaled":
+                kv_dev, _ = pack_scaled(md, kv)
+            else:
+                kv_dev = to_dev(md, kv.reshape(1, 1, T, D), ttnn.bfloat16)
             for valid in (2048, 1024, 512, 128):
                 per = T // S
                 idx = make_idx(S, TOPK, [(s * per, (s + 1) * per) for s in range(S)], valid)
                 sl = torch.linspace(-2, 2, HR)
-                if fmt == "scaled":
-                    if kv_dev is None:
-                        kv_dev, _ = pack_scaled(md, kv)
-                    q_dev, _, i_dev, s_dev = dev_inputs(md, q, kv[:16], idx, sl)
-                else:
-                    q_dev, kv_dev, i_dev, s_dev = dev_inputs(md, q, kv, idx, sl)
+                q_dev, _kv, i_dev, s_dev = dev_inputs(md, q, kv[:16], idx, sl)
+                ttnn.deallocate(_kv)
                 for G, kc in [(8, 128), (4, 256)]:
                     for emit_stats in (False, True):
                         try:
@@ -296,14 +331,10 @@ def test_lat(md, mod):
                                     "error": str(e).strip().splitlines()[0][:200],
                                 }
                             )
-                if fmt != "scaled":
-                    for t in (q_dev, i_dev, s_dev):
-                        ttnn.deallocate(t)
-                    kv_dev = None
-                    kv_dev = to_dev(md, kv.reshape(1, 1, T, D), ttnn.bfloat16)  # keep a pool for the next valid
-                    kv_dev_keep = kv_dev
-            if kv_dev is not None:
-                ttnn.deallocate(kv_dev)
+                            raise
+                for t in (q_dev, i_dev, s_dev):
+                    ttnn.deallocate(t)
+            ttnn.deallocate(kv_dev)
 
 
 if __name__ == "__main__":
@@ -311,7 +342,13 @@ if __name__ == "__main__":
     md = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     which = os.environ.get("TEST", "all")
     try:
-        for name, fn in [("plain", test_plain), ("merge", test_merge), ("scaled", test_scaled), ("lat", test_lat)]:
+        for name, fn in [
+            ("plain", test_plain),
+            ("merge", test_merge),
+            ("scaled", test_scaled),
+            ("merge_scaled", test_merge_scaled),
+            ("lat", test_lat),
+        ]:
             if which in (name, "all"):
                 try:
                     fn(md, mod)

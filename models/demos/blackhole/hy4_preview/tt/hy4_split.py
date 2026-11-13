@@ -19,6 +19,9 @@ import ttnn
 KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hy4_split_kernels")
 
 
+_DUMMY_SINK = {}
+
+
 def _acc(t):
     return list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
@@ -90,14 +93,19 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
     bf = ttnn.bfloat16
     k_in_tile = 1088 if (fp8 or scaled) else 2048
     k_in_df = ttnn.bfloat8_b if (fp8 or scaled) else ttnn.bfloat16
-    if sink is None:  # dummy (the kernel ignores it when emit_stats)
-        sink = ttnn.from_torch(
-            torch.zeros(1, 1, 1, H, dtype=torch.bfloat16),
-            device=md,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+    if (
+        sink is None
+    ):  # dummy (the kernel ignores it when emit_stats); created once per device (host writes are illegal during trace capture)
+        key = id(md)
+        if key not in _DUMMY_SINK:
+            _DUMMY_SINK[key] = ttnn.from_torch(
+                torch.zeros(1, 1, 1, H, dtype=torch.bfloat16),
+                device=md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        sink = _DUMMY_SINK[key]
     use_sink = 0 if emit_stats else 1
     stats = (
         ttnn.allocate_tensor_on_device(
