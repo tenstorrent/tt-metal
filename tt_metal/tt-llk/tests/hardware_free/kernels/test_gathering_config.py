@@ -468,6 +468,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         MathOperation,
         PerfRunType,
         Transpose,
+        VectorMode,
     )
     from helpers.test_variant_parameters import (
         APPROX_MODE,
@@ -483,6 +484,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         TILE_COUNT,
         UNPACK_TRANS_FACES,
         UNPACK_TRANS_WITHIN_FACE,
+        VECTOR_MODE,
     )
     from helpers.tile_constants import MAX_NUM_FACES
 
@@ -509,6 +511,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
             NUM_FACES(num_faces=MAX_NUM_FACES),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            VECTOR_MODE(VectorMode.RC),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
