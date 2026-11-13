@@ -178,9 +178,6 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
 
-    // Left uninitialized: step 0 writes every row on every device before any skipped step merges
-    // it. A schedule in which a device can merge this buffer before writing it (e.g. one that
-    // skips step 0 somewhere) must zero-fill it instead.
     ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
     ttnn::Tensor intermediate_tensor = ttnn::empty(
         ttnn::Shape{batch_num, heads, seq_len_local, 32U},
