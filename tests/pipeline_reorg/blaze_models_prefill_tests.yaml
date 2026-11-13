@@ -268,7 +268,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.7-1T, GLM-5.3-744B, Mistral-Small-4-119B) KV cache table accuracy"
+- name: "(Kimi-K2.7-1T, Kimi-K3.1, GLM-5.3-744B, Mistral-Small-4-119B) KV cache table accuracy"
   fabric_profile: torus_xy
   cmd: |
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -281,14 +281,16 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm53_tp_sharded_kv_cache_mock -k "8x4 and line and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_k3_kv_cache_table -k "kimi_k3_1" -vvv --tb=short
     '
   test_type: kv_cache_table
-  test_tags: [kimi_k2_7, glm_5_3, mistral4, kv_cache]
+  test_tags: [kimi_k2_7, kimi_k3_1, glm_5_3, mistral4, kv_cache]
   test_group: module
   skus:
     bh_sc1:
-      # +4 min on the Kimi/GLM/dflash baseline of 20 for the Mistral row this leg now also runs.
-      timeout: 24
+      # +4 min on the Kimi/GLM/dflash baseline of 20 for the Mistral row this leg now also runs, +2 for the
+      # Kimi-K3.1 row (40 s pytest, 48 s with device open, on bh-glx-120-b08u02 2026-11-13; x2 for a cold JIT).
+      timeout: 26
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -335,11 +337,22 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_variant.py \
-          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py::test_kvpe_format_must_match_the_attention \
-          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py::test_kimi_k3_1_defaults_to_scaled_fp8_and_k3_stays_dense \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_migration_stages.py \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_topk_recall_counts_each_trace_key_once \
+          models/demos/deepseek_v3_d_p/tests/test_kv_chunk_table.py::test_kimi_k31_index_and_kda_share_one_table \
+          models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_cache.py::test_index_key_basis_follows_the_model_config \
+          models/demos/deepseek_v3_d_p/tests/test_chunked_trace_helpers.py::test_single_file_read_past_the_end_raises \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+        # Every host-only K3 / K3.1 allocation contract; the footprint test allocates on an 8x4 mesh.
+        python3 -m pytest -vvv --tb=short -k "not footprint" \
+          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py
+        # K3.1 real checkpoint: the indexer lands under the names TtIndexer loads. The test skips when the
+        # checkpoint is not mounted, so the section fails unless both tests passed.
+        set -o pipefail
+        python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_weights.py | tee /tmp/k31_weights.out
+        grep -qE "\b2 passed" /tmp/k31_weights.out || { echo "::error::test_k31_weights.py did not pass (skipped?): is the K3.1 checkpoint mounted?"; exit 1; }
         python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
         # AttnRes determinism on the full torus: each op, then a whole block of reads, many runs without a sync.
@@ -587,17 +600,19 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(Kimi-K3.1) synthetic-weight DSA block determinism, chunked prefill and pipeline split"
+- name: "(Kimi-K3.1) synthetic-weight DSA block determinism, chunked prefill, pipeline split and traced replay"
   # K3.1 = K3 with Gated DSA on its 24 full-attention layers, run through K3's stack. Its accuracy against vLLM is
   # gated in the K3 transformer suite above (k31_depth_ladder L24 / L24-128k: per-layer outputs, every kvpe slot,
   # the index cache and top-k recall, 2 and 26 chunks). This leg covers what that golden does not, on synthetic
-  # weights (tests/kimi_k3/synthetic.py, dense-FFN stand-in on every layer; no checkpoint, no TTNN cache, no trace):
-  # [1/3] a repeated request is bit-identical, a pipeline stage's KV-only last layer writes its caches, and a
-  # DSA-only window reads the earlier chunk from its caches; [2/3] device DRAM stable across chunks, and outputs,
+  # weights (tests/kimi_k3/synthetic.py, dense-FFN stand-in on every layer; no checkpoint, no TTNN cache):
+  # [1/4] a repeated request is bit-identical, a pipeline stage's KV-only last layer writes its caches, and a
+  # DSA-only window reads the earlier chunk from its caches; [2/4] device DRAM stable across chunks, and outputs,
   # KDA carries and caches independent of the padding past an unaligned end (the golden runs each prompt once,
-  # with one padding); [3/3] a stack split at layer 12 is bit-identical to the undivided one (the golden runs one
-  # stage). Measured on bh-glx-120-b08u02 (2026-11-13), pytest time per section incl. synthetic weight
-  # generation: DSA block 3 windows ~3 min, chunked ~1.5-2.5 min, split ~5.5-6.5 min (~10-12 min), plus the
+  # with one padding); [3/4] a stack split at layer 12 is bit-identical to the undivided one (the golden runs one
+  # stage); [4/4] one captured forward replayed for other users' slots, chunk starts and a partial end is
+  # bit-identical to eager, outputs and both caches (the runner runs traced). Measured on
+  # bh-glx-120-b08u02 (2026-11-13), pytest time per section incl. synthetic weight generation: DSA block 3 windows
+  # ~3 min, chunked ~1.5-2.5 min, split ~5.5-6.5 min, traced replay 3 windows 6.6 min (~17-19 min), plus the
   # job's ~5.5 min "Setup multihost job".
   cmd: |
     # Stops at the first failure, as the suites above.
@@ -622,20 +637,29 @@
       '
     )
 
-    echo "===== [1/3] (Kimi-K3.1) DSA block windows, deterministic, KV-only last layer, prefix from caches ====="
+    k31_dsa_trace() (
+      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_dsa_trace.py -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/4] (Kimi-K3.1) DSA block windows, deterministic, KV-only last layer, prefix from caches ====="
     k31_dsa_block || exit $?
-    echo "===== [2/3] (Kimi-K3.1) chunked prefill L4, 4 chunks to an unaligned end, DRAM and padding independence ====="
+    echo "===== [2/4] (Kimi-K3.1) chunked prefill L4, 4 chunks to an unaligned end, DRAM and padding independence ====="
     k31_chunked_prefill || exit $?
-    echo "===== [3/3] (Kimi-K3.1) pipeline split at layer 12 vs undivided ====="
+    echo "===== [3/4] (Kimi-K3.1) pipeline split at layer 12 vs undivided ====="
     k31_pipeline_split || exit $?
-    echo "===== all 3 sections passed ====="
+    echo "===== [4/4] (Kimi-K3.1) traced DSA replay reads slot, start and end from device metadata ====="
+    k31_dsa_trace || exit $?
+    echo "===== all 4 sections passed ====="
   test_type: k31_transformer_suite
-  test_tags: [kimi_k3_1, transformer, k31_dsa_block, k31_chunked_prefill, k31_pipeline_split]
+  test_tags: [kimi_k3_1, transformer, k31_dsa_block, k31_chunked_prefill, k31_pipeline_split, k31_dsa_trace]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 8 + 15).
-      timeout: 35
+      # Exactly the sum of the per-section bounds (12 + 8 + 15 + 12).
+      timeout: 47
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
