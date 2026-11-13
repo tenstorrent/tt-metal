@@ -279,6 +279,9 @@ class RunTimeOptions {
     // Temporary: rdcycle DFB init timing in device firmware. Deprecate once profiler covers this.
     bool measure_dfb_init_time_enabled = false;
 
+    // Test-only: force the number of txn IDs (FIFO sections) per implicit-sync DFB side (2-4); 0 = host picks.
+    uint32_t dfb_force_num_txn_ids = 0;
+
     bool clear_l1 = false;
     bool clear_dram = false;
 
@@ -789,6 +792,9 @@ public:
     bool get_kernels_early_return() const { return kernels_early_return; }
 
     bool get_measure_dfb_init_time_enabled() const { return measure_dfb_init_time_enabled; }
+    uint32_t get_dfb_force_num_txn_ids() const { return dfb_force_num_txn_ids; }
+    // Test-only: lets a benchmark change the section count between programs in one process.
+    void set_dfb_force_num_txn_ids(uint32_t n) { dfb_force_num_txn_ids = n; }
 
     bool get_clear_l1() const { return clear_l1; }
     void set_clear_l1(bool clear) { clear_l1 = clear; }

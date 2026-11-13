@@ -130,3 +130,29 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+
+# Quasar-only DFB ISR workloads (issue #55788); measured from emulator waveforms, see the design doc.
+add_executable(dfb_isr_timing_bench dataflow_buffer/dfb_isr_timing_bench.cpp)
+target_include_directories(
+    dfb_isr_timing_bench
+    BEFORE
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+target_link_libraries(
+    dfb_isr_timing_bench
+    PRIVATE
+        test_metal_common_libs
+        Boost::smart_ptr
+)
+tt_reuse_precompile_headers(dfb_isr_timing_bench metal_test_pch)
+set_target_properties(
+    dfb_isr_timing_bench
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)

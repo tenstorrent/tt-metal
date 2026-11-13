@@ -129,7 +129,8 @@ enum class EnvVarID {
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
                                      // covers this).
-    TT_METAL_TDP_LIMIT_WATTS,        // Firmware throttler TDP limit [W] (Blackhole)
+    TT_METAL_DFB_FORCE_NUM_TXN_IDS,  // Test-only: force txn IDs (FIFO sections) per implicit-sync DFB side
+    TT_METAL_TDP_LIMIT_WATTS,       // Firmware throttler TDP limit [W] (Blackhole)
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -1012,6 +1013,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_MEASURE_DFB_INIT_TIME=1
         case EnvVarID::TT_METAL_MEASURE_DFB_INIT_TIME:
             this->measure_dfb_init_time_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_DFB_FORCE_NUM_TXN_IDS
+        // Test-only (dfb_isr_timing_bench): number of txn IDs, i.e. FIFO sections the ISR credits
+        // independently, for every implicit-sync DFB side. The host still rejects layouts that do not
+        // divide evenly. Host-side only: device code is unchanged.
+        // Default: 0 (host picks the smallest legal count in 2..4)
+        // Usage: export TT_METAL_DFB_FORCE_NUM_TXN_IDS=3
+        case EnvVarID::TT_METAL_DFB_FORCE_NUM_TXN_IDS:
+            this->dfb_force_num_txn_ids = static_cast<uint32_t>(std::stoul(value));
+            TT_FATAL(
+                this->dfb_force_num_txn_ids == 0 ||
+                    (this->dfb_force_num_txn_ids >= 1 && this->dfb_force_num_txn_ids <= 4),
+                "TT_METAL_DFB_FORCE_NUM_TXN_IDS must be 0 (auto) or 1-4, got {}",
+                this->dfb_force_num_txn_ids);
             break;
 
         // TT_METAL_TDP_LIMIT_WATTS
