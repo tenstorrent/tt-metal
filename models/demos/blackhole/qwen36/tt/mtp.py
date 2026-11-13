@@ -18,6 +18,7 @@ from loguru import logger
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.draft_head import build_draft_head
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.spec_argmax_fused import ROWS, FusedShardArgmax
 from models.tt_transformers.tt.common import Mode
@@ -60,7 +61,8 @@ def draft_argmax(mtp, logits):
 
 
 class Qwen36MTP:
-    """Single-layer MTP drafter head. Reuses the parent model's embedding + LM head."""
+    """Single-layer MTP drafter head. Reuses the parent model's embedding + LM head; under TP its per-shard draft
+    logits read its own bfloat4_b copy of the LM head (draft_head)."""
 
     # --- per-shard drafter argmax (QWEN36_DRAFT_SHARDED_ARGMAX) constants ------------------- #
     # Lanes each device contributes to the two winner-pick all-gathers. 32 = one tile column, so the
@@ -84,10 +86,19 @@ class Qwen36MTP:
         self.num_devices = getattr(args, "num_devices", 1)
         self.tt_ccl = tt_ccl
 
-        # Shared (no new weights): the main embedding + LM head + final-norm reuse.
+        # Shared with the base model: the embedding and the bfloat8_b LM head.
         self.embd = parent.embd
         self._lm_head = parent._lm_head
         self.lm_head_weight = parent.lm_head_weight
+        # The per-shard draft logits read the drafter's own bfloat4_b, DRAM-sharded head copy (tt/draft_head.py)
+        # when the head is vocab-sharded and the copy's program takes the shape; the verify keeps lm_head_weight.
+        self.draft_head = None
+        if self.num_devices > 1 and parent._lmhead_vocab_sharded:
+            self.draft_head = build_draft_head(
+                state_dict["output.weight"],
+                mesh_device,
+                tensor_cache_path / "output.weight.vshard.draft_bfp4" if tensor_cache_path is not None else None,
+            )
 
         mtp_cache = (tensor_cache_path / "mtp") if tensor_cache_path is not None else None
 
@@ -529,7 +540,12 @@ class Qwen36MTP:
             # turns it into the global id with two 32-lane gathers instead of one 993 KB one. Same
             # matmul math as the _lm_head fp32 branch below (HiFi2 + fp32 dest accumulation), minus
             # the collective, so the drafter keeps the fp32 tie-breaking it was given fp32 for.
-            logits = ttnn.linear(normed, self.lm_head_weight, dtype=ttnn.float32, compute_kernel_config=self._fp32_cfg)
+            if self.draft_head is not None and self.draft_head.applies(normed):
+                logits = self.draft_head.linear(normed, self._fp32_cfg)
+            else:
+                logits = ttnn.linear(
+                    normed, self.lm_head_weight, dtype=ttnn.float32, compute_kernel_config=self._fp32_cfg
+                )
         elif sharded_lm_head or getattr(self, "_ondev_argmax", False):
             logits = ttnn.linear(normed, self.lm_head_weight)  # vocab-sharded shard
         else:
