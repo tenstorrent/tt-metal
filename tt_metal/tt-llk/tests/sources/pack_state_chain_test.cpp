@@ -18,7 +18,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 namespace
 {
-[[maybe_unused]] constexpr int K_PT = 0, K_PB1 = 1, K_PBW = 2, K_PBC = 3, K_PBCW = 4, K_ROWS = 5, K_UNT = 6, K_FU = 7, K_PTC = 8;
+[[maybe_unused]] constexpr int K_PT = 0, K_PB1 = 1, K_PBW = 2, K_PBC = 3, K_PBCW = 4, K_ROWS = 5, K_UNT = 6, K_FU = 7, K_PTC = 8, K_PTK = 9, K_PTKI = 10;
 constexpr std::uint32_t NT = 4; // tiles per step
 [[maybe_unused]] constexpr std::uint32_t CT = 4; // the untilize steps run one tile row of NT tiles
 [[maybe_unused]] constexpr auto FU_SYNC = ckernel::FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE;
@@ -196,6 +196,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             case K_PBC:
                 _llk_pack_close_fast_untilize_<dest_sync>();
                 _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(0, a0, NT, tile_stride_bytes, 4);
+                break;
+            case K_PTKI:
+                _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4);
+                [[fallthrough]];
+            case K_PTK:
+                // llk_pack_block's per-tile block past one tile: closed, byte-wise destination, the W stride cache kept.
+                _llk_pack_close_fast_untilize_<dest_sync>();
+                _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en, true, false>(0, a0, NT, tile_stride_bytes, 4);
                 break;
             case K_PBCW:
                 _llk_pack_close_fast_untilize_<dest_sync>();

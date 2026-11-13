@@ -45,6 +45,8 @@ KINDS = {
     "UNT": 6,
     "FU": 7,
     "PTC": 8,
+    "PTK": 9,
+    "PTKI": 10,
 }
 NT = 4
 ROWS_R = 50
@@ -84,6 +86,8 @@ FU_CHAINS = [
     ("pbcw_fu_pbcw", ("PBCW", "FU", "PBCW"), False),
     ("fu_uninit_pbw", ("FU", "PBW"), True),
     ("fu_uninit_pb1", ("FU", "PB1"), True),
+    ("fu_ptk", ("FU", "PTK"), False),
+    ("pbw_fu_ptk", ("PBW", "FU", "PTK"), False),
 ]
 ROWS_CHAINS = [
     ("rows_pb1", ("ROWS", "PB1")),
@@ -92,6 +96,7 @@ ROWS_CHAINS = [
     ("rows_pbcw", ("ROWS", "PBCW")),
     ("pbw_rows_pbw", ("PBW", "ROWS", "PBW")),
     ("rows_pt", ("ROWS", "PT")),
+    ("pbw_rows_ptk", ("PBW", "ROWS", "PTK")),
 ]
 UNT_CHAINS = [
     ("unt_pt", ("UNT", "PT")),
@@ -99,6 +104,7 @@ UNT_CHAINS = [
     ("unt_pbw", ("UNT", "PBW")),
     ("unt_pbc", ("UNT", "PBC")),
     ("pt_unt_pt", ("PT", "UNT", "PT")),
+    ("pbw_unt_ptk", ("PBW", "UNT", "PTK")),
 ]
 MIX_CHAINS = [
     ("pb1_pt", ("PB1", "PT")),
@@ -112,6 +118,11 @@ MIX_CHAINS = [
     ("pbw_pb1_pbw", ("PBW", "PB1", "PBW")),
     ("pbcw_pbc_pbcw", ("PBCW", "PBC", "PBCW")),
     ("pb1_pt_pbw", ("PB1", "PT", "PBW")),
+    ("pbw_ptk", ("PBW", "PTK")),
+    ("pbw_ptki", ("PBW", "PTKI")),
+    ("ptk_pbw_ptki", ("PTK", "PBW", "PTKI")),
+    ("pbcw_ptki_pbcw", ("PBCW", "PTKI", "PBCW")),
+    ("ptki_pt_ptki", ("PTKI", "PT", "PTKI")),
 ]
 
 PLAIN_FORMATS = [F16, F32]

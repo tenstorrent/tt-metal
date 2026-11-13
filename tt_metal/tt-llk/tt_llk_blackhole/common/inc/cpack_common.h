@@ -342,6 +342,21 @@ inline void llk_pack_state_set_half(const std::uint16_t half)
 {
     __builtin_memcpy(pack_state, &half, sizeof(half));
 }
+// A pack program's state store: the channel-1 W stride bytes reset only where it zeroed channel 1, so a W or closed block
+// after an init or reconfigure keeps its stride.
+template <bool ch1_zeroed>
+inline void llk_pack_state_store(const std::uint16_t half)
+{
+    if constexpr (ch1_zeroed)
+    {
+        const std::uint32_t state = half;
+        __builtin_memcpy(pack_state, &state, sizeof(state));
+    }
+    else
+    {
+        llk_pack_state_set_half(half);
+    }
+}
 inline std::uint32_t pack_ch1_w_stride()
 {
     std::uint16_t stride;
@@ -449,6 +464,9 @@ inline constexpr bool pack_strides_u2d = LLK_UNPACK_TO_DEST_ANY != 0;
 template <PackMode>
 inline constexpr bool pack_strides_u2d = true;
 #endif
+// PackMode::Default through a caller's template argument, so pack_strides_u2d is read at the caller's instantiation.
+template <auto>
+inline constexpr PackMode llk_pack_default_mode = PackMode::Default;
 
 // reconfigured: the reconfigure's state, stored by the caller of the noinline reconfigure (store_state false there),
 // so that call writes no memory and the caller keeps its registers across it. zero_ch1: hw_configure and the fast
@@ -461,8 +479,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     // The state store first: behind the config writes it waits for them.
     if constexpr (store_state)
     {
-        const std::uint32_t state = reconfigured ? 0x100 : 0;
-        __builtin_memcpy(pack_state, &state, sizeof(state));
+        llk_pack_state_store<zero_ch1 || (ch1_u2d && pack_strides_u2d<pack_mode>)>(reconfigured ? 0x100 : 0);
     }
     std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
@@ -981,8 +998,7 @@ inline void reconfig_packer_data_format_and_state(
     const bool partial_face)
 {
     reconfig_packer_data_format<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
-    const std::uint32_t state = 0x100;
-    __builtin_memcpy(pack_state, &state, sizeof(state));
+    llk_pack_state_store<!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES) && is_fp32_dest_acc_en && pack_strides_u2d<llk_pack_default_mode<skip>>>(0x100);
 }
 
 // The words the reconfigure leaves for one output, as set_packer_config, reconfig_packer_data_format and
@@ -1206,8 +1222,7 @@ TT_ALWAYS_INLINE void reconfig_packer_data_format_imm_and_state()
         pack_cfg_rmw_imm<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32, zwstride_mask, pack_cfg_zwstride_word(pack_src_format)>();
     }
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    const std::uint32_t state = 0x100;
-    __builtin_memcpy(pack_state, &state, sizeof(state));
+    llk_pack_state_store<strides_full && is_fp32_dest_acc_en && pack_strides_u2d<llk_pack_default_mode<format_mask>>>(0x100);
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>

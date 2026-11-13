@@ -401,8 +401,7 @@ inline void pack_init_apply(
     // live (llk_pack_init_live): the address modes, strides and X counter are hw_configure's; the state store stays.
     if constexpr (live)
     {
-        const std::uint32_t state = 0;
-        __builtin_memcpy(pack_state, &state, sizeof(state));
+        llk_pack_state_set_half(0);
         _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
         return;
     }

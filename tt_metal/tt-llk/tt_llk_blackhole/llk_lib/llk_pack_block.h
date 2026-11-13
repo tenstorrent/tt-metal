@@ -798,6 +798,31 @@ __attribute__((always_inline)) inline void llk_pack_block_per_tile(
     }
 }
 
+// A per-tile block of three tiles or more, to an output the W offset reaches: one destination write, then each tile closed as
+// main's and the next moved by the W counters (_llk_pack_block_closed_), not three byte writes and a SETADC per tile.
+// Not at half sync with fp32 DEST and an unpack to DEST, where the per-tile pack keeps its slower destination write, nor
+// for 4 byte outputs, which read slower closed.
+template <bool is_fp32_dest_acc_en, std::uint32_t ntiles, bool guard_dest_straddle>
+__attribute__((always_inline)) inline void llk_pack_block_tiles(const std::uint32_t start_tile_index, const std::uint8_t output_id)
+{
+    if constexpr (ntiles > 2 && llk_pack_rmw_per_tile<is_fp32_dest_acc_en, PackMode::Default> && !pack_fast_untilize_linked<DST_SYNC_MODE>)
+    {
+        const bool straddle = guard_dest_straddle && IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3;
+        if (llk_pack_block_is_closable(output_id) && !llk_pack_dst_is_wide(output_id) && !llk_pack_dst_is_int8(output_id) && !straddle &&
+            !LLK_PACK_OTHER_PROGRAM_ACTIVE() &&
+            !(DST_SYNC_MODE == DstSync::SyncHalf && LLK_PACK_L1_ACC_ACTIVE()))
+        {
+            const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+            const std::uint32_t pack_tile_addr = get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+            get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+            _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, true, false>(
+                start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+            return;
+        }
+    }
+    llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+}
+
 // The contexts a block can pack in: 0 always, 1 and 2 only in a kernel with a matmul API, 2 only with a pack-thread
 // SFPU header too.
 template <std::uint32_t matmul_kt>
@@ -911,7 +936,7 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     if (forms == 1)
     {
         llk_pack_state_set_half(output_id + 1);
-        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+        llk_pack_block_tiles<is_fp32_dest_acc_en, ntiles, guard_dest_straddle>(start_tile_index, output_id);
         return;
     }
     // A block of one folded form packs as main: it reads no state, so it closes no fast untilize either.
@@ -956,7 +981,7 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
     }
     if (form == 'T')
     {
-        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+        llk_pack_block_tiles<is_fp32_dest_acc_en, ntiles, guard_dest_straddle>(start_tile_index, output_id);
         return;
     }
     if (llk_pack_block_is_contiguous(output_id))
