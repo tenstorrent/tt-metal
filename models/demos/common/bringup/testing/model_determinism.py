@@ -130,11 +130,25 @@ def compare(first: tuple, got: tuple) -> dict:
 
 
 def check(
-    s, model, layers, *, label: str = "model", record: bool = True, tokens: dict | None = None
+    s,
+    model,
+    layers,
+    *,
+    label: str = "model",
+    record: bool = True,
+    tokens: dict | None = None,
+    run=None,
+    suffix: str = "",
 ) -> tuple[str | None, float]:
     """Run the prompts (module docstring) on ``model``; record the metrics. (None when every later sequence equals its
     prompt's first bit for bit, else what differs first (prompt, run, chunk, layer state); the worst |diff|).
-    ``tokens``: {prompt: ids} instead of the spec's prompts (the selftest's fake model)."""
+    ``tokens``: {prompt: ids} instead of the spec's prompts (the selftest's fake model).
+    ``run`` (FIX.28, F266): another serving mode's sequence, ``run(model, layers, tokens, chunk, n, final_norm) ->
+    (per-chunk host tensors, [(name, host tensor)] of the state that mode serves)`` instead of ``sequence`` (e.g.
+    DeepSeek-V4.1's DECODER_SKIP=decode: chunks marked not last, a replay below global_write_start); ``suffix`` is
+    appended to every metric name (``determinism_max_abs_diff<suffix>``, ...), so the default mode's stay as they are.
+    The same prompts, order, cold / warm runs and bit comparison."""
+    seq_fn = sequence if run is None else run
     from models.demos.common.bringup.core import metrics
     from models.demos.common.bringup.testing import b2b
 
@@ -153,9 +167,12 @@ def check(
     state_worst, bits, errors = 0.0, 0, []
     for r in range(runs):
         for wl in PROMPTS:
-            got = sequence(model, layers, tokens[wl], chunk, n, final_norm)
+            got = seq_fn(model, layers, tokens[wl], chunk, n, final_norm)
             if r == 0:
                 first[wl] = got
+                k = len(got[0])  # (a ``run`` may make another count of per-chunk tensors than n)
+                diffs[wl] = [[0.0] * k for _ in range(runs)]
+                rows[wl] = [[0] * k for _ in range(runs)]
                 continue
             res = compare(first[wl], got)
             diffs[wl][r], rows[wl][r] = res["chunk_diff"], res["chunk_rows"]
@@ -179,18 +196,22 @@ def check(
     total = max(worst.values())
     if record:
         for wl in PROMPTS:
-            metrics.record(f"determinism_max_abs_diff_{wl}", worst[wl])
+            metrics.record(f"determinism_max_abs_diff_{wl}{suffix}", worst[wl])
+            k = len(diffs[wl][0])
             metrics.record(
-                f"determinism_chunk_max_abs_diff_{wl}", [max(diffs[wl][r][c] for r in range(runs)) for c in range(n)]
+                f"determinism_chunk_max_abs_diff_{wl}{suffix}",
+                [max(diffs[wl][r][c] for r in range(runs)) for c in range(k)],
             )
-            metrics.record(f"determinism_rows_{wl}", [max(rows[wl][r][c] for r in range(runs)) for c in range(n)])
+            metrics.record(
+                f"determinism_rows_{wl}{suffix}", [max(rows[wl][r][c] for r in range(runs)) for c in range(k)]
+            )
         # bits differing with equal values (-0 / +0, NaN payloads) still fail: the metric is then at least 2^-149
-        metrics.record("determinism_max_abs_diff", total if total or not bits else 2.0**-149)
-        metrics.record("determinism_state_max_abs_diff", state_worst)
-        metrics.record("determinism_elements_differ", bits)
-        metrics.record("determinism_chunks", n)
-        metrics.record("determinism_runs", runs)
-        metrics.record("determinism_s", round(secs, 1))
+        metrics.record(f"determinism_max_abs_diff{suffix}", total if total or not bits else 2.0**-149)
+        metrics.record(f"determinism_state_max_abs_diff{suffix}", state_worst)
+        metrics.record(f"determinism_elements_differ{suffix}", bits)
+        metrics.record(f"determinism_chunks{suffix}", n)
+        metrics.record(f"determinism_runs{suffix}", runs)
+        metrics.record(f"determinism_s{suffix}", round(secs, 1))
     print(f"DETERMINISM ({label}): {'FAIL' if errors else 'bit-identical'} in {secs:.1f} s")
     if not errors:
         return None, total

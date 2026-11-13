@@ -28,6 +28,11 @@ Checks (each failure is listed in ``contract_failures``; metric ``contract_check
                     cap) is judged there: the producer / independent read-back over [0, it rounded down to 32), the
                     fixed state at it, limits from the official drift at it (reference/handoff.py,
                     ``handoff-drift-<rung>.json``); ``contract_state_at`` records the position
+  variants (F266)   FIX.28: every other serving mode the model declares (hooks.contract_variants, ``variants``: e.g.
+                    DeepSeek-V4.1's DECODER_SKIP=decode, a request ending at decode's stop with the engine's header
+                    fields) runs as a request of its own on another slot, through every check above (metrics suffixed
+                    ``_<name>``, judged at the mode's stop), plus the positions it must never write;
+                    ``contract_checks_failed`` counts the failures of every request (``_default`` / ``_<name>`` each)
 
 Engine env (PREFILL_MODEL, PREFILL_SP/TP, PREFILL_CHUNK_SIZE, PREFILL_MAX_SEQ_LEN, PREFILL_NUM_LAYERS,
 PREFILL_NUM_USERS) must be set before the adapter is imported: call ``engine_env(spec)`` at module import.
@@ -176,7 +181,7 @@ def kv_state_names(s, adapter) -> dict:
     return names
 
 
-def producer_limits(s, adapter, mins: dict, drift: dict, failed: list[str]) -> None:
+def producer_limits(s, adapter, mins: dict, drift: dict, failed: list[str], suffix: str = "") -> None:
     """F128 / F131: each producer key's ``pcc_producer_kv_<key>_limit`` from the drift of the golden state it reads
     back. A key that is a state name maps to itself; one that maps to no state with a drift is a failure, never a
     skipped check."""
@@ -191,7 +196,7 @@ def producer_limits(s, adapter, mins: dict, drift: dict, failed: list[str]) -> N
             )
             continue
         lim = E.state_limit(drift, name, "contract_state")
-        metrics.record(f"pcc_producer_kv_{k}_limit", lim)
+        metrics.record(f"pcc_producer_kv_{k}_limit{suffix}", lim)
         if v < lim:
             failed.append(f"producer read-back PCC {k} ({name}) {v:.5f} < limit {lim:.5f}")
 
@@ -244,6 +249,23 @@ class AckReads:
         return sum(self._read(r, p, cid) != data for (r, _chunk, p, cid), data in self.reads.items())
 
 
+def variants(s, length: int) -> list[dict]:
+    """FIX.28 (F266): the model's other serving modes of the contract request (hooks.contract_variants(spec, length)),
+    each run as a request of its own after the default one, through the same checks. A variant is a dict:
+        name         metric suffix (``<metric>_<name>``) and label
+        end          the engine's actual_end of the request's last chunk (the request is [0, end) in chunks)
+        served_end   where the model must stop computing in that mode: the state and the served caches are judged
+                     there, and hooks.contract_end(spec, end), asked while the mode is on, must equal it
+        chunk_kwargs (start, end) -> extra prefill_chunk keyword arguments of the chunk (the engine's header fields)
+        enter, leave (runtime) -> None: switch the runtime into the mode and back (the test's own model, one load)
+        unwritten    (lo, hi): positions of the request the mode must never write: every history (non-Snapshot)
+                     config's records of [ceil32(lo), hi) on the request's slot hold the same bytes after it
+    The variant runs on another slot than the default request (``contract.slot`` + 1 modulo the slots) when there is
+    one, so a write it must not make is not hidden by the default request's equal bytes."""
+    hooks = s.hooks()
+    return list(hooks.contract_variants(s, int(length))) if hasattr(hooks, "contract_variants") else []
+
+
 def run_contract_test(s, mesh) -> list[str]:
     import ttnn
     from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
@@ -254,7 +276,7 @@ def run_contract_test(s, mesh) -> list[str]:
     rung = s.rung(contract_rung(s))
     g = Golden.for_rung(s, rung["name"])
     seq, chunk = rung["seq"], rung["chunk"]
-    n_chunks, sp = seq // chunk, s.mesh[0]
+    sp = s.mesh[0]
     slot = int(s.get("contract.slot"))
     tail = int(s.get("tests.contract_tail_pad"))
     actual_len = seq - tail
@@ -298,7 +320,7 @@ def run_contract_test(s, mesh) -> list[str]:
         if t2.num_configs() != n_cfg or t2.total_entries() != table.total_entries():
             failed.append("table protobuf round-trip changed the table")
 
-    ack_reads, acks, cur = AckReads(table, slot, n_chunks - 1), [], {"chunk": None, "start": 0, "end": 0}
+    run = {"acks": [], "chunk": None, "start": 0, "end": 0, "reads": None}
     slab_layers = getattr(adapter, "kv_slot_layer_ids", lambda n: None)(L)
     # the table's layer of an acked global layer: its KV slot on a hybrid, else the layer itself
     table_row = {g: k for k, g in enumerate(slab_layers)} if slab_layers is not None else None
@@ -306,79 +328,128 @@ def run_contract_test(s, mesh) -> list[str]:
     class Sink(LayerCompletionSink):
         def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end):
             for layer in range(layer_start, layer_end):
-                acks.append((layer, cur["chunk"], (slot_id, pos_start, pos_end)))
+                run["acks"].append((layer, run["chunk"], (slot_id, pos_start, pos_end)))
                 row = layer if table_row is None else table_row.get(layer)
-                if row is None:
+                if row is None or run["reads"] is None:
                     continue  # not a slab layer: the ack list check reports it
                 # Read the blocks this ack claims are ready: first and last 32-token block of the chunk, every history
                 # config; a Snapshot config's records at the request's last chunk only (AckReads)
-                ack_reads.on_ack(row, cur["chunk"], cur["start"], cur["end"])
+                run["reads"].on_ack(row, run["chunk"], run["start"], run["end"])
 
     rt.set_layer_completion_sink(Sink())
     rt.compile(kv)
-    acks.clear()
-    ack_reads.clear()
-
+    dmap = device_map(mesh)
     tokens = g.tokens().tolist()
-    for c in range(n_chunks):
-        a, b = c * chunk, min((c + 1) * chunk, actual_len)
-        cur.update(chunk=c, start=a, end=b)
-        inp = engine_input(mesh, tokens[a:b], chunk, sp, int(s.get("contract.pad_token")))
-        rt.prefill_chunk(inp, kv, slot_id=slot, actual_start=a, actual_end=b, request_id=c)
-    ttnn.synchronize_device(mesh)
-
     acked = list(range(first, first + L)) if slab_layers is None else list(slab_layers)
-    want = [(layer, c, (slot, c * chunk, min((c + 1) * chunk, actual_len))) for c in range(n_chunks) for layer in acked]
-    if acks != want:
-        failed.append(f"acks {acks[:6]}... != one per layer in order per chunk ({len(acks)} vs {len(want)})")
-    early = ack_reads.early()
-    metrics.record("acks_early", early)
-    metrics.record("ack_blocks_checked", len(ack_reads.reads))
-    if early:
-        failed.append(f"{early} of {len(ack_reads.reads)} blocks changed after their layer was acknowledged")
-    if rt.kv_migration_base_address(kv) != table.lookup(0, 0, 0, 0).noc_addr & 0xFFFFFFFF:
-        failed.append("migration base address != table entry (layer 0, pos 0, slot 0, config 0)")
-
-    # F264: the state and the served caches are judged where the model's serving path hands off (hooks.contract_end:
-    # e.g. decode's cap when prefill stops there), never at a position it does not compute; their limits come from
-    # the official drift at that point (reference/handoff.py), the golden's snapshot there from the same pipeline
+    hooks = s.hooks()
     from models.demos.common.bringup.reference import handoff as HO
 
-    at = HO.contract_end(s, actual_len)
-    metrics.record("contract_state_at", at)
-    if not 0 < at <= actual_len:
-        failed.append(f"hooks.contract_end({actual_len}) = {at}: not in (0, {actual_len}]")
-        at = actual_len
-    print(f"contract: state and served caches judged at {at} (request end {actual_len})")
-    dmap = device_map(mesh)
-    mins = producer._read_slot_kv_and_check_pcc(table, dmap, slot, at - at % BLOCK, str(g.dir))
-    for k, v in mins.items():
-        metrics.record(f"pcc_producer_kv_{k}", v)
-    hooks = s.hooks()
-    if hasattr(hooks, "contract_independent_pcc"):
-        # Guards against a stubbed comp_pcc inside the producer (run_safe_pytest's precompile pass stubs it).
-        ind = hooks.contract_independent_pcc(s, table, dmap, slot, at - at % BLOCK, g)
-        metrics.record("pcc_kv_independent_min", min(ind.values()))
-        gap = max(abs(mins[k] - ind[k]) for k in mins if k in ind)
-        metrics.record("producer_vs_independent_pcc_gap", gap)
-        if gap > 1e-4:
-            failed.append(f"producer PCC {mins} disagrees with the independent read-back {ind}")
-    # F128 / F134: calib x the reference's drift as the contract reads it back (F264: at the handoff point)
-    drift = E.load(g.dir, rung["name"]) if at == actual_len else HO.load_drift(g.dir, rung["name"], at)
-    producer_limits(s, adapter, mins, drift, failed)
-    if s.state_fixed:
-        if not hasattr(hooks, "contract_state_pcc"):
-            failed.append(f"fixed-size state {s.state_fixed} unchecked: hooks.contract_state_pcc is missing")
-        else:
-            fixed = hooks.contract_state_pcc(s, rt, kv, slot, at, g)
-            if not fixed:
-                failed.append("fixed-size state read-back: hooks.contract_state_pcc returned nothing")
-            for k, v in fixed.items():
-                metrics.record(f"pcc_contract_state_{k}", v)
-                lim = E.state_limit(drift, k, "contract_state")  # F128: the hook's keys are golden state names
-                metrics.record(f"pcc_contract_state_{k}_limit", lim)
-                if v < lim:
-                    failed.append(f"fixed-size state read-back PCC {k} {v:.5f} < limit {lim:.5f}")
+    def request(rslot: int, end: int, sfx: str = "", kwargs=None, served_end: int | None = None) -> list[str]:
+        """One request [0, end) on ``rslot`` in chunks, its acks and their timing, then the state and the served
+        caches judged where the model stops (metrics suffixed ``sfx``)."""
+        out = []
+        bounds = [(a, min(a + chunk, end)) for a in range(0, end, chunk)]
+        run["reads"] = AckReads(table, rslot, len(bounds) - 1)
+        run["acks"].clear()
+        for c, (a, b) in enumerate(bounds):
+            run.update(chunk=c, start=a, end=b)
+            inp = engine_input(mesh, tokens[a:b], chunk, sp, int(s.get("contract.pad_token")))
+            extra = kwargs(a, b) if kwargs is not None else {}
+            rt.prefill_chunk(inp, kv, slot_id=rslot, actual_start=a, actual_end=b, request_id=c, **extra)
+        ttnn.synchronize_device(mesh)
+        acks, ack_reads = run["acks"], run["reads"]
+        want = [(layer, c, (rslot, a, b)) for c, (a, b) in enumerate(bounds) for layer in acked]
+        if acks != want:
+            out.append(f"acks {acks[:6]}... != one per layer in order per chunk ({len(acks)} vs {len(want)})")
+        early = ack_reads.early()
+        metrics.record(f"acks_early{sfx}", early)
+        metrics.record(f"ack_blocks_checked{sfx}", len(ack_reads.reads))
+        if early:
+            out.append(f"{early} of {len(ack_reads.reads)} blocks changed after their layer was acknowledged")
+        run["reads"] = None
+
+        # F264: the state and the served caches are judged where the model's serving path hands off (hooks.
+        # contract_end: e.g. decode's cap when prefill stops there), never at a position it does not compute; their
+        # limits come from the official drift at that point (reference/handoff.py), the golden's snapshot there from
+        # the same pipeline
+        at = HO.contract_end(s, end)
+        metrics.record(f"contract_state_at{sfx}", at)
+        if served_end is not None and at != served_end:
+            out.append(f"hooks.contract_end({end}) = {at} in this mode, the mode stops at {served_end}")
+        if not 0 < at <= end:
+            out.append(f"hooks.contract_end({end}) = {at}: not in (0, {end}]")
+            at = end
+        print(f"contract{sfx}: state and served caches judged at {at} (request end {end}, slot {rslot})")
+        mins = producer._read_slot_kv_and_check_pcc(table, dmap, rslot, at - at % BLOCK, str(g.dir))
+        for k, v in mins.items():
+            metrics.record(f"pcc_producer_kv_{k}{sfx}", v)
+        if hasattr(hooks, "contract_independent_pcc"):
+            # Guards against a stubbed comp_pcc inside the producer (run_safe_pytest's precompile pass stubs it).
+            ind = hooks.contract_independent_pcc(s, table, dmap, rslot, at - at % BLOCK, g)
+            metrics.record(f"pcc_kv_independent_min{sfx}", min(ind.values()))
+            gap = max(abs(mins[k] - ind[k]) for k in mins if k in ind)
+            metrics.record(f"producer_vs_independent_pcc_gap{sfx}", gap)
+            if gap > 1e-4:
+                out.append(f"producer PCC {mins} disagrees with the independent read-back {ind}")
+        # F128 / F134: calib x the reference's drift as the contract reads it back (F264: at the handoff point)
+        drift = E.load(g.dir, rung["name"]) if at == actual_len else HO.load_drift(g.dir, rung["name"], at)
+        producer_limits(s, adapter, mins, drift, out, sfx)
+        if s.state_fixed:
+            if not hasattr(hooks, "contract_state_pcc"):
+                out.append(f"fixed-size state {s.state_fixed} unchecked: hooks.contract_state_pcc is missing")
+            else:
+                fixed = hooks.contract_state_pcc(s, rt, kv, rslot, at, g)
+                if not fixed:
+                    out.append("fixed-size state read-back: hooks.contract_state_pcc returned nothing")
+                for k, v in fixed.items():
+                    metrics.record(f"pcc_contract_state_{k}{sfx}", v)
+                    lim = E.state_limit(drift, k, "contract_state")  # F128: the hook's keys are golden state names
+                    metrics.record(f"pcc_contract_state_{k}_limit{sfx}", lim)
+                    if v < lim:
+                        out.append(f"fixed-size state read-back PCC {k} {v:.5f} < limit {lim:.5f}")
+        return out
+
+    failed += request(slot, actual_len)
+    if rt.kv_migration_base_address(kv) != table.lookup(0, 0, 0, 0).noc_addr & 0xFFFFFFFF:
+        failed.append("migration base address != table entry (layer 0, pos 0, slot 0, config 0)")
+    metrics.record("contract_checks_failed_default", len(failed))
+
+    # FIX.28 (F266): the model's other serving modes (hooks.contract_variants), each a request of its own
+    n_users = int(os.environ["PREFILL_NUM_USERS"])
+    vslot = (slot + 1) % n_users if n_users > 1 else slot
+    for v in variants(s, actual_len):
+        sfx = f"_{v['name']}"
+        lo, hi = v.get("unwritten", (0, 0))
+        lo = -(-int(lo) // BLOCK) * BLOCK
+        hist = [cid for cid in range(n_cfg) if not is_snapshot_config(table.config(cid))]
+
+        def held() -> dict:
+            return {
+                (cid, row, pos): bytes(table.read_device_chunk(layer=row, position=pos, slot=vslot, config_id=cid))
+                for cid in hist
+                for row in range(L)
+                for pos in range(lo, int(hi), BLOCK)
+                if table.lookup(row, pos, vslot, cid).size_bytes
+            }
+
+        v["enter"](rt)
+        try:
+            before = held()
+            vf = request(vslot, int(v["end"]), sfx, v.get("chunk_kwargs"), int(v["served_end"]))
+            after = held()
+        finally:
+            v["leave"](rt)
+        written = sorted(k for k in before if after.get(k) != before[k])
+        metrics.record(f"unwritten_records_changed{sfx}", len(written))
+        metrics.record(f"unwritten_records_checked{sfx}", len(before))
+        if written:
+            vf.append(f"{len(written)} records of [{lo}, {hi}) written, which this mode never writes: {written[:6]}")
+        print(
+            f"contract{sfx}: request [0, {v['end']}) on slot {vslot}, {len(before)} records of [{lo}, {hi}) checked "
+            f"unwritten, {len(vf)} failures"
+        )
+        metrics.record(f"contract_checks_failed{sfx}", len(vf))
+        failed += [f"{v['name']}: {f}" for f in vf]
     metrics.record("contract_checks_failed", len(failed))
     for f in failed:
         print(f"FAIL contract: {f}")

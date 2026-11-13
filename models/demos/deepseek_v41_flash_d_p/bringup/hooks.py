@@ -1290,11 +1290,35 @@ def contract_state_pcc(spec, runtime, kv, slot, length, golden):
 
 def contract_handoffs(spec, length):
     """F264 (FIX.26): the positions other than ``length`` a request of ``length`` tokens (the engine's actual_end) may
-    stop at: decode's cap (tt/attention.snapshot_cap, P.49 PREFILL_END=cap). The golden holds the state there
-    (reference/handoff.py)."""
-    from models.demos.deepseek_v41_flash_d_p.tt.attention import snapshot_cap
+    stop at: decode's cap (tt/attention.snapshot_cap, P.49 PREFILL_END=cap) and (FIX.28) DECODER_SKIP=decode's stop
+    P = (N - 128) // 64 x 64 of the request taken as a prompt of N = ``length`` tokens (tt/attention.decoder_skip_stop,
+    P.51; contract_variants). The golden holds the state there (reference/handoff.py)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import decoder_skip_stop, snapshot_cap
 
-    return [snapshot_cap(length)]
+    return [snapshot_cap(length), decoder_skip_stop(length)]
+
+
+def contract_variants(spec, length):
+    """FIX.28 (testing/contract.py variants, F266): DECODER_SKIP=decode (P.51, Kartik's cut) as tt-d-gen sends it. The
+    request is a prompt of N = ``length`` tokens; prefill stops at P = (N - 128) // 64 x 64 (tt/attention.
+    decoder_skip_stop), so its chunks are [k chunk, min((k + 1) chunk, P)), each with the header's
+    global_write_start = actual_start (no prefix hit) and last=False. The model must stop at decode's cap of P
+    (snapshot_cap(P) = P) and never write [P, N). The runtime's model (loaded with the shipped DECODER_SKIP, off)
+    runs it through use_decoder_skip("decode") and goes back to off after."""
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import decoder_skip_stop, snapshot_cap
+
+    p = decoder_skip_stop(length)
+    return [
+        dict(
+            name="decoder_skip",
+            end=p,
+            served_end=snapshot_cap(p),
+            chunk_kwargs=lambda a, b: dict(global_write_start=a, last=False),
+            enter=lambda rt: rt.model.use_decoder_skip("decode"),
+            leave=lambda rt: rt.model.use_decoder_skip(rt.model.loaded_skip),
+            unwritten=(p, length),
+        )
+    ]
 
 
 def contract_end(spec, length):

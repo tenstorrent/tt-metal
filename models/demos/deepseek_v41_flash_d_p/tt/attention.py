@@ -489,6 +489,14 @@ def snapshot_cap(end: int, block: int | None = None) -> int:
     return int(end) // b * b if end > 0 else 0
 
 
+def decoder_skip_stop(prompt_len: int, block: int | None = None) -> int:
+    """DECODER_SKIP=decode (P.51, Kartik's cut): where tt-d-gen stops prefill for a prompt of ``prompt_len`` tokens,
+    P = (N - 128) // kv_block x kv_block (exclusive; N 5002 -> P 4864): the engine's actual_end of the request's last
+    chunk, and decode's cap of it (snapshot_cap(P) == P). Decode runs [P, N) through all 40 layers itself."""
+    b = int(settings.get("KV_BLOCK_SIZE")) if block is None else int(block)
+    return max(0, (int(prompt_len) - WINDOW) // b * b)
+
+
 def prefill_end(end: int) -> int:
     """PREFILL_END (P.49): where the serving runtime stops computing a chunk the engine ends at ``end``: cap =
     snapshot_cap(end) (decode's cap; positions at or past it are pad), end = ``end`` (P.42's path)."""

@@ -240,9 +240,12 @@ class DS41PrefillRuntime:
         st = self.state(kv, slot)
         model.state = st  # begin_chunk reads (and advances) the active slot's engram tail
         if acks:  # (P.42: the in-process read-back's snapshot cap; host bookkeeping)
-            from .kv_contract import SNAPSHOT_ENDS
+            from .kv_contract import SNAPSHOT_ENDS, WINDOW_UNWRITTEN
 
             SNAPSHOT_ENDS[int(slot)] = int(end)
+            # FIX.28: the layers whose window (ring and served snapshot) this chunk never writes: DECODER_SKIP=decode's
+            # decoder (20-39); the in-process read-backs judge only what decode is served (host bookkeeping)
+            WINDOW_UNWRITTEN[int(slot)] = frozenset(model.decoder) if model.skip_mode == "decode" else frozenset()
         from ..attention import prefill_end
 
         # PREFILL_END=cap (P.49): compute only [start, cap), cap = decode's cap of the engine's actual_end
@@ -283,9 +286,12 @@ class DS41PrefillRuntime:
         at cap; cap 0: zeros), then the layer's ack, as on a computed chunk (the engine still counts layers_per_chunk acks).
         """
         ttnn = self._ttnn
+        model = self.model
         for k, i in enumerate(self.layer_ids):
             c = st.window[i]
-            if c.snap is not None:  # (cap 0, a prompt shorter than a block: all 128 rows zero)
+            # (cap 0, a prompt shorter than a block: all 128 rows zero; DECODER_SKIP=decode, FIX.28: the decoder's
+            # snapshots are never written, as on a computed chunk)
+            if c.snap is not None and not (model.skip_mode == "decode" and i in model.decoder):
                 c.write_snapshot(cap)
             if d2h is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=metadata_msg)
@@ -458,15 +464,20 @@ def contract_state_pcc(spec, runtime, kv, slot, length, golden) -> dict:
     from loguru import logger
 
     from models.demos.common.bringup.core import metrics
-    from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import _pcc
+    from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import WINDOW_UNWRITTEN, _pcc
 
     st = runtime.state(kv, slot)
     out, exact, bad = {}, {}, []
+    # FIX.28: DECODER_SKIP=decode never computes the decoder's windows (layers 20-39; decode rebuilds them from P):
+    # their window ring is not judged; every other fixed state is (layer 20's compressor partial: its kv_only head)
+    unwritten = WINDOW_UNWRITTEN.get(int(slot), frozenset())
+    if unwritten:
+        logger.info(f"  window_kv of layers {sorted(unwritten)} not judged: DECODER_SKIP=decode never writes it")
     for layer in runtime.layer_ids:
         gold = golden.state(layer, at=length)
         dev = st.to_torch(layer, length)
         for name in spec.state_fixed:
-            if name not in gold or name not in dev:
+            if name not in gold or name not in dev or (name == "window_kv" and layer in unwritten):
                 continue
             if not gold[name].is_floating_point():
                 eq = torch.equal(dev[name].long().flatten(), gold[name].long().flatten())

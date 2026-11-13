@@ -733,3 +733,41 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   unset (identical on both sides); adding it would put the skipped chunk (p51200_nonlast) in the table. Open:
   tt-d-gen's prefix-hit request must carry the slot's id history below actual_start for the engram tail (the same
   slot has it; a migrated prefix needs load_tokens), as for every follow-up today.
+
+## FIX.28 (overseer, OWNER 2026-11-13): the gate tests run DECODER_SKIP=decode too
+
+- What. The gate tests drive the skipped path themselves, on the same model load (loaded with the shipped
+  DECODER_SKIP=off; `TtDS41Model.use_decoder_skip("decode")` now works on an off-loaded model: the decoder lists are
+  host-only, built by `_build_decoder`, dropped again by `use_decoder_skip("off")`). The full-path checks are unchanged
+  and run first.
+  - test_determinism: after the full-path check, `check(..., run=decode_sequence, suffix="_decoder_skip")`
+    (testing/model_determinism.py takes `run` / `suffix`). Per prompt (novel, code), 3 runs (cold, warm): a 4-chunk
+    prompt (N 20480) stops at P = (N-128)//64*64 = 20352 (tt/attention.decoder_skip_stop); request A [0, 7680), then
+    request B from 7552 with global_write_start 7680 (replay of [7552, 7680), no history write) up to P; every chunk
+    last=False. Compared bit for bit: layers 0-19's snapshots after each chunk, every history cache decode reads over
+    [0, P) (layer 20's KV head included) and layers 0-19's rings.
+  - test_contract: hooks.contract_variants -> testing/contract.py `variants` (F266): a request [0, P) on the next slot,
+    P = 10048 for the contract's 10208 tokens, each chunk global_write_start = actual_start, last=False; the same ack /
+    ack-timing / producer / independent / fixed-state checks, judged at P against FIX.26's handoff golden at P
+    (hooks.contract_handoffs adds decoder_skip_stop; golden made with BRINGUP_CPU_THREADS=16, DS41-241), plus
+    nothing written in [P, N). Metrics suffixed `_decoder_skip`; `contract_checks_failed` counts both requests.
+  - test_adapter_acks: `decoder_skip_requests`: slot 0 end P (10048) and slot 1 end P+40 (10088: not a multiple of
+    64; serving_contract.md P.49 rule: served end = end//64*64 = P, checked); acks per layer per chunk, history at
+    every ack, layers 0-19's snapshots at the cap, final history [0, P) and snapshots at P vs the golden
+    (caches.GoldenKV(handoffs=True)), [P, N) unwritten.
+  - Under decode only layers 20-39's window snapshot / ring are not judged (never written; decode does not read
+    them): kv_contract.WINDOW_UNWRITTEN, adapter.contract_state_pcc, the cap-0 path in adapter.py (DS41-240,
+    rewritten).
+- Results (8x4, 40 layers, gate --check, all PASS): ladder err_final_hidden 0.1321 (limit 0.2422), top5 1.0;
+  determinism_max_abs_diff 0 (full) and determinism_max_abs_diff_decoder_skip 0 (decode: 5 chunks per sequence, 3
+  runs x 2 prompts, states 0, 15.9 s); contract (full / decode): contract_checks_failed 0 / 0, acks_early 0 / 0, 800 /
+  800 ack blocks, state judged at 10176 / 10048, window ring PCC 0.98793 (limit 0.94787) / 0.98938 (limit 0.96071),
+  compress_kv 0.98877 / 0.98868 (limits 0.9370 / 0.9366), index_k 0.99334 / 0.99329 (0.9465 / 0.9463), engram tail
+  exact; unwritten_records_changed_decoder_skip 0 of 60; adapter acks: decode_acks_failures 0, served end 10048 for
+  both requests, 0 of 120 records past P changed; test_decoder_skip_decode served_bytes_differ 0 of 20,912.
+- New metrics and limits: `determinism_max_abs_diff_decoder_skip` == 0 (in this gate); the `*_decoder_skip` PCC
+  limits come from the same rule as the full path (calib x official drift at the judged point); no existing limit
+  changed. Suggested lines for P.51's gate: `determinism_max_abs_diff_decoder_skip == 0`,
+  `contract_checks_failed_decoder_skip == 0`, `acks_early_decoder_skip == 0`,
+  `unwritten_records_changed_decoder_skip == 0`, `decode_acks_failures == 0` (tasks.yaml not edited).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.28 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.

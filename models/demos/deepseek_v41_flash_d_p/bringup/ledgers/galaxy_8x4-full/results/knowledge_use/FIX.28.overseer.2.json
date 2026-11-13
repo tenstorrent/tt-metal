@@ -1,0 +1,24 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [
+  "DS41-240"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.28",
+  "role": "overseer",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-13T08:11:54",
+  "head": "17f606d6469",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.28.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.28.overseer.2.json"
+  ]
+ }
+}

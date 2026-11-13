@@ -1112,14 +1112,9 @@ class TtDS41Model:
         # (WINDOW_KV_KEEP=ring | none, P.32: begin_chunk truncates a window whose carry is not kept under exact /
         # replay128 and refuses the chunk under off; the decoder tail model never decides it)
         self.skip_mode = mode if tail_of is None else "off"
+        self.loaded_skip = self.skip_mode  # (FIX.28: use_decoder_skip on a model loaded with off)
         if mode in ("exact", "replay128", "decode") and tail_of is None:
-            assert not self.deep, "DECODER_SKIP and DEEP_LAYERS=tail are two different skips: one at a time"
-            self.decoder = [i for i in self.layers if cfg.cand_source >= 0 and i >= cfg.cand_source]
-            self.kv_only = frozenset(i for i in self.decoder if cfg.is_kv_source(i))
-            bad = [i for i in self.decoder if cfg.is_engram(i) or (cfg.is_kv_source(i) and i != cfg.cand_source)]
-            assert not bad, f"DECODER_SKIP=exact: decoder layers {bad} are engram / extra KV-source layers"
-            enc = [i for i in self.layers if i not in self.decoder]
-            assert all(j < cfg.cand_source or j in self.kv_only for i in enc for j in cfg.sources(i)), enc
+            self._build_decoder()
         self._decoder_set = frozenset(self.decoder)
         # DECODER_SKIP=replay128 (P.31, DeepSeek-V4.1-Flash's SWA Bounded Replay, n_win 128): one code path with exact
         # but the tail length. The caller's two numbers: replay_rows = how far a request's first chunk on a cached
@@ -1467,15 +1462,39 @@ class TtDS41Model:
             + "); the caller starts the last chunk at or before TtDS41Model.last_start(end) (P.43)"
         )
 
+    def _build_decoder(self) -> None:
+        """DECODER_SKIP (P.30 / P.31 / P.51): the decoder layers (the loaded layers from the candidate source, 20, on)
+        and their KV sources (kv_only); host lists only, nothing on the device depends on them."""
+        cfg = self.cfg
+        assert not self.deep, "DECODER_SKIP and DEEP_LAYERS=tail are two different skips: one at a time"
+        self.decoder = [i for i in self.layers if cfg.cand_source >= 0 and i >= cfg.cand_source]
+        self.kv_only = frozenset(i for i in self.decoder if cfg.is_kv_source(i))
+        bad = [i for i in self.decoder if cfg.is_engram(i) or (cfg.is_kv_source(i) and i != cfg.cand_source)]
+        assert not bad, f"DECODER_SKIP=exact: decoder layers {bad} are engram / extra KV-source layers"
+        enc = [i for i in self.layers if i not in self.decoder]
+        assert all(j < cfg.cand_source or j in self.kv_only for i in enc for j in cfg.sources(i)), enc
+        self._decoder_set = frozenset(self.decoder)
+
     def use_decoder_skip(self, mode: str) -> None:
-        """Tests only (tests/bringup/test_window_ring.py, P.32; tests/test_decoder_skip_decode.py, P.51): run a model
-        loaded with a DECODER_SKIP other than off as exact, decode or off (and as replay128 when loaded with it: its
-        decoder tail built) (host only: the same decoder layers, the numbers ``replay_rows`` / ``last_rows`` of the
-        value; off: no chunk skips the decoder, every window carry must be kept). The serving runtime reads
-        ``skip_mode``, so its chunks follow the value too."""
+        """Tests only (tests/bringup/test_window_ring.py, P.32; tests/test_decoder_skip_decode.py, P.51; FIX.28: the
+        gate tests test_determinism, test_contract, test_adapter_acks): run a model loaded with a DECODER_SKIP other
+        than off as exact, decode or off (and as replay128 when loaded with it: its decoder tail built) (host only:
+        the same decoder layers, the numbers ``replay_rows`` / ``last_rows`` of the value; off: no chunk skips the
+        decoder, every window carry must be kept). A model loaded with off (the shipped default, FIX.28) takes exact
+        or decode too: decode's load-time difference is host lists only (``_build_decoder``), so the decoder lists are
+        built here, and ``use_decoder_skip("off")`` drops them again: the model is then exactly as loaded (the off
+        path, no decoder bookkeeping). The serving runtime reads ``skip_mode``, so its chunks follow the value too."""
         assert mode in ("off", "exact", "replay128", "decode"), mode
-        assert self.decoder, "use_decoder_skip needs a model loaded with DECODER_SKIP=exact / replay128 / decode"
         assert mode != "replay128" or self.tail_chunk, "replay128 needs a model loaded with DECODER_SKIP=replay128"
+        if self.loaded_skip == "off":
+            assert self.tail_of is None, "use_decoder_skip: not on the decoder tail model"
+            if mode == "off":  # (exactly as loaded: __init__'s values with DECODER_SKIP=off)
+                self.decoder, self.kv_only, self._decoder_set = [], frozenset(), frozenset()
+                self.skip_mode, self.replay, self.replay_rows, self.last_rows = "off", False, 0, 0
+                return
+            if not self.decoder:
+                self._build_decoder()
+        assert self.decoder, "use_decoder_skip needs a model loaded with DECODER_SKIP=exact / replay128 / decode"
         self.skip_mode = mode
         self.replay = mode == "replay128"
         w = self.cfg.window

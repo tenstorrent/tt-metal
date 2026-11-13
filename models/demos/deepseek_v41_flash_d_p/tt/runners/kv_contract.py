@@ -242,6 +242,9 @@ class DS41ContractKV:
 
 # ---------------------------------------------------------------- read-back (host, through the table over UMD)
 SNAPSHOT_ENDS = {}  # P.42: {slot: the end of the last chunk the in-process runtime ran} (the snapshot's cap source)
+# FIX.28: {slot: layers whose window snapshot the last chunk the in-process runtime ran never wrote} (DECODER_SKIP=
+# decode: the decoder, 20-39; their records keep the slot's earlier bytes and decode does not read them)
+WINDOW_UNWRITTEN = {}
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -348,9 +351,13 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id: int, real_len: int, t
     # P.42 snapshot: the cap of the request's real end (the runtime's last chunk end in this process; else the
     # caller's 32-aligned length, whose cap end // 64 x 64 is the same, P.49)
     cap = snapshot_cap(SNAPSHOT_ENDS.get(int(slot_id), real_len))
+    unwritten = WINDOW_UNWRITTEN.get(int(slot_id), frozenset())
     for c in served_configs(cfg, list(layer_ids)):
         cid = names.index(c["name"])
         for k, layer in zip(c["engine"], c["layers"]):
+            if c.get("snapshot") and layer in unwritten:  # (FIX.28: DECODER_SKIP=decode, not served to decode)
+                modes.setdefault(f"{c['name']}:not-served-decoder-skip", []).append(layer)
+                continue
             if c.get("snapshot"):
                 snap = read_rows(table, device_map, cid, k, slot_id, SNAP, c["width"])
                 got, want, bad = snapshot_failures(snap, golden, layer, cap)
