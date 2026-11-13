@@ -416,12 +416,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Harbor Container Registry
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: harbor.ci.tenstorrent.net
-          username: ${{ secrets.HARBOR_PUSH_USER }}
-          password: ${{ secrets.HARBOR_PUSH_PASSWORD }}
+      # No Harbor login: prewarm only pulls, and Harbor's proxy-cache projects
+      # are public, so anonymous pulls work.
 
       - name: Build LLK CI image list
         id: images-llk
