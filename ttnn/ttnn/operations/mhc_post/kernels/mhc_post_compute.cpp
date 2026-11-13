@@ -24,6 +24,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/ternary/ternary.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -61,8 +62,7 @@ ALWI auto stream_term(uint32_t j) {
     return std::make_tuple(
         CoefBcast<ckl::Dst::D1>{n + I * n + j},
         StreamCopy{I},
-        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
-        ckl::AddBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{});
+        ckl::Addcmul<DataFormat::Float32, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{0x3f800000u});
 }
 
 // X'_j of the current unit, packed to cb_mixed_out_tiles.

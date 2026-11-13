@@ -8,7 +8,8 @@
 //     private landing cb_coef_raw, then copy coefficient column k into column 0 of its own page of
 //     cb_coef_cols (unpack-to-dest COL broadcast reads column 0 of faces 0 / 2). Page order:
 //     [post_0..post_{n-1} | comb_00..comb_{n-1,n-1}] (comb row-major, comb[i][j] at page n + i*n + j).
-//   load_block: per unit (column tile c) one F tile and the n X tiles of stream i = 0..n-1, one barrier per unit.
+//   load_block: per unit (column tile c) one F tile and the n X tiles of stream i = 0..n-1; read_batch units are
+//     issued per barrier into an in_depth-unit ring (double-buffered batches).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -44,7 +45,9 @@ void kernel_main() {
     constexpr uint32_t c_tiles = get_compile_time_arg_val(7);  // tensor_c_tiles
     constexpr uint32_t post_wt = get_compile_time_arg_val(8);
     constexpr uint32_t comb_wt = get_compile_time_arg_val(9);
-    constexpr auto f_args = TensorAccessorArgs<10>();
+    constexpr uint32_t in_depth = get_compile_time_arg_val(10);    // units the input CBs hold
+    constexpr uint32_t read_batch = get_compile_time_arg_val(11);  // units per read barrier (<= in_depth / 2)
+    constexpr auto f_args = TensorAccessorArgs<12>();
     constexpr auto x_args = TensorAccessorArgs<f_args.next_compile_time_args_offset()>();
     constexpr auto post_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
@@ -75,6 +78,11 @@ void kernel_main() {
     const uint32_t raw_comb = coef_shared ? raw_post : raw_post + coef_page;
     constexpr uint32_t coef_words = 1024;  // fp32 words per coefficient page
 
+    // Input rings start at their CB base (nothing pushed yet); in_slot tracks the next unit slot.
+    const uint32_t f_base = get_write_ptr(cb_sublayer_tiles);
+    const uint32_t x_base = get_write_ptr(cb_stream_tiles);
+    uint32_t in_slot = 0;
+
     for (uint32_t rb = 0; rb < t_count; rb += block_rows) {
         const uint32_t rows_in_block = (t_count - rb) < block_rows ? (t_count - rb) : block_rows;
         for (uint32_t r = 0; r < rows_in_block; ++r) {
@@ -98,24 +106,33 @@ void kernel_main() {
             }
             cb_push_back(cb_coef_cols, n_coef);
 
-            // ---- load_block, per column pass ----
+            // ---- load_block, per column pass: read_batch units per barrier ----
             const uint32_t f_row = t * c_tiles;
             const uint32_t x_row = t * n * c_tiles;
             for (uint32_t cb0 = 0; cb0 < c_count; cb0 += block_cols) {
                 const uint32_t cols_in_pass = (c_count - cb0) < block_cols ? (c_count - cb0) : block_cols;
-                for (uint32_t u = 0; u < cols_in_pass; ++u) {
-                    const uint32_t c = c_start + cb0 + u;
-                    cb_reserve_back(cb_sublayer_tiles, 1);
-                    cb_reserve_back(cb_stream_tiles, n);
-                    noc_async_read(f_acc.get_noc_addr(f_row + c), get_write_ptr(cb_sublayer_tiles), f_page);
-                    uint32_t x_l1 = get_write_ptr(cb_stream_tiles);
-                    for (uint32_t i = 0; i < n; ++i) {
-                        noc_async_read(x_acc.get_noc_addr(x_row + i * c_tiles + c), x_l1, x_page);
-                        x_l1 += x_page;
+                for (uint32_t u0 = 0; u0 < cols_in_pass; u0 += read_batch) {
+                    const uint32_t units = (cols_in_pass - u0) < read_batch ? (cols_in_pass - u0) : read_batch;
+                    cb_reserve_back(cb_sublayer_tiles, units);
+                    cb_reserve_back(cb_stream_tiles, units * n);
+                    // The batch may wrap the ring; address each unit's slot explicitly (whole units never wrap).
+                    uint32_t slot = in_slot;
+                    for (uint32_t u = 0; u < units; ++u) {
+                        const uint32_t c = c_start + cb0 + u0 + u;
+                        noc_async_read(f_acc.get_noc_addr(f_row + c), f_base + slot * f_page, f_page);
+                        uint32_t x_l1 = x_base + slot * n * x_page;
+                        for (uint32_t i = 0; i < n; ++i) {
+                            noc_async_read(x_acc.get_noc_addr(x_row + i * c_tiles + c), x_l1, x_page);
+                            x_l1 += x_page;
+                        }
+                        slot = (slot + 1 == in_depth) ? 0 : slot + 1;
                     }
                     noc_async_read_barrier();
-                    cb_push_back(cb_sublayer_tiles, 1);
-                    cb_push_back(cb_stream_tiles, n);
+                    for (uint32_t u = 0; u < units; ++u) {  // per-unit pushes: a push never crosses the ring end
+                        cb_push_back(cb_sublayer_tiles, 1);
+                        cb_push_back(cb_stream_tiles, n);
+                    }
+                    in_slot = slot;
                 }
             }
         }

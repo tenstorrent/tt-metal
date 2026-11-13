@@ -24,8 +24,9 @@ TILE = 32
 # Blocking knobs (single source of truth; every CB size / trip count derives from these)
 # ---------------------------------------------------------------------------
 BLOCK_ROWS = 1  # token-tile rows per block (reasoned decision, op_design.md "Why block_rows = 1")
-IN_DEPTH = 2  # units in flight in cb_sublayer_tiles / cb_stream_tiles
-OUT_DEPTH = 2  # units in flight in cb_mixed_out_tiles
+READ_BATCH = 2  # units issued per reader barrier
+IN_DEPTH = 2 * READ_BATCH  # units cb_sublayer_tiles / cb_stream_tiles hold (double-buffered batches)
+OUT_DEPTH = 4  # units in flight in cb_mixed_out_tiles
 COEF_DEPTH = 2  # token rows of expanded coefficients in flight
 BLOCK_L1_BUDGET = 384 * 1024  # bytes available to block-scaled CBs (ledger symbol)
 
@@ -64,7 +65,9 @@ def worker_list(device, max_grid):
 
 
 def choose_split(t_tiles, c_tiles, num_workers, unit_bytes, has_w, n, C):
-    """Exact chooser of op_design.md: minimise max(total DRAM / DRAM_BW, max core bytes / CORE_BW), ties -> smaller R."""
+    """op_design.md chooser: minimise est = max(total DRAM / DRAM_BW, max core bytes / CORE_BW); on an est tie
+    (DRAM-bound, e.g. plain mode where total does not depend on R) the balanced split (smaller max core bytes)
+    wins; then the smaller R."""
     best = None
     for R in range(1, min(t_tiles, num_workers) + 1):
         Q = min(num_workers // R, c_tiles)
@@ -73,8 +76,9 @@ def choose_split(t_tiles, c_tiles, num_workers, unit_bytes, has_w, n, C):
         total = t_tiles * c_tiles * unit_bytes + has_w * R * n * C * 128
         max_core = -(-t_tiles // R) * -(-c_tiles // Q) * unit_bytes + has_w * n * -(-c_tiles // Q) * 4096
         est = max(total / DRAM_BW, max_core / CORE_BW)
-        if best is None or est < best[0]:
-            best = (est, R, Q)
+        key = (est, max_core, R)
+        if best is None or key < best[0]:
+            best = (key, R, Q)
     return best[1], best[2]
 
 
@@ -185,6 +189,8 @@ def create_program_descriptor(
         c_tiles,
         post_wt,
         comb_wt,
+        IN_DEPTH,
+        READ_BATCH,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(f_tensor).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args())

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // mhc_post writer (RISCV_0, NoC1). store_block: per unit (token-tile row t, column tile c) the n X' tiles
-// X'_j -> page t*n*Ct + j*Ct + c, one write barrier per unit.
+// X'_j -> page t*n*Ct + j*Ct + c. Writes stream (flush per unit, one barrier at the end).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -38,10 +38,11 @@ void kernel_main() {
                         noc_async_write(l1, out_acc.get_noc_addr(x_row + j * c_tiles + c), out_page);
                         l1 += out_page;
                     }
-                    noc_async_write_barrier();
+                    noc_async_writes_flushed();  // the unit's bytes have left L1: free the slots, no ack wait
                     cb_pop_front(cb_mixed_out_tiles, n);
                 }
             }
         }
     }
+    noc_async_write_barrier();
 }
