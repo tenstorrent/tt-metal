@@ -15,13 +15,14 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#include <type_traits>
 
-#ifdef AGMM_ROW_MOP
-// Blackhole, full 32x32 tiles: one math MOP per reuse row of a subblock (matmul_block_init / matmul_block_k).
-constexpr bool row_mop = true;
-#else
-constexpr bool row_mop = false;
-#endif
+// The multicast path (program factory): Blackhole row MOP (one math MOP per reuse row of a subblock), in1 in column
+// chunks of in1_chunk_w columns (0: whole blocks), the last K block packed straight to the output.
+constexpr bool mcast = get_named_compile_time_arg_val("mcast");
+constexpr bool row_mop = get_named_compile_time_arg_val("row_mop");
+constexpr uint32_t in1_chunk_w = get_named_compile_time_arg_val("in1_chunk_w");
+constexpr bool direct_out = get_named_compile_time_arg_val("direct_out");
 
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
@@ -346,13 +347,12 @@ void add_bias_and_addcmul_block(
     intermediate_cb.pop_front(out_block_num_tiles);
 }
 
-#ifdef AGMM_MCAST
 // One K block of an output block (adapted from compute_common.hpp): each subblock runs the block's inner dimension in
 // one matmul_block_k call. Accumulating blocks pack into the subblock's slot of partials_cb (packer L1 accumulation).
 // DIRECT_OUT (the last K block, subblock_h == 1): each subblock reloads its partials into DEST, adds the last block
 // and packs to out_cb, published a subblock at a time; pieces past a partial block are pushed empty, as the writers
-// take the full block. With in1 column chunks (AGMM_IN1_CHUNK_W) the first row waits for each chunk and accumulating
-// blocks go chunk-major, so a chunk serves every row before the next one is needed.
+// take the full block. With in1 column chunks the first row waits for each chunk and accumulating blocks go
+// chunk-major, so a chunk serves every row before the next one is needed.
 template <bool DIRECT_OUT>
 void matmul_blocks_k(
     CircularBuffer& in0_cb,
@@ -371,11 +371,7 @@ void matmul_blocks_k(
     }
     const uint32_t num_m = ((DIRECT_OUT ? full_M_block_tiles : M_block_tiles) + subblock_h - 1) / subblock_h;
     const uint32_t num_n = ((DIRECT_OUT ? full_N_block_tiles : N_block_tiles) + subblock_w - 1) / subblock_w;
-#ifdef AGMM_IN1_CHUNK_W
-    constexpr bool chunk_major = !DIRECT_OUT;
-#else
-    constexpr bool chunk_major = false;
-#endif
+    constexpr bool chunk_major = !DIRECT_OUT && in1_chunk_w > 0;
     const uint32_t num_outer = chunk_major ? num_n : num_m;
     const uint32_t num_inner = chunk_major ? num_m : num_n;
     for (uint32_t outer = 0; outer < num_outer; outer++) {
@@ -389,18 +385,18 @@ void matmul_blocks_k(
                     continue;
                 }
             }
-#ifdef AGMM_IN1_CHUNK_W
-            const uint32_t in1_chunk_tiles = AGMM_IN1_CHUNK_W * K_block_tiles;
-            const uint32_t in1_chunk = N_start / AGMM_IN1_CHUNK_W;
-            if (M_start == 0 && N_start % AGMM_IN1_CHUNK_W == 0) {
-                in1_cb.wait_front((in1_chunk + 1) * in1_chunk_tiles);
+            uint32_t in1_index = N_start;
+            uint32_t in1_k_stride = full_N_block_tiles;
+            if constexpr (in1_chunk_w > 0) {
+                constexpr uint32_t chunk_w = in1_chunk_w > 0 ? in1_chunk_w : 1;  // never 0: no division by zero
+                const uint32_t in1_chunk_tiles = chunk_w * K_block_tiles;
+                const uint32_t in1_chunk = N_start / chunk_w;
+                if (M_start == 0 && N_start % chunk_w == 0) {
+                    in1_cb.wait_front((in1_chunk + 1) * in1_chunk_tiles);
+                }
+                in1_index = in1_chunk * in1_chunk_tiles + (N_start % chunk_w);
+                in1_k_stride = chunk_w;
             }
-            const uint32_t in1_index = in1_chunk * in1_chunk_tiles + (N_start % AGMM_IN1_CHUNK_W);
-            constexpr uint32_t in1_k_stride = AGMM_IN1_CHUNK_W;
-#else
-            const uint32_t in1_index = N_start;
-            const uint32_t in1_k_stride = full_N_block_tiles;
-#endif
             tile_regs_acquire();
             if constexpr (DIRECT_OUT) {
                 // The earlier K blocks' FP32 partials into DEST, then srcA's format and the matmul init back.
@@ -448,7 +444,7 @@ void matmul_blocks_k(
         partials_cb.pop_front(full_M_block_tiles * full_N_block_tiles);
     }
 }
-#else
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     CircularBuffer& in0_cb,
@@ -505,7 +501,6 @@ void matmul_blocks(
         in0_index_offset += subblock_h * K_block_tiles;
     }
 }
-#endif  // AGMM_MCAST
 
 void kernel_main() {
     constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
@@ -515,9 +510,9 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(4);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(5);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(6);
-#ifdef AGMM_DIRECT_OUT
-    static_assert(AGMM_OUT_PUSH_W == subblock_w, "the writers take the output in the pieces the compute packs");
-#endif
+    static_assert(
+        !direct_out || get_named_compile_time_arg_val("out_piece_w") == subblock_w,
+        "the writers take the output in the pieces the compute packs");
     constexpr uint32_t in0_parallel_axis_cores = get_compile_time_arg_val(7);
 
     // Same uniform M split as the data-movement kernels (see dm_in0_sender.cpp).
@@ -600,46 +595,39 @@ void kernel_main() {
             intermediate_cb.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 in0_cb.wait_front(in0_block_num_tiles);
-#ifndef AGMM_IN1_CHUNK_W  // chunked: matmul_blocks waits for each chunk
-                in1_cb.wait_front(in1_block_num_tiles);
-#endif
+                if constexpr (in1_chunk_w == 0) {  // chunked: matmul_blocks_k waits for each chunk
+                    in1_cb.wait_front(in1_block_num_tiles);
+                }
 
-#ifdef AGMM_DIRECT_OUT
-                if (k_block == K_num_blocks - 1) {
-                    // The earlier K blocks' partials are complete: reload them under the last block (matmul_blocks).
-                    intermediate_cb.push_back(out_block_num_tiles);
-                    PACK((llk_pack_reconfig_l1_acc(0)));
-                    pack_reconfig_data_format(out_cb.get_cb_id());
-                    matmul_blocks_k<true>(
-                        in0_cb,
-                        in1_cb,
-                        intermediate_cb,
-                        out_cb,
-                        current_M_block_tiles,
-                        current_N_block_tiles,
-                        M_block_tiles,
-                        N_block_tiles,
-                        K_block_tiles,
-                        current_subblock_h,
-                        current_subblock_w);
-                    pack_reconfig_data_format(intermediate_cb.get_cb_id());
-                } else
-#endif
-                {
-#ifdef AGMM_MCAST
-                    matmul_blocks_k<false>(
-                        in0_cb,
-                        in1_cb,
-                        intermediate_cb,
-                        out_cb,
-                        current_M_block_tiles,
-                        current_N_block_tiles,
-                        M_block_tiles,
-                        N_block_tiles,
-                        K_block_tiles,
-                        current_subblock_h,
-                        current_subblock_w);
-#else
+                if constexpr (mcast) {
+                    // The last K block reloads the earlier blocks' partials and packs straight to the output.
+                    const bool last_direct = direct_out && k_block == K_num_blocks - 1;
+                    if (last_direct) {
+                        intermediate_cb.push_back(out_block_num_tiles);
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_reconfig_data_format(out_cb.get_cb_id());
+                    }
+                    auto run = [&](auto direct) {
+                        matmul_blocks_k<decltype(direct)::value>(
+                            in0_cb,
+                            in1_cb,
+                            intermediate_cb,
+                            out_cb,
+                            current_M_block_tiles,
+                            current_N_block_tiles,
+                            M_block_tiles,
+                            N_block_tiles,
+                            K_block_tiles,
+                            current_subblock_h,
+                            current_subblock_w);
+                    };
+                    if (last_direct) {
+                        run(std::true_type{});
+                        pack_reconfig_data_format(intermediate_cb.get_cb_id());
+                    } else {
+                        run(std::false_type{});
+                    }
+                } else {
                     matmul_blocks(
                         in0_cb,
                         in1_cb,
@@ -650,7 +638,6 @@ void kernel_main() {
                         K_block_tiles,
                         current_subblock_h,
                         current_subblock_w);
-#endif
                 }
 
                 if (k_block == K_num_blocks - 1) {
@@ -678,14 +665,15 @@ void kernel_main() {
                 }
             }
 
-#ifndef AGMM_DIRECT_OUT  // direct output: pushed before the last K block
-            intermediate_cb.push_back(out_block_num_tiles);
-#endif
+            if constexpr (!direct_out) {  // direct output: pushed before the last K block
+                intermediate_cb.push_back(out_block_num_tiles);
+            }
             PACK((llk_pack_reconfig_l1_acc(0)));
+            if constexpr (direct_out) {
+                continue;  // the last K block already wrote out_cb
+            }
 
-#if defined(AGMM_DIRECT_OUT)
-            // matmul_blocks<true> already wrote out_cb
-#elif defined(FUSE_SWIGLU)
+#ifdef FUSE_SWIGLU
             // SwiGLU collapses the interleaved gate/up block to half its N width.
             out_cb.reserve_back(out_block_num_tiles >> 1);
             intermediate_cb.wait_front(out_block_num_tiles);
