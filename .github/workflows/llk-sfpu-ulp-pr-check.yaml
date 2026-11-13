@@ -3,9 +3,11 @@ name: "LLK SFPU ULP PR check"
 # Called from PR Gate. Fails a change that makes a Wormhole SFPU op less accurate, or that
 # loosens a budget in tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_*.yaml.
 #   changes  what the change touches against HEAD^1, and the card matrix.
-#   select   (CPU) fails a loosened budget unless the PR changes only the tables and has the
+#   select   (CPU) fails a loosened budget unless the PR changes only the tables (and the
+#            acknowledgements in test_sfpu_accuracy_budget.py) and has the
 #            `ulp-budget-raise-approved` label. Builds every sweep cell at HEAD^1 and HEAD and
-#            picks those whose loaded ELF bytes or table row differ (helpers/ulp_affected.py).
+#            picks those whose loaded ELF bytes or table row differ (helpers/ulp_affected.py);
+#            a change to this check picks every cell, so its card job runs before it merges.
 #   sweep    (Wormhole card) runs the picked cells; any cell or `domains` entry whose max ULP
 #            is above the table's fails (tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml).
 # Blackhole is swept nightly only (llk-sfpu-ulp-sweep.yaml): its pr_gate time budget is full.
@@ -26,11 +28,16 @@ defaults:
 
 env:
   TESTS: tt_metal/tt-llk/tests/python_tests
-  # What the sweep's kernels are built from: the harness's include roots and the SFPI pin.
+  # What the Wormhole sweep's kernels are built from: the harness's include roots and the SFPI
+  # pin, less what only Blackhole and Quasar build.
   KERNEL_PATHS: >-
-    tt_metal/tt-llk tt_metal/hw/inc tt_metal/hw/ckernels/wormhole_b0 tt_metal/hostdevcommon/api
+    tt_metal/tt-llk/tt_llk_wormhole_b0 tt_metal/tt-llk/common tt_metal/tt-llk/tools
+    tt_metal/tt-llk/tests :!tt_metal/tt-llk/tests/python_tests/quasar
+    :!tt_metal/tt-llk/tests/python_tests/fuser/quasar :!tt_metal/tt-llk/tests/sources/quasar
+    tt_metal/hw/inc tt_metal/hw/ckernels/wormhole_b0 tt_metal/hostdevcommon/api
     ttnn/cpp/ttnn/operations/experimental tt_metal/sfpi-version
-    .github/workflows/llk-sfpu-ulp-pr-check.yaml tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml
+  # The check itself: a change here runs every cell.
+  CHECK_PATHS: .github/workflows/llk-sfpu-ulp-pr-check.yaml tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml
 
 jobs:
   changes:
@@ -38,6 +45,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       kernels: ${{ steps.diff.outputs.kernels }}
+      check: ${{ steps.diff.outputs.check }}
       tables: ${{ steps.diff.outputs.tables }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
@@ -51,9 +59,12 @@ jobs:
         # HEAD is the merge the PR proposes, or the queue's commit; HEAD^1 is what it lands on.
         run: |
           # shellcheck disable=SC2086
-          if git diff --quiet HEAD^1 HEAD -- $KERNEL_PATHS; then kernels=false; else kernels=true; fi
+          if git diff --quiet HEAD^1 HEAD -- $CHECK_PATHS; then check=false; else check=true; fi
+          # shellcheck disable=SC2086
+          if [[ $check == false ]] && git diff --quiet HEAD^1 HEAD -- $KERNEL_PATHS; then kernels=false; else kernels=true; fi
           tables=$(git diff --name-only HEAD^1 HEAD -- "$TESTS/helpers/sfpu_accuracy_budget_*.yaml" | xargs -r -n1 basename | xargs)
           echo "kernels=$kernels" >> "$GITHUB_OUTPUT"
+          echo "check=$check" >> "$GITHUB_OUTPUT"
           echo "tables=$tables" >> "$GITHUB_OUTPUT"
       - if: steps.diff.outputs.kernels == 'true'
         run: pip3 install PyYAML
@@ -110,17 +121,23 @@ jobs:
           done
           [[ -z "$TABLES" ]] && exit 0
           allow=()
-          if [[ "$LABELLED" == true && -z "$(git diff --name-only HEAD^1 HEAD | grep -v '/sfpu_accuracy_budget_[a-z]*\.yaml$')" ]]; then
+          # A raise that parks a cell as not measurable, or leaves an op on tolerance only,
+          # must also edit the acknowledgements in test_sfpu_accuracy_budget.py.
+          others=$(git diff --name-only HEAD^1 HEAD | grep -v -e '/sfpu_accuracy_budget_[a-z]*\.yaml$' \
+            -e '^tt_metal/tt-llk/tests/hardware_free/accuracy/test_sfpu_accuracy_budget\.py$' || :)
+          if [[ "$LABELLED" == true && -z "$others" ]]; then
             allow=(--allow-raises)
           fi
           status=0
           for t in $TABLES; do
+            # 1: a budget loosened. 2: a table did not load, which --allow-raises never passes.
             python3 -m helpers.ulp_budget_diff diff --base "$RUNNER_TEMP/base/$t" --head "helpers/$t" "${allow[@]}" \
-              | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+              | tee -a "$GITHUB_STEP_SUMMARY" || { s=$?; (( s > status )) && status=$s || :; }
           done
-          if (( status )); then
-            echo "::error::A budget was loosened. A raise must be a PR that changes only the tables and has the ulp-budget-raise-approved label; then re-run this job."
-          fi
+          case $status in
+            1) echo "::error::A budget was loosened. A raise must be a PR that changes only the tables (and test_sfpu_accuracy_budget.py) and has the ulp-budget-raise-approved label; then re-run this job." ;;
+            2) echo "::error::A budget table did not load (the report above says why); no label passes that." ;;
+          esac
           exit "$status"
       - name: Build at HEAD^1
         working-directory: ${{ env.TESTS }}/..
@@ -141,11 +158,15 @@ jobs:
             --ulp-variants="$GITHUB_WORKSPACE/ulp/head/records.jsonl" test_unary_sfpu_ulp.py
       - id: select
         working-directory: ${{ env.TESTS }}
+        env:
+          CHECK_CHANGED: ${{ needs.changes.outputs.check }}
         run: |
+          all=()
+          [[ "$CHECK_CHANGED" == true ]] && all=(--all)
           python3 -m helpers.ulp_affected --records "$GITHUB_WORKSPACE/ulp/head/records.jsonl" \
             --base "$GITHUB_WORKSPACE/ulp/base/tt-llk-build" --head "$GITHUB_WORKSPACE/ulp/head/tt-llk-build" \
             --base-table "$RUNNER_TEMP/base/sfpu_accuracy_budget_wh.yaml" --nodes "$GITHUB_WORKSPACE/ulp/head/nodes.txt" \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+            "${all[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "cells=$(wc -l < "$GITHUB_WORKSPACE/ulp/head/nodes.txt")" >> "$GITHUB_OUTPUT"
       - if: steps.select.outputs.cells != '0'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

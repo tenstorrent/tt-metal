@@ -199,22 +199,46 @@ def test_a_declared_tolerance_that_may_loosen_is_a_regression(base_row, head_row
     assert kinds == {Kind.TOLERANCE_WIDENED}
 
 
+_PAST_LIST = Row(input=F16, output=F16B, domains=TANH_DOMAINS)
+_DECLARED = Row(input=F16, metric=TOL, atol=0.2)
+ADDED, GATED, WIDENED = Kind.ADDED, Kind.GATED, Kind.TOLERANCE_WIDENED
+
+
 @pytest.mark.parametrize(
-    "row",
+    "rows, under_an_enrolled_op, as_a_new_op",
     [
-        Row(input=F16, output=F16, metric=TOL, measured=393, nonfinite=3),
-        Row(input=F16, output=F32, metric=TOL, atol=0.2, rtol=0.05),
-        Row(input=F16, output=F32, measured=7),
-        Row(input=F16, output=F32, domains=TANH_DOMAINS),
+        (
+            (Row(input=F16, output=F16, metric=TOL, measured=393, nonfinite=3),),
+            {ADDED},
+            {ADDED},
+        ),
+        (
+            (Row(input=F16, output=F32, metric=TOL, atol=0.2, rtol=0.05),),
+            {WIDENED},
+            {ADDED},
+        ),
+        ((Row(input=F16, output=F32, measured=7),), {GATED}, {GATED}),
+        ((Row(input=F16, output=F32, domains=TANH_DOMAINS),), {GATED}, {GATED}),
+        ((_PAST_LIST, _DECLARED), {ADDED, GATED, WIDENED}, {ADDED, GATED}),
     ],
-    ids=["tolerance-with-nonfinite", "declared-bounds", "gated", "list"],
+    ids=[
+        "tolerance-with-nonfinite",
+        "declared-bounds",
+        "gated",
+        "list",
+        "past-list-beside-bounds",
+    ],
 )
-def test_a_cell_no_row_held_before_is_added_not_loosened(row):
-    """A new op, or a cell enrolled with its kernel, holds what it never held before."""
-    base = _table(Row(input=F16B, output=F16B, measured=1))
-    head = _table(Row(input=F16B, output=F16B, measured=1), row)
-    assert not [c for c in compare(base, head) if c.kind.loosens]
-    assert not [c for c in compare({}, head) if c.kind.loosens]
+def test_a_cell_no_row_held_before_starts_from_its_row(
+    rows, under_an_enrolled_op, as_a_new_op
+):
+    """A new op holds what it never held before. A new variant of an enrolled op was
+    held to the per-format default, which a declared bound replaces: that may loosen.
+    A recorded figure or non-finite count is what the variant starts from either way."""
+    enrolled = Row(input=F16B, output=F16B, measured=1)
+    kinds = {c.kind for c in compare(_table(enrolled), _table(enrolled, *rows))}
+    assert kinds == under_an_enrolled_op
+    assert {c.kind for c in compare({}, _table(*rows))} == as_a_new_op
 
 
 # ── Where a budget binds ──────────────────────────────────────────────────────
@@ -703,6 +727,38 @@ def test_headroom_judges_a_table_by_the_architecture_its_file_names(tmp_path, ar
     measured.write_text(Measurement(op=ABS, key=other_cell, worst=9, lanes=1).to_json())
     assert main(argv) == 2  # another chip's records, not judged against this table
     assert main([*argv, "--arch", other.value]) == 1  # --arch overrides the name
+
+
+@pytest.mark.parametrize("arch", list(TABLE_PATHS), ids=lambda a: a.value)
+def test_headroom_without_table_judges_the_sessions_table(tmp_path, monkeypatch, arch):
+    """The CI commands omit `--table`: the session's architecture picks the file. The
+    other architecture's table would let the reading through."""
+    paths = {a: tmp_path / path.name for a, path in TABLE_PATHS.items()}
+    for a, path in paths.items():
+        write_table_file(
+            _table(Row(output=F16B, measured=1 if a is arch else 20)), path
+        )
+    monkeypatch.setattr(ulp_budget_diff, "TABLE_PATHS", paths)
+    monkeypatch.setattr(ulp_budget_diff, "measured_arch", lambda: arch)
+    measured = tmp_path / "measured.jsonl"
+    cell = replace(_CELL, arch=arch)
+    measured.write_text(Measurement(op=ABS, key=cell, worst=9, lanes=1).to_json())
+    assert main(["headroom", "--measured", str(measured)]) == 1
+    other = next(a for a in TABLE_PATHS if a is not arch)
+    assert (
+        main(
+            [
+                "headroom",
+                "--measured",
+                str(measured),
+                "--table",
+                str(paths[other]),
+                "--arch",
+                arch.value,
+            ]
+        )
+        == 0
+    )
 
 
 def test_headroom_takes_records_from_a_chip_that_reads_the_table(tmp_path):

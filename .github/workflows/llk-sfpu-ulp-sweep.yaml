@@ -54,13 +54,20 @@ jobs:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     env:
-      CHIP_ARCH: ${{ startsWith(matrix.test-group.sku, 'wh_') && 'wormhole' || 'blackhole' }}
+      # A card that is neither fails the run below rather than be judged against another table.
+      CHIP_ARCH: ${{ startsWith(matrix.test-group.sku, 'wh_') && 'wormhole' || startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || 'unknown' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Run the sweep
         shell: bash
         working-directory: tt_metal/tt-llk
+        env:
+          SKU: ${{ matrix.test-group.sku }}
         run: |
+          if [[ "$CHIP_ARCH" == unknown ]]; then
+            echo "::error::No SFPU accuracy table for SKU $SKU; map it in llk-sfpu-ulp-sweep.yaml."
+            exit 1
+          fi
           (cd tests && ./setup_testing_env.sh)
           ${{ matrix.test-group.cmd }}
       - if: always()
