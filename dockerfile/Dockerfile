@@ -357,6 +357,9 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
 # switching to libgl1
+# openssh-server's postinst generates SSH host keys. Baked into a published
+# image, every container would share them, so they are deleted in this same RUN
+# (no layer holds them) and entrypoint.sh generates each container's own.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
@@ -368,7 +371,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     libgl1 \
     ipmitool \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/ssh/ssh_host_*
 
 # Configure SSH for MPI multihost jobs readiness
 # To be safe, keep this **after** the apt install to avoid openssh-server mangling configs
