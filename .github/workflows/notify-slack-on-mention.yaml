@@ -22,9 +22,6 @@ jobs:
       - name: Check for @ mentions
         id: check-mention
         env:
-          # Org-read PAT, as in on-community-issue.yaml: it sees private org members too. github.token only
-          # sees public ones, so it is kept as a fallback for events that get no secrets.
-          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           # Org members can reach each other on Slack directly, so only mentions written by someone outside
@@ -42,11 +39,14 @@ jobs:
             fi
             if [ "$ASSOCIATION" != "MEMBER" ] && [ "$ASSOCIATION" != "OWNER" ]; then
               # A private member reads as CONTRIBUTOR above, and an editor who is not the author has no
-              # association at all, so ask the org. 204 means member.
-              MEMBER_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
-                -H "Authorization: Bearer ${ORG_READ_GITHUB_TOKEN:-$GH_TOKEN}" \
-                "https://api.github.com/orgs/${{ github.repository_owner }}/members/$SENDER" || echo "000")
-              [ "$MEMBER_STATUS" = "204" ] && ASSOCIATION="MEMBER"
+              # association at all. github.token can't read private org membership, so write access to
+              # this repo stands in for it: org developers have write, outside contributors only read.
+              REPO_PERMISSION=$(curl -s --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/collaborators/$SENDER/permission" \
+                | jq -r '.permission // "none"' 2>/dev/null || echo "none")
+              if [ "$REPO_PERMISSION" = "admin" ] || [ "$REPO_PERMISSION" = "write" ]; then
+                ASSOCIATION="MEMBER"
+              fi
             fi
             if [ "$ASSOCIATION" = "MEMBER" ] || [ "$ASSOCIATION" = "OWNER" ]; then
               echo "Skipping: $SENDER is an org $ASSOCIATION"

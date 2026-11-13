@@ -89,29 +89,33 @@ jobs:
           if printf '%s\n' "$COMMENT_BODY" | grep -E "^/(codeowners?|ping)(\s|$)" > /dev/null; then
             # Add reaction to acknowledge we saw the command
             curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Authorization: Bearer ${{ github.token }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               -d '{"content": "eyes"}' \
               "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
 
-            # Check if comment author is a member of tenstorrent organization
-            MEMBERSHIP_API="https://api.github.com/orgs/tenstorrent/members/$COMMENT_AUTHOR"
-            MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            # Org membership needs an org-read token, which github.token can't be, so
+            # write access to this repo stands in for it: org developers have write,
+            # outside contributors only read. maintain reports as write, triage as read.
+            MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
-                                   "$MEMBERSHIP_API")
+                                   "https://api.github.com/repos/${{ github.repository }}/collaborators/$COMMENT_AUTHOR/permission")
+            REPO_PERMISSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "https://api.github.com/repos/${{ github.repository }}/collaborators/$COMMENT_AUTHOR/permission" \
+                              | jq -r '.permission // "none"' 2>/dev/null || echo "none")
 
-            echo "Membership check for $COMMENT_AUTHOR: HTTP $MEMBERSHIP_HTTP_CODE"
+            echo "Repo permission for $COMMENT_AUTHOR: $REPO_PERMISSION (HTTP $MEMBERSHIP_HTTP_CODE)"
 
-            # HTTP 204 = member, HTTP 404 = not a member or private membership, HTTP 302 = public member
-            if [ "$MEMBERSHIP_HTTP_CODE" = "204" ] || [ "$MEMBERSHIP_HTTP_CODE" = "302" ]; then
-              echo "✅ User $COMMENT_AUTHOR is a member of tenstorrent organization"
+            if [ "$REPO_PERMISSION" = "admin" ] || [ "$REPO_PERMISSION" = "write" ]; then
+              echo "✅ User $COMMENT_AUTHOR has write access to this repo"
               echo "should-run=true" >> $GITHUB_OUTPUT
               echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
               # Get PR branch information
               PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
-              PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              PR_DATA=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
                              -H "Accept: application/vnd.github.v3+json" \
                              "$PR_API")
 
@@ -133,7 +137,7 @@ jobs:
                 jq -n --arg body "$RETIRED_MSG" '{"body": $body}' > "$TEMP_JSON_FILE"
 
                 RETIRED_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                  -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                  -H "Authorization: Bearer ${{ github.token }}" \
                   -H "Accept: application/vnd.github.v3+json" \
                   -H "Content-Type: application/json" \
                   --data-binary @"$TEMP_JSON_FILE" \
@@ -218,33 +222,33 @@ jobs:
 
               # Add success reaction
               curl -s -X POST \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                -H "Authorization: Bearer ${{ github.token }}" \
                 -H "Accept: application/vnd.github.v3+json" \
                 -H "Content-Type: application/json" \
                 -d '{"content": "rocket"}' \
                 "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
 
             else
-              echo "❌ User $COMMENT_AUTHOR is not a member of tenstorrent organization (HTTP $MEMBERSHIP_HTTP_CODE)"
+              echo "❌ User $COMMENT_AUTHOR does not have write access to this repo (permission: $REPO_PERMISSION, HTTP $MEMBERSHIP_HTTP_CODE)"
               echo "should-run=false" >> $GITHUB_OUTPUT
 
               # Add unauthorized reaction
               curl -s -X POST \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                -H "Authorization: Bearer ${{ github.token }}" \
                 -H "Accept: application/vnd.github.v3+json" \
                 -H "Content-Type: application/json" \
                 -d '{"content": "-1"}' \
                 "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
 
               # Post a reply comment explaining the restriction
-              REPLY_MESSAGE="❌ **Access Denied**: Only members of the \`tenstorrent\` organization can use CodeOwners commands.\n\nIf you believe this is an error, please contact a repository maintainer."
+              REPLY_MESSAGE="❌ **Access Denied**: Only people with write access to this repository can use CodeOwners commands.\n\nIf you believe this is an error, please contact a repository maintainer."
 
               # Create JSON payload for the reply
               TEMP_JSON_FILE=$(mktemp)
               jq -n --arg body "$REPLY_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"
 
               curl -s -X POST \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                -H "Authorization: Bearer ${{ github.token }}" \
                 -H "Accept: application/vnd.github.v3+json" \
                 -H "Content-Type: application/json" \
                 --data-binary @"$TEMP_JSON_FILE" \
@@ -309,14 +313,19 @@ jobs:
             exit 0
           fi
 
-          # Same access rule as the comment commands: tenstorrent org members only.
-          MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          # Same access rule as the comment commands: write access to this repo
+          # (stands in for org membership, which github.token can't read).
+          MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
-                                 "https://api.github.com/orgs/tenstorrent/members/$SENDER")
-          echo "Membership check for $SENDER: HTTP $MEMBERSHIP_HTTP_CODE"
+                                 "https://api.github.com/repos/${{ github.repository }}/collaborators/$SENDER/permission")
+          REPO_PERMISSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "https://api.github.com/repos/${{ github.repository }}/collaborators/$SENDER/permission" \
+                            | jq -r '.permission // "none"' 2>/dev/null || echo "none")
+          echo "Repo permission for $SENDER: $REPO_PERMISSION (HTTP $MEMBERSHIP_HTTP_CODE)"
 
-          if [ "$MEMBERSHIP_HTTP_CODE" = "204" ] || [ "$MEMBERSHIP_HTTP_CODE" = "302" ]; then
-            echo "✅ User $SENDER is a member of tenstorrent organization"
+          if [ "$REPO_PERMISSION" = "admin" ] || [ "$REPO_PERMISSION" = "write" ]; then
+            echo "✅ User $SENDER has write access to this repo"
 
             # Cooldown, so tapping the box repeatedly doesn't spam owners. Each
             # accepted ping leaves a 🚀 reaction from the bot on the PR description;
@@ -324,12 +333,11 @@ jobs:
             REACTIONS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/reactions"
             # If either lookup fails (rate limit, 5xx), skip the cooldown rather
             # than drop the ping.
-            BOT_LOGIN=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                             -H "Accept: application/vnd.github.v3+json" \
-                             "https://api.github.com/user" | jq -r '.login? // empty' 2>/dev/null || true)
+            # github.token can't call /user; it always acts as github-actions[bot].
+            BOT_LOGIN="github-actions[bot]"
             LAST_PING=""
             if [ -n "$BOT_LOGIN" ]; then
-              LAST_PING=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              LAST_PING=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$REACTIONS_API?content=rocket&per_page=100" \
                           | jq -c --arg bot "$BOT_LOGIN" \
@@ -348,7 +356,7 @@ jobs:
               fi
               # A user can hold only one reaction of each type, so re-stamp it.
               DELETE_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                   -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                   -H "Authorization: Bearer ${{ github.token }}" \
                    -H "Accept: application/vnd.github.v3+json" \
                    "$REACTIONS_API/$(echo "$LAST_PING" | jq -r '.id')")
               echo "Old cooldown marker delete: HTTP $DELETE_HTTP_CODE"
@@ -357,7 +365,7 @@ jobs:
             # inside the cooldown. If the ping then fails, the cost is a 60s wait;
             # `/codeowners ping` has no cooldown and can be used immediately.
             REACTION_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                 -H "Authorization: Bearer ${{ github.token }}" \
                  -H "Accept: application/vnd.github.v3+json" \
                  -H "Content-Type: application/json" \
                  -d '{"content": "rocket"}' \
@@ -381,15 +389,15 @@ jobs:
             } >> $GITHUB_OUTPUT
             echo "Command: ping owners (description checkbox)"
           elif [ "$MEMBERSHIP_HTTP_CODE" = "404" ]; then
-            echo "❌ User $SENDER is not a member of tenstorrent organization (HTTP $MEMBERSHIP_HTTP_CODE)"
+            echo "❌ User $SENDER does not have write access to this repo (permission: $REPO_PERMISSION, HTTP $MEMBERSHIP_HTTP_CODE)"
             echo "should-run=false" >> $GITHUB_OUTPUT
 
-            REPLY_MESSAGE="❌ **Access Denied**: Only members of the \`tenstorrent\` organization can ping code owners from the PR description.\n\nIf you believe this is an error, please contact a repository maintainer."
+            REPLY_MESSAGE="❌ **Access Denied**: Only people with write access to this repository can ping code owners from the PR description.\n\nIf you believe this is an error, please contact a repository maintainer."
             TEMP_JSON_FILE=$(mktemp)
             jq -n --arg body "$REPLY_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"
 
             curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Authorization: Bearer ${{ github.token }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$TEMP_JSON_FILE" \
@@ -432,7 +440,7 @@ jobs:
             echo "API URL: $API_URL"
 
             # Get PR data
-            PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            PR_DATA=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
                            -H "Accept: application/vnd.github.v3+json" \
                            "$API_URL")
 
@@ -476,12 +484,12 @@ jobs:
 
           while true; do
             REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews?per_page=100&page=$PAGE"
-            REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
                              -H "Accept: application/vnd.github.v3+json" \
                              "$REVIEWS_API" 2>/dev/null)
 
             # Check if API call was successful
-            REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" \
                              -H "Accept: application/vnd.github.v3+json" \
                              "$REVIEWS_API")
 
@@ -577,7 +585,7 @@ jobs:
           TOTAL_DELETIONS=0
           while true; do
             FILES_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE"
-            FILES_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            FILES_DATA=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
                              -H "Accept: application/vnd.github.v3+json" \
                              "$FILES_API")
 
@@ -677,10 +685,7 @@ jobs:
               if "/" in clean_username:
                   return clean_username
 
-              # Try both tokens
-              token = (
-                  os.environ.get("GITHUB_TOKEN") or os.environ.get("ORG_READ_GITHUB_TOKEN") or os.environ.get("ORG_READ") or ""
-              )
+              token = os.environ.get("GITHUB_TOKEN", "")
 
               if not token:
                   print(f"Warning: No token available for user lookup of {username}")
@@ -901,8 +906,7 @@ jobs:
               main()
           EOF
         env:
-          GITHUB_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
-          ORG_READ_GITHUB_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   post-comment:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
@@ -961,9 +965,9 @@ jobs:
               team=$(echo "$team_entry" | cut -d':' -f1)
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
               if [ "$MEMBERS_HTTP_CODE" = "200" ]; then
-                MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API" 2>/dev/null)
+                MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API" 2>/dev/null)
                 TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
                 [ -n "$TEAM_MEMBER_LOGINS" ] && TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|" || TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
               elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
@@ -1019,7 +1023,7 @@ jobs:
                     for member in "${MEMBERS_ARRAY[@]}"; do
                       member_name="$member"
                       if [ -n "$member" ] && [ "$member" != " " ]; then
-                        USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                        USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
                         USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                         [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ] && member_name="$USER_NAME"
                       fi
@@ -1164,7 +1168,7 @@ jobs:
                 IFS=',' read -ra DIRECT_ARRAY <<< "$direct_approvers_set"
                 for member in "${DIRECT_ARRAY[@]}"; do
                   [ -z "$member" ] && continue
-                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                   [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
                   direct_approved="$direct_approved$USER_NAME, "
@@ -1176,7 +1180,7 @@ jobs:
                 IFS=',' read -ra SHARED_ARRAY <<< "$shared_approvers_set"
                 for member in "${SHARED_ARRAY[@]}"; do
                   [ -z "$member" ] && continue
-                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                   [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
                   shared_approved="$shared_approved$USER_NAME, "
@@ -1303,7 +1307,7 @@ jobs:
 
           echo "Fetching existing comments..."
           while true; do
-            COMMENTS_PAGE=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            COMMENTS_PAGE=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
                                   -H "Accept: application/vnd.github.v3+json" \
                                   "$COMMENTS_API?per_page=100&page=$PAGE")
 
@@ -1334,8 +1338,10 @@ jobs:
           echo "Found $TOTAL_COMMENTS total comments across $((PAGE)) pages"
 
           # Find existing comment from this workflow (contains our marker)
-          # Get the most recent one by sorting by created_at descending
-          EXISTING_COMMENT_ID=$(echo "$ALL_COMMENTS" | jq -r "[.[] | select(.body | contains(\"CodeOwners-Workflow-Bot\"))] | sort_by(.created_at) | reverse | .[0].id")
+          # Get the most recent one by sorting by created_at descending. Only
+          # github-actions[bot]'s own comments: github.token can't edit the older
+          # ones tenstorrent-github-bot posted, so those get a fresh comment instead.
+          EXISTING_COMMENT_ID=$(echo "$ALL_COMMENTS" | jq -r "[.[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"CodeOwners-Workflow-Bot\")))] | sort_by(.created_at) | reverse | .[0].id")
 
           # Use jq to properly escape the comment for JSON (use temp file for large comments)
           TEMP_JSON_FILE=$(mktemp)
@@ -1348,7 +1354,7 @@ jobs:
             # Create new comment
             echo "Creating new comment..."
             curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Authorization: Bearer ${{ github.token }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$TEMP_JSON_FILE" \
@@ -1359,7 +1365,7 @@ jobs:
               echo "No existing CodeOwners analysis found. Creating new summary comment..."
               # Create new comment for bare commands and ping commands
               curl -s -X POST \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                -H "Authorization: Bearer ${{ github.token }}" \
                 -H "Accept: application/vnd.github.v3+json" \
                 -H "Content-Type: application/json" \
                 --data-binary @"$TEMP_JSON_FILE" \
@@ -1372,7 +1378,7 @@ jobs:
             # Edit existing comment
             echo "Updating existing comment (ID: $EXISTING_COMMENT_ID)..."
             curl -s -X PATCH \
-              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Authorization: Bearer ${{ github.token }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$TEMP_JSON_FILE" \
@@ -1399,7 +1405,7 @@ jobs:
 
             # Post acknowledgment comment
             curl -s -X POST \
-              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              -H "Authorization: Bearer ${{ github.token }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
               --data-binary @"$ACK_JSON_FILE" \
@@ -1480,7 +1486,7 @@ jobs:
           if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
             echo "DEBUG: Requester and PR author are different users"
             REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
-            REQUESTER_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            REQUESTER_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$REQUESTER_USER_API" 2>/dev/null)
             REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -1527,7 +1533,7 @@ jobs:
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
 
           # Check API response status
-          PR_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          PR_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
 
@@ -1537,7 +1543,7 @@ jobs:
             exit 1
           fi
 
-          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ github.token }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
 
@@ -1565,7 +1571,7 @@ jobs:
           PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"
           if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
             AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-            AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$AUTHOR_USER_API" 2>/dev/null)
             AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -1715,7 +1721,7 @@ jobs:
                   # This is an individual user
                   # Get full name from GitHub API
                   USER_API="https://api.github.com/users/$clean_item"
-                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -1787,7 +1793,7 @@ jobs:
                   fi
 
                   USER_API="https://api.github.com/users/$clean_username"
-                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                  USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -1888,11 +1894,11 @@ jobs:
           # Get members of thirdparty-moreh team to exclude from selection (they're not in Slack)
           MOREH_TEAM_MEMBERS=""
           MOREH_MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/thirdparty-moreh/members"
-          MOREH_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          MOREH_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$MOREH_MEMBERS_API" 2>/dev/null)
 
-          MOREH_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          MOREH_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$MOREH_MEMBERS_API")
 
@@ -1905,7 +1911,7 @@ jobs:
 
           # Get PR information
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
-          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ github.token }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
@@ -1987,7 +1993,7 @@ jobs:
           # status costs no extra users.list calls.
           SLACK_USERS_FILE: ${{ runner.temp }}/slack_users.json
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
-          GITHUB_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 .github/scripts/select_owners_to_ping.py
       - name: Send notifications
@@ -2003,7 +2009,7 @@ jobs:
 
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
-          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ github.token }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
@@ -2028,7 +2034,7 @@ jobs:
               if [ -n "$owner" ]; then
                 # Get user info
                 USER_API="https://api.github.com/users/$owner"
-                USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$USER_API" 2>/dev/null)
                 USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2050,7 +2056,7 @@ jobs:
             if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
               # Try to fetch full name from GitHub API
               AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-              AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                      -H "Accept: application/vnd.github.v3+json" \
                                      "$AUTHOR_USER_API" 2>/dev/null)
               AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2102,7 +2108,7 @@ jobs:
 
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
-          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ github.token }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
@@ -2260,7 +2266,7 @@ jobs:
                 if [ -n "$owner" ]; then
                   # Get full name for this owner
                   USER_API="https://api.github.com/users/$owner"
-                  USER_RESPONSE=$(curl -s -g -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                  USER_RESPONSE=$(curl -s -g -w '\n%{http_code}' -H "Authorization: Bearer ${{ github.token }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
                   USER_HTTP_CODE=$(echo "$USER_RESPONSE" | tail -n1)
@@ -2291,7 +2297,7 @@ jobs:
             PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"
             if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
               AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-              AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              AUTHOR_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                      -H "Accept: application/vnd.github.v3+json" \
                                      "$AUTHOR_USER_API" 2>/dev/null)
               AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2313,7 +2319,7 @@ jobs:
             if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
               # Get full name for requester if available
               REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
-              REQUESTER_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              REQUESTER_USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                      -H "Accept: application/vnd.github.v3+json" \
                                      "$REQUESTER_USER_API" 2>/dev/null)
               REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -2382,7 +2388,7 @@ jobs:
 
                     # Get full name from GitHub API
                     USER_API="https://api.github.com/users/$clean_username"
-                    USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                    USER_DATA=$(curl -s -g -H "Authorization: Bearer ${{ github.token }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$USER_API" 2>/dev/null)
                     USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
