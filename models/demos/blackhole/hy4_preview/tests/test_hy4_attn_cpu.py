@@ -59,6 +59,7 @@ def test_shard_plan_real_dims(indexer):
         "gate": (1, 1, 6144, 2048),
         "o_proj": (1, 1, 2048, 6144),
         "sink_over_scale": (1, 1, 1, 8),
+        "sink_dec": (1, 1, 1, 32),
         "q_a_norm": (1, 1, 64, 32),
         "kv_a_norm": (1, 1, 16, 32),
     }

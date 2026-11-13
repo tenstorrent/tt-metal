@@ -58,7 +58,9 @@ def build_attn_host_weights(
     scale = (nope + rope) ** -0.5 if sink_scale is None else sink_scale
     out["sink_over_scale"] = HostW((g("learnable_sink_param").float() / scale).reshape(1, 1, 1, H), 3)
     hc = H // tp
-    dec = torch.zeros(tp, 32)  # decode: the column's 8 heads zero-padded to the 32 heads the stock op needs
+    dec = torch.zeros(
+        tp, 32, device=out["sink_over_scale"].tensor.device
+    )  # decode: the column's 8 heads zero-padded to the 32 heads the stock op needs
     dec[:, :hc] = out["sink_over_scale"].tensor.reshape(tp, hc)
     out["sink_dec"] = HostW(dec.reshape(1, 1, 1, tp * 32), 3)
     if "self_attn.indexer.wq_b.weight" in sd:
