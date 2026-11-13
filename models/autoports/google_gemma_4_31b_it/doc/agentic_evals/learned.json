@@ -1,0 +1,212 @@
+{
+  "best_config": {
+    "r1_gpqa_diamond": {
+      "status": "best_observed_completed_full_list_not_phase_passing",
+      "run": "gpqa-full-list-thinking-off",
+      "list_size": 10,
+      "selection_rule": "Highest solved count among completed full-list runs; tie broken by observed wall time. Diagnostic solos excluded.",
+      "config": {
+        "pool_tokens": 1048576,
+        "agents": 10,
+        "batch": 32,
+        "limits": {
+          "max_gen_toks": 126976,
+          "request_timeout_seconds": 14400,
+          "agent_timeout_s": 14400,
+          "request_timeout_s": 14400,
+          "output_cap_tokens": 126976,
+          "reference": {
+            "agent_timeout_s": 14400,
+            "request_timeout_s": 14400,
+            "output_cap_tokens": 126976
+          },
+          "source": "unchanged main Gemma4-31B eval_config at7a51c2f",
+          "interpretation": "GPQA has one model call per task and no autonomous tool agent; task timeout equals main request timeout. Outer list supervisor is recorded separately and is not a raised agent limit."
+        },
+        "limits_source": "unchanged main Gemma4-31B eval_config at7a51c2f",
+        "network": "cached gated GPQA; no tools",
+        "reasoning": {
+          "thinking": false,
+          "effort": null,
+          "effort_note": "Gemma4 pinned chat template exposes enable_thinking, no effort levels"
+        },
+        "SHAs": {
+          "main": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+          "benchmark": "41ed690b64674cf0ce8d6e98593dcc379416abf4"
+        },
+        "sha": "581d5f6277a4ec412c8fafe16bc21bf2d557152d",
+        "source_manifest": "current/server-observed/configuration-b32.json",
+        "sizing_evidence": "current/gpqa_off_sizing.json",
+        "max_num_seqs": 32
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42,
+        "seed_note": "Explicit main GPQA seed42"
+      },
+      "score": {
+        "solved": 6,
+        "n": 10,
+        "interval_95": [
+          31.267376973365824,
+          83.18196702937638
+        ],
+        "units": "percent",
+        "main_exact_match_fraction": 0.6,
+        "scored_samples": 10
+      },
+      "reference": {
+        "value": 84.3,
+        "unit": "percent",
+        "source": "inputs.json: model card published reference via main eval_config",
+        "reasoning": "unknown exact published-reference recipe; main harness comparison recipe enables thinking"
+      },
+      "hours": 0.01720521110970165,
+      "measured_hours": 0.01720521110970165,
+      "explained_hours": 0.028876588064387688,
+      "phase_pass": false,
+      "native_accounting_complete": true,
+      "rate_coverage_complete": true,
+      "accounting_complete": true,
+      "evidence": [
+        "current/gpqa-thinking-off/collected.json",
+        "current/gpqa-off-command.json",
+        "results.json"
+      ],
+      "diagnostic_caveat": "All required isolated on/off diagnostics collected and analyzed within phase times; no single-task diagnostic replaces a non-infrastructure full-list score. Both phase budgets ended with not-passed-yet outcomes; these are best observed configurations, not release-readiness claims.",
+      "selection_reason": "All three full-list runs scored6/10; thinking-off61.94s is faster than observed thinking-on10677.4s. Score below reference band and timing replay outside25%, so this is an observed starting configuration only.",
+      "time_pass": false
+    },
+    "swe_bench_verified": {
+      "status": "best_observed_completed_full_list_not_phase_passing",
+      "run": "swe-phase2-thinking-on-cache-retry",
+      "list_size": 10,
+      "selection_rule": "Highest solved count among completed full-list runs; tie broken by observed wall time. Diagnostic solos excluded.",
+      "config": {
+        "pool_tokens": 1048576,
+        "agents": 10,
+        "batch": 32,
+        "limits": {
+          "agent_timeout_sec": 21600,
+          "llm_timeout_sec": 3600,
+          "max_tokens": 32768,
+          "agent_timeout_s": 21600,
+          "request_timeout_s": 3600,
+          "output_cap_tokens": 32768,
+          "reference": {
+            "agent_timeout_s": 21600,
+            "request_timeout_s": 3600,
+            "output_cap_tokens": 32768
+          },
+          "source": "Qwen/Qwen3.8-27B",
+          "interpretation": "Main closest-model Harbor limits, unchanged."
+        },
+        "limits_source": "Qwen/Qwen3.8-27B",
+        "network": "Task agent phase no-network; unchanged main allow_agent_endpoint populates extra_allowed_hosts with Docker host gateway. Verifier retains source public policy.",
+        "reasoning": {
+          "enable_thinking": true,
+          "effort": null,
+          "choice": "Observed main Harbor recipe enables thinking; exact operator H100 reference reasoning recipe is unknown, not asserted identical."
+        },
+        "SHAs": {
+          "main": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+          "benchmark": "41ed690b64674cf0ce8d6e98593dcc379416abf4"
+        },
+        "sha": "581d5f6277a4ec412c8fafe16bc21bf2d557152d",
+        "source_manifest": "current/server-observed/configuration-b32.json",
+        "sizing_evidence": "current/swe_sizing_prior.json",
+        "max_num_seqs": 32
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": null,
+        "seed_note": "No explicit SWE request seed in main Harbor model config"
+      },
+      "score": {
+        "solved": 5,
+        "n": 10,
+        "interval_95": [
+          23.6593090512564,
+          76.3406909487436
+        ],
+        "units": "percent",
+        "first_attempt_only": true,
+        "complete": true
+      },
+      "reference": {
+        "value": 64.8,
+        "units": "percent",
+        "source": "Operator H100 floor in bringup/agentic_evals/inputs.json",
+        "reasoning": "unknown exact reference recipe"
+      },
+      "hours": 3.9557196017106375,
+      "measured_hours": 3.9557196017106375,
+      "explained_hours": 11.69690390389452,
+      "phase_pass": false,
+      "native_accounting_complete": true,
+      "rate_coverage_complete": false,
+      "accounting_complete": false,
+      "evidence": [
+        "current/swe-phase2/collected.recovered.json",
+        "current/swe_command.json",
+        "results.json"
+      ],
+      "diagnostic_caveat": "All required isolated on/off diagnostics collected and analyzed within phase times; no single-task diagnostic replaces a non-infrastructure full-list score. Both phase budgets ended with not-passed-yet outcomes; these are best observed configurations, not release-readiness claims.",
+      "selection_reason": "Only completed full-list SWE run scores5/10; initial infrastructure launch is incomplete and retained separately. Twelve capped discarded responses recovered across six tasks; all six isolated on/off diagnostic pairs complete. No alternative setting improved an originally unresolved task.",
+      "supervisor_hours": 3.9563611463883555,
+      "hours_basis": "Harbor job lifecycle from collector/results; supervisor_hours separately includes process launch overhead.",
+      "time_pass": false,
+      "accounting_note": "All476 native model calls and outside-model intervals recovered. Collector accounting_complete=false denotes missing replay rate coverage (active2/context33843), not missing native token/timing evidence.",
+      "explained_hours_approximate": true,
+      "explained_hours_evidence": "current/swe-approximate-replay.json"
+    }
+  },
+  "harness_facts": [
+    "Pinned cached main harness 7a51c2f20f51e7508d8ea365d09092d00bbd5fcb; local only.",
+    "Installed multigoal has no runs.json collection or usage_budget implementation; local supervisor being prepared.",
+    "Stage12 fresh host setup: official GPQA10 spread and main-generated command in current/gpqa_command.json; pinned tokenizer842da3794eaa0b77d5f08bae87a17459d91ff475, main7a51c2f source hashes verified. No prior scores reused.",
+    "SWE10 preparation in current/swe_command.json: unchanged main config writer and clean cached Harbor e76c762f; official HF SWE-bench_Verified c104f840cc67f8b6eec6f759ebc8b2693d585d4a; ten repos/three difficulty classes, count-only patch metadata. Qwen3.8-27B supplies published-reference limits6h agent/1h request/32768 output; operator Gemma floor0.648 remains score reference.",
+    "All10 SWE official base images pulled and digests recorded in current/swe_image_acquisition.json;490GiB free. Generated task definitions declare1CPU/4096MiB/10240MiB each. Main-supported agent no-network plus extra_allowed_hosts restricts agent to serving gateway; root independently confirmed health200 at127.0.0.1 and172.17.0.1.",
+    "Harbor dedicated venv bringup/artifacts/agentic-v4-swe-env uses unmodified cached tt-inference-server branch; unchanged SWE adapter requires swebench4.1.0 because5.0.2 removed imported LATEST. Dependency pin only, no harness source fix. current/swe_requirements.lock records packages.",
+    "SWE sizing remains10agents/B32 under skill formula and stage10 estimated32768-token working set; no current SWE working-set measurement yet. B8 two-wave timing comparison is advisory only; short cold-prefill stage11 rates may pessimistically extrapolate long replies (current/swe_sizing_prior.json).",
+    "Mini-swe2.2.8 native trajectory retains per-response usage/cache counts and completion timestamp but no explicit model-call start/duration. Harbor ATIF preserves token metrics but may lose dedicated reasoning_content (uses assistant content). Collector must retain native trajectory and combine server request timing for measured outside-model time; missing cache field is unknown rather than measured zero.",
+    "Pinned vLLM VLLM_DEBUG_LOG_API_SERVER_RESPONSE is enabled only when value.lower() == 'true'; '1' does not enable response middleware. First v4 GPQA run used '1': existing external client response IDs/answer hashes and sample visible outputs survive, but absent native response usage/end timestamps cannot be reconstructed. Future external observer stores response usage/finish reasons/hashes plus full response in mode0600 client_boundaries.responses.private.jsonl without harness changes. Seven host tests cover this flag, retry/suspension capture, private response retention and accounting.",
+    "Host-only tools/agentic_collect_swe.py joins trajectory response IDs to native server receipt/completion, computes agent outside as lifecycle minus union, preserves inter-call gaps, and event-replays first attempts against rows+release_rows without uncovered context/batch or cache extrapolation. All attempts retained; first-attempt selected denominator fixed. Four synthetic tests pass; no current SWE eval collected yet.",
+    "First GPQA duplicate-empty outputs map unambiguously through saved doc hash\u2192construct_requests prompt hash\u2192amodel_call: logged167 is official68 (453.36s,10657 candidate physical samples, not cap);102 is official102 (10660.16s,126976 candidate physical samples, cap-consistent). Ten unique prompt lengths match ten continuous phase position chains with zero ambiguous links, but absent API usage/finish/raw token IDs prevent full API accounting recovery; physical decode counts can include asynchronous work after client receipt. Evidence current/gpqa_first_analysis.json.",
+    "Pinned main lm_eval labels unsorted --samples incorrectly: Task.doc_iterator iterates matching docs in dataset order; evaluator maps ordinals via original unsorted indices. Original fixed10 score6/10 is unaffected but failed logged167 is actual68;102 remains102. Preserve original evidence, use sorted or singleton selections, and join by question/RecordID hashes. Four solo on/off B1 manifests prepared and actual68/102 questions verified against main task.doc_iterator (current/gpqa_solo_plan.json).",
+    "Full GPQA thinking-off prepared with sorted same10 IDs and10agents/B32. Original observed max context candidate127328 uses1990 full-attention IDs plus5*(ceil((1023+4096)/32)+1)=805 sliding IDs perrequest,2795 total. Measured B32 pool36896 fits13 conservatively, bounded10tasks; ten need27951 including null. Nominal1M-token pool shorthand is invalid for arbitrary hybrid context composition. B8/B32 long-context rates missing, so no fastest-finish claim. Evidence current/gpqa_off_sizing.json.",
+    "All four first-GPQA solo diagnoses have complete accounting, all within25% explained-time band. Official68 thinking on/off both solve with8370/871tokens and stop; original logged167 remains empty wrong with unknown termination, not infrastructure. Official102 thinking-on directly shows loop_cap126976 with degenerate reasoning; thinking-off stops wrong at1260. Original102 loop attribution is inference supported by cap-consistent physical work, not recovered original text. Original6/10 unchanged; all solo attempts counted=false. See results.json diagnostic_accounting_review and failure evidence.",
+    "Whole-list thinking-off GPQA has complete accounting but61.94s measured vs103.96s stage11 replay (0.596ratio): no proven collector bug. Actual10-request one-wave136\u2013540prompt/450\u20131137output traffic delivers24.40\u201325.17outputtok/s/native-wall. Final-context and batch rounding select cold-prefill B32 input1024/2048 output128 rates12.75/7.67tok/s with50\u201364% prefill fraction, then B8 input4096 rate16.28; these conservatively prolong simulated concurrency. Shared16.74s overhead counted once. Original rates/replay unchanged; current/gpqa-off-timing-analysis.json records limits and per-call evidence.",
+    "Observed thinking-on GPQA completed6/10 in2.965944h. Exact document\u2192constructed prompt\u2192client response ID disambiguates empty visible answers; nine collector host tests pass. Task68 stopped after10656tokens with degenerate reasoning/no answer; task102 looped to126976cap. Full replay unavailable because127328finalcontext lacks B8/B32 rates. Keep stage11 rates unchanged and unknown explained hours; B1 rate cannot substitute for overlapping traffic.",
+    "Harbor CLI requires writable ~/.cache/harbor for its first-run notification before job creation; its CACHE_DIR is hardcoded, not XDG-configurable. Initial phase2 launch04:54:58 failed there and was preserved as incomplete0/10. Created only this directory with run-user ownership via sudo install; same-list retry session66143 brought all10 task containers and healthy network sidecars up by04:56:52. Main/runtime/credentials unchanged.",
+    "SWE phase2 seven completed first attempts audited in current/swe-phase2/completed_task_analysis.json: matplotlib/pylint/sphinx/requests resolved; pytest/xarray/sklearn wrong patches. All explicitly Submitted, no trial exceptions or recorded length finishes (largest retained call2947/32768), so no limit reruns required for these seven. Defects: pytest conftest key type remains py.path.local; xarray drops dim keyword compatibility; sklearn caller workaround leaves MultiOutputClassifier.classes_ absent. Executed commands show no upstream solution fetching; failed package downloads and localhost requests reproduction are not fetched solutions. Xarray broad verifier stdout has ancillary dependency/warning failures, but graded integrate TypeErrors independently establish wrong patch. Remaining three not assessed in this snapshot; denominator10 unchanged.",
+    "Completed SWE audit extended to Django reward1 (eight audited, five resolved; astropy/sympy still pending). Django also explicitly Submitted with no evidenced solution fetching; pip pytz retrieval failed. Missing ordinary assistant-response counts are explained by retained FormatError interrupts (missing tool calls), not evidenced API timeouts. All eight trial.log and mini-swe-agent.txt scanned for request-timeout exceptions with no hits. Snapshot pending list corrected; no limit reruns evidenced.",
+    "SWE Sympy first attempt reward0 audited: Submitted,87 API calls,85 retained tool_calls plus2 recovered missing-tool-call FormatErrors; max retained completion2956/32768, no timeout signatures in main/job/trial/agent logs and no limit reruns evidenced. Agent-created local mpmath stubs (_mpf=object()) cause TypeError bases must be types during both reproduction and verifier import; cause wrong/model-created workspace contamination, not external infrastructure. Verifier reports1 F2P and17 P2P failures because tests cannot run. No upstream solution fetch; local git log shows only SWE-bench setup commit and package retrieval failed. Audit now9 completed/5resolved, astropy pending; denominator10 unchanged.",
+    "Astropy final wrong patch audited: Submitted59 API calls,53 retained tool_calls and6 FormatErrors. Final MRO check raises prop rather than original random_attr; graded property test fails. No solution fetching evidenced. Full suite10complete/5resolved. IMPORTANT correction:14 native responses omitted from trajectories must be audited for output caps; FormatError does not prove no cap. Earlier no-limit conclusions only covered retained responses/logs. run_accounting attribution pending; do not decide solo requirements from retained calls alone.",
+    "Native discarded-response cap audit SUPERSEDES prior no-cap claims:14 omitted calls include12 finish_reason=length at32768tokens, mapped by run_accounting to Astropy6,Sympy2,Django1,Requests1,Xarray1,sklearn1; remaining2 stop. These six require isolated thinking on/off diagnostics even though Django/Requests passed. Twelve unchanged-limit single-agent/B1 configs prepared in current/swe_solo_plan.json, off first; no launches by setup agent. Deadline12:54:58 must be explicit and incomplete diagnostics unavailable, not silently omitted.",
+    "SWE native accounting must include responses discarded before trajectory insertion on FormatError. Fresh10 has476 API calls but462 retained messages; recovered14 uniquely from exact api_calls deficits, lifecycle bounds and sequential non-overlap (12 length32768,2 stop). Six tasks hit cap including passing tasks. Astropy actual model14143.48s/outside21.90s, not1238/12926. Corrected output current/swe-phase2/collected.recovered.json preserves original; score5/10. Native accounting complete; stage11 replay missing active2/context33843, no extrapolation. Workload max finalcontext77144; current/swe_accounting_audit.json records full aggregates.",
+    "All12 discarded SWE cap responses show terminal mechanical repetition, not progressing reasoning: separate content/reasoning field tail4096 character statistics in completed_task_analysis.json. Initial xarray/sklearn/requests responses have ordinary reasoning but repetitive terminal content; looking only at reasoning falsely hides loops. No raw private text retained in summary. Required12solo diagnostics remain. SWE actual model_kwargs contain no seed: seed42 belongs benchmark settings, not SWE harness; temperature1/top_p0.95/top_k20 explicit, seed unspecified.",
+    "Xarray isolated thinking-off diagnostic0/1: same wrong dim\u2192coord rename without backwards-compatible dim alias; both graded integrate tests TypeError. Agent never successfully ran reproduction under prepared testbed interpreter.24native calls incl discarded stop61, no caps/timeouts per complete coordinator accounting; off removes cap but not patch defect. No fetching commands. Separate current/swe-solo-pydata__xarray-3993-off/failure_analysis.json; original score untouched, on solo still required.",
+    "Sklearn isolated thinking-off0/1 repeats caller-workaround defect: cross_val_predict fallback uses constituent estimators classes but fitted MultiOutputClassifier.classes_ still missing;1graded failure,26P2P pass.24native calls/no caps per coordinator,226.51s measured226.61s explained. No solution fetching evidenced. Off avoids original loop but not wrong patch; on isolated diagnostic still required. Evidence current/swe-solo-scikit-learn__scikit-learn-14629-off/failure_analysis.json.",
+    "Document audit: corrected observed GPQA-on and SWE full-list native evidence is complete although collector accounting_complete=false because replay-rate coverage is missing. GPQA-off native+rate coverage are complete but timeband fails; original GPQA-on native evidence is incomplete. REPORT now distinguishes device profiling from external Python observation, served262144context from main GPQA max_length131072, and incomplete infrastructure launch from same-list retry denominator. No score changed.",
+    "Requests isolated thinking-off0/1 still loops:38native calls115861outputs, two discarded length32768 visible-content mechanical loops (2023.90s), plus discarded stop4969/6041. Normal submission3584.34s; no request/agent timeout. Wrong patch handles GET but not HEAD, graded HEAD Content-Length assertion fails; no solution fetching, localhost reproduction only. Original on passed with42055tokens/onecap; prior24.1min estimate assumed that ON trace, not new off trace. Actual2.75x tokenwork invalidates identical-trace assumption; low17.83s agent outside excludes host delay. On isolated diagnostic still required. Evidence solo Requests failure_analysis.json.",
+    "Django isolated thinking-off1/1,74native calls10604outputs/no caps;Exact timing in failure_analysis.json (measured0.103071499h/explained0.102031807h). Patch forwards simple_col in nested _add_q;1F2P+103P2P pass. No fetched solutions; pip pytz fails SSL. Original on also resolved, so no whole-list-off improvement demonstrated; isolated on still required.",
+    "Sympy isolated thinking-off0/1 no caps: whole additive-product branch deletion fixes target issue but regresses rational_products/special_products (1F2P pass,15P2P pass,2P2P fail). Verifier imports/runs successfully; unlike original mpmath contamination, failure is semantic regression, not infrastructure.35calls; measured.065500615h/explained.065296760h. No upstream solution fetching, pip mpmath fails. Original also0; on solo still required. Evidence solo Sympy failure_analysis.json.",
+    "Xarray isolated thinking-on0/1 finishes uncapped, measured.061355731h/explained.060637859h. Same dim\u2192coord compatibility loss as original and isolated off;2graded TypeErrors,2398P2P passes. No fetched solutions; pip numpy fails. Required isolated on/off pair COMPLETE, both no caps but wrong patches. Original cap not reproduced alone; no thinking-toggle quality improvement established. Evidence solo xarray-on failure_analysis.json.",
+    "Sklearn isolated thinking-on0/1 uncapped: adds classes_ in shared multi-output fit; target classifier passes but4regressor P2P tests fail AttributeError (1F2P pass,22P2P pass). Off/original omit classes_, on overgeneralizes it. Both isolated modes complete/no caps, score0; pair COMPLETE. No fetched solutions, pip attempts fail. measured.072710397h/explained.072348038h. Evidence solo sklearn-on failure_analysis.json.",
+    "Requests isolated thinking-on1/1 uncapped32calls9595outputs: explicit HEAD reproduction leads to GET+HEAD exclusion,1F2P+5P2P pass. Off0/1 missesHEAD and hits2caps; original on1/1 hit1cap. Required isolated pair COMPLETE. No fetched solutions, only localhost HTTP tests. measured.091544639h/explained.092649100h. No universal mode advantage or whole-list-off improvement inferred; original score unchanged. Evidence solo Requests-on failure_analysis.json.",
+    "Django isolated thinking-on1/1 uncapped73calls17667outputs: forwards simple_col in recursive _add_q,1F2P+103P2P pass. Both isolated on/off and original resolve; required pair COMPLETE. Off10604outputs shorter in this attempt only, no whole-list-off score improvement. No fetched solutions; pip pytz failed. measured.162744934h/explained.162679403h. Evidence solo Django-on failure_analysis.json.",
+    "Sympy isolated thinking-on0/1: same wholesale additive-branch deletion as off fixes target but breaks rational/special products (1F2P+15P2P pass,2P2P fail). One native32768 mechanical cap consumes972.19s; off uncapped. Verifier environment works; wrong patch rather than infrastructure. No upstream fetching, pip mpmath fails. Required isolated pair COMPLETE. measured.358197132h/explained.397398596h; evidence solo Sympy-on failure_analysis.json includes private-text-free native tail statistics.",
+    "Documentary closure: all10 initial SWE cache-permission infrastructure failure rows in results.json now explicitly link completed same-list cache-retry task/trial/result evidence. Initial incomplete0/10 and completed retry5/10 remain separate and unchanged; no duplicate counting, retry rows untouched.",
+    "Astropy isolated thinking-off0/1: repeated fixed-line sed damages sky_coordinate.py indentation, verifier import/collection fails atline900;1F2P+426P2P listed failures are unexecuted tests. Model source damage, not infrastructure.35calls77771outputs2456.87s, two32768 mechanical reasoning caps2027.13s combined, visible content empty; tail alphabets2/20 and compression.0073/.0207. Off does not eliminate loops. On isolated still required/deadline-bound. Solution-fetch audit explicitly outside this task scope. Evidence solo Astropy-off failure_analysis.json.",
+    "Astropy-off fetch-audit clarification completed: no upstream solution fetching evidenced. Only external package attempt pip install erfa atmessage6 fails SSL/EOF/no matching distribution. Prior scope-exclusion note superseded; failure_analysis.json updated.",
+    "Astropy isolated thinking-on0/1 uncapped58calls21177outputs: target still raises prop not random_attr; final method-replacement script skips all following indented source, deleting class methods,163gradedP2P failures/263pass. Model edit damage, not infrastructure. Off0syntax damage+2caps; on0uncapped semantic/destructive rewrite. No fetched solutions, pip install . failed SSL. measured.203242476h/explained.204478552h. Astropy required pair COMPLETE; all6capaffected task on/off pairs completed before phase deadline. Evidence solo Astropy-on failure_analysis.json.",
+    "Final diagnostic state12:08UTC: all six SWE on/off pairs complete; Astropy ON0/1 no caps, OFF0/1 two mechanical caps. Earlier harness_facts entries describing pending audits are chronological observations superseded by complete recovered/native and solo analyses. No alternate-setting full-list rerun triggered; per-task solo scores remain diagnostic.",
+    "2026-11-13 operator-authorized closure: SWE replay uses closest context within smallest covering batch only where measured coverage is absent (B8/B32 input32768); 11.696904h approximate versus3.955720h measured. Both phases remain not passed yet; no new measurements. Evidence current/swe-approximate-replay.json."
+  ],
+  "generic_fixes": []
+}

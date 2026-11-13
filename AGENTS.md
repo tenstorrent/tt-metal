@@ -19,9 +19,9 @@ registers and imports this run's autoport adapter, rather than a stock adapter.
 
 Use this machine for local TT work; it is the only device for this run. Serialize all local
 device commands and check for device owners before reset. No CI, no GitHub, no pushes: commit
-locally on branch v4-agentic-rehearsal.
+locally on branch v5-extended-run.
 
-Pipeline worker: gpt-6-astra, medium effort, ChatGPT login in /home/mvasiljevic/v4-agentic/codex-home.
+Pipeline worker: gpt-6-astra, medium effort, ChatGPT login in /home/mvasiljevic/v5-agentic/codex-home.
 Do not substitute other credentials or ambient OpenAI/Codex API keys. Use the enabled workflow skills.
 Stage templates authorize subagents where the selected skill requests them.
 
@@ -79,3 +79,11 @@ Mark `blocked.json` resolved by these decisions and continue the stage.
 6. The v3 stage 11 and 12 outputs were removed from this branch (they are in its first commit and in
    /home/mvasiljevic/v4-agentic/v3-leftovers). Do not reuse them as results.
 7. Rehearsal limits are in bringup/agentic_evals/inputs.json: stage budget 10 h, phase 2 on 4 SWE tasks.
+
+## Operator decisions (v5 extended run, 2026-11-13)
+
+8. Where they differ, this replaces decisions 5 and 7: mode extended (agentic plus the extended phase),
+   local only, with the same Docker and gated GPQA access. Limits (stage budget, run timeout) are in
+   bringup/agentic_evals/inputs.json; the phase lists are the skill defaults.
+9. The v4 stage 11 and 12 outputs are not on this branch; do not reuse them as results.
+   doc/agentic_evals/learned.json is carried over from v4 to inform this run, as the skill intends.

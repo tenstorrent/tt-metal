@@ -1,21 +1,16 @@
 {
-  "_comment": "Operator inputs, goal 12 v4 rehearsal of agentic mode on qb2-49-14. Skills: local mvasiljevic/stage12-v4 (tt-model-bringup 0.1.24). Stages 11-12 from the v3 stage-10 state of Gemma 4 31B.",
+  "_comment": "Operator inputs, goal 12 v5 extended run on qb2-49-14. Skills: mvasiljevic/stage12-v5 (tt-model-bringup 0.1.24). Stages 11-12 from the same fresh start as v4 (5c6c97ac + f708f322), so v5 compares with v4.",
   "entry": "autoport",
-  "mode": "agentic",
+  "mode": "extended",
   "batch_sizes": [
     1,
     8,
     32
   ],
-  "_batch_sizes_note": "Stage 10 validated 1, 8, 16 and 32. The rehearsal measures three to keep stage 11 short; 32 stays so the pool-first sizing can choose a large batch.",
-  "benchmark_budget_hours": 2,
-  "phase2": {
-    "suite": "swe_bench_verified",
-    "tasks": 4
-  },
-  "_phase2_note": "Rehearsal: 4 of the fixed diverse 10 (the first 4 of the list the skill defines). A full agentic run uses 10.",
-  "stage_budget_hours": 10,
-  "_stage_budget_note": "Rehearsal cap: agentic mode allows 24 h; this run is capped at 10 h to check the plan.",
+  "_batch_sizes_note": "As v4 (comparison): stage 10 validated 1, 8, 16 and 32; three are measured to keep stage 11 short, 32 stays so pool-first sizing can choose a large batch.",
+  "_phase_lists_note": "phase1, phase2, extended_suites and task_lists are not set: the skill defaults apply (GPQA Diamond 10, the fixed diverse SWE-bench Verified 10, extended suites r1_gpqa_diamond and swe_bench_verified).",
+  "stage_budget_hours": 51,
+  "_stage_budget_note": "Stage 12 must end by Mon 2026-11-16 06:30 UTC. Computed at launch 2026-11-13T19:06Z: 59.4 h window - 3.5 h stage-11 estimate - 4 h margin for report/review/remediation = 51 h: agentic 24 h (phase 1 up to phase1_hours 12, phase 2 the rest of the 24 h) + extended 27 h.",
   "run_timeout_hours": 12,
   "references": {
     "r1_gpqa_diamond": {
@@ -27,7 +22,5 @@
       "source": "Operator floor from an H100 GPU run (64.8%) recorded on the Gemma 4 31B Experiment Reference page (claude.ai/artifact/WGzzRmT5KPRMpNjNEDtNp4); tt-inference-server eval_config has no SWE-bench Verified reference for this model"
     }
   },
-  "usage_budget": 25,
-  "_usage_budget_note": "Codex points of the weekly allowance for this rehearsal. Gemma v3 used about 81 points in 37.7 h.",
   "decisions": []
 }
