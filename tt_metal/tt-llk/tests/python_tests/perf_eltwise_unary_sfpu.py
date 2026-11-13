@@ -20,7 +20,12 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.sfpu_domains import sfpu_unary_ops
-from test_eltwise_unary_sfpu import eltwise_unary_sfpu
+from test_eltwise_unary_sfpu import (
+    UNARY_SHIFT_AMOUNTS,
+    UNARY_SHIFT_DIMENSIONS,
+    UNARY_SHIFT_OPS,
+    eltwise_unary_sfpu,
+)
 
 _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Abs,
@@ -260,7 +265,13 @@ _UINT_COMP_OPS = [
 
 
 def _extra_slice_run(
-    perf_report, formats, mathop, dest_acc, unpack_to_dest, input_dimensions
+    perf_report,
+    formats,
+    mathop,
+    dest_acc,
+    unpack_to_dest,
+    input_dimensions,
+    shift_amount=None,
 ):
     eltwise_unary_sfpu(
         formats=formats,
@@ -269,6 +280,7 @@ def _extra_slice_run(
         mathop=mathop,
         fast_mode=FastMode.No,
         input_dimensions=input_dimensions,
+        shift_amount=shift_amount,
         dest_sync=DestSync.Half,
         clamp_negative=False,
         unpack_to_dest=unpack_to_dest,
@@ -299,28 +311,25 @@ def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimen
 
 # The Int32 unary shifts in their production configuration (32-bit Dest, unpacked to Dest); the
 # instruction stream does not depend on the shift amount.
-_INT32_SHIFT_OPS = [
-    MathOperation.LeftShift,
-    MathOperation.RightShift,
-]
-
-
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32], same=True),
-    mathop=_INT32_SHIFT_OPS,
-    input_dimensions=_EXTRA_SLICE_DIMS,
+    mathop=UNARY_SHIFT_OPS,
+    shift_amount=UNARY_SHIFT_AMOUNTS,
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=UNARY_SHIFT_DIMENSIONS,
 )
 def test_perf_eltwise_unary_sfpu_int_shift(
-    perf_report, formats, mathop, input_dimensions
+    perf_report, formats, mathop, shift_amount, dest_acc, input_dimensions
 ):
     _extra_slice_run(
         perf_report,
         formats,
         mathop,
-        dest_acc=DestAccumulation.Yes,
+        dest_acc=dest_acc,
         unpack_to_dest=True,
         input_dimensions=input_dimensions,
+        shift_amount=shift_amount,
     )
 
 

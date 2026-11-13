@@ -147,14 +147,39 @@ def _production_dest_acc(formats: InputOutputFormat) -> list[DestAccumulation]:
     return [DestAccumulation.Yes if fp32_dest_acc_en else DestAccumulation.No]
 
 
-@parametrize(
+TYPECAST_BENCHMARK_CASES = [
+    (InputOutputFormat(DataFormat.Float16_b, DataFormat.UInt16), DestAccumulation.No),
+    (InputOutputFormat(DataFormat.UInt16, DataFormat.Float32), DestAccumulation.No),
+    (InputOutputFormat(DataFormat.UInt32, DataFormat.Float16_b), DestAccumulation.Yes),
+    (InputOutputFormat(DataFormat.UInt32, DataFormat.Float32), DestAccumulation.Yes),
+    (InputOutputFormat(DataFormat.UInt16, DataFormat.UInt32), DestAccumulation.No),
+    (InputOutputFormat(DataFormat.Int32, DataFormat.UInt16), DestAccumulation.Yes),
+    (InputOutputFormat(DataFormat.Float32, DataFormat.UInt8), DestAccumulation.Yes),
+    (InputOutputFormat(DataFormat.Int32, DataFormat.UInt8), DestAccumulation.Yes),
+    (InputOutputFormat(DataFormat.UInt32, DataFormat.UInt8), DestAccumulation.Yes),
+    (InputOutputFormat(DataFormat.UInt16, DataFormat.UInt8), DestAccumulation.Yes),
+    (InputOutputFormat(DataFormat.UInt32, DataFormat.UInt16), DestAccumulation.Yes),
+    (InputOutputFormat(DataFormat.UInt8, DataFormat.UInt16), DestAccumulation.Yes),
+]
+
+
+def typecast_dest_acc_modes(formats):
+    modes = _production_dest_acc(formats)
+    for benchmark_formats, benchmark_dest_acc in TYPECAST_BENCHMARK_CASES:
+        if benchmark_formats == formats and benchmark_dest_acc not in modes:
+            modes.append(benchmark_dest_acc)
+    return modes
+
+
+TYPECAST_SWEEP = dict(
     formats=TYPECAST_PAIRS,
-    dest_acc=_production_dest_acc,
+    dest_acc=typecast_dest_acc_modes,
     approx_mode=[ApproximationMode.No],
-    input_dimensions=[
-        [32, 32]
-    ],  # no need for larger tiles, as the SFPU typecast is elementwise
+    input_dimensions=[[32, 32], [128, 64]],
 )
+
+
+@parametrize(**TYPECAST_SWEEP)
 def test_eltwise_unary_typecast(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,

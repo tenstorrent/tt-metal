@@ -32,7 +32,6 @@ from test_sfpu_ema import (
     **SFPU_EMA_PERF_SWEEP,
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[16],  # amortise profiler overhead
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
     is_perf=[True],
 )
 def test_perf_sfpu_ema(

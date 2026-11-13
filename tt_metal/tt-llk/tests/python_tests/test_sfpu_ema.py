@@ -65,6 +65,7 @@ SFPU_EMA_PERF_SWEEP = dict(
         same=True,
     ),
     dest_acc=get_valid_dest_accumulation_modes,
+    input_dimensions=[[32, 32], [64, 32], [128, 32], [128, 64]],
 )
 
 # Time tiles per sweep case. Kept small because the sweep is 1000 cases wide;
@@ -228,18 +229,19 @@ def _run_sfpu_ema(
 # Both DEST widths are swept. The kernel's SFPLOAD/SFPSTORE take the element format from
 # the configured DEST rather than fixing it, so each width has to be covered on its own;
 # the ttnn ema op runs with a 32-bit DEST, so that leg is the one production uses.
-@parametrize(
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    num_time_tiles=[1, 2, 4],
-)
-def test_sfpu_ema(dest_acc, num_time_tiles):
+@parametrize(**SFPU_EMA_PERF_SWEEP)
+def test_sfpu_ema(formats, dest_acc, input_dimensions):
     res_tensor, golden_input = _run_sfpu_ema(
-        EMA_ALPHA, EMA_BETA, dest_acc, num_time_tiles=num_time_tiles
+        EMA_ALPHA,
+        EMA_BETA,
+        dest_acc,
+        formats=formats,
+        input_dimensions=input_dimensions,
     )
     golden_tensor = _ema_golden(golden_input, EMA_ALPHA, EMA_BETA)
 
     assert passed_test(
-        golden_tensor, res_tensor, DataFormat.Float16_b
+        golden_tensor, res_tensor, formats.output_format
     ), "EMA result does not match golden"
 
 

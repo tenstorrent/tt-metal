@@ -23,6 +23,7 @@ from helpers.llk_params import MathOperation
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_sfpu_binop_scalar import (
+    SFPU_BINOP_SCALAR_DIMENSIONS,
     SFPU_BINOP_SCALAR_SWEEP,
     _run_sfpu_binop_scalar,
 )
@@ -35,7 +36,7 @@ from test_sfpu_binop_scalar import (
     loop_factor=[16],
     # Retained as a schema-v3 catalog column; the kernel uses 8 iterations per face.
     iterations=[32],
-    input_dimensions=[[128, 64]],  # tile_cnt: 8
+    input_dimensions=SFPU_BINOP_SCALAR_DIMENSIONS,
     is_perf=[True],
 )
 def test_perf_sfpu_binop_scalar(
