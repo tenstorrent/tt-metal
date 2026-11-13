@@ -45,7 +45,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import _nearest_y, pad_and_fold_conv_filters_for_unity_stride
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def _cpu_fold_activation(activation_nchw, pad_h, pad_w, stride_h, stride_w, align_c):

@@ -46,7 +46,7 @@ void RunTest(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     CoreCoord logical_core = {0, 0};
     CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
-    const experimental::NodeCoord node{static_cast<uint32_t>(logical_core.x), static_cast<uint32_t>(logical_core.y)};
+    const NodeCoord node{static_cast<uint32_t>(logical_core.x), static_cast<uint32_t>(logical_core.y)};
 
     // Allocate L1 buffer for sync flag
     auto sync_buffer = distributed::MeshBuffer::create(
@@ -59,13 +59,13 @@ void RunTest(
 
     // DFB config: 1 DM producer -> 4 NEO unpacker consumers
     // use_remapper: true -> all (remapper enabled), false -> strided (bypass mode)
-    const auto cap = use_remapper ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED;
+    const auto cap = use_remapper ? DFBAccessPattern::ALL : DFBAccessPattern::STRIDED;
 
-    const experimental::DFBSpecName TILE_COUNTER_DFB{"tile_counter_dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const DFBSpecName TILE_COUNTER_DFB{"tile_counter_dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
 
-    experimental::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = TILE_COUNTER_DFB,
         .entry_size = TILE_SIZE,
         .num_entries = NUM_ENTRIES_PER_DFB,
@@ -74,17 +74,17 @@ void RunTest(
 
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_tile_counters.cpp";
 
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = kernel_path,
         .num_threads = NUM_PRODUCERS,
         .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
-        .dfb_bindings = {experimental::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
+        .dfb_bindings = {ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_2xx =
-                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
                         .disable_dfb_implicit_sync_for_all = true,
                     },
             },
@@ -93,37 +93,37 @@ void RunTest(
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)
     // blocked: each consumer sees all entries; strided: entries distributed among consumers
     uint32_t entries_per_consumer = use_remapper ? NUM_ENTRIES_PER_DFB : NUM_ENTRIES_PER_CONSUMER;
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = kernel_path,
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings = {{
             .dfb_spec_name = TILE_COUNTER_DFB,
             .accessor_name = "tile_counter_dfb",
-            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+            .endpoint_type = DFBEndpointType::CONSUMER,
             .access_pattern = cap,
         }},
         .compile_time_args =
             {{"num_entries", entries_per_consumer},
              {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
              {"sync_flag_addr", tensix_sync_addr}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "tile_counter_log",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
     workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);

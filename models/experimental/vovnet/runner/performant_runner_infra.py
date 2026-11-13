@@ -9,7 +9,7 @@ from loguru import logger
 from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
 from models.experimental.vovnet.tt.vovnet import TtVoVNet
 from models.common.utility_functions import divup, is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.vovnet.common import load_torch_model
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 

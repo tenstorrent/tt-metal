@@ -8,8 +8,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt_stl/fmt.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -25,7 +25,7 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using namespace ttnn::prim::layernorm_distributed_metal2;
 
 const m2::KernelSpecName POST_READER{"post_reader"};

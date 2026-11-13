@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
@@ -13,7 +13,7 @@
 #include "impl/program/program_impl.hpp"
 #include "llrt/hal.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Step 3: lower every KernelSpec into a Kernel (source, argument layout, hardware config, binding
 // handles) and add it to the Program, registering its name and runtime-arg schema.
@@ -25,4 +25,4 @@ void AddKernels(
     const Hal& hal,
     detail::ProgramImpl& program_impl);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

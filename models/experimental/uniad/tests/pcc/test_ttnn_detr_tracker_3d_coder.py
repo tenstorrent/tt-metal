@@ -8,7 +8,7 @@ import pytest
 import numpy as np
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 from models.experimental.uniad.reference.utils import LiDARInstance3DBoxes
 from models.experimental.uniad.reference.detr_track_3d_coder import DETRTrack3DCoder

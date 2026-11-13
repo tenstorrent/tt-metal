@@ -29,7 +29,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import sparse_attention_ref_msa
+from tt_py_test_utils_common.sparse_sdpa_msa_test_utils import sparse_attention_ref_msa
 
 from ..test_factory import parametrize_mesh_with_fabric
 
