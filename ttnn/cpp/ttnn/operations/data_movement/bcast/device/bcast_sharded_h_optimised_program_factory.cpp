@@ -37,11 +37,10 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
 
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
-    const std::uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
-    const std::uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     const std::uint32_t H = ashape[-2];
-    const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
-    const std::uint32_t NC = N * C;
+    // Tiles are ordered by every dim above H, so each index over those dims is one batch.
+    const std::uint32_t bN = get_batch_size(bshape);
+    const std::uint32_t NC = get_batch_size(ashape);
 
     MeshDevice* device = a.device();
 
@@ -188,6 +187,16 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
     KernelRunArgs compute_args{.kernel = COMPUTE};
 
     const std::uint32_t ncores_y = ncores / ncores_x;
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        // The block-sharded offsets below split the cores along the shard height evenly between b's batches.
+        const std::uint32_t height_cores = shard_spec.orientation == ShardOrientation::ROW_MAJOR ? ncores_x : ncores_y;
+        TT_FATAL(
+            height_cores % bN == 0,
+            "Block-sharded bcast H needs the {} cores along the shard height to split evenly between the {} batches "
+            "of input b",
+            height_cores,
+            bN);
+    }
     TT_FATAL((NC * H / TILE_HEIGHT) % bN == 0, "N*C*H of input0 must be divisible by batch size of input1");
     const std::uint32_t Ht_per_batch_b = std::min((NC * H / TILE_HEIGHT) / bN, Ht);
     const std::uint32_t batch_b = Ht / Ht_per_batch_b;
