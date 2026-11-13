@@ -21,6 +21,8 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_multi_pos,
     run_test_sdpa_decode_paged_attention,
     run_test_sdpa_decode_broadcast_mask_batch,
+    run_test_sdpa_decode_mask_batch_layout,
+    run_test_sdpa_decode_mask_batch_rejected,
 )
 
 
@@ -546,4 +548,40 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         dtype=dtype,
         grid_size=grid_size,
         mask_dtype=mask_dtype,
+    )
+
+
+@pytest.mark.parametrize("mask_batch_dim", [0, 1], ids=["b_1_nh_s", "1_b_nh_s"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, dtype, grid_size",
+    [
+        (8, 8, 1, 1024, 128, ttnn.bfloat16, (8, 4)),
+    ],
+)
+def test_sdpa_decode_mask_batch_layout(device, b, nh, nkv, s, d, dtype, grid_size, mask_batch_dim):
+    run_test_sdpa_decode_mask_batch_layout(
+        device,
+        b=b,
+        nh=nh,
+        nkv=nkv,
+        s=s,
+        d=d,
+        dtype=dtype,
+        grid_size=grid_size,
+        mask_batch_dim=mask_batch_dim,
+    )
+
+
+@pytest.mark.parametrize(
+    "mask_batch_shape, message",
+    [
+        ((2, 1), "attn_mask batch must be 1"),
+        ((1, 2), "attn_mask batch must be 1"),
+        ((2, 2), "but got dims 0 and 1 of 2 and 2"),
+    ],
+    ids=["dim0_mismatch", "dim1_mismatch", "both_dims"],
+)
+def test_sdpa_decode_mask_batch_rejected(device, expect_error, mask_batch_shape, message):
+    run_test_sdpa_decode_mask_batch_rejected(
+        device, expect_error, b=4, nh=8, s=256, d=64, mask_batch_shape=mask_batch_shape, message=message
     )
