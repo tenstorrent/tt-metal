@@ -53,6 +53,7 @@ inline constexpr uint32_t kStatusRequestsDone = 2, kStatusPagesDone = 3, kStatus
                           kStatusObserved = 8, kStatusExpected = 9, kStatusWaitReceiver = 10, kStatusWaitPagesSent = 11,
                           kStatusWaitPagesAcked = 12, kStatusRechecked = 13, kStatusWords = 14;
 inline constexpr uint32_t kDoneMagic = 0x6CB0D0E5u;
+static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
 using cce_test_status_abi::kStatusPoison;
 
 // kCodeCreditTimeout: a sender's free-space wait or a receiver's page wait used its budget; the sender then records
