@@ -26,23 +26,33 @@ UNKNOWN = "unknown: see the FAIL lines above"
 # (cause pattern, repair template); first match wins. {u} tray, {b} chip BDF(s) of the line, {p} its part text.
 # None: the line asks for no repair (a warning or not a fault). Order: power, software/firmware, links, PCIe, chip.
 RULES = [
-    (r"not opened after the reset because tray ([1-4]) lost power", None),   # another tray's power broke the chain
-    (r"whole-tray power loss|lost power and its re-power failed|bus-bar signature|^tray 12 V input lost or under-voltage",
-     "bus bar / tray 12 V feed of tray {u}, then tray {u} board if it still drops"),
-    (r"^POWER: tray [1-4] 12 V feed", "POWERFEED"),   # an HSC power latch newly set during this run
+    (r"not opened after the reset because tray ([1-4]) lost power", None),  # another tray's power broke the chain
+    (
+        r"whole-tray power loss|lost power and its re-power failed|bus-bar signature|^tray 12 V input lost or under-voltage",
+        "bus bar / tray 12 V feed of tray {u}, then tray {u} board if it still drops",
+    ),
+    (r"^POWER: tray [1-4] 12 V feed", "POWERFEED"),  # an HSC power latch newly set during this run
     (r"^test infrastructure", "no hardware repair (software: test infrastructure on tray {u})"),
     (r"^firmware version differs", "no hardware repair (firmware: reflash tray {u})"),
-    (r"warning only|not a fault|not checked|leave the box|read no link map|ETH ports not up \(warning\)|down before the run", None),
+    (
+        r"warning only|not a fault|not checked|leave the box|read no link map|ETH ports not up \(warning\)|down before the run",
+        None,
+    ),
     (r"which fails all its C5 pairs: that chip", "the tray {t} board carrying {c} (all its links fail)"),
     (r"^in-box link down or bad", "the tray-to-tray connection of link {p}, then the tray boards"),
     (r"^link pair hung|^link down or bad", "the cable or port of link {p}"),
-    (r"^weak PCIe link|^correctable AER rate outlier|^PCIe path", "the PCIe path (slot, retimer) of {b} on tray {u}, then the tray {u} board"),
+    (
+        r"^weak PCIe link|^correctable AER rate outlier|^PCIe path",
+        "the PCIe path (slot, retimer) of {b} on tray {u}, then the tray {u} board",
+    ),
     (r"^CCL group fault: one bad result from the likely source", "NUMERIC:{s}"),
     (r"^chip compute fault|^chip DRAM fault|^chip read fault", "NUMERIC:{b}"),
-    (r"^these chips stopped while the others kept going|^chip fell off PCIe|^chip lost after its warm reset"
-     r"|^chip did not take the warm reset|^hang on the named chip\(s\)|^chip slow to finish its warm reset"
-     r"|^chip stopped answering the kernel driver under load|^chip hung for MMIO",
-     "the tray {u} board carrying {b}"),
+    (
+        r"^these chips stopped while the others kept going|^chip fell off PCIe|^chip lost after its warm reset"
+        r"|^chip did not take the warm reset|^hang on the named chip\(s\)|^chip slow to finish its warm reset"
+        r"|^chip stopped answering the kernel driver under load|^chip hung for MMIO",
+        "the tray {u} board carrying {b}",
+    ),
 ]
 
 
@@ -67,20 +77,29 @@ def item(u, part, cause, nxt, commit):
         b = " ".join(bs) if bs else f"a chip of tray {u}"
         if tpl == "POWERFEED":
             m = re.search(r"12 V feed (.+?) / bus bar: HSC (0x[0-9a-f]+) ([A-Z_+]+)", cause)
-            src = f"feed {m.group(1)} of tray {u} (HSC {m.group(2)} {m.group(3)} newly set during this run)" if m else f"feed of tray {u}"
+            src = (
+                f"feed {m.group(1)} of tray {u} (HSC {m.group(2)} {m.group(3)} newly set during this run)"
+                if m
+                else f"feed of tray {u}"
+            )
             return f"bus bar / tray 12 V {src}, then tray {u} board if it persists"
         if tpl.startswith("NUMERIC:"):
             if tpl == "NUMERIC:{s}":
                 m = re.search(rf"likely source ({BDF})", cause)
                 b = m.group(1) if m else b
             cc = re.search(r"compute core \((\d+),(\d+)\)", cause)
-            if cc:   # the owning compute core names the board to replace
-                wc = re.search(r"\(translated worker core (\d+),(\d+)\)", cause)   # not the die location
-                return (f"the tray {u} board (UBB-{u}): ASIC {b} compute core logical ({cc.group(1)},{cc.group(2)})"
-                        + (f", translated worker core ({wc.group(1)},{wc.group(2)})" if wc else "") + " writes wrong values under matmul load")
+            if cc:  # the owning compute core names the board to replace
+                wc = re.search(r"\(translated worker core (\d+),(\d+)\)", cause)  # not the die location
+                return (
+                    f"the tray {u} board (UBB-{u}): ASIC {b} compute core logical ({cc.group(1)},{cc.group(2)})"
+                    + (f", translated worker core ({wc.group(1)},{wc.group(2)})" if wc else "")
+                    + " writes wrong values under matmul load"
+                )
             # a numeric FAIL is the box only once clean hosts on the same commit stay clean
-            return (f"the tray {u} board carrying {b} (numeric fault), only if the same check with commit {commit} "
-                    f"on clean hosts shows no similar counts (similar counts there: test or CCL issue, not the box)")
+            return (
+                f"the tray {u} board carrying {b} (numeric fault), only if the same check with commit {commit} "
+                f"on clean hosts shows no similar counts (similar counts there: test or CCL issue, not the box)"
+            )
         m = re.search(rf"of ({BDF}) \(tray ([1-4])\)", cause)
         return tpl.format(u=u, b=b, p=part, c=m.group(1) if m else b, t=m.group(2) if m else u)
     return None
@@ -113,8 +132,12 @@ def rootcause_rows(trays_text, commit="?"):
         if c.startswith("chip DRAM fault"):
             kind, conf = "numeric-dram", "high" if re.search(r"\bch(annel)? \d+|bank \d+", c) else "medium"
             ro = "compute (the DRAM readback split failed)"
-        elif c.startswith("chip read fault"):   # one bad read across a core column, memory or NoC not told apart
-            kind, conf, ro = "numeric-read", "medium", "one compute core (every core of the column got the same bad read)"
+        elif c.startswith("chip read fault"):  # one bad read across a core column, memory or NoC not told apart
+            kind, conf, ro = (
+                "numeric-read",
+                "medium",
+                "one compute core (every core of the column got the same bad read)",
+            )
         elif c.startswith("CCL group fault"):
             kind, conf, ro = "numeric-ccl", "low", "none (one bad result; the likely source is not confirmed)"
         else:
@@ -124,17 +147,32 @@ def rootcause_rows(trays_text, commit="?"):
         if t not in power:
             ro += "; tray power loss (none this run)"
         r = item(t, part, c, nxt, commit)
-        pt = re.sub(r"^tray [1-4]$|\s*\(tray [1-4]\)", "", part).strip()   # the tray once
-        p = f"tray {t}" + (f" {pt}" if pt else "") + (f" compute core logical ({core.group(1)},{core.group(2)})" if core else "")
-        rows.append(dict(kind=kind, part=p, cause=c, confidence=conf, evidence=f"{st}: {ev}", ruled_out=ro,
-                         fix=("Replace " + r) if r else "none determined", next_step=nxt))
+        pt = re.sub(r"^tray [1-4]$|\s*\(tray [1-4]\)", "", part).strip()  # the tray once
+        p = (
+            f"tray {t}"
+            + (f" {pt}" if pt else "")
+            + (f" compute core logical ({core.group(1)},{core.group(2)})" if core else "")
+        )
+        rows.append(
+            dict(
+                kind=kind,
+                part=p,
+                cause=c,
+                confidence=conf,
+                evidence=f"{st}: {ev}",
+                ruled_out=ro,
+                fix=("Replace " + r) if r else "none determined",
+                next_step=nxt,
+            )
+        )
     return rows
 
 
 def write_rootcause(path, rows):
     """Append rows to path as TSV, with a '# kind<TAB>...' header when the file is new or empty."""
     import os
-    clean = lambda v: re.sub(r"[\t\r\n]+", " ", str(v)).strip()   # noqa: E731
+
+    clean = lambda v: re.sub(r"[\t\r\n]+", " ", str(v)).strip()  # noqa: E731
     new = not os.path.exists(path) or os.path.getsize(path) == 0
     with open(path, "a") as f:
         if new:
@@ -163,7 +201,9 @@ def recommend(rc, verdict, trays_text="", findings_text="", mode="", commit="?",
             named.add(u)
             if r not in items:
                 items.append(r)
-    fx = fix_text.splitlines()   # lib/link_check.sh's lk_hint: "FIX tray N: **...**", then "  why: ..." (host link check)
+    fx = (
+        fix_text.splitlines()
+    )  # lib/link_check.sh's lk_hint: "FIX tray N: **...**", then "  why: ..." (host link check)
     for i, l in enumerate(fx):
         m = re.match(r"FIX tray ([1-4]): \*\*(.*?)\*\*", l)
         if not m:
@@ -173,27 +213,34 @@ def recommend(rc, verdict, trays_text="", findings_text="", mode="", commit="?",
             r = f"bus bar / tray 12 V feed of tray {t}, then tray {t} board if it still drops"
         else:
             bs = bdfs(why, t)
-            r = (f"the tray {t} board carrying {' '.join(bs) if bs else 'its missing chips'} or its PCIe path, after the "
-                 f"remote recovery steps ({m.group(2)})")
+            r = (
+                f"the tray {t} board carrying {' '.join(bs) if bs else 'its missing chips'} or its PCIe path, after the "
+                f"remote recovery steps ({m.group(2)})"
+            )
         named.add(t)
         if r not in items:
             items.append(r)
-    for l in findings_text.splitlines():   # PSU findings name no tray (lib/psu_check.sh)
+    for l in findings_text.splitlines():  # PSU findings name no tray (lib/psu_check.sh)
         if l.startswith("PSU FINDING") and "the PSU named in the PSU FINDING line" not in items:
             items.append("the PSU named in the PSU FINDING line")
-    for t in "1234":   # the HSC-named feed of a tray replaces that tray's generic bus-bar item
+    for t in "1234":  # the HSC-named feed of a tray replaces that tray's generic bus-bar item
         if any(i.startswith("bus bar / tray 12 V feed ") and f" of tray {t} (HSC " in i for i in items):
-            items = [i for i in items if i != f"bus bar / tray 12 V feed of tray {t}, then tray {t} board if it still drops"]
+            items = [
+                i for i in items if i != f"bus bar / tray 12 V feed of tray {t}, then tray {t} board if it still drops"
+            ]
     fails = sorted(t for t, (k, _) in heads.items() if k == "FAIL")
-    unknown += [t for t in fails if t not in named]   # a FAIL tray with no repairable cause line under it
+    unknown += [t for t in fails if t not in named]  # a FAIL tray with no repairable cause line under it
     if unknown:
         items.append(f"{UNKNOWN} (tray {', '.join(sorted(set(unknown)))})")
     kd = [t for t, (k, _) in heads.items() if k == "KNOWN-DROP"]
     if items:
         return "; ".join(items + [f"tray {t} (known dropped, not tested)" for t in kd])
     v = verdict or ""
-    if v.startswith(("NOT RUN", "INCOMPLETE")) or rc in (9, 10, 129, 130, 143) or \
-            any(k == "INCOMPLETE" for k, _ in heads.values()):
+    if (
+        v.startswith(("NOT RUN", "INCOMPLETE"))
+        or rc in (9, 10, 129, 130, 143)
+        or any(k == "INCOMPLETE" for k, _ in heads.values())
+    ):
         inc = [f"tray {t}" for t, (k, _) in sorted(heads.items()) if k == "INCOMPLETE"]
         return f"none determined ({v or f'exit {rc}'}); rerun {rerun}" + (f" for {', '.join(inc)}" if inc else "")
     if kd:
@@ -222,11 +269,12 @@ def main(argv=None):
             return open(p, errors="replace").read() if p else ""
         except OSError:
             return ""
+
     try:
         r = recommend(o.rc, o.verdict, rd(o.trays), rd(o.findings), o.mode, o.commit, rd(o.fix))
-    except Exception:   # the last line is always printed
+    except Exception:  # the last line is always printed
         r = UNKNOWN
-    if o.rootcause:   # never stops the last line
+    if o.rootcause:  # never stops the last line
         try:
             rows = rootcause_rows(rd(o.trays), o.commit)
             if rows:

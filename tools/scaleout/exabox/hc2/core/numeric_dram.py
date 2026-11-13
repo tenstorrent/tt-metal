@@ -30,7 +30,7 @@ import time
 sys.path.insert(1, os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet"))
 import stop_signal as ss  # noqa: E402
 
-M, K, N = 2048, 8192, 16384   # the C4n shape (the pinpoint's 'heavy')
+M, K, N = 2048, 8192, 16384  # the C4n shape (the pinpoint's 'heavy')
 FLOP = 2 * M * K * N
 
 
@@ -42,6 +42,7 @@ def mesh_chips(mesh, metal_n):
     """mesh index -> dict(bdf, dev, tray, metal): the UMD map from this process's log, else the identity."""
     from numeric_check import umd_map_from_stdout
     from ub0_repro import chips, tray_of
+
     try:
         metal = [int(v) for v in mesh.get_device_ids()]
     except Exception:
@@ -51,8 +52,9 @@ def mesh_chips(mesh, metal_n):
     for i, m in enumerate(metal):
         dev = umd.get(m, m) if umd else m
         p = ids.get(dev)
-        out[i] = dict(bdf=re.sub(r"^[0-9a-f]{4}:", "", p) if p else f"metal{m}", dev=dev, metal=m,
-                      tray=tray_of(p) if p else None)
+        out[i] = dict(
+            bdf=re.sub(r"^[0-9a-f]{4}:", "", p) if p else f"metal{m}", dev=dev, metal=m, tray=tray_of(p) if p else None
+        )
     return out, ("umd_log" if umd else "assumed_identity")
 
 
@@ -76,8 +78,14 @@ def rw_burst(ttnn, torch, mesh, on_check, burst_s, wall_s, per_check=8, seed=119
     D = ttnn.DRAM_MEMORY_CONFIG
     g = torch.Generator().manual_seed(seed)
     rn = lambda *s, sc=1.0: (torch.randn(*s, generator=g, dtype=torch.float32) * sc).to(torch.bfloat16)
-    up = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=D,
-                                   mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+    up = lambda t: ttnn.from_torch(
+        t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=D,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
     xh, wh = up(rn(1, 1, M, K)), up(rn(1, 1, K, N, sc=0.02))
     ttnn.synchronize_device(mesh)
     t0 = time.monotonic()
@@ -89,13 +97,15 @@ def rw_burst(ttnn, torch, mesh, on_check, burst_s, wall_s, per_check=8, seed=119
                 nmm += 1
                 if old is not None:
                     ttnn.deallocate(old)
-            ttnn.synchronize_device(mesh)   # the matmuls run async: wait for them so their run time counts as load
+            ttnn.synchronize_device(mesh)  # the matmuls run async: wait for them so their run time counts as load
             s0 = time.monotonic()
             t_load = s0 - t0 - paused
             if last is not None and t_load - last < check_s and t_load < burst_s:
                 continue
             last = t_load
-            got = [ttnn.to_torch(d).reshape(M, N).contiguous().view(torch.int16) for d in ttnn.get_device_tensors(y.cpu())]
+            got = [
+                ttnn.to_torch(d).reshape(M, N).contiguous().view(torch.int16) for d in ttnn.get_device_tensors(y.cpu())
+            ]
             checks += 1
             on_check(got, majority(torch, got), t_load)
             paused += time.monotonic() - s0
@@ -104,8 +114,13 @@ def rw_burst(ttnn, torch, mesh, on_check, burst_s, wall_s, per_check=8, seed=119
             if t is not None:
                 ttnn.deallocate(t)
     el = time.monotonic() - t0
-    return dict(checks=checks, matmuls=nmm, load_s=round(el - paused, 1), wall_s=round(el, 1),
-                tflops=round(nmm * FLOP / max(el - paused, 1e-3) / 1e12, 1))
+    return dict(
+        checks=checks,
+        matmuls=nmm,
+        load_s=round(el - paused, 1),
+        wall_s=round(el, 1),
+        tflops=round(nmm * FLOP / max(el - paused, 1e-3) / 1e12, 1),
+    )
 
 
 def bank_lane(torch, nb):
@@ -121,14 +136,30 @@ def rw_check(ttnn, torch, mesh, chips, burst_s, wall_s, per_check=8, check_s=3.0
     bad_checks, bad (words), first (s of load), first_t (epoch), per_bank, per_lane, inf, nan. beat(s) is called at
     every check (the stage's hang watch); say(line) for each mismatched chip at the check that saw it."""
     bank_of, lane_of = bank_lane(torch, nb)
-    st = {i: dict(checks=0, bad_checks=0, bad=0, first=None, first_t=None, per_bank=[0] * nb, per_lane=[0, 0], inf=0,
-                  nan=0) for i in chips}
+    st = {
+        i: dict(
+            checks=0, bad_checks=0, bad=0, first=None, first_t=None, per_bank=[0] * nb, per_lane=[0, 0], inf=0, nan=0
+        )
+        for i in chips
+    }
 
     def on_check(got, gold, t_load):
         e = gold.reshape(-1)
         for i, gt in enumerate(got):
-            s = st.setdefault(i, dict(checks=0, bad_checks=0, bad=0, first=None, first_t=None, per_bank=[0] * nb,
-                                      per_lane=[0, 0], inf=0, nan=0))
+            s = st.setdefault(
+                i,
+                dict(
+                    checks=0,
+                    bad_checks=0,
+                    bad=0,
+                    first=None,
+                    first_t=None,
+                    per_bank=[0] * nb,
+                    per_lane=[0, 0],
+                    inf=0,
+                    nan=0,
+                ),
+            )
             s["checks"] += 1
             gf = gt.reshape(-1)
             bad = torch.nonzero(gf != e).flatten()
@@ -145,8 +176,10 @@ def rw_check(ttnn, torch, mesh, chips, burst_s, wall_s, per_check=8, check_s=3.0
             s["per_lane"] = [u + v for u, v in zip(s["per_lane"], torch.bincount(lane_of[bad], minlength=2).tolist())]
             if say:
                 c = chips.get(i, {})
-                say(f"BAD mesh{i} {c.get('pci')} tray {c.get('tray') or '?'}: {int(bad.numel())} words at "
-                    f"{t_load:.0f} s of load")
+                say(
+                    f"BAD mesh{i} {c.get('pci')} tray {c.get('tray') or '?'}: {int(bad.numel())} words at "
+                    f"{t_load:.0f} s of load"
+                )
         if beat:
             beat(f"rw check {st[0]['checks'] if 0 in st else 0}")
 
@@ -165,9 +198,10 @@ def main(argv=None):
     a = ap.parse_args(argv)
     import torch
     import ttnn
+
     r, c = (int(v) for v in a.mesh.split("x"))
     t0 = time.monotonic()
-    ss.install("C4D")   # TERM/INT: the finally below closes the mesh
+    ss.install("C4D")  # TERM/INT: the finally below closes the mesh
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(r, c))
     lines = []
     try:
@@ -180,8 +214,10 @@ def main(argv=None):
         except Exception:
             pass
         bank_of, lane_of = bank_lane(torch, nb)
-        st = {i: dict(checks=0, bad_checks=0, bad=0, first=None, per_bank=[0] * nb, per_lane=[0, 0], inf=0, nan=0)
-              for i in mc}
+        st = {
+            i: dict(checks=0, bad_checks=0, bad=0, first=None, per_bank=[0] * nb, per_lane=[0, 0], inf=0, nan=0)
+            for i in mc
+        }
 
         def on_check(got, gold, t_load):
             e = gold.reshape(-1)
@@ -198,23 +234,35 @@ def main(argv=None):
                 f = gf[bad].view(torch.bfloat16).float()
                 s["inf"] += int(torch.isinf(f).sum())
                 s["nan"] += int(torch.isnan(f).sum())
-                s["per_bank"] = [u + v for u, v in zip(s["per_bank"], torch.bincount(bank_of[bad], minlength=nb).tolist())]
-                s["per_lane"] = [u + v for u, v in zip(s["per_lane"], torch.bincount(lane_of[bad], minlength=2).tolist())]
-                log(f"BAD mesh{i} {mc[i]['bdf']} tray {mc[i]['tray']}: {int(bad.numel())} words at {t_load:.0f} s of load")
+                s["per_bank"] = [
+                    u + v for u, v in zip(s["per_bank"], torch.bincount(bank_of[bad], minlength=nb).tolist())
+                ]
+                s["per_lane"] = [
+                    u + v for u, v in zip(s["per_lane"], torch.bincount(lane_of[bad], minlength=2).tolist())
+                ]
+                log(
+                    f"BAD mesh{i} {mc[i]['bdf']} tray {mc[i]['tray']}: {int(bad.numel())} words at {t_load:.0f} s of load"
+                )
 
-        log(f"x/w/y-in-DRAM matmul {M}x{K}x{N} on {len(mc)} chips: {a.burst_s:g} s of load, a readback every "
-            f"{a.check_s:g} s of load (batches of {a.per_check} matmuls), wall cap {a.wall_s:g} s, banks {nb}, map {src}")
+        log(
+            f"x/w/y-in-DRAM matmul {M}x{K}x{N} on {len(mc)} chips: {a.burst_s:g} s of load, a readback every "
+            f"{a.check_s:g} s of load (batches of {a.per_check} matmuls), wall cap {a.wall_s:g} s, banks {nb}, map {src}"
+        )
         got = rw_burst(ttnn, torch, mesh, on_check, a.burst_s, a.wall_s, a.per_check, check_s=a.check_s)
         for i, s in sorted(st.items(), key=lambda kv: (mc[kv[0]]["tray"] or 9, mc[kv[0]]["bdf"])):
             if s["bad_checks"]:
-                lines.append(f"NUMERIC FAIL {mc[i]['bdf']} (tray {mc[i]['tray'] or '?'}) chip {mc[i]['dev']}: C4d x/w/y-in-DRAM "
-                             f"matmul {s['bad_checks']}/{s['checks']} checks mismatched, first at {s['first']:g} s of load, "
-                             f"{s['bad']} words, banks {s['per_bank']}, lanes even/odd {s['per_lane'][0]}/{s['per_lane'][1]}, "
-                             f"Inf {s['inf']} NaN {s['nan']}")
+                lines.append(
+                    f"NUMERIC FAIL {mc[i]['bdf']} (tray {mc[i]['tray'] or '?'}) chip {mc[i]['dev']}: C4d x/w/y-in-DRAM "
+                    f"matmul {s['bad_checks']}/{s['checks']} checks mismatched, first at {s['first']:g} s of load, "
+                    f"{s['bad']} words, banks {s['per_bank']}, lanes even/odd {s['per_lane'][0]}/{s['per_lane'][1]}, "
+                    f"Inf {s['inf']} NaN {s['nan']}"
+                )
         nbad = sum(1 for s in st.values() if s["bad_checks"])
-        lines.append(f"C4d numeric: {got['checks']} checks on {len(mc)} chips, {got['load_s']:g} s of load in "
-                     f"{got['wall_s']:g} s, {got['matmuls']} matmuls, {got['tflops']:g} TFLOP/s per chip; "
-                     + (f"{nbad} chip(s) mismatched" if nbad else "every chip matched"))
+        lines.append(
+            f"C4d numeric: {got['checks']} checks on {len(mc)} chips, {got['load_s']:g} s of load in "
+            f"{got['wall_s']:g} s, {got['matmuls']} matmuls, {got['tflops']:g} TFLOP/s per chip; "
+            + (f"{nbad} chip(s) mismatched" if nbad else "every chip matched")
+        )
     finally:
         ttnn.close_mesh_device(mesh)
         with open(a.out + ".tmp", "w") as f:

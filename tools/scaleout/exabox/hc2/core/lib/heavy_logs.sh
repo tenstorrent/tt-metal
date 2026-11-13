@@ -201,7 +201,7 @@ hl_hwmon_guard() {  # <snapshot dir>: only with HEAVY_HWMON_GUARD=1 (run.sh --hw
   # *_max of each chip in hung_chips.txt, so non-root pollers (node_exporter, sensors) stop sending it ARC messages; root
   # readers are not stopped (DAC override). Non-serving hosts only: refused while a process of another user (an H3
   # server) holds /dev/tenstorrent. Each file's mode is saved first (hwmon_guard.saved); hwmon_guard_undo.sh restores it.
-  # Prints the ledger line to record (notes/hold-on-hang.md). Never resets, signals or writes to a chip.
+  # Prints the ledger line to record (the hold-on-hang record). Never resets, signals or writes to a chip.
   [ "${HEAVY_HWMON_GUARD:-0}" = 1 ] && [ -s "$1/hung_chips.txt" ] || return 0
   local g=$HL_OUT/hwmon_guard.txt sv=$HL_OUT/hwmon_guard.saved me others b f cb m n=0 bad=0 done_b=""
   me=${HEAVY_RUN_USER:-${SUDO_USER:-$(id -un)}}
@@ -225,7 +225,7 @@ hl_hwmon_guard() {  # <snapshot dir>: only with HEAVY_HWMON_GUARD=1 (run.sh --hw
   [ $n = 0 ] && return 0
   local h p=""; h=$(hostname -s | tr '[:upper:]' '[:lower:]')
   for b in $done_b; do p="$p${p:+ && }lspci -s $b | grep -q . && ! lspci -s $b | grep -q rev.ff"; done   # back and not rev ff
-  { echo "hwmon guard: chmod 000 on $n hwmon *_input/*_max file(s) of hung chip(s)$done_b. Record it with ttp:"
+  { echo "hwmon guard: chmod 000 on $n hwmon *_input/*_max file(s) of hung chip(s)$done_b. Record it in the change ledger: run this ttp command on the machine that runs ttp and bin/quad-ssh, not on this host:"
     echo "  ttp machines change add $(hl_alias) \"hwmon guard on $h:$done_b (hung; run.sh --hwmon-guard, $HL_OUT)\"" \
       "--undo \"bin/quad-ssh $h 'sudo bash $HL_OUT/hwmon_guard_undo.sh'\" --until-probe \"bin/quad-ssh $h '$p'\""
   } | tee -a "$g"

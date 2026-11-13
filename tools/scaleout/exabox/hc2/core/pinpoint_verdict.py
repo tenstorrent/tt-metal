@@ -62,23 +62,28 @@ import os
 import re
 import sys
 
-import numeric_capture as nc   # standard library only too
+import numeric_capture as nc  # standard library only too
 
-BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}   # PCI bus & 0xF0 -> tray (ub0_repro.py)
+BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}  # PCI bus & 0xF0 -> tray (ub0_repro.py)
 BDF = r"(?:[0-9a-f]{4}:)?([0-9a-f]{2}:[0-9a-f]{2}\.[0-7])"
 FAIL_RE = re.compile(r"^NUMERIC FAIL " + BDF + r" \((?:tray (\d|\?)|UBB(\d))\)(?: chip \S+?)?(?: \[([^\]]*)\])?:", re.I)
-CONC = 0.8        # one bank or core holding this share of the bad words: the fault is there (banks: see Banks above)
+CONC = 0.8  # one bank or core holding this share of the bad words: the fault is there (banks: see Banks above)
 SPREAD_BANKS = 3  # at least this many banks, each with BANK_MIN of the bad words: 'several banks'
 BANK_MIN = 0.05
-COL_SKEW = 2.0    # the top output column group holding this many times its even share: the bad words follow columns
+COL_SKEW = 2.0  # the top output column group holding this many times its even share: the bad words follow columns
 CONC_PFX = "bad words concentrated in DRAM"
 CONC_WHERE = "bank controller/PHY or the NoC path out of it"
 CONC_NOTE = CONC_WHERE + "; never a compute or Tensix-core cause"
 COMPUTE = "compute side, likely"
-LANE = 0.9        # one 16-bit lane holding this share: named in the detail
+LANE = 0.9  # one 16-bit lane holding this share: named in the detail
 PHASES = ("hr", "nr", "hl", "nw", "rw")
-PHASE_WHAT = dict(hr="host write+read of DRAM", nr="cores read DRAM over NOC0", hl="host write+read of L1",
-                  nw="cores write DRAM over NOC1", rw="DRAM to DRAM copy")
+PHASE_WHAT = dict(
+    hr="host write+read of DRAM",
+    nr="cores read DRAM over NOC0",
+    hl="host write+read of L1",
+    nw="cores write DRAM over NOC1",
+    rw="DRAM to DRAM copy",
+)
 CCL_PARTS = {"h3"}  # chunk_sched.py: the only sustained part with CCL (ETH) traffic
 
 
@@ -156,8 +161,12 @@ def spread_comp(per_bank, per_lane=None, per_col=None, decoupled=False):
         ev.append(f"{'odd' if lk == 1 else 'even'} lanes {round(ls * lt)}/{lt}")
     if col:
         ev.append(f"output column group {ck} {round(cs * 100)}% of {len(per_col)} groups")
-    detail = (f"banks {per_bank}" + (f", lanes even/odd {per_lane[0]}/{per_lane[1]}" if len(per_lane or []) == 2 else "")
-              + (f", output column groups {list(per_col)}" if ct else "") + (", columns decoupled from banks" if decoupled else ""))
+    detail = (
+        f"banks {per_bank}"
+        + (f", lanes even/odd {per_lane[0]}/{per_lane[1]}" if len(per_lane or []) == 2 else "")
+        + (f", output column groups {list(per_col)}" if ct else "")
+        + (", columns decoupled from banks" if decoupled else "")
+    )
     return f"{COMPUTE} ({'; '.join(ev)})", detail
 
 
@@ -179,14 +188,21 @@ def bank_comp(per_bank, per_lane=None, per_col=None, decoupled=False):
 
 
 TILE_NOTE = "a tile index mod 8, not a DRAM bank: no DRAM readback failed"
-DRAM_READS = ("dram", "mm_dram", "rw_dram", "heavy_read", "heavy_write")   # splits that read DRAM back (core_loc_finding)
+DRAM_READS = (
+    "dram",
+    "mm_dram",
+    "rw_dram",
+    "heavy_read",
+    "heavy_write",
+)  # splits that read DRAM back (core_loc_finding)
 
 
 def dram_seen(ch):
     """A DRAM readback failed on this chip (a DRAM split, or the operand w/x readback found bad words)."""
     r = ch.get("wx_readback")
-    return any((ch.get(s) or {}).get("bad_checks") for s in DRAM_READS) or \
-        bool(isinstance(r, dict) and r.get("bad_words"))
+    return any((ch.get(s) or {}).get("bad_checks") for s in DRAM_READS) or bool(
+        isinstance(r, dict) and r.get("bad_words")
+    )
 
 
 def label(comp, detail, ch=None):
@@ -197,13 +213,21 @@ def label(comp, detail, ch=None):
     if comp.startswith(CONC_PFX) and ch is not None and not dram_seen(ch):
         m = re.match(r"bad words concentrated in DRAM ch (\d+) bank \d+", comp)
         n = m.group(1) if m else "?"
-        return f"wrong words concentrated in output tiles {n} mod 8{lanes_of(detail)} ({TILE_NOTE}; compute side, likely)"
-    if comp.startswith(CONC_PFX):   # 82/82 bad column tiles on 03:00.0 were w columns stored in bank 3
+        return (
+            f"wrong words concentrated in output tiles {n} mod 8{lanes_of(detail)} ({TILE_NOTE}; compute side, likely)"
+        )
+    if comp.startswith(CONC_PFX):  # 82/82 bad column tiles on 03:00.0 were w columns stored in bank 3
         m = re.match(r"bad words concentrated in DRAM ch (\d+) bank \d+(.*)$", comp)
-        if not m:   # the bank pattern did not match: no 'transient' or 'never compute' claim
+        if not m:  # the bank pattern did not match: no 'transient' or 'never compute' claim
             return f"{comp}{lanes_of(detail)} ({CONC_WHERE})"
-        path, rest = (" read path", m.group(2)[len(" read path"):]) if m.group(2).startswith(" read path") else ("", m.group(2))
-        comp = f"transient DRAM bank {m.group(1)} read fault{rest}" if not path else f"transient DRAM bank {m.group(1)} fault on the read path{rest}"
+        path, rest = (
+            (" read path", m.group(2)[len(" read path") :]) if m.group(2).startswith(" read path") else ("", m.group(2))
+        )
+        comp = (
+            f"transient DRAM bank {m.group(1)} read fault{rest}"
+            if not path
+            else f"transient DRAM bank {m.group(1)} fault on the read path{rest}"
+        )
         return f"{comp}{lanes_of(detail)} ({CONC_NOTE})"
     return f"{comp}{lanes_of(detail)}"
 
@@ -225,14 +249,14 @@ def dram_finding(d):
     pp = d.get("per_phase") or {}
     hit = [p for p in PHASES if (pp.get(p) or [0, 0])[0]]
     ph = ", ".join(f"{p} {pp[p][0]}/{pp[p][1]}" for p in hit)
-    b, bd = one_bank(d.get("per_bank"))   # no compute: banks by page address, so one bank is the DRAM channel
+    b, bd = one_bank(d.get("per_bank"))  # no compute: banks by page address, so one bank is the DRAM channel
     comp = f"dram ch {b} bank {b}" if bd else None
     if comp:
         via = {("nr",): " via NOC0 read", ("nw",): " via NOC1 write"}.get(tuple(hit), "")
         detail = f"phase {ph}{via}, {bd}"
     else:
         host = set(hit) <= {"hr", "hl"}
-        comp = ("pcie" if host else "noc0" if hit == ["nr"] else "noc1" if hit == ["nw"] else "dram")
+        comp = "pcie" if host else "noc0" if hit == ["nr"] else "noc1" if hit == ["nw"] else "dram"
         detail = f"phase {ph}, spread over banks {d.get('per_bank')}"
     if d.get("reread_n"):
         detail += f", reread same {d.get('reread_same', 0)}/{d['reread_n']}"
@@ -245,7 +269,7 @@ def heavy_finding(chip):
     """The heavy split -> (component, k/N, detail) or None. A bank holding most of the DRAM arms' bad words
     names the DRAM channel; the read-only and write-only arms name the path when one is bad and the other clean."""
     hv, xl, hr, hw = (chip.get(s) or {} for s in ("heavy", "heavy_xl", "heavy_read", "heavy_write"))
-    hd = chip.get("heavy_dec") or {}   # N not a multiple of 8 tile columns: columns do not map to banks
+    hd = chip.get("heavy_dec") or {}  # N not a multiple of 8 tile columns: columns do not map to banks
     arms = (hv, xl, hr, hw)
     if not any(s.get("bad_checks") for s in arms + (hd,)):
         return None
@@ -260,18 +284,22 @@ def heavy_finding(chip):
     comp, bd = None, None
     per_bank = [sum((s.get("per_bank") or [0] * nb)[i] for s in (hr, hw)) for i in range(nb)]
     if dram:
-        comp, bd = bank_comp(per_bank,
-                             [sum((s.get("per_lane") or [0, 0])[i] for s in (hr, hw)) for i in range(2)],
-                             [sum((s.get("per_col") or [0] * nc)[i] for s in (hr, hw)) for i in range(nc)],
-                             all(s.get("decoupled") for s in dram))
+        comp, bd = bank_comp(
+            per_bank,
+            [sum((s.get("per_lane") or [0, 0])[i] for s in (hr, hw)) for i in range(2)],
+            [sum((s.get("per_col") or [0] * nc)[i] for s in (hr, hw)) for i in range(nc)],
+            all(s.get("decoupled") for s in dram),
+        )
     path = ""
     if (hr.get("bad_checks") or xl.get("bad_checks")) and hw.get("checks") and not hw.get("bad_checks"):
-        path = " read path"   # xl reads w from DRAM where hw has it in L1; both write y to DRAM
+        path = " read path"  # xl reads w from DRAM where hw has it in L1; both write y to DRAM
     elif hw.get("bad_checks") and hr.get("checks") and not hr.get("bad_checks"):
         path = " write path"
-    detail = (f"x, w, y in DRAM {kn(hv)}, {xs}read only {kn(hr)}, write only {kn(hw)}"
-              + (f", decoupled arm {kn(hd)}" if hd.get("checks") else "")
-              + (f", {bd}" if comp else f", DRAM arms spread over banks {per_bank}" if dram else ""))
+    detail = (
+        f"x, w, y in DRAM {kn(hv)}, {xs}read only {kn(hr)}, write only {kn(hw)}"
+        + (f", decoupled arm {kn(hd)}" if hd.get("checks") else "")
+        + (f", {bd}" if comp else f", DRAM arms spread over banks {per_bank}" if dram else "")
+    )
     if hv.get("reread_n"):
         detail += f", reread same {hv.get('reread_same', 0)}/{hv['reread_n']}"
     inf, nan = sum(int(s.get("inf", 0)) for s in arms), sum(int(s.get("nan", 0)) for s in arms)
@@ -300,13 +328,13 @@ def repeat_finding(chip):
     s = chip.get("repeat") or {}
     if not s.get("bad_checks"):
         return None
-    detail = f"failing shape again, {s.get('bad', 0)} bad words"   # a compute split names no DRAM bank
+    detail = f"failing shape again, {s.get('bad', 0)} bad words"  # a compute split names no DRAM bank
     if s.get("inf") or s.get("nan"):
         detail += f", Inf {s.get('inf', 0)} NaN {s.get('nan', 0)}"
     return "repeat", kn(s), detail + lane_note(s.get("per_lane") or [0, 0])
 
 
-COMPUTE_SPLITS = ("mm_l1", "heavy", "heavy_xl", "heavy_dec", "repeat")   # matmul checks with no DRAM readback in them
+COMPUTE_SPLITS = ("mm_l1", "heavy", "heavy_xl", "heavy_dec", "repeat")  # matmul checks with no DRAM readback in them
 
 
 def core_loc_finding(chip):
@@ -325,17 +353,40 @@ def core_loc_finding(chip):
     if not cnt:
         return None
     k, share, tot = top(cnt)
-    if share < CONC:   # no one core holds it: the compute side spread over cores, never a DRAM bank
+    if share < CONC:  # no one core holds it: the compute side spread over cores, never a DRAM bank
         cores = sorted(cnt.items(), key=lambda kv: -kv[1])
-        return ("compute (core spread)", sp0, kn(chip.get(sp0)), f"{len(cores)} cores wrote {tot} wrong words: "
-                + ", ".join(f"core ({c}) {v} ({round(100 * v / tot)}%)" for c, v in cores[:6]))
+        return (
+            "compute (core spread)",
+            sp0,
+            kn(chip.get(sp0)),
+            f"{len(cores)} cores wrote {tot} wrong words: "
+            + ", ".join(f"core ({c}) {v} ({round(100 * v / tot)}%)" for c, v in cores[:6]),
+        )
     l = first.get(k) or {}
     g, e = l.get("grid") or ["?", "?"], l.get("element")
-    comp = (f"compute core ({k}) of the {g[0]}x{g[1]} grid" + (f", element ({e[0]},{e[1]}) of its 32x32 output tiles"
-            f" (16x16 face {l['face'][0]},{l['face'][1]}, element {l['in_face'][0]},{l['in_face'][1]})" if e else "")
-            + (f" on ASIC {l['asic']} ({l['bdf']})" if l.get("asic") and l.get("bdf") else f" on {l['bdf']}" if l.get("bdf") else ""))
-    return (comp, sp0, kn(chip.get(sp0)), f"core ({k}) {round(share * tot)}/{tot} wrong words; first at row {l.get('row')} "
-            f"col {l.get('col')} (tile {(l.get('tile') or ['?', '?'])[0]},{(l.get('tile') or ['?', '?'])[1]})")
+    comp = (
+        f"compute core ({k}) of the {g[0]}x{g[1]} grid"
+        + (
+            f", element ({e[0]},{e[1]}) of its 32x32 output tiles"
+            f" (16x16 face {l['face'][0]},{l['face'][1]}, element {l['in_face'][0]},{l['in_face'][1]})"
+            if e
+            else ""
+        )
+        + (
+            f" on ASIC {l['asic']} ({l['bdf']})"
+            if l.get("asic") and l.get("bdf")
+            else f" on {l['bdf']}"
+            if l.get("bdf")
+            else ""
+        )
+    )
+    return (
+        comp,
+        sp0,
+        kn(chip.get(sp0)),
+        f"core ({k}) {round(share * tot)}/{tot} wrong words; first at row {l.get('row')} "
+        f"col {l.get('col')} (tile {(l.get('tile') or ['?', '?'])[0]},{(l.get('tile') or ['?', '?'])[1]})",
+    )
 
 
 def findings(chip):
@@ -350,15 +401,31 @@ def findings(chip):
     l1, dr = chip.get("mm_l1") or {}, chip.get("mm_dram") or {}
     if dr.get("bad_checks") and l1.get("checks") and not l1.get("bad_checks"):
         comp, bd = bank_comp(dr.get("per_bank"), dr.get("per_lane"), dr.get("per_col"), dr.get("decoupled"))
-        out.append((comp or "dram", "mm", kn(dr), f"matmul in DRAM {kn(dr)}, in L1 {kn(l1)} clean"
-                    + (f", output {bd}" if bd else f", output banks {dr.get('per_bank')}") + lane_note(dr.get("per_lane"))))
+        out.append(
+            (
+                comp or "dram",
+                "mm",
+                kn(dr),
+                f"matmul in DRAM {kn(dr)}, in L1 {kn(l1)} clean"
+                + (f", output {bd}" if bd else f", output banks {dr.get('per_bank')}")
+                + lane_note(dr.get("per_lane")),
+            )
+        )
     rw = chip.get("rw_dram") or {}
-    if rw.get("bad_checks"):   # the full-size DRAM matmul under load: the DRAM path when a bank holds it
+    if rw.get("bad_checks"):  # the full-size DRAM matmul under load: the DRAM path when a bank holds it
         comp, bd = bank_comp(rw.get("per_bank"), rw.get("per_lane"), rw.get("per_col"), rw.get("decoupled"))
-        out.append((comp or "dram", "rw", kn(rw), f"C4n-size x/w/y-in-DRAM matmul under load {kn(rw)}, small matmul in "
-                    f"L1 {kn(l1)}, in DRAM {kn(dr)}" + (f", output {bd}" if bd else f", output banks {rw.get('per_bank')}")
-                    + (f", Inf {rw.get('inf', 0)} NaN {rw.get('nan', 0)}" if rw.get("inf") or rw.get("nan") else "")
-                    + lane_note(rw.get("per_lane"))))
+        out.append(
+            (
+                comp or "dram",
+                "rw",
+                kn(rw),
+                f"C4n-size x/w/y-in-DRAM matmul under load {kn(rw)}, small matmul in "
+                f"L1 {kn(l1)}, in DRAM {kn(dr)}"
+                + (f", output {bd}" if bd else f", output banks {rw.get('per_bank')}")
+                + (f", Inf {rw.get('inf', 0)} NaN {rw.get('nan', 0)}" if rw.get("inf") or rw.get("nan") else "")
+                + lane_note(rw.get("per_lane")),
+            )
+        )
     f = heavy_finding(chip)
     if f:
         out.append((f[0], "heavy", f[1], f[2]))
@@ -373,12 +440,24 @@ def findings(chip):
         out.append(("compute", "mm", kn(l1), f"matmul in L1 {kn(l1)} (no DRAM in the loop), in DRAM {kn(dr)}"))
     ck = chip.get("clock") or {}
     if ck.get("checks") and ck.get("base_bad") and not ck.get("bad_checks"):
-        out.append(("clock", "clock", f"{ck.get('base_bad')}/{ck.get('base_checks')}",
-                    f"DRAM matmul {ck.get('base_bad')}/{ck.get('base_checks')} at the normal clock, 0/{ck['checks']} "
-                    f"at {ck.get('mhz')} MHz"))
-    rank = lambda c: (0 if c[0].startswith(("dram ch", "core ", "compute core")) else 1 if c[0] in ("noc0", "noc1", "pcie", "clock")
-                      or c[0].startswith(COMPUTE) else 2 if c[0] in ("fpu", "sfpu", "compute", "heavy", "repeat")
-                      or c[0].startswith(CONC_PFX) else 3)   # a bank's share alone is a pattern, never the cause
+        out.append(
+            (
+                "clock",
+                "clock",
+                f"{ck.get('base_bad')}/{ck.get('base_checks')}",
+                f"DRAM matmul {ck.get('base_bad')}/{ck.get('base_checks')} at the normal clock, 0/{ck['checks']} "
+                f"at {ck.get('mhz')} MHz",
+            )
+        )
+    rank = lambda c: (
+        0
+        if c[0].startswith(("dram ch", "core ", "compute core"))
+        else 1
+        if c[0] in ("noc0", "noc1", "pcie", "clock") or c[0].startswith(COMPUTE)
+        else 2
+        if c[0] in ("fpu", "sfpu", "compute", "heavy", "repeat") or c[0].startswith(CONC_PFX)
+        else 3
+    )  # a bank's share alone is a pattern, never the cause
     out = sorted(out, key=rank)
     # a core spread goes after the other compute findings, never under a bank-share pattern
     sp = [c for c in out if c[0] == "compute (core spread)"]
@@ -393,8 +472,10 @@ def isolated(chip):
     """A split named a part: the pinpoint can stop for this chip. Hits in the L1 matmul alone, or heavy hits spread over
     the banks, or the compute side named by lanes or columns, go on to the core split; the repeat split alone never stops
     it (the component splits still run)."""
-    return any(c[0] not in ("compute", "heavy", "compute (core spread)") and not c[0].startswith(COMPUTE) and c[1] != "repeat"
-               for c in findings(chip or {}))
+    return any(
+        c[0] not in ("compute", "heavy", "compute (core spread)") and not c[0].startswith(COMPUTE) and c[1] != "repeat"
+        for c in findings(chip or {})
+    )
 
 
 def wants_clock(chip):
@@ -417,19 +498,33 @@ def load_line(ld, ch):
     if ld.get("off") and not ld.get("bursts"):
         return f"load off ({ld['off']}): the checks ran solo"
     p = (ld.get("chips") or {}).get(ch.get("_bdf")) or {}
-    out = (f"under {(ld.get('op') or '?').split(';')[0]}: {ld.get('launches', 0)} launches, box "
-           f"{ld.get('box_kw_mean')} kW mean, {ld.get('box_kw_max')} kW max (32 chips' W); chip peak {p.get('w')} W, "
-           + (f"{p['c']} C at launch {p['c_launch']} ({p['c_split']}, before any fault)" if p.get("c") is not None
-              else "no pre-fault temperature"))
-    locs = sorted((l for v in ch.values() if isinstance(v, dict) for l in (v.get("locs") or []) if l.get("launch")),
-                  key=lambda l: l["launch"])
+    out = (
+        f"under {(ld.get('op') or '?').split(';')[0]}: {ld.get('launches', 0)} launches, box "
+        f"{ld.get('box_kw_mean')} kW mean, {ld.get('box_kw_max')} kW max (32 chips' W); chip peak {p.get('w')} W, "
+        + (
+            f"{p['c']} C at launch {p['c_launch']} ({p['c_split']}, before any fault)"
+            if p.get("c") is not None
+            else "no pre-fault temperature"
+        )
+    )
+    locs = sorted(
+        (l for v in ch.values() if isinstance(v, dict) for l in (v.get("locs") or []) if l.get("launch")),
+        key=lambda l: l["launch"],
+    )
     if locs:
         l = locs[0]
-        out += (f"; first bad at launch {l['launch']} ({l['split']}): "
-                + (f"compute core ({l['core'][0]},{l['core'][1]}) of the {l['grid'][0]}x{l['grid'][1]} grid, element "
-                   f"({l['element'][0]},{l['element'][1]}), " if l.get("core") else
-                   f"DRAM bank {l['bank']}, " if l.get("bank") is not None and l["split"] not in COMPUTE_SPLITS else "")
-                + f"row {l['row']} col {l['col']} (tile {l['tile'][0]},{l['tile'][1]}), {l['words']} words")
+        out += (
+            f"; first bad at launch {l['launch']} ({l['split']}): "
+            + (
+                f"compute core ({l['core'][0]},{l['core'][1]}) of the {l['grid'][0]}x{l['grid'][1]} grid, element "
+                f"({l['element'][0]},{l['element'][1]}), "
+                if l.get("core")
+                else f"DRAM bank {l['bank']}, "
+                if l.get("bank") is not None and l["split"] not in COMPUTE_SPLITS
+                else ""
+            )
+            + f"row {l['row']} col {l['col']} (tile {l['tile'][0]},{l['tile'][1]}), {l['words']} words"
+        )
     if ld.get("off"):
         out += f"; load stopped: {ld['off']}"
     return out
@@ -444,11 +539,15 @@ def repeat_line(rp, s, ch=None):
         b = rp.get("back") or {}
         f = repeat_finding({"repeat": s})
         where = f", {label(f[0], f[2], ch)}" if f and f[0] != "repeat" else ""
-        if s.get("launch0_bad") and int(s["bad_checks"]) <= 1:   # only launch 0's reference against the majority
-            return (f"wrong from launch 0 (its reference against the 32-chip majority){where}; no new fault in the "
-                    f"{rp.get('launches', 0)} launches after it ({rp.get('s', 0)} s){load}")
-        return (f"fault back within {b.get('launches', rp.get('launches'))} launches ({b.get('s', rp.get('s'))} s)"
-                f"{where}{load}")
+        if s.get("launch0_bad") and int(s["bad_checks"]) <= 1:  # only launch 0's reference against the majority
+            return (
+                f"wrong from launch 0 (its reference against the 32-chip majority){where}; no new fault in the "
+                f"{rp.get('launches', 0)} launches after it ({rp.get('s', 0)} s){load}"
+            )
+        return (
+            f"fault back within {b.get('launches', rp.get('launches'))} launches ({b.get('s', rp.get('s'))} s)"
+            f"{where}{load}"
+        )
     return f"not back in {rp.get('launches', 0)} launches ({rp.get('s', 0)} s){load}"
 
 
@@ -486,16 +585,36 @@ def report(numeric_lines, c7_lines, res, why=""):
                 v += f"; {wx_note(ch)}"
         elif caps.get(bdf):
             c = caps[bdf][0]
-            v = (f"captured in-run: {c['cls']}, recompute {c['recompute']} ({len(caps[bdf])} capture(s); "
-                 "NUMERIC-CAPTURE lines)")
+            v = (
+                f"captured in-run: {c['cls']}, recompute {c['recompute']} ({len(caps[bdf])} capture(s); "
+                "NUMERIC-CAPTURE lines)"
+            )
         elif not ch:
             v = "not run" + (f" ({why})" if why else " (no result for this chip)")
         else:
-            ran = [s for s in ("repeat", "dram", "mm_l1", "mm_dram", "heavy", "heavy_xl", "heavy_read", "heavy_write", "rw_dram", "fpu", "sfpu", "clock")
-                   if (ch.get(s) or {}).get("checks")]
+            ran = [
+                s
+                for s in (
+                    "repeat",
+                    "dram",
+                    "mm_l1",
+                    "mm_dram",
+                    "heavy",
+                    "heavy_xl",
+                    "heavy_read",
+                    "heavy_write",
+                    "rw_dram",
+                    "fpu",
+                    "sfpu",
+                    "clock",
+                )
+                if (ch.get(s) or {}).get("checks")
+            ]
             n = sum(int(ch[s]["checks"]) for s in ran)
-            v = (f"not isolated (0/{n}: " + ", ".join(f"{s} {kn(ch[s])}" for s in ran) + "): the fault did not come "
-                 f"back in {res.get('s', '?')} s; intermittent, rerun the pinpoint or the run")
+            v = (
+                f"not isolated (0/{n}: " + ", ".join(f"{s} {kn(ch[s])}" for s in ran) + "): the fault did not come "
+                f"back in {res.get('s', '?')} s; intermittent, rerun the pinpoint or the run"
+            )
         tail = "; ".join(x for x in (note, why if fs and why else "") if x)
         out.append(f"NUMERIC-PINPOINT VERDICT {bdf} tray {tray}: {v}" + (f"; {tail}" if tail else ""))
         r = repeat_line(res.get("repeat"), ch.get("repeat"), ch)
@@ -537,9 +656,11 @@ def main(argv):
                     res = json.load(f)
             except (OSError, ValueError, IndexError):
                 res = {}
-            print("\n".join(report(read_lines(argv[1]), read_lines(argv[2]), res, argv[4] if len(argv) > 4 else "")),
-                  flush=True)
-    except Exception as e:      # never fail a run
+            print(
+                "\n".join(report(read_lines(argv[1]), read_lines(argv[2]), res, argv[4] if len(argv) > 4 else "")),
+                flush=True,
+            )
+    except Exception as e:  # never fail a run
         print(f"NUMERIC-PINPOINT ERROR report: {type(e).__name__}: {str(e)[:200]}", flush=True)
     return 0
 

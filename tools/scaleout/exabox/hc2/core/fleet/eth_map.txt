@@ -1,7 +1,7 @@
 # fleet/eth_map.txt: the ETH cabling of one galaxy host (tray asic chan; asic 1-8 = bus low nibble, tray 1-4 = bus
 # 0x00/0x40/0xC0/0x80), from the X16 factory system descriptor (work/task35/fsd_x16.textproto =
 # /data_bh/scaleout_configs/factory_system_descriptor_X16.textproto, md5 68ccda5a2e01b3faa336adcc86aa27ef), the same on
-# all 16 hosts of four reference quads. L: an intra-host link (240 endpoints, channels 0-7; UMD channel = FSD chan_id).
+# all 16 quad 1-4 hosts. L: an intra-host link (240 endpoints, channels 0-7; UMD channel = FSD chan_id).
 # Q: a port cabled to a quad mate (QSFP). Cross-quad ports (channels 8, 9) are not listed: not judged by C3.
 L 1 1 0 2 1 0
 L 1 1 1 2 1 1

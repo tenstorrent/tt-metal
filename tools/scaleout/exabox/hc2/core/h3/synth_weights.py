@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 """h3/synth_weights.py: the synthetic H3's random weights and stand-in tokenizer (no device, no tt-metal imports).
 
@@ -145,11 +147,17 @@ class SyntheticWeights:
                     if sub in SHARED_PARTITIONS and kind == "normal":
                         self._shared_n[(sub, dt, value)] = self._shared_n.get((sub, dt, value), 0) + int(np.prod(sh))
             if len(shards) > 1:
-                index = "model.safetensors.index.json" if sub == "text_encoder" else "diffusion_pytorch_model.safetensors.index.json"
+                index = (
+                    "model.safetensors.index.json"
+                    if sub == "text_encoder"
+                    else "diffusion_pytorch_model.safetensors.index.json"
+                )
                 weight_map = {k: shard for shard, tensors in shards.items() for k in tensors}
                 (directory / index).write_text(json.dumps({"metadata": {"synthetic": True}, "weight_map": weight_map}))
 
-    def tensor(self, name: str, dtype: str, shape: list[int], view: bool = False, part: str | None = None) -> torch.Tensor:
+    def tensor(
+        self, name: str, dtype: str, shape: list[int], view: bool = False, part: str | None = None
+    ) -> torch.Tensor:
         if self._pool is None:
             self._pool = _Pool(SEED)
         kind, value = _scale_rule(name, shape)
@@ -260,7 +268,11 @@ def _check(config_dir: str, work: str) -> int:
         stds = [float(t.float().std()) for t in state.values() if t.numel() > 1]
         print(f"{sub}: {len(state)} tensors, std {min(stds):.4f}..{max(stds):.4f}")
     tok = SyntheticTokenizer(Path(config_dir) / "tokenizer" / "tokenizer_config.json")
-    print("tokens", len(tok("A short cinematic scene, with a fox.")["input_ids"]), tok.convert_tokens_to_ids("<|image_pad|>"))
+    print(
+        "tokens",
+        len(tok("A short cinematic scene, with a fox.")["input_ids"]),
+        tok.convert_tokens_to_ids("<|image_pad|>"),
+    )
     return 1 if bad else 0
 
 

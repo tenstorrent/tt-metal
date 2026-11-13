@@ -125,12 +125,13 @@ def size(p):
 
 class Stream:
     """copies new whole lines of each source file into <dir>/<name>.txt and writes samples.txt; fsyncs every FSYNC_S"""
+
     FSYNC_S = 1.0
 
     def __init__(self, d, srcs):
         os.makedirs(d, exist_ok=True)
         self.src = [(p, open(os.path.join(d, n + ".txt"), "a")) for n, p in srcs]
-        self.off = [size(p) for _, p in srcs]   # only rows from the load start on (c8_telemetry.txt holds the whole run)
+        self.off = [size(p) for _, p in srcs]  # only rows from the load start on (c8_telemetry.txt holds the whole run)
         self.part = [b""] * len(self.src)
         self.smp = open(os.path.join(d, "samples.txt"), "a")
         self.synced = 0.0
@@ -139,7 +140,7 @@ class Stream:
         for k, (p, out) in enumerate(self.src):
             if not p:
                 continue
-            if size(p) < self.off[k]:   # truncated or replaced: read it again from its start
+            if size(p) < self.off[k]:  # truncated or replaced: read it again from its start
                 self.off[k], self.part[k] = 0, b""
             try:
                 with open(p, "rb") as fh:
@@ -205,13 +206,17 @@ def main(argv):
         say(f"PV ERROR setup: {why}")
         return 3
     t0 = int(time.time())
+
     def on_sig(n, _f):
         raise Stop(f"signal {n}")
+
     for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(s, on_sig)
     os.makedirs(a.log_dir, exist_ok=True)
     procs, rc, stop = {}, 0, ""
-    st = Stream(a.stream, (("hsc", a.hsc), ("brick", a.brick), ("telem", a.telem), ("psu", a.psu))) if a.stream else None
+    st = (
+        Stream(a.stream, (("hsc", a.hsc), ("brick", a.brick), ("telem", a.telem), ("psu", a.psu))) if a.stream else None
+    )
     pk = {"feed": None, "brick": None, "sum": None}
     try:
         open(a.pgids, "w").close()
@@ -220,14 +225,29 @@ def main(argv):
             os.makedirs(tmp, exist_ok=True)
             env = dict(os.environ, TMPDIR=tmp)
             log = open(os.path.join(a.log_dir, f"chip{i}.log"), "wb")
-            p = subprocess.Popen([os.path.join(a.dir, "run-ttx"), "--broadcast", "--timeout", "inf", "--interface", f"pci:{i}",
-                                  os.path.join(a.dir, a.ttx)], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                 env=env, start_new_session=True)
+            p = subprocess.Popen(
+                [
+                    os.path.join(a.dir, "run-ttx"),
+                    "--broadcast",
+                    "--timeout",
+                    "inf",
+                    "--interface",
+                    f"pci:{i}",
+                    os.path.join(a.dir, a.ttx),
+                ],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                start_new_session=True,
+            )
             procs[i] = p
             with open(a.pgids, "a") as f:
                 f.write(f"{p.pid} {start_time(p.pid)}\n")
-        say(f"PV LOAD start: run-ttx {a.ttx} on {len(chips)} chips ({','.join(map(str, chips))}) for {a.load_s:g} s; "
-            f"stops: brick >= {a.brick_c:g} C, feed > {a.feed_a:g} A (chips' power is logged, never a stop)")
+        say(
+            f"PV LOAD start: run-ttx {a.ttx} on {len(chips)} chips ({','.join(map(str, chips))}) for {a.load_s:g} s; "
+            f"stops: brick >= {a.brick_c:g} C, feed > {a.feed_a:g} A (chips' power is logged, never a stop)"
+        )
         end = time.time() + a.load_s
         while time.time() < end:
             if a.limit_s and time.time() - t0 > a.limit_s:
@@ -260,13 +280,15 @@ def main(argv):
             st.close()
         early = {i: p.poll() for i, p in procs.items() if p.poll() is not None}
         for i, r in sorted(early.items()):
-            say(f"PV WARN chip {i} ({bdf(i, a.sys)}): run-ttx exited rc {r} at {el:.0f} s, before the load end (see {a.log_dir}/chip{i}.log)")
+            say(
+                f"PV WARN chip {i} ({bdf(i, a.sys)}): run-ttx exited rc {r} at {el:.0f} s, before the load end (see {a.log_dir}/chip{i}.log)"
+            )
         left = []
         for sig, wait in ((signal.SIGINT, 5), (signal.SIGTERM, 5), (signal.SIGKILL, 2)):
             live = [p for p in procs.values() if alive(p.pid)]
             for p in live:
                 try:
-                    os.killpg(p.pid, sig)   # our own group: pgid = the run-ttx we started (start_new_session)
+                    os.killpg(p.pid, sig)  # our own group: pgid = the run-ttx we started (start_new_session)
                 except ProcessLookupError:
                     pass
             t = time.time() + wait
@@ -279,7 +301,12 @@ def main(argv):
                 break
         if a.scratch and os.path.isdir(a.scratch) and os.path.abspath(a.scratch) not in ("/", os.path.expanduser("~")):
             shutil.rmtree(a.scratch, ignore_errors=True)
-    pks = "; ".join(f"peak {n} {v[0]:.1f}{u} ({v[1]})" for n, u in (("feed", " A"), ("brick", " C"), ("sum", " W")) for v in [pk[n]] if v)
+    pks = "; ".join(
+        f"peak {n} {v[0]:.1f}{u} ({v[1]})"
+        for n, u in (("feed", " A"), ("brick", " C"), ("sum", " W"))
+        for v in [pk[n]]
+        if v
+    )
     if procs and len(early) == len(procs) and not stop and el < a.load_s - 1:
         say(f"PV ERROR setup: every run-ttx exited before the load end ({el:.0f} of {a.load_s:g} s; see {a.log_dir})")
         rc = 3
@@ -288,8 +315,11 @@ def main(argv):
     if left:
         say(f"PV LEFT process groups {' '.join(map(str, left))} still running after SIGKILL")
         rc = 5
-    say(f"PV LOAD done: {len(procs)} chips, {el:.0f} of {a.load_s:g} s{', ' + pks if pks else ''}; no run-ttx of ours left" if not left
-        else f"PV LOAD done: {len(procs)} chips, {el:.0f} s{', ' + pks if pks else ''}")
+    say(
+        f"PV LOAD done: {len(procs)} chips, {el:.0f} of {a.load_s:g} s{', ' + pks if pks else ''}; no run-ttx of ours left"
+        if not left
+        else f"PV LOAD done: {len(procs)} chips, {el:.0f} s{', ' + pks if pks else ''}"
+    )
     return rc
 
 

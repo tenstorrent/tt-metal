@@ -65,14 +65,19 @@ mkdir -p "$LOG"; LOG=$(cd "$LOG" && pwd)
 log() { echo "[$(date -u +%FT%TZ)] h3.sh: $*"; }
 
 PIN=$(cat "$HERE/tt-metal.sha")
-SITE=${H3_TT_METAL_BUILD:-$HOME/h3-tt-metal/$PIN}
+[ ! -r "$HERE/../lib/hc.sh" ] || . "$HERE/../lib/hc.sh"   # the build path default is site data
+if [ -n "${H3_TT_METAL_BUILD:-}" ]; then SITE=$H3_TT_METAL_BUILD
+else SITE=$(! declare -F hc_site > /dev/null || hc_site h3_tt_metal_build); SITE=${SITE:-$HOME/h3-tt-metal}/$PIN; fi
 ready() { [ -f "$1/READY" ] && [ -x "$1/python_env/bin/python" ] && [ -f "$1/tt-metal/ttnn/ttnn/_ttnn.so" ]; }
 why_not() { if [ ! -e "$1" ]; then echo "$1 does not exist"; elif [ ! -f "$1/READY" ]; then echo "$1 has no READY (build not finished)";
   elif [ ! -x "$1/python_env/bin/python" ]; then echo "$1 has no venv python"; else echo "$1 has no ttnn/_ttnn.so"; fi; }
 trap 'log "stopped by signal during setup"; exit 4' TERM INT HUP
-TT=""; for d in "$HERE/../traytest" "$HERE/.."; do [ -f "$d/setup.sh" ] && [ -f "$d/ttnn-wheel.env" ] && { TT=$(cd "$d" && pwd); break; }; done
+TT=""; for d in "$HERE/../.." "$HERE/.."; do [ -f "$d/setup.sh" ] && [ -f "$d/ttnn-wheel.env" ] && { TT=$(cd "$d" && pwd); break; }; done
 ROUTE=build
-if [ -z "${H3_TT_METAL_BUILD:-}" ] && [ -n "$TT" ]; then
+# H3_PYTHON_ENV (a venv dir with bin/python) set: a plain tt-metal tree at TT_METAL_HOME with that env, no
+# pin, wheel, site build or archive. Unset: the routes below, as before
+if [ -n "${H3_PYTHON_ENV:-}" ]; then ROUTE=home
+elif [ -z "${H3_TT_METAL_BUILD:-}" ] && [ -n "$TT" ]; then
   # shellcheck disable=SC1091
   . "$TT/lib/pinned.sh"
   pinned_load "$TT/ttnn-wheel.env" 2> "$LOG/pin.err" || { log "ERROR: ttnn wheel pin unreadable: $(tail -n 1 "$LOG/pin.err")"; exit 3; }
@@ -182,6 +187,11 @@ fi
 if [ "$ROUTE" = wheel ]; then
   if wheel_setup; then BUILD=$PYENV
   else exec 7>&-; log "ERROR: ttnn wheel route failed: $WHY; trying the site build or the h3-dist archive once"; ROUTE=build; fi
+fi
+if [ "$ROUTE" = home ]; then
+  [ -n "${TT_METAL_HOME:-}" ] && [ -d "$TT_METAL_HOME/ttnn" ] && [ -x "$H3_PYTHON_ENV/bin/python" ] \
+    || { log "ERROR: H3_PYTHON_ENV is set but TT_METAL_HOME '${TT_METAL_HOME:-}' has no ttnn/ dir or '$H3_PYTHON_ENV' has no bin/python; the step ends now"; exit 3; }
+  W=$(cd "$TT_METAL_HOME" && pwd) PYENV=$H3_PYTHON_ENV BUILD=$W; log "tt-metal $W with python env $PYENV (H3_PYTHON_ENV)"
 fi
 if [ "$ROUTE" = build ]; then
   build_once || { log "ERROR: no usable ttnn for synthetic H3${WHY:+ (wheel: $WHY)}; $cause; the step ends now, no wait for a build"; exit 3; }

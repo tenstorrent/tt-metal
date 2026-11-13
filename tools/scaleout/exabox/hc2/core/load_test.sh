@@ -93,6 +93,7 @@
 # LOAD_TEST_SYS, LOAD_TEST_SHM and LOAD_TEST_PROC (default /sys, /dev/shm, /proc) are for the tests only.
 set -u
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+. "$HERE/lib/hc.sh"   # hc_site (site data)
 RR=$HERE/run_repro.sh
 BC=$HERE/broker_collision.py; SINCE=$(date +%s); NCOL=0; n=0
 LOAD=ub0; OUT=$PWD/load_test_$(hostname -s)_$(date -u +%Y%m%dT%H%M%SZ); DRY=0; PASS=(); ONCE=0; ONCE_Q=1; QSET=0
@@ -214,7 +215,7 @@ done
 [ -n "$FMAX_OPT" ] && [[ " ${PASS[*]} " =~ \ --fmax[=\ ] ]] && { echo "give the cap once: --fmax MHz or -- --fmax MHz, not both" >&2; exit 1; }
 [ -n "${TT_METAL_HOME:-}" ] || { [ -d "$HERE/tt-metal" ] && export TT_METAL_HOME=$HERE/tt-metal; }
 # this package: a pip venv next to this script (made by setup.sh) is the python when UB0_PYTHON is unset (sudo drops env)
-[ -z "${UB0_PYTHON:-}" ] && [ -z "${TT_METAL_HOME:-}" ] && [ -x "$HERE/venv/bin/python" ] && export UB0_PYTHON=$HERE/venv/bin/python
+[ -z "${UB0_PYTHON:-}" ] && [ -z "${TT_METAL_HOME:-}" ] && [ -x "${HC_VENV:-$HERE/venv}/bin/python" ] && export UB0_PYTHON=${HC_VENV:-$HERE/venv}/bin/python
 [ -x "$RR" ] || { echo "missing $RR" >&2; exit 1; }
 H=$(hostname -s)
 case $H in *cs04) echo "$H: no tray test runs here (cs04 is never used)" >&2; exit 2 ;; esac
@@ -365,6 +366,7 @@ CFG=""; [ "$FMAX" != 0 ] && CFG+="+cap$FMAX"
 [ -n "${TT_MM_THROTTLE_PERF+x}" ] && CFG+="+thr$TT_MM_THROTTLE_PERF"
 for v in $MM; do case $v in TT_MM_STAGGER_TYPE=*|TT_MM_STAGGER_VALUE=*|TT_MM_THROTTLE_PERF=*) ;; *) CFG+="+$v" ;; esac; done
 CFG=${CFG#+}; CFG=${CFG:-stock}; CFG=${CFG//,/;}
+HW=$(hc_site "warn_$H"); [ -z "$HW" ] || say "WARNING: $HW"   # a host's warning is site data (warn_<host>)
 say "mitigation env: ${MM:-none}; AICLK cap (fmax): $([ "$FMAX" = 0 ] && echo "0 (stock; a cap set outside is cleared, pass --fmax 800 to cap)" || echo "$FMAX MHz"); cfg=$CFG"
 [ -z "$MM" ] && [ -n "${SUDO_USER:-}" ] && say "note: run under sudo with no TT_MM_* set; sudo drops the caller's environment, pass them as options (--throttle, --stagger, --env)"
 

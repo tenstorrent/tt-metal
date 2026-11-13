@@ -5,7 +5,7 @@
 
 """l1_march.py: run.sh's L1 march check, right after G3/G3b in the bus-bar mix.
 
-notes/goal54-stage2-coverage.md: run.sh had no SRAM/L1 check. One pass writes one pattern to an L1 tensor
+The stage-2 coverage review: run.sh had no SRAM/L1 check. One pass writes one pattern to an L1 tensor
 HEIGHT_SHARDED over the compute grid (one shard per Tensix core, sized so the source and its copy fill the allocatable
 L1), copies it on the device L1 to L1 onto the grid shifted by one column (shard i moves to the next core), reads the
 copy back per chip and compares it word for word with the written pattern. Only on a mismatch is the source read back
@@ -22,9 +22,9 @@ config regions are N3's.
 """
 import time
 
-W = 256                 # uint32 words per row: one row is 1 KB of L1
-MARGIN = 128 << 10      # L1 bytes per core left free for the copy op's own buffers
-FALLBACK_KB = 256       # per-core shard size when the free L1 cannot be read
+W = 256  # uint32 words per row: one row is 1 KB of L1
+MARGIN = 128 << 10  # L1 bytes per core left free for the copy op's own buffers
+FALLBACK_KB = 256  # per-core shard size when the free L1 cannot be read
 BASE = [("5555", 0x55555555), ("aaaa", 0xAAAAAAAA), ("addr", None), ("0000", 0x00000000), ("ffff", 0xFFFFFFFF)]
 
 
@@ -48,7 +48,7 @@ def pattern_data(torch, pat, n, rows):
         g = torch.full((n, rows, W), word, dtype=torch.int64)
     if inv:
         g = g ^ 0xFFFFFFFF
-    g = torch.where(g >= 2**31, g - 2**32, g)          # uint32 bits in int32
+    g = torch.where(g >= 2**31, g - 2**32, g)  # uint32 bits in int32
     return g.to(torch.int32).reshape(n * rows, W)
 
 
@@ -78,8 +78,11 @@ def grid(mesh):
 def mem(ttnn, x0, gx, gy, rows):
     """HEIGHT_SHARDED L1 config over columns x0..x0+gx-1, rows 0..gy-1: shard i on core (x0 + i % gx, i // gx)."""
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x0, 0), ttnn.CoreCoord(x0 + gx - 1, gy - 1))})
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
-                             ttnn.ShardSpec(crs, [rows, W], ttnn.ShardOrientation.ROW_MAJOR))
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(crs, [rows, W], ttnn.ShardOrientation.ROW_MAJOR),
+    )
 
 
 def l1_check(ttnn, torch, mesh, chips, wall_s, full=False, kb=0, beat=None, say=None):
@@ -91,7 +94,7 @@ def l1_check(ttnn, torch, mesh, chips, wall_s, full=False, kb=0, beat=None, say=
     gx, gy = grid(mesh)
     if gx < 2 or gy < 1:
         raise RuntimeError(f"compute grid {gx}x{gy}: no column to copy to")
-    cx = gx - 1                                        # each side of the copy is cx columns wide
+    cx = gx - 1  # each side of the copy is cx columns wide
     n = cx * gy
     free, fsrc = l1_free(ttnn, mesh)
     if kb:
@@ -111,17 +114,25 @@ def l1_check(ttnn, torch, mesh, chips, wall_s, full=False, kb=0, beat=None, say=
         return f"{x0 + s % cx},{s // cx}"
 
     def read(t):
-        return [ttnn.to_torch(d).contiguous().view(torch.int32).reshape(n * rows, W)
-                for d in ttnn.get_device_tensors(t.cpu())]
+        return [
+            ttnn.to_torch(d).contiguous().view(torch.int32).reshape(n * rows, W)
+            for d in ttnn.get_device_tensors(t.cpu())
+        ]
 
     while time.monotonic() - t0 + last < wall_s or k == 0:
         p0 = time.monotonic()
         pat = pats[k % len(pats)]
-        src, dst = (0, 1) if k % 2 == 0 else (1, 0)    # columns 0..X-2 -> 1..X-1, then back
+        src, dst = (0, 1) if k % 2 == 0 else (1, 0)  # columns 0..X-2 -> 1..X-1, then back
         gold = pattern_data(torch, pat, n, rows)
         ma, mb = mem(ttnn, src, cx, gy, rows), mem(ttnn, dst, cx, gy, rows)
-        x = ttnn.from_torch(gold, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ma,
-                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+        x = ttnn.from_torch(
+            gold,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ma,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
         y, at = None, src
         try:
             if copy == "reshard":
@@ -135,7 +146,7 @@ def l1_check(ttnn, torch, mesh, chips, wall_s, full=False, kb=0, beat=None, say=
             got = read(y if y is not None else x)
             sgot = None
             if y is not None and any(bool((g != gold).any()) for g in got):
-                sgot = read(x)                         # name the core: the source's own word, or the copy's
+                sgot = read(x)  # name the core: the source's own word, or the copy's
         finally:
             ttnn.deallocate(x)
             if y is not None:
@@ -157,8 +168,10 @@ def l1_check(ttnn, torch, mesh, chips, wall_s, full=False, kb=0, beat=None, say=
         if common:
             test_side.append(dict(pass_=k, pattern=pat[0], chips=len(common[0]), words=int(diffs[common[0][0]].sum())))
             if say:
-                say(f"pattern {pat[0]} pass {k}: {len(common[0])} of {len(got)} chips mismatched the same way: test-side, "
-                    "not judged")
+                say(
+                    f"pattern {pat[0]} pass {k}: {len(common[0])} of {len(got)} chips mismatched the same way: test-side, "
+                    "not judged"
+                )
             for i in common[0]:
                 diffs.pop(i)
         for i, d in diffs.items():
@@ -172,7 +185,7 @@ def l1_check(ttnn, torch, mesh, chips, wall_s, full=False, kb=0, beat=None, say=
             for sh, v in enumerate(torch.bincount(shard_of[d], minlength=n).tolist()):
                 if not v:
                     continue
-                own = sbad is not None and bool(sbad[sh * rows:(sh + 1) * rows].any())
+                own = sbad is not None and bool(sbad[sh * rows : (sh + 1) * rows].any())
                 key = core(src if (own or y is None) else at, sh)
                 c = s["cores"].setdefault(key, {})
                 c[pat[0]] = c.get(pat[0], 0) + v
@@ -184,7 +197,16 @@ def l1_check(ttnn, torch, mesh, chips, wall_s, full=False, kb=0, beat=None, say=
         if beat:
             beat(f"l1 pass {k}")
     el = time.monotonic() - t0
-    return dict(passes=k, patterns=len(pats), done=sorted(done, key=[p[0] for p in pats].index), copy=copy,
-                **({"copy_error": cerr} if cerr else {}), kb_per_core=rows * W * 4 >> 10, cores=gx * gy,
-                l1_free=dict(bytes=free, source=fsrc), wall_s=round(el, 1), test_side=test_side,
-                chips={str(i): dict(chips.get(i, {}), **s) for i, s in st.items()})
+    return dict(
+        passes=k,
+        patterns=len(pats),
+        done=sorted(done, key=[p[0] for p in pats].index),
+        copy=copy,
+        **({"copy_error": cerr} if cerr else {}),
+        kb_per_core=rows * W * 4 >> 10,
+        cores=gx * gy,
+        l1_free=dict(bytes=free, source=fsrc),
+        wall_s=round(el, 1),
+        test_side=test_side,
+        chips={str(i): dict(chips.get(i, {}), **s) for i, s in st.items()},
+    )

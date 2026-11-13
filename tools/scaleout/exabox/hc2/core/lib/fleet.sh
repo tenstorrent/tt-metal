@@ -6,7 +6,7 @@ declare -F pg_run > /dev/null || . "$(dirname "${BASH_SOURCE[0]}")/pgroups.sh"  
 declare -F rk_umd > /dev/null || . "$(dirname "${BASH_SOURCE[0]}")/umd_index.sh"   # open a chip by its UMD index
 declare -F sudo_t > /dev/null || . "$(dirname "${BASH_SOURCE[0]}")/sudo_l.sh"   # exact sudo -n -l probes
 # lib/fleet.sh: the fleet profile of run.sh (plain run.sh = --mode=quick, or --mode=full; --mode=sustained is retired;
-# plan notes/fleet-test-plan.md). Sourced by run.sh only; defines functions, runs nothing by itself. Stages are numbered 1-7 in run
+# fleet test plan). Sourced by run.sh only; defines functions, runs nothing by itself. Stages are numbered 1-7 in run
 # order in fleet/stages.tsv: 1 gate (P0), 2 pre-run checks (P1: C0, C1, C3), 3 start reset (C2),
 # 4 bus-bar stage (busbar), 5 numeric verify (inside 4: chunk-end readbacks, G3, the heavy chunk), 6 end reset (C9),
 # 7 per-link sweep (on a fault only). fl_pn, the dry run, Phase times, tray_why.py and the README read that table. run.sh calls:
@@ -61,36 +61,37 @@ FL_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../fleet
 . "$FL_DIR/../lib/psu_fast.sh"   # pf_*: per-PSU input power every 0.5 s over the bus-bar stage
 . "$FL_DIR/../lib/pv_crash.sh"   # pvc_open/pvc_check: a host crash under the power virus is that box's FAIL
 . "$FL_DIR/../lib/hsc_check.sh"   # fl_hsc_before/after: each tray's HSC UV latches and min VIN around each load leg
-. "$FL_DIR/../lib/broker_yield.sh"   # by_start/by_check/by_stop: give the brokered device up to a queued job
+declare -F hc_site > /dev/null || . "$FL_DIR/../lib/hc.sh"   # hc core hooks; tests source fleet.sh alone
+if [ -n "${HC_BROKER_YIELD:-}" ]; then . "$HC_BROKER_YIELD"; else hc_broker_yield_off; fi   # by_start/by_check/by_stop: give the brokered device up to a queued job
 . "$FL_DIR/../lib/power_policy.sh"   # pp_tag: power_policy on the run summary line
 declare -F rk_can_glx > /dev/null || . "$FL_DIR/../lib/glxcan.sh"   # run.sh defines it; tests source fleet.sh alone
 FL_STOP=""; FL_BB_INC=""; FL_BB_TRY=0 FL_BB_NJ=0 FL_BB_RAN=0 FL_C7_NJ=""; FL_HANG_PIN=""; FL_FABSTALL=""; FL_FAB_HIT=""; FL_FAB_RETRY=""; FL_C3STOP=""; FL_C3STOP_CHIPS=""; FL_C3_RC=""; FL_PGDROP=""; FL_NORESET=""; FL_HUNG=""; FL_LINKS_DOWN=""; FL_SUSPECT=(); FL_SKIPPED=(); FL_C8_PID=""; FL_PW_PID=""; FL_AER_PID=""; FL_RESET_SKIPPED=(); FL_LEFT_HUNG=""; FL_LEFT_WHY=""; FL_RESULT=""; FL_PIN=""; FL_SWEEP_HP=""; FL_SWEPT=(); FL_C5_INC=(); FL_C2_NONE=""
-FL_SETUP_INC=""; FL_AF_INC=""; FL_LINKA_INC=""; FL_AF_LINE=""; FL_LINKA_LINE=""   # INCOMPLETE causes: one left in the environment or from an earlier run would grade a clean run rc 9
+FL_PV_SKIP=""; FL_PV_REPL=""; FL_SETUP_INC=""; FL_AF_INC=""; FL_LINKA_INC=""; FL_AF_LINE=""; FL_LINKA_LINE=""   # INCOMPLETE causes: one left in the environment or from an earlier run would grade a clean run rc 9
 # phase | what | quick s | full s   (plan section 3; stage numbers and names: fleet/stages.tsv)
 # Stage list (results/t822/stage-table.md):
 # every mode opens with the bus-bar stage right after C2 (FLEET_BUSBAR_ORDER, default qb,mix,step,heavy in every mode): first two
-# quiet-to-burst steps (qb, placed by design: 60 s clock-checked quiet + 30 s lofi_all matmul burst on all chips, x2),
+# quiet-to-burst steps (qb, placed by #2511: 60 s clock-checked quiet + 30 s lofi_all matmul burst on all chips, x2),
 # then the CCL mix (fleet/chunk_load.py
 # h3shape: H3 all-gather/reduce-scatter + mm/SFPU/DRAM/PCIe, no heavy part, one command queue: e9831c5's chunk, which dropped
 # one quad host's tray 3 at 572 s) in 1, 2, 3, 4 min chunks with a clock-checked 10 s quiet
-# and numeric readback after each (after chunk 1 also G3: FLEET_BUSBAR_RW_S s of x/w/y-in-DRAM C4n-size
+# and numeric readback after each (after chunk 1 also G3: FLEET_BUSBAR_RW_S s of #1197's x/w/y-in-DRAM C4n-size
 # matmul with readbacks, before that quiet: a quad host's 03:00.0 tray 1 DRAM fault, which C4n caught at 21-22 min and the
-# bus-bar numeric at 926 s; G3's catch time is measured),
-# then the cold-quiet-to-full-load step (10 s quiet + 90 s lofi_all burst), then in quick and full (
+# bus-bar numeric at 926 s, t1646b; #1778 measures G3's catch time),
+# then the cold-quiet-to-full-load step (#1258's 10 s quiet + 90 s lofi_all burst), then in quick and full (
 # full runs everything quick runs) one heavy chunk (90 s; 750 s in full), the stage 5 DIDT numeric chunk: the DIDT
 # bf16 HiFi2 16k matmul then the bf8 LoFi 16k matmul (FLEET_DIDT_OPS 16k_hifi2,16k_bf8_lofi), back to back in each launch, each output
 # compared bit-exactly with its launch-0 reference per launch and across chips; it replaced this chunk's lofi_all, which every mix chunk still runs checked.
 # full runs the same parts; only its last mix chunk is longer (25 min). long (one separate 25 min chunk) is opt-in.
 # the mix, heavy chunk and long chunk all run the one load (fl_load_args: lofi_all x16 + SFPU in parallel + the
 # H3 CCL/mm/SFPU/DRAM/PCIe parts, 2 cqs), and qb and step the same heavy op (fl_burst_args).
-# Then C5, the pair link test (stage 6; kept); the per-link sweep (stage 8) reruns its pairs on a fault. The old opt-in stages (C4v, the C4 tries, C6, C6b, qstep) found nothing the chunks do not and are gone.
+# Then C5, the pair link test (stage 6; kept after audit #3282 removed it); the per-link sweep (stage 8) reruns its pairs on a fault. The old opt-in stages (C4v, the C4 tries, C6, C6b, qstep) found nothing the chunks do not and are gone.
 # P1 45 s: it ran in 9 s (t166); the T5 reads add ~22 s (on a quad host: journal boot 0.8, 7-day 4.9, SDR 8.8, SEL 7.0 s), ~31 s; 45 s again
-# with G3 in C4d's old slot, so quick stays under 30 min
+# with G3 in C4d's old slot (#1646 had given C4d's time back to P1), so quick stays under 30 min
 # busbar G3 +35 s: 15 s of load + readbacks, wall cap FLEET_BUSBAR_RW_WALL_S 35 s (+ 15 s for its inputs until
 # G3 took 20.0-29.5 s end to end, inputs included, in 10-30's runs); G3b +13 s right after it: the DRAM byte/DBI
 # pattern check (dram_dbi.py, R03), wall cap FLEET_BUSBAR_DBI_WALL_S 10 s (60 s in --mode=full) + 3 s; N1 +13 s right
 # after G3b: the L1 march (l1_march.py), wall cap FLEET_BUSBAR_L1_WALL_S 10 s (60 s in full) + 3 s; G3 takes
-# C4d's old slot (same x/w/y-in-DRAM shape, on the bus-bar mesh after chunk 1; C4d itself is gone)
+# C4d's old slot (same #1197 shape, on the bus-bar mesh after chunk 1; C4d itself is gone)
 # P0 30 s, C9 150 s, the mix/step/heavy fixed parts: re-based on 161 plain runs since 10-24 (C9 median 83 s, p90 111 s;
 # mix 706-716 s, step 146-160 s, heavy 122-157 s on 58 runs) to give the two quiet-to-burst steps their 240 s inside 30 min
 FL_TABLE='P0|gate (read-only), setup|30|30|30
@@ -99,7 +100,7 @@ C2|start glx_reset (tt-smi -glx_reset) + rescan + recount + C3 (never tt-smi -r)
 busbar|bus-bar stage, first load in every mode (FLEET_BUSBAR_ORDER qb,mix,step,heavy in every mode): 2 x (60 s clock-checked quiet + 30 s burst of the one load definition); then the max load (FL_LOAD_*: lofi_all x16 + SFPU in parallel + H3 CCL/mm/SFPU/DRAM/PCIe) 1, 2, 3, 4 min chunks, 10 s clock-checked quiet + numeric after each, after chunk 1 also G3; then 10 s quiet + 90 s step + numeric; heavy chunk (90 s; 750 s in full); full: the same, last mix chunk 25 min; tray power poll, C8|960|960
 numeric|numeric verify inside stage 4: numeric readback after each chunk and the step, G3, the G3b DRAM byte/DBI pattern check and the N1 L1 march after chunk 1, 90 s (750 s in full, ~2 s in smoke) DIDT numeric heavy chunk (bf16 HiFi2 then bf8 LoFi 16k matmuls, bit-exact per launch and across chips, each checked output also through one sharded SFPU op per launch, exp/reciprocal/sqrt/gelu in turn, voted across chips with the core x,y named)|0|0
 C5|pairwise local ETH-link all-gather, edge-coloured parallel rounds (70-82 s on 7 legs; the C5 link hang)|120|120
-C9|end reset + recheck, C1/C3 after, SUSPECT pair reruns|150|150
+C9|end reset + recheck (#70), C1/C3 after, SUSPECT pair reruns|150|150
 sweep|on a fault only (a hang or CCL failure), after the C9 reset: per-link all-gather, up to FLEET_SWEEP_S|0|0'
 fl_g3() { [ "${FL_BB_RW:-0}" -gt 0 ] && [ "$FL_BB_RW" -le "${FL_BB_CHUNKS:-0}" ] && case ,${FL_BB_ORDER:-}, in *,mix,*) ;; *) false ;; esac; }   # G3 runs
 # the one load definition ('just bring max load to the bus bar stage, make sure it's ACTUALLY the max
@@ -127,7 +128,7 @@ fl_bb_plan() {  # the bus-bar stage's parts in FLEET_BUSBAR_ORDER order, for the
     step) o="$o${o:+, then }${FLEET_BUSBAR_QUIET_S:-10} s quiet + ${FLEET_BUSBAR_BURST_S:-90} s $FL_LOAD_HEAVY step" ;;
     heavy) o="$o${o:+, then }one $FL_BB_HV s stage 5 DIDT numeric chunk ($FL_DIDT_OPS back to back, each output checked bit-exact and through a sharded SFPU op voted across chips; in its last $FL_DIDT_X_S s also $FL_DIDT_X_OPS), $FL_BB_GAP_S s clock-checked quiet" ;;
     long) o="$o${o:+, then }one $FL_LONG_MIN min long chunk of the load$([ "$FL_LONG_PRE" -gt 0 ] && echo " after a $FL_LONG_PRE s pre-ramp"), $FL_BB_GAP_S s clock-checked quiet (12-14 kW)" ;;
-    rw) o="$o${o:+, then }$FL_BB_RW_S s x/w/y-in-DRAM matmul on all chips (numeric_dram.py, C4d shape), a readback every $FL_BB_RW_CK s of load, wall cap $FL_BB_RW_WALL s" ;;
+    rw) o="$o${o:+, then }$FL_BB_RW_S s x/w/y-in-DRAM matmul on all chips (numeric_dram.py, #2499's C4d shape), a readback every $FL_BB_RW_CK s of load, wall cap $FL_BB_RW_WALL s" ;;
     code) o="$o${o:+, then }code readback (exalens, no load: each core's firmware and kernel code in L1 by strong-majority vote across chips, then a re-read; ${FL_BB_CODE_B} s budget, $FL_BB_CODE_SCOPE scope${FLEET_CODE_ELF_DIR:+, ELF compare}, $([ "$FL_BB_CODE_SCOPE" = smoke ] && echo "2 Tensix + 1 ETH cores per chip" || echo "the next run carries on from the last core read"))" ;;
     maxutil) o="$o${o:+, then }max-util (tt-metal unit_tests_didt_max_util, FPU 92 % DRAM 92 % duty 100 % on every chip, prebuilt archive fleet/maxutil.pin): $FL_BB_MU_LOAD s ($FL_BB_MU_MODE) after ${FL_BB_MU_SETUP} s setup" ;;
     pv) if [ "${FL_PV_SWAP:-}" = maxutil ]; then o="$o${o:+, then }max-util in place of the power virus (FLEET_PV_SWAP=maxutil: this box failed the power virus repeatedly): $FL_BB_MU_LOAD s ($FL_BB_MU_MODE)"
@@ -158,7 +159,7 @@ fl_smoke() {
 }
 fl_mode() { [ "${FL_SMOKE:-0}" = 1 ] && echo smoke || echo "$FLEET"; }   # the mode's name in the dry run and the log
 # TRAYTEST_MIX_SWAP (a trial): the swap part's segments, time and WARNING. virus alternates the weaker
-# max-util load (FLEET_SWAP_MU_S, 180 s) and the heavier power virus (FLEET_SWAP_PV_S, 240 s) over the swapped chunk's
+# max-util load (FLEET_SWAP_MU_S, 180 s) and the heavier power virus (FLEET_SWAP_PV_S, 240 s) of #7196 over the swapped chunk's
 # seconds, the last segment cut to fit; each power virus segment ends with the shared glx_reset and recount (fl_bb_pv, rk_reset)
 fl_swap_init() {
   [ -n "$FL_MIX_SWAP" ] || return 0
@@ -205,7 +206,7 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   # two quiet-to-burst steps (qb), then the CCL-mix chunks (FLEET_BUSBAR_CHUNK_MIN, default 1, 2, 3, 4 min, full 1, 2, 3, 25: the e9831c5 schedule, which dropped one quad host's tray 3
   # 155 s into its 4 min chunk, 572 s into the stage; FLEET_CHUNK_MIN also sets it (full raises its last chunk to FLEET_LONG_MIN), FLEET_C7_S <s> one chunk of <s>),
   # before them the quiet-to-burst steps (qb: FLEET_BUSBAR_QB_TRIES 2 x FLEET_BUSBAR_QB_QUIET_S
-  # 60 s quiet + FLEET_BUSBAR_QB_BURST_S 30 s burst, fl_bb_step, no numeric readback; they run first), the cold-quiet-to-full-load step (FLEET_BUSBAR_QUIET_S 10 s + FLEET_BUSBAR_BURST_S 90 s, ~40 s mesh open, ~40 s numeric
+  # 60 s quiet + FLEET_BUSBAR_QB_BURST_S 30 s burst, fl_bb_step, no numeric readback; #2511 puts them at the front), the cold-quiet-to-full-load step (FLEET_BUSBAR_QUIET_S 10 s + FLEET_BUSBAR_BURST_S 90 s, ~40 s mesh open, ~40 s numeric
   # readback) and, in quick and full, the heavy chunk: one FLEET_BUSBAR_HEAVY_S (90 s; 750 s in full) chunk_load.py
   # chunk of the heavy part alone, its output compared across chips at the chunk end, which caught a quad host's 88:00.0 tray 4 numeric
   # Inf ([heavy] 1/193 launches, r010/r011; the mix chunks run that lofi_all heavy part checked). Its load is FLEET_DIDT_OPS, the DIDT bf16 HiFi2 matmul then the bf8 LoFi matmul that caught a quad host's 81:00.0 tray 4,
@@ -225,7 +226,7 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   [[ ,$FL_BB_ORDER, =~ ^(,(qb|mix|step|heavy|long|rw|code|maxutil|pv))+,$ ]] && ! tr , '\n' <<< "$FL_BB_ORDER" | sort | uniq -d | grep -q . \
     || { echo "FLEET_BUSBAR_ORDER takes qb, mix, step, heavy, long, rw, code, maxutil and pv, each at most once, comma-separated (got '$FL_BB_ORDER')" >&2; exit 1; }
   # TRAYTEST_MIX_SWAP (goal 54 stage 3 trial): dev trial knob. heavy: the last CCL-mix chunk (full's
-  # 25 min chunk, smoke's last chunk) runs the same seconds of the heavy matmul load instead; virus: the same seconds of the
+  # 25 min chunk, smoke's last chunk) runs the same seconds of the heavy matmul load instead; virus: the same seconds of the #7196
   # power virus alternating with max-util. Unset or empty: identical to main. A loud WARNING goes on the first line, the chunk line
   # and the summary, and reliability.sh --install refuses it. An unknown value exits here, before any device open
   FL_MIX_SWAP=${TRAYTEST_MIX_SWAP:-}; FL_SWAP_WARN=""; FL_SWAP_S=0; FL_SWAP_SEGS=""; FL_SWAP_PART_S=0
@@ -235,12 +236,13 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   # plan line, at the part's place in the stage and in the run summary (never a quiet skip); the other parts run
   # Unset, the box's own site file (TRAY_SITE_FILE, default ~/.config/tray-test/site, a "maxutil_skip=<text>" line) gives it, so
   # launchers that reach run.sh over ssh or through reliability.sh carry it too
-  FL_MU_SKIP=""; local mus=${FLEET_MAXUTIL_SKIP:-} sf=${TRAY_SITE_FILE:-$HOME/.config/tray-test/site}
-  [ -z "$mus" ] && [ -r "$sf" ] && mus=$(sed -n 's/^maxutil_skip=//p' "$sf" | head -1)
+  FL_MU_SKIP=""; local mus=${FLEET_MAXUTIL_SKIP:-} mut mupv
+  [ -n "$mus" ] || mus=$(hc_site maxutil_skip)
   if [ -n "$mus" ]; then
-    case $mus in "WARNING: max-util skipped"*) FL_MU_SKIP=$mus ;; *) FL_MU_SKIP="WARNING: max-util skipped: $mus (site data)" ;; esac
+    mut=$(hc_site maxutil_skip_tag); mupv=$(hc_site maxutil_skip_pv)   # the core's text is plain; site data adds its cites
+    case $mus in "WARNING: max-util skipped"*) FL_MU_SKIP=$mus ;; *) FL_MU_SKIP="WARNING: max-util skipped: $mus${mut:+ $mut}" ;; esac
     # the power virus is skipped with it (a site that bans max-util bans the PV too)
-    FL_MU_SKIP="$FL_MU_SKIP; WARNING: the power virus is skipped too, the 4 min chunk stays"
+    FL_MU_SKIP="$FL_MU_SKIP; ${mupv:-WARNING: the power virus is skipped too, the 4 min chunk stays}"
     FL_BB_ORDER=$(tr , '\n' <<< "$FL_BB_ORDER" | grep -vx 'maxutil\|pv' | paste -sd,)
   fi
   FL_BB_QB_N=${FLEET_BUSBAR_QB_TRIES:-2}; FL_BB_QB_Q=${FLEET_BUSBAR_QB_QUIET_S:-60}; FL_BB_QB_B=${FLEET_BUSBAR_QB_BURST_S:-30}
@@ -253,7 +255,7 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
     || { echo "FLEET_LOAD_TRAYS takes trays 1-4, comma-separated (got '$FLEET_LOAD_TRAYS')" >&2; exit 1; }
   # --mode=full (formerly): the same 1, 2, 3, 4 min quick jumps, then two 20 min chunks,
   # 50 min of CCL-mix load: past every late bus-bar drop on record by max(20%, 3 min) (latest a quad host's tray 4 at 24:31
-  # of the CCL-only C7) and about 95% per full run on an outside galaxy's tray 4 (notes/full-mode-coverage.md, tests/test_full_soak.py);
+  # of the CCL-only C7) and about 95% per full run on an outside galaxy's tray 4 (tests/test_full_soak.py);
   # full's 2 x 20 min went into one 25 min chunk, past both late drops on record.
   # Full = plain, just longer: the same chunks and quiets, its last chunk raised to FLEET_LONG_MIN (1, 2, 3, 25 min)
   FL_LONG_MIN=${FLEET_LONG_MIN:-25}; [[ $FL_LONG_MIN =~ ^[1-9][0-9]*$ ]] || { echo "FLEET_LONG_MIN takes whole minutes (got '$FL_LONG_MIN')" >&2; exit 1; }
@@ -290,11 +292,11 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   # its 4 MiB x chips PCIe write on every 2nd launch (in line on cq 0, every launch paced b02u08's 16 GT/s links to half rate)
   # it was replaced by the one load definition: the sustained part's load, which drew more box kW than the mix in 14 of
   # 17 same-run pairs (full runs 10-25/26: +0.1 to +0.5 kW, sustained chunks mean 11.40 kW, max 12.74 kW), with the SFPU in
-  # parallel and the CCL mix kept. FLEET_LOAD_* override it; the old FLEET_SUSTAIN_* names still work.
+  # parallel (#3152) and the CCL mix kept. FLEET_LOAD_* override it; the old FLEET_SUSTAIN_* names still work.
   # Over-limit bursts: the load runs as bursts of FL_LOAD_STEPS ops with a FL_LOAD_GAP_MS pause after
   # each, which drives each chip well over its power limit at every burst start (an outside galaxy's power notes: chip peak
   # max 295 W, median 282 W at 50 ms vs 210 / 180 W with no gap, 130 W limit). Never 0 without a peak comparison
-  # (tests/test_burst_gap.sh). The SFPU op is gelu:1 (notes/max-load.md: 32/32 chips limiter-bound on a quad host
+  # (tests/test_burst_gap.sh). The SFPU op is gelu:1 (the max-load study: 32/32 chips limiter-bound on a quad host
   # at their 130 W limit, 27/32 with the old gelu:0).
   FL_LOAD_HEAVY=${FLEET_LOAD_HEAVY:-lofi_all}; FL_LOAD_HEAVY_N=${FLEET_LOAD_HEAVY_N:-16}; FL_LOAD_GAP_MS=${FLEET_LOAD_GAP_MS:-50}
   FL_LOAD_STEPS=${FLEET_LOAD_STEPS:-8}; FL_LOAD_PCIE_MB=${FLEET_LOAD_PCIE_MB:-${FLEET_SUSTAIN_PCIE_MB:-16}}; FL_LOAD_PCIE_EVERY=${FLEET_LOAD_PCIE_EVERY:-1}
@@ -324,7 +326,7 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   fl_g3 && [ "$FL_BB_DBI_WALL" -gt 10 ] && FL_EXTRA_S=$(( FL_EXTRA_S + FL_BB_DBI_WALL - 10 ))   # a longer G3b (full: 60 s) is duration only
   fl_g3 && [ "$FL_BB_L1_WALL" -gt 10 ] && FL_EXTRA_S=$(( FL_EXTRA_S + FL_BB_L1_WALL - 10 ))   # a longer N1 (full: 60 s) too
   # rw (opt-in, repro.sh's dram way): numeric_dram.py on its own mesh, FLEET_BUSBAR_RW_S of load, a readback every
-  # FLEET_BUSBAR_RW_CHECK_S (1.5 s, as C4d), FLEET_BUSBAR_RW_WALL_S cap; ~60 s mesh open and inputs
+  # FLEET_BUSBAR_RW_CHECK_S (1.5 s, #2499's C4d), FLEET_BUSBAR_RW_WALL_S cap; ~60 s mesh open and inputs
   FL_BB_RW_CK=${FLEET_BUSBAR_RW_CHECK_S:-1.5}; [[ $FL_BB_RW_CK =~ ^[0-9]+(\.[0-9]+)?$ ]] && [ "$FL_BB_RW_CK" != 0 ] \
     || { echo "FLEET_BUSBAR_RW_CHECK_S takes seconds > 0 (got '$FL_BB_RW_CK')" >&2; exit 1; }
   FL_BB_RWP_S=$(( FL_BB_RW_WALL + 60 ))
@@ -334,7 +336,7 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   FL_DIDT_X_DEF=10; FL_BB_HV_DEF=90; [ "$FLEET" = full ] && [ -z "${FLEET_BUSBAR_HEAVY_S:-}" ] && { FL_BB_HV_DEF=750; FL_DIDT_X_DEF=90; FL_EXTRA_S=$(( ${FL_EXTRA_S:-0} + 660 )); }
   FL_BB_HV=${FLEET_BUSBAR_HEAVY_S:-$FL_BB_HV_DEF}; [[ $FL_BB_HV =~ ^[1-9][0-9]*$ ]] || { echo "FLEET_BUSBAR_HEAVY_S takes whole seconds (got '$FL_BB_HV')" >&2; exit 1; }
   # the heavy chunk's ops: tt-metal tests/didt/test_minimal_matmul.py bf16_HiFi2 (ub0_repro 16k_hifi2), then the
-  # bf8 LoFi matmul of diag (16k_bf8_lofi), each 16384^3, minimal_matmul M8/K16/N8, subblock 2x4
+  # bf8 LoFi matmul of #3986's diag (16k_bf8_lofi), each 16384^3, minimal_matmul M8/K16/N8, subblock 2x4
   FL_DIDT_OPS=${FLEET_DIDT_OPS:-16k_hifi2,16k_bf8_lofi}; [[ $FL_DIDT_OPS =~ ^[0-9a-z_]+(,[0-9a-z_]+)*$ ]] \
     || { echo "FLEET_DIDT_OPS takes ub0_repro.py HEAVY names, comma-separated (got '$FL_DIDT_OPS')" >&2; exit 1; }
   # the heavy chunk's SFPU vote (exp, reciprocal, sqrt, gelu in turn on each checked output, voted across
@@ -521,7 +523,7 @@ fl_capture() {
     [ "$k" = hang ] && declare -F hold_point > /dev/null && hold_point "fleet $n hang" "${FL_HELD[*]}" "$@"
   fi
   [ ${#FL_HELD[@]} = 0 ] || { fl_unhold; declare -F hold_done > /dev/null && hold_done >> "$d/heavy_on_hang.log" 2>&1; }
-  [ "$k" = drop ] && declare -F bh_drop > /dev/null && bh_drop "$d" drop   # BMC heat snapshot + CPLD alive/vr_pg
+  [ "$k" = drop ] && declare -F bh_drop > /dev/null && bh_drop "$d" drop   # BMC heat snapshot + CPLD alive/vr_pg (#1341)
   say "fault capture ($k, $# chip(s)): $d"; return 0
 }
 fl_ccl_err() {  # <run.log>: 0 when its last 40 lines hold a CCL error line: the active
@@ -569,9 +571,9 @@ fl_c7_named() {  # <label> <tag> <stage and part> <rc> <c7 dir>: fl_c7's CCL or 
 }
 fl_all() { echo "$RK_MAP" | awk '{ print $1 }'; }   # every chip's BDF
 fl_ubb() { echo "tray $(rk_tray "$1")"; }   # bdf -> "tray N"
-fl_lk() { echo "${1#0000:} ($(fl_ubb "$1"))"; }   # bdf -> "02:00.0 (tray 1)" (tray 1-4, no UBB number: by design)
+fl_lk() { echo "${1#0000:} ($(fl_ubb "$1"))"; }   # bdf -> "02:00.0 (tray 1)" (tray 1-4, no UBB number: #249/#284)
 fl_gate() {  # $1 the phase about to start: 0 ok; else FL_STOP set, nothing more loads or resets
-  local o rc l; o=$(FLEET_PROC=${FLEET_PROC:-/proc} bash "$FL_DIR/gate.sh" "$FL_PGID" 2>&1); rc=$?
+  local o rc l; o=$(FLEET_PROC=${FLEET_PROC:-/proc} bash "$FL_DIR/gate.sh" "$FL_PGID" "$$" 2>&1); rc=$?   # $$: run.sh, whose own jobs it waits for
   echo "$1 $o" >> "$FL_OUT/gate.txt"; [ $rc = 0 ] && return 0
   l=$(grep -a '^gate busy: ' <<< "$o" | tail -1); l=${l:-$o}   # the verdict line, not the stderr info ("host load: ...", WARNING) before it
   FL_STOP="gate busy before $(fl_pn "$1"): ${l#gate busy: }"; fl_find "GATE BUSY before $(fl_pn "$1"): ${l#gate busy: }"; return 1
@@ -712,7 +714,7 @@ fl_c3named() {  # <FL_OUT/disc_label>: "N<TAB>tt-umd's last warning/error/wait l
 # never ran). C3 c2 failed after the C2 start reset: the cause line names each chip tt-umd named (BDF, tray 1-4) and its error;
 # one more tt-smi -glx_reset (rk_reset, settled sa3; never tt-smi -r) with its root-port rescan and recount by BDF and tray;
 # C3 c2 again. 0: C3 c2 counted after the retry (a C3 WARN per chip named the first time); 1: fl_c3stop follows, as before.
-# --hold: 1 with no reset. Leaving the chips out and running the no-CCL fallback load on the others waits for
+# --hold: 1 with no reset. Leaving the chips out and running the no-CCL fallback load on the others waits for #8987's
 # fallback load on main.
 fl_c3retry() {
   local f=$FL_OUT/disc_c2 n m b x named="" cause="" miss
@@ -872,7 +874,7 @@ fl_c0settle() {
     if [ "$(rk_state "$b")" != ok ]; then   # still missing: its PCIE FAIL line from lk_settle names it, else this line
       grep -q "^PCIE FAIL ${b#0000:} " "$OUT/link/findings.txt" 2> /dev/null && continue
       fl_find "$l"; [ "$ft" = 1 ] && echo "$(date '+%F %T %Z') $l" >> "$OUT/fault.txt"; continue; fi
-    s=""; [ -s "${RK_RESET_LOG:-/nonexistent}" ] || s="the recount (no reset ran)"   # follows RK_RESET_LOG only
+    s=""; [ -s "${RK_RESET_LOG:-/nonexistent}" ] || s="the recount (no reset ran)"   # follows RK_RESET_LOG only (#6498, #6499)
     # --known-dropped-tray=N: the start glx_reset is the tray re-power that brings tray N back, main's wording
     [ -n "$d" ] && for f in "recheck|the $([ -n "${KD_TRAY:-}" ] && echo "tray re-power" || echo glx_reset) (tt-smi -glx_reset, start reset)" "recheck_rescan|the root port rescan after the glx_reset (tt-smi -glx_reset, start reset)" \
         "recheck_glx|the tray re-power (tt-smi -glx_reset, start reset)" "recheck_glx_rescan|the root port rescan after the tray re-power (start reset)"; do
@@ -953,7 +955,7 @@ fl_c2() {  # C2: tt-smi -glx_reset (never tt-smi -r), rescan, recount, recovery;
     if ! fl_gate C2; then rk_hook post C2 skipped; fl_rskip C2 "$FL_STOP"; fl_c3pend "C2 reset skipped"; return 0; fi
     if ! fl_peer C2; then rk_hook post C2 skipped; FL_NORESET=$FL_PEER_WHY; fl_rskip C2 "$FL_PEER_WHY"; fl_c3pend "C2 reset skipped: $FL_PEER_WHY"; fl_c3nopre; return 0; fi
   fi
-  # Steer: C2 runs tt-smi -glx_reset through rk_reset, the same
+  # Steer (#2397 'you're never supposed to use -r.'): C2 runs tt-smi -glx_reset through rk_reset, the same
   # function C9 uses (settled sa3), so OK, FAILED and NO RESET are decided in one place. tt-smi -r is never run. NO RESET only
   # when no glx_reset ran (--hold, TRAY_GLX_FIRST=0, TRAY_REPRO_NO_GLX=1, it cannot run here); then no reset result is judged
   # (no RESET FAIL, no RESET UNATTRIBUTED) and a missing chip is named as missing. A glx_reset that ran and failed goes
@@ -1010,14 +1012,14 @@ fl_c2() {  # C2: tt-smi -glx_reset (never tt-smi -r), rescan, recount, recovery;
   # C9 keeps a reset-sized share of the run budget on a host whose C2 needed it
   if [ -n "$af${RK_RECOVERY:-}" ] || [ -n "${RK_RESET_FAILS:-}" ]; then
     ! declare -F rs_c9_share > /dev/null || rs_c9_share "$t0" "$([ -n "$af${RK_RECOVERY:-}" ] && echo "C2 needed a tray re-power" || echo "a glx_reset failed")"; fi
-  rk_map; echo "$RK_MAP" > "$FL_OUT/map.txt"; fl_c3 c2 || fl_c3retry || { fl_c3stop c2 "C2 start reset$([ "${HOLD_ACTIVE:-0}" = 1 ] || echo " and one more glx_reset")"; return 0; }   # nothing loads; one retry
+  rk_map; echo "$RK_MAP" > "$FL_OUT/map.txt"; fl_c3 c2 || fl_c3retry || { fl_c3stop c2 "C2 start reset$([ "${HOLD_ACTIVE:-0}" = 1 ] || echo " and one more glx_reset")"; return 0; }   # nothing loads; #9289: one retry
   fl_c3cmp pre c2; [ "$ok" = 1 ] && fl_hung_clear
   fl_c3glx
 }
 # fl_c2redo: C2 is about to run after a start reset (RK_START_RAN=1): retake the C3 pre baseline now, so
 # fl_c3cmp/fl_c3glx/fl_ethdown compare C2 with ports as they were after the start reset. Reset skipped: baseline unchanged.
 # Read-only discovery; it never acts on a chip, so --hold (HOLD_ACTIVE=1) leaves a hung chip as it is.
-# fl_c2fw <dir> (17; 5/5 legs left tray 3 on PCI with firmware not ready after C2's one re-power, C3 then
+# fl_c2fw <dir> (17; #3867: 5/5 legs left tray 3 on PCI with firmware not ready after C2's one re-power, C3 then
 # timed out on c1:00.0): a chip on PCI whose firmware is not ready counts as missing. Its tray gets one more in-band re-power round
 # and a recount before C3; still not ready: it joins FW_NR, so fw_nr_settle prints FAIL tray N with the exact failure (BDF, tray 1-4)
 # and the run exits non-zero. --hold (HOLD_ACTIVE=1), TRAY_REPRO_NO_GLX=1 or no root: nothing acts, the chip stays as it is.
@@ -1063,7 +1065,7 @@ fl_ethdown() {  # $1 label: the local ETH links up at pre and down at $1, one "<
   python3 "$FL_DIR/fleet_py.py" ethdiff "$FL_OUT/disc_pre.json" "$FL_OUT/disc_$1.json" 2>/dev/null | paste -sd';' | sed 's/;/; /g'
 }
 # C2's glx_reset can leave local ETH links down (an outside galaxy, run 1: eth_local 248 of 256, then tt-metal's mesh
-# open failed with 'SAT placement: mesh M0 has no grouping'); a glx_reset cleared it once. When C3 after C2 counts
+# open failed with 'SAT placement: mesh M0 has no grouping'); a glx_reset cleared it in #1132. When C3 after C2 counts
 # fewer local links than before it: tt-smi -glx_reset under the same gates as C2's reset (fl_peer), recount, both counts
 # logged. Links still down: FL_LINKS_DOWN and a "C3 FAIL mesh placement failed: ETH links down" naming each chip pair.
 fl_c3glx() {
@@ -1107,7 +1109,7 @@ fl_rd() { local _l=; { read -r _l < "$2"; } 2> /dev/null; printf -v "$1" %s "${_
 fl_c8_start() {  # C8: per-chip temp, power, AICLK, current, vcore from sysfs (read-only, no device open) every FLEET_TELEM_S
   local main=$$ d h b t c
   # each chip's limits once, "<bdf> <power1_max uW (TDP)> <curr1_max mA (TDC)> <power1_cap uW>": the LOAD lines' power-limit
-  # count and LOAD LOW's own limit (power1_cap where the driver has it); only read, never written
+  # count and LOAD LOW's own limit (power1_cap where the driver has it); only read, never written (#763)
   for d in "$SYS"/class/tenstorrent/tenstorrent!*; do
     h=$(ls -d "$d"/device/hwmon/hwmon* 2>/dev/null | head -1)
     echo "$(basename "$(readlink -f "$d/device")") $(cat "$h/power1_max" 2>/dev/null || echo -) $(cat "$h/curr1_max" 2>/dev/null || echo -) $(cat "$h/power1_cap" 2>/dev/null || echo -)"
@@ -1151,7 +1153,7 @@ fl_c8_stop() {
   # thermal: a chip at or over its thermal limit before its first fault -> THERMAL FAIL by
   # BDF, tray and stage; samples at or after a chip's first fault, and implausible ones, are only counted
   python3 "$FL_DIR/fleet_py.py" thermal "$FL_OUT/c8_telemetry.txt" "$FL_OUT/c8_tlimit.txt" "$FL_OUT/phases.txt" "$FL_STAGES_TSV" \
-    "$FL_OUT/fault_times.tsv" "${FLEET_TEMP_TRIP_C:-90}" "${FLEET_TEMP_TRIP_SRC:-records: hwmon temp1_max 90 C}" \
+    "$FL_OUT/fault_times.tsv" "${FLEET_TEMP_TRIP_C:-90}" "${FLEET_TEMP_TRIP_SRC:-$(hc_site temp_trip_src | grep . || echo "default 90 C")}" \
     2> "$FL_OUT/c8_thermal.err" | while read -r l; do fl_find "$l"; done
   [ -s "$FL_OUT/c8_thermal.err" ] && say "$(tail -1 "$FL_OUT/c8_thermal.err")"
 }
@@ -1217,7 +1219,7 @@ fl_watch() {
       declare -F rk_drop_now > /dev/null && rk_drop_now "${at:-$lab}"   # first, before the kills below
       declare -F th_stop > /dev/null && th_stop now   # no thermal read of a lost chip
       for j in "$@"; do pid=${j%%:*}; lab=${j#*:}; lab=${lab#*:}; [ -z "${FL_RC[$lab]:-}" ] && { FL_RC[$lab]=loss; fl_kill "$pid"; }; done
-      # every lost chip still on PCI is cut at the monitor's DROP, ffff or not (left one readable);
+      # every lost chip still on PCI is cut at the monitor's DROP, ffff or not (r046/#7229 left one readable);
       # none lost (a vr_pg fall with PCIe up): no cut, as mg_loss: mg_hang's empty list means every chip, all MG_LOST
       local lostb; lostb=$(rk_snap | awk '$3 == "lost" { print $1 }')
       # shellcheck disable=SC2086  # a word list of BDFs
@@ -1274,7 +1276,7 @@ fl_lost() {  # after a load phase: chips lost from PCIe -> seen/chips (run.sh's)
   declare -F mg_loss > /dev/null && { mg_loss "$1" $(rk_snap | awk '$3 != "ok" { print $1 }') || true; }
   seen=1; chips="$chips $g"; at="$1"; say "$1: chips lost: $(echo $g | rk_list) (not answering: $(lost_trays))"; return 0
 }
-# Per-stage AER delta and the post-boot settle recount (rows R77, R80, R81 of notes/run-sh-coverage.md).
+# Per-stage AER delta and the post-boot settle recount (rows R77, R80, R81 of run.sh's coverage table).
 # Reads only: sysfs AER counters and the chip recount; no reset of their own (a loss goes through fl_lost and run.sh's C9).
 fl_uptime() { local u; read -r u _ 2> /dev/null < "${FLEET_PROC:-/proc}/uptime" && echo "${u%%.*}"; }   # 2> first: a missing file says nothing
 : "${FL_BOOT_UP0=$(fl_uptime)}"   # host uptime (s) at run start; run.sh sets it before its start reset
@@ -1546,7 +1548,7 @@ fl_linka_plan() {  # the link-A step in one phrase
   echo "hide e${FL_LINKA_DROP%,*} <-> e${FL_LINKA_DROP#*,}, all-gather ${FL_LINKA_HW/,/x} bf16 per chip over $(fl_lk "$FL_LINKA_A") e${FL_LINKA_KEEP%,*} <-> $(fl_lk "$FL_LINKA_B") e${FL_LINKA_KEEP#*,} for ${FL_LINKA_S} s, hang at ${FL_LINKA_HANG} s (launch 0: ${FL_LINKA_FIRST} s)"
 }
 FL_LINKA_RECOVERY="glx_reset (tt-smi -glx_reset, run.sh's C9 end reset, runs it and unhides the masked link)"
-fl_linka_line() {  # <PASS|HANG> <seconds> [detail]: the one result line, chips by BDF and tray 1-4 (never a UBB number)
+fl_linka_line() {  # <PASS|HANG> <seconds> [detail]: the one result line, chips by BDF and tray 1-4 (never a UBB number, #284)
   local w; if [ "$1" = HANG ]; then w="time to hang $2 s${3:+ ($3)}; recovery: $FL_LINKA_RECOVERY"; else w="no hang in $2 s${3:+ ($3)}"; fi
   echo "REPRO LINK-A $1 $(fl_lk "$FL_LINKA_A") e${FL_LINKA_KEEP%,*} <-> $(fl_lk "$FL_LINKA_B") e${FL_LINKA_KEEP#*,}: $w"
 }
@@ -1947,7 +1949,7 @@ fl_c7() {  # <dir under FL_OUT> <stage name> <chunk_load.py args...>: chunk_load
           else fl_attr $tag HANG "at $el s of the $st$([ -e "$d/hang" ] && echo " (snapshot $d/hang)"); ${FL_HANG_PIN#PINPOINT: }" 0 "$d/run.log"; FL_HANG_PIN=""; FL_HUNG="$tag HANG ${FA_CHIPS:+$FA_TAG}${FA_CHIPS:-(chip not named)}"; fi
           say "$st hang $(python3 "$FL_DIR/chunk_sched.py" where "$d/rows.jsonl" "$(stat -c %Y "$d/beat" 2>/dev/null || echo $(( t0 + el )))" $(fc_bdfk $FA_CHIPS) 2>&1 | head -1)"
           FL_PIN="$st $nm hang at $el s" ;;   # the chunk it hung in: the 'sustained hang' line above
-    # rc 1 from chunk-end readback errors: the CHUNK FAIL lines above name each part, chip and cause once
+    # rc 1 from chunk-end readback errors: the CHUNK FAIL lines above name each part, chip and cause once (#908)
     # an exception in a CCL op (not a hang, not a mismatch) is a CCL failure too (fl_ccl_err). Its one finding is fl_attr's,
     # naming the chip from the log by BDF and tray 1-4, and its one fault.txt entry is fault_attr's (FL_CAP_NAMED);
     # a device error (fl_dev_err: No such device, 0xffffffff, firmware startup, device timeout) is captured and
@@ -1956,12 +1958,12 @@ fl_c7() {  # <dir under FL_OUT> <stage name> <chunk_load.py args...>: chunk_load
     *) if [ "$rc" = 1 ] && grep -aqE '"event": "end".*"verify_errors": [1-9]' "$d/rows.jsonl" 2>/dev/null && grep -aqE '^(CHUNK FAIL|HANG INCOMPLETE whole box) ' "$d/report.txt" 2>/dev/null; then
          :   # rc 1 with a chunk-end NUMERIC FAIL: its chips are already named by the CHUNK FAIL lines above
        elif ! fl_dev_err "$d/run.log" && fl_setup_err "$d/run.log"; then   # a fabric-setup error is no CCL fault; test-side,
-         # so a named WARN with no chip capture and no FL_PIN, never a hardware FAIL
+         # so a named WARN with no chip capture and no FL_PIN, never a hardware FAIL (#7163)
          fl_find "$tag WARN SETUP/SOFTWARE: fabric setup failed rc $rc (test-side setup or software, not a hardware fault)"
-         FL_SETUP_INC="${FL_SETUP_INC:+$FL_SETUP_INC; }$st $nm rc $rc"   # that stage did not run: INCOMPLETE, never a pass
+         FL_SETUP_INC="${FL_SETUP_INC:+$FL_SETUP_INC; }$st $nm rc $rc"   # that stage did not run: INCOMPLETE, never a pass (#6101)
        elif fl_nj_open "$st $nm" "$(test -s "$d/rows.jsonl" && echo 1 || echo 0)" "$d/run.log"; then
          # as fl_bb_step: the open timed out only on off-box links whose own evidence says the peer
-         # host is down or resetting (ethcore's WARN, this host's own chips only), before any load row: a named WARN, no
+         # host is down or resetting (ethcore's WARN, this host's own chips only, #5548), before any load row: a named WARN, no
          # chip FAIL or pin; the chunk is not judged (fl_busbar's not-tested check). Mixed on-box lines or rows
          # written first: the CCL error path below, with no ETH note first
          FL_C7_NJ=1
@@ -2089,7 +2091,7 @@ fl_busbar() {  # every mode, first load after C2 (one try): the bus-bar stage,
   # not at peak kW; G3 after chunk 1), step = fl_bb_step. After a loss, vr_pg fall, hang or CCL failure the next part runs once
   # fl_bb_cont has recovered. Never writes a power limit.
   local x mk lt0=${FLEET_LOAD_TRAYS:-}; FL_BB_RECSIG=""; FL_BB_RECST=""; FL_BB_HUNG1=""; FL_BB_PIN1=""; FL_BB_FAULTS=""; FL_BB_PGS=""; FL_BB_PGT=""; FL_BB_TRAYS=""; FL_BB_BACK=0; FL_BB_PART=""; mkdir -p "$FL_OUT/busbar"; : > "$FL_OUT/busbar/named.tsv"; : > "$FL_OUT/busbar/parts.txt"; fl_power_start "$FL_OUT/busbar/power.txt"; fl_aer_start "$FL_OUT/busbar/aer_rate.txt" "bus-bar stage"; pf_start "$FL_OUT/busbar"
-  FL_BB_TRY=0; FL_BB_NJ=0; FL_BB_RAN=0; FL_C7_NJ=""   # ub0_repro.py and chunk_load.py tries, of them not judged at device open, other parts that loaded
+  FL_BB_TRY=0; FL_BB_NJ=0; FL_BB_RAN=0; FL_C7_NJ=""   # ub0_repro.py and chunk_load.py tries (#11334), of them not judged at device open, other parts that loaded
   for x in ${FL_BB_ORDER//,/ }; do
     by_check; [ -n "${FL_YIELD:-}" ] && { fl_skip "bus-bar stage $x" "$FL_YIELD"; continue; }   # no part starts after the broker yield
     fl_bb_t "$x"   # each part's wall time (fl_report's "Bus-bar part times" line)
@@ -2124,14 +2126,14 @@ fl_busbar() {  # every mode, first load after C2 (one try): the bus-bar stage,
       step) if [ -n "${FLEET_LOAD_TRAYS:-}" ]; then say "bus-bar stage: step skipped (FLEET_LOAD_TRAYS=$FLEET_LOAD_TRAYS: its ub0_repro.py burst loads every tray)"; else fl_bb_step; fi ;;
       heavy) mkdir -p "$FL_OUT/busbar/heavy"; ln -sfn ../power.txt "$FL_OUT/busbar/heavy/power.txt"   # the stage's one power poll
              fl_bb_hvfit || continue   # cut to end before stage 6's and C9's reserve
-             FL_BB_HV=$FL_BB_HVC FL_BB_HEAVY_S=$(( FL_BB_HEAVY_S - FL_BB_HV + FL_BB_HVC )) fl_c7 busbar/heavy "bus-bar stage" $(fl_load_args heavy) --heavy "$FL_DIDT_OPS" --sfpu-par 0 --heavy-check-each 1 --sfpu-vote 1 --heavy-x "$FL_DIDT_X_OPS" --heavy-x-s "$FL_DIDT_X_S" ;;   # the DIDT ops, numeric; every output checked; SFPU vote; N5: extra formats in the last FL_DIDT_X_S s
+             FL_BB_HV=$FL_BB_HVC FL_BB_HEAVY_S=$(( FL_BB_HEAVY_S - FL_BB_HV + FL_BB_HVC )) fl_c7 busbar/heavy "bus-bar stage" $(fl_load_args heavy) --heavy "$FL_DIDT_OPS" --sfpu-par 0 --heavy-check-each 1 --sfpu-vote 1 --heavy-x "$FL_DIDT_X_OPS" --heavy-x-s "$FL_DIDT_X_S" ;;   # the DIDT ops, numeric; #4882: every output checked; #11083: SFPU vote; N5: extra formats in the last FL_DIDT_X_S s
       long) mkdir -p "$FL_OUT/busbar/long"; ln -sfn ../power.txt "$FL_OUT/busbar/long/power.txt"
             fl_c7 busbar/long "bus-bar stage" $(fl_load_args) ;;
       rw) fl_bb_rw ;; code) fl_bb_code ;; maxutil) fl_bb_mu ;;
       pv) if [ "${FL_PV_SWAP:-}" = maxutil ]; then FL_MU_NM="bus-bar stage max-util in place of the power virus (FLEET_PV_SWAP=maxutil)" FL_MU_OUT=$FL_OUT/busbar/maxutil-pv fl_bb_mu
           else fl_bb_pv; fi ;; esac
     case $x in maxutil|pv) [ "$mk" != "${FL_MU_SKIP:-}|${FL_MU_INC:-}|${#FL_SKIPPED[@]}" ] && continue ;; esac   # skipped: it loaded nothing
-    xk=$x; [ "$x" = pv ] && [ "${FL_PV_SWAP:-}" = maxutil ] && xk=maxutil   # a swapped pv ran max-util and counts as it
+    xk=$x; [ "$x" = pv ] && [ "${FL_PV_SWAP:-}" = maxutil ] && xk=maxutil; [ "$x" = pv ] && [ -n "${FL_PV_REPL:-}" ] && xk=long   # a skipped pv ran the chunk load and counts as one; a swapped pv ran max-util and counts as it
     # a mix, heavy or long chunk (fl_c7), the rw part and the max-util part count as tries; one that failed
     # at device open on off-box links only is not judged. The power virus (pv, not swapped) runs run-ttx over PCIe with no tt-metal ETH
     # open, so it cannot fail that way
@@ -2146,7 +2148,7 @@ fl_busbar() {  # every mode, first load after C2 (one try): the bus-bar stage,
   [[ "$FL_BB_PGS" == *"; "* ]] && FL_PGDROP=$FL_BB_PGS   # every vr_pg fall of the stage, for the verdict
   [ -n "$FL_BB_HUNG1$FL_BB_PIN1" ] && { FL_HUNG=${FL_BB_HUNG1:-$FL_HUNG}; FL_PIN=${FL_BB_PIN1:-$FL_PIN}; say "bus-bar stage: faults in the stage: $FL_BB_FAULTS"; }
   # no part opened its mesh and every ub0_repro.py try failed at device open on off-box links only
-  # (peer host down or resetting, judged from this host's own chips): INCOMPLETE, never a pass or a fault; the off-box WARN stays
+  # (peer host down or resetting, judged from this host's own chips, #5548): INCOMPLETE, never a pass or a fault; the off-box WARN stays
   if [ "$FL_BB_NJ" -gt 0 ] && [ "$FL_BB_NJ" = "$FL_BB_TRY" ] && [ "$FL_BB_RAN" = 0 ]; then
     FL_BB_INC="bus-bar stage not tested: every chunk failed at device open ($FL_BB_NJ of $FL_BB_TRY, only off-box links with the peer host down or resetting; see $FL_OUT/busbar)"
     fl_skip "$(fl_pn busbar)" "INCOMPLETE: $FL_BB_INC"; fi
@@ -2192,8 +2194,8 @@ fl_fabstall() {  # $1 a try's log, $2 the part, $3 the step's start (epoch s; wa
   FL_FABSTALL="set_fabric_config waited $s s in the $nm$nr (chips: ${ch:-none named})"; FL_FAB_HIT=1
   say "$FL_FABSTALL: every later stage still runs"   # no run budget gates a later stage
 }
-fl_bb_rw() {  # the bus-bar stage's rw part (opt-in, repro.sh's dram way): C4d shape, numeric_dram.py
-  # on its own mesh, FL_BB_RW_S s of x/w/y-in-DRAM C4n-size matmul on every chip, read back every FL_BB_RW_CK s of
+fl_bb_rw() {  # the bus-bar stage's rw part (opt-in, repro.sh's dram way): #2499's C4d shape, numeric_dram.py
+  # on its own mesh, FL_BB_RW_S s of #1197's x/w/y-in-DRAM C4n-size matmul on every chip, read back every FL_BB_RW_CK s of
   # load and compared with the majority (03:00.0 tray 1: 4/4 at 0-30 s of load). Its NUMERIC FAIL lines name the chip by
   # BDF and tray with DRAM banks and lanes; a loss is named by tray and BDF. Never writes a power limit
   local nm="stage 5 numeric verify (G3 readback)" d=$FL_OUT/busbar/rw t0 el lost nb l ub g bd pw pg v pb pf=$FL_PW_FILE
@@ -2364,6 +2366,31 @@ fl_pv_psu_start() {  # <file>: the BMC's per-PSU W ("epoch name W") as fast as p
   FL_PV_PSU_PID=$!
 }
 fl_pv_psu_stop() { [ -n "${FL_PV_PSU_PID:-}" ] || return 0; kill "$FL_PV_PSU_PID" 2> /dev/null; wait "$FL_PV_PSU_PID" 2> /dev/null; FL_PV_PSU_PID=""; }
+fl_pv_guard() {  # $1 the part's name: 0 when no other process holds a Tenstorrent device node (fleet/pv_holders.py),
+  # else the WARNING (said, and kept in FL_PV_SKIP for the run summary and the RESULT line) and 1. run-ttx
+  # programs fixed TLB windows itself and hangs chips beside another TLB user (tt_telemetry_collector maps windows 0 and 1), so
+  # the virus never runs beside one; a scan that could not read every process's fds (no sudo) skips it too. It needs no sudo:
+  # general sudo (sudo_all) only makes the scan complete. Same in every mode. The scan is stdlib python3, never $PY (the device
+  # python, a stub in tests and --stub). Its stderr goes to the log, not into the WARNING. FLEET_PROC and FLEET_DEVD (gate.sh's
+  # test hooks) go in as args, which survive sudo. FLEET_PV_SUDO=0: never sudo (test hook; lib/stubhost.sh sets it)
+  local o rc s=() sf=() w
+  [ "$(id -u)" = 0 ] || { [ "${FLEET_PV_SUDO:-1}" = 1 ] && sudo_all && { s=(sudo -n); sf=(--sudo); }; }
+  o=$("${s[@]}" python3 "$FL_DIR/pv_holders.py" --self "$$" --proc "${FLEET_PROC:-/proc}" --glob "${FLEET_DEVD:-/dev/tenstorrent}*" "${sf[@]}"); rc=$?
+  [ $rc = 0 ] && return 0
+  [ $rc = 10 ] || [ $rc = 11 ] || o="holder scan failed (rc $rc)"
+  w="WARNING power virus SKIPPED: $o: run-ttx programs fixed TLB windows itself and hangs chips beside another TLB user"
+  say "$w"; FL_PV_SKIP=${FL_PV_SKIP:+$FL_PV_SKIP$'\n'}$w; return 1
+}
+fl_pv_chunk() {  # $1 the part's name, $2 its dir: in place of a power virus fl_pv_guard skipped, the stage's own chunk load
+  # (fl_c7, chunk_load.py, one chunk) for the same FL_BB_PV_LOAD s, as a max-util-skip box keeps its 4 min chunk;
+  # in <its dir>-chunk. No other stage changes
+  local r=${2#"$FL_OUT"/}-chunk
+  say "$1: $FL_BB_PV_LOAD s of the bus-bar chunk load in its place ($r)"
+  mkdir -p "$FL_OUT/$r"; [ "${r%/*}" = busbar ] && ln -sfn ../power.txt "$FL_OUT/$r/power.txt"   # the stage's one power poll
+  # shellcheck disable=SC2046  # fl_load_args prints the load's args, split on purpose
+  FL_BB_MIN=$(awk -v s="$FL_BB_PV_LOAD" 'BEGIN { printf "%g", s / 60 }') FL_BB_CHUNKS=1 \
+    FL_BB_MIX_S=$(awk -v l="$FL_BB_PV_LOAD" -v g="$FL_BB_GAP_S" 'BEGIN { printf "%d", l + g + 50 }') fl_c7 "$r" "bus-bar stage" $(fl_load_args)
+}
 fl_bb_pv() {  # the bus-bar stage's power virus part: fleet/pv.py, run-ttx of the power virus
   # on every chip for FL_BB_PV_LOAD s. A load only (no numeric check); --tdp does not cap it, so pv.py stops it early on a brick
   # >= FL_PV_BRICK_C C or a feed > FL_PV_FEED_A A (the busbar leg's HSC sampler); the chips' power is never a stop.
@@ -2373,6 +2400,8 @@ fl_bb_pv() {  # the bus-bar stage's power virus part: fleet/pv.py, run-ttx of th
   # Then tt-smi -glx_reset with its rescan and recount (never tt-smi -r), so the virus kernels end and later steps open clean;
   # where glx_reset cannot run it says so plainly. A chip missing after it is a POWER DROP or CHIP DROP by tray and BDF
   local nm="${FL_PV_NM:-bus-bar stage power virus}" d=${FL_PV_OUT:-$FL_OUT/busbar/pv} t0 el l af lost all ub g ga bd hf="" pg st
+  # just before run-ttx, no other process may hold a device node, else the chunk load in its place
+  FL_PV_REPL=""; fl_pv_guard "$nm" || { FL_PV_REPL=1; fl_pv_chunk "$nm" "$d"; return 0; }
   mkdir -p "$d"; t0=$(date +%s); : > "$d/brick.txt"; : > "$d/psu.txt"; pvc_open "$nm load" "$d" "$FL_BB_PV_LOAD"
   fl_pv_psu_start "$d/psu.txt"
   [ -n "${HSC_LEG:-}" ] && [ -n "${HSC_POLL_PID:-}" ] && hf="$(fl_hsc_f "$HSC_LEG").vin"
@@ -2472,7 +2501,7 @@ fl_bb_step() {  # [<label> <busbar/ subdir> <quiet s> <burst s> <numeric 0|1> [<
   while :; do t0=$(date +%s)
     hb_start "$nm" "$lg"
     fl_try_need "$nm" "$lim"
-    # quiet-burst tries: 180 s with no
+    # quiet-burst tries (code task 2 of the stage-2 design): 180 s with no
     # progress after fabric setup is a hang (900 s kept during fabric setup), plus the open quiet before the burst
     TRY_FAB_LIMIT_S=$fs TRY_FAB_IDLE_S=$fq \
     TRY_LOSS_S=${FLEET_BUSBAR_LOSS_S:-60} TRY_LIMIT_S=$(fl_try_cap "$lim") try_run busbar "$lg" "${AS[@]}" "$PY" ub0_repro.py --load ub0 \
@@ -2531,7 +2560,7 @@ json.dump(dict(r, burst=b), open(sys.argv[3], "w"))' "$d/result.json" "$i" "$d/c
     0) [ -n "$nb" ] && say "$nm: numeric mismatch ($el s)" || say "$nm: clean ($el s)" ;;
     *) # the chips its own error names (C4's try-log attribution, folded in when C4 went), each under its tray
        # the open timed out only on off-box links whose own evidence says the peer
-       # host is down or resetting (ethcore's WARN): that link and chip count in no FAIL; read from this host only.
+       # host is down or resetting (ethcore's WARN): that link and chip count in no FAIL; read from this host only (#5548).
        # Only before any load row (a telem.csv row in a load phase): a peer-down timeout mid-run stays judged.
        # As fl_c7: fl_nj_open notes only when it takes the step; mixed on-box and off-box ETH lines, or none,
        # go to fault_attr with no ETH note first, so the step writes one fault.txt entry
@@ -2561,7 +2590,7 @@ fl_load_phases() {  # fl_loads' phases in order for this FLEET (tests/test_mode_
   [ "$FLEET" = repro-abortfab ] && { echo abortfab; return 0; }   # run.sh --repro abort-fabric alone (never in quick or full)
   # FLEET_REPRO (repro.sh): numeric runs only the bus-bar stage (its FLEET_BUSBAR_* way), warm-reset no load
   case ${FLEET_REPRO:-} in numeric|tray-drop) echo busbar; return ;; warm-reset) return ;; esac   # tray-drop: its shape
-  echo busbar C5; }   # C5 stays
+  echo busbar C5; }   # C5 stays (charter goal 21; restored from train 47 818c5ed after audit #3282 removed it)
 fl_loads() {  # the bus-bar stage, first in every mode (full: with its long chunk, the old sustained part C7) -> numeric verify -> C5; any loss, hang or busy gate ends them (a hung chip would only hang the next mesh)
   local p bk; FL_C5_PEND=0; FL_BB_BACK=0; case " $(fl_load_phases) " in *" C5 "*) FL_C5_PEND=1 ;; esac   # stage 4 leaves stage 6 its RS_C5_S (fl_keep)
   [ "$seen" = 1 ] && FL_CAP_FAULT=0 fl_capture c4 drop $(rk_snap | awk '$3 != "ok" { print $1 }')
@@ -2671,7 +2700,7 @@ fl_pin_noreset() {  # $1 why no reset could run, with FL_PIN set: every chip on 
 }
 fl_post_fits() { return 0; }  # $1 post-C9 step: always runs (no run budget skips or cuts a stage; a stage ends only on its own hang timeout)
 fl_c3_fits() { FL_C3_SMI_T=120; FL_C3_DISC_T=180; }  # post-C9 fl_c3 keeps its whole tt-smi (120 s) and discovery (180 s) timeouts (no run budget skips or cuts a stage; a stage ends only on its own hang timeout)
-fl_end() {  # C9: the end reset and recheck when the gates allow it, then C1/C3 after and the SUSPECT reruns
+fl_end() {  # C9: the end reset and recheck (#70) when the gates allow it, then C1/C3 after and the SUSPECT reruns
   local rc1 tr1 ch1 rs1 s lab idx r a b ba bb da db ca cb d=$FL_OUT/c5 nr="" hp="" p1="" c3s=""
   fl_psu_join 0   # the last stage's PSU read if done; C9 does not wait for it: fl_verdict joins it before the RESULT
   fl_c8_stop; while IFS= read -r l; do say "$l"; done < <(th_summary); fl_unhold; fl_t C9; FL_C9_ON=1   # fl_unhold: no held job outlives the stages (--hold); FL_C9_ON: later losses (the sweep) leave C9's share
@@ -2684,12 +2713,12 @@ fl_end() {  # C9: the end reset and recheck when the gates allow it, then C1/C3 
   else
     FL_RESET_T=$(date +%s); RK_PHASE="C9 end reset" RK_STEP=C9 rk_end "$OUT" "$chips" "$seen"; FL_YIELD_C9=1   # the verdict's 'chips after the C9 reset'
     if fl_c3_fits "fl_c3 c9"; then fl_c3 c9; fl_c3cmp pre c9; fi; FL_C3_SMI_T=120; FL_C3_DISC_T=180
-    echo "$RK_RESET_NEW" | grep -a . | while read -r l; do fl_find "$l"; done   # the reset left a chip missing
+    echo "$RK_RESET_NEW" | grep -a . | while read -r l; do fl_find "$l"; done   # the reset left a chip missing (#384)
     [ -n "$RK_RESET_SKIP" ] && { fl_rskip "C9 reset" "$RK_RESET_SKIP"; [ "$RK_GLXRAN" = 1 ] || nr=$RK_RESET_SKIP; }   # the gate refused inside rk_end (rc 9); nr only if no reset ran
     [ -n "$ys" ] && FL_STOP=$FL_YIELD   # after the yield's C9 no sweep and no reruns: the device goes to the queued job
     if [ -z "$nr" ] && [ -n "$FL_PIN" ]; then
       [ -n "${ys:-}" ] || fl_sweep   # --hold: fl_sweep's skip line; chip BDF and tray as FL_PIN names them: no sweep after the yield's C9
-    fi   # a hang or CCL failure (FL_PIN; none: no sweep, no budget check): the per-link sweep now that the chips are reset (no reset ran: fl_pin_noreset below)
+    fi   # a hang or CCL failure (FL_PIN; none: no sweep, no budget check, #3248): the per-link sweep now that the chips are reset (no reset ran: fl_pin_noreset below)
     if [ ${#FL_SUSPECT[@]} -gt 0 ] && [ -z "$FL_STOP" ]; then
       if [ -n "$FL_LEFT_HUNG" ]; then s="not run: the reset after the per-link sweep was refused ($FL_LEFT_WHY)"   # a link is still hung
       elif [ "$RK_RC" = 9 ]; then s="not run: the end reset was skipped by the serving gate"
@@ -2869,8 +2898,9 @@ fl_result_say() {  # $1 run.sh's RESULT line: a failed check fl_report prints as
 fl_verdict() {  # before the RESULT line: a skipped reset and what it leaves (FL_RESULT replaces run.sh's RESULT text)
   local w inc nrs=${#FL_RESET_SKIPPED[@]}; FL_RESULT=""
   fl_psu_join 1   # the last stage's PSU read, run in the background over C9, is in before the RESULT (FL_PSU_STOP: INCOMPLETE)
+  [ -n "${FL_PV_SKIP:-}" ] && echo "$FL_PV_SKIP"   # the power virus guard's WARNING, in the run summary too
   [ -n "${FL_MU_SKIP:-}" ] && echo "$FL_MU_SKIP"   # the run summary says the site skip too
-  if [ -n "${FL_YIELD:-}" ]; then   # the device went to a queued broker job: never a fault, never a pass
+  if [ -n "${FL_YIELD:-}" ]; then   # the device went to a queued broker job: never a fault, never a pass (#6101)
     local cnt=""; declare -F rs_count > /dev/null && cnt=$(rs_count 2> /dev/null | head -1)
     if [ -n "${FL_YIELD_C9:-}" ]; then FL_RESULT="INCOMPLETE: $FL_YIELD during stage $FL_YIELD_AT; chips after the C9 reset: ${cnt:-not counted}"
     else FL_RESULT="INCOMPLETE: $FL_YIELD during stage $FL_YIELD_AT; no C9 reset ran (${FL_STOP:-see the Reset: line}); chips: ${cnt:-not counted}"; fi

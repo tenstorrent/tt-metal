@@ -23,7 +23,7 @@ BDF = r"[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]"
 HEAD = re.compile(r"^(FAIL|INCOMPLETE|PASS|KNOWN-DROP) tray ([1-4])\b")
 WHY = re.compile(r"^    (.*?) \| .*\| cause: (.*?) -> next: (.*)$")
 RR = "Repair recommendation: "
-VRC = {"PASS": 0, "FAIL": 8}   # the long run's VERDICT word -> exit code; anything else (INCOMPLETE) 9
+VRC = {"PASS": 0, "FAIL": 8}  # the long run's VERDICT word -> exit code; anything else (INCOMPLETE) 9
 HSC = re.compile(r"(?:^|: )((?:WARN )?HSC\b(?! feed ).*)$")  # not the per-feed sag lines
 
 
@@ -68,7 +68,7 @@ def rr_items(log):
     last = ""
     for l in log.splitlines():
         if l.startswith(RR):
-            last = l[len(RR):].strip()
+            last = l[len(RR) :].strip()
     return last
 
 
@@ -120,17 +120,23 @@ def overall(classes):
 def combine(legs_rr, ran, stop):
     rep = {}
     for i, _, r in legs_rr:
-        if r.startswith("none"):   # 'none (...)' and 'none determined (...); rerun ...': the leg names no repair
+        if r.startswith("none"):  # 'none (...)' and 'none determined (...); rerun ...': the leg names no repair
             continue
         for it in (x.strip() for x in r.split("; ")):
-            if it and not it.startswith("none"):   # 'none ...' and 'none determined ...; rerun' name no repair
+            if it and not it.startswith("none"):  # 'none ...' and 'none determined ...; rerun' name no repair
                 rep.setdefault(it, []).append(i)
     if rep:
         items = [f"{it} ({len(ls)}/{N} legs)" for it, ls in rep.items()]
         return "; ".join(items + ([f"stopped early ({stop}); rerun run.sh --mode=long"] if stop else []))
     inc = [i for i, c, _ in legs_rr if c != "COMPLETE PASS"]
     if stop or ran < N or inc:
-        what = f"stopped early: {stop}" if stop else f"legs {', '.join(inc)} incomplete" if inc else f"{ran} of {N} legs ran"
+        what = (
+            f"stopped early: {stop}"
+            if stop
+            else f"legs {', '.join(inc)} incomplete"
+            if inc
+            else f"{ran} of {N} legs ran"
+        )
         return f"none determined ({what}); rerun run.sh --mode=long"
     return f"none (all 4 trays pass in {N}/{N} legs)"
 
@@ -139,9 +145,12 @@ def main(argv):
     rows = [l.rstrip("\n").split("\t") for l in rd(argv[1] if len(argv) > 1 else "").splitlines() if l.strip()]
     try:
         lines = summary(rows)
-    except Exception as e:   # the last line is always printed
-        lines = [f"long summary failed: {e}", "VERDICT: INCOMPLETE (long summary failed)",
-                 RR + "unknown: see each leg's FAIL lines above"]
+    except Exception as e:  # the last line is always printed
+        lines = [
+            f"long summary failed: {e}",
+            "VERDICT: INCOMPLETE (long summary failed)",
+            RR + "unknown: see each leg's FAIL lines above",
+        ]
     print("\n".join(lines))
     v = [l[9:].split()[0] for l in lines if l.startswith("VERDICT: ")]
     return VRC.get(v[-1] if v else "", 9)

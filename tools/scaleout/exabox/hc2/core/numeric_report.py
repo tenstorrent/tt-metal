@@ -70,8 +70,20 @@ def collect(paths):
             errors.append(f"NUMERIC ERROR {t}: {n['error']}")
         for c in (n.get("chips") or {}).values():
             key = c.get("pci") or f"metal{c.get('metal')}"
-            a = chips.setdefault(key, dict(pci=c.get("pci"), ubb=c.get("ubb"), dev=c.get("dev"), checks=0,
-                                           mismatched=0, first=None, max_abs_err=0.0, nan=0, inf=0))
+            a = chips.setdefault(
+                key,
+                dict(
+                    pci=c.get("pci"),
+                    ubb=c.get("ubb"),
+                    dev=c.get("dev"),
+                    checks=0,
+                    mismatched=0,
+                    first=None,
+                    max_abs_err=0.0,
+                    nan=0,
+                    inf=0,
+                ),
+            )
             a["checks"] += c.get("checks", 0)
             a["mismatched"] += c.get("mismatched", 0)
             a["nan"] += c.get("nan", 0)
@@ -100,29 +112,39 @@ def skip_warns(paths, chips=None):
         trays = {}
         for c in (n.get("chips") or {}).values():
             trays.setdefault(c.get("ubb"), []).append(bdf(c.get("pci")))
-        if not trays:   # no chips in this try's numeric section: take the trays and BDFs other tries read
+        if not trays:  # no chips in this try's numeric section: take the trays and BDFs other tries read
             for c in (chips or {}).values():
                 trays.setdefault(c.get("ubb"), []).append(bdf(c.get("pci")))
-        why = (f"{b['numeric_skipped']} of {b.get('numeric_pending', '?')} burst checked outputs not read back in "
-               f"{label(f, paths)} (--numeric-budget-s spent or checks off; ops 2..n-1 unchecked, only op 1 and the last were read back; a mismatch in between goes unseen)")
+        why = (
+            f"{b['numeric_skipped']} of {b.get('numeric_pending', '?')} burst checked outputs not read back in "
+            f"{label(f, paths)} (--numeric-budget-s spent or checks off; ops 2..n-1 unchecked, only op 1 and the last were read back; a mismatch in between goes unseen)"
+        )
         for u in sorted(trays, key=lambda u: (u is None, u)) or [None]:
             bd = sorted(set(trays.get(u, [])))
-            out.append(f"NUMERIC WARN tray {u + 1 if u is not None else '?'} ({len(bd)} chips: {' '.join(bd) or 'BDF unknown, no chip in any try'}): {why}")
+            out.append(
+                f"NUMERIC WARN tray {u + 1 if u is not None else '?'} ({len(bd)} chips: {' '.join(bd) or 'BDF unknown, no chip in any try'}): {why}"
+            )
     return out
 
 
 def lines(paths):
     tries, chips, errors = collect(paths)
     if not tries:
-        return ["NUMERIC: not checked (no try wrote a numeric result: all-gather load, TRAY_NUMERIC=0, or no burst ended)"]
+        return [
+            "NUMERIC: not checked (no try wrote a numeric result: all-gather load, TRAY_NUMERIC=0, or no burst ended)"
+        ]
     out = []
-    fails = sorted((c for c in chips.values() if c["mismatched"]), key=lambda c: (c["ubb"] is None, c["ubb"], c["pci"] or ""))
+    fails = sorted(
+        (c for c in chips.values() if c["mismatched"]), key=lambda c: (c["ubb"] is None, c["ubb"], c["pci"] or "")
+    )
     for c in fails:
         k, t = c["first"] or ("?", "?")
         e = "inf (non-finite)" if c["max_abs_err"] == float("inf") else f"{c['max_abs_err']:.4g}"
-        out.append(f"NUMERIC FAIL {bdf(c['pci'])} (tray {c['ubb'] + 1 if c['ubb'] is not None else '?'}) chip {c['dev']}: "
-                   f"{c['mismatched']}/{c['checks']} mismatched, first at iter {k} in {t}, max abs err {e}, "
-                   f"NaN count {c['nan']}" + (f", Inf count {c['inf']}" if c["inf"] else ""))
+        out.append(
+            f"NUMERIC FAIL {bdf(c['pci'])} (tray {c['ubb'] + 1 if c['ubb'] is not None else '?'}) chip {c['dev']}: "
+            f"{c['mismatched']}/{c['checks']} mismatched, first at iter {k} in {t}, max abs err {e}, "
+            f"NaN count {c['nan']}" + (f", Inf count {c['inf']}" if c["inf"] else "")
+        )
     for u in UBBS:
         mine = [c for c in chips.values() if c["ubb"] == u]
         if any(c["mismatched"] for c in mine):
@@ -136,7 +158,9 @@ def lines(paths):
         out.append(f"NUMERIC PASS tray {u + 1} ({len(done)} chips, {n if n == m else f'{n}-{m}'} checks)")
     unk = [c for c in chips.values() if c["ubb"] is None and not c["mismatched"] and c["checks"]]
     if unk:
-        out.append(f"NUMERIC PASS tray ? ({len(unk)} chips with no PCI address, {min(c['checks'] for c in unk)} checks)")
+        out.append(
+            f"NUMERIC PASS tray ? ({len(unk)} chips with no PCI address, {min(c['checks'] for c in unk)} checks)"
+        )
     return out + skip_warns(paths, chips) + errors
 
 
@@ -146,7 +170,7 @@ def main(argv):
         return 0
     try:
         print("\n".join(lines(argv)), flush=True)
-    except Exception as e:      # the report must never fail a run
+    except Exception as e:  # the report must never fail a run
         print(f"NUMERIC: report error {type(e).__name__}: {str(e)[:200]}", flush=True)
     return 0
 

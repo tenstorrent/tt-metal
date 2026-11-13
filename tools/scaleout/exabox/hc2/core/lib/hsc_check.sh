@@ -10,7 +10,7 @@
 # per-second 12 V log (fl_12v) cannot see.
 #   Reads: `ipmitool raw 0x06 0x52 <bus> <addr> <n> <code>` (master write-read) with code STATUS_WORD 0x79 (2 B),
 #   STATUS_INPUT 0x7C (1 B), READ_VIN 0x88 (2 B, 31.25 mV/LSB), READ_IOUT 0x8C (2 B, 62.5 mA/LSB: the MP5990's tray-input
-#   current; READ_IIN reads 0 there, notes/tray-12v-margin-A.md) or VIN_UV_WARN_LIMIT 0x58 (2 B, bits 6:0 x 125 mV), plus
+#   current; READ_IIN reads 0 there) or VIN_UV_WARN_LIMIT 0x58 (2 B, bits 6:0 x 125 mV), plus
 #   HSC_VIN_MIN_REG / HSC_VIN_PEAK_REG when set, and STATUS_CML 0x7E (1 B) only where STATUS_WORD shows CML (bit 1).
 #   Fault-record reads (codes from the vendor): FAULT_RECORD 0xFA and FAULT_RECORD_LAST 0xFB (2 B
 #   each), STATUS_IOUT 0x7B (1 B) and READ_VOUT 0x8B (2 B, 31.25 mV/LSB) in every leg and run snapshot; IOUT_OC_FAULT_LIMIT

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 """h3/synth_gen.py: weight-free synthetic MiniMax-H3 ref2va generations (tray-test goal 48, reliability.sh h3 step).
 
@@ -82,18 +84,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from PIL import Image
-
 import ttnn
+from PIL import Image
 
 from ....layers.module import Parameter
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....pipelines.minimax_h3.policy import get_num_frames
 from .common import create_fractal_image
-from .synth_weights import SEED, SyntheticTokenizer, SyntheticWeights
-from .pcie_traffic import OFF_WARNING as PCIE_OFF_WARNING, RELOAD_RESERVE_S, for_mesh as pcie_for_mesh
 from .common_av import CALIBRATED_FOX_PROMPT, is_host
+from .pcie_traffic import OFF_WARNING as PCIE_OFF_WARNING
+from .pcie_traffic import RELOAD_RESERVE_S
+from .pcie_traffic import for_mesh as pcie_for_mesh
+from .synth_weights import SEED, SyntheticTokenizer, SyntheticWeights
 from .test_performance_minimax_h3 import REF2VA_MESHES
 
 E = os.environ.get
@@ -168,8 +171,14 @@ class _DeviceWeights:
         else:
             mean, half = float(sample.mean()), float(sample.std()) * math.sqrt(3.0)
             data = ttnn.rand(
-                shape, param.device, dtype=param.dtype, layout=param.layout, memory_config=dram,
-                low=mean - half, high=mean + half, seed=(self.seed * 100003 + self.device) % 2**31 + 1,
+                shape,
+                param.device,
+                dtype=param.dtype,
+                layout=param.layout,
+                memory_config=dram,
+                low=mean - half,
+                high=mean + half,
+                seed=(self.seed * 100003 + self.device) % 2**31 + 1,
             )
         if param.memory_config != dram:
             try:
@@ -187,8 +196,11 @@ class _DeviceWeights:
 
         def load_torch_tensor(param, torch_tensor, /):
             start = time.time()
-            if (dw.active and tuple(torch_tensor.shape) == param.total_shape
-                    and E("H3_SYNTH_DEVICE_WEIGHTS", "1") != "0"):
+            if (
+                dw.active
+                and tuple(torch_tensor.shape) == param.total_shape
+                and E("H3_SYNTH_DEVICE_WEIGHTS", "1") != "0"
+            ):
                 data = None
                 try:
                     data = dw._make(param, torch_tensor)
@@ -210,12 +222,19 @@ class _DeviceWeights:
 
     def summary(self) -> str:
         why = ";".join(f"{k}={v}" for k, v in sorted(self.why.items(), key=lambda kv: -kv[1])[:4])
-        return (f"device={self.device} device_s={self.device_s:.1f} host={self.host} host_s={self.host_s:.1f}"
-                f" host_why={why or '-'}")
+        return (
+            f"device={self.device} device_s={self.device_s:.1f} host={self.host} host_s={self.host_s:.1f}"
+            f" host_why={why or '-'}"
+        )
 
 
-_PHASES = ("_read_safetensors", "_prepare_text_encoder", "_prepare_transformer", "_prepare_audio_decoder",
-           "_warmup_on_init")
+_PHASES = (
+    "_read_safetensors",
+    "_prepare_text_encoder",
+    "_prepare_transformer",
+    "_prepare_audio_decoder",
+    "_warmup_on_init",
+)
 
 
 def _time_phases(emit, device_weights: _DeviceWeights) -> None:
@@ -250,16 +269,20 @@ def _guard_conditioning(emit) -> None:
     def guarded(*args, **kwargs):
         a = sig.bind(*args, **kwargs).arguments
         layout, parts, bad = a["layout"], [], []
-        for name, rows, n in (("video", a["video_rows"], layout.num_condition_video_rows),
-                              ("audio", a["audio_rows"], layout.num_condition_audio_rows)):
+        for name, rows, n in (
+            ("video", a["video_rows"], layout.num_condition_video_rows),
+            ("audio", a["audio_rows"], layout.num_condition_audio_rows),
+        ):
             nonfinite = int((~torch.isfinite(rows[:n])).any(dim=-1).sum()) if n else 0
             parts.append(f"{name}={n} nonfinite_{name}={nonfinite}")
             if nonfinite:
                 bad.append(f"{nonfinite} of {n} {name}")
         emit("H3 COND " + " ".join(parts))
         if bad:
-            raise RuntimeError(f"non-finite conditioning rows before denoising ({', '.join(bad)}): the synthetic "
-                               "encoder weights made non-finite reference latents, not the loop's write mask")
+            raise RuntimeError(
+                f"non-finite conditioning rows before denoising ({', '.join(bad)}): the synthetic "
+                "encoder weights made non-finite reference latents, not the loop's write mask"
+            )
         return fn(*args, **kwargs)
 
     MiniMaxH3Pipeline._denoise = guarded
@@ -337,7 +360,8 @@ def _cooldown_due(cooldowns: list, elapsed: float, end_s: float):
     `cooldowns`, else None. With end_s > 0 no cooldown runs past end_s and none starts at or after it: from there the
     rows left are popped into `skipped` and the load runs continuously to the step end."""
     if end_s > 0 and elapsed >= end_s:
-        skipped = list(cooldowns); cooldowns.clear()
+        skipped = list(cooldowns)
+        cooldowns.clear()
         return None, skipped
     if not cooldowns or elapsed < cooldowns[0][0]:
         return None, []
@@ -350,7 +374,8 @@ class _Power:
 
     def __init__(self):
         self.paths = sorted(
-            p for p in Path("/sys/class/hwmon").glob("hwmon*/power1_input")
+            p
+            for p in Path("/sys/class/hwmon").glob("hwmon*/power1_input")
             if os.path.basename(os.path.realpath(p.parent / "device" / "driver")) == "tenstorrent"
         )
         self.samples: list[float] = []
@@ -470,8 +495,9 @@ def _install_stop_handlers() -> None:
         for s in (signal.SIGTERM, signal.SIGINT):
             signal.signal(s, signal.SIG_IGN)
         print(f"H3 SIGNAL {name} {t0:.0f} closing the mesh device", file=sys.stderr, flush=True)
-        atexit.register(lambda: print(f"H3 SIGNAL-EXIT {name} {time.time() - t0:.1f} after the signal",
-                                      file=sys.stderr, flush=True))
+        atexit.register(
+            lambda: print(f"H3 SIGNAL-EXIT {name} {time.time() - t0:.1f} after the signal", file=sys.stderr, flush=True)
+        )
         raise _StopSignal(name)
 
     for s in (signal.SIGTERM, signal.SIGINT):
@@ -517,11 +543,15 @@ def test_h3_synth_gen(mesh_device):
     )
     if host:
         _emit(f"H3 WEIGHTS {device_weights.summary()} warmup={int(warmup)}")
-        _emit(f"H3 SETUP {t0:.0f} {time.time():.0f} {time.time() - t0:.1f} elements={weights.elements} hf_rev={weights.revision}")
+        _emit(
+            f"H3 SETUP {t0:.0f} {time.time():.0f} {time.time() - t0:.1f} elements={weights.elements} hf_rev={weights.revision}"
+        )
 
     per_gen = not warmup  # warmup captures traces; their replay may write over per-gen DRAM tensors made after it
     if traffic is not None and not per_gen:
-        emit("H3 PCIE GEN skipped for every gen: H3_SYNTH_WARMUP=1 traces replay over DRAM made after capture; reload traffic only")
+        emit(
+            "H3 PCIE GEN skipped for every gen: H3_SYNTH_WARMUP=1 traces replay over DRAM made after capture; reload traffic only"
+        )
     rng = np.random.default_rng(SEED + 1)
     power = _Power()
     n = 0
@@ -533,11 +563,15 @@ def test_h3_synth_gen(mesh_device):
     for kind, value in _plan(mode):
         if time.time() >= stop_at:
             break
-        due, skipped = _cooldown_due(cooldowns, time.time() - load_t0, cool_end) if cooldowns and gen_since else (None, [])
+        due, skipped = (
+            _cooldown_due(cooldowns, time.time() - load_t0, cool_end) if cooldowns and gen_since else (None, [])
+        )
         for i, (offset, planned) in enumerate(skipped):
             if host:
-                _emit(f"H3 COOLDOWN-SKIP {n_cool - len(skipped) + i + 1} {time.time():.0f} offset={offset:.0f}"
-                      f" planned_s={planned:.0f} end_s={cool_end:.0f}")
+                _emit(
+                    f"H3 COOLDOWN-SKIP {n_cool - len(skipped) + i + 1} {time.time():.0f} offset={offset:.0f}"
+                    f" planned_s={planned:.0f} end_s={cool_end:.0f}"
+                )
         if due:
             offset, planned = due
             k = n_cool - len(cooldowns)
@@ -549,8 +583,10 @@ def test_h3_synth_gen(mesh_device):
             end = time.time()
             gen_since = False
             if host:
-                _emit(f"H3 COOLDOWN {k} {start:.0f} {end:.0f} {end - start:.1f} offset={offset:.0f} planned_s={planned:.0f}"
-                      f" late_s={start - load_t0 - offset:.0f} {power.summary()}")
+                _emit(
+                    f"H3 COOLDOWN {k} {start:.0f} {end:.0f} {end - start:.1f} offset={offset:.0f} planned_s={planned:.0f}"
+                    f" late_s={start - load_t0 - offset:.0f} {power.summary()}"
+                )
             continue
         if kind == "pause":
             time.sleep(max(0.0, min(value, stop_at - time.time())))
@@ -594,7 +630,9 @@ def test_h3_synth_gen(mesh_device):
         emit(traffic.summary())
     written = weights.shared_writes()
     if host and written:  # a model write into a shared VAE pool changes the weights it shares with
-        _emit(f"H3 SYNTH WARNING shared weight pools written in place ({' '.join(written)}): VAE weights differ from the seeded tables")
+        _emit(
+            f"H3 SYNTH WARNING shared weight pools written in place ({' '.join(written)}): VAE weights differ from the seeded tables"
+        )
     if ttnn.using_distributed_env():
         ttnn.distributed_context_barrier()
     pipeline.release_traces()

@@ -24,12 +24,13 @@ Usage: maxutil.py size <seconds> <rate>                    iterations for that m
        maxutil.py parse <log>                              the summary run would print for that log (tests)
 The archive: fleet/maxutil.pin holds "sha256=<sha256 of the archive file>" and "file=<name>" lines
 (fleet/maxutil_pack.sh; a sha256sum-style "<sha256> [<file name>]" line also works); the file is looked up in TRAY_MAXUTIL_DIST (colon-separated dirs), else ~/tray-test-dist
-and /data/$USER/tray-test-dist, checked against the pin, and unpacked to node-local disk ($SLURM_TMPDIR, else $TMPDIR,
+and /data/$USER/tray-test-dist, then the dirs of the site key maxutil_dist (HC_SITE_FILE), checked against the pin, and unpacked to node-local disk ($SLURM_TMPDIR, else $TMPDIR,
 else /tmp; never under /data) once per pin. No pin, no archive or a sha256 mismatch is
 "MAXUTIL ERROR setup: <why>" and exit 3: fleet.sh makes the run INCOMPLETE, never a silent skip.
 Lines for fleet.sh start with "MAXUTIL ": "MAXUTIL FAIL <chip> <why>" names a chip by its tt-kmd number
 (the test's device id is its PCIe id, UMD's "Opening local chip ids/PCIe ids" line); fleet.sh adds BDF and tray.
 """
+import hashlib
 import json
 import math
 import os
@@ -38,27 +39,31 @@ import random
 import re
 import select
 import shutil
-import socket
 import signal
+import socket
 import stat
 import subprocess
-import hashlib
 import sys
 import time
 
-DEFAULT_RATE = 145.0   # enqueues/s, measured in testing (7242 in 49.9 s, NUM_WL_LOOPS 5000)
+DEFAULT_RATE = 145.0  # enqueues/s, measured in testing (7242 in 49.9 s, NUM_WL_LOOPS 5000)
 WL_LOOPS = 5000
-PLAIN_S = 240          # 240 s at max power at the bus-bar stage end, in plain and full; it takes plain's 4 min chunk
-FULL_S = 600           # about 10 min in full
+PLAIN_S = 240  # 240 s at max power at the bus-bar stage end, in plain and full; it takes plain's 4 min chunk
+FULL_S = 600  # about 10 min in full
 BURST = (30, 90)
 IDLE = (10, 30)
 SEED = 50
-SETUP_S = 60           # device open, init and kernel compile before the timed load (52 s measured), in the plan
-KILL_GRACE_S = 5        # SIGTERM at --limit-s, then SIGKILL of our own child this long after
-STOP_GRACE_S = 2        # our own TERM/INT: SIGKILL of the child this long after its SIGTERM, inside run.sh's 4 s reap
-MIN_RATE_S = 20        # a run shorter than this does not update the host's rate (smoke)
-ENV = {"MAX_UTIL_FPU_UTILIZATION_PCT": "92", "MAX_UTIL_DRAM_UTILIZATION_PCT": "92", "MAX_UTIL_DUTY_CYCLE": "100",
-       "MAX_UTIL_SUPER_SYNC": "0", "MAX_UTIL_NUM_WL_LOOPS": str(WL_LOOPS)}
+SETUP_S = 60  # device open, init and kernel compile before the timed load (52 s measured), in the plan
+KILL_GRACE_S = 5  # SIGTERM at --limit-s, then SIGKILL of our own child this long after
+STOP_GRACE_S = 2  # our own TERM/INT: SIGKILL of the child this long after its SIGTERM, inside run.sh's 4 s reap
+MIN_RATE_S = 20  # a run shorter than this does not update the host's rate (smoke)
+ENV = {
+    "MAX_UTIL_FPU_UTILIZATION_PCT": "92",
+    "MAX_UTIL_DRAM_UTILIZATION_PCT": "92",
+    "MAX_UTIL_DUTY_CYCLE": "100",
+    "MAX_UTIL_SUPER_SYNC": "0",
+    "MAX_UTIL_NUM_WL_LOOPS": str(WL_LOOPS),
+}
 HERE = os.path.dirname(os.path.abspath(__file__))
 READY = re.compile(rb"Main program ready: device=(\d+)")
 PASS = re.compile(rb"Device (\d+): compute output validation passed")
@@ -101,7 +106,9 @@ def ldd_missing(binary, env, ldd="ldd"):
         r = subprocess.run([ldd, binary], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return []
-    return sorted({m.group(1) for m in re.finditer(r"^\s*(\S+)\s+=>\s+not found", r.stdout.decode(errors="replace"), re.M)})
+    return sorted(
+        {m.group(1) for m in re.finditer(r"^\s*(\S+)\s+=>\s+not found", r.stdout.decode(errors="replace"), re.M)}
+    )
 
 
 def find_on_box(name, roots=None):
@@ -136,15 +143,37 @@ def preflight(binary, env, ldd="ldd", roots=None):
         f = find_on_box(lib, roots)
         if f:
             found.append(os.path.dirname(f))
-            out.append(f"MAXUTIL WARN test-infra: {os.path.basename(binary)} on {host}: the loader does not find {lib}; "
-                       f"using the on-box copy {f}")
+            out.append(
+                f"MAXUTIL WARN test-infra: {os.path.basename(binary)} on {host}: the loader does not find {lib}; "
+                f"using the on-box copy {f}"
+            )
     if found:
-        env["LD_LIBRARY_PATH"] = ":".join(dict.fromkeys(found)) + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+        env["LD_LIBRARY_PATH"] = ":".join(dict.fromkeys(found)) + (
+            ":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else ""
+        )
         miss = ldd_missing(binary, env, ldd)
     if not miss:
         return out, ""
-    return out, (f"{os.path.basename(binary)} cannot load {', '.join(miss)} on {host} (ldd: not found; no usable on-box copy; "
-                 f"nothing is installed on lab boxes)")
+    return out, (
+        f"{os.path.basename(binary)} cannot load {', '.join(miss)} on {host} (ldd: not found; no usable on-box copy; "
+        f"nothing is installed on lab boxes)"
+    )
+
+
+def hc_site(key):
+    """The key's value in the first HC_SITE_FILE file (':'-separated key=value files) that has it; "" when none does."""
+    for f in (os.environ.get("HC_SITE_FILE") or "").split(":"):
+        try:
+            with open(f) as fh:
+                for line in fh:
+                    if line.startswith(key + "="):
+                        v = line[len(key) + 1 :].strip()
+                        if v:
+                            return v
+                        break
+        except OSError:
+            continue
+    return ""
 
 
 def dist_dirs():
@@ -152,7 +181,11 @@ def dist_dirs():
     if e:
         return [d for d in e.split(":") if d]
     u = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
-    return [os.path.expanduser("~/tray-test-dist")] + ([f"/data/{u}/tray-test-dist"] if u else [])
+    return (
+        [os.path.expanduser("~/tray-test-dist")]
+        + ([f"/data/{u}/tray-test-dist"] if u else [])
+        + [d for d in hc_site("maxutil_dist").split(":") if d]
+    )
 
 
 def read_pin(path):
@@ -160,7 +193,9 @@ def read_pin(path):
     try:
         lines = open(path).read().splitlines()
     except OSError as e:
-        raise SetupError(f"no pin {path} ({e.strerror}): the prebuilt max-util archive is not pinned (fleet/maxutil_pack.sh)")
+        raise SetupError(
+            f"no pin {path} ({e.strerror}): the prebuilt max-util archive is not pinned (fleet/maxutil_pack.sh)"
+        )
     kv = dict(ln.strip().split("=", 1) for ln in lines if re.match(r"\s*(sha256|file|bytes)=", ln))
     if "sha256" in kv:
         if not re.fullmatch(r"[0-9a-f]{64}", kv["sha256"]):
@@ -191,7 +226,11 @@ def find_archive(sha, name, dirs):
             c = [os.path.join(d, name)]
         else:
             try:
-                c = sorted(os.path.join(d, x) for x in os.listdir(d) if x.startswith("maxutil") and ".tar" in x and sha[:12] in x)
+                c = sorted(
+                    os.path.join(d, x)
+                    for x in os.listdir(d)
+                    if x.startswith("maxutil") and ".tar" in x and sha[:12] in x
+                )
             except OSError:
                 c = []
         for p in c:
@@ -202,13 +241,17 @@ def find_archive(sha, name, dirs):
                 return p
             seen.append(f"{p} has sha256 {got[:12]}")
     want = name or f"maxutil*{sha[:12]}*.tar*"
-    raise SetupError(f"prebuilt max-util archive {want} (sha256 {sha[:12]}) not found in {', '.join(dirs)}"
-                     + (f"; {'; '.join(seen)}" if seen else "") + " (fleet/maxutil_pack.sh builds and copies it)")
+    raise SetupError(
+        f"prebuilt max-util archive {want} (sha256 {sha[:12]}) not found in {', '.join(dirs)}"
+        + (f"; {'; '.join(seen)}" if seen else "")
+        + " (fleet/maxutil_pack.sh builds and copies it)"
+    )
 
 
 def node_root():
-    r = os.environ.get("TRAY_MAXUTIL_ROOT") or os.path.join(os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR") or "/tmp",
-                                                           "tray-test-maxutil")
+    r = os.environ.get("TRAY_MAXUTIL_ROOT") or os.path.join(
+        os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR") or "/tmp", "tray-test-maxutil"
+    )
     r = os.path.abspath(r)
     if r == "/data" or r.startswith("/data/"):
         raise SetupError(f"unpack dir {r} is under /data: max-util unpacks to node-local disk only")
@@ -235,10 +278,12 @@ def layout(top):
     if not os.access(b, os.X_OK):
         raise SetupError(f"unpacked archive {top} has no executable {kv['bin']} (MANIFEST bin=)")
     h = os.path.join(m, kv["home"])
-    rr = os.path.join(m, kv.get("runtime_root") or kv["home"])   # an archive packed before runtime_root= (abaecf815feb)
+    rr = os.path.join(m, kv.get("runtime_root") or kv["home"])  # an archive packed before runtime_root= (abaecf815feb)
     if not os.path.isdir(os.path.join(rr, "tt_metal")):
-        raise SetupError(f"unpacked archive {top} has no tt_metal/ dir under {kv.get('runtime_root') or kv['home']} "
-                         f"(MANIFEST runtime_root=)")
+        raise SetupError(
+            f"unpacked archive {top} has no tt_metal/ dir under {kv.get('runtime_root') or kv['home']} "
+            f"(MANIFEST runtime_root=)"
+        )
     lib = ":".join(os.path.join(m, x) for x in kv["lib"].split(":") if x)
     opal = os.path.join(m, kv["opal_prefix"]) if kv.get("opal_prefix") else ""
     return {"bin": b, "home": h, "runtime_root": rr, "lib": lib, "opal": opal, "sfpi": kv.get("sfpi", "")}
@@ -250,8 +295,10 @@ def link_sfpi(rr):
     renewed on each call so a moved bundle still works"""
     src = os.environ.get("TRAY_MAXUTIL_SFPI", "")
     if not src or not os.path.isdir(os.path.join(src, "compiler", "bin")):
-        raise SetupError(f"archive packed with sfpi=external needs TRAY_MAXUTIL_SFPI naming an SFPI dir with compiler/bin "
-                         f"(got '{src}')")
+        raise SetupError(
+            f"archive packed with sfpi=external needs TRAY_MAXUTIL_SFPI naming an SFPI dir with compiler/bin "
+            f"(got '{src}')"
+        )
     src = os.path.abspath(src)
     dst = os.path.join(rr, "runtime", "sfpi")
     if os.path.islink(dst) and os.readlink(dst) == src:
@@ -266,7 +313,7 @@ def link_sfpi(rr):
     os.replace(tmp, dst)
 
 
-FRESH_S = 6 * 3600     # an older pin's tree touched in the last 6 h is kept
+FRESH_S = 6 * 3600  # an older pin's tree touched in the last 6 h is kept
 
 
 def private(root):
@@ -297,7 +344,10 @@ def make_private(root):
         return False
     finally:
         os.close(fd)
-    print(f"MAXUTIL unpack root {root} was mode {stat.S_IMODE(st.st_mode):04o}, set to 0700 so prune can remove idle trees", flush=True)
+    print(
+        f"MAXUTIL unpack root {root} was mode {stat.S_IMODE(st.st_mode):04o}, set to 0700 so prune can remove idle trees",
+        flush=True,
+    )
     return True
 
 
@@ -317,7 +367,7 @@ def foreign(d):
             return True
         return str(os.stat(os.path.join(d, "fd")).st_uid) != me
     except FileNotFoundError:
-        return not os.path.isdir(d)   # exited mid-scan: uses nothing
+        return not os.path.isdir(d)  # exited mid-scan: uses nothing
     except OSError:
         return False
 
@@ -347,7 +397,7 @@ def in_use(proc="/proc", skip_others=False):
             for f in fds:
                 try:
                     seen.add(os.readlink(os.path.join(d, "fd", f)))
-                except FileNotFoundError:   # closed since the listing
+                except FileNotFoundError:  # closed since the listing
                     pass
             try:
                 with open(os.path.join(d, "maps")) as m:
@@ -418,16 +468,18 @@ def unpack(pin, dirs=None, root=None):
         pass
     if not reused:
         arc = find_archive(sha, name, dirs or dist_dirs())
-        os.makedirs(root, mode=0o700, exist_ok=True)   # private: prune may then skip other uids' pids
-        make_private(root)   # a root made 0755 earlier
+        os.makedirs(root, mode=0o700, exist_ok=True)  # private: prune may then skip other uids' pids
+        make_private(root)  # a root made 0755 earlier
         tmp = f"{tree}.tmp.{os.getpid()}"
         shutil.rmtree(tmp, ignore_errors=True)
         os.makedirs(tmp)
         r = subprocess.run(["tar", "-xf", arc, "-C", tmp], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if r.returncode:
             shutil.rmtree(tmp, ignore_errors=True)
-            raise SetupError(f"tar -xf {arc} failed (rc {r.returncode}): {r.stdout.decode(errors='replace').strip()[-200:]}")
-        layout(tmp)   # refuses a tree with no binary before it replaces anything
+            raise SetupError(
+                f"tar -xf {arc} failed (rc {r.returncode}): {r.stdout.decode(errors='replace').strip()[-200:]}"
+            )
+        layout(tmp)  # refuses a tree with no binary before it replaces anything
         shutil.rmtree(tree, ignore_errors=True)
         os.rename(tmp, tree)
         with open(ok, "w") as f:
@@ -492,15 +544,26 @@ def table(mode, smoke_s=2, load_s=None):
 
 def summary(log, marks=None):
     """per-chip result from the log bytes; marks: wall times run recorded (ready, first iteration, first pass)"""
-    chips = [int(c) for c in (OPEN.search(log).group(1).decode().replace(" ", "").split(",") if OPEN.search(log) else []) if c]
+    chips = [
+        int(c)
+        for c in (OPEN.search(log).group(1).decode().replace(" ", "").split(",") if OPEN.search(log) else [])
+        if c
+    ]
     ok = sorted({int(m.group(1)) for m in PASS.finditer(log)})
     badv = {}
     for m in BADV.finditer(log):
         badv.setdefault(int(m.group(1)), m.group(0).decode(errors="replace")[:160])
     util = {int(m.group(1)): float(m.group(2)) for m in UTIL.finditer(log)}
     it = [(int(a), int(b)) for a, b in ITER.findall(log)]
-    return {"chips": chips, "passed": ok, "failed": badv, "util": util,
-            "iterations": it[-1][1] if it else None, "last_iteration": it[-1][0] if it else None, "marks": marks or {}}
+    return {
+        "chips": chips,
+        "passed": ok,
+        "failed": badv,
+        "util": util,
+        "iterations": it[-1][1] if it else None,
+        "last_iteration": it[-1][0] if it else None,
+        "marks": marks or {},
+    }
 
 
 def judge(s, rc, stopped=None):
@@ -518,12 +581,51 @@ def judge(s, rc, stopped=None):
     if not want or not s["passed"]:
         out.append("MAXUTIL FAIL - no chip passed its output check")
     u = sorted(s["util"].values())
-    out.append(f"MAXUTIL {len(s['passed'])}/{len(want) or '?'} chips passed their output check"
-               + (f", FPU measured {u[0]:g}-{u[-1]:g} %" if u else ", FPU utilization not reported") + f", rc {rc}")
+    out.append(
+        f"MAXUTIL {len(s['passed'])}/{len(want) or '?'} chips passed their output check"
+        + (f", FPU measured {u[0]:g}-{u[-1]:g} %" if u else ", FPU utilization not reported")
+        + f", rc {rc}"
+    )
     return out
 
 
+def built_bin(b):
+    """TRAY_MAXUTIL_BIN: a built unit_tests_didt_max_util used in place of the pinned archive. Its tt-metal tree
+    is TT_METAL_HOME, else the first dir above the binary with tt_metal/ and build/lib dirs; libs in its build/lib; kernel cache TT_METAL_CACHE,
+    else node-local tmp"""
+    if not (os.path.isfile(b) and os.access(b, os.X_OK)):
+        raise SetupError(f"TRAY_MAXUTIL_BIN {b} is not an executable file")
+    h = os.environ.get("TT_METAL_HOME") or ""
+    d = os.path.dirname(os.path.abspath(b))
+    while not h and d != os.path.dirname(d):
+        d = os.path.dirname(d)
+        if os.path.isdir(os.path.join(d, "tt_metal")) and os.path.isdir(os.path.join(d, "build", "lib")):
+            h = d
+    if not h:
+        raise SetupError(f"TRAY_MAXUTIL_BIN {b}: no tt-metal tree above it; set TT_METAL_HOME")
+    c = os.environ.get("TT_METAL_CACHE") or os.path.join(
+        os.environ.get("SLURM_TMPDIR") or os.environ.get("TMPDIR") or "/tmp", "tray-maxutil-built-cache"
+    )
+    return {"bin": b, "home": h, "runtime_root": None, "lib": os.path.join(h, "build", "lib"), "opal": None, "cache": c}
+
+
 def run(a):
+    if not a.bin and os.environ.get("TRAY_MAXUTIL_BIN"):
+        try:
+            u = built_bin(os.environ["TRAY_MAXUTIL_BIN"])
+        except SetupError as e:
+            print(f"MAXUTIL ERROR setup: {e}", flush=True)
+            json.dump({"maxutil": {"mode": a.mode, "error": str(e)}}, open(a.result, "w"), indent=1)
+            return 3
+        a.bin, a.home, a.runtime_root, a.lib, a.opal, a.cache = (
+            u["bin"],
+            u["home"],
+            u["runtime_root"],
+            u["lib"],
+            u["opal"],
+            u["cache"],
+        )
+        print(f"MAXUTIL built binary {a.bin} (TRAY_MAXUTIL_BIN), tt-metal {a.home}", flush=True)
     if not a.bin:
         try:
             u = unpack(a.pin)
@@ -531,7 +633,14 @@ def run(a):
             print(f"MAXUTIL ERROR setup: {e}", flush=True)
             json.dump({"maxutil": {"mode": a.mode, "error": str(e)}}, open(a.result, "w"), indent=1)
             return 3
-        a.bin, a.home, a.runtime_root, a.lib, a.opal, a.cache = u["bin"], u["home"], u["runtime_root"], u["lib"], u["opal"], u["cache"]
+        a.bin, a.home, a.runtime_root, a.lib, a.opal, a.cache = (
+            u["bin"],
+            u["home"],
+            u["runtime_root"],
+            u["lib"],
+            u["opal"],
+            u["cache"],
+        )
         print(f"MAXUTIL archive {u['sha'][:12]} {'reused' if u['reused'] else 'unpacked'} at {u['tree']}", flush=True)
     a.state = a.state or default_state()
     rows = table(a.mode, a.smoke_s, a.load_s)
@@ -540,12 +649,19 @@ def run(a):
     n = size(load_s, r)
     # TT_METAL_RUNTIME_ROOT only here, for the test binary (MANIFEST runtime_root=, else --runtime-root, else --home):
     # exported for all of run.sh, it broke every other tt-metal load (t9600)
-    env = dict(os.environ, TT_METAL_HOME=a.home, TT_METAL_RUNTIME_ROOT=a.runtime_root or a.home, ARCH_NAME="blackhole", TT_METAL_CACHE=a.cache,
-               LD_LIBRARY_PATH=a.lib + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else ""),
-               MAX_UTIL_NUM_ITERATIONS=str(n), **ENV)
+    env = dict(
+        os.environ,
+        TT_METAL_HOME=a.home,
+        TT_METAL_RUNTIME_ROOT=a.runtime_root or a.home,
+        ARCH_NAME="blackhole",
+        TT_METAL_CACHE=a.cache,
+        LD_LIBRARY_PATH=a.lib + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else ""),
+        MAX_UTIL_NUM_ITERATIONS=str(n),
+        **ENV,
+    )
     if a.opal:
         env["OPAL_PREFIX"] = a.opal
-    for k in ("TT_METAL_TDP_LIMIT_WATTS",):   # TDP item: never a power-limit knob
+    for k in ("TT_METAL_TDP_LIMIT_WATTS",):  # TDP item: never a power-limit knob
         env.pop(k, None)
     os.makedirs(a.cache, exist_ok=True)
     warn, err = preflight(a.bin, env)
@@ -553,10 +669,15 @@ def run(a):
         print(ln, flush=True)
     if err:
         print(f"MAXUTIL NOT_RUN test-infra: {err}", flush=True)
-        json.dump({"maxutil": {"mode": a.mode, "error": f"test-infra: {err}", "rc": 127}}, open(a.result, "w"), indent=1)
+        json.dump(
+            {"maxutil": {"mode": a.mode, "error": f"test-infra: {err}", "rc": 127}}, open(a.result, "w"), indent=1
+        )
         return 127
-    print(f"MAXUTIL plan: mode {a.mode}, bursts {' '.join(f'{b}+{i}' for b, i in rows)} s, {load_s} s of load,"
-          f" NUM_ITERATIONS {n} at {r:g}/s ({src}), FPU 92 DRAM 92 duty 100, NUM_WL_LOOPS {WL_LOOPS}", flush=True)
+    print(
+        f"MAXUTIL plan: mode {a.mode}, bursts {' '.join(f'{b}+{i}' for b, i in rows)} s, {load_s} s of load,"
+        f" NUM_ITERATIONS {n} at {r:g}/s ({src}), FPU 92 DRAM 92 duty 100, NUM_WL_LOOPS {WL_LOOPS}",
+        flush=True,
+    )
     # TERM/INT (the broker's preemption, run.sh's pg_reap, reliability.sh's stop): no more bursts, SIGCONT and
     # SIGTERM of the child, SIGKILL STOP_GRACE_S later. unit_tests_didt_max_util has no stop input (its iteration count is
     # fixed at start by MAX_UTIL_NUM_ITERATIONS) and no close on SIGTERM: it ends without its own device close, and the
@@ -565,23 +686,29 @@ def run(a):
 
     def on_stop(signum, _frame):
         stop.setdefault("sig", signal.Signals(signum).name)
+
     for sg in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sg, on_stop)
-    mfd, sfd = pty.openpty()   # a tty: the test's log and progress lines come as written, not block-buffered
-    p = subprocess.Popen([a.bin, "--gtest_filter=*All*"], stdout=sfd, stderr=sfd, stdin=subprocess.DEVNULL, env=env, cwd=a.home)
+    mfd, sfd = pty.openpty()  # a tty: the test's log and progress lines come as written, not block-buffered
+    p = subprocess.Popen(
+        [a.bin, "--gtest_filter=*All*"], stdout=sfd, stderr=sfd, stdin=subprocess.DEVNULL, env=env, cwd=a.home
+    )
     os.close(sfd)
     buf, marks, pauses = bytearray(), {"start": time.time()}, []
     t_ready = None
     plan, k, t_next, paused_until = None, 0, None, None
     deadline = time.time() + a.limit_s
     limited, kill_at = False, None
-    exited = False   # the child exited: drain the tty with no wait, then end
+    exited = False  # the child exited: drain the tty with no wait, then end
     with open(a.log, "ab") as lg:
         while True:
             now = time.time()
             if stop and "t" not in stop:
                 stop["t"] = now
-                print(f"MAXUTIL stopped by {stop['sig']}: no more bursts; the test process gets SIGTERM, SIGKILL {STOP_GRACE_S} s later", flush=True)
+                print(
+                    f"MAXUTIL stopped by {stop['sig']}: no more bursts; the test process gets SIGTERM, SIGKILL {STOP_GRACE_S} s later",
+                    flush=True,
+                )
                 if paused_until is not None:
                     pauses[-1].append(now)
                     paused_until = None
@@ -595,15 +722,24 @@ def run(a):
                 p.send_signal(signal.SIGCONT)
                 p.terminate()
             elif kill_at is not None and now >= kill_at and p.poll() is None:
-                p.kill()   # it ignored SIGTERM: SIGKILL of our own child, by its pid
+                p.kill()  # it ignored SIGTERM: SIGKILL of our own child, by its pid
                 kill_at = None
             if paused_until is not None and now >= paused_until:
                 p.send_signal(signal.SIGCONT)
                 pauses[-1].append(now)
                 paused_until = None
                 t_next = now + rows[k][0] if k < len(rows) else None
-            elif plan and paused_until is None and t_next is not None and now >= t_next and k < len(rows) and rows[k][1] > 0 \
-                    and "pass" not in marks and not limited and p.poll() is None:
+            elif (
+                plan
+                and paused_until is None
+                and t_next is not None
+                and now >= t_next
+                and k < len(rows)
+                and rows[k][1] > 0
+                and "pass" not in marks
+                and not limited
+                and p.poll() is None
+            ):
                 p.send_signal(signal.SIGSTOP)
                 pauses.append([now])
                 paused_until = now + rows[k][1]
@@ -612,7 +748,7 @@ def run(a):
                 rd, _, _ = select.select([mfd], [], [], 0 if exited else 0.2)
                 ch = os.read(mfd, 65536) if rd else b""
             except OSError:
-                ch = b""   # the child closed the tty
+                ch = b""  # the child closed the tty
             if ch:
                 lg.write(ch)
                 lg.flush()
@@ -621,18 +757,18 @@ def run(a):
                 if READY.search(tail):
                     t_ready = time.time()
                 if "load" not in marks and b"Iteration " in tail and t_ready:
-                    marks["load"] = t_ready   # the last "Main program ready" before the first progress line
+                    marks["load"] = t_ready  # the last "Main program ready" before the first progress line
                     plan, k, t_next = True, 0, t_ready + rows[0][0]
                 if "pass" not in marks and PASS.search(tail):
                     marks["pass"] = time.time()
             elif exited:
-                break   # a no-wait read after the exit gave EOF/EIO or nothing: all its output is read
+                break  # a no-wait read after the exit gave EOF/EIO or nothing: all its output is read
             elif p.poll() is not None:
-                exited = True   # lines written just before the exit may still be in the tty
+                exited = True  # lines written just before the exit may still be in the tty
     os.close(mfd)
     rc = p.wait()
     if limited:
-        rc = 124   # a limit kill fails the run whatever the child's own exit code
+        rc = 124  # a limit kill fails the run whatever the child's own exit code
     if stop:
         rc = 143 if stop["sig"] == "SIGTERM" else 130
     marks["end"] = time.time()
@@ -644,28 +780,65 @@ def run(a):
     t1 = marks.get("pass") or marks["end"]
     act = (t1 - t0 - paused) if t0 else None
     meas = round(n / act, 1) if act and act > 0 and rc == 0 and s["passed"] else None
-    res = {"burst": {"t0": t0, "seconds": round(t1 - t0, 1) if t0 else None, "tflops_per_chip": None,
-                     "op": "unit_tests_didt_max_util FPU 92 DRAM 92 duty 100", "load": f"max-util {a.mode} ({len(rows)} burst(s))"},
-           "maxutil": {"mode": a.mode, "rows": rows, "iterations": n, "rate_used": r, "rate_source": src,
-                       "load_s_measured": round(act, 1) if act else None, "rate_measured": meas, "paused_s": round(paused, 1),
-                       "pauses": pauses, "setup_s": round(t0 - marks["start"], 1) if t0 else None, "rc": rc,
-                       "passed": s["passed"], "failed": s["failed"], "util": s["util"], "chips": s["chips"],
-                       "stopped": stop.get("sig"), "stop_s": round(marks["end"] - stop["t"], 1) if stop.get("t") else None}}
+    res = {
+        "burst": {
+            "t0": t0,
+            "seconds": round(t1 - t0, 1) if t0 else None,
+            "tflops_per_chip": None,
+            "op": "unit_tests_didt_max_util FPU 92 DRAM 92 duty 100",
+            "load": f"max-util {a.mode} ({len(rows)} burst(s))",
+        },
+        "maxutil": {
+            "mode": a.mode,
+            "rows": rows,
+            "iterations": n,
+            "rate_used": r,
+            "rate_source": src,
+            "load_s_measured": round(act, 1) if act else None,
+            "rate_measured": meas,
+            "paused_s": round(paused, 1),
+            "pauses": pauses,
+            "setup_s": round(t0 - marks["start"], 1) if t0 else None,
+            "rc": rc,
+            "passed": s["passed"],
+            "failed": s["failed"],
+            "util": s["util"],
+            "chips": s["chips"],
+            "stopped": stop.get("sig"),
+            "stop_s": round(marks["end"] - stop["t"], 1) if stop.get("t") else None,
+        },
+    }
     json.dump(res, open(a.result, "w"), indent=1)
     if meas and act >= MIN_RATE_S and not stop:
         try:
             os.makedirs(os.path.dirname(a.state) or ".", exist_ok=True)
-            json.dump({"rate": meas, "iterations": n, "seconds": round(act, 1), "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                       "wl_loops": WL_LOOPS}, open(a.state + ".tmp", "w"))
+            json.dump(
+                {
+                    "rate": meas,
+                    "iterations": n,
+                    "seconds": round(act, 1),
+                    "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "wl_loops": WL_LOOPS,
+                },
+                open(a.state + ".tmp", "w"),
+            )
             os.replace(a.state + ".tmp", a.state)
         except OSError as e:
             print(f"MAXUTIL rate not saved ({e})", flush=True)
-    print(f"MAXUTIL timed load {res['maxutil']['load_s_measured']} s of planned {load_s} s (setup before it"
-          f" {res['maxutil']['setup_s']} s, idle {round(paused, 1)} s in {len(pauses)} pause(s)), measured rate {meas}/s", flush=True)
+    print(
+        f"MAXUTIL timed load {res['maxutil']['load_s_measured']} s of planned {load_s} s (setup before it"
+        f" {res['maxutil']['setup_s']} s, idle {round(paused, 1)} s in {len(pauses)} pause(s)), measured rate {meas}/s",
+        flush=True,
+    )
     ld = LOADER.search(bytes(buf))
-    if not s["passed"] and not s["failed"] and not limited and (rc in (126, 127) or ld):   # it never ran: test-infra, not a chip FAIL
+    if (
+        not s["passed"] and not s["failed"] and not limited and (rc in (126, 127) or ld)
+    ):  # it never ran: test-infra, not a chip FAIL
         why = ld.group(0).decode(errors="replace").strip()[-300:] if ld else "the test binary did not start"
-        print(f"MAXUTIL NOT_RUN test-infra: {os.path.basename(a.bin)} rc {rc} on {socket.gethostname().split('.')[0]}: {why}", flush=True)
+        print(
+            f"MAXUTIL NOT_RUN test-infra: {os.path.basename(a.bin)} rc {rc} on {socket.gethostname().split('.')[0]}: {why}",
+            flush=True,
+        )
         return 127
     for ln in judge(s, rc, stop.get("sig")):
         print(ln, flush=True)
@@ -698,6 +871,7 @@ def main(argv):
             print(ln)
     elif c == "run":
         import argparse
+
         ap = argparse.ArgumentParser()
         for k in ("bin", "home", "runtime-root", "lib", "opal", "cache", "state"):
             ap.add_argument("--" + k)

@@ -19,16 +19,16 @@ import os
 import threading
 import time
 
-IDLE_MHZ = 800                     # cold idle AICLK (ub0_repro.IDLE_MHZ)
-LOST_AICLK = 100000                # tt_aiclk reads 0xFFFFFFFF (or fails) once a chip is gone
+IDLE_MHZ = 800  # cold idle AICLK (ub0_repro.IDLE_MHZ)
+LOST_AICLK = 100000  # tt_aiclk reads 0xFFFFFFFF (or fails) once a chip is gone
 MSG_GO_BUSY, MSG_GO_LONG_IDLE = 0x52, 0x54
-CAP_S = float(os.environ.get("TRAY_QUIET_CLK_CAP_S") or 300)   # 5 min, then a FINDING
-RESEND_S = 30.0                    # a chip still above idle gets the idle request again this often
-SAY_S = 30.0                       # a progress line naming the chips still above idle (the broker reaps 300 s of silence)
+CAP_S = float(os.environ.get("TRAY_QUIET_CLK_CAP_S") or 300)  # 5 min, then a FINDING
+RESEND_S = 30.0  # a chip still above idle gets the idle request again this often
+SAY_S = 30.0  # a progress line naming the chips still above idle (the broker reaps 300 s of silence)
 POLL_S = 0.25
-BUSY_WAIT_S = 5.0                  # after GO_BUSY: wait at most this long for the clocks to rise, then log them
+BUSY_WAIT_S = 5.0  # after GO_BUSY: wait at most this long for the clocks to rise, then log them
 SEND_TIMEOUT_S = 60.0
-BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}   # PCI bus & 0xF0 -> tray 1-4 (ub0_repro.BUS_TO_TRAY)
+BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}  # PCI bus & 0xF0 -> tray 1-4 (ub0_repro.BUS_TO_TRAY)
 
 
 def tray_of(pci):
@@ -40,8 +40,11 @@ def tray_of(pci):
 
 def sysfs_aiclk(cid):
     try:
-        with open(os.path.join(os.environ.get("UB0_SYS_ROOT", "/sys"), "class", "tenstorrent",
-                               f"tenstorrent!{cid}", "tt_aiclk")) as f:
+        with open(
+            os.path.join(
+                os.environ.get("UB0_SYS_ROOT", "/sys"), "class", "tenstorrent", f"tenstorrent!{cid}", "tt_aiclk"
+            )
+        ) as f:
             return int(f.read().strip() or "0")
     except (OSError, ValueError):
         return None
@@ -54,6 +57,7 @@ def arc_send(cids, code, timeout_s=SEND_TIMEOUT_S):
 
     def go():
         import tt_umd
+
         for c in cids:
             try:
                 d = tt_umd.TTDevice.create(c)
@@ -102,11 +106,20 @@ class QuietClock:
     tick(what), if given, is called on each poll (a heartbeat for the stage's watchdog). Each settle() is one dict in
     self.log (the result JSON / rows keep it)."""
 
-    def __init__(self, ids, read=sysfs_aiclk, send=arc_send, say=print, tick=None, cap_s=CAP_S,
-                 clock=time.monotonic, sleep=time.sleep):
+    def __init__(
+        self,
+        ids,
+        read=sysfs_aiclk,
+        send=arc_send,
+        say=print,
+        tick=None,
+        cap_s=CAP_S,
+        clock=time.monotonic,
+        sleep=time.sleep,
+    ):
         self.ids, self.read, self.send, self.say, self.tick = dict(ids), read, send, say, tick
         self.cap_s, self.clock, self.sleep = cap_s, clock, sleep
-        self.stuck = {}   # chip -> its last MHz: named in a QUIET FAIL, not waited for again
+        self.stuck = {}  # chip -> its last MHz: named in a QUIET FAIL, not waited for again
         self.log = []
 
     def name(self, c, mhz=None):
@@ -144,21 +157,33 @@ class QuietClock:
                 self.send(hot, MSG_GO_LONG_IDLE)
             if now - last_say >= SAY_S:
                 last_say = now
-                self.say(f"QUIET CLOCK {label}: {now - t0:.0f} s, still above {IDLE_MHZ} MHz: "
-                         + ", ".join(self.name(c, clocks[c]) for c in hot))
+                self.say(
+                    f"QUIET CLOCK {label}: {now - t0:.0f} s, still above {IDLE_MHZ} MHz: "
+                    + ", ".join(self.name(c, clocks[c]) for c in hot)
+                )
             self.sleep(POLL_S)
         el = self.clock() - t0
         never = {c: clocks[c] for c in hot}
         lost = sorted(c for c, v in clocks.items() if not alive(v))
         earlier = sorted(c for c in self.stuck if alive(clocks.get(c)) and clocks[c] > IDLE_MHZ)
-        rec.update(settle_s=round(el, 2), at_idle=sum(1 for v in clocks.values() if alive(v) and v <= IDLE_MHZ),
-                   never=[dict(chip=c, pci=self.ids.get(c), tray=tray_of(self.ids.get(c)), mhz=v) for c, v in never.items()],
-                   still_above_named_earlier=earlier, lost=lost)
+        rec.update(
+            settle_s=round(el, 2),
+            at_idle=sum(1 for v in clocks.values() if alive(v) and v <= IDLE_MHZ),
+            never=[dict(chip=c, pci=self.ids.get(c), tray=tray_of(self.ids.get(c)), mhz=v) for c, v in never.items()],
+            still_above_named_earlier=earlier,
+            lost=lost,
+        )
         self.stuck.update(never)
-        self.say(f"QUIET CLOCK {label}: {rec['at_idle']}/{len(self.ids)} chips at <= {IDLE_MHZ} MHz after {el:.1f} s"
-                 + (f"; lost {chip_list(lost)}" if lost else "")
-                 + (f"; still above, named in an earlier quiet: {', '.join(self.name(c, clocks[c]) for c in earlier)}"
-                    if earlier else "") + "; quiet counts from here")
+        self.say(
+            f"QUIET CLOCK {label}: {rec['at_idle']}/{len(self.ids)} chips at <= {IDLE_MHZ} MHz after {el:.1f} s"
+            + (f"; lost {chip_list(lost)}" if lost else "")
+            + (
+                f"; still above, named in an earlier quiet: {', '.join(self.name(c, clocks[c]) for c in earlier)}"
+                if earlier
+                else ""
+            )
+            + "; quiet counts from here"
+        )
         if never:
             self.say(fail_line(label, [(self.ids.get(c), c, v) for c, v in never.items()], el, self.cap_s))
         self.log.append(rec)
@@ -175,8 +200,10 @@ class QuietClock:
             if all(not alive(v) or v > IDLE_MHZ for v in clocks.values()) or self.clock() - t0 >= BUSY_WAIT_S:
                 break
             self.sleep(POLL_S)
-        self.say(f"AICLK at load start ({label}): {grouped(clocks)}"
-                 + (f"; busy request: {r}" if r.get("failed") or r.get("error") else ""))
+        self.say(
+            f"AICLK at load start ({label}): {grouped(clocks)}"
+            + (f"; busy request: {r}" if r.get("failed") or r.get("error") else "")
+        )
         if self.log and self.log[-1].get("label") == label:
             self.log[-1]["load_start_aiclk"] = clocks
         return clocks
@@ -184,14 +211,18 @@ class QuietClock:
 
 def fail_line(label, never, waited_s, cap_s=CAP_S):
     """never: [(pci, chip, MHz)]. The finding: every chip by BDF and tray 1-4 with its last reading."""
-    return (f"QUIET FAIL {label}: chip(s) not at idle clock (<= {IDLE_MHZ} MHz) after {waited_s:.0f} s (cap "
-            f"{cap_s:.0f} s): " + ", ".join(f"{p} (tray {tray_of(p) or '?'}) chip {c} at {v} MHz" for p, c, v in never)
-            + "; the quiet went on without them")
+    return (
+        f"QUIET FAIL {label}: chip(s) not at idle clock (<= {IDLE_MHZ} MHz) after {waited_s:.0f} s (cap "
+        f"{cap_s:.0f} s): "
+        + ", ".join(f"{p} (tray {tray_of(p) or '?'}) chip {c} at {v} MHz" for p, c, v in never)
+        + "; the quiet went on without them"
+    )
 
 
 def kmd_pci():
     """/dev/tenstorrent id -> PCI address (sysfs, read-only)."""
     import glob
+
     out = {}
     for d in glob.glob(os.path.join(os.environ.get("UB0_SYS_ROOT", "/sys"), "class", "tenstorrent", "tenstorrent!*")):
         out[int(d.rsplit("!", 1)[1])] = os.path.basename(os.path.realpath(os.path.join(d, "device")))
@@ -201,6 +232,7 @@ def kmd_pci():
 if __name__ == "__main__":
     # quiet_clock.py settle <label>: the clock check on every chip of this host (run.sh's idle_clocks, before each try)
     import sys
+
     if len(sys.argv) < 3 or sys.argv[1] != "settle":
         sys.exit("usage: quiet_clock.py settle <label>")
     QuietClock(kmd_pci(), say=lambda s: print(s, flush=True)).settle(" ".join(sys.argv[2:]))
