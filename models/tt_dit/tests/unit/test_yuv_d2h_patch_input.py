@@ -13,7 +13,6 @@ import pytest
 
 import ttnn
 
-from ...models.vae import vae_ltx
 from ...utils import yuv_d2h
 
 
@@ -74,12 +73,3 @@ def test_patchified_input_is_single_host_only(stub_device, monkeypatch, expect_e
         yuv_d2h.fast_device_to_host_yuv(
             _ShapeOnly((1, 8, 4, 6, 48)), _ShapeOnly((2, 4)), coefficients=object(), input_patch_size=4
         )
-
-
-@pytest.mark.parametrize(("value", "expected"), [(None, False), ("0", False), ("1", True)])
-def test_fuse_unpatch_flag_defaults_off(monkeypatch, value, expected):
-    if value is None:
-        monkeypatch.delenv("LTX_VAE_FUSE_UNPATCH", raising=False)
-    else:
-        monkeypatch.setenv("LTX_VAE_FUSE_UNPATCH", value)
-    assert vae_ltx._fuse_unpatch_enabled() is expected

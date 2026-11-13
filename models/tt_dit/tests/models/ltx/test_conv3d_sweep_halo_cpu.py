@@ -5,7 +5,7 @@
 
 import pytest
 
-from models.tt_dit.utils.conv3d import _BLOCKINGS, aligned_channels
+from models.tt_dit.utils.conv3d import _BLOCKINGS, _LTX_4X8_T2_BLOCKINGS, aligned_channels
 
 from ..wan2_2.bruteforce_conv3d_sweep import (
     HaloSpec,
@@ -15,6 +15,7 @@ from ..wan2_2.bruteforce_conv3d_sweep import (
     prefetch_shard_fits,
     valid_cin,
     valid_cout,
+    vol2col_ring_safe,
 )
 from .bruteforce_conv3d_sweep_ltx import (
     _SWEEP_LAYERS_LTX25_544P_145F_HALO,
@@ -46,8 +47,11 @@ def test_halo_masks_only_when_shards_overhang():
 def test_ltx25_halo_layers_key_into_table(name, C_in, C_out, T, H, W, key, logical_hw):
     blk = _BLOCKINGS.get((4, 8, C_in, C_out, (3, 3, 3), *key))
     assert blk is not None, f"{name}: no _BLOCKINGS entry for {key}"
-    # The shard overhangs the logical size on both axes, as in production.
-    assert halo_masks(HaloSpec(2, 4, *logical_hw), H - 2, W - 2) == logical_hw
+    # The key is the exact shard; the swept shard is at least that, and masks only where it overhangs.
+    assert key[1:] == (-(-logical_hw[0] // 2), -(-logical_hw[1] // 4))
+    assert H - 2 >= key[1] and W - 2 >= key[2]
+    masks = halo_masks(HaloSpec(2, 4, *logical_hw), H - 2, W - 2)
+    assert masks == tuple(l if (s * f > l) else 0 for l, s, f in zip(logical_hw, (H - 2, W - 2), (2, 4)))
     combos = build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=(16, 32, 64))
     assert tuple(blk) in combos
 
@@ -59,11 +63,17 @@ def test_ltx25_halo_layers_key_into_table(name, C_in, C_out, T, H, W, key, logic
     [
         ((4, 8, 128, 128, (3, 3, 3), 147, 68, 60), (128, 64, 6, 4, 8)),  # s4_res
         ((4, 8, 512, 4096, (3, 3, 3), 39, 17, 15), (128, 64, 5, 2, 16)),  # s1_up
+        ((4, 8, 512, 512, (3, 3, 3), 39, 17, 15), (64, 256, 2, 2, 8)),  # s1_res
+        ((4, 8, 512, 512, (3, 3, 3), 75, 34, 30), (64, 256, 2, 4, 4)),  # s2_res
+        ((4, 8, 256, 256, (3, 3, 3), 147, 34, 30), (64, 256, 2, 4, 4)),  # s3_res
+        ((4, 8, 256, 512, (3, 3, 3), 147, 34, 30), (64, 256, 2, 4, 4)),  # s3_chg
     ],
-    ids=["s4_res", "s1_up"],
+    ids=["s4_res", "s1_up", "s1_res", "s2_res", "s3_res", "s3_chg"],
 )
 def test_ltx25_halo_winners_in_table(key, blocking):
-    assert _BLOCKINGS[key] == blocking
+    # The T_out_block 2 winners sit in their own table (LTX_VAE_T2_BLOCKINGS=0 falls back to _BLOCKINGS).
+    table = _LTX_4X8_T2_BLOCKINGS if blocking[2] == 2 else _BLOCKINGS
+    assert table[key] == blocking
 
 
 @pytest.mark.parametrize(
@@ -87,7 +97,7 @@ def test_ltx_table_blockings_without_prefetch_shard():
     # In halo mode conv3d rejects a blocking without an L1 prefetch shard (the direct reader drops the halo).
     no_shard = {
         k
-        for k, v in _BLOCKINGS.items()
+        for k, v in {**_BLOCKINGS, **_LTX_4X8_T2_BLOCKINGS}.items()
         if k[2] in (128, 256, 512, 1024) and k[4] == (3, 3, 3) and not prefetch_shard_fits(*v, k[4], k[2])
     }
     assert no_shard == set()
@@ -120,3 +130,30 @@ def test_ltx_portrait_upsampler_encoder_layers_key_into_table(name, C_in, C_out,
     assert valid_cin(C_in_block, aligned_channels(C_in), kernel) and valid_cout(C_out_block, C_out)
     assert H_out_block * W_out_block in ((hw_product,) if isinstance(hw_product, int) else hw_product)
     assert T_out_block <= max(1, T - (kT - 1))
+
+
+@pytest.mark.parametrize(
+    "blocking, safe",
+    [
+        ((5, 2, 8), False),
+        ((5, 4, 4), False),
+        ((7, 2, 8), False),
+        ((5, 4, 8), True),
+        ((7, 2, 4), True),
+        ((1, 1, 1), True),
+        ((3, 2, 16), True),
+    ],
+)
+def test_vol2col_ring_safe(blocking, safe):
+    assert vol2col_ring_safe(*blocking) == safe
+
+
+def test_table_blockings_are_ring_safe():
+    tables = {**_BLOCKINGS, **_LTX_4X8_T2_BLOCKINGS}
+    assert [k for k, v in tables.items() if not vol2col_ring_safe(*v[2:])] == []
+
+
+@pytest.mark.parametrize("name, C_in, C_out, T, H, W, key, logical_hw", _SWEEP_LAYERS_LTX25_544P_145F_HALO)
+def test_ltx25_halo_sweep_blockings_are_ring_safe(name, C_in, C_out, T, H, W, key, logical_hw):
+    combos = build_all_blockings(C_in, C_out, (3, 3, 3), H, W, T, max_t_block=8, hw_product=(16, 32, 64))
+    assert combos and all(vol2col_ring_safe(*c[2:]) for c in combos)

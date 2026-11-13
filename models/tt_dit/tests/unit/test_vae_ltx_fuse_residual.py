@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""LTX_VAE_FUSE_RESIDUAL is off by default; with it off the resnet block runs conv2 and then ttnn.add as
+"""With LTX_VAE_FUSE_RESIDUAL=0 the resnet block runs conv2 and then ttnn.add as
 before, and with it on conv2 takes the skip tensor only when conv3d's residual epilogue can read it. No
 device."""
 
@@ -11,15 +11,6 @@ import pytest
 import ttnn
 
 from ...models.vae import vae_ltx
-
-
-@pytest.mark.parametrize(("value", "expected"), [(None, False), ("0", False), ("1", True)])
-def test_fuse_residual_flag_defaults_off(monkeypatch, value, expected):
-    if value is None:
-        monkeypatch.delenv("LTX_VAE_FUSE_RESIDUAL", raising=False)
-    else:
-        monkeypatch.setenv("LTX_VAE_FUSE_RESIDUAL", value)
-    assert vae_ltx._fuse_residual_enabled() is expected
 
 
 def _residual(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mem=ttnn.DRAM_MEMORY_CONFIG):

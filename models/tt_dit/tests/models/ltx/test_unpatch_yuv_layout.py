@@ -53,7 +53,7 @@ def test_unpatch_yuv_device_matches_oracle(monkeypatch, t, h, w):
     packed = (torch.arange(t * h * w * 48, dtype=torch.float32) % 251 - 125).div(64).to(torch.bfloat16)
     packed = packed.reshape(1, t, h, w, 48)
 
-    chwt = vae_ltx.LTXVideoDecoder._unpatch_yuv_device(SimpleNamespace(patch_size=patch), packed)
+    chwt = vae_ltx.LTXVideoDecoder._unpatch_yuv_device(SimpleNamespace(patch_size=patch, fuse_unpatch=False), packed)
 
     assert chwt.shape == (3, h * patch, w * patch, t)
     assert torch.equal(chwt, _oracle_chwt(packed, patch))

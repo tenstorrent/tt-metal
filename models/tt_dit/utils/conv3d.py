@@ -846,6 +846,15 @@ _HALO_LAST_KEYS = {
 }
 
 
+# On by default (LTX_VAE_T2_BLOCKINGS=0 turns it off): T_out_block 2 for the LTX VAE's 4x8 1080p
+# res/chg convs, swept with the halo reader. Exact (mesh, shape) keys only; it does not feed the T-relaxed lookup.
+_LTX_4X8_T2_BLOCKINGS = {
+    (4, 8, 512, 512, (3, 3, 3), 39, 17, 15): (64, 256, 2, 2, 8),  # ltx_s1_res — 2435us halo (T1 H4 W8: 2863us)
+    (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 2, 4, 4),  # ltx_s2_res — 16319us halo (T1 H8 W4: 17343us)
+    (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 2, 4, 4),  # ltx_s3_res — 6372us halo (T1 H8 W4: 7481us)
+    (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 2, 4, 4),  # ltx_s3_chg — 11904us halo (T1 H8 W4: 14469us)
+}
+
 # Lazily-built index of swept _BLOCKINGS keyed by (h_factor, w_factor, C_in, C_out, kernel, H, W),
 # dropping T -> list of (T, blocking). See _t_relaxed_blocking.
 _BLOCKINGS_BY_SPATIAL: dict | None = None
@@ -941,6 +950,8 @@ def get_conv3d_config(
     channel_key = (in_channels, out_channels, kernel_size)
 
     exact = _BLOCKINGS.get(blocking_key)
+    if os.environ.get("LTX_VAE_T2_BLOCKINGS", "1") != "0":
+        exact = _LTX_4X8_T2_BLOCKINGS.get(blocking_key, exact)
     arch = "bh" if ttnn.device.is_blackhole() else "wh"
     split = _SPLIT_BLOCKINGS.get((arch, h_factor, w_factor, *channel_key))
     if exact is not None:

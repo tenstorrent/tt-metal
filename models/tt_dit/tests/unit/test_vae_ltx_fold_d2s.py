@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""LTX_VAE_FOLD_D2S is off by default, and the upsampler only folds depth-to-space into conv3d for channel
+"""The upsampler only folds depth-to-space into conv3d for channel
 blockings the conv3d writer supports. No device."""
 
 from types import SimpleNamespace
@@ -8,15 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from ...models.vae import vae_ltx
-
-
-@pytest.mark.parametrize(("value", "expected"), [(None, False), ("0", False), ("1", True)])
-def test_fold_d2s_flag_defaults_off(monkeypatch, value, expected):
-    if value is None:
-        monkeypatch.delenv("LTX_VAE_FOLD_D2S", raising=False)
-    else:
-        monkeypatch.setenv("LTX_VAE_FOLD_D2S", value)
-    assert vae_ltx._fold_d2s_enabled() is expected
 
 
 def _conv(out_channels, c_out_block):

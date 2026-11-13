@@ -24,6 +24,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
+from ...utils import timing_tree
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
@@ -273,9 +274,15 @@ class LTXCausalConv3d(Module):
         causal: bool = True,
         logical_h: int = 0,
         logical_w: int = 0,
+        output_depth_to_space: tuple[int, int, int] | None = None,
+        output_trim_t_front: int = 0,
+        residual: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         # x_BTHWC: (B, T, H_per_device, W_per_device, C) ROW_MAJOR, H/W fractured on the mesh.
         # logical_h/logical_w: pre-pad full spatial dims for pad masking (0 = no masking).
+        # output_depth_to_space: conv3d writes each (p1, p2, p3) channel group to its depth-to-space
+        # slot (per device), dropping the first output_trim_t_front frames.
+        # residual: added to the output in the conv3d epilogue (see can_fuse_residual).
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
         fold_time_pad = self.fold_time_pad and not causal
@@ -381,6 +388,12 @@ class LTXCausalConv3d(Module):
                     logical_w=(logical_w if fold_w_mask else 0),
                 )
 
+        d2s_kwargs = {}
+        if output_depth_to_space is not None:
+            d2s_kwargs = dict(
+                output_depth_to_space=list(output_depth_to_space), output_trim_t_front=output_trim_t_front
+            )
+
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
@@ -395,9 +408,35 @@ class LTXCausalConv3d(Module):
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
             **halo_kwargs,
+            **d2s_kwargs,
+            **({} if residual is None else dict(residual_tensor=residual)),
         )
 
         return x_BTHWC
+
+    def can_fuse_residual(self, residual: ttnn.Tensor) -> bool:
+        """conv3d's residual epilogue reads bf16 row-major DRAM rows laid out like its output."""
+        mem = residual.memory_config()
+        return (
+            self.dtype == ttnn.bfloat16
+            and self.out_channels == self.unpadded_out_channels
+            and self.out_channels % 32 == 0
+            and residual.dtype == ttnn.bfloat16
+            and residual.layout == ttnn.ROW_MAJOR_LAYOUT
+            and mem.buffer_type == ttnn.BufferType.DRAM
+            and mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        )
+
+    def can_fold_depth_to_space(self, stride: tuple[int, int, int]) -> bool:
+        """conv3d's depth-to-space output needs tile-aligned groups that nest with C_out_block."""
+        group = self.out_channels // math.prod(stride)
+        c_out_block = self.conv_config.C_out_block or self.out_channels
+        return (
+            group % 32 == 0
+            and self.out_channels % c_out_block == 0
+            and (c_out_block % group == 0 or group % c_out_block == 0)
+            and c_out_block // group <= 8
+        )
 
 
 def _neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
@@ -476,6 +515,10 @@ class LTXResnetBlock3D(Module):
             out_channels, out_channels, kernel_size=3, stride=1, conv_dims=conv_dims, **conv_kwargs
         )
 
+        # On by default (LTX_VAE_FUSE_RESIDUAL=0 turns it off): conv2 adds the skip in its epilogue
+        # instead of a separate add over the whole activation.
+        self.fuse_residual = os.environ.get("LTX_VAE_FUSE_RESIDUAL", "1") != "0"
+
         self.has_shortcut = in_channels != out_channels
         if self.has_shortcut:
             # 1x1x1 channel-projection conv
@@ -521,7 +564,6 @@ class LTXResnetBlock3D(Module):
 
         h = self.norm2(h, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         # Skip connection
         if self.has_shortcut:
@@ -533,6 +575,10 @@ class LTXResnetBlock3D(Module):
             )
             residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
+        self.fused = self.fuse_residual and self.conv2.can_fuse_residual(residual)
+        if self.fused:
+            return self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w, residual=residual)
+        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
         return ttnn.add(residual, h)
 
 
@@ -611,6 +657,9 @@ class LTXDepthToSpaceUpsample(Module):
             conv_dims=conv_dims,
             depth_to_space_stride=stride,
         )
+        # On by default (LTX_VAE_FOLD_D2S=0 turns it off): conv3d writes its output straight to the
+        # depth-to-space layout and drops the causal first frame, replacing reshape+permute+reshape+slice.
+        self.fold_d2s = os.environ.get("LTX_VAE_FOLD_D2S", "1") != "0" and self.conv.can_fold_depth_to_space(stride)
 
     def _depth_to_space_bthwc(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
         """Depth-to-space in BTHWC, channel order C,p1,p2,p3: (B,T,H,W,C*p1*p2*p3) -> (B,T*p1,H*p2,W*p3,C).
@@ -646,14 +695,24 @@ class LTXDepthToSpaceUpsample(Module):
             if p1 == 2:
                 x_in = x_in[:, 1:, :, :, :]
 
-        x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
-
-        # Depth-to-space on conv output (channels reordered to p1,p2,p3,C by self.conv).
-        x = depth_to_space_channels_last(x_BTHWC, self.stride)
-
         # Remove first frame if temporal upsampling (causal padding artifact)
-        if p1 == 2:
-            x = x[:, 1:, :, :, :]
+        trim_t = 1 if p1 == 2 else 0
+        if self.fold_d2s:
+            x = self.conv(
+                x_BTHWC,
+                causal=causal,
+                logical_h=logical_h,
+                logical_w=logical_w,
+                output_depth_to_space=self.stride,
+                output_trim_t_front=trim_t,
+            )
+        else:
+            x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
+
+            # Depth-to-space on conv output (channels reordered to p1,p2,p3,C by self.conv).
+            x = depth_to_space_channels_last(x_BTHWC, self.stride)
+            if trim_t:
+                x = x[:, trim_t:, :, :, :]
 
         if self.residual:
             x = ttnn.add(x, x_in)
@@ -805,7 +864,9 @@ class LTXVideoDecoder(Module):
         # dims it stashes for forward's crop. Only used when forward(traced=True).
         self._decode_tracer = None
         self._yuv_output_tracer = None
-        self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
+        self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "1") == "1"
+        # rgb_to_yuv reads conv_out's patchified output directly instead of after a reshape + permute.
+        self.fuse_unpatch = os.environ.get("LTX_VAE_FUSE_UNPATCH", "1") == "1"
         self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"
         self.exact_shard = _exact_shard_enabled()
         self._decode_logical_hw = (0, 0)
@@ -999,6 +1060,8 @@ class LTXVideoDecoder(Module):
         b, t, h, w, channels = tuple(sample_tt.shape)
         q = r = self.patch_size
         assert b == 1 and channels == 3 * q * r
+        if self.fuse_unpatch:
+            return rgb_chwt_to_yuv_device(sample_tt, input_patch_size=q)
         # Channels are (c,p,r,q) with p=1; the output order is C,H,q,W,r,T. The p axis is left out so T
         # is the permute's innermost dim: a trailing size-1 axis makes the RM permute move 1-element
         # rows and turns the final reshape into a copy instead of a view.
@@ -1007,6 +1070,7 @@ class LTXVideoDecoder(Module):
         chwt = ttnn.reshape(chwt, (3, h * q, w * r, t))
         return rgb_chwt_to_yuv_device(chwt)
 
+    @timing_tree.span("mesh_device", "decode TOTAL", root=True)
     def forward(
         self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", traced: bool = False, defer_yuv: bool = False
     ) -> torch.Tensor:
@@ -1017,7 +1081,7 @@ class LTXVideoDecoder(Module):
         traced: capture the device decode once and replay it from a resident ttnn trace, dropping per-op
             host dispatch. A single decode does not amortize the capture, so this pays off only when the
             decoder is reused across generations; the mesh must be opened with a trace_region_size.
-        defer_yuv: with "yuv" on the unfused path, return a ``DeferredYuvPlanar`` once the device reads have
+        defer_yuv: with "yuv", return a ``DeferredYuvPlanar`` once the device reads have
             landed; the host assembly runs when its ``result()`` is called.
         """
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
@@ -1025,25 +1089,27 @@ class LTXVideoDecoder(Module):
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
         sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
 
-        sample_tt = typed_tensor_2dshard(
-            sample,
-            self.mesh_device,
-            shard_mapping={
-                self.parallel_config.height_parallel.mesh_axis: 2,
-                self.parallel_config.width_parallel.mesh_axis: 3,
-            },
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
+        with timing_tree.span(self.mesh_device, "latent upload", category=timing_tree.HOST_XFER):
+            sample_tt = typed_tensor_2dshard(
+                sample,
+                self.mesh_device,
+                shard_mapping={
+                    self.parallel_config.height_parallel.mesh_axis: 2,
+                    self.parallel_config.width_parallel.mesh_axis: 3,
+                },
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
 
-        if traced:
-            if self._decode_tracer is None:
-                self._decode_tracer = Tracer(
-                    self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
-                )
-            sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
-        else:
-            sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
+        with timing_tree.span(self.mesh_device, "decode (device)"):
+            if traced:
+                if self._decode_tracer is None:
+                    self._decode_tracer = Tracer(
+                        self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
+                    )
+                sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
+            else:
+                sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
         # decode_device threads logical_h/logical_w through the upsamples; read back the final dims.
         logical_h, logical_w = self._decode_logical_hw
 
@@ -1055,16 +1121,17 @@ class LTXVideoDecoder(Module):
             and self.parallel_config.width_parallel.mesh_axis == 1
             and sample_tt.shape[0] == 1
         ):
-            if self.trace_yuv_output:
-                if self._yuv_output_tracer is None:
-                    self._yuv_output_tracer = Tracer(
-                        self._unpatch_yuv_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
-                    )
-                planes = self._yuv_output_tracer(sample_tt)
-            else:
-                planes = self._unpatch_yuv_device(sample_tt)
+            with timing_tree.span(self.mesh_device, "unpatch + rgb->yuv (device)"):
+                if self.trace_yuv_output:
+                    if self._yuv_output_tracer is None:
+                        self._yuv_output_tracer = Tracer(
+                            self._unpatch_yuv_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
+                        )
+                    planes = self._yuv_output_tracer(sample_tt)
+                else:
+                    planes = self._unpatch_yuv_device(sample_tt)
             h_out, w_out = logical_h * self.patch_size, logical_w * self.patch_size
-            planar = yuv_planes_to_host(planes, self.mesh_device, logical_h=h_out, logical_w=w_out)
+            planar = yuv_planes_to_host(planes, self.mesh_device, logical_h=h_out, logical_w=w_out, defer=defer_yuv)
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
 
         # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large

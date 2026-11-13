@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 
+from . import timing_tree
 from .planar_concat import HAS_CPP_PLANAR_CONCAT
 from .planar_concat import planar_concat_cpp as _planar_concat_cpp_impl
 from .tensor import _get_inter_host_axis, _host_buffer_to_torch, _to_torch_zero_copy
@@ -93,15 +94,19 @@ def _bt601_yuv_coefficients():
     return ttnn.experimental.yuv_bt601_coefficients()
 
 
-def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None):
-    """Pure device region, preserving RGB clip before every color/chroma operation."""
+def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None, input_patch_size: int = 0):
+    """Pure device region, preserving RGB clip before every color/chroma operation.
+
+    input_patch_size: 0 for CHWT input; p for a patchified (1, T, H/p, W/p, 3*p*p) tensor, which
+    rgb_to_yuv unpatchifies while reading.
+    """
     if coefficients is None:
         coefficients = _bt601_yuv_coefficients()
     tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
-    return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+    return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, input_patch_size=input_patch_size)
 
 
-def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int):
+def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int, defer: bool = False):
     """Single-host H/W-sharded planes to the existing asynchronous DMA/reassembly path."""
     if ttnn.using_distributed_env():
         raise ValueError("direct YUV planes currently require a single host")
@@ -112,7 +117,7 @@ def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int):
     h, w = h_per * mesh_device.shape[0], w_per * mesh_device.shape[1]
     if not (0 < logical_h <= h and logical_h % 2 == 0 and 0 < logical_w <= w and logical_w % 2 == 0):
         raise ValueError("YUV crop must be positive, even, and inside the assembled planes")
-    return _yuv_planar_d2h(y, cb, cr, mesh_device, h, w, frames, out_H=logical_h, out_W=logical_w)
+    return _yuv_planar_d2h(y, cb, cr, mesh_device, h, w, frames, out_H=logical_h, out_W=logical_w, defer=defer)
 
 
 def _yuv_planar_d2h(
@@ -174,14 +179,15 @@ def _yuv_planar_d2h(
     out_H = H if out_H is None else out_H
     out_W = W if out_W is None else out_W
 
-    host_Y = tt_Y.cpu(blocking=False)
-    host_Cb = tt_Cb.cpu(blocking=False)
-    host_Cr = tt_Cr.cpu(blocking=False)
-    read_event = None
-    if defer:
-        read_event = ttnn.record_event(mesh_device, 0, device_range=_local_range(view))
-    else:
-        ttnn.synchronize_device(mesh_device)
+    with timing_tree.span(mesh_device, "yuv readback (3 planes)", category=timing_tree.HOST_XFER):
+        host_Y = tt_Y.cpu(blocking=False)
+        host_Cb = tt_Cb.cpu(blocking=False)
+        host_Cr = tt_Cr.cpu(blocking=False)
+        read_event = None
+        if defer:
+            read_event = ttnn.record_event(mesh_device, 0, device_range=_local_range(view))
+        else:
+            ttnn.synchronize_device(mesh_device)
 
     def _host_half():
         if read_event is not None:
@@ -305,7 +311,9 @@ def _yuv_planar_d2h(
     if defer:
         out_row = out_H * out_W + 2 * (out_H // 2) * (out_W // 2)
         return DeferredYuvPlanar(_host_half, (T, out_row))
-    return _host_half()
+    path = "C++ planar concat" if HAS_CPP_PLANAR_CONCAT else "torch fallback"
+    with timing_tree.span(mesh_device, f"yuv host assemble ({path})", category=timing_tree.HOST_COMPUTE):
+        return _host_half()
 
 
 class DeferredYuvPlanar:

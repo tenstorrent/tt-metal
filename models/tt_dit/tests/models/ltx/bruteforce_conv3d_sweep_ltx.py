@@ -106,8 +106,16 @@ _SWEEP_LAYERS_LTX25_544P_145F_HALO = [
     ("s2_res", 512, 512, 75, 38, 34, (75, 34, 30), (68, 120)),
     ("s3_res", 256, 256, 147, 38, 34, (147, 34, 30), (68, 120)),
     ("s4_res", 128, 128, 147, 74, 66, (147, 68, 60), (136, 240)),
+    ("s1_res", 512, 512, 39, 20, 18, (39, 17, 15), (34, 60)),
     ("s1_up", 512, 4096, 39, 20, 18, (39, 17, 15), (34, 60)),
     ("s3_chg", 256, 512, 147, 38, 34, (147, 34, 30), (68, 120)),
+    # Exact shards (LTX_VAE_EXACT_SHARD, the default): ceil(logical / mesh) per chip, so s1 and s4
+    # do not overhang and only s0 masks. Names avoid the older ids as substrings for -k selection.
+    ("s4res_x", 128, 128, 147, 70, 62, (147, 68, 60), (136, 240)),
+    ("s4out_x", 128, 48, 147, 70, 62, (147, 68, 60), (136, 240)),
+    ("s1up_x", 512, 4096, 39, 19, 17, (39, 17, 15), (34, 60)),
+    ("s0res_x", 1024, 1024, 21, 11, 10, (21, 9, 8), (17, 30)),
+    ("s0up_x", 1024, 4096, 21, 11, 10, (21, 9, 8), (17, 30)),
 ]
 
 
@@ -152,6 +160,7 @@ def test_bruteforce_sweep_ltx25_544p_145f_halo(
         max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "720")),
         near_table=True,
         only_blockings=only_blockings,
+        combo_watchdog_s=float(os.environ.get("SWEEP_COMBO_WATCHDOG_S", "90")),
     )
 
 
