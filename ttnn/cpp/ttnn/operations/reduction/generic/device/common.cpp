@@ -99,7 +99,7 @@ void validate_rm_preconditions(
     TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);
 }
 
-tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
+tt::tt_metal::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
     const RmPlan& plan, uint32_t num_h_slices, uint32_t slice_Ht) {
     // Both reduce dims get the same set. Only the reader's REDUCE_COL (H) branch reads H_logical and
     // the H-axis-split geometry (num_h_slices / slice_Ht), but a compile-time arg is free on the
@@ -119,7 +119,7 @@ tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
     };
 }
 
-tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
+tt::tt_metal::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
     const RmPlan& plan, bool tile_output, uint32_t num_h_slices) {
     // As above: everything past datum_bytes is read only by the writer's REDUCE_COL (H) branch, but
     // both dims declare the full set so the names resolve in either build. tile_output is mirrored
@@ -135,7 +135,7 @@ tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
     };
 }
 
-tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
+tt::tt_metal::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
     const RmPlan& plan, uint32_t Ht_arg, bool fp32_sfpu_reduce) {
     return {
         {"Ht", Ht_arg},

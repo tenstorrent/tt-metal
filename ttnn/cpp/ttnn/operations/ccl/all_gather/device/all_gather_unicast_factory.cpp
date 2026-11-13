@@ -106,8 +106,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
     uint32_t num_links = operation_attributes.axis_num_links[axis];
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
+    const uint32_t input_page_size = input_tensor.mesh_buffer().aligned_page_size();
+    const uint32_t output_page_size = output_tensor.mesh_buffer().aligned_page_size();
     uint32_t workers_per_dir = 1;
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
         workers_per_dir = 2;
@@ -120,7 +120,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         // 2 and than >=6 -- so the ramp jumps 2->8->12 and must never emit them.
         const uint32_t txn_bytes = std::min(input_page_size, output_page_size);  // NOC transaction size
         const uint64_t total_output_bytes =
-            static_cast<uint64_t>(output_tensor.buffer()->num_pages()) * output_page_size;
+            static_cast<uint64_t>(output_tensor.mesh_buffer().num_pages()) * output_page_size;
         const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
         constexpr uint32_t bw_bound_txn_bytes = 1536;              // NOC txn size needed to benefit from >2 workers
         constexpr uint64_t bw_bound_link_bytes = 4000000ULL;       // bytes/link where fabric link starts saturating
@@ -218,6 +218,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // clear of persistent L1 there; its addresses are offsets until the mux publishes the map's base.
     constexpr uint8_t num_buffers_per_channel = 2;  // hardcoded since no observable impact on performance
     tt::tt_fabric::FabricMuxConfig mux_config(
+        *mesh_device,
         /*num_full_size_channels=*/workers_per_dir,
         /*num_header_only_channels=*/0,
         /*num_buffers_full_size_channel=*/num_buffers_per_channel,
@@ -252,7 +253,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                 mux_kernel_desc.runtime_args.emplace_back(
                     mux_core_coord,
                     mux_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                        sender_fabric_node_id, dst_node, link, desc, mux_core_coord));
+                        *mesh_device, sender_fabric_node_id, dst_node, link, desc, mux_core_coord));
             }
         }
         desc.kernels.push_back(std::move(mux_kernel_desc));
@@ -295,8 +296,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each chunk
     //                        lands at a byte offset within a shared output page.
     //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
-    const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
-    const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
+    const uint32_t input_unaligned_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t output_unaligned_page_size = output_tensor.mesh_buffer().page_size();
     // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
     // split writes output-content-sized pieces to separate output page bases.
     const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
@@ -307,7 +308,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
         "concat requires an unpadded input page");  // so slots align to content
 
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
+    const uint32_t num_input_pages = input_tensor.mesh_buffer().num_pages();
     const uint32_t num_output_chunks = num_input_pages * split_factor;
     TT_FATAL(
         num_output_chunks / split_factor == num_input_pages,

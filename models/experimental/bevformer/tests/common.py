@@ -26,8 +26,9 @@ from models.experimental.bevformer.model_config import (
     BOX_SIZE,
     BOX_VELOCITY,
     BOX_YAW,
-    CAMERA_ORDER,
+    CAMERA_GROUPS,
     CAMERA_IMAGE_SIZE,
+    CAMERA_ORDER,
     CAN_BUS_DIMS,
     CENTERS_FIRST,
     CODE_CENTERS,
@@ -85,6 +86,7 @@ from models.experimental.bevformer.tests.fixtures.camera_rigs import (
     build_lidar2img,
     ring_camera_rig,
 )
+from models.experimental.bevformer.tt.tt_resnet import TTResLayer
 from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 # The variant is fixed when model_config is first imported; the log says which one a run tests.
@@ -358,6 +360,11 @@ BACKBONE_FPN_PCC = 0.985 if VARIANT == "small" else 0.99
 
 # Dtypes TTResNet emits for its outputs: C3-C5 for base, C5 for small and tiny.
 BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16] * len(RESNET_KWARGS["out_indices"])
+# Layouts TTResNet emits its outputs in, which follow its layers' camera groups.
+BACKBONE_OUTPUT_LAYOUTS = [
+    TTResLayer.group_output_layout(CAMERA_GROUPS.get(layer), h, w)
+    for layer, (h, w) in zip(RESNET_KWARGS["out_indices"], SPATIAL_SHAPES)
+]
 
 # Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
 IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))
@@ -390,6 +397,13 @@ def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
     n, c, h, w = nchw.shape
     nhwc = nchw.permute(0, 2, 3, 1).reshape(1, 1, n * h * w, c)
     return ttnn.from_torch(nhwc, device=device, dtype=dtype, layout=layout)
+
+
+def to_image_layout(nchw, device):
+    """NCHW images -> the (N, 3, H, W) bfloat16 ROW_MAJOR ttnn tensor TTResNet reads (``device`` None
+    keeps it on the host). torch rounds float32 to bfloat16 bit for bit as from_torch does, several
+    times faster."""
+    return ttnn.from_torch(nchw.to(torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 def from_conv_layout(tt_tensor, nchw_shape):

@@ -31,7 +31,7 @@ namespace tt::tt_metal {
 
 class RISCVAtomicsFixture : public UnitMeshAnyDispatchFixture {
 protected:
-    static constexpr experimental::NodeCoord core = {0, 0};
+    static constexpr NodeCoord core = {0, 0};
     static constexpr uint32_t SENTINEL{0xABABABAB};
     static constexpr uint32_t iterations{2000};
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/riscv_atomics.cpp";
@@ -64,48 +64,48 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        experimental::KernelSpec::CompilerOptions::Defines defines_vec(dm_defines);
+        KernelSpec::CompilerOptions::Defines defines_vec(dm_defines);
 
         // Quasar: one multi-threaded DM kernel spans the user DMs (DM2..DM7).
         // Gen1 (BH): one KernelSpec per DM processor (BRISC, NCRISC), each single-threaded with its
         // own NOC binding. The kernel itself picks its role via mhartid (Quasar) or COMPILE_FOR_BRISC
         // (Gen1) — see riscv_atomics.cpp.
-        std::vector<experimental::KernelSpec> kernel_specs;
-        std::vector<experimental::KernelSpecName> kernel_names;
-        experimental::ProgramRunArgs params;
-        const auto make_run_params = [&](const experimental::KernelSpecName& kernel_name) {
-            return experimental::ProgramRunArgs::KernelRunArgs{
+        std::vector<KernelSpec> kernel_specs;
+        std::vector<KernelSpecName> kernel_names;
+        ProgramRunArgs params;
+        const auto make_run_params = [&](const KernelSpecName& kernel_name) {
+            return ProgramRunArgs::KernelRunArgs{
                 .kernel = kernel_name,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     core, {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}),
             };
         };
 
         if (is_quasar) {
-            const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
-            kernel_specs.push_back(experimental::KernelSpec{
+            const KernelSpecName DM_KERNEL{"dm_kernel"};
+            kernel_specs.push_back(KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = kernel_path,
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
-                .hw_config = experimental::DataMovementHardwareConfig{},
+                .hw_config = DataMovementHardwareConfig{},
             });
             kernel_names.push_back(DM_KERNEL);
             params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
         } else {
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
-                const experimental::KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
-                kernel_specs.push_back(experimental::KernelSpec{
+                const KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
+                kernel_specs.push_back(KernelSpec{
                     .unique_id = name,
                     .source = kernel_path,
                     .num_threads = 1,
                     .compiler_options = {.defines = defines_vec},
                     .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
                     .hw_config =
-                        experimental::DataMovementHardwareConfig{
+                        DataMovementHardwareConfig{
                             .config_1xx =
-                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                DataMovementHardwareConfig::DataMovement1XXConfig{
                                     .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
                                     .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
                                 },
@@ -116,12 +116,12 @@ protected:
             }
         }
 
-        experimental::WorkUnitSpec main_wu{
+        WorkUnitSpec main_wu{
             .name = "main",
             .kernels = kernel_names,
             .target_nodes = core,
         };
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "riscv_atomics",
             .kernels = kernel_specs,
             .work_units = {main_wu},

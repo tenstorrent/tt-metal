@@ -18,6 +18,7 @@
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 namespace ttnn::prim {
@@ -184,10 +185,10 @@ void PadDeviceOperation::validate_on_program_cache_miss(
         uint32_t shard_width = input_tensor.shard_spec().has_value()
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
-        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
         const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
-            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",
             shard_width,
             page_size_bytes,
@@ -215,7 +216,7 @@ tt::tt_metal::TensorSpec PadDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input;
     return tt::tt_metal::TensorSpec(
         operation_attributes.output_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

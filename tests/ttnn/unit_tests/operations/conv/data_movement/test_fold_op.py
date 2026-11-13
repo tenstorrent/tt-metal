@@ -417,6 +417,15 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32, ttnn.uint8])
+def test_fold_rejects_unsupported_row_major_dtype(device, dtype, expect_error):
+    tt_input = ttnn.from_torch(
+        torch.zeros((1, 16, 16, 32), dtype=torch.int32), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, r"row-major output dtype \(.*\) must match the input dtype"):
+        ttnn.fold(tt_input, 2, 2)
+
+
 def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid, layout=ttnn.ROW_MAJOR_LAYOUT):
     torch.manual_seed(0)
 

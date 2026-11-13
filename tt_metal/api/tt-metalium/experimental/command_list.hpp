@@ -10,12 +10,12 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/workload/utils/arg_value.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/workload/utils/table.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -115,12 +115,15 @@ public:
 
     /**
      * @brief Records one workload without launching it.
-     * Compiles the workload and uploads any required kernel binaries through the current thread's command queue.
+     * Compiles the workload and uploads any required kernel binaries.
      *
-     * @param workload      Workload to record.
-     * @param parameters    Fields of @p workload that built command lists can patch with CommandList::update_args().
+     * @param binary_upload_cq  Command queue of device() that writes the kernel binaries to the device. Waits for the
+     *                          upload to finish.
+     * @param workload          Workload to record.
+     * @param parameters        Fields of @p workload that built command lists can patch with
+     *                          CommandList::update_args().
      */
-    void add(MeshWorkload& workload, const CmdListParameters& parameters = {});
+    void add(MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters = {});
 
     /**
      * @brief Records one Tensor prefetcher request without sending it.

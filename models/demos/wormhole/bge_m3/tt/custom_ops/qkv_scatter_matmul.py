@@ -4,10 +4,14 @@
 """Fixed-shape Python descriptor for BGE's S8192 QKV MinimalMatmul.
 
 This is intentionally a parity scaffold: it mirrors the compiled
-``minimal_matmul_factory_helper_common`` host factory while reusing its three
-unmodified JIT kernel sources.  Real dataflow changes (direct Q/K/V scatter,
-output-CB depth A/B) must not be added until this descriptor matches output,
-device time, warm reuse, and trace replay.
+``minimal_matmul_factory_helper_common`` host factory while reusing its
+unmodified in0 JIT kernel source.  That kernel takes the row count (M tiles)
+and every buffer address as common runtime args and derives its per-core row
+range on device from its in0 index (``minimal_matmul_runtime_args.hpp``), so
+the argument lists below follow the factory's ``dm_compile_time_args`` /
+``dm_common_args``.  Real dataflow changes (direct Q/K/V scatter, output-CB
+depth A/B) must not be added until this descriptor matches output, device
+time, warm reuse, and trace replay.
 """
 
 from __future__ import annotations
@@ -87,6 +91,10 @@ def _axis_order(
     current = x if axis == "x" else y
     order = [_physical(device, value if axis == "x" else x, y if axis == "x" else value) for value in values]
     return order, values.index(current)
+
+
+def bias_addr_or_zero(bias_tensor: ttnn.Tensor | None) -> int:
+    return bias_tensor.buffer_address() if bias_tensor is not None else 0
 
 
 def _append_accessor_args(args: list[int], *tensors: ttnn.Tensor | None) -> None:
@@ -217,10 +225,10 @@ def bge_qkv_scatter_matmul(
     in1_noc = ttnn.NOC.NOC_1
     kernel_defines = [("FUSE_BIAS", "1")] if bias_tensor is not None else []
 
-    # Compile-time argument order mirrors minimal_matmul_factory_helper_common.
+    # Compile-time argument order mirrors minimal_matmul_factory_helper_common's dm_compile_time_args: the row
+    # count is not here (the kernel takes it as common runtime arg 0 and splits it over M_cores on device).
     in0_prefix = [
-        M,
-        M,
+        in0_parallel_axis_cores,  # M_cores
         K,
         K,
         N,
@@ -228,7 +236,6 @@ def bge_qkv_scatter_matmul(
         M_block,
         K_block,
         N_block,
-        m_blocks_per_core,
         n_blocks_per_core,
         _tile_bytes(input_dtype),
         _tile_bytes(out_dtype),
@@ -238,10 +245,21 @@ def bge_qkv_scatter_matmul(
         2,
         0,  # transposed grid: in1 writes output
     ]
-    in0_sender_ct = [*in0_prefix, 1, 1, N, _tile_bytes(weight_dtype)]
-    in0_receiver_ct = [*in0_prefix, 0, 1, N, _tile_bytes(weight_dtype)]
+    in0_sender_ct = [*in0_prefix, 1, 1, N]
+    in0_receiver_ct = [*in0_prefix, 0, 1, N]
     _append_accessor_args(in0_sender_ct, input_tensor, q_output, bias_tensor)
     _append_accessor_args(in0_receiver_ct, input_tensor, q_output, bias_tensor)
+    # Common runtime args of the in0 kernels (minimal_matmul_common_args::Dm): M_tiles, in0, bias (in2), the
+    # second in0 source (in3, unused), the ternary inputs (unused), then the N_chunks output addresses.
+    in0_common_rt = [
+        M,
+        input_tensor.buffer_address(),
+        bias_addr_or_zero(bias_tensor),
+        0,
+        0,
+        0,
+        q_output.buffer_address(),
+    ]
 
     in1_prefix = [
         M,
@@ -286,7 +304,7 @@ def bge_qkv_scatter_matmul(
     in0_rt: list[tuple[tuple[int, int], list[int]]] = []
     in1_rt: list[tuple[tuple[int, int], list[int]]] = []
     compute_rt: list[tuple[tuple[int, int], list[int]]] = []
-    bias_addr = bias_tensor.buffer_address() if bias_tensor is not None else 0
+    bias_addr = bias_addr_or_zero(bias_tensor)
     k_blocks_per_core = math.ceil(num_k_blocks / in1_parallel_axis_cores)
     max_defer_write_k_block = num_k_blocks - 1
     for x in range(_GRID_X):
@@ -309,25 +327,22 @@ def bge_qkv_scatter_matmul(
             n_end = (N // in1_parallel_axis_cores) * (y + 1)
             defer_write_k_block = min(y * k_blocks_per_core, num_k_blocks - 1)
 
+            # Per-core args of the in0 kernel: the chain position, then the in0 index the kernel derives its
+            # uniform M range from (rows [x * M / 8, (x + 1) * M / 8), the m_start / m_end below).
             in0_rt.append(
                 (
                     (x, y),
                     [
-                        input_tensor.buffer_address(),
-                        bias_addr,
-                        0,
                         int(in0_idx == len(in0_order) - 1),
                         next_in0.x,
                         next_in0.y,
                         prev_in0.x,
                         prev_in0.y,
-                        m_start,
-                        m_end,
+                        x,
                         n_start,
                         n_end,
                         defer_write_k_block,
                         max_defer_write_k_block,
-                        q_output.buffer_address(),
                     ],
                 )
             )
@@ -368,6 +383,7 @@ def bge_qkv_scatter_matmul(
             core_ranges=in0_sender_cores,
             compile_time_args=in0_sender_ct,
             runtime_args=in0_sender_rt,
+            common_runtime_args=in0_common_rt,
             defines=kernel_defines,
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=in0_noc),
         ),
@@ -377,6 +393,7 @@ def bge_qkv_scatter_matmul(
             core_ranges=in0_receiver_cores,
             compile_time_args=in0_receiver_ct,
             runtime_args=in0_receiver_rt,
+            common_runtime_args=in0_common_rt,
             defines=kernel_defines,
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=in0_noc),
         ),

@@ -12,7 +12,7 @@
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 namespace ttnn::operations::ternary {
 
@@ -56,7 +56,7 @@ struct TernaryDeviceOperation {
         // rebuild and no kernel recompile, but the work split and every shape-dependent arg is
         // re-derived for the current tensors, via the same shared builder
         // create_program_artifacts() uses.
-        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,

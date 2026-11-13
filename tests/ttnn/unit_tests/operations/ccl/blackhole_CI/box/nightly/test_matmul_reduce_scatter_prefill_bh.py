@@ -157,6 +157,8 @@ MODEL_CASES = {
     # output chunks (the block misses L1): 1 x 6 and 3 x 2 chunks on a 1x4 ring
     "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, ttnn.bfloat16, ttnn.bfloat16),
     "chunked_mn": ((1, 1, 4096, 1024), (1024, 8192), -1, ttnn.bfloat16, ttnn.bfloat16),
+    # fits L1 unchunked only with a 2-tile K-block: the cost model picks 3 x 1 chunks instead
+    "llama_70b_wo_prefill": ((1, 1, 8192, 1024), (1024, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
 
 
@@ -177,6 +179,53 @@ def test_ring_model_shapes(mesh_device, case):
         weight_dtype=weight_dtype,
         num_links=2,
     )
+
+
+# Decode rows on the default 2D grid: resident plans 1-4 rows tall and 10 columns wide with N along x, the plan class
+# whose W the reader fetches on NoC0 (w_noc0_thin_wide in the program factory). No prefill shape above reaches it.
+THIN_WIDE_CASES = {
+    "kimi_k27_o_proj_decode": ((1, 1, 32, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "kimi_k3_dense_ffn_decode_m96": ((1, 1, 96, 8448), (8448, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+}
+
+
+def last_plan():
+    return dict(ttnn._ttnn.operations.experimental.ccl_experimental._matmul_reduce_scatter_prefill_last_plan())
+
+
+def assert_thin_wide_plan(scatter_dim):
+    """The last call took the thin-wide plan (resident, scattering on N, M on y, <= 4 rows of >= 10 columns), so a
+    planner or threshold change cannot silently move a THIN_WIDE_CASES shape off the NoC0 W reads it is there for."""
+    plan = last_plan()
+    grid_m, grid_n = plan["grid"]
+    thin_wide = (
+        scatter_dim == -1
+        and plan["xblock"] == "resident"
+        and plan["orient"] == "m_on_y"
+        and grid_m <= 4
+        and grid_n >= 10
+    )
+    assert thin_wide, f"expected a thin-wide plan (resident, m_on_y, grid_m <= 4, grid_n >= 10), got {plan}"
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("case", THIN_WIDE_CASES.values(), ids=THIN_WIDE_CASES.keys())
+def test_ring_thin_wide(mesh_device, case):
+    a_shape, w_shape, scatter_dim, dtype, weight_dtype = case
+    run_case(
+        mesh_device,
+        a_shape,
+        w_shape,
+        cluster_axis=1,
+        scatter_dim=scatter_dim,
+        topology=ttnn.Topology.Ring,
+        dtype=dtype,
+        weight_dtype=weight_dtype,
+        num_links=2,
+    )
+    assert_thin_wide_plan(scatter_dim)
 
 
 # Operands in L1 interleaved (GLM-5.3 prefill feeds q_a_proj and the indexer projections from an L1 attention norm):

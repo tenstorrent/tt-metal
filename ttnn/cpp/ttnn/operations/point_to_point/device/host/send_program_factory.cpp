@@ -152,7 +152,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         // index 8 (semaphore address) become a Buffer* binding and an
         // absolute semaphore address, respectively.
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensors.at(0).buffer()->address(),  // placeholder, replaced via Buffer* below
+            output_tensors.at(0).mesh_buffer().address(),  // placeholder, replaced via Buffer* below
             page_idx_start,
             page_idx_end,
             num_hops,

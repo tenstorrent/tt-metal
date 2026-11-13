@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import all_zero_bits
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 
 # Blackhole only, like the other KDA ops.
@@ -190,6 +191,117 @@ def test_one_trace_follows_the_index(device, dtype, layout, entry_shape, nd_shar
             assert torch.equal(ttnn.to_torch(table), table_host), f"replay store index {value}"
     finally:
         ttnn.release_trace(device, trace)
+
+
+# (zero_fill_at_zero word or None, index[0]) -> the table entry the copy reads or writes, "zeros" when that entry (a
+# store) or the single-entry destination (a load) is zero-filled instead, or None when the index selects no entry and
+# nothing is written.
+ZERO_FILL_ROWS = [
+    (0, 3, "zeros"),
+    (0, 6, "zeros"),
+    (32, 3, 3),  # any nonzero word copies: a chunk start past the head
+    (0xFFFFFFFF, 6, 6),
+    (None, 3, 3),
+    (0, _TABLE_ENTRIES, None),  # an out-of-range index stays a no-op even when zeroing
+]
+DIRECTIONS = ["load", "store"]
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("dtype, layout, entry_shape, nd_shard", FORMS)
+def test_zero_fill_at_zero_writes_zeros_or_the_copy(device, direction, dtype, layout, entry_shape, nd_shard):
+    """A word reading 0 fills the destination entry with zeros, a nonzero or absent one copies; a load never writes
+    the table, and a store writes only the indexed entry."""
+    table_host = _random((_TABLE_ENTRIES, *entry_shape), dtype, 1)
+    single_host = _random((1, *entry_shape), dtype, 2)
+    assert not all_zero_bits(table_host) and not all_zero_bits(single_host)
+    for flag, value, expected in ZERO_FILL_ROWS:
+        row = f"{direction} zero_fill_at_zero {flag} index {value}"
+        # Fresh tensors per row, so every row starts from the same nonzero contents.
+        table = _to_device(table_host, device, dtype, layout, _table_memory(device, nd_shard))
+        single = _to_device(single_host, device, dtype, layout)
+        index = _index(device, value)
+        zero_fill_at_zero = None if flag is None else _index(device, flag)
+        source, destination = (table, single) if direction == "load" else (single, table)
+        ttnn.experimental.kda.indexed_entry_copy(
+            source, destination, index, index_scale=1, index_offset=0, zero_fill_at_zero=zero_fill_at_zero
+        )
+        want_table, want_single = table_host.clone(), single_host.clone()
+        if expected is not None:
+            if direction == "load":
+                want_single = (
+                    torch.zeros_like(single_host) if expected == "zeros" else table_host[expected : expected + 1]
+                )
+            else:
+                want_table[value : value + 1] = 0 if expected == "zeros" else single_host
+        got_table, got_single = ttnn.to_torch(table), ttnn.to_torch(single)
+        if expected == "zeros":
+            zeroed = got_single if direction == "load" else got_table[value : value + 1]
+            assert all_zero_bits(zeroed), f"{row}: not zero-filled"
+        assert torch.equal(got_table, want_table), f"{row}: table"
+        assert torch.equal(got_single, want_single), f"{row}: single entry"
+        for tensor in (table, single, index, zero_fill_at_zero):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("dtype, layout, entry_shape, nd_shard", FORMS)
+def test_one_trace_follows_the_zero_fill_at_zero_word(device, direction, dtype, layout, entry_shape, nd_shard):
+    """A captured copy reads the word on device: replays alternate zeros and the copy in the destination entry."""
+    entries, scale, offset = 6, 2, 1
+    table_host = _random((entries, *entry_shape), dtype, 9)
+    single_host = _random((1, *entry_shape), dtype, 3)
+    table = _to_device(table_host, device, dtype, layout, _table_memory(device, nd_shard))
+    single = _to_device(single_host, device, dtype, layout)
+    index = _index(device, 0)
+    zero_fill_at_zero = _index(device, 1)
+    source, destination = (table, single) if direction == "load" else (single, table)
+
+    def step():
+        ttnn.experimental.kda.indexed_entry_copy(
+            source, destination, index, index_scale=scale, index_offset=offset, zero_fill_at_zero=zero_fill_at_zero
+        )
+
+    step()  # compile before capture; writes nothing that a replay does not overwrite below
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    step()
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    try:
+        for flag, value in ((0, 2), (32, 2), (0, 0), (1, 1)):
+            row = f"{direction} replay zero_fill_at_zero {flag} index {value}"
+            _overwrite(table, table_host)
+            _overwrite(single, single_host)
+            _overwrite(index, torch.tensor([value], dtype=torch.int64))
+            _overwrite(zero_fill_at_zero, torch.tensor([flag], dtype=torch.int64))
+            ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+            entry = value * scale + offset
+            want_table, want_single = table_host.clone(), single_host.clone()
+            if direction == "load":
+                want_single = torch.zeros_like(single_host) if flag == 0 else table_host[entry : entry + 1]
+            else:
+                want_table[entry : entry + 1] = 0 if flag == 0 else single_host
+            assert torch.equal(ttnn.to_torch(table), want_table), f"{row}: table"
+            assert torch.equal(ttnn.to_torch(single), want_single), f"{row}: single entry"
+    finally:
+        ttnn.release_trace(device, trace)
+
+
+def test_zero_fill_at_zero_rejects_a_non_uint32_word(device, expect_error):
+    source = _to_device(torch.zeros(1, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)
+    destination = _to_device(torch.zeros(4, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)
+    zero_fill_at_zero = ttnn.from_torch(
+        torch.tensor([1], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "zero_fill_at_zero must be"):
+        ttnn.experimental.kda.indexed_entry_copy(
+            source, destination, _index(device, 0), index_scale=1, index_offset=0, zero_fill_at_zero=zero_fill_at_zero
+        )
 
 
 @pytest.mark.parametrize(

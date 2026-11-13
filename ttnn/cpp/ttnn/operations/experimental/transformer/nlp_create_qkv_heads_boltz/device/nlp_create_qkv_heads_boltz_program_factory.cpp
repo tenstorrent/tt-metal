@@ -165,13 +165,14 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
     KernelDescriptor::Defines reader_defines;
     KernelDescriptor::Defines writer_defines;
     if (transpose_k_heads) {
+        const bool fp32_dest_acc_en = input_tensor.dtype() == DataType::FLOAT32;
         std::vector<uint32_t> compute_args_core_group_1 = {split.num_blocks_per_core_group_1 * kv_num_tiles};
         KernelDescriptor compute_desc_1;
         compute_desc_1.kernel_source = "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp";
         compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc_1.core_ranges = split.core_group_1;
         compute_desc_1.compile_time_args = std::move(compute_args_core_group_1);
-        compute_desc_1.config = ComputeConfigDescriptor{};
+        compute_desc_1.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
         desc.kernels.push_back(std::move(compute_desc_1));
 
         if (split.core_group_2.num_cores() > 0) {
@@ -181,7 +182,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
             compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
             compute_desc_2.core_ranges = split.core_group_2;
             compute_desc_2.compile_time_args = std::move(compute_args_core_group_2);
-            compute_desc_2.config = ComputeConfigDescriptor{};
+            compute_desc_2.config = ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
             desc.kernels.push_back(std::move(compute_desc_2));
         }
 
@@ -375,10 +376,10 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
         num_kv_heads / (read_from_input_tensor_kv ? input_tensor_kv.value().shard_spec().value().num_cores()
                                                   : input_tensor.shard_spec().value().num_cores());
 
-    uint32_t q_base_addr = input_tensor.buffer()->address();
+    uint32_t q_base_addr = input_tensor.mesh_buffer().address();
     uint32_t k_base_addr = 0;
     if (read_from_input_tensor_kv) {
-        k_base_addr = input_tensor_kv.value().buffer()->address();
+        k_base_addr = input_tensor_kv.value().mesh_buffer().address();
     } else {
         k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
     }
@@ -635,13 +636,13 @@ void NlpCreateHeadsBoltzDeviceOperation::Interleaved::override_runtime_arguments
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const auto split = interleaved_work_split(operation_attributes, tensor_args);
-    const uint32_t in0_addr = tensor_args.input_tensor_q.buffer()->address();
+    const uint32_t in0_addr = tensor_args.input_tensor_q.mesh_buffer().address();
     // 0 when there is no kv tensor, matching the literal create_descriptor() bakes into that slot.
     const uint32_t in1_addr =
-        tensor_args.input_tensor_kv.has_value() ? tensor_args.input_tensor_kv->buffer()->address() : 0;
-    const uint32_t q_addr = std::get<0>(tensor_return_value).buffer()->address();
-    const uint32_t k_addr = std::get<1>(tensor_return_value).buffer()->address();
-    const uint32_t v_addr = std::get<2>(tensor_return_value).buffer()->address();
+        tensor_args.input_tensor_kv.has_value() ? tensor_args.input_tensor_kv->mesh_buffer().address() : 0;
+    const uint32_t q_addr = std::get<0>(tensor_return_value).mesh_buffer().address();
+    const uint32_t k_addr = std::get<1>(tensor_return_value).mesh_buffer().address();
+    const uint32_t v_addr = std::get<2>(tensor_return_value).mesh_buffer().address();
 
     for (const CoreCoord& core : split.cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, split.reader_kernel_idx, core);

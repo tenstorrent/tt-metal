@@ -400,6 +400,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
     bool fused_has_sub_device = false;
     uint32_t fused_sub_device = 0;
     bool fused_full_mesh = false;
+    bool fused_column_major = false;
     ttnn::ccl::snake_ring::Orientation fused_snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t fused_mesh_rows = 0;
     uint32_t fused_mesh_cols = 0;
@@ -411,6 +412,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_has_sub_device = fused.ag_sub_device_id.has_value();
         fused_sub_device = fused_has_sub_device ? static_cast<uint32_t>(**fused.ag_sub_device_id) : 0u;
         fused_full_mesh = fused.full_mesh;
+        fused_column_major = fused.column_major;
         fused_snake_orientation = fused.snake_orientation;
         fused_mesh_rows = fused.mesh_rows;
         fused_mesh_cols = fused.mesh_cols;
@@ -457,6 +459,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_has_sub_device,
         fused_sub_device,
         fused_full_mesh,
+        fused_column_major,
         fused_snake_orientation,
         fused_mesh_rows,
         fused_mesh_cols,
@@ -1267,7 +1270,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& valid_end_tensor,
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
     uint32_t index_cache_num_layers,
-    uint32_t index_cache_layer_idx) {
+    uint32_t index_cache_layer_idx,
+    uint32_t full_mesh_outer_axis) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
@@ -1277,6 +1281,12 @@ ttnn::Tensor ring_indexer_score_dsa(
     fused_ring.ag_sub_device_id = ag_sub_device_id;
     const auto mesh_shape = q.device()->get_view().shape();
     const bool full_mesh = !cluster_axis.has_value();
+    TT_FATAL(
+        full_mesh_outer_axis < 2 && (full_mesh || full_mesh_outer_axis == 0),
+        "ring_indexer_score_dsa full_mesh_outer_axis must be 0 or 1, and only applies when cluster_axis is None; "
+        "got {}",
+        full_mesh_outer_axis);
+    fused_ring.column_major = full_mesh_outer_axis == 1;
     std::vector<uint32_t> seq_shard_axes;
     if (full_mesh) {
         const uint32_t mesh_size = mesh_shape.mesh_size();
@@ -1324,23 +1334,18 @@ ttnn::Tensor ring_indexer_score_dsa(
             "ring_indexer_score_dsa cluster_axis=None requires a 2D fabric config (FABRIC_2D or "
             "FABRIC_2D_TORUS_X/Y/XY), got {}",
             fabric_config);
-        const std::array<tt::tt_fabric::Topology, 2> axis_topology{
-            ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
-        const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            q, std::nullopt, num_links, axis_topology, true, "ring_indexer_score_dsa", /*allow_open_path=*/true);
-        TT_FATAL(route.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh route");
         TT_FATAL(
-            route->plan.ring_size <= ttnn::operations::experimental::indexer_score::kMaxRingSize,
-            "ring_indexer_score_dsa supports at most {} full-mesh ranks, got {}",
+            mesh_shape.dims() == 2 && mesh_size <= ttnn::operations::experimental::indexer_score::kMaxRingSize,
+            "ring_indexer_score_dsa supports a 2D mesh of at most {} full-mesh ranks, got {}",
             ttnn::operations::experimental::indexer_score::kMaxRingSize,
-            route->plan.ring_size);
+            mesh_shape);
         fused_ring.full_mesh = true;
-        // The proved route decides closure; the caller's topology only asked for a full-mesh gather.
-        fused_ring.topology = route->topology;
-        fused_ring.snake_orientation = route->plan.orientation;
-        fused_ring.mesh_rows = route->plan.mesh_rows;
-        fused_ring.mesh_cols = route->plan.mesh_cols;
-        fused_ring.route_plan_hash = route->plan.route_plan_hash;
+        // The route is proved on a program-cache miss (resolve_full_mesh_route in the program factory), not here,
+        // where it would walk the fabric control plane on every call. It decides closure (Ring or Linear); the
+        // caller's topology only asked for a full-mesh gather, so it is not kept and Ring and Linear share a program.
+        fused_ring.topology = ttnn::ccl::Topology::Ring;
+        fused_ring.mesh_rows = mesh_shape[0];
+        fused_ring.mesh_cols = mesh_shape[1];
     } else {
         TT_FATAL(
             *cluster_axis < mesh_shape.dims(),

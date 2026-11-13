@@ -182,6 +182,10 @@ For changes to the Metalium host API, follow the
   review and start running pipelines. This is because we don't want to clog
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
+- To reduce CI load, batch related changes locally and push them together.
+  Run relevant local checks before pushing. Keep unfinished PRs in draft, and
+  mark them ready only when review is the only blocker for merge. Draft PRs
+  skip PR Gate's heavy jobs, but other checks still run.
 
 ### New feature and design specifications
 

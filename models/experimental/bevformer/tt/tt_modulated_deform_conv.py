@@ -65,13 +65,13 @@ class TTModulatedDeformConv2dDevice:
         W_out = (W_in + 2 * self.padding[1] - self.dilation[1] * (self.K - 1) - 1) // self.stride[1] + 1
         self.io_shape = (batch, H_in, W_in, H_out, W_out)
 
-    def __call__(self, x_nhwc, offset_mask_nhwc):
+    def __call__(self, x_nhwc, offset_mask_nhwc, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """``x_nhwc`` (B, H_in, W_in, C_in) and ``offset_mask_nhwc`` (B, H_out, W_out, 3*K*K), the
         offset conv's output: the offsets in pixels, (y, x) per kernel position, then the mask
         logits. Both inputs bfloat16, ROW_MAJOR; ``x_nhwc`` interleaved, or height-sharded in L1 in
         whole 32-row shards when the output has the input's height and width, ``offset_mask_nhwc``
         interleaved. Returns the (1, 1, B*H_out*W_out, C_out) bfloat16 TILE output, conv2d's
-        layout."""
+        layout, interleaved in ``memory_config``."""
         B, H_in, W_in, _ = x_nhwc.shape
         _, H_out, W_out, _ = offset_mask_nhwc.shape
         assert (B, H_in, W_in, H_out, W_out) == self.io_shape, (
@@ -88,5 +88,5 @@ class TTModulatedDeformConv2dDevice:
             padding=self.padding,
             dilation=self.dilation,
             relu=self.relu,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=memory_config,
         )

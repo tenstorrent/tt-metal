@@ -15,7 +15,7 @@
 
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -84,4 +84,4 @@ void ValidateProgramSpec(
     //  - DFBs' allocation node sets are the union of their binding kernels' node sets
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

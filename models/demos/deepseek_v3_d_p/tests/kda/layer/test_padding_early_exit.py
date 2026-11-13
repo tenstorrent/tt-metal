@@ -12,6 +12,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.kda.utils import LayerNrmseThresholds
 from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_matches_reference as _assert_matches_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import build_layer as _build_layer
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import mla_row_permutation as _mla_row_permutation
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_convolution_at_sp_rank,
@@ -26,12 +27,22 @@ pytestmark = run_for_blackhole()
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis", [((1, 8), 0, 1), ((2, 4), 0, 1), ((2, 4), 1, 0)], indirect=["mesh_device"]
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
+    "mesh_device,sp_axis,tp_axis,device_params",
+    [
+        pytest.param((1, 8), 0, 1, kda_device_params((1, 8)), id="SP1xTP8"),
+        pytest.param((2, 4), 0, 1, kda_device_params((2, 4)), id="SP2xTP4"),
+        pytest.param((2, 4), 1, 0, kda_device_params((2, 4)), id="SP4xTP2"),
+        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            1,
+            0,
+            kda_device_params((4, 4)),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-x-4x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis, device_params):
     p = tuple(mesh_device.shape)[sp_axis]
@@ -62,7 +73,8 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
         sp_axis,
         tp_axis,
         0,
-        config.num_heads // tuple(mesh_device.shape)[tp_axis] * config.head_k_dim,
+        config,
+        layer.convolution_page_channels,
     ).float()
     reference_initial = KDAReferenceState(
         recurrent=reconstruct_state_at_sp_rank(initial.recurrent, mesh_device, sp_axis, tp_axis, 0).float(),
@@ -169,6 +181,7 @@ def test_padding_changing_interval_single_capture(mesh_device, sp_axis, tp_axis,
                     sp_axis=sp_axis,
                     tp_axis=tp_axis,
                     config=config,
+                    page_channels=layer.convolution_page_channels,
                     label=f"padding SP{p} start={start} length={length}",
                     # Short SP1 and full-length offset baselines can exceed
                     # the inherited peak-error gate without padding. These

@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-from ....models.vae.vae_flux2 import Flux2VaeDecoder
+from ....models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
@@ -161,3 +161,58 @@ def test_vae_flux2_decoder(
 
     tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)  # [B, 3, H, W]
     assert_quality(torch_output, tt_out_torch, pcc=0.9978, relative_rmse=0.034)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        [(2, 2), line_params_flux2],
+        [(2, 4), line_params_flux2],
+        [(1, 8), line_params_flux2],
+        [(4, 8), line_params_flux2],
+    ],
+    ids=["2x2", "2x4", "1x8", "4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("height", "width"), [(1024, 1024)], ids=["1024"])
+def test_vae_flux2_encoder(*, mesh_device: ttnn.MeshDevice, height: int, width: int) -> None:
+    torch.manual_seed(0)
+
+    tp_axis = 0
+    h_axis = 1 - tp_axis
+
+    torch_model = reference.AutoencoderKLFlux2.from_pretrained("black-forest-labs/FLUX.2-dev", subfolder="vae")
+    assert isinstance(torch_model, reference.AutoencoderKLFlux2)
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    vae_parallel_config = Flux2VaeParallelConfig.from_axes(mesh_device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
+
+    tt_model = Flux2VaeEncoder(
+        in_channels=torch_model.config.in_channels,
+        block_out_channels=list(torch_model.config.block_out_channels),
+        layers_per_block=torch_model.config.layers_per_block,
+        z_channels=torch_model.config.latent_channels,
+        device=mesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    image = torch.rand(1, 3, height, width) * 2 - 1
+
+    with torch.no_grad():
+        torch_output = torch_model.encode(image).latent_dist.mode()  # [B, C, H / 8, W / 8]
+
+    h_mesh_axis = vae_parallel_config.h_parallel.mesh_axis if vae_parallel_config.h_parallel is not None else None
+    tt_image = tensor.from_torch(
+        image.permute(0, 2, 3, 1),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_axes=[None, h_mesh_axis, None, None],
+    )
+    tt_out = tt_model.forward(tt_image)
+    ttnn.synchronize_device(mesh_device)
+
+    tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)  # [B, C, H / 8, W / 8]
+    assert_quality(torch_output, tt_out_torch, pcc=0.999, relative_rmse=0.03)

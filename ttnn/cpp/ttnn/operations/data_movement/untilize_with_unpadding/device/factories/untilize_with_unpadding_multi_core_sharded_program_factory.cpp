@@ -12,15 +12,14 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -166,7 +165,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
-    uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
+    uint32_t aligned_page_size = static_cast<uint32_t>(output.mesh_buffer().aligned_page_size());
     DataflowBufferSpec out_dfb{
         .unique_id = SH_OUT,
         .entry_size = output_single_tile_size,

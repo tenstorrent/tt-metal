@@ -41,6 +41,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks = RT_DIM / rt_block;
 
     {
         START_PERF_MEASURE("INIT")
@@ -56,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
-        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM);
+        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, rt_block, KT_DIM);
         PROFILER_SYNC();
     }
     {
@@ -66,15 +69,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            _perf_unpack_matmul_mock<PERF_RUN_TYPE>(LOOP_FACTOR * num_blocks, rt_block, KT_DIM, CT_DIM);
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                // Each block is the next rt_block rows of A; B is shared by every block.
+                for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+                    for (std::uint32_t j = 0; j < KT_DIM; j++)
+                    {
+                        _llk_unpack_matmul_(CT_DIM, rt_block, KT_DIM, block * rt_block * KT_DIM + j, j * CT_DIM);
+                    }
                 }
             }
         }
@@ -101,6 +108,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t KT_DIM      = params.KT_DIM;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block     = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks   = RT_DIM / rt_block;
+    const std::uint32_t num_sections = LOOP_FACTOR * num_blocks;
 
     {
         START_PERF_MEASURE("INIT")
@@ -111,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
         _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
-            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), CT_DIM, RT_DIM);
+            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), CT_DIM, rt_block);
         PROFILER_SYNC();
     }
     {
@@ -119,27 +130,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            _perf_math_matmul_mock<PERF_RUN_TYPE>(num_sections, rt_block, KT_DIM, CT_DIM);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < num_sections; loop++)
             {
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    _llk_math_matmul_block_(CT_DIM, rt_block);
                 }
             }
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            // One Dest section per block of rt_block x CT_DIM output tiles.
+            for (std::uint32_t loop = 0; loop < num_sections; loop++)
             {
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    _llk_math_matmul_block_(CT_DIM, rt_block);
                 }
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
@@ -240,12 +252,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces   = params.num_faces;
     const Operand& buffer_C         = params.buffer_C;
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks = RT_DIM / rt_block;
 
     {
         START_PERF_MEASURE("INIT")
-        // PACK_ISOLATE and L1_CONGESTION pack without a math<->pack handshake.
+        // PACK_ISOLATE packs without a math<->pack handshake.
         // Explicitly clear wait_mask because CFG state can persist across run types.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -257,7 +272,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces), L1_ADDRESS(buffer_C[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
+        _llk_pack_matmul_init_(bfd_pack, rt_block, CT_DIM, 1 /*num_subblocks_c_dim*/);
         PROFILER_SYNC();
     }
     {
@@ -265,19 +280,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/);
+                }
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/);
+                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
             }
         }
         PROFILER_SYNC();

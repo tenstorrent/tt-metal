@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks that the MiniMax-H3 served envelope resolves to packable geometry within the arena caps."""
+"""Host-only gate for the MiniMax-H3 serving policy: the served envelope must resolve to geometry
+the pipeline can pack, and the text budget must sit exactly inside the prompt arena cap."""
 
 import pytest
 from PIL import Image
@@ -108,7 +109,8 @@ def test_served_reference_image_sizes_are_one_per_token_count():
 
 
 def test_swept_token_counts_close_over_continuous_aspects():
-    """The finite-grid sweeps must be dense enough that no continuous aspect reaches an unswept token count."""
+    """The sweeps sample the ratio space on a finite grid; this probe checks the grid is dense
+    enough that no continuous input aspect reaches a token count the grid missed."""
     import random
 
     multiple = p.MINIMAX_H3_CANVAS_MULTIPLE
@@ -480,3 +482,15 @@ def test_admit_request_accepts_served_requests(overrides):
 def test_admit_request_rejects_unserved_requests(overrides, match, expect_error):
     with expect_error(ValueError, match):
         policy.admit_request(**_admission(**overrides))
+
+
+def test_admit_request_collects_every_error(expect_error):
+    bad = (5000, 1000)
+    references = [_ref("image", f"images[{i}]", size=bad if i in (1, 3) else (1024, 1024)) for i in range(10)]
+    with expect_error(policy.MiniMaxH3AdmissionError, "at most 9 image references") as info:
+        policy.admit_request(**_admission(references=references))
+    errors = info.value.errors
+    assert [name for name, _ in errors] == [None, "images[1]", "images[3]"]
+    assert "at most 9 image references" in errors[0][1]
+    assert all("within 1:4 and 4:1" in message for _, message in errors[1:])
+    assert str(info.value) == "; ".join(message for _, message in errors)

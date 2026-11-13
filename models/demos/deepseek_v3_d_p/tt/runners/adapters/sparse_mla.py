@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Sparse-attention (DSA) prefill adapters: the shared ``SparseMLAPrefillAdapter`` base + DeepSeek-V3.2-Exp.
+"""Sparse-attention (DSA) prefill adapters: the shared ``SparseMLAPrefillAdapter`` base, DeepSeek-V3.2-Exp and Kimi-K3.1.
 
 GLM-5.3 has its own serving adapter (``adapters/glm_5_3.py``);
-what remains here is the test-only base + DeepSeek-V3.2-Exp.
+what remains here is the test-only base + DeepSeek-V3.2-Exp and Kimi-K3.1 (both test-only).
 
 Both add a lightning indexer (DeepSeek Sparse Attention) on top of the MLA + MoE
 family. Two things set them apart from the dense ``DeepSeekV3Adapter`` / ``KimiK27Adapter``:
@@ -28,6 +28,7 @@ from typing import Callable
 
 from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
 
@@ -81,3 +82,34 @@ class DeepSeekV32Adapter(SparseMLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
 
         return deepseek_v32_hf_config
+
+
+class KimiK31Adapter(SparseMLAPrefillAdapter):
+    """Kimi-K3.1 sparse-MLA test variant (test-only): K3's gated NoPE MLA plus a NoPE lightning indexer."""
+
+    # --- identity ---
+    name = "kimi_k3_1"
+
+    model_config = KimiK31Config
+
+    # --- test metadata ---
+    hf_repo_id = "moonshotai/Kimi-K3.1-Pro"
+    env_var = "KIMI_K31_HF_MODEL"
+    mla_ref_cache_env = "KIMI_K31_MLA_REF_CACHE"
+    # NoPE: the KV cache's rope half is unrotated.
+    kv_pe_interleave = False
+    # None: conftest's pretrained_mla_layer_weights fixture would resolve the whole multi-TB checkpoint.
+    pretrained_mla_layer = None
+
+    @property
+    def default_sparse_kv_cache_format(self):
+        """Scaled-FP8 main KVPE cache, as GLM-5.3."""
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+        return MlaKvCacheFormat.SCALED_FP8
+
+    @property
+    def config_builder(self) -> Callable:
+        from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
+
+        return kimi_k3_1_hf_config

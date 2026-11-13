@@ -7,17 +7,17 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_utils.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -155,9 +155,9 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
 
     const bool is_tile = input_a.layout() == Layout::TILE;
 
-    Buffer* input_a_buffer = input_a.buffer();
-    Buffer* input_b_buffer = input_b.buffer();
-    Buffer* output_buffer = output.buffer();
+    const auto* input_a_buffer = &input_a.mesh_buffer();
+    const auto* input_b_buffer = &input_b.mesh_buffer();
+    const auto* output_buffer = &output.mesh_buffer();
 
     // -----------------------------------------------------------------------------------
     // Path selection

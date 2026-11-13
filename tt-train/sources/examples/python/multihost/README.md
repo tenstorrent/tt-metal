@@ -73,7 +73,7 @@ This file is used by MPI (via `mpirun --hostfile`) to distribute processes acros
 #### 2. `mgd.textproto` (Mesh Graph Descriptor)
 Defines the hardware topology and connectivity of the distributed system using the textproto format. The YAML format (MGD 1.0) has been deprecated.
 
-**Note:** If you have an existing `mgd.yaml` file, you need to convert it to `mgd.textproto` format. See the conversion guide in [`tt_metal/fabric/MGD_README.md`](../../../../tt_metal/fabric/MGD_README.md) (section: Converting from MGD 1.0 to MGD).
+**Note:** If you have an existing `mgd.yaml` file, you need to convert it to `mgd.textproto` format. See the conversion guide in [`tt_metal/fabric/MGD_README.md`](../../../../../tt_metal/fabric/MGD_README.md) (section: Converting from MGD 1.0 to MGD).
 
 **Key Sections:**
 
@@ -133,7 +133,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 - `channels.count` specifies the number of ethernet channels per direction
 - The `graph_descriptors` with `connections` defines which meshes can communicate and their connection bandwidth
 
-For more examples and detailed documentation, see [`tt_metal/fabric/MGD_README.md`](../../../../tt_metal/fabric/MGD_README.md).
+For more examples and detailed documentation, see [`tt_metal/fabric/MGD_README.md`](../../../../../tt_metal/fabric/MGD_README.md).
 
 #### 3. `rank_bindings.yaml`
 Maps MPI ranks to mesh IDs and sets global environment variables for the distributed execution.
@@ -192,7 +192,7 @@ To create a new configuration for your hardware setup:
    - Define mesh descriptors with architecture, device topology, and host topology
    - Create graph descriptors to define connectivity between meshes
    - Specify the top-level instance
-   - See [`tt_metal/fabric/MGD_README.md`](../../../../tt_metal/fabric/MGD_README.md) for detailed format documentation
+   - See [`tt_metal/fabric/MGD_README.md`](../../../../../tt_metal/fabric/MGD_README.md) for detailed format documentation
    - If you have an existing `mgd.yaml` file, see the conversion guide in the same README
 
 4. **Create `rank_bindings.yaml`** mapping ranks to meshes:

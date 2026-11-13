@@ -166,7 +166,7 @@ ChunkedParams compute_chunked_params(
         TT_FATAL(p.page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
     } else {
         p.max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-        p.page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        p.page_table_stick_size = page_table_tensor.mesh_buffer().aligned_page_size();
         TT_FATAL(
             p.page_table_stick_size % 32 == 0,
             "page table page size in bytes must be a multiple of 32 due to address alignment");
@@ -521,7 +521,7 @@ uint32_t allocate_mask_block_map_cb(const SDPAInputs& tensors, sdpa_cb::CBIds& c
     if (!tensors.attn_mask_block_map.has_value()) {
         return 0;
     }
-    const uint32_t stick_size = tensors.attn_mask_block_map->buffer()->aligned_page_size();
+    const uint32_t stick_size = tensors.attn_mask_block_map->mesh_buffer().aligned_page_size();
     cb_ids.mask_block_map = allocate_cb(stick_size, 1, tt::DataFormat::Int32);
     return stick_size;
 }
@@ -1932,8 +1932,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // 40% at bs16-32 (11x8, 12x10) and 13-14% at bs1 with L1-resident K/V and unicast chains. (Causal chains are
     // already off under retention, see kv_chain_mode_for.)
     constexpr uint32_t kMaxRetainChainBatch = 8;
-    const bool kv_in_l1 = input_tensor_k.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 &&
-                          input_tensor_v.buffer()->buffer_type() == tt::tt_metal::BufferType::L1;
+    const bool kv_in_l1 = input_tensor_k.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                          input_tensor_v.memory_config().buffer_type() == tt::tt_metal::BufferType::L1;
     const bool retain_skips_chains = kv_retain != 0 && B > kMaxRetainChainBatch;
     if (kv_chains_possible && !retain_skips_chains) {
         // Causal chains pool the Q heads of a KV head. With K/V retention the non-causal chains share its key, so a

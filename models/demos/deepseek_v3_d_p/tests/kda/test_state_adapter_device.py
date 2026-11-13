@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     device_scalar,
     recurrent_segment_to_torch,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     kda_chunk_n_tokens,
     kda_position,
@@ -37,7 +38,12 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     kda_window,
     populate_kv_chunk_address_table_kda,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    all_zero_bits,
+    assert_bit_identical,
+    decode_tail,
+    encode_tail,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -85,8 +91,11 @@ def _native_from_global(mesh_device, geometry, recurrent, convolution) -> KdaSta
     """TP-shard heads, replicate across SP, in the layout the layer itself produces."""
     tp = geometry.tensor_parallel_size
     rec_dims, conv_dims = [None, None], [None, None]
-    rec_dims[TP_AXIS], conv_dims[TP_AXIS] = 1, -1
-    stacked_conv = torch.cat([_per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1)
+    rec_dims[TP_AXIS], conv_dims[TP_AXIS] = 1, 1
+    stacked_conv = encode_tail(
+        torch.cat([_per_chip_convolution(geometry, convolution, col) for col in range(tp)], dim=-1),
+        KDA_CONVOLUTION_PAGE_CHANNELS,
+    )
     mesh_shape = tuple(mesh_device.shape)
     return KdaState(
         recurrent=ttnn.from_torch(
@@ -163,7 +172,6 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     # 1. Every slab batch holds its layer's per-chip state, on every SP replica, bit for bit.
     rec_shards = _shards(slabs.recurrent, mesh_device)
     conv_shards = _shards(slabs.convolution, mesh_device)
-    seg = geometry.convolution_shards_per_layer
     for (slot, layer), (recurrent, convolution) in patterns.items():
         batch = slabs.batch_index(slot, layer)
         for row in range(rows):
@@ -175,10 +183,9 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
                 assert_bit_identical(
                     want_rec, rec_shards[(row, col)][batch], name=f"S slot{slot} L{layer} ({row},{col})"
                 )
-                got_conv = conv_shards[(row, col)][batch].reshape(seg, geometry.conv_history, 64).permute(1, 0, 2)
                 assert_bit_identical(
                     want_conv,
-                    got_conv.reshape(geometry.conv_history, -1),
+                    decode_tail(conv_shards[(row, col)][batch], KDA_CONVOLUTION_PAGE_CHANNELS),
                     name=f"conv slot{slot} L{layer} ({row},{col})",
                 )
 
@@ -226,9 +233,10 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
             coord[TP_AXIS] = col
             want_rec, want_conv = _expected_chip(geometry, recurrent, convolution, coord[TP_AXIS])
             assert_bit_identical(want_rec, rec_shards[(0, col)][batch], name=f"replay S slot{slot} L{layer} col{col}")
-            got_conv = conv_shards[(0, col)][batch].reshape(seg, geometry.conv_history, 64).permute(1, 0, 2)
             assert_bit_identical(
-                want_conv, got_conv.reshape(geometry.conv_history, -1), name=f"replay conv slot{slot} L{layer} col{col}"
+                want_conv,
+                decode_tail(conv_shards[(0, col)][batch], KDA_CONVOLUTION_PAGE_CHANNELS),
+                name=f"replay conv slot{slot} L{layer} col{col}",
             )
 
     # 4. The address table resolves every (layer, segment, slot) to the right bytes, and the segment
@@ -297,15 +305,20 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     )
     print(f"host {socket.gethostname()}: table check ok for fabric node {int(fid.mesh_id)}:{int(fid.chip_id)}")
 
-    # 6. Zeroing a slot zeroes every layer of that slot and nothing else.
-    others = {(slot, layer): imported(slot, layer) for slot in range(1, num_slots) for layer in layer_ids}
-    slabs.zero_slot(0)
+    # 6. A request-head import (zero_fill_at_zero reading 0, as a chunk start of 0 does) loads zeros into both
+    #    carries of every layer, over a carry that held a pattern, and reads the slot without writing any slab byte.
+    slabs_before = [*_shards(slabs.recurrent, mesh_device).values(), *_shards(slabs.convolution, mesh_device).values()]
+    slot_tt, head_tt = device_scalar(mesh_device, 0), device_scalar(mesh_device, 0)
     for layer in layer_ids:
-        for index, got in enumerate(imported(0, layer)):
-            assert torch.count_nonzero(got) == 0, f"zero_slot(0) left nonzero bytes in L{layer} dev{index}"
-    for (slot, layer), want in others.items():
-        for index, (w, g) in enumerate(zip(want, imported(slot, layer))):
-            assert_bit_identical(w, g, name=f"zero_slot(0) touched slot{slot} L{layer} dev{index}")
+        carry = natives[(0, layer)]
+        slabs.import_layer(carry, slot_tt, layer, zero_fill_at_zero=head_tt)
+        for index, got in enumerate(host(carry)):
+            assert all_zero_bits(got), f"zero_fill_at_zero import left bytes in L{layer} dev{index}"
+    slabs_after = [*_shards(slabs.recurrent, mesh_device).values(), *_shards(slabs.convolution, mesh_device).values()]
+    for index, (want, got) in enumerate(zip(slabs_before, slabs_after, strict=True)):
+        assert_bit_identical(want, got, name=f"zero_fill_at_zero import wrote slab shard {index}")
+    for tensor in (slot_tt, head_tt):
+        ttnn.deallocate(tensor)
 
     for state in natives.values():
         ttnn.deallocate(state.recurrent)

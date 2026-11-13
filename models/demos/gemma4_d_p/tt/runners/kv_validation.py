@@ -263,8 +263,8 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir):
     return compare_slot_cache(read_heads, slot_id, real_len, trace_dir)
 
 
-def read_cache_tensor(tensor, slot_id, real_len, staging=None):
-    """Gather one slot's populated prefix and restore chunk-major CP order.
+def read_cache_tensor(tensor, slot_id, real_len, staging=None, chunk_size=None):
+    """Gather one slot's populated prefix and restore chunk-major CP order (chunk_size: default the service's).
 
     `staging` keeps one host tensor per cache shape across calls. Reading into it and viewing its
     shards without a copy avoids allocating and freeing ~2 GB of host memory per call, which costs
@@ -272,8 +272,9 @@ def read_cache_tensor(tensor, slot_id, real_len, staging=None):
     """
     staging = {} if staging is None else staging
     cp, tp = Gemma4ServiceConfig.MESH_SHAPE
-    local_chunk = Gemma4ServiceConfig.CHUNK_SIZE // cp
-    if real_len % Gemma4ServiceConfig.CHUNK_SIZE:
+    chunk_size = chunk_size or Gemma4ServiceConfig.CHUNK_SIZE
+    local_chunk = chunk_size // cp
+    if real_len % chunk_size:
         raise ValueError("Command-queue validation requires complete prefill chunks")
     selected = ttnn.slice(
         tensor,
@@ -296,7 +297,7 @@ def read_cache_tensor(tensor, slot_id, real_len, staging=None):
     # Views of the staging buffers, consumed by the gather below before the next read reuses them.
     shards = [shard.to_torch_with_padded_shape() for shard in ttnn.get_device_tensors(host)]
     local_heads, width = shards[0].shape[1], shards[0].shape[3]
-    chunks = real_len // Gemma4ServiceConfig.CHUNK_SIZE
+    chunks = real_len // chunk_size
     gathered = torch.empty((local_heads * tp, chunks, cp, local_chunk, width), dtype=shards[0].dtype)
     for row in range(cp):
         for column in range(tp):
@@ -336,6 +337,34 @@ def _timed(function, *args):
 
 def _read_layer_heads(read_heads, layer):
     return list(read_heads(layer))
+
+
+# KV error through these layers is set by arithmetic precision. From about layer 18 on, the model amplifies rounding
+# chaotically: two runs that differ only in summation order (matmul blocking, reduce-scatter order, SDPA K split) match
+# per layer within 3% through layer 17 but move a lone 2048-token prompt's final-layer PCC by up to 0.04. Checks that
+# two runs compute the same thing compare these layers.
+EARLY_LAYERS = 16
+# Rows per block of the block_relative_rmse in each of the first EARLY_LAYERS layers' metrics: one 2048-token chunk.
+ERROR_BLOCK_ROWS = 2048
+# Coarse floor on a batched slot's whole cache against its reference, all layers (the deep layers are chaotic).
+BATCHED_MIN_OVERALL_PCC = 0.96
+BATCHED_MAX_OVERALL_RRMSE = 0.275
+
+
+def block_squared_sums(expected, actual, block_rows=ERROR_BLOCK_ROWS):
+    """One head's squared error and squared reference sums, per block_rows-row block of tokens, as [2, blocks]."""
+    sums = torch.empty(2, -(-expected.shape[0] // block_rows))
+    for block, start in enumerate(range(0, expected.shape[0], block_rows)):
+        reference = expected[start : start + block_rows].float()
+        sums[0, block] = (actual[start : start + block_rows].float() - reference).square_().sum()
+        sums[1, block] = reference.square_().sum()
+    return sums
+
+
+def block_relative_rmse(head_sums):
+    """Relative RMSE over all of a layer's heads, per block, from each head's block_squared_sums."""
+    totals = sum(head_sums)
+    return (totals[0] / totals[1]).sqrt().tolist()
 
 
 def compare_head(config_id, expected, actual):
@@ -401,9 +430,13 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
                         minima[name] = min(minima[name], score)
                         layer_minima[name] = min(layer_minima.get(name, 1.0), score)
                     measurements.append(dict(layer=layer, config=CONFIG_NAMES[config_id], pcc=scores))
+                layer_summary = summarize_metrics(layer_comparisons)
+                if layer < EARLY_LAYERS:
+                    layer_summary["block_relative_rmse"] = block_relative_rmse(
+                        comparer.map(lambda head: block_squared_sums(expected_heads[head[0]], head[1]), actual_heads)
+                    )
                 timings["comparison_seconds"] += time.perf_counter() - start
                 all_comparisons.extend(layer_comparisons)
-                layer_summary = summarize_metrics(layer_comparisons)
                 layer_metrics.append(dict(layer=layer, **layer_summary))
                 layer_seconds = {name: timings[name] - previous_timings[name] for name in previous_timings}
                 layer_timings.append(dict(layer=layer, **layer_seconds))

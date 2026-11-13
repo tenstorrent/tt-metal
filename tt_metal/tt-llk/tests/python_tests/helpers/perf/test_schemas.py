@@ -95,7 +95,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary": {
-        "version": 8,
+        "version": 9,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -114,6 +114,10 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
+            "in0_face_c_dim",
+            "in0_face_r_dim",
+            "in1_face_c_dim",
+            "in1_face_r_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
@@ -141,7 +145,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary_broadcast": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -160,6 +164,10 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
+            "in0_face_c_dim",
+            "in0_face_r_dim",
+            "in1_face_c_dim",
+            "in1_face_r_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",

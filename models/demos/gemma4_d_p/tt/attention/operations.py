@@ -51,9 +51,12 @@ def projection_math_fidelity(rows):
     return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
 
 
-def projection_matmul_configs(hidden_states, weight, max_m_tiles=None):
+def projection_matmul_configs(hidden_states, weight, max_m_tiles=None, fidelity_rows=None):
     """(program_config, compute_kernel_config) for an attention projection: explicit blocking with fp32
     accumulation, or (None, None) for ttnn's defaults.
+
+    fidelity_rows: the rows per device of one request, when hidden_states stacks several (a batched step takes the
+    fidelity of one request's chunk, not of the stacked rows).
 
     Uses the device's full core grid. With this blocking, accumulating in bf16 measurably costs
     prefill KV accuracy, so it accumulates in fp32. LoFi pays from 512 rows per device; below that the
@@ -69,7 +72,7 @@ def projection_matmul_configs(hidden_states, weight, max_m_tiles=None):
         return None, None
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=projection_math_fidelity(hidden_states.shape[-2]),
+        math_fidelity=projection_math_fidelity(fidelity_rows or hidden_states.shape[-2]),
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -77,7 +80,7 @@ def projection_matmul_configs(hidden_states, weight, max_m_tiles=None):
     return program_config, compute_kernel_config
 
 
-def apply_attn_projection(hidden_states, weight, memory_config=None, into_reduce_scatter=False):
+def apply_attn_projection(hidden_states, weight, memory_config=None, into_reduce_scatter=False, fidelity_rows=None):
     """hidden_states @ weight for an attention projection, written interleaved (DRAM unless memory_config says
     otherwise). A short-M activation is read width-sharded from L1.
 
@@ -87,7 +90,7 @@ def apply_attn_projection(hidden_states, weight, memory_config=None, into_reduce
     sharded_output = into_reduce_scatter and tile_rows(hidden_states) <= _MAX_SHARDED_OUTPUT_M_TILES
     x = to_l1_width_sharded(hidden_states) if sharded_output or is_short_m(hidden_states) else hidden_states
     program_config, compute_kernel_config = projection_matmul_configs(
-        x, weight, max_m_tiles=_MAX_SHARDED_OUTPUT_M_TILES if sharded_output else None
+        x, weight, max_m_tiles=_MAX_SHARDED_OUTPUT_M_TILES if sharded_output else None, fidelity_rows=fidelity_rows
     )
     if sharded_output:
         memory_config = short_m_output_memcfg(x, weight)
@@ -103,7 +106,9 @@ def apply_attn_projection(hidden_states, weight, memory_config=None, into_reduce
     return out
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
+def apply_qkv_projection(
+    hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False, fidelity_rows=None
+):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight.
 
     Up to _MAX_L1_QKV_M_TILES tile rows the output goes to L1 rather than DRAM, so the matmul's writer doesn't trail
@@ -111,12 +116,13 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     """
     if memory_config is None and tile_rows(hidden_states) <= _MAX_L1_QKV_M_TILES:
         memory_config = ttnn.L1_MEMORY_CONFIG
-    return apply_attn_projection(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
+    weight = weights.wqk if kv_tied else weights.wqkv
+    return apply_attn_projection(hidden_states, weight, memory_config=memory_config, fidelity_rows=fidelity_rows)
 
 
-def apply_output_projection(hidden_states, weights: AttentionWeights):
+def apply_output_projection(hidden_states, weights: AttentionWeights, fidelity_rows=None):
     """Project the concatenated attention heads through o_proj."""
-    return apply_attn_projection(hidden_states, weights.o_proj, into_reduce_scatter=True)
+    return apply_attn_projection(hidden_states, weights.o_proj, into_reduce_scatter=True, fidelity_rows=fidelity_rows)
 
 
 def split_qkv_heads_prefill(
