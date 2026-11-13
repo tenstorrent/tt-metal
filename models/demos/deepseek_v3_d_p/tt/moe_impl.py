@@ -3,7 +3,7 @@
 
 """Which MoE a prefill block builds: TtMoe or the MoE block's C++ ops (ttnn.experimental.moe_block).
 
-Kimi-K3 defaults to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert (K3: and the
+GLM-5.3 and Kimi-K3 default to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert (K3: and the
 latent pair) from the checkpoint, the routed experts from the TtMoe tensorbin cache. Every other model stays on TtMoe.
 Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL (Kimi-K3: $K3_MOE_IMPL first), then the model's
 default.
@@ -22,7 +22,7 @@ from typing import Optional
 
 BLOCK = "block"
 TTMOE = "ttmoe"
-_BLOCK_DEFAULT = ("KimiK3Config",)  # model config classes whose MoE is the block by default
+_BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose MoE is the block by default
 
 # The model's own L1_SMALL use a bank next to the block (its other ops' semaphores and words, allocated before the
 # block's slab), where the model's l1_small_size is not that figure:
@@ -34,9 +34,12 @@ _BLOCK_DEFAULT = ("KimiK3Config",)  # model config classes whose MoE is the bloc
 #   test that followed the untraced one ran out of L1_SMALL. KimiK3Config.L1_SMALL_SIZE (4096) is inherited, not
 #   measured, and still floors the mesh open. L1_SMALL is carved from the top of L1 and MLA's chunked attention
 #   (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (both tests pass at 5504 B a bank).
+# - GLM-5.3: 3328 B (the GLM chunked-accuracy CI job, Nov 6: the 576 B its 3904 B mesh left the block), with
+#   matmul_reduce_scatter_prefill's semaphores and mailbox. Was 1536 B, its runner adapter's l1_small_size.
 # Every other model: its l1_small_size.
 _MODEL_L1_SMALL = {
     "KimiK3Config": 3328,
+    "GLM53Config": 3328,
 }
 _L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
 
