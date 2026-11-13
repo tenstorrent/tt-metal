@@ -299,6 +299,34 @@ def test_rm_width_sharded_cache_skip_row(device):
     assert torch.equal(ttnn.to_torch(cache).to(torch.bfloat16), expected)
 
 
+@pytest.mark.parametrize("session", [0, 2])
+def test_rm_interleaved_paged_cache(device, session):
+    """Writer-only ROW_MAJOR DRAM paged cache: one session's rows through its page-table row; ``-1`` and
+    positions past the table skip."""
+    torch.manual_seed(0)
+    num_sessions, blocks_per_session, block_size = 3, 4, 64
+    num_blocks = num_sessions * blocks_per_session
+    table = torch.randperm(num_blocks).to(torch.int32).reshape(num_sessions, blocks_per_session)
+    prior = torch.randn(num_blocks, 1, block_size, HEAD_DIM).to(torch.bfloat16)
+    cache = ttnn.from_torch(
+        prior, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    positions = [62, 63, 64, -1, 200, blocks_per_session * block_size]
+    x = torch.randn(1, 1, len(positions), HEAD_DIM).to(torch.bfloat16)
+    ttnn.experimental.paged_update_cache(
+        cache,
+        _rows_per_user(device, x),
+        update_idxs_tensor=_int32(positions, device),
+        page_table=_int32(table, device),
+        page_table_row_tensor=_int32([session], device),
+    )
+    expected = prior.clone()
+    for s, p in enumerate(positions):
+        if 0 <= p < blocks_per_session * block_size:
+            expected[table[session, p // block_size], 0, p % block_size] = x[0, 0, s]
+    assert torch.equal(ttnn.to_torch(cache).to(torch.bfloat16), expected)
+
+
 def test_tile_input_rejects_multiple_rows(device, expect_error):
     torch.manual_seed(0)
     cache = _tile_cache(torch.randn(1, 1, 128, HEAD_DIM).to(torch.bfloat16), ttnn.bfloat16, device)

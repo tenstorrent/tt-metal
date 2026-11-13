@@ -69,6 +69,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
 from models.experimental.deepseek_v41_flash.tt.decode.attention import (
     _SELECT_KV_RATE,
     CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS,
+    DENSE_SELECT,
     KEY_SPLIT_CROSSOVER_KEYS,
     DeepSeekV41LayerCache,
     _rows_on_one_core,
@@ -839,7 +840,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             sizes = {"token": t, "pos": t, "sliding_pos": t, "ring_rows": t * t, "sliding_curpos": t}
             sizes.update(win_prev=1, stash_slot=t, dspark_slot=t)
             for r in sorted(ratios):
-                sizes.update({f"{name}{r}": t for name in ("win_slot", "entry", "start", "index_pos", "curpos")})
+                sizes.update(
+                    {f"{name}{r}": t for name in ("win_slot", "entry", "start", "index_pos", "curpos", "dense_entry")}
+                )
             offset = 0
             for name, size in sizes.items():
                 self._verify_fields[name] = (offset, size)
@@ -1110,6 +1113,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                             ),
                             idx_page_table=sm["page_tables"][ratio],
                             sel_kv=_device_zeros((1, 1, rows, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                            dense_kv=_device_zeros((1, 1, slots * cfg.index_topk, head_dim), device),
                         )
                     if src == self._candidate_group:
                         builds_pool = any(w in self._pool_builders for w in sm["layers"])
@@ -1162,13 +1166,24 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if li >= self.num_layers:
                 continue
             ratio = int(cfg.compress_ratios[li])
-            for keys in (KEY_SPLIT_CROSSOVER_KEYS, CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS):
+            for keys in (KEY_SPLIT_CROSSOVER_KEYS, CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS, cfg.index_topk):
                 # The first position with more than ``keys`` keys: (pos + 1) // ratio > keys.
                 starts.add((keys + 1) * ratio - 1)
         return sorted(p for p in starts if p < self._decode_max_seq)
 
-    def _variant_key(self, pos: int, image: bool = False) -> tuple[bool, int, tuple[int, frozenset[int], bool]]:
-        """``(causal, r=2 pool phase, (select mode, split layers, image))`` for absolute ``pos``.
+    def _dense_ratios(self, pos: int) -> frozenset[int]:
+        """The ratios whose index sources select densely at ``pos``: at most ``index_topk`` closed groups, all of
+        which the select keeps (see :data:`~.decode.attention.DENSE_SELECT`)."""
+        if not DENSE_SELECT:
+            return frozenset()
+        cfg = self.config
+        ratios = {int(cfg.compress_ratios[li]) for li in cfg.index_source_layer_ids if li < self.num_layers}
+        return frozenset(r for r in ratios if (pos + 1) // r <= cfg.index_topk)
+
+    def _variant_key(
+        self, pos: int, image: bool = False
+    ) -> tuple[bool, int, tuple[int, frozenset[int], bool, frozenset[int]]]:
+        """``(causal, r=2 pool phase, (select mode, split layers, image, dense ratios))`` for absolute ``pos``.
 
         Causal starts at ``sliding_window - 1`` when the profile asks for it and the step has several
         users (:attr:`_causal_variants`). An r=2 group pools on odd positions (``(pos + 1) % 2 == 0``)
@@ -1181,17 +1196,20 @@ class DeepSeekV41Model(DeepSeekV4Model):
         it derives the token's ``image_mask`` and gathers each router's bias row from it. The text trace adds
         the resident bias and has neither, so a step is posted with the image trace only when it is fed an image
         token (:meth:`replay_traced`).
+
+        The dense ratios (:meth:`_dense_ratios`) are those whose index sources copy every entry instead of scoring.
         """
         causal = self._causal_variants and pos >= self.sliding_window - 1
         split = self._split_layers(pos)
         image = bool(image and self.image_rows)
+        dense = self._dense_ratios(pos)
         if self._two_level(pos):
-            return (causal, int(bool(self._pool_crs) and (pos + 1) % 2 == 0), (2, split, image))
+            return (causal, int(bool(self._pool_crs) and (pos + 1) % 2 == 0), (2, split, image, dense))
         if not self._pool_crs:
-            return (causal, 0, (0, split, image))
-        return (causal, int((pos + 1) % 2 == 0), (int(pos >= 1), split, image))
+            return (causal, 0, (0, split, image, dense))
+        return (causal, int((pos + 1) % 2 == 0), (int(pos >= 1), split, image, dense))
 
-    def _reachable_variants(self) -> list[tuple[bool, int, tuple[int, frozenset[int], bool]]]:
+    def _reachable_variants(self) -> list[tuple[bool, int, tuple[int, frozenset[int], bool, frozenset[int]]]]:
         """The variants some position below ``max_seq`` asks for: :meth:`_variant_key` at each of
         :meth:`_variant_starts` and the position after it, which has the other r=2 phase, each with its image
         twin when the model takes images."""
@@ -1200,15 +1218,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return list(dict.fromkeys(self._variant_key(p, image) for image in images for p in positions))
 
     @staticmethod
-    def _sm_pool_key(sm: dict, pool_flags: dict, causal: bool, index_sparse: tuple = (0, frozenset(), False)) -> tuple:
+    def _sm_pool_key(
+        sm: dict, pool_flags: dict, causal: bool, index_sparse: tuple = (0, frozenset(), False, frozenset())
+    ) -> tuple:
         """Drop variant bits this submesh's layers do not branch on.
 
-        ``index_sparse`` is the ``(select mode, split layers, image)`` of :meth:`_variant_key`. A sliding-only
-        stage collapses to one trace per image bit; a ratio-1 stage keeps only the causal bit, the two-level bit
-        if it holds the candidate source or a consumer, and the split of its own index sources. A stage of
-        hash-routed MoE layers only ignores the image bit.
+        ``index_sparse`` is the ``(select mode, split layers, image, dense ratios)`` of :meth:`_variant_key`. A
+        sliding-only stage collapses to one trace per image bit; a ratio-1 stage keeps only the causal bit, the
+        two-level bit if it holds the candidate source or a consumer, the split of its own index sources and
+        whether they select densely. A stage of hash-routed MoE layers only ignores the image bit.
         """
-        mode, split, image = index_sparse
+        mode, split, image, dense = index_sparse
         return (
             causal and sm["has_compressed"],
             bool(pool_flags.get(2, False)) and sm["has_r2_pool"],
@@ -1216,6 +1236,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             mode == 2 and sm["has_candidates"],
             split.intersection(sm["layers"]),
             image and sm["routes_images"],
+            dense.intersection(sm["index_ratios"]),
         )
 
     def _capture_packet_pos(self, pos: int, causal: bool, index_sparse: tuple) -> int:
@@ -1627,11 +1648,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self._commit_paged_entries(scache, self._paged_ratios[ratio].layer_type, sid, kv, keys)
                 ttnn.deallocate(kv)
                 ttnn.deallocate(keys)
+        self._session_pos[sid] = pos
+        self._sync_dense_entries(sid)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
         if snapshot.engram is not None and self._engram_lookup is not None:
             self._engram_lookup.import_history(slot, snapshot.engram)
-        self._session_pos[sid] = pos
 
     def evict_session_to_device_park(self, sid: int) -> DeviceParkedSnapshot:
         """Evict ``sid`` from its slot and page table without freeing its KV cache blocks from device RAM."""
@@ -1704,11 +1726,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 if li == src and scache.win_kv is not None:
                     for dst, rows in zip((scache.win_kv, scache.win_gate), snapshot.windows[li]):
                         write_rows(dst, rows, slot * rows.shape[0])
+        self._session_pos[sid] = snapshot.pos
+        self._sync_dense_entries(sid)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
         if snapshot.engram is not None and self._engram_lookup is not None:
             self._engram_lookup.import_history(slot, snapshot.engram)
-        self._session_pos[sid] = snapshot.pos
 
     def free_device_park(self, snapshot: DeviceParkedSnapshot) -> None:
         """Free the KV cache blocks held by a :class:`DeviceParkedSnapshot`."""
@@ -1812,13 +1835,22 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
 
     def _step_context(
-        self, sm: dict, pkt: ttnn.Tensor, causal: bool, r2_pool: bool, r2_select: bool, image: bool = False
+        self,
+        sm: dict,
+        pkt: ttnn.Tensor,
+        causal: bool,
+        r2_pool: bool,
+        r2_select: bool,
+        image: bool = False,
+        dense: frozenset[int] = frozenset(),
     ) -> dict:
         """Token, positions, RoPE rows and the SDPA bounds for one step: per-ratio ``sdpa_lengths`` with one
         user, else the per-ratio mask or ``cur_pos``.
 
         Pool and select tensors are built only for the ratios this variant actually runs, so a
-        stage that ignores the r=2 bits has one op sequence across those variants.
+        stage that ignores the r=2 bits has one op sequence across those variants. A ``dense`` ratio's select
+        takes the slot's first ``dense_kv`` row (``dense_offset``, ``None`` with one slot) and the ``dense_kv`` row
+        of the entry it writes (``dense_entry``) instead of ``index_pos``.
         """
         b = self._decode_batch
 
@@ -1842,6 +1874,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "win_rope": {},
             "entry": {},
             "index_pos": {},
+            "dense_entry": {},
+            "dense_offset": None,
             # Even one session's page table is not the identity (block 0 is ZERO_BLOCK), so the paged
             # ops always read the slot's row.
             "page_row": field(3),
@@ -1889,8 +1923,22 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for ratio in sm["row_ratios"]:
             if ratio not in ctx["entry"] and (ratio == 1 or (ratio == 2 and r2_pool)):
                 ctx["entry"][ratio] = self._entry_index(pos_f, ratio)
+        dense_base_f = None
+        if dense and self._slotted:
+            slot_f = ttnn.typecast(
+                ttnn.to_layout(ttnn.reshape(ctx["page_row"], [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
+            )
+            dense_base_f = ttnn.multiply(slot_f, float(self.config.index_topk))
+            ctx["dense_offset"] = self._device_index(dense_base_f)
         for ratio in sm["index_ratios"]:
-            if ratio == 1 or (ratio == 2 and r2_select):
+            if ratio in dense:
+                if ratio in ctx["entry"]:
+                    ctx["dense_entry"][ratio] = (
+                        ctx["entry"][ratio]
+                        if dense_base_f is None
+                        else self._device_index(ttnn.add(ttnn.floor(ttnn.multiply(pos_f, 1.0 / ratio)), dense_base_f))
+                    )
+            elif ratio == 1 or (ratio == 2 and r2_select):
                 ctx["index_pos"][ratio] = self._index_position(pos_f, ratio)
         if sm.get("taps"):
             ctx["stash_slot"] = self._win_slot(pos_f, self.dspark.stash_rows)
@@ -1950,6 +1998,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         r2_select: bool,
         two_level: bool = False,
         split: frozenset[int] = frozenset(),
+        dense: frozenset[int] = frozenset(),
     ) -> dict:
         ratio = attn.compress_ratio
         cos, sin, neg_sin = ctx["rope"]["main" if ratio == 0 else "compress"]
@@ -1980,8 +2029,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 inputs["entry"] = ctx["entry"][ratio]
         if attn.is_index_source and (ratio == 1 or (ratio == 2 and r2_select)):
             inputs["select"] = True
-            inputs["index_pos"] = ctx["index_pos"][ratio]
-            inputs["split_keys"] = attn.layer_idx in split
+            if ratio in dense:
+                inputs["dense"] = True
+                inputs["dense_offset"] = ctx["dense_offset"]
+                inputs["dense_entry"] = ctx["dense_entry"].get(ratio)
+            else:
+                inputs["index_pos"] = ctx["index_pos"][ratio]
+                inputs["split_keys"] = attn.layer_idx in split
             if attn.layer_idx in self._row_writers and (ratio == 1 or r2_pool):
                 inputs["received_entry"] = ctx["entry"][ratio]
             if two_level and attn.layer_idx in self._candidate_layers:
@@ -2016,10 +2070,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return ttnn.typecast(total, ttnn.bfloat16)
 
     def _decode_submesh_static(
-        self, sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: tuple = (0, frozenset(), False)
+        self,
+        sm: dict,
+        pool_flags: dict[int, bool],
+        causal: bool,
+        index_sparse: tuple = (0, frozenset(), False, frozenset()),
     ) -> ttnn.Tensor:
-        """One submesh's layers for this variant. ``index_sparse`` is the ``(select mode, split layers, image)``
-        of :meth:`_variant_key`.
+        """One submesh's layers for this variant. ``index_sparse`` is the ``(select mode, split layers, image,
+        dense ratios)`` of :meth:`_variant_key`.
 
         Entering a stage receives streams, the packet, ``pre_mix`` and the shared KV groups, in
         that order. Leaving sends the same. The global-last layer collapses, normalises, applies
@@ -2028,7 +2086,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         (:meth:`_send_step_row`), then, for a device accept, its logits (:meth:`_send_step_logits`).
         """
         r2_pool = bool(pool_flags.get(2, False))
-        mode, split, image = index_sparse
+        mode, split, image, dense = index_sparse
+        dense = dense.intersection(sm["index_ratios"])
         r2_select = bool(mode)
         two_level = mode == 2
         stage = sm["index"]
@@ -2071,7 +2130,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 streams = ttnn.to_memory_config(sm["streams_in"], sm["streams_memory_config"])
                 pre_mix = sm["pre_mix_in"]
             if ctx is None:
-                ctx = self._step_context(sm, pkt, causal, r2_pool, r2_select, image and sm["routes_images"])
+                ctx = self._step_context(sm, pkt, causal, r2_pool, r2_select, image and sm["routes_images"], dense)
             if is_first:
                 with _region("EMBED"):
                     embedded = ttnn.embedding(
@@ -2100,7 +2159,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 pre_mix,
                 sm["scaches"][li],
                 image_mask=ctx["image_mask"],
-                **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select, two_level, split),
+                **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select, two_level, split, dense),
             )
             if is_last:
                 hidden = self.norm(self._collapse_streams(streams, pre_mix))
@@ -2509,6 +2568,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
         self._session_pos[session_id] = total
+        self._sync_dense_entries(session_id)
         note("prefill state committed")
         return total
 
@@ -2616,6 +2676,35 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``[1, 1, n, Dh]`` / ``[1, 1, n, index_head_dim]`` tensors (one slice per run of consecutive blocks)."""
         page_row = self._require_paged().page_row(session_id, group)[0].tolist()
         return self._gather_paged_entries_from_rows(scache, group, page_row, n)
+
+    def _sync_dense_entries(self, session_id: int) -> None:
+        """Copy session ``session_id``'s first ``index_topk`` compressed entries out of every stage's ``comp_kv`` into
+        its slot of ``dense_kv``, which a dense select reads. For what writes or maps entries without a decode step:
+        a prefill commit, an import, a reload from the device park."""
+        if not DENSE_SELECT:
+            return
+        pos, topk = self._session_pos[session_id], self.config.index_topk
+        first_row = self._slot_of[session_id] * topk
+        for sm in self.submeshes_io:
+            synced = set()
+            for li in sm["layers"]:
+                scache = sm["scaches"][li]
+                src = self._kv_source_of.get(li)
+                if src is None or src in synced or scache.dense_kv is None:
+                    continue
+                synced.add(src)
+                ratio = int(self.config.compress_ratios[src])
+                n = min(pos // ratio, topk)
+                if n == 0:
+                    continue
+                # Whole tiles; the rows past entry n - 1 are in its (mapped) block and never selected.
+                n = -(-n // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+                kv, keys = self._gather_paged_entries(scache, self._paged_ratios[ratio].layer_type, session_id, n)
+                ttnn.deallocate(keys)
+                tiled = ttnn.to_layout(kv, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(kv)
+                ttnn.fill_cache(scache.dense_kv, tiled, 0, update_idx=first_row)
+                ttnn.deallocate(tiled)
 
     def _gather_paged_entries_from_rows(
         self, scache, group: str, page_row: list[int], n: int
@@ -3541,6 +3630,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             closing = [p for p in positions if (p + 1) % r == 0]
             values[f"win_slot{r}"] = [p % (win_rows if r > 1 else r) for p in positions]
             values[f"entry{r}"] = [p // r for p in closing]
+            values[f"dense_entry{r}"] = [p // r if p // r < topk else -1 for p in closing]
             values[f"start{r}"] = [p + 1 - r for p in closing]
             values[f"index_pos{r}"] = [_SELECT_KV_RATE * max(n, 1) - 1 for n in counts]
             values[f"curpos{r}"] = [w + min(n, topk) - 1 for n in counts]
@@ -3586,6 +3676,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "win_rope": {},
             "entry": {},
             "index_pos": {},
+            "dense_entry": {},
         }
         if sm["deep_windows"]:
             prev = ttnn.typecast(
@@ -3615,6 +3706,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
             ]
         for ratio in sm["index_ratios"]:
             ctx["index_pos"][ratio] = field(f"index_pos{ratio}")
+            n = len(self._verify_closing(ratio, odd))
+            if DENSE_SELECT and n:
+                # A verify block selects by scoring, but keeps dense_kv whole for the one-row steps after it.
+                ctx["dense_entry"][ratio] = field(f"dense_entry{ratio}", n)
         return ctx
 
     def _verify_attention_inputs(self, attn, ctx: dict, causal: bool, odd: bool) -> dict:
@@ -3643,6 +3738,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if attn.is_index_source:
             inputs["select"] = True
             inputs["index_pos"] = ctx["index_pos"][ratio]
+            inputs["dense_entry"] = ctx["dense_entry"].get(ratio)
             if attn.layer_idx in self._row_writers:
                 inputs["received_entry"] = ctx["entry"][ratio]
         if causal:

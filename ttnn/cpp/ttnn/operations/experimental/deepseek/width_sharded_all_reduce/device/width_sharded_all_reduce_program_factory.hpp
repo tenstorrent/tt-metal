@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #include "width_sharded_all_reduce_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
@@ -13,15 +14,20 @@
 namespace ttnn::prim {
 
 struct WidthShardedAllReduceSharedVariables {
+    bool is_coalesced = false;
     tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
     tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
     tt::tt_metal::KernelHandle reduction_reader_kernel_id{};
+    tt::tt_metal::KernelHandle reduction_writer_kernel_id{};
     std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
     CoreRangeSet output_tensor_cores;
     tt::tt_metal::CBHandle cb_out{};
     tt::tt_metal::CBHandle cb_reduction{};
     std::shared_ptr<Tensor> scratch;
     GlobalSemaphore out_ready_semaphore;
+    std::optional<GlobalSemaphore> out_ready_semaphore_odd;
+    std::optional<GlobalSemaphore> iter_semaphore_0;
+    std::optional<GlobalSemaphore> iter_semaphore_1;
 };
 
 struct WidthShardedAllReduceMeshWorkloadFactory {
@@ -50,6 +56,19 @@ private:
         Tensor& output_tensor,
         const std::shared_ptr<Tensor>& scratch,
         const GlobalSemaphore& out_ready_semaphore);
+
+    static cached_program_t create_coalesced_at(
+        const WidthShardedAllReduceParams& operation_attributes,
+        const ttnn::MeshCoordinate& coord,
+        const WidthShardedAllReduceInputs& tensor_args,
+        Tensor& output_tensor,
+        const std::shared_ptr<Tensor>& scratch,
+        const GlobalSemaphore& sem_even,
+        const GlobalSemaphore& sem_odd,
+        const GlobalSemaphore& sem_iter_0,
+        const GlobalSemaphore& sem_iter_1,
+        uint32_t reducers_per_link,
+        uint32_t group_pages);
 };
 
 }  // namespace ttnn::prim
