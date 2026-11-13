@@ -1128,6 +1128,44 @@ void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
     }
 }
 
+void Kernel::reclaim_runtime_args_from_command_sequence() {
+    for (size_t x = 0; x < this->core_to_runtime_args_.size(); x++) {
+        for (size_t y = 0; y < this->core_to_runtime_args_[x].size(); y++) {
+            auto& stored = this->core_to_runtime_args_[x][y];
+            auto& view = this->core_to_runtime_args_data_[x][y];
+            if (stored.empty()) {
+                // No args here, but assembly may have pointed the (empty) view into the sequence.
+                view = RuntimeArgsData{};
+                continue;
+            }
+            uint32_t* own = stored.data() + this->watcher_count_word_offset_;
+            if (view.data() != own) {
+                // A core can hold only the watcher count word (no args) and still have a view into the sequence.
+                const size_t num_args = stored.size() > this->watcher_count_word_offset_
+                                            ? stored.size() - this->watcher_count_word_offset_
+                                            : 0;
+                if (num_args > 0) {
+                    std::memcpy(own, view.data(), num_args * sizeof(uint32_t));
+                }
+                view = RuntimeArgsData{own, view.size()};
+            }
+        }
+    }
+    if (!this->common_runtime_args_.empty()) {
+        uint32_t* own = this->common_runtime_args_.data() + this->watcher_count_word_offset_;
+        auto& view = this->common_runtime_args_data_;
+        if (view.data() != own) {
+            const size_t num_args = this->common_runtime_args_.size() > this->watcher_count_word_offset_
+                                        ? this->common_runtime_args_.size() - this->watcher_count_word_offset_
+                                        : 0;
+            if (num_args > 0) {
+                std::memcpy(own, view.data(), num_args * sizeof(uint32_t));
+            }
+            view = RuntimeArgsData{own, view.size()};
+        }
+    }
+}
+
 void Kernel::set_common_runtime_args_count(uint32_t count) {
     TT_ASSERT(count >= this->common_runtime_args_.size());
 

@@ -118,6 +118,9 @@ struct CapturedTensorPatch {
 struct CapturedProgram {
     MeshCoordinateRange device_range;
     TraceNode trace_node;
+    // The program's per-device runtime args as recorded (null when it has none). A program with them is serialized
+    // once per device, each stream carrying that device's values.
+    std::shared_ptr<const PerDeviceRuntimeArgs> per_device_runtime_args;
     std::vector<CapturedRuntimePatch> runtime_patches;
     std::vector<CapturedCommonRuntimePatch> common_runtime_patches;
     std::vector<CapturedTensorPatch> tensor_patches;
@@ -691,6 +694,12 @@ std::vector<MeshCoordinateRange> CommandListBuilderImpl::compute_device_ranges(
             if (!local_device_range.has_value()) {
                 continue;
             }
+            if (program.per_device_runtime_args != nullptr) {
+                for (const auto& coord : *local_device_range) {
+                    partition_mesh_coordinate_ranges(device_ranges, MeshCoordinateRange(coord));
+                }
+                continue;
+            }
             partition_mesh_coordinate_ranges(device_ranges, *local_device_range);
         }
     }
@@ -750,6 +759,8 @@ CommandListData CommandListBuilderImpl::serialize_range(
     // is serialized from a clean prefetcher cache and launch state.
     dispatch_state.reset(mesh_device.num_sub_devices());
     std::vector<uint32_t> bytes;
+    // (stream byte offset, size) of every per-device runtime argument written into this range's stream
+    std::vector<std::pair<uint32_t, uint32_t>> per_device_words;
     auto& launch_state = dispatch_state.launch_state;
     DispatchArray<uint32_t> expected_workers{};
 
@@ -806,7 +817,17 @@ CommandListData CommandListBuilderImpl::serialize_range(
             ProgramBinaryStatus::Committed);
 
         const auto& captured = *programs[i];
+        // This device's values of the program's per-device runtime args (the range is one device; see
+        // compute_device_ranges), written over the serialized words.
+        std::vector<ResolvedPerDeviceRuntimeArgsField> per_device_fields;
+        uint32_t coord_index = 0;
+        if (captured.per_device_runtime_args != nullptr) {
+            TT_ASSERT(range.shape().mesh_size() == 1);
+            per_device_fields = resolve_per_device_runtime_args(*captured.per_device_runtime_args, command_sequence);
+            coord_index = coordinate_index_in_range(captured.device_range, range.start_coord());
+        }
         size_t num_recorded = 0;
+        size_t num_fields_written = 0;
         program_dispatch::for_each_program_command_sequence_chunk(
             command_sequence,
             node.dispatch_metadata.stall_first,
@@ -814,9 +835,30 @@ CommandListData CommandListBuilderImpl::serialize_range(
             node.dispatch_metadata.send_binary,
             [&](const void* chunk, uint32_t chunk_size) {
                 const uint32_t chunk_offset = append_command_bytes(bytes, chunk, chunk_size);
+                const auto* chunk_begin = static_cast<const uint8_t*>(chunk);
+                for (const auto& [location, field] : per_device_fields) {
+                    const auto* loc = reinterpret_cast<const uint8_t*>(location);
+                    const uint32_t field_bytes = field->num_words * sizeof(uint32_t);
+                    if (loc < chunk_begin || loc + field_bytes > chunk_begin + chunk_size) {
+                        continue;
+                    }
+                    const uint32_t stream_offset = chunk_offset + static_cast<uint32_t>(loc - chunk_begin);
+                    // A device without a value keeps the program's own words, which a parameter may patch.
+                    if (field->present[coord_index] != 0) {
+                        std::memcpy(
+                            reinterpret_cast<uint8_t*>(bytes.data()) + stream_offset,
+                            field->values.data() + static_cast<size_t>(coord_index) * field->num_words,
+                            field_bytes);
+                        per_device_words.push_back({stream_offset, field_bytes});
+                    }
+                    ++num_fields_written;
+                }
                 num_recorded += record_patch_targets(
                     captured, command_sequence, chunk, chunk_size, chunk_offset, range_index, registry);
             });
+        TT_FATAL(
+            num_fields_written == per_device_fields.size(),
+            "Failed to locate every per-device runtime argument in the serialized command stream");
         TT_FATAL(
             num_recorded == captured.runtime_patches.size() + captured.common_runtime_patches.size() +
                                 captured.tensor_patches.size(),
@@ -826,6 +868,33 @@ CommandListData CommandListBuilderImpl::serialize_range(
             worker_launch_state.inc_mcast_wptr(1);
         }
         expected_workers[*sub_device] += node.num_workers;
+    }
+
+    // A command-list parameter under a per-device runtime argument would overwrite that device's value with the one
+    // every device gets on update_args.
+    if (!per_device_words.empty()) {
+        auto check = [&](const PatchTarget& target) {
+            if (target.range_index != range_index) {
+                return;
+            }
+            const uint32_t end = target.stream_offset + target.num_words * static_cast<uint32_t>(sizeof(uint32_t));
+            for (const auto& [offset, size] : per_device_words) {
+                TT_FATAL(
+                    end <= offset || offset + size <= target.stream_offset,
+                    "A command list parameter overlaps a per-device runtime argument");
+            }
+        };
+        for (const auto& [_, targets] : registry.runtime_targets) {
+            std::ranges::for_each(targets, check);
+        }
+        for (const auto& [_, targets] : registry.common_runtime_targets) {
+            std::ranges::for_each(targets, check);
+        }
+        for (const auto& [_, targets] : registry.tensor_targets) {
+            for (const auto& target : targets) {
+                check(target.target);
+            }
+        }
     }
 
     // Returns the prefetcher from the exec buffer to the issue queue.
@@ -1057,10 +1126,13 @@ void CommandListBuilderImpl::add(
     const bool use_prefetcher_cache = max_program_kernels_size != 0 && max_program_kernels_size <= cache_size;
 
     for (auto& [device_range, program] : workload.get_programs()) {
+        const auto* per_device = workload.impl().per_device_runtime_args(device_range);
         staged_node.programs.push_back(
-            {device_range,
-             program_dispatch::create_trace_node(
-                 program.impl(), &mesh_device, staged_node.num_workers, use_prefetcher_cache)});
+            {.device_range = device_range,
+             .trace_node = program_dispatch::create_trace_node(
+                 program.impl(), &mesh_device, staged_node.num_workers, use_prefetcher_cache),
+             .per_device_runtime_args =
+                 per_device != nullptr ? snapshot_per_device_runtime_args(*per_device) : nullptr});
     }
     resolve_parameters(staged_node, parameters);
 

@@ -45,6 +45,57 @@ const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const Progra
     return kp.advanced_options.common_runtime_varargs;
 }
 
+// UpdateProgramRunArgs drops the per-device values of the named args it lists (see ProgramImpl::PerDeviceRunArgDrops).
+// Tensor args, DFB overrides and varargs cannot have per-device values, so only named args are recorded.
+static void RecordPerDeviceRunArgDrops(detail::ProgramImpl& program_impl, const ProgramRunArgs& params) {
+    if (!program_impl.tracks_per_device_run_args()) {
+        return;
+    }
+    using Key = detail::ProgramImpl::PerDeviceRunArgKey;
+    for (const auto& kernel_params : params.kernel_run_args) {
+        const std::string& kernel_name = kernel_params.kernel.get();
+        const KernelHandle kernel = program_impl.get_kernel_handle(kernel_name);
+        if (!program_impl.tracks_per_device_run_args_of(kernel)) {
+            continue;
+        }
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
+        TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
+        for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
+            const auto it = schema->runtime_arg_name_to_slot.find(name);
+            if (it == schema->runtime_arg_name_to_slot.end()) {
+                continue;  // the update itself fails on it
+            }
+            for (const auto& [node, value] : per_node) {
+                program_impl.record_per_device_run_arg_drop(Key{kernel, node, static_cast<uint32_t>(it->second)});
+            }
+        }
+        for (const auto& [name, per_node] : kernel_params.runtime_array_arg_values) {
+            const auto it = schema->runtime_array_arg_slots.find(name);
+            if (it == schema->runtime_array_arg_slots.end()) {
+                continue;
+            }
+            for (const auto& [node, value] : per_node) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, node, static_cast<uint32_t>(it->second.first_slot)});
+            }
+        }
+        for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
+            const auto it = schema->common_runtime_arg_name_to_slot.find(name);
+            if (it != schema->common_runtime_arg_name_to_slot.end()) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, std::nullopt, static_cast<uint32_t>(it->second)});
+            }
+        }
+        for (const auto& [name, value] : kernel_params.common_runtime_array_arg_values) {
+            const auto it = schema->common_runtime_array_arg_slots.find(name);
+            if (it != schema->common_runtime_array_arg_slots.end()) {
+                program_impl.record_per_device_run_arg_drop(
+                    Key{kernel, std::nullopt, static_cast<uint32_t>(it->second.first_slot)});
+            }
+        }
+    }
+}
+
 // Validation of the array args a KernelRunArgs supplies, shared by the full and partial-update paths:
 // each supplied array must be declared, set only on nodes the kernel runs on, and have exactly its
 // declared length. (The full path also requires every declared array; see ValidateProgramRunArgs.)
@@ -1274,6 +1325,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
     }
     program_impl.mark_program_run_args_initialized();
+    // Every arg was just set for the whole program: per-device values are dropped (see
+    // ProgramImpl::PerDeviceRunArgDrops).
+    program_impl.record_per_device_run_args_drop_all();
 }
 
 void UpdateTensorArgs(
@@ -1589,7 +1643,6 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     if (!skip_validation) {
         ValidateUpdateProgramRunArgs(program, params);
     }
-
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
     // retaining the value installed by the most recent SetProgramRunArgs. A supplied positional
     // vararg section refreshes that section wholesale.
@@ -1776,6 +1829,8 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 
     // Install arena addresses after DFB, tensor, and pipe checks succeed.
     BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
+    // Only once the update succeeded: a failed update must not drop per-device values it never replaced.
+    RecordPerDeviceRunArgDrops(program_impl, params);
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {

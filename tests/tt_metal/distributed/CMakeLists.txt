@@ -36,6 +36,7 @@ target_sources(
     PRIVATE
         benchmark_thread_pool.cpp
         benchmark_mesh_fan_out.cpp
+        benchmark_mesh_per_device_runtime_args.cpp
         benchmark_distributed_host_buffer.cpp
         benchmark_hd_sockets.cpp
         benchmark_command_list.cpp
