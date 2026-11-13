@@ -65,7 +65,8 @@ int main(void)
     // fire it, the queued stores and Tensix pushes are dropped and the kernel computes with missing instructions. Match
     // trisck.cc's intent with the full range (#63869). ttsim rejects values other than 0x100000 today and does not model
     // the timeout at all, so skip it there.
-    asm volatile("csrw 0xBD0, %0" : : "r"(0xFFFFFFFFu));
+    constexpr std::uint16_t CSR_TIMEOUT_COUNT = 0xBD0;
+    ckernel::csr_write<CSR_TIMEOUT_COUNT, false /*fence*/>(0xFFFFFFFFu);
 #endif
     mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
 #if defined(LLK_TRISC_UNPACK) && defined(LLK_BOOT_MODE_TRISC)
