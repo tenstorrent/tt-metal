@@ -11,6 +11,11 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "../persistent.h"
 
+// The shared gate_up's K-split (see the program factory's shared_split): 1 = off.
+#ifndef FE_SHARED_SPLIT
+#define FE_SHARED_SPLIT 1u
+#endif
+
 namespace {
 
 constexpr uint32_t kFaceRowBytes = 16 * 2;              // 16 bf16 columns: one face row
@@ -168,6 +173,16 @@ void kernel_main() {
     const uint32_t hub1_noc_x = get_arg_val<uint32_t>(6);
     const uint32_t hub1_noc_y = get_arg_val<uint32_t>(7);
     const uint32_t down_local = get_arg_val<uint32_t>(8);
+    // Last: this group's shared aggregator (FE_SHARED_SPLIT), after the fused all-reduce's args.
+#if defined(FE_ALL_REDUCE) && defined(FE_PERSISTENT)
+    constexpr uint32_t kAggArg = 18;
+#elif defined(FE_ALL_REDUCE)
+    constexpr uint32_t kAggArg = 16;
+#else
+    constexpr uint32_t kAggArg = 10;
+#endif
+    const uint32_t agg_noc_x = get_arg_val<uint32_t>(kAggArg);
+    const uint32_t agg_noc_y = get_arg_val<uint32_t>(kAggArg + 1);
     const bool down_core = down_local != 0xFFFFFFFFu;
     (void)down_core;
 
@@ -361,6 +376,39 @@ void kernel_main() {
                 expert_group < shared_i_tiles
                     ? (shared_i_tiles - expert_group + num_expert_groups - 1u) / num_expert_groups
                     : 0u;
+#if FE_SHARED_SPLIT > 1
+            // The shared gate_up's K-split: parts past the first send their [gate | up] partial (cb_wtmp, 2 tiles)
+            // into the aggregator's cb_wtmp, at the same address there, in part order; the aggregator publishes
+            // them to its compute once every part has counted in.
+            if (shared_tiles == 1u && local_idx >= shared_first_local &&
+                local_idx < shared_first_local + FE_SHARED_SPLIT) {
+                const uint32_t part = local_idx - shared_first_local;
+                CircularBuffer cb_wtmp(FE_CB_WTMP);
+                constexpr uint32_t kPartBytes = kOutTiles * out_tile_bytes;
+                const auto& wtmp_if = get_local_cb_interface(FE_CB_WTMP);
+                const uint32_t wtmp_base = wtmp_if.fifo_limit - wtmp_if.fifo_size;
+                if (part > 0u) {
+                    cb_wtmp.wait_front(kOutTiles);
+                    noc.async_write(
+                        cb_wtmp,
+                        UnicastEndpoint{},
+                        kPartBytes,
+                        {.offset_bytes = 0},
+                        {.noc_x = agg_noc_x, .noc_y = agg_noc_y, .addr = wtmp_base + (part - 1u) * kPartBytes});
+                    noc.async_write_barrier();
+                    noc_semaphore_inc(get_noc_addr(agg_noc_x, agg_noc_y, get_semaphore(FE_SEM_SHARED_PART)), 1);
+                    noc_async_atomic_barrier();
+                    cb_wtmp.pop_front(kOutTiles);
+                } else {
+                    constexpr uint32_t kParts = FE_SHARED_SPLIT - 1u;
+                    cb_wtmp.reserve_back(kParts * kOutTiles);
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_SHARED_PART)),
+                        kParts * (iter + 1u));
+                    cb_wtmp.push_back(kParts * kOutTiles);
+                }
+            }
+#endif
             if (local_idx >= shared_first_local && local_idx < shared_first_local + shared_tiles) {
                 cb_out.wait_front(1);
                 noc.async_write(

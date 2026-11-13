@@ -17,6 +17,11 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "../persistent.h"
 
+// The shared gate_up's K-split (see the program factory's shared_split): 1 = off.
+#ifndef FE_SHARED_SPLIT
+#define FE_SHARED_SPLIT 1u
+#endif
+
 // Per-core gate_up matmul + SwiGLU gate + down matmul (runs on every compute core).
 //
 // The B (<= 32) tokens of the batch are the rows of a single tile row, so every matmul below already
@@ -159,10 +164,15 @@ void kernel_main() {
     const uint32_t shared_tiles =
         expert_group < shared_i_tiles ? (shared_i_tiles - expert_group + num_expert_groups - 1) / num_expert_groups : 0;
     const bool shared_core = local_idx >= shared_first_local && local_idx < shared_first_local + shared_tiles;
+    // FE_SHARED_SPLIT > 1: cores [shared_first_local, + FE_SHARED_SPLIT) each multiply a K-range of the group's one
+    // shared tile; part 0 (the shared core itself) adds the others' partials, which its writer lands in cb_wtmp.
+    const bool shared_split_core = FE_SHARED_SPLIT > 1u && shared_tiles == 1u && local_idx >= shared_first_local &&
+                                   local_idx < shared_first_local + FE_SHARED_SPLIT;
+    const uint32_t shared_part = shared_split_core ? local_idx - shared_first_local : 0u;
 #if defined(FE_PERSISTENT)
     const bool uses_input = true;
 #else
-    const bool uses_input = swiglu_core || shared_core;
+    const bool uses_input = swiglu_core || shared_core || shared_split_core;
 #endif
 
     constexpr uint32_t kOutTilesPerCore = 2;
@@ -190,6 +200,17 @@ void kernel_main() {
     // custom_mm writes the whole [gate | up] slice in one call: 8 16-bit tiles at half sync.
     static_assert(kShardTileCols <= 8, "custom_mm holds gate and up in DST at once");
 #endif
+
+    // 6-expert path: the producers fold the routing weight into the activation they scatter (SwiGLU output times
+    // the group's per-token weight tile), so the down cores' matmul output needs no weighting pass. Only where
+    // every producer is a down core (it builds the weight tile): 16-core groups, not the 18-core tall ones,
+    // whose 9th-row cores run gate_up only; and the weight tile needs a free DST slot after gate | up.
+#ifdef FE_CUSTOM_MM
+    constexpr uint32_t kDstTiles = 8;
+#else
+    constexpr uint32_t kDstTiles = 4;
+#endif
+    constexpr bool kScaledAct = num_expert_groups > 1 && cores_per_expert == 16 && kShardTileCols < kDstTiles;
 
     // gate: clamp(min = -inf, max = limit); up: clamp(min = -limit, max = limit).
     constexpr uint32_t kNegInfBits = 0xFF800000u;
@@ -323,9 +344,18 @@ void kernel_main() {
                     pack_reconfig_data_format(cb_out_id);
                     out_cb.reserve_back(swiglu_tiles);
 
+                    if constexpr (kScaledAct) {
+                        rscalar_cb.wait_front(1);
+                    }
                     tile_regs_acquire();
                     for (uint32_t n = 0; n < kShardTileCols; ++n) {
                         copy_tile(cb_mm_id, n, n);
+                    }
+                    if constexpr (kScaledAct) {
+                        // The group's per-token routing weight, row b = token b's in every column.
+                        copy_init(cb_rscalar_id);
+                        reconfig_data_format_srca(cb_mm_id, cb_rscalar_id);
+                        copy_tile(cb_rscalar_id, 0, kShardTileCols);
                     }
                     clamp_tile_init();
                     for (uint32_t n = 0; n < swiglu_tiles; ++n) {
@@ -342,6 +372,9 @@ void kernel_main() {
                     mul_binary_tile_init();
                     for (uint32_t n = 0; n < swiglu_tiles; ++n) {
                         mul_binary_tile(n, swiglu_tiles + n, n);
+                        if constexpr (kScaledAct) {
+                            mul_binary_tile(n, kShardTileCols, n);
+                        }
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -358,61 +391,82 @@ void kernel_main() {
             // Shared expert: one I-tile's gate (dst 0) and up (dst 1), accumulated over the streamed
             // K-chunks of its [K, 2] shard, then the same SwiGLU with the shared clamp. The writer
             // scatters the tile behind the group's routed activation.
-            if (shared_core) {
+            if (shared_core || shared_split_core) {
                 DeviceZoneScopedN("FE_C_SHARED");
                 CircularBuffer shared_w_cb(cb_shared_gate_up_id);
                 constexpr uint32_t kChunkTiles = 2 * shared_chunk_k;
 
-                constexpr uint32_t kSharedChunks = k_tiles / shared_chunk_k;
+                // This core's K-range of the shard (the whole of it unless split), and where its gate | up go: a
+                // split part past the first only produces a partial, for the aggregator.
+                const uint32_t part_k = shared_split_core ? k_tiles / FE_SHARED_SPLIT : k_tiles;
+                const uint32_t k_begin = shared_part * part_k;
+                const uint32_t shared_chunks = part_k / shared_chunk_k;
+                const bool partial_only = shared_split_core && shared_part > 0u;
+                const uint32_t gu_dst_id = partial_only ? cb_wtmp_id : cb_mm_id;
+                CircularBuffer gu_dst_cb(gu_dst_id);
 #ifdef FE_CUSTOM_MM
                 reconfig_full_operand(cb_shared_gate_up_id, cb_input_id);
-                pack_reconfig_data_format(cb_mm_id);
+                pack_reconfig_data_format(gu_dst_id);
                 custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
-                    cb_input_id, cb_shared_gate_up_id, cb_mm_id, 2);
+                    cb_input_id, cb_shared_gate_up_id, gu_dst_id, 2);
 #else
                 matmul_init(cb_input_id, cb_shared_gate_up_id);
                 reconfig_full_operand(cb_shared_gate_up_id, cb_input_id);
-                pack_reconfig_data_format(cb_mm_id);
+                pack_reconfig_data_format(gu_dst_id);
 #endif
-                mm_cb.reserve_back(2);
+                gu_dst_cb.reserve_back(2);
 
                 tile_regs_acquire();
-                for (uint32_t c = 0; c < kSharedChunks; ++c) {
+                for (uint32_t c = 0; c < shared_chunks; ++c) {
                     shared_w_cb.wait_front(kChunkTiles);
+                    const uint32_t k0 = k_begin + c * shared_chunk_k;
 #ifdef FE_CUSTOM_MM
                     // A chunk is [shared_chunk_k, 2] tiles row-major: gate -> dst 0, up -> dst 1, chained over
                     // the chunks (only the last one finalizes).
-                    if (c + 1 == kSharedChunks) {
+                    if (c + 1 == shared_chunks) {
                         custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
-                            cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k, 0, 0, shared_chunk_k, 2);
+                            cb_input_id, cb_shared_gate_up_id, k0, 0, 0, shared_chunk_k, 2);
                     } else {
                         custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
-                            cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k, 0, 0, shared_chunk_k, 2);
+                            cb_input_id, cb_shared_gate_up_id, k0, 0, 0, shared_chunk_k, 2);
                     }
 #else
                     for (uint32_t k = 0; k < shared_chunk_k; ++k) {
-                        matmul_tiles(cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k + k, 2 * k, 0);
-                        matmul_tiles(cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k + k, 2 * k + 1, 1);
+                        matmul_tiles(cb_input_id, cb_shared_gate_up_id, k0 + k, 2 * k, 0);
+                        matmul_tiles(cb_input_id, cb_shared_gate_up_id, k0 + k, 2 * k + 1, 1);
                     }
 #endif
                     shared_w_cb.pop_front(kChunkTiles);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile<true>(0, cb_mm_id, 0);
-                pack_tile<true>(1, cb_mm_id, 1);
+                pack_tile<true>(0, gu_dst_id, 0);
+                pack_tile<true>(1, gu_dst_id, 1);
                 tile_regs_release();
-                mm_cb.push_back(2);
-
+                gu_dst_cb.push_back(2);
+            }
+            if (shared_core) {
+                // The other parts' partials: (FE_SHARED_SPLIT - 1) [gate | up] pairs in cb_wtmp, part order.
+                constexpr uint32_t kPartialTiles = FE_SHARED_SPLIT > 1u ? (FE_SHARED_SPLIT - 1u) * 2u : 0u;
+                if (shared_split_core) {
+                    wtmp_cb.wait_front(kPartialTiles);
+                }
                 mm_cb.wait_front(2);
                 copy_init(cb_mm_id);
-                reconfig_full_operand_srca(cb_mm_id);
+                reconfig_full_operand(cb_mm_id, shared_split_core ? cb_wtmp_id : cb_mm_id);
                 pack_reconfig_data_format(cb_out_id);
                 out_cb.reserve_back(1);
 
                 tile_regs_acquire();
                 copy_tile(cb_mm_id, 0, 0);
                 copy_tile(cb_mm_id, 1, 1);
+                if (shared_split_core) {
+                    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_wtmp_id);
+                    for (uint32_t q = 0; q < kPartialTiles / 2u; ++q) {
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_wtmp_id, 2u * q, 0);
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_wtmp_id, 2u * q + 1u, 1);
+                    }
+                }
                 clamp_tile_init();
                 clamp_tile(0, kNegInfBits, shared_limit_bits);
                 silu_tile_init();
@@ -427,6 +481,9 @@ void kernel_main() {
                 tile_regs_release();
 
                 mm_cb.pop_front(2);
+                if (shared_split_core) {
+                    wtmp_cb.pop_front(kPartialTiles);
+                }
                 out_cb.push_back(1);
             }
 
@@ -459,6 +516,71 @@ void kernel_main() {
 
             for (uint32_t s = 0; s < shards_per_core; ++s) {
                 down_w_cb.wait_front(down_reserve_tiles);
+
+                if constexpr (kScaledAct) {
+                    // The activation is already weighted, so the slice is act @ down_w (+ the shared expert's
+                    // act_shared @ down_shared, accumulated in the same DST), packed once, straight to mul_dst.
+                    const bool with_shared = shared_tiles > 0;
+                    if (with_shared) {
+                        shared_down_cb.wait_front(shared_slots * kOutTilesPerCore);
+                    }
+                    mul_dst_cb.reserve_back(kOutTilesPerCore);
+#ifdef FE_CUSTOM_MM
+                    reconfig_full_operand(cb_down_w_id, cb_act_id);
+                    pack_reconfig_data_format(mul_dst_id);
+                    custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                        cb_act_id, cb_down_w_id, mul_dst_id, kOutTilesPerCore);
+                    tile_regs_acquire();
+                    if (with_shared) {
+                        // One split accumulation over both: the routed K-tiles, then (in the shared weight's own
+                        // format) the shared ones, which finalize it.
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
+                            cb_act_id, cb_down_w_id, 0, 0, 0, i_tiles, kOutTilesPerCore);
+                        reconfig_full_operand(cb_shared_down_id, cb_act_id);
+                        custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                            cb_act_id, cb_shared_down_id, mul_dst_id, kOutTilesPerCore);
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                            cb_act_id, cb_shared_down_id, i_tiles, 0, 0, shared_tiles, kOutTilesPerCore);
+                    } else {
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                            cb_act_id, cb_down_w_id, 0, 0, 0, i_tiles, kOutTilesPerCore);
+                    }
+#else
+                    matmul_init(cb_act_id, cb_down_w_id);
+                    reconfig_full_operand(cb_down_w_id, cb_act_id);
+                    pack_reconfig_data_format(mul_dst_id);
+                    tile_regs_acquire();
+                    for (uint32_t n = 0; n < kOutTilesPerCore; ++n) {
+                        for (uint32_t k = 0; k < i_tiles; ++k) {
+                            matmul_tiles(cb_act_id, cb_down_w_id, k, k * kOutTilesPerCore + n, n);
+                        }
+                    }
+                    if (with_shared) {
+                        matmul_init(cb_act_id, cb_shared_down_id);
+                        reconfig_full_operand(cb_shared_down_id, cb_act_id);
+                        for (uint32_t n = 0; n < kOutTilesPerCore; ++n) {
+                            for (uint32_t j = 0; j < shared_tiles; ++j) {
+                                matmul_tiles(cb_act_id, cb_shared_down_id, i_tiles + j, j * kOutTilesPerCore + n, n);
+                            }
+                        }
+                    }
+#endif
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, mul_dst_id);
+                    pack_tile(1, mul_dst_id);
+                    tile_regs_release();
+#ifdef FE_CUSTOM_MM
+                    // Back to the plain packer for what follows (the root's reduce packs with it).
+                    custom_mm_block_uninit<CustomMmDestLayout::DefaultSplitAcc>(mul_dst_id);
+#endif
+                    mul_dst_cb.push_back(kOutTilesPerCore);
+                    down_w_cb.pop_front(down_reserve_tiles);
+                    if (with_shared) {
+                        shared_down_cb.pop_front(shared_slots * kOutTilesPerCore);
+                    }
+                    continue;
+                }
 
 #ifdef FE_CUSTOM_MM
                 reconfig_full_operand(cb_down_w_id, cb_act_id);
@@ -561,33 +683,38 @@ void kernel_main() {
                 acc_cb.wait_front(kLocalTiles);
                 reduce_cb.wait_front(kRemoteGroups * kLocalTiles);
 
-                for (uint32_t g = 0; g < kRemoteGroups; ++g) {
-                    const bool last = (g == kRemoteGroups - 1);
-                    const bool src_is_acc = (g % 2u == 0);
-                    const uint32_t src_id = src_is_acc ? cb_acc_id : cb_wtmp_id;
-                    const uint32_t dst_id = last ? cb_down_out_id : (src_is_acc ? cb_wtmp_id : cb_acc_id);
-                    CircularBuffer src_cb(src_id);
-                    CircularBuffer dst_cb(dst_id);
-                    if (g > 0) {
-                        src_cb.wait_front(kLocalTiles);
-                    }
-                    add_init(src_id, cb_reduce_id);
-                    reconfig_full_operand(src_id, cb_reduce_id);
-                    pack_reconfig_data_format(dst_id);
-                    dst_cb.reserve_back(kLocalTiles);
-                    const uint32_t reduce_base = g * kLocalTiles;
+                // Each slice's 2 tiles: the root's own, plus every other group's, in group order, in DST, packed
+                // once (rather than one pass through the CBs per group).
+                {
+                    CircularBuffer out_cb2(cb_down_out_id);
+                    out_cb2.reserve_back(kLocalTiles);
+                    // Full operand reconfig (formats and tile shapes): the down slices last unpacked the shared
+                    // expert's full 32x32 weight tiles into SrcB.
+                    reconfig_full_operand(cb_acc_id, cb_reduce_id);
+                    pack_reconfig_data_format(cb_down_out_id);
                     for (uint32_t p = 0; p < shards_per_core; ++p) {
                         tile_regs_acquire();
-                        add_tiles(src_id, cb_reduce_id, p * 2, reduce_base + p * 2, 0);
-                        add_tiles(src_id, cb_reduce_id, p * 2 + 1, reduce_base + p * 2 + 1, 1);
+                        // The root's own + the first other group's, then the rest added onto DST in place.
+                        add_init(cb_acc_id, cb_reduce_id);
+                        add_tiles(cb_acc_id, cb_reduce_id, p * 2, p * 2, 0);
+                        add_tiles(cb_acc_id, cb_reduce_id, p * 2 + 1, p * 2 + 1, 1);
+                        if constexpr (kRemoteGroups > 1) {
+                            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_reduce_id);
+                            for (uint32_t g = 1; g < kRemoteGroups; ++g) {
+                                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                                    cb_reduce_id, g * kLocalTiles + p * 2, 0);
+                                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                                    cb_reduce_id, g * kLocalTiles + p * 2 + 1, 1);
+                            }
+                        }
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_tile(0, dst_id);
-                        pack_tile(1, dst_id);
+                        pack_tile(0, cb_down_out_id);
+                        pack_tile(1, cb_down_out_id);
                         tile_regs_release();
                     }
-                    src_cb.pop_front(kLocalTiles);
-                    dst_cb.push_back(kLocalTiles);
+                    acc_cb.pop_front(kLocalTiles);
+                    out_cb2.push_back(kLocalTiles);
                 }
                 reduce_cb.pop_front(kRemoteGroups * kLocalTiles);
 #if defined(FE_ALL_REDUCE) && (!defined(FE_PERSISTENT) || defined(FE_REDUCE_ROOT))
