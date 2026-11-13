@@ -210,9 +210,18 @@ def test_tensix_all_reduce_wave_pipeline_device_perf(device):
 # the measured gain, never closer than the noise margin; does_not_help: at most the measured value plus
 # the noise margin, and never below 1.0). An architecture without a measured number is logged, not
 # asserted. A missed bound is re-measured once and the samples are pooled.
+# "bh": BH p150b. "wh": WH B0 n150, 8x8 groups, 1000 MHz, min-max of the regime test's median over 10 runs
+# (2026-11-13).
 _REGIMES = [
-    ("helps_tall_32x4_4waves", 32, 4, 4, "helps", {"bh": 1.34}),  # BH p150b 1.34x
-    ("does_not_help_short_8x1_4waves", 8, 1, 4, "does_not_help", {"bh": 0.92}),  # BH p150b 0.92x (2 tiles per wave)
+    ("helps_tall_32x4_4waves", 32, 4, 4, "helps", {"wh": (1.16, 1.18), "bh": 1.34}),  # BH p150b 1.34x
+    (
+        "does_not_help_short_8x1_4waves",
+        8,
+        1,
+        4,
+        "does_not_help",
+        {"wh": (0.88, 0.91), "bh": 0.92},
+    ),  # BH p150b 0.92x (2 tiles per wave)
 ]
 
 

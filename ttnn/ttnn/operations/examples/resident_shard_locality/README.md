@@ -3,6 +3,7 @@
 **Problem type:** cross-core communication  ·  **Concept(s):** (1) work split = shard spec (every Tensix core works on the sticks it already holds); (2) CB aliased onto the shard (no staging copy at all)
 **First profiled on:** `bh-50-special-adamjanovic-for-reservation-143315` · BH, 13×10 = 130 Tensix cores · 1350 MHz · 2026-10-29 · `8104cced9bc`
 **Wide-row / partial-width cases added:** same box · 2026-10-30 · `f45246f274b` (appended block in [`report.md`](report.md))
+**Wormhole B0 numbers:** `bgd-lab-22-special-adamjanovic-for-reservation-165935` · WH B0 n150, 8×8 = 64 Tensix cores · 1000 MHz · 2026-11-13 · `b31c663a467` ([`report_wh_n150.md`](report_wh_n150.md))
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -142,10 +143,10 @@ resident_shard_locality   box=bh-50  arch=BH  clock=1350MHz   N=1   kernel-iters
 ## When it helps / when it does not
 Measured on device by `test_resident_shard_locality_regimes` (interleaved A/B, median of 5 when these numbers
 were taken). The test now takes the median of 7 interleaved trials per variant and asserts the direction
-against a bound derived from these BH numbers (`perf_test_utils.regime_bound`: half the measured gain for
-"helps", ≤ max(1.0, 1.10 × the measured value) for "does not help"), with one confirmation pass; on an
-architecture with no measured number (Wormhole) it logs without asserting. `[1, 8192]` needs 128 Tensix cores
-and skips on a smaller grid. Conditions in portable units: sticks per Tensix core, bytes per stick, Tensix cores.
+against a bound derived from the number measured on the board it runs on (`perf_test_utils.regime_bound`: half
+the measured gain for "helps", ≤ max(1.0, 1.10 × the measured value) for "does not help"), with one
+confirmation pass. WH B0 rows: the regime test's median, median of 10 runs (min–max in the test). `[1, 8192]`
+needs 128 Tensix cores and skips on a smaller grid, so it has no WH number. Conditions in portable units: sticks per Tensix core, bytes per stick, Tensix cores.
 
 | Regime | Condition | Shape(s) | Baseline ns | Lever ns | Speedup | Trials | Board |
 |---|---|---|---|---|---|---|---|
@@ -158,6 +159,22 @@ and skips on a smaller grid. Conditions in portable units: sticks per Tensix cor
 | helps | partial-width BLOCK | BLOCK [221, 400], 10×13 | 55 783 (`resplit`) | 9 850 (`local`) | **5.66×** | 5 | BH 13×10 |
 | helps | partial-width BLOCK | BLOCK [23, 848] / [16, 848], 10×13 | 21 676 / 13 248 (`resplit`) | 3 453 / 3 116 (`local`) | **6.28× / 4.25×** | 5 | BH 13×10 |
 | does not help | 1 stick per Tensix core, 16 KB sticks | HEIGHT [1, 8192], 128 Tensix cores | 12 074 (`resplit`) | 17 423 (`local`) | **0.69×** | 5 | BH 13×10 |
+| helps | ≥ 1 tile-row per Tensix core, shard height not a multiple of 32, whole grid | HEIGHT [72, 544], 64 Tensix cores | 88 918 (`resplit`) | 21 698 (`local`) | **4.10×** | 7 × 10 runs | WH B0 8×8 |
+| helps | BLOCK_SHARDED, whole grid | BLOCK [311, 320], 8×8 | 86 847 (`resplit`) | 23 174 (`local`) | **3.75×** | 7 × 10 runs | WH B0 8×8 |
+| helps | whole tile-rows, ≤ 32 tiles wide (aliasing legal) | HEIGHT [32, 1024], 64 Tensix cores | 10 536 (`local`) | 6 070 (`local_alias`) | **1.74×** | 7 × 10 runs | WH B0 8×8 |
+| helps | wide rows, W chunked (127 tiles per stick) | HEIGHT [24, 4064], 64 Tensix cores | 32 978 (`resplit`) | 25 274 (`local`) | **1.31×** (1.29–1.56×) | 7 × 10 runs | WH B0 8×8 |
+| helps | wide rows, W chunked (160 tiles per stick) | HEIGHT [17, 5120], 64 Tensix cores | 134 778 (`resplit`) | 29 604 (`local`) | **4.56×** | 7 × 10 runs | WH B0 8×8 |
+| helps | partial-width BLOCK, fp32 | BLOCK [13, 632] fp32, 8×8 | 25 154 (`resplit`) | 10 846 (`local`) | **2.32×** | 7 × 10 runs | WH B0 8×8 |
+| helps | partial-width BLOCK | BLOCK [221, 400], 8×8 | 47 077 (`resplit`) | 37 822 (`local`) | **1.25×** | 7 × 10 runs | WH B0 8×8 |
+| helps | partial-width BLOCK | BLOCK [23, 848] / [16, 848], 8×8 | 39 960 / 20 206 (`resplit`) | 9 160 / 8 334 (`local`) | **4.36× / 2.43×** | 7 × 10 runs | WH B0 8×8 |
+
+WH B0 n150: every "helps" regime holds, with smaller gains than on BH — the `local` path itself takes ~4× longer
+in absolute time on WH ([72, 544]: 21.7 µs vs 5.5 µs on BH) and the grid has 64, not 130, Tensix cores. The
+widest gaps: [24, 4064] 1.31× (BH 7.94×) and [221, 400] 1.25× (BH 5.66×). The [24, 4064] `resplit` baseline is
+bimodal on WH (32–43 µs inside one run), so that speedup ranged 1.29–1.56× over 10 runs. Whole-tile-row shards,
+where `resplit` lands on the owners by accident, are flat on WH (`local` vs `resplit` 1.01–1.03× at [32, 1024],
+[64, 544], [96, 544]; BH 1.14–1.26×); aliasing over `local` still pays (1.13–1.73×, BH 1.21–1.58×). Mechanism table on WH ([72, 544]
+shards): `resplit` / `local` 1.00× on 1 Tensix core, 1.07× on 2, 2.96× on 13, 4.05× on 26.
 
 Sub-tile-row crossover (sweep, single pass, 128 Tensix cores): local costs one tile-row per column chunk
 whatever the stick count (~68 ns per tile of tilize + untilize: [·, 8192] = 256 tiles ≈ 17.5 µs flat for 1–8
@@ -184,7 +201,8 @@ RSL_SWEEPS=1 RSL_REPORT=ttnn/ttnn/operations/examples/resident_shard_locality/re
     tests/ttnn/unit_tests/operations/examples/test_resident_shard_locality.py::test_resident_shard_locality_device_perf
 ```
 or `python -m ttnn.operations.examples.resident_shard_locality --report ttnn/ttnn/operations/examples/resident_shard_locality/report.md`.
-Sweep cases on 128 Tensix cores (the sub-tile-row rows) are left out on a smaller grid.
+Sweep cases on 128 Tensix cores (the sub-tile-row rows) are left out on a smaller grid. The WH B0 n150 sweep is
+[`report_wh_n150.md`](report_wh_n150.md) (same command, `RSL_REPORT=.../report_wh_n150.md`).
 
 ## Code
 `program_descriptor_with_inline_kernels.py`: `chunk_plan()` (balanced ≤ 32-tile column chunks) and

@@ -2,6 +2,7 @@
 
 **Problem type:** cross-core communication  ·  **Concept(s):** overlapping a cross-core exchange with the compute on either side of it (waves + a non-blocking poll loop)
 **First profiled on:** `bh-50` · BH p150b · 1350 MHz · 2026-10-26 · `094f60e1352`
+**Wormhole B0 numbers:** `bgd-lab-22-special-adamjanovic-for-reservation-165935` · WH B0 n150 · 1000 MHz · 2026-11-13 · `b31c663a467` ([`report_wh_n150.md`](report_wh_n150.md))
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -66,7 +67,9 @@ semaphore round costs more than it hides, and at one tile-row per wave a single 
 incast.
 
 ## When it helps / when it does not
-Measured by `test_tensix_all_reduce_wave_pipeline_regimes` (asserts the direction).
+Measured by `test_tensix_all_reduce_wave_pipeline_regimes` (asserts the direction on each board it has a number
+for) and the sweep. WH B0 rows: the two regimes are the regime test's median over 10 runs (7 interleaved trials
+each); the rest come from the WH sweep ([`report_wh_n150.md`](report_wh_n150.md), N = 3).
 
 | Regime | Condition | Geometry per Tensix core | Baseline ns | Lever ns | Speedup | Trials | Board |
 |---|---|---|---|---|---|---|---|
@@ -75,16 +78,24 @@ Measured by `test_tensix_all_reduce_wave_pipeline_regimes` (asserts the directio
 | does not help | 2 tiles per wave | 8 × 1, 4 waves | 5 484 | 5 972 | 0.92× | 3 | BH p150b |
 | does not help | 1 tile per wave | 8 × 1, 8 waves | 5 484 | 8 410 | 0.65× | 3 | BH p150b |
 | does not help | 1 tile-row per wave | 8 × 16, 8 waves | 13 897 | 13 536 | 1.03× | 3 | BH p150b |
+| helps | ≥ 16 tiles per wave | 32 tile-rows × 4 tiles, 4 waves | 47 342 | 40 375 | 1.17× | 7 × 10 runs | WH B0 n150 |
+| helps | ≥ 16 tiles per wave, few rows | 8 × 16, 4 waves | 25 856 | 21 732 | 1.19× | 3 | WH B0 n150 |
+| does not help | 2 tiles per wave | 8 × 1, 4 waves | 10 527 | 11 791 | 0.89× | 7 × 10 runs | WH B0 n150 |
+| does not help | 1 tile per wave | 8 × 1, 8 waves | 10 524 | 14 679 | 0.72× | 3 | WH B0 n150 |
+| helps (WH) | 1 tile-row per wave | 8 × 16, 8 waves | 25 856 | 22 086 | 1.17× | 3 | WH B0 n150 |
 
 Helps: each wave's exchange travels under the next wave's compute. Stops paying when a wave carries too
-little compute to cover its semaphore round, or so few rows that one owner serializes the wave. WH B0: not
-measured.
+little compute to cover its semaphore round, or so few rows that one owner serializes the wave. WH B0 n150:
+the same direction for every row except one tile-row per wave — 8 × 16 at 8 waves still gains 1.17× on WH
+(1.19× at 4 waves), so the one-owner loss seen on BH does not appear there. At 32 × 4 the WH gain is smaller
+(1.10× / 1.16× / 1.22× at 2 / 4 / 8 waves, BH 1.23× / 1.35× / 1.34×) and keeps growing to 8 waves.
 
 ## Run the predefined sweep (regenerates `report.md`)
 ```bash
 EXAMPLES_SWEEPS=1 WP_TRIALS=3 WP_REPORT=ttnn/ttnn/operations/examples/tensix_all_reduce_wave_pipeline/report.md \
   scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce_wave_pipeline.py
 ```
+The WH B0 n150 sweep is [`report_wh_n150.md`](report_wh_n150.md) (same command, `WP_REPORT=.../report_wh_n150.md`).
 
 ## Code
 `program_descriptor_with_inline_kernels.py`:

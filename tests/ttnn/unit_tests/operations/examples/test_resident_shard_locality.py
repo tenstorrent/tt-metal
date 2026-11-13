@@ -413,10 +413,11 @@ def _mechanism_table(device):
 # interleaved A,B,A,B... trials per variant, verdict from `perf_test_utils.check_regime`.
 # The bound each regime is asserted against is derived from the speedup measured on the architecture it
 # runs on (`perf_test_utils.regime_bound`): "helps" asserts half the measured gain but never closer than
-# 10% to the measurement; "does_not_help" asserts <= max(1.0, 1.10 x the highest measured value). Every
-# number below was measured on Blackhole p150b, 13x10 = 130 Tensix cores (ranges: the regime test's
-# runs in the comment / README.md / report.md); there is no Wormhole number, so on Wormhole every regime
-# is logged, not asserted. A missed bound is re-measured once and re-checked on the pooled samples.
+# 10% to the measurement; "does_not_help" asserts <= max(1.0, 1.10 x the highest measured value).
+# "bh": Blackhole p150b, 13x10 = 130 Tensix cores (ranges: the regime test's runs in the comment /
+# README.md / report.md). "wh": Wormhole B0 n150, 8x8 = 64 Tensix cores, 1000 MHz, min-max of the regime
+# test's median over 10 runs (2026-11-13); [1, 8192] needs 128 Tensix cores and has no WH number.
+# A missed bound is re-measured once and re-checked on the pooled samples.
 # "grid" cases use the whole compute grid (BLOCK_SHARDED: rows x cols = the grid, K = grid columns), so
 # they build on any grid; a fixed Tensix-core count skips on a grid that is too small.
 # ---------------------------------------------------------------------------------------
@@ -425,8 +426,30 @@ _REGIME_TRIALS = 7
 
 _REGIMES = [
     # (id, memory_layout, cores, shard_rows, shard_width, dtype, baseline, lever, kind, measured speedup)
-    ("helps_height_72x544", "height", "grid", 72, 544, "bf16", "resplit", "local", "helps", {"bh": (10.71, 10.9)}),
-    ("helps_block_311x320", "block", "grid", 311, 320, "bf16", "resplit", "local", "helps", {"bh": (5.29, 5.47)}),
+    (
+        "helps_height_72x544",
+        "height",
+        "grid",
+        72,
+        544,
+        "bf16",
+        "resplit",
+        "local",
+        "helps",
+        {"wh": (4.07, 4.14), "bh": (10.71, 10.9)},
+    ),
+    (
+        "helps_block_311x320",
+        "block",
+        "grid",
+        311,
+        320,
+        "bf16",
+        "resplit",
+        "local",
+        "helps",
+        {"wh": (3.64, 3.80), "bh": (5.29, 5.47)},
+    ),
     # <= 2 sticks of >= 8 KB per Tensix core; needs 128 Tensix cores
     (
         "does_not_help_height_1x8192",
@@ -450,7 +473,7 @@ _REGIMES = [
         "local",
         "local_alias",
         "helps",
-        {"bh": (1.55, 1.56)},
+        {"wh": (1.73, 1.74), "bh": (1.55, 1.56)},
     ),
     # wide rows (127 / 160 tiles per stick), W chunked into <= 32-tile column chunks
     (
@@ -463,7 +486,7 @@ _REGIMES = [
         "resplit",
         "local",
         "helps",
-        {"bh": (7.8, 7.94)},
+        {"wh": (1.29, 1.56), "bh": (7.8, 7.94)},
     ),
     (
         "helps_height_wide_17x5120",
@@ -475,13 +498,57 @@ _REGIMES = [
         "resplit",
         "local",
         "helps",
-        {"bh": (11.1, 11.2)},
+        {"wh": (4.45, 4.70), "bh": (11.1, 11.2)},
     ),
     # partial-width BLOCK shards (shard width not a multiple of 32), K = grid columns
-    ("helps_block_13x632_fp32", "block", "grid", 13, 632, "fp32", "resplit", "local", "helps", {"bh": (2.1, 2.13)}),
-    ("helps_block_221x400", "block", "grid", 221, 400, "bf16", "resplit", "local", "helps", {"bh": (5.66, 5.7)}),
-    ("helps_block_23x848", "block", "grid", 23, 848, "bf16", "resplit", "local", "helps", {"bh": (6.28, 6.3)}),
-    ("helps_block_16x848", "block", "grid", 16, 848, "bf16", "resplit", "local", "helps", {"bh": (4.2, 4.25)}),
+    (
+        "helps_block_13x632_fp32",
+        "block",
+        "grid",
+        13,
+        632,
+        "fp32",
+        "resplit",
+        "local",
+        "helps",
+        {"wh": (2.31, 2.34), "bh": (2.1, 2.13)},
+    ),
+    (
+        "helps_block_221x400",
+        "block",
+        "grid",
+        221,
+        400,
+        "bf16",
+        "resplit",
+        "local",
+        "helps",
+        {"wh": (1.23, 1.27), "bh": (5.66, 5.7)},
+    ),
+    (
+        "helps_block_23x848",
+        "block",
+        "grid",
+        23,
+        848,
+        "bf16",
+        "resplit",
+        "local",
+        "helps",
+        {"wh": (4.33, 4.41), "bh": (6.28, 6.3)},
+    ),
+    (
+        "helps_block_16x848",
+        "block",
+        "grid",
+        16,
+        848,
+        "bf16",
+        "resplit",
+        "local",
+        "helps",
+        {"wh": (2.41, 2.45), "bh": (4.2, 4.25)},
+    ),
 ]
 
 
