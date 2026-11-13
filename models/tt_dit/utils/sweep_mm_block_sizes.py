@@ -32,6 +32,7 @@ Usage:
     # e.g. a LoFi model with block-float operands and 8-tile fp32 subblocks on the all-gather matmul:
     MM_SWEEP_MATH_FIDELITY=lofi MM_SWEEP_IN0_DTYPE=bf8 MM_SWEEP_IN1_DTYPE=bf8 MM_SWEEP_DST_FULL_SYNC=1 \\
         pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep -k "..." -x -s
+    MM_SWEEP_OUT_DTYPE=bf8 also writes a block-float output.
     The mode is a column of the results CSV (sweep_mode).
 """
 
@@ -182,21 +183,34 @@ SHAPES = [
     # per-device Ms: to_qkv / ff1 on the NON-transposed AGMM worker grid (11x10, the op's in0 muxes in the
     # free column; the model pins transpose_core_grid=False for both), ff2 and the row-parallel to_out
     # (K = 7168 / tp = 1792) as fused MM+RS+addcmul on each candidate matmul grid. Sweep them with the
-    # model's precision / dtype mode (see MM_SWEEP_* below).
+    # model's precision / dtype mode (see MM_SWEEP_* below). The fused MM+RS rows use the model's approx-mode
+    # compute config ("mmrs_approx"); the two "mmrs" rows above keep the original sweep's config.
     (4736, 5376, 5376, 11, 10, True, "qkv_nt"),
     (9184, 5376, 5376, 11, 10, True, "qkv_nt"),
     (4736, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
     (9184, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
-    (9184, 3584, 5376, 12, 7, False, "mmrs"),
-    (9184, 3584, 5376, 12, 8, False, "mmrs"),
-    (9184, 3584, 5376, 12, 9, False, "mmrs"),
-    (4736, 1792, 5376, 12, 7, False, "mmrs"),
-    (4736, 1792, 5376, 12, 8, False, "mmrs"),
-    (4736, 1792, 5376, 12, 9, False, "mmrs"),
-    (9184, 1792, 5376, 12, 7, False, "mmrs"),
-    (9184, 1792, 5376, 12, 8, False, "mmrs"),
-    (9184, 1792, 5376, 12, 9, False, "mmrs"),
-    (4736, 3584, 5376, 12, 9, False, "mmrs"),
+    (4736, 3584, 5376, 12, 7, False, "mmrs_approx"),
+    (4736, 3584, 5376, 12, 8, False, "mmrs_approx"),
+    (4736, 3584, 5376, 12, 9, False, "mmrs_approx"),
+    (9184, 3584, 5376, 12, 7, False, "mmrs_approx"),
+    (9184, 3584, 5376, 12, 8, False, "mmrs_approx"),
+    (9184, 3584, 5376, 12, 9, False, "mmrs_approx"),
+    (4736, 1792, 5376, 12, 7, False, "mmrs_approx"),
+    (4736, 1792, 5376, 12, 8, False, "mmrs_approx"),
+    (4736, 1792, 5376, 12, 9, False, "mmrs_approx"),
+    (9184, 1792, 5376, 12, 7, False, "mmrs_approx"),
+    (9184, 1792, 5376, 12, 8, False, "mmrs_approx"),
+    (9184, 1792, 5376, 12, 9, False, "mmrs_approx"),
+    # Matmul-only arms of the four ops above, on the same matmul grids (to_qkv as the 3-way split matmul,
+    # ff1 with the fused SwiGLU, ff2 / to_out on the pinned 12x8 MMRS grid): fused time minus these = CCL share.
+    (4736, 5376, 5376, 11, 10, False, "qkv_mm_split"),
+    (9184, 5376, 5376, 11, 10, False, "qkv_mm_split"),
+    (4736, 5376, 7168, 11, 10, False, "ff1_swiglu_mm"),
+    (9184, 5376, 7168, 11, 10, False, "ff1_swiglu_mm"),
+    (4736, 3584, 5376, 12, 8, False, "mm_approx"),
+    (9184, 3584, 5376, 12, 8, False, "mm_approx"),
+    (4736, 1792, 5376, 12, 8, False, "mm_approx"),
+    (9184, 1792, 5376, 12, 8, False, "mm_approx"),
     # -----------------------------------------------------------------------
     # MiniMax-H3 on WH Galaxy (device config wh_4x8_ring), TP=4 / SP=8.
     #
@@ -587,7 +601,23 @@ USE_CASE_CONFIGS = {
     },
     "ff1_swiglu_nt": {
         "fuse_swiglu": True,
+        "math_approx_mode": True,
         "transpose_core_grid": False,
+    },
+    # "mmrs" with the approx-mode compute config the DiT block uses for all four big matmuls.
+    "mmrs_approx": {
+        "is_mmrs": True,
+        "use_addcmul": True,
+        "math_approx_mode": True,
+    },
+    # Matmul-only arms of the same four ops (no all-gather / reduce-scatter; in0 is the full, pre-gathered K),
+    # to split each fused op's time into matmul and CCL. Run them with the fused op's blocking.
+    "ff1_swiglu_mm": {
+        "fuse_swiglu": True,
+        "math_approx_mode": True,
+    },
+    "mm_approx": {
+        "math_approx_mode": True,
     },
 }
 
@@ -605,8 +635,10 @@ FP32_DEST_ACC_EN = True
 #   MM_SWEEP_IN0_DTYPE      bf16 | bf8   activation operand  (default bf16)
 #   MM_SWEEP_IN1_DTYPE      bf16 | bf8   weight operand      (default bf16)
 #   MM_SWEEP_DST_FULL_SYNC  0 | 1        dst_full_sync_en    (default 0)
-# Bias, addcmul operands and the output stay bfloat16 (a model that feeds a block-float activation pins its
-# output back to bfloat16). dst_full_sync_en doubles the DEST tiles a subblock may use (8 with fp32 dest) at
+#   MM_SWEEP_OUT_DTYPE      bf16 | bf8   output              (default: the op's own choice with bf16 operands,
+#                                                            bfloat16 otherwise)
+# Bias and addcmul operands stay bfloat16 (a model that feeds a block-float activation pins its output back to
+# bfloat16 unless MM_SWEEP_OUT_DTYPE says otherwise). dst_full_sync_en doubles the DEST tiles a subblock may use (8 with fp32 dest) at
 # the cost of math / pack overlap.
 _FIDELITIES = {
     "lofi": ttnn.MathFidelity.LoFi,
@@ -630,18 +662,26 @@ MATH_FIDELITY_NAME = _env_choice("MM_SWEEP_MATH_FIDELITY", _FIDELITIES, "hifi2")
 IN0_DTYPE_NAME = _env_choice("MM_SWEEP_IN0_DTYPE", _DTYPES, "bf16")
 IN1_DTYPE_NAME = _env_choice("MM_SWEEP_IN1_DTYPE", _DTYPES, "bf16")
 DST_FULL_SYNC = _env_choice("MM_SWEEP_DST_FULL_SYNC", {"0", "1"}, "0") == "1"
+OUT_DTYPE_NAME = _env_choice("MM_SWEEP_OUT_DTYPE", set(_DTYPES) | {""}, "")
 MATH_FIDELITY = _FIDELITIES[MATH_FIDELITY_NAME]
 IN0_DTYPE = _DTYPES[IN0_DTYPE_NAME]
 IN1_DTYPE = _DTYPES[IN1_DTYPE_NAME]
 # DEST tiles per subblock: 16 bf16 tiles in all, halved by fp32 dest and again by half-sync.
 MAX_DEST_VOLUME = (16 if DST_FULL_SYNC else 8) // (2 if FP32_DEST_ACC_EN else 1)
 # The output dtype is passed only in a non-default mode, so a default sweep makes exactly the original calls.
-_OUT_DTYPE_KW = {} if IN0_DTYPE == ttnn.bfloat16 and IN1_DTYPE == ttnn.bfloat16 else {"dtype": ttnn.bfloat16}
+if OUT_DTYPE_NAME:
+    _OUT_DTYPE_KW = {"dtype": _DTYPES[OUT_DTYPE_NAME]}
+elif IN0_DTYPE == ttnn.bfloat16 and IN1_DTYPE == ttnn.bfloat16:
+    _OUT_DTYPE_KW = {}
+else:
+    _OUT_DTYPE_KW = {"dtype": ttnn.bfloat16}
+OUT_DTYPE = _OUT_DTYPE_KW.get("dtype", ttnn.bfloat16)
 
 
 def sweep_mode_tag():
     """Short label of the precision / dtype mode, for logs and the CSV."""
-    return f"{MATH_FIDELITY_NAME}_in0-{IN0_DTYPE_NAME}_in1-{IN1_DTYPE_NAME}_sync-{'full' if DST_FULL_SYNC else 'half'}"
+    tag = f"{MATH_FIDELITY_NAME}_in0-{IN0_DTYPE_NAME}_in1-{IN1_DTYPE_NAME}_sync-{'full' if DST_FULL_SYNC else 'half'}"
+    return f"{tag}_out-{OUT_DTYPE_NAME}" if OUT_DTYPE_NAME else tag
 
 
 # Block-size candidate methodology:
@@ -793,7 +833,7 @@ def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain", op_kind="mm"):
     kb = (
         2 * m_blk * k_blk * in0_kb  # c_0: in0
         + 2 * k_blk * n_blk * in1_kb  # c_1: in1
-        + 2 * m_blk * n_blk * bf16_kb  # c_2: out
+        + 2 * m_blk * n_blk * _TILE_KB[OUT_DTYPE]  # c_2: out (bf16 unless MM_SWEEP_OUT_DTYPE says otherwise)
         + m_blk * n_blk * f32_kb  # c_3: intermediate (f32 accumulator)
         + n_blk * bf16_kb  # c_4: bias
     )
