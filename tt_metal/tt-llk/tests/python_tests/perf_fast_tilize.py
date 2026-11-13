@@ -56,6 +56,7 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     output_format=[DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     input_dimensions=generate_input_dimensions(16),
+    loop_factor=[1024],
 )
 def test_fast_tilize_perf(
     perf_report,
@@ -63,6 +64,7 @@ def test_fast_tilize_perf(
     output_format,
     dest_acc,
     input_dimensions,
+    loop_factor,
 ):
     tile_count = input_dimensions[0] * input_dimensions[1]
     input_dimensions = (input_dimensions[0] * 32, input_dimensions[1] * 32)
@@ -77,7 +79,7 @@ def test_fast_tilize_perf(
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(1024),
+            LOOP_FACTOR(loop_factor),
             NUM_FACES(4),
         ],
         variant_stimuli=StimuliConfig(
