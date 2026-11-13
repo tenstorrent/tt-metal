@@ -169,7 +169,10 @@ def test_vae_flux2_decoder(
     tt_out = tt_model.forward(tt_inp)
     ttnn.synchronize_device(mesh_device)
 
-    tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)  # [B, 3, H, W]
+    # The output stays split over the H and W axes.
+    h_mesh_axis = vae_parallel_config.h_parallel.mesh_axis if vae_parallel_config.h_parallel is not None else None
+    w_mesh_axis = vae_parallel_config.w_parallel.mesh_axis if vae_parallel_config.w_parallel is not None else None
+    tt_out_torch = tensor.to_torch(tt_out, mesh_axes=[None, h_mesh_axis, w_mesh_axis, None]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_out_torch, pcc=0.9978, relative_rmse=0.034)
 
 
