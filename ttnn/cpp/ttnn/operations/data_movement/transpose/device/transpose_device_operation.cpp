@@ -456,15 +456,27 @@ ttnn::Tensor transpose(
     float pad_value,
     bool output_mem_config_is_explicit) {
     using OperationType = ttnn::prim::TransposeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config, bool is_explicit) {
+        return OperationType::operation_attributes_t{
             .dim = dim,
-            .output_mem_config = output_mem_config,
+            .output_mem_config = mem_config,
             .pad_value = pad_value,
-            .output_mem_config_is_explicit = output_mem_config_is_explicit,
+            .output_mem_config_is_explicit = is_explicit,
+        };
+    };
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input_tensor,
+        output_mem_config,
+        std::nullopt,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(output_mem_config, output_mem_config_is_explicit), TransposeInputs{.input = input_tensor});
         },
-        TransposeInputs{
-            .input = input_tensor,
+        [&](const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                explicit_mem_config.has_value() ? attributes(*explicit_mem_config, true)
+                                                : attributes(output_mem_config, output_mem_config_is_explicit),
+                TransposeInputs{.input = input});
         });
 }
 }  // namespace ttnn::prim

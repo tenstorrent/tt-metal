@@ -259,3 +259,21 @@ def test_pc_with_different_shapes_in_sequence(device):
         for i in range(64):
             z_torch = ttnn.to_torch(z_tt[i : i + 1])
             assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
+
+
+def test_repeat_rm_width_sharded_subaligned_shard_rows(device):
+    # [4, 12] shards: 24-byte shard rows, not a multiple of the 16-byte L1 alignment, so each row spans two shard
+    # rows that the sharded reads and writes cannot split. repeat stages the tensor through interleaved memory.
+    x = ((torch.arange(4 * 24) % 97 - 48) / 8).reshape(1, 1, 4, 24).to(torch.bfloat16)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [4, 12], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config)
+
+    output = ttnn.repeat(t, ttnn.Shape([1, 1, 2, 1]))
+
+    assert output.memory_config().shard_spec.shape[1] == 12, output.memory_config()
+    assert_equal(x.repeat(1, 1, 2, 1), ttnn.to_torch(output))

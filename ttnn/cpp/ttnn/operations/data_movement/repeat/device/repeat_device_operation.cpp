@@ -133,10 +133,26 @@ RepeatDeviceOperation::tensor_return_value_t repeat(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<Tensor> optional_output_tensor) {
     using OperationType = RepeatDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = output_mem_config},
-        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
+    const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config) {
+        return OperationType::operation_attributes_t{
+            .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = mem_config};
+    };
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input,
+        output_mem_config,
+        optional_output_tensor,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(output_mem_config),
+                OperationType::tensor_args_t{.input = input, .optional_output_tensor = optional_output_tensor});
+        },
+        [&](const Tensor& launch_input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                attributes(explicit_mem_config.value_or(output_mem_config)),
+                OperationType::tensor_args_t{
+                    .input = launch_input,
+                    .optional_output_tensor = explicit_mem_config.has_value() ? std::nullopt : optional_output_tensor});
+        });
 }
 
 RepeatDeviceOperation::tensor_return_value_t repeat_tile(

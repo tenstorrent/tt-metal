@@ -8,7 +8,6 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
-#include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -235,14 +234,7 @@ ttnn::Tensor permute(
 
     const auto input_layout = input_tensor.layout();
 
-    if (input_layout == Layout::ROW_MAJOR && memory_config.has_value() && memory_config->is_sharded() &&
-        memory_config->shard_spec().has_value()) {
-        uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-        TT_FATAL(
-            memory_config->shard_spec()->shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
-            "Shard page size must be aligned to {}B for L1 Tensor",
-            l1_alignment);
-    }
+    // prim::permute stages a row-major output whose sharded rows are not aligned, so any shard width works here.
     auto output_tensor = operations::data_movement::detail::permute_impl(itensor, iorder, memory_config, pad_value);
     output_tensor = ttnn::to_layout(output_tensor, input_layout);
 

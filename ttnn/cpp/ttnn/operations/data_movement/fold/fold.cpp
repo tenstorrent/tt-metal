@@ -341,35 +341,39 @@ static Tensor apply_halo_padding(
     return ttnn::reshape(halo_output, padded_shape);
 }
 
+// base with its shard height made a multiple of stride_h·input_width (zero-NOC pre-condition), on a grid that splits
+// the tensor's pixel rows evenly.
+static tt::tt_metal::ShardSpec fast_path_shard_spec(
+    tt::tt_metal::ShardSpec base,
+    const ttnn::Shape& input_shape,
+    uint32_t stride_h,
+    const CoreCoord& compute_grid_size) {
+    uint32_t pixels_per_compute_row = stride_h * input_shape[2];
+    uint32_t max_cores = compute_grid_size.x * compute_grid_size.y;
+    uint32_t total_height = input_shape[0] * input_shape[1] * input_shape[2];
+
+    uint32_t num_cores = max_cores;
+    while (num_cores > 0 && (total_height / pixels_per_compute_row) % num_cores != 0) {
+        num_cores--;
+    }
+    // The loop stops at 1 at the latest, since 1 divides every row count.
+
+    base.shape[0] = tt::round_up(total_height / num_cores, pixels_per_compute_row);
+    base.grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
+    return base;
+}
+
 // Reshard so shard_h is a multiple of stride_h·input_width (zero-NOC pre-condition).
 Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t /*stride_w*/) {
     ttnn::Shape input_shape = input.logical_shape();
-    uint32_t input_width = input_shape[2];
-    uint32_t pixels_per_compute_row = stride_h * input_width;
+    uint32_t pixels_per_compute_row = stride_h * input_shape[2];
     uint32_t current_shard_height = input.shard_spec().value().shape[0];
-    const CoreCoord& compute_grid_size = input.device()->compute_with_storage_grid_size();
     if (current_shard_height % pixels_per_compute_row != 0) {
-        uint32_t max_cores = compute_grid_size.x * compute_grid_size.y;
-        uint32_t total_height = input_shape[0] * input_shape[1] * input_shape[2];
-
-        uint32_t num_cores = max_cores;
-        while (num_cores > 0 && (total_height / pixels_per_compute_row) % num_cores != 0) {
-            num_cores--;
-        }
-
-        TT_ASSERT(num_cores != 0, "Could not find suitable number of cores for resharing the input tensor");
-
-        uint32_t optimal_shard_height = tt::round_up(total_height / num_cores, pixels_per_compute_row);
-
-        auto new_shard_spec = input.shard_spec().value();
-        new_shard_spec.shape[0] = optimal_shard_height;
-
-        // Create new core range set using the calculated number of cores
-        CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
-        new_shard_spec.grid = new_core_range;
-
-        auto new_mem_config =
-            MemoryConfig(input.memory_config().memory_layout(), input.memory_config().buffer_type(), new_shard_spec);
+        auto new_mem_config = MemoryConfig(
+            input.memory_config().memory_layout(),
+            input.memory_config().buffer_type(),
+            fast_path_shard_spec(
+                input.shard_spec().value(), input_shape, stride_h, input.device()->compute_with_storage_grid_size()));
         // need to reshard
         return ttnn::reshard(input, new_mem_config, std::nullopt);
     }
@@ -483,19 +487,54 @@ Tensor fold(
     if (fast_path_input) {
         operations::data_movement::validate_height_sharding(input_tensor);
 
-        if (has_hw_padding) {
-            processed_tensor = operations::data_movement::apply_halo_padding(
-                processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
-        }
+        // The halo and the sharded pad below need pixels that fill their shard rows. Narrower pixels (C padded to the
+        // shard width, or a TILE input's 32-wide rows) are padded in interleaved memory, then resharded straight to a
+        // fast-path spec. An RM input keeps its shard width, so the output matches the unpadded case.
+        const uint32_t channels = input_tensor.logical_shape()[-1];
+        const uint32_t shard_width = input_tensor.shard_spec()->shape[1];
+        if (shard_width != channels && (has_hw_padding || has_c_padding)) {
+            processed_tensor = ttnn::to_memory_config(
+                processed_tensor,
+                tt::tt_metal::MemoryConfig(
+                    tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()),
+                std::nullopt);
+            if (processed_tensor.layout() == Layout::TILE) {
+                processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+            }
+            ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec{
+                {0, 0}, {pad_top, pad_bottom}, {pad_left, pad_right}, {pad_c_front, pad_c_back}};
+            processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
+            const uint32_t padded_channels = processed_tensor.logical_shape()[-1];
+            auto spec = input_tensor.shard_spec().value();
+            spec.shape[1] =
+                input_tensor.layout() == Layout::TILE ? padded_channels : std::max(shard_width, padded_channels);
+            processed_tensor = ttnn::to_memory_config(
+                processed_tensor,
+                tt::tt_metal::MemoryConfig(
+                    tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                    input_tensor.memory_config().buffer_type(),
+                    operations::data_movement::fast_path_shard_spec(
+                        spec,
+                        processed_tensor.logical_shape(),
+                        stride_h,
+                        input_tensor.device()->compute_with_storage_grid_size())),
+                std::nullopt);
+        } else {
+            if (has_hw_padding) {
+                processed_tensor = operations::data_movement::apply_halo_padding(
+                    processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
+            }
 
-        if (has_c_padding) {
-            const auto current_shape = processed_tensor.logical_shape();
-            const ttnn::Array4D padded_shape = {
-                static_cast<uint32_t>(current_shape[0]),
-                static_cast<uint32_t>(current_shape[1]),
-                static_cast<uint32_t>(current_shape[2]),
-                static_cast<uint32_t>(current_shape[3] + pad_c_front + pad_c_back)};
-            processed_tensor = ::ttnn::pad(processed_tensor, padded_shape, ttnn::Array4D({0, 0, 0, pad_c_front}), 0);
+            if (has_c_padding) {
+                const auto current_shape = processed_tensor.logical_shape();
+                const ttnn::Array4D padded_shape = {
+                    static_cast<uint32_t>(current_shape[0]),
+                    static_cast<uint32_t>(current_shape[1]),
+                    static_cast<uint32_t>(current_shape[2]),
+                    static_cast<uint32_t>(current_shape[3] + pad_c_front + pad_c_back)};
+                processed_tensor =
+                    ::ttnn::pad(processed_tensor, padded_shape, ttnn::Array4D({0, 0, 0, pad_c_front}), 0);
+            }
         }
 
         if (processed_tensor.layout() == Layout::TILE) {
@@ -530,6 +569,20 @@ Tensor fold(
         }();
         if (sub_alignment_wb_sharded_rm) {
             processed_tensor = ttnn::to_memory_config(processed_tensor, l1_interleaved, std::nullopt);
+        }
+
+        // A height-sharded RM input in DRAM whose shard is wider than C has padded pixels. pad keeps the input's shard
+        // spec and cannot grow it, so such an input is padded in interleaved memory.
+        const bool padded_pixels = processed_tensor.layout() == Layout::ROW_MAJOR && processed_tensor.is_sharded() &&
+                                   processed_tensor.shard_spec().has_value() &&
+                                   in_ml == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+                                   processed_tensor.shard_spec()->shape[1] != processed_tensor.logical_shape()[-1];
+        if (padded_pixels && (has_hw_padding || has_c_padding)) {
+            processed_tensor = ttnn::to_memory_config(
+                processed_tensor,
+                tt::tt_metal::MemoryConfig(
+                    tt::tt_metal::TensorMemoryLayout::INTERLEAVED, processed_tensor.memory_config().buffer_type()),
+                std::nullopt);
         }
 
         if (has_hw_padding || has_c_padding) {

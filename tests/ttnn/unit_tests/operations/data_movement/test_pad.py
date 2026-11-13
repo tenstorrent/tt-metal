@@ -2275,3 +2275,48 @@ def test_pad_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.memory_config().buffer_type == buffer_type
     expected = torch.nn.functional.pad(ttnn.to_torch(input_tensor).to(torch.float64), (0, 32, 0, 32), value=0.0)
     assert_exact(expected, ttnn.to_torch(output))
+
+
+# Row-major tensors whose rows span several shards, with a shard row that is not a multiple of the buffer alignment
+# (L1: 16 B; DRAM: 32 B on Wormhole, 64 B on Blackhole). The sharded reads and writes cannot split such rows, so pad
+# stages these tensors through interleaved memory.
+def _ramp_bf16(shape):
+    # Multiples of 1/8 in [-6, 6], exact in bfloat16, with a period that does not divide the row lengths used here.
+    return ((torch.arange(torch.Size(shape).numel()) % 97 - 48) / 8).reshape(shape).to(torch.bfloat16)
+
+
+def _width_shards(buffer_type, shard_shape):
+    # Two shards, on cores (0, 0) and (1, 0) or on DRAM banks 0 and 1.
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    spec = ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, spec)
+
+
+def test_pad_rm_into_dram_width_shards_with_subaligned_rows(device):
+    # DRAM shard rows that are 16-byte multiples but not multiples of the DRAM alignment.
+    e = 8 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
+    x = _ramp_bf16([1, 1, 2, 2 * e - 4])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.pad(t, [1, 1, 2, 2 * e], [0, 0, 0, 0], 1.0, memory_config=_width_shards(ttnn.BufferType.DRAM, [2, e]))
+
+    assert_tensors_equal(torch.nn.functional.pad(x, (0, 4), value=1.0), ttnn.to_torch(output))
+
+
+def test_pad_rm_single_core_width_sharded_subaligned_input(device):
+    # use_multicore=False with 24-byte input shard rows: the input moves to interleaved memory, and its padded output,
+    # in [2, 16] shards, must still take a multicore factory.
+    x = _ramp_bf16([1, 1, 2, 24])
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(ttnn.BufferType.L1, [2, 12])
+    )
+
+    output = ttnn.pad(
+        t,
+        [(0, 0), (0, 0), (0, 0), (0, 8)],
+        0.0,
+        use_multicore=False,
+        memory_config=_width_shards(ttnn.BufferType.L1, [2, 16]),
+    )
+
+    assert_tensors_equal(torch.nn.functional.pad(x, (0, 8)), ttnn.to_torch(output))
