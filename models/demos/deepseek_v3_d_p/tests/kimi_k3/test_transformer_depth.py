@@ -52,18 +52,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
     resolve_trace,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
-    CACHE_LEN,
-    HF_CONFIGS,
-    build_stack,
-    cache_rows,
-    compose,
-    placements,
-    release,
-    synthetic_state_dict,
-    token_ids,
-    upload_tokens,
-)
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
@@ -390,60 +379,6 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
     # bad KV slot and a bad residual layer look identical from one assertion, and which of the two
     # moved is the whole diagnosis. The residual stream is the model; the cache is what it wrote.
     assert not kv_failures, "KV cache diverged: " + "; ".join(kv_failures)
-
-
-# --- Synthetic weights (K3 and K3.1) ------------------------------------------------------------------
-#
-# K3.1 has no golden to score a depth curve against, so this rung checks what depth alone can break:
-# 24 layers -- one pipeline stage, past the second AttnRes seal at layer 12, with six full-attention
-# layers -- run to finite, non-constant outputs at every layer, and each full-attention layer writes its
-# own rank-local slot of every cache (kvpe; for K3.1 also the indexer keys). A slot collision leaves one
-# slot empty and another overwritten; a stride error leaves rows past the chunk written. Per-layer
-# accuracy at depth is the golden ladder's job (K3); K3.1 has no depth oracle until its golden exists.
-SYNTHETIC_DEPTH = 24
-
-
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize("model, mesh_device, device_params", placements(), indirect=["mesh_device", "device_params"])
-def test_synthetic_depth_writes_every_slot(model, mesh_device, device_params):
-    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), 0, SYNTHETIC_DEPTH)
-    stack, caches = build_stack(mesh_device, model, state_dict, 0, SYNTHETIC_DEPTH)
-    assert stack.schedule.num_mla_layers == SYNTHETIC_DEPTH // 4
-    per_layer = {}
-    try:
-        tokens_tt = upload_tokens(mesh_device, token_ids(SEQ_LEN))
-        out = stack.forward(
-            tokens_tt,
-            kvpe_cache=caches.kvpe,
-            index_kv_cache=caches.index,
-            actual_start=0,
-            actual_end=SEQ_LEN,
-            layer_tap=lambda idx, h: per_layer.__setitem__(idx, compose(mesh_device, h, SEQ_LEN).float()),
-        )
-        ttnn.deallocate(tokens_tt)
-        output = compose(mesh_device, out, SEQ_LEN).float()
-        ttnn.deallocate(out)
-        kv = {
-            name: cache_rows(mesh_device, cache, SEQ_LEN, CACHE_LEN)
-            for name, cache in (("kvpe", caches.kvpe), ("index", caches.index))
-            if cache is not None
-        }
-    finally:
-        release(stack, caches)
-
-    assert sorted(per_layer) == list(range(SYNTHETIC_DEPTH))
-    for idx, hidden in [*per_layer.items(), ("final", output)]:
-        assert torch.isfinite(hidden).all(), f"layer {idx}: non-finite output"
-        assert hidden.std() > 0, f"layer {idx}: constant output"
-    assert set(kv) == ({"kvpe", "index"} if model == "kimi_k3_1" else {"kvpe"})
-    for name, slots in kv.items():
-        assert slots.shape[0] == stack.schedule.num_mla_layers, f"{name}: {slots.shape[0]} slots"
-        for slot in range(slots.shape[0]):
-            assert slots[slot, :SEQ_LEN].abs().amax(dim=-1).gt(0).all(), f"{name} slot {slot}: a row is unwritten"
-            assert not slots[slot, SEQ_LEN:].any(), f"{name} slot {slot}: rows past the chunk were written"
-            for other in range(slot):
-                assert not torch.equal(slots[slot], slots[other]), f"{name} slots {other} and {slot} are identical"
-        logger.info(f"  {model} {name}: {slots.shape[0]} slots written, distinct, nothing past {SEQ_LEN}")
 
 
 # --- Kimi-K3.1 on real weights against its vLLM trace -------------------------------------------------------

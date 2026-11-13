@@ -254,9 +254,10 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
     )
 
 
-# --- Synthetic weights: split against undivided (K3 and K3.1) ---------------------------------------
+# --- Synthetic weights: split against undivided (K3.1) ----------------------------------------------
 #
-# K3.1 has no golden, so its oracle is the undivided stack on the same weights, cut at the layer-12 seal.
+# The K3.1 golden runs one stage, so the split's oracle is the undivided stack on the same weights, cut at the
+# layer-12 seal.
 # The split is exact: the handoff is a lossless bf16 concat/slice, and the second rank takes the read that
 # straddles the boundary the way the undivided walk takes it (an open site over the inherited set, read
 # before the seal). So every layer, the final output and every cache must be bit-identical, on both ranks.
@@ -265,7 +266,6 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
 #
 # Layers 0-15: the boundary at 12 gives rank 1 one inherited sealed block, and layer 15 is its one
 # full-attention layer (slot 0 of rank 1's kvpe and index caches, slot 3 of the undivided ones).
-# K3 runs the identical path.
 SP_SHARDS = 8  # the 8x4 mesh's SP ranks; tokens are contiguous per rank
 
 
