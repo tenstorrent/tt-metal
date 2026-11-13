@@ -75,6 +75,17 @@ KNOBS = {
     "GLM53_PF_MOE_PADMASK": "1",
     "GLM53_PF_MOE_XFFN_VALID": "1",
     "GLM53_PF_MOE_XFFN_SNAKE": "1",
+    # the sparse_dsa pool + its s1 child borrow the KDA stacks' pool tensors of the same key (the programs never run at
+    # once; persistent state lives in the pools' children, never lent): ~44 KB per bank at the full width, what lets the
+    # B 16 x 1 M build take narrow widths; det3 4 K x 16 digest a18df85fa319 knob off = on, 32.2 ms per step both
+    "GLM53_DSA_POOL_BORROW": "1",
+    # the mHC deferral (stack_model.set_knobs GLM53_STACK_DEFER: sparse_kda deferred 1/rms(h) in DRAM + hn first, sparse_dsa
+    # hn first; GLM53_MK_MOE_DEFER_INV the sparse_dsa MoE's deferral) and the one-tile round 1 at t <= 2
+    # (GLM53_MHC_MS1, capped by GLM53_MHC_MS1_TMAX): chain_mhc_1 2026-11-13, e2e 32 K x 4 47.5 -> 48.9, 4 K x 1 53.6 ->
+    # 55.9 tok/s/u; sparse_kda attn site 33.1 -> 21.1 us at B 1; the ids move only along existing near-tie sequences
+    "GLM53_STACK_DEFER": "1",
+    "GLM53_MK_MOE_DEFER_INV": "1",
+    "GLM53_MHC_MS1": "1",
     # opt-in, not a default: GLM53_DSA_SHARD_COMB (the fold combine on the lane roots: correct, but its fp32 order moves
     # the ids at a near-tie -- fails the strict ids gate)
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE

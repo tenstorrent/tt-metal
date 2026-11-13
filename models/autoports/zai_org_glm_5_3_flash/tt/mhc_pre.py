@@ -72,8 +72,11 @@ MS1_T_MAX = 16
 
 def ms1_on(t: int, debug: bool = False) -> bool:
     """the combined round-1 tile (GLM53_MHC_MS1=1): rows 0..t-1 hold M, rows 16..16+t-1 hold S -> t <= 16; the debug
-    taps read the separate (M, S) totals, so a debug build keeps the pair"""
-    return os.environ.get("GLM53_MHC_MS1") == "1" and t <= MS1_T_MAX and not debug
+    taps read the separate (M, S) totals, so a debug build keeps the pair. GLM53_MHC_MS1_TMAX (default 2) caps the
+    program widths that take it (2026-11-13 chain_mhc_1, 8x4: e2e 4 K x 1 (t 1) 53.6 -> 54.3 tok/s/u, 32 K x 4 (t 4)
+    47.5 -> 47.3, the B 16 probe (t 16) +186 us per 8 layers -- the S-row copy outweighs the halved hop past t 2)"""
+    tmax = min(MS1_T_MAX, int(os.environ.get("GLM53_MHC_MS1_TMAX", "2")))
+    return os.environ.get("GLM53_MHC_MS1") == "1" and t <= tmax and not debug
 
 
 SEMAPHORES = 4

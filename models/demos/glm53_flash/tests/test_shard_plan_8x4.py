@@ -1264,6 +1264,10 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.KNOBS["GLM53_DSA_SHARD_RSNP"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_LOCAL_ALL"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_SEL2"] == "1"
+    assert all(
+        GD.KNOBS[k] == "1"
+        for k in ("GLM53_DSA_POOL_BORROW", "GLM53_STACK_DEFER", "GLM53_MK_MOE_DEFER_INV", "GLM53_MHC_MS1")
+    )
     assert GD.KNOBS["GLM53_PF_MHC_POST"] == "fused"
     assert GD.KNOBS["GLM53_PF_MOE_KB"] == "808" and "GLM53_PF_MOE_FID" not in GD.KNOBS
     assert all(
@@ -1289,6 +1293,9 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)
     assert got["GLM53_DSA_SHARD_LOCAL_ALL"] == "1" and SP.shard_local_all(8)
     assert got["GLM53_DSA_SHARD_SEL2"] == "1" and SP.shard_sel2(8)
+    assert all(
+        got[k] == "1" for k in ("GLM53_DSA_POOL_BORROW", "GLM53_STACK_DEFER", "GLM53_MK_MOE_DEFER_INV", "GLM53_MHC_MS1")
+    )
     assert got["GLM53_PF_MHC_POST"] == "fused"
     assert got["GLM53_PF_MOE_KB"] == "808" and "GLM53_PF_MOE_FID" not in got
     assert all(

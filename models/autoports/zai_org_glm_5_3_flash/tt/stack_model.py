@@ -226,6 +226,17 @@ def set_knobs(sparse, tp: int = 1, t: int = 1):
         # 4-row chunks: the sparse stack's 4-slot expert ring (14's B=1 default) puts the reader CBs 5 KB above the
         # step's L1 floor (0x1466c0 > 0x145400 in mock); 3 slots fit (7a's serving value)
         os.environ["GLM53_MKX_RING"] = "3"
+    # GLM53_STACK_DEFER=1 (tt/galaxy_defaults.py on the 8x4, 2026-11-13 chain_mhc_1): the deferred 1/rms(h) on the
+    # sparse_kda layers (both invh tiles in DRAM: in L1 they sit below the 45-layer stack's floor) + hn first, and hn
+    # first on the sparse_dsa kind (its MoE deferral is GLM53_MK_MOE_DEFER_INV; mhc_pre takes HN_FIRST only with a
+    # deferral). The dense layers already defer (KNOBS_TP). sparse_kda attn site 30.6 -> 21.1 us at B 1; e2e 32 K x 4
+    # 47.3 -> 48.9, 4 K x 1 54.3 -> 55.9 tok/s/u (with MS1); the ids move along existing near-tie sequences only.
+    # Applied before GLM53_STACK_KNOB_SET, so an A/B entry still overrides it per kind
+    if tp > 1 and os.environ.get("GLM53_STACK_DEFER", "0") == "1":
+        if key is True:
+            os.environ.update({"GLM53_MK_SPARSE_DEFER_INV": "dram", "GLM53_MHC_HN_FIRST": "1"})
+        elif key == "dsa":
+            os.environ["GLM53_MHC_HN_FIRST"] = "1"
     # GLM53_STACK_KNOB_SET="d:K=V;s:K=V;a:K=V" (dense_kda / sparse_kda / sparse_dsa; K=- drops K; ";" or ","
     # between items when no value holds a comma): overrides (A/B)
     spec = os.environ.get("GLM53_STACK_KNOB_SET", "")

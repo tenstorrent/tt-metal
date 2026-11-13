@@ -125,9 +125,9 @@ class MkMoE:
         # GLM53_MK_SPARSE_DEFER_INV, the MLA program's GLM53_MLA_DEFER); the root writes 1/rms(h) to a DRAM tile and
         # signals the readers, which scale the router logits and the shared gate | up at pack (reader_c.cpp, both linear
         # in hn) and the routed experts' gate | up before SwiGLU (mk_experts MKX_XINV); shared down reads m, unscaled
-        defer = os.environ.get("GLM53_MK_MOE_DEFER_INV", "0") == "1"
-        if defer and getattr(self.experts, "xtp", None) is not None:
-            raise ValueError("GLM53_MK_MOE_DEFER_INV: the experts' MKX_XINV is not wired for expert TP partials")
+        # (expert TP partials: MKX_XINV is not wired there, so such a build keeps the undeferred mix -- the knob is a
+        # galaxy default since 2026-11-13 and must not fail a build it does not apply to)
+        defer = os.environ.get("GLM53_MK_MOE_DEFER_INV", "0") == "1" and getattr(self.experts, "xtp", None) is None
         invh = mk((1, 1, 32, 32), FP32, DRAM) if defer else None
         rd.scale = dict(groups=[((0, 1), invh)], sem=SEM_INVH_M) if defer else None
         roles, mhc_cbs, mhc_sems = mhc.parts(s1, hn, post, comb, None, coef, t=t, x_mode=rm["s1_x"],
