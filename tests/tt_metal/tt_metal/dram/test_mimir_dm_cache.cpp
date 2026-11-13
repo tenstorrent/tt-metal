@@ -847,7 +847,6 @@ TEST_P(MimirCacheOps, FullInvalidate) {
 std::string ordering_leg_name(uint32_t leg) {
     switch (leg) {
         case abi::kOrderingLegFlushNoFence: return "FlushNoFence";
-        case abi::kOrderingLegFenceNoFlush: return "FenceNoFlush";
         case abi::kOrderingLegL1ThenL2: return "L1ThenL2";
         case abi::kOrderingLegFullHierarchy: return "FullHierarchy";
     }
@@ -1358,8 +1357,7 @@ std::string snoop_verdict(const std::vector<uint32_t>& status, uint32_t num_word
                      status[abi::kStatusRegisterA]);
 }
 
-// kModeExternalReader on `cce_index` hart kReaderHart over `region_offset`, `flag_offset` 0 for a writer that does not
-// wait for the warmed flag.
+// kModeExternalReader on `cce_index` hart kReaderHart over `region_offset`; it sets the warmed flag at `flag_offset`.
 HartKernel external_reader_kernel(
     uint32_t cce_index,
     uint64_t region_offset,
