@@ -16,15 +16,21 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.device_constants import BLACKHOLE_COMPUTE_GRID, WORMHOLE_COMPUTE_GRID, compute_grid_key
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
 
-# Ring SDPA chunk pair of the dynamic-length path per length class, one program each. Measured per block
-# on 4x8: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
-DYNAMIC_RING_SDPA_CHUNKS: dict[str, tuple[int, int]] = {"short": (320, 384), "long": (256, 512)}
+# Ring SDPA chunk pair of the dynamic-length path per device compute grid and length class, one program each.
+# Blackhole 4x8, measured per block: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
+# Wormhole 4x8: (256, 512) in both classes, one program; the fastest pair at 13664 rows/device and within 0.4 % of
+# it at 4736.
+DYNAMIC_RING_SDPA_CHUNKS: dict[tuple[int, int], dict[str, tuple[int, int]]] = {
+    BLACKHOLE_COMPUTE_GRID: {"short": (320, 384), "long": (256, 512)},
+    WORMHOLE_COMPUTE_GRID: {"short": (256, 512), "long": (256, 512)},
+}
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -210,11 +216,15 @@ class MiniMaxH3Attention(Module):
             self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
             self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
         if dynamic_length and self.use_ring:
+            grid = compute_grid_key(full_grid)
+            if grid not in DYNAMIC_RING_SDPA_CHUNKS:
+                raise ValueError(f"dynamic_length has no ring SDPA chunk sizes for the {grid} compute grid")
+            chunks = DYNAMIC_RING_SDPA_CHUNKS[grid]
             self._ring_sdpa_configs = {
                 cls.name: ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
-                    q_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[cls.name][0],
-                    k_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[cls.name][1],
+                    q_chunk_size=chunks[cls.name][0],
+                    k_chunk_size=chunks[cls.name][1],
                     exp_approx_mode=False,
                 )
                 for cls in LENGTH_CLASSES
