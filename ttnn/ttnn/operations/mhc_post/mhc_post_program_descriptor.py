@@ -24,9 +24,10 @@ TILE = 32
 # Blocking knobs (single source of truth; every CB size / trip count derives from these)
 # ---------------------------------------------------------------------------
 BLOCK_ROWS = 1  # token-tile rows per block (reasoned decision, op_design.md "Why block_rows = 1")
-READ_BATCH = 2  # units issued per reader barrier
-IN_DEPTH = 2 * READ_BATCH  # units cb_sublayer_tiles / cb_stream_tiles hold (double-buffered batches)
-OUT_DEPTH = 4  # units in flight in cb_mixed_out_tiles
+IN_BLOCKS = 2  # input depth in blocks: the reader fetches block k+1 while compute mixes block k
+OUT_BLOCKS = 2  # output depth in blocks: the writer drains block k while compute packs block k+1
+DST_FULL_SYNC = True  # 8 fp32 DEST slots (vs 4 half-sync): room for the block's accumulators
+MIX_FIXED_SLOTS = 2  # DEST slots of mix_block besides the per-unit accumulators (coefficient, operand)
 COEF_DEPTH = 2  # token rows of expanded coefficients in flight
 BLOCK_L1_BUDGET = 384 * 1024  # bytes available to block-scaled CBs (ledger symbol)
 
@@ -82,9 +83,17 @@ def choose_split(t_tiles, c_tiles, num_workers, unit_bytes, has_w, n, C):
     return best[1], best[2]
 
 
+def dest_fp32_slots():
+    return 8 if DST_FULL_SYNC else 4
+
+
 def choose_block_cols(core_c_tiles, bytes_per_block_col):
-    cap = max(1, BLOCK_L1_BUDGET // max(1, bytes_per_block_col))
-    return max(1, min(core_c_tiles, cap))
+    """block_cols: the whole per-core column range, capped by L1 and by DEST (one accumulator per unit).
+    (Balancing the passes to equal size measured worse at T=1024 C=1792: 243 vs 215 us; a ragged pass runs as
+    one-unit blocks.)"""
+    l1_cap = max(1, BLOCK_L1_BUDGET // max(1, bytes_per_block_col))
+    dest_cap = dest_fp32_slots() - MIX_FIXED_SLOTS
+    return max(1, min(core_c_tiles, l1_cap, dest_cap))
 
 
 def _merged_ranges(cores, gx):
@@ -152,16 +161,18 @@ def create_program_descriptor(
     used = workers[: R * Q]
     core_ranges = _merged_ranges(used, gx)
     max_core_c_tiles = col_ranges[0][1]
-    # block-scaled bytes per column tile: plain mode streams every CB over c, so only the loop extent scales
-    block_cols = choose_block_cols(max_core_c_tiles, n * 2048)
+    # block-scaled bytes per column tile: IN_BLOCKS units of F + n X in, OUT_BLOCKS units of n X' out
+    block_cols = choose_block_cols(max_core_c_tiles, IN_BLOCKS * (f_page + n * x_page) + OUT_BLOCKS * n * out_page)
+    in_depth = IN_BLOCKS * block_cols  # units
+    out_ring_tiles = OUT_BLOCKS * block_cols * n
 
     # ---------------- CBs ----------------
     cbs = [
-        _cb(CB_SUBLAYER_TILES, f_tensor.dtype, f_page, IN_DEPTH, core_ranges),
-        _cb(CB_STREAM_TILES, x_tensor.dtype, x_page, n * IN_DEPTH, core_ranges),
+        _cb(CB_SUBLAYER_TILES, f_tensor.dtype, f_page, in_depth, core_ranges),
+        _cb(CB_STREAM_TILES, x_tensor.dtype, x_page, n * in_depth, core_ranges),
         _cb(CB_COEF_RAW, ttnn.float32, coef_page, 2, core_ranges),  # post + comb (1 used when one tensor)
         _cb(CB_COEF_COLS, ttnn.float32, coef_page, n_coef * COEF_DEPTH, core_ranges),
-        _cb(CB_MIXED_OUT_TILES, out_tensor.dtype, out_page, n * OUT_DEPTH, core_ranges),
+        _cb(CB_MIXED_OUT_TILES, out_tensor.dtype, out_page, out_ring_tiles, core_ranges),
     ]
 
     # ---------------- per-core runtime args ----------------
@@ -189,8 +200,6 @@ def create_program_descriptor(
         c_tiles,
         post_wt,
         comb_wt,
-        IN_DEPTH,
-        READ_BATCH,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(f_tensor).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args())
@@ -212,7 +221,7 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    writer_ct = [CB_MIXED_OUT_TILES, n, BLOCK_ROWS, block_cols, c_tiles]
+    writer_ct = [CB_MIXED_OUT_TILES, n, BLOCK_ROWS, block_cols, c_tiles, out_ring_tiles]
     writer_ct.extend(ttnn.TensorAccessorArgs(out_tensor).get_compile_time_args())
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
@@ -234,6 +243,7 @@ def create_program_descriptor(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=True,
         math_approx_mode=math_approx_mode,
+        dst_full_sync_en=DST_FULL_SYNC,
     )
     compute_cfg.unpack_to_dest_mode = unpack_modes
     compute_ct = [CB_SUBLAYER_TILES, CB_STREAM_TILES, CB_COEF_COLS, CB_MIXED_OUT_TILES, n, BLOCK_ROWS, block_cols]

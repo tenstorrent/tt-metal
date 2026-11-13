@@ -17,11 +17,11 @@ Schema: `.claude/references/l1-footprint-discipline.md`.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_sublayer_tiles` | `ind` | 1 (one unit's F) | {t: streams, c: streams → 1/unit, s: n/a (F has no stream axis)} | F.dtype | reader | compute | block | Capacity is above the live set by `ind − 1`, for double buffering (overlap). Concurrent with every other streaming CB, so no alias. |
-| `cb_stream_tiles` | `n·ind` | n (all streams of one unit; X'_j needs all X_i) | {t: streams, c: streams → 1/unit, s: spans → n} | X.dtype | reader | compute | block | Kept separate from `cb_sublayer_tiles` because their page formats differ when the sublayer and stream dtypes differ. Double-buffered. |
+| `cb_sublayer_tiles` | `ind·bc` (implemented: IN_BLOCKS = 2 blocks) | bc (one block's F; mix_block holds one coefficient broadcast in DEST across the block's units) | {t: streams, c: spans → bc per block, s: n/a (F has no stream axis)} | F.dtype | reader | compute | block | Double-buffered in blocks (overlap). A ragged pass still occupies bc slots (filler) so every consumer window starts on a block boundary and never wraps. Concurrent with every other streaming CB, so no alias. |
+| `cb_stream_tiles` | `n·ind·bc` (IN_BLOCKS = 2) | n·bc (all streams of the block's units, unit-major) | {t: streams, c: spans → bc, s: spans → n} | X.dtype | reader | compute | block | Kept separate from `cb_sublayer_tiles` because their page formats differ when the sublayer and stream dtypes differ. Double-buffered in blocks; filler slots on a ragged pass as above. |
 | `cb_coef_raw` | 3, or 1 when post/comb/P are one buffer | 1–3 raw tiles of the current row | {t: spans → 1 row, c: none (constant across c), s: none} | Float32 | reader | reader (private landing) | per row | Cannot alias `cb_coef_cols`: the expansion reads raw and writes the column pages at the same time. It is only 4–12 KB. |
 | `cb_coef_cols` | `ncoef·cd` | `ncoef` (the row's coefficients, all referenced by every unit of the row) | {t: spans → 1 row ×cd window, c: none (broadcast over c), s: spans → n (post_j, comb_ij, P_i)} | Float32 (UnpackToDestFp32) | reader | compute | per row | `cd = 2` overlaps the next row's expansion with this row's mix. Each page uses only column 0 (128 B of 4 KB), because unpack-to-dest COL bcast reads column 0 of faces 0/2 only (mechanism cap). A denser packing is impossible without an unaligned unpack offset. |
-| `cb_mixed_out_tiles` | `n·outd` | n (one unit's X'_0..n-1) | {t: streams, c: streams → 1/unit, s: spans → n} | X.dtype | compute | writer | block | Not shared with `cb_mixed_bf16`: that would give two consumers (the writer and compute), which is a CB-ownership violation. In fp32 mode the formats also differ. |
+| `cb_mixed_out_tiles` | `n·outd·bc` (OUT_BLOCKS = 2) | n·bc (one block's X', j-major) | {t: streams, c: spans → bc, s: spans → n} | X.dtype | compute | writer | block | Not shared with `cb_mixed_bf16`: that would give two consumers (the writer and compute), which is a CB-ownership violation. In fp32 mode the formats also differ. |
 | `cb_mixed_bf16` (R2) | `n·bc` | n·bc (the projection K-block and y need the whole block) | {t: spans → 1, c: spans → bc, s: spans → n} | Float16_b | compute | compute | block | This is the contract's "bf16 X' as written". It replaces the forbidden DRAM re-read (rejected regime X2). It cannot be the writer's CB (ownership rule). |
 | `cb_w_slice` (R2) | W-resident: `n·core_c_tiles`; W-streamed: `n·bc` | same as capacity | {t: none (resident across t), c: spans → core_c_tiles / bc, s: spans → n} | Float32 (srcB holds W's 9-bit mantissa exactly) | reader | compute | kernel (resident) / block (streamed) | Resident so that W crosses DRAM once per core (Rule 1b). The predicate `n·core_c_tiles·4096 ≤ W_RESIDENT_BUDGET` selects the variant. |
 | `cb_sumsq_acc` (R2) | 1 | 1 | {t: spans → 1 row, c: streams (folded by packer L1-acc), s: streams (folded)} | Float32 | compute | compute | per row | Folding into one tile through packer L1 accumulation (Rule 3.4) removes any per-unit storage. It cannot alias `cb_ysq_acc`, because both are live across the row. |
@@ -43,20 +43,20 @@ Schema: `.claude/references/l1-footprint-discipline.md`.
 |--------|-------|---------------------------|
 | n | = 4 | contract (validated) |
 | `ncoef` | ≤ 24 | n = 4 |
-| `bc = block_cols` | `≤ block_cols_cap = floor(BLOCK_L1_BUDGET / (n·2048 + [W-streamed] n·4096 + (nr+1)·2048))` and `≤ core_c_tiles` | host `choose_block_cols()` |
+| `bc = block_cols` | `≤ core_c_tiles`; `≤ floor(BLOCK_L1_BUDGET / bytes_per_block_col)` with plain `bytes_per_block_col = 2·(pgF + n·pgX) + 2·n·pgX` (R2 adds `n·2048 + [W-streamed] n·4096 + (nr+1)·2048`); `≤ DEST fp32 slots − 2` (= 6, full-sync DEST: one accumulator per unit + coefficient + operand) | host `choose_block_cols()` |
 | `core_c_tiles` | `ceil(tensor_c_tiles / Q)` | split chooser |
 | `W_RESIDENT_BUDGET` | host constant 256 KiB → `n·core_c_tiles ≤ 64` | regime predicate R2 vs R2-W-streamed |
 | `cb_norm_w` pages | `core_c_tiles ≤ 64` under the same predicate (norm implies R2). When it is exceeded, w streams with `bc` like W (same predicate). | R2 predicate |
 | `fanin` | ≤ 16 | host constant `COMBINE_FANIN` (Phase 0 of R2: the grid row width, 11 on an 11×10 grid) |
-| `ind`, `outd`, `cd`, `nr` | 2 each (Phase 0) | host constants |
+| `ind`, `outd`, `cd`, `nr` | 2 each (Phase 0); `ind`/`outd` are counted in blocks of `bc` units (IN_BLOCKS / OUT_BLOCKS) | host constants |
 | `BLOCK_L1_BUDGET` | 384 KiB | host constant; total below stays < 1 MiB |
 
 ## Total per-core footprint
 
 ```
-plain (Phase 0):
-  ind·pgF + n·ind·pgX + n·outd·pgX + ncoef·cd·4096 + 3·4096
-  fp32 worst case: 2·4K + 8·4K + 8·4K + 20·2·4K + 12K = 252 KiB   (bc-independent: streams over c)
+plain (Phase 0, as implemented):
+  bc·(ind·pgF + n·ind·pgX + n·outd·pgX) + ncoef·cd·4096 + 2·4096
+  fp32 worst case (bc = 5, the L1 cap at BLOCK_L1_BUDGET = 384 KiB): 5·72K + 160K + 8K = 528 KiB
 
 collapse + norm (R2), additional:
   n·bc·2048 + n·core_c_tiles·4096 + 3·4096 (accs/interm) + 3·4096 (partial_out)
