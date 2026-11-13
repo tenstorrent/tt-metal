@@ -924,6 +924,154 @@ inline void _topk_canonicalize_negzero_value_tiles_()
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+// ---- Fused-key local sort: phases 0..4 in a 32-datum register window ----
+// Fused keys carry their index inside the packed word, so the index bank L4-L7 is free. One
+// window holds two consecutive 16-datum groups (group d in L0-L3, group d+1 in L4-L7, 32 DEST
+// rows apart). SFPTRANSP transposes L0-3 and L4-7 independently (one instruction serves both
+// halves), phases 0..3 sort each half in place, and phase 4's step 5 (distance 16) is
+// SWAP(L0,L4)..SWAP(L3,L7), so phases 0..4 run on one load32/store32 instead of five
+// store/load round trips, the ph4 step-5 pass and the steps-4..1 reload. The comparators are
+// the stock ones (same register pairs, same modes, same order within a half; the halves are
+// disjoint, so interleaving them does not change any result), ph0's trailing SFPTRANSP cancels
+// ph1's leading one (involution, all lanes enabled), and ArgMin is expressed by operand order
+// instead of the SFPSWAP reversal in SFPU_CONTROL_REG: with index tracking off both leave
+// VD = max / VC = min on every bit pattern (ties included), so the output is bit-identical.
+
+TT_ALWAYS_INLINE void topk_fused_load32() {
+    constexpr InstrModLoadStore M = InstrModLoadStore::INT32;
+    TTI_SFPLOAD(p_sfpu::LREG0, M, ADDR_MOD_3, 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, M, ADDR_MOD_3, 4);
+    TTI_SFPLOAD(p_sfpu::LREG2, M, ADDR_MOD_3, 8);
+    TTI_SFPLOAD(p_sfpu::LREG3, M, ADDR_MOD_3, 12);
+    TTI_SFPLOAD(p_sfpu::LREG4, M, ADDR_MOD_3, 32);
+    TTI_SFPLOAD(p_sfpu::LREG5, M, ADDR_MOD_3, 36);
+    TTI_SFPLOAD(p_sfpu::LREG6, M, ADDR_MOD_3, 40);
+    TTI_SFPLOAD(p_sfpu::LREG7, M, ADDR_MOD_3, 44);
+}
+
+// The two ADDR_MOD_2 stores (dest incr 32, as the stock alt-store) move the RWC past both groups.
+TT_ALWAYS_INLINE void topk_fused_store32() {
+    constexpr InstrModLoadStore M = InstrModLoadStore::INT32;
+    TTI_SFPSTORE(p_sfpu::LREG0, M, ADDR_MOD_3, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, M, ADDR_MOD_3, 4);
+    TTI_SFPSTORE(p_sfpu::LREG2, M, ADDR_MOD_3, 8);
+    TTI_SFPSTORE(p_sfpu::LREG3, M, ADDR_MOD_2, 12);
+    TTI_SFPSTORE(p_sfpu::LREG4, M, ADDR_MOD_3, 0);
+    TTI_SFPSTORE(p_sfpu::LREG5, M, ADDR_MOD_3, 4);
+    TTI_SFPSTORE(p_sfpu::LREG6, M, ADDR_MOD_3, 8);
+    TTI_SFPSTORE(p_sfpu::LREG7, M, ADDR_MOD_2, 12);
+}
+
+// Phases 0..2 (direction-free) on both halves.
+TT_ALWAYS_INLINE void topk_fused_ph0_to_2_pair() {
+    // Phase 0, step 1 (its trailing SFPTRANSP cancels phase 1's leading one).
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
+
+    // Phase 1, steps 2 and 1.
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ROWS_02_MAX);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Phase 2, step 3.
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::UNCONDITIONALLY);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    // Phase 2, steps 2 and 1.
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+// Half of the stock ph3 body (two steps of a sorted-16 run) on bank B (0 or 4); ARGMIN by
+// operand order (VD = max / VC = min in both forms).
+template <std::uint32_t B, bool ARGMIN>
+TT_ALWAYS_INLINE void topk_fused_two_steps_half() {
+    constexpr std::uint32_t R0 = p_sfpu::LREG0 + B;
+    constexpr std::uint32_t R1 = p_sfpu::LREG1 + B;
+    constexpr std::uint32_t R2 = p_sfpu::LREG2 + B;
+    constexpr std::uint32_t R3 = p_sfpu::LREG3 + B;
+    if constexpr (ARGMIN) {
+        TTI_SFPSWAP(0, R2, R0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, R3, R1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, R1, R0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, R3, R2, p_sfpswap::ALL_ROWS_MAX);
+    } else {
+        TTI_SFPSWAP(0, R0, R2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, R1, R3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, R0, R1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, R2, R3, p_sfpswap::ALL_ROWS_MAX);
+    }
+}
+
+// Steps 4..1 on both halves, A in ARGMIN_A, B in ARGMIN_B (the stock 5-slot ph3 window twice).
+template <bool ARGMIN_A, bool ARGMIN_B>
+TT_ALWAYS_INLINE void topk_fused_st4_to_1_pair() {
+    topk_fused_two_steps_half<0, ARGMIN_A>();
+    topk_fused_two_steps_half<4, ARGMIN_B>();
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    topk_fused_two_steps_half<0, ARGMIN_A>();
+    topk_fused_two_steps_half<4, ARGMIN_B>();
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+// Phase 4: step 5 (distance 16, group d against group d+1 lane-wise) then steps 4..1.
+template <bool ARGMIN>
+TT_ALWAYS_INLINE void topk_fused_ph4_pair() {
+    if constexpr (ARGMIN) {
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    } else {
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+    }
+    topk_fused_st4_to_1_pair<ARGMIN, ARGMIN>();
+}
+
+// One 32-datum window (groups d, d+1 at the RWC): phases 0..4. Phase 3 sorts group d in idir
+// and group d+1 in !idir (the bitonic pair), phase 4 merges them in pair_argmin (idir for the
+// first pair of a 64-run, !idir for the second). Not inlined: the loop-invariant direction
+// branches would otherwise be unswitched into per-direction copies of the caller's loops.
+[[gnu::noinline]] inline void topk_fused_ph0_to_4_pair(bool argmin, bool pair_argmin) {
+    topk_fused_load32();
+    topk_fused_ph0_to_2_pair();
+    if (argmin) {
+        topk_fused_st4_to_1_pair<true, false>();
+    } else {
+        topk_fused_st4_to_1_pair<false, true>();
+    }
+    if (pair_argmin) {
+        topk_fused_ph4_pair<true>();
+    } else {
+        topk_fused_ph4_pair<false>();
+    }
+    topk_fused_store32();
+}
+
 // Mode-combination rules shared by the three network entry points (local sort, merge, rebuild).
 template <bool is_fp32_dest_acc_en, bool STABLE_SORT, bool FUSED, bool RANK_STAMPED, TopkTieOrder TIE_ORDER>
 inline void topk_validate_mode_combo()
@@ -973,14 +1121,43 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     bool init_store = (topk_replay_init >= 0) ? true : false;
     bool init_phase;
 
+    // Fused keys: phases 0..4 run in the 32-datum register window (topk_fused_ph0_to_4_pair) and
+    // the per-phase passes start at phase 5. The load16/store16 windows are still recorded
+    // (without executing) for the phase-5 steps-4..1 pass.
+    int ph_first = i_start_phase;
+    [[maybe_unused]] bool fused_window = false;
+    [[maybe_unused]] const bool argmin = (static_cast<bool>(idir) == static_cast<bool>(SortDir::ArgMin));
+    if constexpr (FUSED) {
+        if (i_start_phase == 0 && i_end_phase >= 4) {
+            fused_window = true;
+            if (init_load) {
+                lltt::record<lltt::NoExec>(0, ldst_count);
+                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                init_load = false;
+            }
+            if (init_store) {
+                lltt::record<lltt::NoExec>(8, ldst_count);
+                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8);
+                init_store = false;
+            }
+            ph_first = 5;
+        }
+    }
+
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++)
     {
         for (int col = 0; col < 2; col++)
         {
             bool dir = idir;
-            for (int ph = i_start_phase; ph < (i_end_phase + 1); ph++)
-            {
+            if constexpr (FUSED) {
+                if (fused_window) {
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                    topk_fused_ph0_to_4_pair(argmin, argmin);
+                    topk_fused_ph0_to_4_pair(argmin, !argmin);
+                }
+            }
+            for (int ph = ph_first; ph < (i_end_phase + 1); ph++) {
                 init_phase = true; // init each new phase of local sort in replay buffer
 
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
