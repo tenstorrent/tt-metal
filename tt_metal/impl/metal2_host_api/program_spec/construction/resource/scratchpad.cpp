@@ -20,7 +20,7 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec) {
+std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec, uint32_t l1_alignment) {
     if (!spec.data_format_metadata.has_value()) {
         TT_FATAL(
             !spec.tile_format_metadata.has_value(),
@@ -30,7 +30,7 @@ std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec)
         return std::nullopt;
     }
     const Tile tile = spec.tile_format_metadata.value_or(Tile{});
-    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
+    return make_llk_metadata(*spec.data_format_metadata, tile, l1_alignment);
 }
 
 }  // namespace
@@ -38,7 +38,8 @@ std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec)
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
-    size_t scratchpad_base_crta_word) {
+    size_t scratchpad_base_crta_word,
+    uint32_t l1_alignment) {
     ScratchpadBindingsForKernel out;
     out.handles.reserve(kernel.scratchpad_bindings.size());
 
@@ -50,7 +51,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
-        handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
+        handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec, l1_alignment);
         if (const auto& source = scratchpad_spec->advanced_options.allocation_override) {
             handle.allocation_override = SRAMArenaSource{.arena = source->arena, .offset = source->offset};
         }

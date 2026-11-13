@@ -67,8 +67,12 @@ struct ResolvedTensorParameter {
 };
 
 // Register tensor parameters with the Program
+// precondition: l1_alignment is the target device's nonzero L1 alignment.
 std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParameters(
-    const ProgramSpec& spec, const distributed::MeshDevice& mesh_device, detail::ProgramImpl& program_impl);
+    const ProgramSpec& spec,
+    const distributed::MeshDevice& mesh_device,
+    detail::ProgramImpl& program_impl,
+    uint32_t l1_alignment);
 
 // Register tensor parameters with a Kernel
 // Per-kernel resolved tensor binding data:
@@ -129,6 +133,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
 void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_id, detail::ProgramImpl& program_impl);
 
 // Register DFBs with a Kernel
+// precondition: l1_alignment is the target device's nonzero L1 alignment.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec,
     const DFBNameToSlotMap& dfb_name_to_slot,
@@ -136,7 +141,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
     const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
     const DFBNameToIdMap& dfb_name_to_id,
-    const DFBNameToPatternsMap& dfb_name_to_patterns);
+    const DFBNameToPatternsMap& dfb_name_to_patterns,
+    uint32_t l1_alignment);
 
 // ----------------------------------------------------------------------------
 // PrefetcherPipes (prefetcher_pipe.cpp)
@@ -212,10 +218,13 @@ struct ScratchpadBindingsForKernel {
     uint32_t section_words = 0;  // == number of scratchpad bindings
 };
 
+// Returns a kernel's scratchpad bindings and their resource metadata.
+// precondition: l1_alignment is the target device's nonzero L1 alignment.
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
-    size_t scratchpad_base_crta_word);
+    size_t scratchpad_base_crta_word,
+    uint32_t l1_alignment);
 
 // ----------------------------------------------------------------------------
 // Drivers (resource.cpp)
@@ -256,7 +265,12 @@ struct KernelResourceBindings {
     std::vector<tt::tt_metal::PrefetcherPipeBindingHandle> prefetcher_pipes;
 };
 
+// Returns a kernel's bindings to registered resources.
+// precondition: l1_alignment is the target device's nonzero L1 alignment.
 KernelResourceBindings ResolveKernelResourceBindings(
-    const KernelSpec& kernel_spec, const CollectedSpecData& collected, const ProgramResources& resources);
+    const KernelSpec& kernel_spec,
+    const CollectedSpecData& collected,
+    const ProgramResources& resources,
+    uint32_t l1_alignment);
 
 }  // namespace tt::tt_metal::experimental

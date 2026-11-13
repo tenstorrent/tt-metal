@@ -24,7 +24,7 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
+std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec, uint32_t l1_alignment) {
     if (!spec.data_format_metadata.has_value()) {
         TT_FATAL(
             !spec.tile_format_metadata.has_value(),
@@ -33,7 +33,7 @@ std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
         return std::nullopt;
     }
     const Tile tile = spec.tile_format_metadata.value_or(Tile{});
-    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
+    return make_llk_metadata(*spec.data_format_metadata, tile, l1_alignment);
 }
 
 uint8_t DFBAccessPatternCode(DFBAccessPattern pattern) {
@@ -79,7 +79,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
     const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
     const DFBNameToIdMap& dfb_name_to_id,
-    const DFBNameToPatternsMap& dfb_name_to_patterns) {
+    const DFBNameToPatternsMap& dfb_name_to_patterns,
+    uint32_t l1_alignment) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -98,7 +99,7 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         handle.pap = patterns.pap;
         handle.cap = patterns.cap;
         if (!handle.is_relay) {
-            handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+            handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name), l1_alignment);
         }
         // Borrowed-memory DFB: remember the tensor it is and this kernel's side, for op-to-op R/W inference.
         if (const auto& borrowed_from = dfb_by_name.at(dfb_binding.dfb_spec_name)->borrowed_from) {

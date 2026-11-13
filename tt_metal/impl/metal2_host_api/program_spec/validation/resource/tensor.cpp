@@ -17,6 +17,15 @@
 
 namespace tt::tt_metal::experimental {
 
+void ValidateTensorParameterSpec(const TensorParameter& tensor_parameter) {
+    const TensorSpec& spec = tensor_parameter.spec;
+    ValidateResourceTileMetadata(
+        "TensorParameter",
+        tensor_parameter.unique_id.get(),
+        datatype_to_dataformat_converter(spec.data_type()),
+        spec.tile());
+}
+
 // Tensor bindings: accessor names, binding sequences
 void ValidateTensorBindings(const KernelSpec& kernel) {
     // A tensor binding is legal on both DM and compute kernels:

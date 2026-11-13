@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include <tt-metalium/tile.hpp>
@@ -11,18 +12,25 @@
 
 namespace tt::tt_metal {
 
-// Host-side format and tile used to emit binding_details::LLKMetadata onto a binding token.
+// Host-side resource description used to emit binding_details::LLKMetadata onto a binding token.
 // Face layout is read from the tile.
 struct LLKMetadata {
     DataFormat format;
     Tile tile;
+    // Zero when the format has no supported Tile storage encoding.
+    uint32_t tile_size_bytes = 0;
 };
+
+// Returns resource metadata with tile storage bytes computed for the supplied target alignment.
+// precondition: l1_alignment is a nonzero alignment in bytes.
+LLKMetadata make_llk_metadata(DataFormat format, const Tile& tile, uint32_t l1_alignment);
 
 // Returns the C++ initializer for the device-side binding_details::LLKMetadata
 // (internal/llk_metadata.h) that a generated binding token is constructed with, e.g.
 //   ::binding_details::LLKMetadata{.format = 5u, .face_r_dim = 16u, .face_c_dim = 16u,
-//                                  .num_faces_r_dim = 2u, .num_faces_c_dim = 2u}
+//                                  .num_faces_r_dim = 2u, .num_faces_c_dim = 2u, .tile_size_bytes = 2048u}
 // `format` is the HW DataFormat code; the face fields are derived from `metadata.tile`.
+// The tile byte size is resolved with the program target's L1 alignment before serialization.
 // The JIT's kernel bindings header and the emulator's both embed this string verbatim.
 std::string serialize_llk_metadata(const LLKMetadata& metadata);
 
