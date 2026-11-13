@@ -247,6 +247,47 @@ void kernel_main() {
         return (dc << mladsa::DIGIT_BITS) | e;
     };
 #endif
+#if defined(MLA_DSA_SHARD_SEL2)
+    // rev 73 SEL2 (dsa_shard.hpp): r8_fine's pull with the packed sum and no per-core above counts (the cores report
+    // theirs in the tie round)
+    auto sel2_fine = [&](uint32_t n, uint32_t dc, uint32_t& k_rem_) -> uint32_t {
+        for (uint32_t k = 0; k < n; ++k) {
+            const uint32_t x = get_arg_val<uint32_t>(OWN0 + 2 * k), yy = get_arg_val<uint32_t>(OWN0 + 2 * k + 1);
+            noc_async_read(
+                get_noc_addr(x, yy, mbox + mlashard::R8_FINE_OFF + dc * mlashard::R8_SLICE_BYTES),
+                hist_addr + k * mladsa::HIST_SLOT_BYTES,
+                mlashard::R8_SLICE_BYTES);
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        uint32_t h[mladsa::BINS];
+        mlashard::sel2_sum(hist, n, h);
+        uint32_t e = mladsa::BINS - 1, ab = 0;
+        while (e > 0 && ab + h[e] < k_rem_) {
+            ab += h[e];
+            --e;
+        }
+        k_rem_ -= ab;
+        return (dc << mladsa::DIGIT_BITS) | e;
+    };
+    // the (quota, offset) pairs: owner k (= chunk core k: one head group per chip) gets the 16-B chunk holding its own
+    // pair (QUOTA_W words at k QUOTA_W) instead of the whole table; SEL_SEM += 1 on each as broadcast does
+    static_assert(NOWN == C, "SEL2: one head group per chip (owner k = chunk core k)");
+    auto send_own = [&](uint32_t src, uint32_t dst_off) {
+        invalidate_l1_cache();
+        for (uint32_t k = 0; k < NOWN; ++k) {
+            const uint32_t x = get_arg_val<uint32_t>(OWN0 + 2 * k), yy = get_arg_val<uint32_t>(OWN0 + 2 * k + 1);
+            const uint32_t o = (k * 4 * mladsa::QUOTA_W) & ~15u;
+            noc_async_write(src + o, get_noc_addr(x, yy, mbox + dst_off + o), 16);
+        }
+        noc_async_write_barrier();
+        for (uint32_t k = 0; k < NOWN; ++k) {
+            const uint32_t x = get_arg_val<uint32_t>(OWN0 + 2 * k), yy = get_arg_val<uint32_t>(OWN0 + 2 * k + 1);
+            noc_semaphore_inc(get_noc_addr(x, yy, get_semaphore(SEL_SEM)), 1);
+        }
+        noc_async_atomic_barrier();
+    };
+#endif
 #if defined(MLA_DSA_SHARD_LINE)
     // TP8: the index core's NCRISC assembles the q tiles (ix_dm1.cpp) and counts the tokens done on this semaphore
     const uint32_t qasm_sem = get_arg_val<uint32_t>(SH0 + 8);
@@ -289,10 +330,14 @@ void kernel_main() {
 #endif
         if (!local_all && mladsa::sparse(pos < 0 ? 0u : static_cast<uint32_t>(pos))) {
             uint32_t prefix = 0, k_rem = mladsa::TOPK;
+#if defined(MLA_DSA_SHARD_SEL2)  // (the cores report their keys above T in the tie round: no above[] here)
+            ASSERT(mlashard::n_closed_local(static_cast<uint32_t>(pos), rank, nchips) <= 0xFFFFu);  // sel2_sum's halves
+#else
             uint32_t above[mladsa::MAX_CHUNKS];
             for (uint32_t c = 0; c < C; ++c) {
                 above[c] = 0;
             }
+#endif
             for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
                 const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
                 mk::wait_handoff(H_SEM, C);
@@ -303,14 +348,21 @@ void kernel_main() {
 #endif
                 invalidate_l1_cache();
                 uint32_t h[mladsa::BINS];
+#if defined(MLA_DSA_SHARD_SEL2)
+                mlashard::sel2_sum(hist, C, h);  // (dsa_shard.hpp SEL2: 8 packed words per core)
+#else
                 mladsa::sum_hist(hist, C, h);
+#endif
                 uint32_t d = mladsa::BINS - 1, ab = 0;
                 while (d > 0 && ab + h[d] < k_rem) {
                     ab += h[d];
                     --d;
                 }
                 k_rem -= ab;
-#if defined(MLA_DSA_R8)
+#if defined(MLA_DSA_SHARD_SEL2)
+                d = sel2_fine(C, d, k_rem);  // the pulled bucket's packed fine counts
+                prefix |= d << shift;
+#elif defined(MLA_DSA_R8)
                 for (uint32_t c = 0; c < C; ++c) {  // the coarse level's keys above its digit, per core
                     for (uint32_t b = d + 1; b < mladsa::BINS; ++b) {
                         above[c] += hist[c * (mladsa::HIST_SLOT_BYTES / 4) + b];
@@ -348,14 +400,22 @@ void kernel_main() {
                 const uint32_t q = n < rem ? n : rem;
                 qpair[2 * c] = q;
                 qpair[2 * c + 1] = off;
+#if defined(MLA_DSA_SHARD_SEL2)
+                off += hist[c * (mladsa::HIST_SLOT_BYTES / 4) + 1] + q;  // the core's keys above T (its tie report)
+#else
                 off += above[c] + q;
+#endif
                 rem -= q;
             }
             n_rec = off;
+#if defined(MLA_DSA_SHARD_SEL2)
+            send_own(shs + 64, mladsa::QUOTA_OFF + j * mladsa::MAX_CHUNKS * 4 * mladsa::QUOTA_W);
+#else
             broadcast(
                 shs + 64,
                 mladsa::QUOTA_OFF + j * mladsa::MAX_CHUNKS * 4 * mladsa::QUOTA_W,
                 (C * 4 * mladsa::QUOTA_W + 15) & ~15u);
+#endif
 #if defined(MLA_DSA_ROUND_MARKS)
             if (t == t0) {
                 MK_MARK();  // probe (rev 72): the (quota, offset) message broadcast

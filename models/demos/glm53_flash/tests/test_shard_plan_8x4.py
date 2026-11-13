@@ -1299,6 +1299,86 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_R8"] == "1"
 
 
+@pytest.mark.parametrize("lanes", [1, 4, 8])
+def test_sel2_matches_the_rounds(lanes):
+    """rev 73 GLM53_DSA_SHARD_SEL2: the local select with packed report / pull sums, no per-round above counts (the
+    cores count the keys their compactions drop upward and report them in the tie round) and per-owner quota chunks
+    gives R8's prefixes, k_rem, both levels' sums per round, (quota, offset) pairs, header count, kept pairs and records
+    bitwise -- the cores' upward drops equal the rounds' above counts -- for random, heavy-tie, all-equal (the bare
+    probe's unwritten pool) and fp32-clustered keys, past 512 local pools up to 1 M's 8192 and at the edges"""
+    gen = torch.Generator().manual_seed(73 + lanes)
+    rnd = random.Random(73 + lanes)
+    sizes = [0, 1, 511, 512, 513, 600, 1024, 2047, 4096, 8192] + rnd.sample(range(514, 8192), 10)
+    for n in sizes:
+        lq = torch.arange(n)
+        for mode in ("random", "heavy", "equal", "clustered"):
+            if mode == "random":
+                keys = torch.randint(0, 1 << 32, (n,), generator=gen, dtype=torch.int64)
+            elif mode == "heavy":
+                keys = torch.randint(0, 4, (n,), generator=gen, dtype=torch.int64)
+            elif mode == "equal":
+                keys = torch.full((n,), 0x80000000, dtype=torch.int64)
+            else:  # relu'd fp32 scores in a narrow band: the top bytes agree, the low ones decide
+                keys = 0x3F000000 + torch.randint(0, 1 << 18, (n,), generator=gen, dtype=torch.int64)
+            core_keys = SP.lane_core_keys(keys, lq, 64, lanes)
+            want = SP.local_select(core_keys, 512, 8)
+            got = SP.local_select_sel2(core_keys, 512)
+            for key in ("T", "k_rem", "qpair", "n_rec", "kept", "records", "hists", "messages"):
+                assert got[key] == want[key], (n, lanes, mode, key)
+            assert got["gt"] == want["above"], (n, lanes, mode)
+            assert SP.x_ag_chunk(got["records"], n_rec=got["n_rec"]) == SP.x_ag_chunk(
+                want["records"], n_rec=want["n_rec"]
+            )
+    with expect_error(ValueError, "keys on the lane > 65535"):
+        SP.local_select_sel2([[1] * 65536], 512)
+
+
+def test_sel2_packed_sums_and_quota_chunks():
+    """dsa_shard.hpp SEL2's packed sums are exact up to 65535 per count over the lane (64 cores x 1023 + 63 in one
+    bin, 65535 from one core) and catch the carry past it; every owner's 16-B chunk holds its own (quota, offset) pair
+    (sel2_quota_chunks: ix_dm0.cpp send_own) for odd / even core counts"""
+    rnd = random.Random(7300)
+    slots = [SP.sel2_pack([1023 + (c == 0) * 63] + [rnd.randrange(0, 64) for _ in range(15)]) for c in range(64)]
+    out = SP.sel2_sum(slots)
+    assert out[0] == 64 * 1023 + 63 == 65535
+    assert SP.sel2_sum([SP.sel2_pack([65535] * 16)]) == [65535] * 16
+    with expect_error(AssertionError, "carry between the halves"):
+        SP.sel2_sum([SP.sel2_pack([65535] + [0] * 15), SP.sel2_pack([1] + [0] * 15)])
+    with expect_error(AssertionError, ""):
+        SP.sel2_pack([65536] + [0] * 15)
+    for C in (1, 2, 7, 8, 16, 63, 64):
+        qp = [(rnd.randrange(0, 600), rnd.randrange(0, 8192)) for _ in range(C)]
+        assert SP.sel2_quota_chunks(qp) == qp, C
+
+
+def test_sel2_knobs(monkeypatch):
+    """GLM53_DSA_SHARD_SEL2: default off, the 8x4 only, 0 / 1 only, needs R8; the kernels and mk_mla.py carry the same
+    define / helper names (a renamed define would silently build knob-off)"""
+    monkeypatch.delenv("GLM53_DSA_SHARD_SEL2", raising=False)
+    assert not SP.shard_sel2(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_SEL2", "1")
+    assert SP.shard_sel2(8, r8=True) and not SP.shard_sel2(2, r8=False)
+    with expect_error(ValueError, "needs GLM53_DSA_SHARD_R8=1"):
+        SP.shard_sel2(8, r8=False)
+    monkeypatch.setenv("GLM53_DSA_SHARD_SEL2", "on")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_SEL2=on: 0 or 1"):
+        SP.shard_sel2(8)
+    import os
+
+    kd = os.path.join(SP.KDIR, "mla")
+    for f, names in (
+        ("ix_dm0.cpp", ("MLA_DSA_SHARD_SEL2", "sel2_sum", "send_own", "sel2_fine")),
+        ("att_dsa_shard_dm1.cpp", ("MLA_DSA_SHARD_SEL2", "r8_hist_packed", "hist[1] = gt")),
+        ("dsa_shard.hpp", ("MLA_DSA_SHARD_SEL2", "r8_hist_packed", "sel2_sum")),
+    ):
+        with open(os.path.join(kd, f)) as fh:
+            src = fh.read()
+        assert all(nm in src for nm in names), (f, names)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_mla.py")) as fh:
+        src = fh.read()
+    assert '("MLA_DSA_SHARD_SEL2", "1")' in src
+
+
 def test_zz_no_ttnn_was_imported_by_the_suite():
     """The unit CI runs this file without the root conftest: a host suite must never pull ttnn in (it would open
     every chip of the box beside a running mesh job)."""

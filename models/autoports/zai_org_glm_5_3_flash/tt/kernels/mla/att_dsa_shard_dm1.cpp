@@ -282,10 +282,15 @@ void kernel_main() {
             uint32_t prefix = 0, mask = 0;
             volatile tt_l1_ptr uint32_t* src = keys;
             uint32_t nsrc = nvalid;
+#if defined(MLA_DSA_SHARD_SEL2)
+            uint32_t gt = 0;  // (dsa_shard.hpp SEL2) this core's keys above T: the ones its compactions drop upward
+#endif
             for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
                 const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
                 if (g == 0) {
-#if defined(MLA_DSA_R8)  // dsa_shard.hpp R8: the fine counts in this core's mailbox, the coarse ones reported
+#if defined(MLA_DSA_SHARD_SEL2)  // dsa_shard.hpp SEL2: r8_hist with the coarse counts packed two per word
+                    mlashard::r8_hist_packed(mbox + mlashard::R8_FINE_OFF, hist, src, nsrc, mask, prefix, shift);
+#elif defined(MLA_DSA_R8)  // dsa_shard.hpp R8: the fine counts in this core's mailbox, the coarse ones reported
                     mlashard::r8_hist(mbox + mlashard::R8_FINE_OFF, hist, src, nsrc, mask, prefix, shift);
 #else
                     for (uint32_t b = 0; b < mladsa::BINS; ++b) {
@@ -312,6 +317,11 @@ void kernel_main() {
                         if ((k & mask) == prefix) {
                             cand[m++] = k;
                         }
+#if defined(MLA_DSA_SHARD_SEL2)
+                        else if ((k & mask) > prefix) {
+                            ++gt;
+                        }
+#endif
                     }
                     src = cand;
                     nsrc = m;
@@ -323,6 +333,9 @@ void kernel_main() {
                     eq += src[i] == prefix ? 1 : 0;
                 }
                 hist[0] = eq;
+#if defined(MLA_DSA_SHARD_SEL2)
+                hist[1] = gt;  // the coordinator's record offsets (dsa_shard.hpp SEL2)
+#endif
                 report();
             }
             noc_semaphore_wait_min(sel_sem, ++msgs);

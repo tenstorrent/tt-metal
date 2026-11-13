@@ -399,6 +399,31 @@ digits, random keys and heavy ties, 0 .. 600 pools on 64 / 16 / 8 lane cores; a 
 rounds (decode_probe "rounds": per round the owners' share -- round 0 includes the I4 scoring -- and the coordinator's
 sums + digits + broadcast) for the next cut.
 
+### SEL2: cheaper local-select rounds past 512 local pools (2026-11-13, MLA_REV 73, opt-in)
+
+Past ~64 K tokens of context (a chip over 512 closed local pools) LOCAL_ALL no longer applies and the slowest chip's
+rounds gate the all-gather (POS 66000: chips 0-3 keep the rounds, the others' AG1 waits ~130 us for them). The rev-72
+round marks put a coordinator round at ~0.4 us per participating chunk core (27.0 us at B 1 with one lane of 64 cores,
+4.3 us at B 16 with 8 per lane): per core 16 coarse words summed, `above[c]` updated by stack read-modify-writes over
+the bins above the coarse digit, a 32-B fine pull, 16 uint16 fine loads, `above[c]` again over the fine bins, one
+message write and one semaphore increment. `GLM53_DSA_SHARD_SEL2=1` (dsa_shard.hpp SEL2, MLA_DSA_SHARD_SEL2; needs R8)
+keeps every integer and drops most of that work:
+
+- no `above[c]` on the coordinator: a core's keys above the final T are exactly the keys its compactions drop upward
+  (a key > T leaves at the first digit where it differs from T, with the larger digit), so each core counts them while
+  it compacts and reports (eq, gt) in the tie round; the record offsets are `off += gt + quota` in core order;
+- packed sums: the coarse report is 8 uint32 words of 2 uint16 counts (`r8_hist_packed`), like the pulled fine slice;
+  the coordinator adds 8 words per core in registers and splits the halves (`sel2_sum`): exact while a count's lane
+  total stays <= 65535 (n_closed_local <= 65535, contexts below 8 M tokens);
+- the (quota, offset) message: owner k gets the 16-B chunk with its own pair (`send_own`) instead of the C x 8-B table.
+
+Host proof: `shard_plan.local_select_sel2` against `local_select` (R8), `test_sel2_matches_the_rounds` (lanes 1 / 4 / 8,
+0 .. 8192 keys per lane, random / heavy ties / all equal / fp32-clustered): prefixes, k_rem, both levels' sums, (quota,
+offset), header count, kept pairs and records bitwise; the upward drops equal the rounds' above counts;
+`test_sel2_packed_sums_and_quota_chunks` (the 65535 bound and the carry past it). Expected (per-core cost ~0.4 ->
+~0.15-0.2 us): a B 1 round 27 -> ~11-14 us, ~55-65 us per DSA layer at 1 M x 1 (~0.6-0.7 ms per 45-layer step), small
+at B 16 (8 cores per lane). Validation: `_logs/mesh/chain_dsa_2.sh`.
+
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 
 | users at 1 M each | 1 | 2 | 4 | 8 | 16 |

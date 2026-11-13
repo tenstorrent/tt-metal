@@ -407,4 +407,57 @@ inline uint32_t local_all_offset(uint32_t n_closed, uint32_t c, uint32_t C) {
 #if defined(MLA_DSA_ROUND_MARKS)
 static_assert(PAIR == 8 && LINE == 4 && mladsa::ROUNDS == 4, "ROUND_MARKS: the 8x4 shard with R8 (16 probe marks)");
 #endif
+// rev 73, SEL2 (MLA_DSA_SHARD_SEL2, tt/mk_mla.py GLM53_DSA_SHARD_SEL2; the 8x4 + R8 only, unset: every build
+// unchanged): the local select's coordinator work per round and core (rev-72 round marks: ~0.4 us per core, 27 us a
+// round at 64 chunk cores), cut with the same integers. (1) No per-round above[c] accumulation on the coordinator: a
+// core's keys above the final T are exactly the keys its compactions drop UPWARD (a key > T leaves at the first digit
+// where it differs from T, and its digit is the larger one there); every core counts them while it compacts and reports
+// (eq, gt) in the tie round (slot words 0 / 1). (2) Packed sums: a core's coarse report is 8 uint32 words of 2 uint16
+// counts (r8_hist_packed), as the pulled fine slice already is; the coordinator sums 8 words per core in 8 registers
+// and splits the halves (sel2_sum) -- no carry while the lane's keys total <= 65535 (n_closed_local <= 65535: contexts
+// below 8 M tokens on 32 chips). (3) The (quota, offset) message: owner k gets the 16-B chunk holding its own pair
+// instead of the whole C x 8-B table (ix_dm0.cpp send_own). Emulated by tt/shard_plan.py local_select_sel2.
+#if defined(MLA_DSA_SHARD_SEL2)
+static_assert(PAIR == 8 && LINE == 4, "SEL2: the 8x4 shard");
+static_assert(mladsa::RADIX_BITS == 2 * mladsa::DIGIT_BITS && mladsa::BINS == 16, "SEL2: R8's two-level rounds");
+constexpr uint32_t SEL2_WORDS = mladsa::BINS / 2;  // packed words of a report / a pulled bucket
+static_assert(SEL2_WORDS * 4 == R8_SLICE_BYTES, "SEL2: a pulled bucket is 8 packed words");
+static_assert(mladsa::QUOTA_W == 2, "SEL2: two (quota, offset) pairs per 16-B chunk");
+// a core's round: r8_hist (the fine counts in its mailbox, the 16 coarse counts in hist), then the coarse counts packed
+// two per word in place: hist[w] = c[2 w] | c[2 w + 1] << 16 (word w reads 2 w and 2 w + 1 >= w before it is written)
+inline void r8_hist_packed(
+    uint32_t fine_addr,
+    volatile tt_l1_ptr uint32_t* hist,
+    volatile tt_l1_ptr uint32_t* src,
+    uint32_t n,
+    uint32_t mask,
+    uint32_t prefix,
+    uint32_t shift) {
+    r8_hist(fine_addr, hist, src, n, mask, prefix, shift);
+    for (uint32_t w = 0; w < SEL2_WORDS; ++w) {
+        hist[w] = hist[2 * w] | (hist[2 * w + 1] << 16);
+    }
+}
+// the coordinator: n slots' 8 packed words summed in registers, each word's halves split -> 16 counts (exact while
+// every count's total <= 65535: the lane's keys)
+inline __attribute__((always_inline)) void sel2_sum(volatile tt_l1_ptr uint32_t* hist, uint32_t n, uint32_t* out) {
+    uint32_t a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0;
+    for (uint32_t c = 0; c < n; ++c) {
+        volatile tt_l1_ptr uint32_t* p = hist + c * (mladsa::HIST_SLOT_BYTES / 4);
+        a0 += p[0];
+        a1 += p[1];
+        a2 += p[2];
+        a3 += p[3];
+        a4 += p[4];
+        a5 += p[5];
+        a6 += p[6];
+        a7 += p[7];
+    }
+    const uint32_t a[SEL2_WORDS] = {a0, a1, a2, a3, a4, a5, a6, a7};
+    for (uint32_t w = 0; w < SEL2_WORDS; ++w) {
+        out[2 * w] = a[w] & 0xFFFFu;
+        out[2 * w + 1] = a[w] >> 16;
+    }
+}
+#endif
 }  // namespace mlashard

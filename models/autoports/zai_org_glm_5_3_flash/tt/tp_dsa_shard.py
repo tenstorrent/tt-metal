@@ -242,6 +242,7 @@ class TPMlaShard(TPM.TPMla):
             # rev 72: GLM53_DSA_SHARD_LOCAL_ALL (the <= 512-pool skip) / GLM53_DSA_SHARD_ROUND_MARKS (the coordinator's
             # round marks): kernel defines only
             local_all, rmarks = SP.shard_local_all(self.P), SP.shard_round_marks(self.P, r8)
+            sel2 = SP.shard_sel2(self.P, r8)  # rev 73: the local select's cheaper coordinator rounds (kernel define)
             split = dict(first=lambda p: SP.rs1_early_first(p, self.P), wait2=rs_wait[1]) if early else {}
             rs1 = FS.FabricStreamScatter(mesh, rsa["rs1"]["rows"], rsa["rs1"]["width"], axis=geo.pair_axis, lanes=lane("rs1"),
                                          **sy("rs1"), wait=rs_wait, cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA,
@@ -263,7 +264,7 @@ class TPMlaShard(TPM.TPMla):
             ypg = (SP.AGK_PPC if agk else SP.AG32_PPC) * t  # y_ag pages per block: AGB keeps AGK's page ids
             assert int(ag1.y.shape[-2]) * int(ag1.y.shape[-1]) == geo.n * ypg * 1024, (tuple(ag1.y.shape), ypg)
             return dict(C=self.n, line=self.L, pair=self.P, kph=kph, comb=comb, rs1_early=early, agk=agk, agb=agb, rsb=rsb, r8=r8,
-                        rsnp=rsnp, local_all=local_all, round_marks=rmarks, x_ag=x_ag, y_ag=ag1.y,
+                        rsnp=rsnp, local_all=local_all, round_marks=rmarks, sel2=sel2, x_ag=x_ag, y_ag=ag1.y,
                         x_rs=x_rs, y_rs=x_rs,
                         x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
                         ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],

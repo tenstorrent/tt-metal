@@ -958,6 +958,17 @@ def shard_round_marks(pair: int, r8: bool = True) -> bool:
     return on
 
 
+def shard_sel2(pair: int, r8: bool = True) -> bool:
+    """rev 73 GLM53_DSA_SHARD_SEL2 (default 0): the shard local select's rounds with the same integers at less
+    coordinator work (dsa_shard.hpp SEL2: no per-round above counts -- the cores report theirs in the tie round --,
+    packed report / pull sums, per-owner quota chunks; emulated by local_select_sel2); needs R8; the pair / the 2x4
+    never take it"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_SEL2")
+    if on and not r8:
+        raise ValueError("GLM53_DSA_SHARD_SEL2=1 needs GLM53_DSA_SHARD_R8=1 (the two-level rounds)")
+    return on
+
+
 def local_all_pools(n_closed: int, c: int, C: int) -> int:
     """dsa_shard.hpp local_all_pools: the valid pools of chunk core c of C at n_closed closed local pools (pool tiles
     c, c + C, .. < ceil(n_closed / 32), each min(32, n_closed - its first pool) columns)"""
@@ -1413,6 +1424,96 @@ def local_select(core_keys: list, k: int = 512, digit_bits: int = 4) -> dict:
         kept[c] = kc
         records += [(kk, c) for kk, _ in kc]
     return dict(T=prefix, k_rem=k_rem, above=above, qpair=qpair, n_rec=off, kept=kept, records=records, hists=sums,
+                messages=msgs)  # fmt: skip
+
+
+def sel2_pack(counts: list) -> list:
+    """dsa_shard.hpp r8_hist_packed / the pulled fine slice: 16 uint16 counts as 8 little-endian uint32 words"""
+    assert len(counts) == 16 and all(0 <= v <= 0xFFFF for v in counts), counts
+    return [counts[2 * w] | (counts[2 * w + 1] << 16) for w in range(8)]
+
+
+def sel2_sum(slots: list) -> list:
+    """dsa_shard.hpp sel2_sum: the slots' 8 packed words summed as uint32 (8 accumulators), each word's halves split ->
+    16 counts. Exact while every count's total <= 65535 (asserted against the plain sums)"""
+    acc = [sum(s[w] for s in slots) & 0xFFFFFFFF for w in range(8)]
+    out = [v for a in acc for v in (a & 0xFFFF, a >> 16)]
+    want = [sum((s[b // 2] >> (16 * (b % 2))) & 0xFFFF for s in slots) for b in range(16)]
+    assert out == want, ("sel2_sum: a carry between the halves", want)
+    return out
+
+
+def sel2_quota_chunks(qpair: list) -> list:
+    """ix_dm0.cpp send_own: owner c's mailbox view of the (quota, offset) table -- only the 16-B chunk holding its own
+    pair lands (pairs 2 (c // 2) and 2 (c // 2) + 1) -> the pair owner c reads at c QUOTA_W"""
+    words = [v for q, o in qpair for v in (q, o)]
+    out = []
+    for c in range(len(qpair)):
+        w0 = (c * 8 & ~15) // 4
+        chunk = words[w0 : w0 + 4]
+        mine = (c * 8 - (c * 8 & ~15)) // 4
+        out.append((chunk[mine], chunk[mine + 1]))
+    return out
+
+
+def local_select_sel2(core_keys: list, k: int = 512) -> dict:
+    """rev 73 SEL2 (ix_dm0.cpp + att_dsa_shard_dm1.cpp phase A, GLM53_DSA_SHARD_SEL2 on R8) step by step: per round the
+    cores' r8_hist with the coarse counts packed (sel2_pack), the coordinator's packed sum (sel2_sum) and coarse pick,
+    the pulled bucket's packed fine sum and the fine pick -- no above counts; the cores compact and count the keys their
+    compaction drops upward (gt); the tie round reports (eq, gt) per core -> (quota, record offset) in core order with
+    off += gt + quota; each owner reads its pair from its 16-B chunk (sel2_quota_chunks). -> local_select's dict with
+    gt in place of above"""
+    total = sum(len(v) for v in core_keys)
+    if total > 0xFFFF:
+        raise ValueError(f"local_select_sel2: {total} keys on the lane > 65535 (sel2_sum's halves)")
+    C = len(core_keys)
+    prefix, mask, k_rem, msgs, sums, gt = 0, 0, k, 0, [], [0] * C
+    src = [list(v) for v in core_keys]
+    for r in range(4):
+        shift = 32 - 8 * (r + 1)
+        fine, coarse = zip(*(r8_hist(v, mask, prefix, shift) for v in src)) if src else ((), ())
+        hs = sel2_sum([sel2_pack(list(cz)) for cz in coarse])
+        sums.append(hs)
+        d, ab = pick_digit(hs, k_rem)
+        k_rem -= ab
+        hf = sel2_sum([sel2_pack(list(f[16 * d : 16 * d + 16])) for f in fine])
+        sums.append(hf)
+        e, ab = pick_digit(hf, k_rem)
+        k_rem -= ab
+        prefix |= ((d << 4) | e) << shift
+        mask |= 0xFF << shift
+        msgs += 1
+        for c, v in enumerate(src):  # the compaction (cand) + the upward drops
+            keep = []
+            for kk in v:
+                if (kk & mask) == prefix:
+                    keep.append(kk)
+                elif (kk & mask) > prefix:
+                    gt[c] += 1
+            src[c] = keep
+    rem, off, qpair = k_rem, 0, []
+    for c, v in enumerate(src):  # the tie round: (eq, gt) per core -> (quota, record offset)
+        q = min(sum(1 for kk in v if kk == prefix), rem)
+        qpair.append((q, off))
+        off += gt[c] + q
+        rem -= q
+    msgs += 1
+    seen = sel2_quota_chunks(qpair)
+    assert seen == qpair, "sel2: an owner's chunk does not hold its own pair"
+    kept, records = {}, []
+    for c, keys in enumerate(core_keys):
+        quota, kc = seen[c][0], []
+        for i, kk in enumerate(keys):
+            take = kk > prefix
+            if not take and kk == prefix and quota > 0:
+                quota -= 1
+                take = True
+            if take:
+                kc.append((kk, i))
+        assert len(kc) == gt[c] + seen[c][0] and len(records) == seen[c][1], c
+        kept[c] = kc
+        records += [(kk, c) for kk, _ in kc]
+    return dict(T=prefix, k_rem=k_rem, gt=gt, qpair=qpair, n_rec=off, kept=kept, records=records, hists=sums,
                 messages=msgs)  # fmt: skip
 
 
