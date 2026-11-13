@@ -4812,7 +4812,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 232.1,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
@@ -5306,7 +5306,7 @@
  },
  "X.3": {
   "attempts": 1,
-  "duration_s": 486.7,
+  "duration_s": 594.7,
   "history": [
    {
     "s": 1754.0,
@@ -5325,39 +5325,31 @@
     "s": 486.7,
     "status": "FAIL",
     "t": "2026-11-13T09:41:06"
+   },
+   {
+    "s": 594.7,
+    "status": "PASS",
+    "t": "2026-11-13T19:42:17"
    }
   ],
-  "last_run": "2026-11-13T09:41:06",
+  "last_run": "2026-11-13T19:42:15",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.3.log",
-  "rc": 1,
-  "reason": [
-   "  cmd rc=1 (487s), log: /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.3.log",
-   "  units passed: X.3#test_determinism, X.3#test_profile, X.3#test_positions",
-   "  units remaining: X.3#test_ladder (gate X.3 --continue runs only these)",
-   "  MISSING  err_layer_L* (need <= limit)",
-   "  MISSING  err_state_*_L* (need <= limit)",
-   "  MISSING  prefill_ms_full (need > 0)",
-   "  MISSING  pos_chunk (need >= 1)",
-   "  MISSING  op_rows (need >= 1)",
-   "  MISSING  timeline_ok (need == 1)",
-   "  MISSING  err_final_hidden (need <= limit)",
-   "  MISSING  top5_overlap (need >= limit)",
-   "  ok       determinism_max_abs_diff = 0.0 (need == 0)"
-  ],
+  "rc": 0,
+  "reason": [],
   "stamp": {
    "reused": [],
    "units": {
-    "X.3#test_determinism": "d3e2bc432412a88f",
-    "X.3#test_ladder": "8fdb74f2cdb036d2",
-    "X.3#test_positions": "0c2d0220ac6822e0",
-    "X.3#test_profile": "25a75550bde3774a"
+    "X.3#test_determinism": "b4eaa62781c68038",
+    "X.3#test_ladder": "0086f8e5871727ef",
+    "X.3#test_positions": "8c366ced6c97d788",
+    "X.3#test_profile": "4d3451dbe5137128"
    }
   },
-  "started": "2026-11-13T09:32:58",
-  "status": "FAIL",
+  "started": "2026-11-13T19:32:20",
+  "status": "PASS",
   "units": {
    "X.3#test_determinism": "PASS",
-   "X.3#test_ladder": "FAIL",
+   "X.3#test_ladder": "PASS",
    "X.3#test_positions": "PASS",
    "X.3#test_profile": "PASS"
   }
