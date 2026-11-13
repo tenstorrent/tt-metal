@@ -62,6 +62,7 @@ def _rope_model(max_seq_len=4096, rope_delta=0):
 def _host_tables(model, monkeypatch):
     """rope_rm_tables with the upload stood in: the host (cos, sin) [rows, RD] it would replicate."""
     monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: t)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
     model._rope_rm = None
     return model.rope_rm_tables()
 
