@@ -17,6 +17,7 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/chunk_gated_delta_rule_fw/chunk_gated_delta_rule_fw.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
@@ -756,6 +757,57 @@ void py_module(nb::module_& m) {
 
     {
         auto py_metal = static_cast<nb::module_>(m.attr("metal"));
+        py_metal.def(
+            "chunk_gated_delta_rule_fw",
+            [](const ttnn::Tensor& q,
+               const ttnn::Tensor& k,
+               const ttnn::Tensor& v,
+               const ttnn::Tensor& g,
+               const ttnn::Tensor& beta,
+               uint32_t key_head_dim,
+               const std::optional<ttnn::Tensor>& initial_state,
+               uint32_t chunk_size,
+               std::optional<float> scale,
+               bool output_head_major,
+               tt::tt_metal::DataType output_dtype,
+               bool save_for_backward) {
+                auto r = ttml::metal::chunk_gated_delta_rule_fw(
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    key_head_dim,
+                    initial_state,
+                    chunk_size,
+                    scale,
+                    output_head_major,
+                    output_dtype,
+                    /*compute_kernel_config=*/std::nullopt,
+                    save_for_backward);
+                return std::make_tuple(r.output, r.final_state, r.h, r.v_new, r.a);
+            },
+            nb::arg("q"),
+            nb::arg("k"),
+            nb::arg("v"),
+            nb::arg("g"),
+            nb::arg("beta"),
+            nb::arg("key_head_dim"),
+            nb::arg("initial_state") = nb::none(),
+            nb::arg("chunk_size") = 64U,
+            nb::arg("scale") = nb::none(),
+            nb::arg("output_head_major") = false,
+            nb::arg("output_dtype") = tt::tt_metal::DataType::FLOAT32,
+            nb::arg("save_for_backward") = true,
+            "Chunked gated delta rule forward on flat layouts, with the intermediates the backward needs.\n"
+            "q, k [B,1,T,HK*K] bf16 (L2-normalized along K); v [B,1,T,HV*V] bf16; g, beta [B,1,T,HV];\n"
+            "initial_state [B,HV,K,V] fp32 (optional).\n"
+            "Returns (o [B,1,T,HV*V] or [B*HV,1,T,V] if output_head_major, final_state [B,HV,K,V], h [B*HV,NC,K,V], "
+            "v_new [B*HV,1,T,V],\n"
+            "A [B*HV,1,T,C]).  All fp32 except o, which is output_dtype (float32 or bfloat16; bfloat16 is packed "
+            "directly by the scan).\n"
+            "With save_for_backward=False the h, v_new and A entries are None and the writes of h and v_new are "
+            "skipped.");
         py_metal.def(
             "moe_group",
             &ttml::metal::moe_group,
