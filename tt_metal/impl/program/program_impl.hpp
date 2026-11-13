@@ -729,6 +729,10 @@ public:
     bool program_run_args_initialized() const { return program_run_args_initialized_; }
     void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
 
+    // Set data format and tile metadata in `build_options` for every dataflow buffer intersecting `crs` (the
+    // compile's prep, and emulation's copy of a kernel's generated descriptors).
+    void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -881,8 +885,6 @@ private:
     // intersecting `crs`.
     void set_cb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
-    // Same as `set_cb_data_fmt_and_tile`, but for dataflow buffers.
-    void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 
