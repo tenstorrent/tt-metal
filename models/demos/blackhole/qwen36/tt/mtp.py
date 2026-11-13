@@ -59,6 +59,20 @@ def draft_argmax(mtp, logits):
     return argmax_last(logits)  # full-vocab gathered row: untilize + argmax
 
 
+def drafter_fc_progcfg(dim, num_devices, grid_w):
+    """The drafter fc's program for one tile of rows: [rows, 2*dim] x [2*dim, dim/tp] as a 1D mcast_in0 matmul on 20
+    cores with 32-tile K blocks. The auto-configured program streams K in 2-tile blocks; on Blackhole at TP=8 the
+    fc took about 29 us with this program and 139 us with the auto one (device profile)."""
+    return tpc.create_matmul_1d_decode_progcfg(
+        ttnn.TILE_SIZE,
+        2 * dim,
+        dim // num_devices,
+        num_cores=20,
+        grid_w=grid_w,
+        max_in0_block_w=32,
+    )
+
+
 class Qwen36MTP:
     """Single-layer MTP drafter head. Reuses the parent model's embedding + LM head."""
 
@@ -104,6 +118,9 @@ class Qwen36MTP:
             from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
             self._fc_compute_cfg = tpc.COMPUTE_HIFI2
+            self._fc_1d_progcfg = drafter_fc_progcfg(
+                args.dim, self.num_devices, mesh_device.compute_with_storage_grid_size().x
+            )
             # Column-parallel: transpose to [2*dim, dim] then shard dim=-1 -> [2*dim, dim/tp] per device.
             self.fc = tpc.shard_w(
                 fc_w,
@@ -115,6 +132,7 @@ class Qwen36MTP:
             )
         else:
             self._fc_compute_cfg = None
+            self._fc_1d_progcfg = None
             self.fc = ttnn.as_tensor(
                 fc_w.T.contiguous(),  # [2*dim, dim]
                 dtype=ttnn.bfloat8_b,
@@ -422,6 +440,9 @@ class Qwen36MTP:
         ttnn.deallocate(e)
         ttnn.deallocate(h)
         kw = dict(compute_kernel_config=self._fc_compute_cfg) if self._fc_compute_cfg is not None else {}
+        # The program has per_core_M 1: more rows (a reseed past B*T = 32, prefill) keep the auto config.
+        if self._fc_1d_progcfg is not None and mode == Mode.DECODE and cat.shape[-2] <= ttnn.TILE_SIZE:
+            kw["program_config"] = self._fc_1d_progcfg
         fused = ttnn.linear(cat, self.fc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)  # [1,1,*,dim/tp]
         ttnn.deallocate(cat)
         return fused
