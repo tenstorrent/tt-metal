@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,10 +18,11 @@ namespace tt::tt_fabric::decode {
 
 // What decode is handed initially, to find its inputs.
 struct DecodeRequest {
-    // The manifest's path.
-    std::filesystem::path manifest_path;
     // The capture record. Its .bin is beside it, under the name the record gives.
     std::filesystem::path capture_record_path;
+    // The manifest's path. Null takes the manifest the capture record names, which is the one capture read, in the
+    // run's folder the record is in.
+    std::optional<std::filesystem::path> manifest_path;
 };
 
 // One rank's inputs, read into their models and checked against each other.
@@ -31,8 +33,8 @@ struct DecodeInputs {
     capture::LoadedCapture capture;
 };
 
-// Reads the manifest and the capture, and checks that the capture was taken from that manifest. Fails, before decode
-// reads any value, on an input it can't use:
+// Reads the capture, and the manifest the request gives or else the one the capture record names, and checks that the
+// capture was taken from that manifest. Fails, before decode reads any value, on an input it can't use:
 // - a manifest that parse_manifest_json refuses, including one from another build than decode's;
 // - a capture-record that parse_capture_record refuses, or a .bin that isn't the one the record names;
 // - a capture that mentions another manifest, identified by comparing the computed BLAKE3 of the manifest's bytes with

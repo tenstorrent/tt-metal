@@ -4,12 +4,14 @@
 
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_inputs.hpp"
 
+#include <filesystem>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
 
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_paths.hpp"
 
@@ -63,9 +65,18 @@ RecordEntriesByPath collect_record_entries_by_path(const capture::CaptureRecord&
 }  // namespace
 
 DecodeInputs load_decode_inputs(const DecodeRequest& request) {
-    // Read the manifest and the capture record
-    capture::ManifestFile manifest = capture::read_manifest_file(request.manifest_path);
+    // Read the capture record, and the manifest the request gives, else the one the record names. The record names it
+    // by its file name in the run's folder, which the record is in.
     capture::LoadedCapture capture = capture::load_capture(request.capture_record_path);
+    const std::filesystem::path manifest_path = request.manifest_path.value_or(
+        visualizer::get_run_directory_of_capture_record(request.capture_record_path) /
+        capture.get_record().manifest.path);
+    TT_FATAL(
+        request.manifest_path.has_value() || std::filesystem::exists(manifest_path),
+        "Fabric decode: {} was captured from {}, which isn't there; give the manifest with --manifest",
+        request.capture_record_path.string(),
+        manifest_path.string());
+    capture::ManifestFile manifest = capture::read_manifest_file(manifest_path);
 
     // Validate that the capture was taken from the manifest
     check_capture_is_from_manifest(manifest, capture);

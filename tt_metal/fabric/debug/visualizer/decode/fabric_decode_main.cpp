@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // fabric_decode: decodes one rank's capture against its manifest, and writes the rank's decoded file. It opens no
-// chip, so it runs anywhere the two files are, on the same build that wrote the manifest.
+// chip, so it runs anywhere the files are, on the same build that wrote the manifest. Given no capture record, it
+// finds this rank's the way capture finds its manifest, so the run's tt-run command finds each rank's capture. The
+// manifest is the one the capture record names, unless --manifest gives another.
 //
 // Exit status: 0 when every router was read in full and every region decoded, 1 when the decoded file was written
 // with something missing or wrong, which its findings say, 2 when it failed and wrote nothing.
@@ -12,10 +14,12 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include <cxxopts.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
@@ -58,10 +62,51 @@ size_t count_findings(const decode::DecodedRank& rank, decode::FindingSeverity s
     });
 }
 
+// The capture record to decode: --capture's, else this rank's record of --capture-id, else of its latest capture, in
+// the newest run under the logs folder that has one.
+std::filesystem::path find_capture_record(const cxxopts::ParseResult& options) {
+    if (options.contains("capture")) {
+        return options["capture"].as<std::string>();
+    }
+    const std::filesystem::path logs_dir = visualizer::get_logs_directory();
+    const visualizer::JobRank rank = visualizer::get_job_rank();
+    const std::string record_file_name = visualizer::make_capture_record_file_name(rank.mpi_rank, rank.world_size);
+    if (options.contains("capture-id")) {
+        const std::string capture_id = options["capture-id"].as<std::string>();
+        const std::optional<std::filesystem::path> record_path =
+            visualizer::find_capture_record(logs_dir, rank, capture_id);
+        TT_FATAL(
+            record_path.has_value(),
+            "Fabric decode: no run under {} has capture {} with {}; give the record with --capture",
+            visualizer::make_runs_directory(logs_dir).string(),
+            capture_id,
+            record_file_name);
+        return *record_path;
+    }
+    const std::optional<std::filesystem::path> record_path = visualizer::find_latest_capture_record(logs_dir, rank);
+    if (!record_path.has_value()) {
+        const std::string manifest_file_name = visualizer::make_manifest_file_name(rank.mpi_rank, rank.world_size);
+        const std::optional<std::filesystem::path> manifest_path = visualizer::find_latest_manifest(logs_dir, rank);
+        TT_FATAL(
+            manifest_path.has_value(),
+            "Fabric decode: no run under {} has {}; give the record with --capture",
+            visualizer::make_runs_directory(logs_dir).string(),
+            manifest_file_name);
+        TT_THROW(
+            "Fabric decode: the newest run with {}, {}, has no capture with {}; give the record with --capture",
+            manifest_file_name,
+            manifest_path->parent_path().string(),
+            record_file_name);
+    }
+    return *record_path;
+}
+
 int run_decode(const cxxopts::ParseResult& options) {
     const decode::DecodeRequest request{
-        .manifest_path = options["manifest"].as<std::string>(),
-        .capture_record_path = options["capture"].as<std::string>(),
+        .capture_record_path = find_capture_record(options),
+        .manifest_path = options.contains("manifest")
+                             ? std::optional<std::filesystem::path>(options["manifest"].as<std::string>())
+                             : std::nullopt,
     };
     const decode::DecodeInputs inputs = decode::load_decode_inputs(request);
     // Beside the capture record, under the rank's decoded file name, unless --output says otherwise.
@@ -72,7 +117,7 @@ int run_decode(const cxxopts::ParseResult& options) {
             : request.capture_record_path.parent_path() /
                   visualizer::make_decoded_file_name(run.mpi_rank, run.world_size);
     std::cerr << "fabric_decode: decoding " << request.capture_record_path.string() << " against "
-              << request.manifest_path.string() << "\n";
+              << inputs.manifest.path.string() << "\n";
 
     const decode::DecodedRank rank = decode::decode_rank(request, inputs, make_decode_identity());
     decode::write_decoded_file(
@@ -92,8 +137,19 @@ int run_decode(const cxxopts::ParseResult& options) {
 
 int main(int argc, char** argv) {
     cxxopts::Options parser("fabric_decode", "Decodes one rank's fabric capture against its manifest.");
-    parser.add_options()("manifest", "This rank's manifest", cxxopts::value<std::string>())(
-        "capture", "This rank's capture record. Its .bin is beside it", cxxopts::value<std::string>())(
+    parser.add_options()(
+        "capture",
+        "This rank's capture record. Its .bin is beside it. Defaults to this rank's record of --capture-id, else of "
+        "the newest capture of the newest run that has this rank's manifest, under TT_METAL_LOGS_PATH (else the "
+        "working folder), for its rank from TT_RUN_RANK or OMPI_COMM_WORLD_RANK",
+        cxxopts::value<std::string>())(
+        "capture-id",
+        "The capture to decode, when --capture isn't given. Its record is found in the newest run that has it",
+        cxxopts::value<std::string>())(
+        "manifest",
+        "The manifest the capture was taken from. Defaults to the one the capture record names, in the run's folder "
+        "the record is in",
+        cxxopts::value<std::string>())(
         "output",
         "Where to write the decoded file. Defaults to beside the capture record, as "
         "fabric_decoded_rank_<r>_of_<n>.json for the manifest's rank",
@@ -107,11 +163,9 @@ int main(int argc, char** argv) {
             std::cout << parser.help() << "\n";
             return k_exit_complete;
         }
-        for (const char* required : {"manifest", "capture"}) {
-            if (!options.contains(required)) {
-                std::cerr << "fabric_decode: --" << required << " is required; see --help\n";
-                return k_exit_failed;
-            }
+        if (options.contains("capture") && options.contains("capture-id")) {
+            std::cerr << "fabric_decode: give --capture or --capture-id, not both; see --help\n";
+            return k_exit_failed;
         }
         return run_decode(options);
     } catch (const cxxopts::exceptions::exception& error) {
