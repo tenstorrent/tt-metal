@@ -28,7 +28,6 @@
 #include <array>
 #include <tuple>
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -868,12 +867,11 @@ public:
         using PrefetcherPipeParamName = tt::tt_metal::experimental::PrefetcherPipeParamName;
         using PrefetcherPipeArgument = tt::tt_metal::experimental::PrefetcherPipeArgument;
 
-        // Stored across cache entries: for each TensorArgument in a program's ProgramRunArgs, the
-        // candidate indices into the deterministic enumeration of io tensors followed by op-owned
-        // tensors that matched its MeshTensor pointer. When an op is primed with distinct tensors,
-        // each binding has a single index; when primed with aliased inputs (one MeshTensor passed
-        // in multiple argument slots), all matching slots are retained and narrowed on the first
-        // cache hit whose arguments diverge across them.
+        // Stored across cache entries: for each TensorArgument in a program's ProgramRunArgs, which
+        // tensor (by index into the deterministic enumeration of io tensors followed by op-owned
+        // tensors) it was bound to. Each entry of candidate_indices is one such index; there is more
+        // than one only if the miss call passed the same MeshTensor in several slots, and then any
+        // of them is correct until a hit passes different tensors there (see refine_bindings).
         struct ResolvedTensorBinding {
             TensorParamName tensor_parameter_name;
             ttsl::SmallVector<std::size_t, 2> candidate_indices;
@@ -1206,17 +1204,10 @@ public:
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
-        // Guard against allocating device memory on a cache hit while trace capture or command-list
-        // recording is active. Only needed when refining aliased bindings for a factory that also
-        // creates op_owned_tensors on device.
+        // Re-running a factory that uploads op_owned_tensors would hit "Writes are not supported during
+        // trace capture" deep inside the factory; fail here instead with the actual cause and remedy.
         static void assert_safe_to_reinvoke_op_owned_factory(
             const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
-            TT_FATAL(
-                !detail::is_recording_command_list(),
-                "{}: program cache hit requires disambiguating tensor bindings from an aliased warmup call, "
-                "which cannot run while recording a command list because this operation allocates op-owned tensors. "
-                "Warm up the cache with distinct tensor arguments before recording.",
-                ttsl::get_type_name<DeviceOperation>());
             auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
             for (std::uint8_t cq = 0; cq < mesh_device->num_hw_cqs(); ++cq) {
                 TT_FATAL(
@@ -1371,12 +1362,14 @@ public:
                 }
                 const auto [_, inserted] = program_specs.emplace(per_coord.range, std::move(per_coord.spec));
                 TT_FATAL(inserted, "create_mesh_workload_artifacts returned range {} twice", per_coord.range);
-                shared_variables_t sv;
-                sv.bindings = SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors);
-                sv.pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
-                    per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs);
-                sv.tensor_coords = tensor_coords;
-                shared_variables.emplace(per_coord.range, std::move(sv));
+                shared_variables.emplace(
+                    per_coord.range,
+                    shared_variables_t{
+                        {.bindings =
+                             SpecBindingSupport::resolve_bindings(per_coord.run_params.tensor_args, mesh_tensors),
+                         .pipe_bindings = SpecBindingSupport::resolve_pipe_bindings(
+                             per_coord.run_params.advanced_options.prefetcher_pipe_args, attrs)},
+                        tensor_coords});
                 run_params.emplace(per_coord.range, std::move(per_coord.run_params));
             }
 
