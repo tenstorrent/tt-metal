@@ -25,7 +25,7 @@ export QSR_SIM_BACKEND
 Read before the first edit:
 - The kernel: `$WORKTREE_DIR/$GENERATED_KERNEL`.
 - The diagnosis: `$PERF_DIAG_DIR/verdict.json` (`causes` ranked in cycles per tile, `units.<bottleneck>.instructions_by_opcode`, `bubbles_per_tile`, `stall_per_tile`) and `$PERF_DIAG_DIR/diag.json`.
-- `codegen/skills/llk-perf-headroom/SKILL.md`, sections **Reading the verdict** (the cause → fix table) and **Common mistakes**.
+- `codegen/skills/llk-perf-headroom/SKILL.md`, sections **Reading the verdict** (the cause → fix table), **Known Quasar instruction costs** (read the private section it names when `${LLK_CODEGEN_PRIVATE_ROOT:-/proj_sw/user_dev/llk_code_gen}` exists) and **Common mistakes**.
 - `codegen/agents/quasar/llk-optimizer.md`, sections **What NOT to Do** and **Step 8: Compile and test** (your functional gate is that Step 8).
 
 ## Helpers
