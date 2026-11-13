@@ -406,17 +406,10 @@ jobs:
           run_sim='${{ inputs.run-sim }}'
 
           if [[ -z "$run_wormhole" && -z "$run_blackhole" && -z "$run_sim" ]]; then
-            if [[ "${{ github.event_name }}" == "schedule" ]]; then
-              # Scheduled (cron) runs of this workflow cover Blackhole.
-              run_wormhole=false
-              run_blackhole=true
-              run_sim=false
-            else
-              # Direct push to main covers Wormhole + sim.
-              run_wormhole=true
-              run_blackhole=false
-              run_sim=true
-            fi
+            # The cron is the only automatic trigger, so it covers every architecture.
+            run_wormhole=true
+            run_blackhole=true
+            run_sim=true
           fi
 
           if [[ "$run_wormhole" != "true" && "$run_blackhole" != "true" && "$run_sim" != "true" ]]; then
