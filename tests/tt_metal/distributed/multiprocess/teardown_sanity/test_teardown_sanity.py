@@ -386,14 +386,26 @@ def test_slow_collective_ok():
     clean(r)
 
 
-@known(
-    "P11: a tt-metal process with no launcher starts MPI as a singleton and leaves a 16 MB shm segment (#63870); fixed upstream by tt-metal #63954"
-)
-def test_singleton_shm():
-    """A tt-metal process nobody launched inits the distributed context and must leave no Open MPI shared-memory
-    segment. This exercises the DistributedContext path #63954 fixes (the C-probe singleton row tests raw MPI). Slow,
-    because it imports ttnn; kept in Python like the rest of the suite."""
-    r = run_case("singleton", {}, DEADLINE_END, cmd=[PYTHON, "-c", "import ttnn; ttnn.init_distributed_context()"])
+def test_singleton_shm(tmp_path):
+    """A tt-metal process nobody launched inits the distributed context as an MPI singleton. Open MPI would leave
+    both a 16 MB shared-memory segment and its session directory (``/tmp/ompi.<host>.<uid>/...``) behind, because the
+    launcher that reaps them never ran (#63870). The DistributedContext init asks for the ``self`` transport only (no
+    shm segment) and steers the session directory into a private ``TMPDIR`` it removes at exit (nothing left). This is
+    the less-invasive counterpart of tt-metal #63954, which fixes the same leak by not initialising MPI at all for a
+    singleton; both are carried in this PR. Slow, because it imports ttnn; kept in Python like the rest of the suite.
+
+    ``TMPDIR`` is pointed at a fresh directory so the session-dir check is scoped to this job (the shared
+    ``/tmp/ompi.*`` tree can hold a concurrent job's subdirs)."""
+    sess = tmp_path / "mpi"
+    sess.mkdir()
+    r = run_case(
+        "singleton",
+        {"TMPDIR": str(sess)},
+        DEADLINE_END,
+        cmd=[PYTHON, "-c", "import ttnn; ttnn.init_distributed_context()"],
+    )
     ended(r)
     assert r.exit == 0, str(r)
-    assert not r.shm_leaked, f"a tt-metal singleton left {r.shm_leaked} (#63870, fixed by #63954)"
+    assert not r.shm_leaked, f"a tt-metal singleton left a shm segment {r.shm_leaked} (#63870)"
+    session_dirs = sorted(p.name for p in sess.iterdir() if p.name.startswith(("tt_mpi_singleton", "ompi.")))
+    assert not session_dirs, f"a tt-metal singleton left an Open MPI session directory {session_dirs} (#63870)"

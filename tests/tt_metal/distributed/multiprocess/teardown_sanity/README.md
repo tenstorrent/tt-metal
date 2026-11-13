@@ -91,7 +91,10 @@ stage of a real distributed job, grouped by the piece that fails:
 - **the control plane's init** — ranks that disagree on the mesh shape, or on the fabric config, when the device is opened;
 - **the solver and descriptor loading** — a rank killed during the solve, an unsatisfiable mesh, a descriptor that
   describes a different machine;
-- **the user's signals** — Ctrl-C / SIGTERM at tt-run while the job is in a collective or in init.
+- **the user's signals** — Ctrl-C / SIGTERM at tt-run while the job is in a collective or in init;
+- **a singleton** — a process nobody launched (`test_singleton_shm`): init asks for the `self` transport only and
+  steers Open MPI's session directory into a private `TMPDIR` it removes at exit, so it leaves neither a `/dev/shm`
+  segment nor a `/tmp/ompi.*` directory behind (#63870; the less-invasive counterpart of tt-metal #63954).
 
 ### Group G — raw-MPI expectation gates
 Two gates that confirm the OpenMPI build we ship provides what the DistributedContext teardown relies on — not

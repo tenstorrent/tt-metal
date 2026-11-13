@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <limits>
 #include <thread>
 #include <memory>
@@ -277,19 +278,57 @@ bool MPIRequest::active() const { return !done_; }
 inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
     static int provided_thread_level = MPI_THREAD_SINGLE;
+    // A singleton's private OpenMPI session directory, removed at exit (see the singleton branch below).
+    static std::string singleton_session_dir;
 
     std::call_once(mpi_once, [&] {
         // A process nobody launched (no PMIx rank from mpirun / tt-run) is a singleton: it has no peers, so it has
         // no use for the shared-memory transport, and Open MPI never unlinks a singleton's 16 MB segment
         // (tt-metal #63870). Ask for the self transport only; an explicit OMPI_MCA_btl in the environment wins.
+        bool singleton_tmpdir_redirected = false;
+        bool had_caller_tmpdir = false;
+        std::string caller_tmpdir;
         if (std::getenv("PMIX_RANK") == nullptr && std::getenv("OMPI_COMM_WORLD_SIZE") == nullptr) {
             setenv("OMPI_MCA_btl", "self", /*overwrite=*/0);
+            // Open MPI also leaves a singleton's session directory (/tmp/ompi.<host>.<uid>/...) behind — the
+            // launcher that would reap it never ran (tt-metal #63870, comprehensively fixed by #63954). Steer that
+            // session dir into a private directory we own by pointing TMPDIR at it just for MPI_Init, then remove
+            // the directory at exit. The caller's TMPDIR is restored immediately after init so nothing else moves.
+            const char* base_env = std::getenv("TMPDIR");
+            const std::string base = (base_env != nullptr && base_env[0] != '\0') ? base_env : "/tmp";
+            std::string tmpl = base + "/tt_mpi_singleton.XXXXXX";
+            std::vector<char> buf(tmpl.c_str(), tmpl.c_str() + tmpl.size() + 1);
+            if (mkdtemp(buf.data()) != nullptr) {
+                singleton_session_dir = buf.data();
+                had_caller_tmpdir = (base_env != nullptr);
+                if (had_caller_tmpdir) {
+                    caller_tmpdir = base_env;
+                }
+                setenv("TMPDIR", singleton_session_dir.c_str(), /*overwrite=*/1);
+                singleton_tmpdir_redirected = true;
+                // Runs after the MPI_Finalize atexit below (atexit is LIFO), so the session dir is empty by then.
+                std::atexit([] {
+                    if (!singleton_session_dir.empty()) {
+                        std::error_code ec;
+                        std::filesystem::remove_all(singleton_session_dir, ec);
+                    }
+                });
+            }
         }
         int provided = 0;
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
         provided_thread_level = provided;
+
+        // The TMPDIR redirect was only needed to place OpenMPI's session dir at init; give the caller theirs back.
+        if (singleton_tmpdir_redirected) {
+            if (had_caller_tmpdir) {
+                setenv("TMPDIR", caller_tmpdir.c_str(), /*overwrite=*/1);
+            } else {
+                unsetenv("TMPDIR");
+            }
+        }
 
         // Ensure MPI_Finalize is called when the program exits
         std::atexit([] { MPI_Finalize(); });
@@ -665,8 +704,7 @@ void MPIContext::reduce_scatter(
         comm_));              // communicator
 }
 
-void MPIContext::scan(
-    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+void MPIContext::scan(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     TT_FATAL(
         send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 
