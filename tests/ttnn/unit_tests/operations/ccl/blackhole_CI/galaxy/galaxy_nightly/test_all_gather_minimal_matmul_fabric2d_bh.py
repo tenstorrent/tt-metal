@@ -5,8 +5,9 @@
 """all_gather_minimal_matmul_async on a Blackhole Galaxy (8 x 4) over a 2D fabric.
 
 The activation's K is gathered along one axis (the TP axis of 4 or the SP axis of 8) and multiplied by that axis'
-weight shard: as a Ring where the fabric wraps the axis, as a Linear line where it does not. Each case runs the op back to back on one gathered buffer and one set of semaphores, as a model's layers
-do, and checks every call on every device.
+weight shard: as a Ring where the fabric wraps the axis, as a Linear line where it does not. Each case runs the op
+back to back on one gathered buffer and one set of semaphores, as a model's layers do, and checks every call on every
+device.
 """
 
 import pytest
@@ -163,6 +164,8 @@ _CASES = [
     # One K block per device: each fabric core's first forward is also its last.
     pytest.param(dict(_KDA, K=1024), id="one_k_block_per_device"),
     pytest.param(dict(_KDA, subblock_h=2, subblock_w=2), id="subblock_2x2"),
+    # 24-column N blocks: in1 goes in two chunks of 12 columns.
+    pytest.param(dict(_KDA, n_per_device=11 * 24 * 32, N_block=24), id="two_in1_chunks"),
     # The SP ring of 8: K gathered over 8 devices, 2 K blocks per device.
     pytest.param(dict(_KDA, gather_axis=0, rows_per_device=320, n_per_device=11 * 20 * 32, N_block=20), id="sp_ring_8"),
 ]

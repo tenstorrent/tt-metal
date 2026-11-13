@@ -197,10 +197,14 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     // Device/storage checks, repeated on every cache hit.
     validate_operands_on_device(tensor_args);
 
-    TT_FATAL(
-        !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+        TT_FATAL(
             !tensor_args.persistent_weight_buffer.has_value(),
-        "all_gather_minimal_matmul_async: FSDP is not ported to Fabric2D");
+            "all_gather_minimal_matmul_async: FSDP is not ported to Fabric2D");
+        TT_FATAL(
+            !attributes.force_transpose && !attributes.transpose_core_grid.value_or(false),
+            "all_gather_minimal_matmul_async: the transposed grid is not ported to Fabric2D");
+    }
 
     // Layout requirements: all inputs must be TILE layout
     TT_FATAL(
