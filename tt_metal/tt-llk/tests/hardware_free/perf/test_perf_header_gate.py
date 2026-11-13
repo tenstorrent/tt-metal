@@ -308,6 +308,44 @@ async def _run_b():
     ]
 
 
+def test_helper_calls_and_nested_config_kwargs_participate_in_consistency():
+    groups = _synthetic_column_sets(
+        """
+def _templates():
+    return [LOOP_FACTOR(1)]
+
+def _runtimes_a():
+    return [NUM_FACES()]
+
+def _runtimes_b():
+    return [NUM_FACES(), APPROX_MODE()]
+
+def _run_a():
+    return create_test_or_perf_config(
+        test_config_kwargs=dict(
+            test_name="sources/a.cpp",
+            templates=_templates(),
+            runtimes=_runtimes_a(),
+        )
+    )
+
+def _run_b():
+    return create_test_or_perf_config(
+        test_config_kwargs=dict(
+            test_name="sources/a.cpp",
+            templates=_templates(),
+            runtimes=_runtimes_b(),
+        )
+    )
+"""
+    )
+    assert len(groups) == 2
+    assert sorted(path for paths in groups.values() for path in paths) == [
+        "sources/a.cpp (_run_a)",
+        "sources/a.cpp (_run_b)",
+    ]
+
+
 def test_functional_only_and_partly_visible_functions_are_skipped():
     groups = _synthetic_column_sets(
         """

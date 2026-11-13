@@ -34,74 +34,172 @@ def _is_name(node, name):
     return isinstance(node, ast.Name) and node.id == name
 
 
-def _is_not_name(node, name):
-    return (
-        isinstance(node, ast.UnaryOp)
-        and isinstance(node.op, ast.Not)
-        and _is_name(node.operand, name)
-    )
+def _eval_bool(node, state):
+    if isinstance(node, ast.Name):
+        return state.get(node.id)
+    if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        value = _eval_bool(node.operand, state)
+        return None if value is None else not value
+    if isinstance(node, ast.BoolOp):
+        values = [_eval_bool(value, state) for value in node.values]
+        if isinstance(node.op, ast.And):
+            return False if False in values else (True if all(values) else None)
+        return (
+            True
+            if True in values
+            else (False if all(value is False for value in values) else None)
+        )
+    return None
 
 
-def _contains_return(statements):
+def _refine_bool(state, node, expected):
+    state = dict(state)
+    value = _eval_bool(node, state)
+    if value is not None:
+        return state if value == expected else None
+    if isinstance(node, ast.Name):
+        state[node.id] = expected
+        return state
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _refine_bool(state, node.operand, not expected)
+    if isinstance(node, ast.BoolOp):
+        refine_all = (isinstance(node.op, ast.And) and expected) or (
+            isinstance(node.op, ast.Or) and not expected
+        )
+        if refine_all:
+            for child in node.values:
+                state = _refine_bool(state, child, expected)
+                if state is None:
+                    return None
+            return state
+        unresolved = [
+            child for child in node.values if _eval_bool(child, state) is None
+        ]
+        decisive = isinstance(node.op, ast.Or)
+        if len(unresolved) == 1:
+            return _refine_bool(state, unresolved[0], decisive)
+    return state
+
+
+def _contains_result_access(node):
     return any(
-        isinstance(node, ast.Return)
-        for statement in statements
-        for node in ast.walk(statement)
+        isinstance(child, ast.Attribute) and child.attr == "result"
+        for child in ast.walk(node)
     )
 
 
-def _implies_is_perf(node):
-    return _is_name(node, "is_perf") or (
-        isinstance(node, ast.BoolOp)
-        and isinstance(node.op, ast.And)
-        and any(_implies_is_perf(value) for value in node.values)
-    )
+def _perf_paths_reach_result(statements, states):
+    states = list(states)
+    for statement in statements:
+        if not states:
+            break
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(statement, ast.If):
+            if _contains_result_access(statement.test):
+                return True, []
+            remaining = []
+            for state in states:
+                true_state = _refine_bool(state, statement.test, True)
+                false_state = _refine_bool(state, statement.test, False)
+                for branch, branch_state in (
+                    (statement.body, true_state),
+                    (statement.orelse, false_state),
+                ):
+                    if branch_state is None:
+                        continue
+                    failed, paths = _perf_paths_reach_result(branch, [branch_state])
+                    if failed:
+                        return True, []
+                    remaining.extend(paths)
+            states = remaining
+            continue
+        if _contains_result_access(statement):
+            return True, []
+        if isinstance(statement, (ast.Return, ast.Raise)):
+            states = []
+    return False, states
 
 
 def _result_accesses_guarded(function):
-    early_return_lines = [
-        statement.lineno
-        for statement in function.body
-        if isinstance(statement, ast.If)
-        and _implies_is_perf(statement.test)
-        and not statement.orelse
-        and _contains_return(statement.body)
+    reaches_result, _ = _perf_paths_reach_result(function.body, [{"is_perf": True}])
+    return not reaches_result
+
+
+def _configuration_accesses(node):
+    return [
+        child.lineno
+        for child in ast.walk(node)
+        if isinstance(child, ast.Attribute)
+        and child.attr == "variant_stimuli"
+        and _is_name(child.value, "configuration")
     ]
 
-    guarded_accesses = set()
-    for node in ast.walk(function):
-        if isinstance(node, ast.If) and _is_not_name(node.test, "is_perf"):
-            guarded_accesses.update(
-                child.lineno
-                for statement in node.body
-                for child in ast.walk(statement)
-                if isinstance(child, ast.Attribute) and child.attr == "result"
-            )
 
-    accesses = [
-        node.lineno
-        for node in ast.walk(function)
-        if isinstance(node, ast.Attribute) and node.attr == "result"
-    ]
-    return all(
-        line in guarded_accesses or any(guard < line for guard in early_return_lines)
-        for line in accesses
+def _binds_configuration(statement):
+    targets = []
+    if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+        targets = (
+            statement.targets
+            if isinstance(statement, ast.Assign)
+            else [statement.target]
+        )
+    return any(
+        _is_name(node, "configuration")
+        for target in targets
+        for node in ast.walk(target)
     )
+
+
+def _configuration_accesses_in_block(statements, bound=False):
+    failures = []
+    for statement in statements:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(statement, ast.If):
+            if not bound:
+                failures.extend(_configuration_accesses(statement.test))
+            body_failures, body_bound = _configuration_accesses_in_block(
+                statement.body, bound
+            )
+            else_failures, else_bound = _configuration_accesses_in_block(
+                statement.orelse, bound
+            )
+            failures.extend(body_failures)
+            failures.extend(else_failures)
+            if statement.orelse:
+                bound = body_bound and else_bound
+            continue
+        if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+            failures.extend(_configuration_accesses_in_block(statement.body, bound)[0])
+            failures.extend(
+                _configuration_accesses_in_block(statement.orelse, bound)[0]
+            )
+            continue
+        if isinstance(statement, ast.Try):
+            failures.extend(_configuration_accesses_in_block(statement.body, bound)[0])
+            for handler in statement.handlers:
+                failures.extend(
+                    _configuration_accesses_in_block(handler.body, bound)[0]
+                )
+            failures.extend(
+                _configuration_accesses_in_block(statement.orelse, bound)[0]
+            )
+            failures.extend(
+                _configuration_accesses_in_block(statement.finalbody, bound)[0]
+            )
+            continue
+        if not bound:
+            failures.extend(_configuration_accesses(statement))
+        if _binds_configuration(statement):
+            bound = True
+    return failures, bound
 
 
 def _undefined_configuration_accesses(function):
-    accesses = [
-        node.lineno
-        for node in ast.walk(function)
-        if isinstance(node, ast.Attribute)
-        and node.attr == "variant_stimuli"
-        and _is_name(node.value, "configuration")
-    ]
-    configuration_is_bound = any(
-        _is_name(node, "configuration") and isinstance(node.ctx, ast.Store)
-        for node in ast.walk(function)
-    )
-    return [] if configuration_is_bound else accesses
+    return _configuration_accesses_in_block(function.body)[0]
 
 
 def test_perf_backed_functional_module_discovery_is_not_empty():
@@ -113,8 +211,8 @@ def test_perf_backed_functional_module_discovery_is_not_empty():
 def test_guard_analysis_handles_blaze_runner_shapes():
     safe = ast.parse(
         """
-def run(is_perf, collect_result):
-    if is_perf and not collect_result:
+def run(is_perf):
+    if is_perf:
         return None
     return configuration.run().result
 """
@@ -125,8 +223,18 @@ def run(is_perf):
     return configuration.run().result
 """
     ).body[0]
+    partial = ast.parse(
+        """
+def run(is_perf, collect_result):
+    if is_perf:
+        if not collect_result:
+            return None
+    return configuration.run().result
+"""
+    ).body[0]
     assert _result_accesses_guarded(safe)
     assert not _result_accesses_guarded(unsafe)
+    assert not _result_accesses_guarded(partial)
 
 
 def test_stale_configuration_analysis_requires_a_local_binding():
@@ -144,8 +252,26 @@ def run():
     return configuration.variant_stimuli
 """
     ).body[0]
+    late = ast.parse(
+        """
+def run():
+    result = configuration.variant_stimuli
+    configuration = build()
+    return result
+"""
+    ).body[0]
+    conditional = ast.parse(
+        """
+def run(use_new):
+    if use_new:
+        configuration = build()
+    return configuration.variant_stimuli
+"""
+    ).body[0]
     assert not _undefined_configuration_accesses(bound)
     assert _undefined_configuration_accesses(stale)
+    assert _undefined_configuration_accesses(late)
+    assert _undefined_configuration_accesses(conditional)
 
 
 def test_perf_backed_runners_have_no_stale_configuration_references():

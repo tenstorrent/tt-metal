@@ -562,31 +562,46 @@ def _kernel_source(fn):
                     and isinstance(value, ast.Constant)
                 ):
                     return value.value
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "dict"
+        ):
+            for keyword in node.keywords:
+                if keyword.arg == "test_name" and isinstance(
+                    keyword.value, ast.Constant
+                ):
+                    return keyword.value.value
     return None
 
 
 def _function_param_fields(fn, specs, helpers, post_init):
-    fields = set()
-    for list_node in _param_lists(fn):
-        for elt in list_node.elts:
-            for call in (
-                (elt.body, elt.orelse) if isinstance(elt, ast.IfExp) else (elt,)
-            ):
-                if not (
-                    isinstance(call, ast.Call)
-                    and (_call_name(call) in specs or _call_name(call) in helpers)
-                ):
-                    return None
-                fields.update(emitted_fields(call, specs, helpers, post_init))
-    return fields
+    def visible(expr):
+        if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+            return all(visible(elt) for elt in expr.elts)
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+            return visible(expr.left) and visible(expr.right)
+        if isinstance(expr, ast.IfExp):
+            return visible(expr.body) and visible(expr.orelse)
+        return isinstance(expr, ast.Call) and (
+            _call_name(expr) in specs or _call_name(expr) in helpers
+        )
+
+    if any(not visible(list_node) for list_node in _param_lists(fn)):
+        return None
+    return _param_fields_in_tree(fn, specs, helpers, post_init)
 
 
 def column_sets_in_tree(tree, specs, helpers, post_init) -> dict:
     groups: dict = {}
+    file_helpers = dict(helpers or {})
+    file_helpers.update(_local_returned_param_calls(tree, specs))
     for fn in _config_functions(tree):
         if _is_functional_only(fn):
             continue
-        fields = _function_param_fields(fn, specs, helpers, post_init)
+        if _function_returned_param_calls(fn, specs) and not _has_perfconfig(fn):
+            continue
+        fields = _function_param_fields(fn, specs, file_helpers, post_init)
         if not fields:
             continue
         kernel = _kernel_source(fn)
