@@ -21,11 +21,31 @@ env:
 on:
   workflow_call:
     inputs:
-      force-rebuild:
+      force-rebuild-tools:
         required: false
         type: boolean
         default: false
-        description: "Force rebuild of all Docker images even if they exist in registry"
+        description: "Rebuild the tool images even if they exist in the registry"
+      force-rebuild-venv:
+        required: false
+        type: boolean
+        default: false
+        description: "Rebuild the Python venv images even if they exist in the registry"
+      force-rebuild-llk:
+        required: false
+        type: boolean
+        default: false
+        description: "Rebuild the LLK CI image even if it exists in the registry"
+      force-rebuild-manylinux:
+        required: false
+        type: boolean
+        default: false
+        description: "Rebuild the manylinux image even if it exists in the registry"
+      force-rebuild-ubuntu:
+        required: false
+        type: boolean
+        default: false
+        description: "Rebuild the Ubuntu images (ci-build, ci-test, dev, basic) even if they exist in the registry"
       prewarm-harbor:
         required: false
         type: boolean
@@ -118,11 +138,31 @@ on:
         value: ${{ jobs.preflight.outputs.llk-ci-tag }}
   workflow_dispatch:
     inputs:
-      force-rebuild:
+      force-rebuild-tools:
         required: false
         type: boolean
         default: false
-        description: "Force rebuild of all Docker images even if they exist in registry"
+        description: "Rebuild the tool images even if they exist in the registry"
+      force-rebuild-venv:
+        required: false
+        type: boolean
+        default: false
+        description: "Rebuild the Python venv images even if they exist in the registry"
+      force-rebuild-llk:
+        required: false
+        type: boolean
+        default: false
+        description: "Rebuild the LLK CI image even if it exists in the registry"
+      force-rebuild-manylinux:
+        required: false
+        type: boolean
+        default: false
+        description: "Rebuild the manylinux image even if it exists in the registry"
+      force-rebuild-ubuntu:
+        required: false
+        type: boolean
+        default: false
+        description: "Rebuild the Ubuntu images (ci-build, ci-test, dev, basic) even if they exist in the registry"
       prewarm-harbor:
         required: false
         type: boolean
@@ -165,11 +205,15 @@ jobs:
       - name: Compute Ubuntu 22.04 platform data
         id: platform-2204
         env:
-          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+          FORCE_UBUNTU: ${{ inputs.force-rebuild-ubuntu }}
+          FORCE_VENV: ${{ inputs.force-rebuild-venv }}
+          FORCE_MANYLINUX: ${{ inputs.force-rebuild-manylinux }}
         run: |
           set -euo pipefail
           ARGS="22.04 ${{ github.repository }}"
-          [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
+          [ "$FORCE_UBUNTU" = "true" ] && ARGS+=" --force-rebuild-ubuntu"
+          [ "$FORCE_VENV" = "true" ] && ARGS+=" --force-rebuild-venv"
+          [ "$FORCE_MANYLINUX" = "true" ] && ARGS+=" --force-rebuild-manylinux"
           DATA=$(.github/scripts/compute-platform-data.sh $ARGS)
           {
             echo "data<<EOJSON"
@@ -180,11 +224,15 @@ jobs:
       - name: Compute Ubuntu 24.04 platform data
         id: platform-2404
         env:
-          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+          FORCE_UBUNTU: ${{ inputs.force-rebuild-ubuntu }}
+          FORCE_VENV: ${{ inputs.force-rebuild-venv }}
+          FORCE_MANYLINUX: ${{ inputs.force-rebuild-manylinux }}
         run: |
           set -euo pipefail
           ARGS="24.04 ${{ github.repository }}"
-          [ "$FORCE_REBUILD" = "true" ] && ARGS+=" --force-rebuild"
+          [ "$FORCE_UBUNTU" = "true" ] && ARGS+=" --force-rebuild-ubuntu"
+          [ "$FORCE_VENV" = "true" ] && ARGS+=" --force-rebuild-venv"
+          [ "$FORCE_MANYLINUX" = "true" ] && ARGS+=" --force-rebuild-manylinux"
           DATA=$(.github/scripts/compute-platform-data.sh $ARGS)
           {
             echo "data<<EOJSON"
@@ -195,7 +243,7 @@ jobs:
       - name: Compute tool data
         id: tool-data
         env:
-          FORCE_REBUILD: ${{ inputs.force-rebuild }}
+          FORCE_REBUILD: ${{ inputs.force-rebuild-tools }}
           PLATFORM_2204_DATA: ${{ steps.platform-2204.outputs.data }}
           PLATFORM_2404_DATA: ${{ steps.platform-2404.outputs.data }}
         run: |
@@ -261,6 +309,8 @@ jobs:
 
       - name: Check LLK CI image
         id: llk-check
+        env:
+          FORCE_REBUILD: ${{ inputs.force-rebuild-llk }}
         run: |
           set -euo pipefail
           LLK="tt_metal/tt-llk"
@@ -273,7 +323,10 @@ jobs:
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
           TAG="ghcr.io/${{ github.repository }}/tt-llk-ci-ubuntu-22-04:${DOCKER_TAG}"
           echo "llk-ci-tag=$TAG" >> "$GITHUB_OUTPUT"
-          if docker manifest inspect "$TAG" > /dev/null 2>&1; then
+          if [ "$FORCE_REBUILD" = "true" ]; then
+            echo "LLK CI image rebuild forced"
+            echo "llk-needs-build=true" >> "$GITHUB_OUTPUT"
+          elif docker manifest inspect "$TAG" > /dev/null 2>&1; then
             echo "LLK CI image exists"
             echo "llk-needs-build=false" >> "$GITHUB_OUTPUT"
           else
