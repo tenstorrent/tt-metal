@@ -41,9 +41,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
 
             - **dim = rank-2** (height):
               - BFLOAT16/FLOAT32 only
-              - ROW_MAJOR input with last dim (W) a multiple of 32: multi-core. The input is viewed as
-                ``(..., H, W/32, 32)`` so the reduction runs on the batch/channel path below
-                (output is produced in TILE internally and converted to ROW_MAJOR; ``sub_core_grids`` is supported)
+              - ROW_MAJOR input with W (last dim) a multiple of 32: multi-core (input is viewed as ``(..., H, W/32, 32)`` and reduced on the batch/channel path below; ``sub_core_grids`` is supported)
               - ROW_MAJOR input with W not a multiple of 32: internally tilized; runs single-core
               - TILE input: single-core
 
