@@ -46,6 +46,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const CoreRangeSet& available_cores) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::ProgramDescriptor desc;
+    TT_FATAL(input_tensor.is_allocated(), "all_gather unicast requires an allocated input buffer");
+    TT_FATAL(output_tensor.is_allocated(), "all_gather unicast requires an allocated output buffer");
     auto* mesh_device = input_tensor.device();
 
     ////////////////////////////////////////////////////////////////
@@ -110,11 +112,11 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     TT_FATAL(
         walk_geometry.has_value(),
         "all_gather unicast cannot cut {} B input pages and {} B output pages on the relay's read alignment",
-        input_tensor.buffer()->page_size(),
-        output_tensor.buffer()->page_size());
+        input_tensor.mesh_buffer().page_size(),
+        output_tensor.mesh_buffer().page_size());
     const all_gather_walk::WalkGeo& geo = *walk_geometry;
     const uint32_t unit_bytes = geo.unit_bytes;
-    const uint32_t num_elements = input_tensor.buffer()->num_pages() * geo.in_page_units / geo.element_units;
+    const uint32_t num_elements = input_tensor.mesh_buffer().num_pages() * geo.in_page_units / geo.element_units;
     const uint32_t packet_cap = compute_packet_cap(geo, output_tensor);
 
     ////////////////////////////////////////////////////////////////
@@ -382,6 +384,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         for (uint32_t dir = 0; dir < num_directions; ++dir) {
             if (dir_active(dir)) {
                 tt::tt_fabric::add_fabric_mux_v2_to_program(
+                    *mesh_device,
                     desc,
                     mux_config,
                     mux_core(link, dir),
