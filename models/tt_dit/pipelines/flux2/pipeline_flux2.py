@@ -39,9 +39,8 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 # The image sizes (width, height) a pipeline supports by default: the square sizes the inference
-# server offers. Other sizes work where each device's share of the latents passes the decoder's
-# checks: whole tiles of tokens where the VAE rows are not on the SP axis, and a whole number of
-# tiles of pixels per device in the fused group norm.
+# server offers. Other sizes work where the fused group norm accepts each device's share of the
+# latents, a whole number of tiles of pixels.
 _DEFAULT_RESOLUTIONS = ((1024, 1024), (2048, 2048))
 
 # The parallel layout per mesh shape: the DiT's SP and TP axes, the text encoder's TP axis, the VAE's
@@ -684,10 +683,14 @@ class Flux2Pipeline:
             # Latents arrive SP-sharded on dim=1 (patchified token dim). Redistribute to
             # whatever spatial sharding the VAE conv pyramid expects before unpatchifying.
             #
-            # H (token dim=1): gather SP, then re-shard to H axis if on a different axis.
+            # H (token dim=1): if the VAE rows are on the SP axis, the SP shards are already bands of
+            #   rows. Otherwise gather SP, and preprocess_and_unpatchify re-splits over the H axis.
             # W (spatial dim=2): can only be applied after unpatchify since H/W are interleaved
             #   in patchified tokens; preprocess_and_unpatchify splits it.
-            if self._vae_parallel.h_parallel is not None and self._vae_parallel.h_parallel.mesh_axis == sp_axis:
+            rows_on_sp = (
+                self._vae_parallel.h_parallel is not None and self._vae_parallel.h_parallel.mesh_axis == sp_axis
+            )
+            if rows_on_sp:
                 tt_latents = state.latents.data
             else:
                 tt_latents = self._ccl_manager.all_gather(
@@ -696,16 +699,9 @@ class Flux2Pipeline:
                     mesh_axis=sp_axis,
                     use_hyperparams=True,
                 )
-                if self._vae_parallel.h_parallel is not None:
-                    tt_latents = ttnn.mesh_partition(
-                        tt_latents,
-                        dim=1,
-                        cluster_axis=self._vae_parallel.h_parallel.mesh_axis,
-                        memory_config=tt_latents.memory_config(),
-                    )
 
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
-                tt_latents, height=latents_height, width=latents_width
+                tt_latents, height=latents_height, width=latents_width, split_height=not rows_on_sp
             )
 
             tracer = self._vae_decoder_tracers.get((width, height))
