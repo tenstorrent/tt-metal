@@ -712,8 +712,8 @@ void read_ternary_blocks_sync(
 /**
  * This write method is more granular, waiting on a row of output tiles
  * in the output CB before writing those out, rather than waiting on the entire block.
- * PIECE_W: the compute publishes the output PIECE_W tiles at a time (a whole row by default; a subblock with
- * compute.cpp's AGMM_OUT_PUSH_W); each piece is written and released as soon as it lands.
+ * PIECE_W: the compute publishes the output PIECE_W tiles at a time (a whole row by default; a subblock with the
+ * multicast path's direct output, out_piece_w); each piece is written and released as soon as it lands.
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t PIECE_W = N_block_tiles, typename TensorAccessorType>
 void write_block_sync_granular(

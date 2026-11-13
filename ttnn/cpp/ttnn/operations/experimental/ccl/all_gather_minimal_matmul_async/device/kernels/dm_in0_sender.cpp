@@ -11,9 +11,7 @@
 #include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
-#ifdef AGMM_MCAST
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
-#endif
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -32,11 +30,8 @@ constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(3);
 constexpr uint32_t M_block_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t K_block_tiles = get_compile_time_arg_val(5);
 constexpr uint32_t N_block_tiles = get_compile_time_arg_val(6);
-#ifdef AGMM_OUT_PUSH_W
-constexpr uint32_t out_piece_tiles = AGMM_OUT_PUSH_W;  // the compute publishes the output a subblock at a time
-#else
-constexpr uint32_t out_piece_tiles = N_block_tiles;
-#endif
+constexpr uint32_t out_piece_tiles = get_named_compile_time_arg_val("out_piece_w");  // the compute's output pieces
+constexpr bool mcast = get_named_compile_time_arg_val("mcast");  // blocks go along the row in one multicast
 constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(7);
 constexpr uint32_t in0_tile_size = get_compile_time_arg_val(8);
 constexpr uint32_t out_tile_size = get_compile_time_arg_val(9);
@@ -193,14 +188,13 @@ void kernel_main() {
 #endif
     }
 #ifdef FABRIC_2D
-    // This core's part in the Fabric2D exchange (program factory, append_fabric_2d_roles): whether it sends blocks,
-    // whether and to which fabric node it announces this device's entry, and whether it waits for the entry of the
-    // device it sends to.
+    // This core's part in the Fabric2D exchange (program factory, append_fabric_2d_roles): whether it sends blocks
+    // (then it waits for the entry of the device it sends to), and whether and to which fabric node it announces this
+    // device's entry.
     const bool fabric_sends = get_arg_val<uint32_t>(argidx++);
     const bool fabric_announces = get_arg_val<uint32_t>(argidx++);
     const uint16_t announce_mesh_id = get_arg_val<uint32_t>(argidx++);
     const uint8_t announce_chip_id = get_arg_val<uint32_t>(argidx++);
-    const bool fabric_waits = get_arg_val<uint32_t>(argidx++);
 #endif
 #endif
 
@@ -284,18 +278,17 @@ void kernel_main() {
     const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
 #endif
 
-#ifdef AGMM_MCAST
-    // Each in0 block goes along the row from its injector (x = 0) in one multicast write. The fabric cores receive it
-    // like any core and forward it from L1 below.
+    // With multicast each in0 block goes along the row from its injector (x = 0) in one multicast write; the fabric
+    // cores receive it like any core and forward it from L1 below. Otherwise the channel is absent.
     constexpr dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("in0_mcast_ct_offset"),
         get_named_compile_time_arg_val("in0_mcast_rt_offset")>
         in0_mcast_args;
     auto in0_tx = in0_mcast_args.optional_sender(noc_obj);
     auto in0_rx = in0_mcast_args.optional_receiver(noc_obj);
-#else
-    in0_valid_sem.set(VALID);
-#endif
+    if constexpr (!mcast) {
+        in0_valid_sem.set(VALID);
+    }
 
     // all gather
     volatile tt_l1_ptr uint32_t* out_ready_sem_backward_addr_ptr =
@@ -357,7 +350,7 @@ void kernel_main() {
     };
     // Whether the neighbour has entered (waiting for it if `wait`), consuming its announcement.
     auto neighbour_entered = [&](bool wait) {
-        if (barrier_sem == 0 || !fabric_waits) {
+        if (barrier_sem == 0 || !fabric_sends) {
             return true;
         }
         auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
@@ -378,57 +371,38 @@ void kernel_main() {
     bool joined_fabric = false;
     bool fabric_open = false;
     // Until the neighbour has entered, this core keeps receiving this device's own blocks and holds their forwards: a
-    // held block stays in this core's in0 buffer until its slot is reserved again, AGMM_IN0_CB_BLOCKS blocks later, so
-    // up to AGMM_IN0_CB_BLOCKS - 1 can wait. A late neighbour then stalls this row only after that many blocks.
+    // held block stays in this core's in0 buffer until its slot is reserved again, in0_cb_blocks blocks later, so up to
+    // in0_cb_blocks - 1 can wait. A late neighbour then stalls this row only after that many blocks.
     struct HeldForward {
         uint32_t m_tile, k_left_start, k_right_start, m_block_tiles, k_left_tiles, k_right_tiles, l1;
     };
-    constexpr uint32_t max_held = AGMM_IN0_CB_BLOCKS - 1;
+    constexpr uint32_t max_held = get_named_compile_time_arg_val("in0_cb_blocks") - 1;
     HeldForward held[max_held + 1];
     uint32_t num_held = 0;
     // Sends a held block on. The forward sender writes into rank - 1; the backward sender into rank + 1 (Ring, the
     // other half of the block) or, on a Linear line, from rank 0 into the last rank (the whole block).
     auto forward_held = [&](const HeldForward& b) {
-        if (in0_core_order_index == forward_in0_core_order_index) {
-            forward_half_block_to_fabric_neighbor(
-                noc_obj,
-                b.m_tile,
-                b.k_left_start,
-                b.m_block_tiles,
-                b.k_left_tiles,
-                b.k_right_tiles,
-                num_tiles_to_write_per_packet,
-                b.l1,
-                K_tiles,
-                in0_reader,
-                mux_connection_handle_forward,
-                pkt_hdrs_backward,
-                in0_tile_size,
-                out_ready_sem_injector_noc_addr_forward_in_pkt,
-                true,
-                M_tiles,
-                true);
-        } else {
-            forward_half_block_to_fabric_neighbor(
-                noc_obj,
-                b.m_tile,
-                is_linear ? b.k_left_start : b.k_right_start,
-                b.m_block_tiles,
-                b.k_left_tiles,
-                b.k_right_tiles,
-                num_tiles_to_write_per_packet,
-                b.l1,
-                K_tiles,
-                in0_reader,
-                mux_connection_handle_backward,
-                pkt_hdrs_forward,
-                in0_tile_size,
-                is_linear ? out_ready_sem_injector_noc_addr_forward_in_pkt
+        const bool to_previous = in0_core_order_index == forward_in0_core_order_index;
+        const bool whole_or_left = to_previous || is_linear;
+        forward_half_block_to_fabric_neighbor(
+            noc_obj,
+            b.m_tile,
+            whole_or_left ? b.k_left_start : b.k_right_start,
+            b.m_block_tiles,
+            b.k_left_tiles,
+            b.k_right_tiles,
+            num_tiles_to_write_per_packet,
+            b.l1,
+            K_tiles,
+            in0_reader,
+            to_previous ? mux_connection_handle_forward : mux_connection_handle_backward,
+            to_previous ? pkt_hdrs_backward : pkt_hdrs_forward,
+            in0_tile_size,
+            whole_or_left ? out_ready_sem_injector_noc_addr_forward_in_pkt
                           : out_ready_sem_injector_noc_addr_backward_in_pkt,
-                is_linear,
-                M_tiles,
-                true);
-        }
+            whole_or_left,
+            M_tiles,
+            true);
     };
 #endif
 
@@ -621,29 +595,23 @@ void kernel_main() {
                         k_block_right_tile,
                         k_block_right_tile + k_right_tiles,
                         k_right_tiles);
-                } else {
-#ifdef AGMM_MCAST
+                } else if constexpr (mcast) {
                     in0_rx->receive();
-#else
+                } else {
                     // Get from previous device
                     in0_receiver_sem.set(INVALID);
                     in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
                     in0_receiver_sem.wait(VALID);
-#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_in0.push_back(in0_block_num_tiles);
-#ifdef AGMM_MCAST
-                if (is_injector_core) {
-                    in0_tx->send(in0_start_address, in0_start_address, current_block_bytes);
-                }
-                constexpr bool relay_chain = false;
-#else
-                constexpr bool relay_chain = true;
-#endif
-                if (relay_chain && !is_sink_core) {
+                if constexpr (mcast) {
+                    if (is_injector_core) {
+                        in0_tx->send(in0_start_address, in0_start_address, current_block_bytes);
+                    }
+                } else if (!is_sink_core) {
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
 
