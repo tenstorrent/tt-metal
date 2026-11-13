@@ -1,0 +1,29 @@
+# Hy4-Preview (HYV4ForCausalLM, 78 layers: layer 0 dense, 77 MoE) on a 4x8 Blackhole Galaxy.
+# Same MoE geometry as models/common/moe/configs/glm5.yaml (hidden 6144, 256 experts, top-8, moe inter 2048, sigmoid + e_score_correction_bias);
+# differs in routed_scaling_factor (2.827), swiglu_limit (10.0, routed and shared), mesh (4x8, EP over all 32 chips = 8 experts per chip).
+# Source of truth: /mnt/tt-data/Hy4-Preview/config.json (the oracle: reference/oracle.py router()).
+mesh_shape: [4, 8]
+cluster_axis: 0
+batch_per_device: 1      # tokens per device: B=4 (U=1: one user per mesh row) -> 1; B=8 -> 2; 4 users per row -> 4
+hidden_size: 6144
+select_experts_k: 8
+num_routed_experts: 256
+num_shared_experts: 1
+has_bias: false
+
+n_group: 1
+score_func: sigmoid
+routed_scaling_factor: 2.827
+score_correction_bias: true
+
+compute:
+  intermediate_size: 2048
+  activation_type: SILU
+  swiglu_limit: 10.0   # clamp(up, +-10), min(gate, 10) before silu(gate) * up (oracle.swiglu, conv.swiglu_clamp=True)
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential
+  shared_expert_ids_to_devices: fully_replicated
