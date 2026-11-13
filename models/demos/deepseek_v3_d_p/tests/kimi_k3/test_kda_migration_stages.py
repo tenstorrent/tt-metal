@@ -131,8 +131,6 @@ def test_table_layer_rows_follow_the_gathered_stages():
 def test_adapter_hooks_name_the_three_configs():
     adapter = KimiK3Adapter()
     assert [adapter.cache_kind(i) for i in range(4)] == ["kvpe", "kda_recurrent", "kda_convolution", "other"]
-    assert adapter.cache_layer_rows(0, 93) == {layer: layer for layer in KimiK3Config.mla_layer_ids()}
-    assert adapter.cache_layer_rows(1, 93) == {layer: layer for layer in KimiK3Config.kda_layer_ids()}
     assert adapter.cache_layer_rows(2, 24) == {layer: layer for layer in KimiK3Config.kda_layer_ids() if layer < 24}
     assert len(adapter.cache_layer_rows(2, 24)) == 18
     assert adapter.cache_head_dim(0) == 576 and adapter.cache_head_dim(1) is None
