@@ -139,9 +139,10 @@ def test_tilize_with_val_padding(device):
     # Create a tensor to tilize with value padding
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    # Tilize the tensor with value padding
+    # Tilize the tensor, padding its last dimension to 64 with zeros
     tilized_tensor = ttnn.tilize_with_val_padding(input_tensor, output_tensor_shape=[1, 1, 64, 64], pad_value=0.0)
-    logger.info("Tilized Tensor with Value Padding Shape:", tilized_tensor.shape)
+    logger.info(f"Tilized Tensor Shape: {tilized_tensor.shape}")  # Shape([1, 1, 64, 32])
+    logger.info(f"Tilized Tensor Padded Shape: {tilized_tensor.padded_shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_fill_rm(device):
