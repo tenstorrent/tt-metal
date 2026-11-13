@@ -14,7 +14,7 @@
 
 // matmul_kernel_ttsync of the kernel's JIT inputs
 constexpr bool llk_unpack_AB_matmul_kernel_ttsync() {
-    return matmul_kernel_ttsync(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE);
+    return matmul_kernel_ttsync(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE, unpack_src_format);
 }
 
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul unpack is

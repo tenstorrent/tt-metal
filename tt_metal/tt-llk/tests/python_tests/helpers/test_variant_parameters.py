@@ -226,19 +226,25 @@ class MATMUL_PRODUCTION(TemplateParameter):
         )
     )
 
-    def __init__(self, prod_dir: int = 0):
+    def __init__(self, prod_dir: int = 0, kernel_formats: tuple = ()):
         self.prod_dir = prod_dir
         # LLK_MATMUL_PROD_NO_ELIDE=1: the requested fidelity, for a bit-exact comparison against the phase elision
         self.no_elide = os.environ.get("LLK_MATMUL_PROD_NO_ELIDE") == "1"
+        # every CB format of the key's production kernel (MATMUL_KERNEL_FORMATS, the formats matmul_kernel_ttsync reads)
+        self.kernel_formats = tuple(kernel_formats)
 
     def __repr__(self) -> str:
-        return (
-            f"MATMUL_PRODUCTION({self.prod_dir}{', no_elide' if self.no_elide else ''})"
-        )
+        return f"MATMUL_PRODUCTION({self.prod_dir}{', no_elide' if self.no_elide else ''}{', ' + '+'.join(self.kernel_formats) if self.kernel_formats else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
             f"#define MATMUL_PRODUCTION\nconstexpr std::uint32_t MATMUL_PROD_DIR = {self.prod_dir};"
+            + "\nconstexpr std::uint8_t MATMUL_KERNEL_FORMATS[] = {"
+            + ", ".join(
+                f"static_cast<std::uint8_t>(DataFormat::{f})"
+                for f in (self.kernel_formats or ("Invalid",))
+            )
+            + "};"
             + ("\n#define MATMUL_PROD_NO_ELIDE" if self.no_elide else "")
         )
 
@@ -256,7 +262,61 @@ class MATMUL_PRODUCTION(TemplateParameter):
         )
 
     @staticmethod
+    def kernel_formats_of(formats, math_fidelity, dest_sync, dest_acc, dims) -> tuple:
+        """Every CB format of the key's production kernel: in1, in0 and the output, plus those the kernel adds (partials, bias,
+        scratch) from LLK_MATMUL_KERNEL_FORMATS_MAP, a TSV with in1, in0, out, fid, fp32, full, rt, ct, kt and unpack_formats as
+        mm-census census_prod/keys_cbfmt.tsv, and LLK_MATMUL_KERNEL_FORMATS (DataFormat names joined by +).
+        """
+        own = (
+            formats.input_format.name,
+            formats.input_format_B.name,
+            formats.output_format.name,
+        )
+        extra = tuple(
+            f for f in os.environ.get("LLK_MATMUL_KERNEL_FORMATS", "").split("+") if f
+        )
+        path = os.environ.get("LLK_MATMUL_KERNEL_FORMATS_MAP")
+        if not path:
+            return tuple(dict.fromkeys(own + extra))
+        import csv
+
+        key = (
+            formats.input_format.name,
+            formats.input_format_B.name,
+            formats.output_format.name,
+            math_fidelity.name,
+            str(dest_acc == DestAccumulation.Yes),
+            str(dest_sync == DestSync.Full),
+            str(dims.r_dimm),
+            str(dims.c_dimm),
+            str(dims.k_dimm),
+        )
+        for r in csv.DictReader(open(path), delimiter="\t"):
+            if (
+                r["in1"],
+                r["in0"],
+                r["out"],
+                r["fid"],
+                r["fp32"],
+                r["full"],
+                r["rt"],
+                r["ct"],
+                r["kt"],
+            ) == key:
+                return tuple(
+                    dict.fromkeys(
+                        own + extra + tuple(sorted(set(r["unpack_formats"].split())))
+                    )
+                )
+        return tuple(dict.fromkeys(own + extra))
+
+    @staticmethod
     def apply(templates: list, runtimes: list, formats) -> list:
+        """templates without the opt-ins, plus MATMUL_PRODUCTION with the direction of the block (CRK_TILE_DIMM)."""
+        return MATMUL_PRODUCTION.apply_acc(templates, runtimes, formats, None)
+
+    @staticmethod
+    def apply_acc(templates: list, runtimes: list, formats, dest_acc) -> list:
         """templates without the opt-ins, plus MATMUL_PRODUCTION with the direction of the block (CRK_TILE_DIMM)."""
         by_name = {type(p).__name__: p for p in list(templates) + list(runtimes)}
         dims = by_name["CRK_TILE_DIMM"]
@@ -277,7 +337,22 @@ class MATMUL_PRODUCTION(TemplateParameter):
             for p in templates
             if type(p).__name__ not in MATMUL_PRODUCTION.OPT_INS
             and type(p).__name__ != "MATMUL_PRODUCTION"
-        ] + [MATMUL_PRODUCTION(d)]
+        ] + [
+            MATMUL_PRODUCTION(
+                d,
+                MATMUL_PRODUCTION.kernel_formats_of(
+                    formats,
+                    by_name["MATH_FIDELITY"].math_fidelity,
+                    (
+                        by_name["DEST_SYNC"].dest_sync
+                        if "DEST_SYNC" in by_name
+                        else DestSync.Half
+                    ),
+                    dest_acc,
+                    dims,
+                ),
+            )
+        ]
 
 
 @dataclass

@@ -1121,10 +1121,12 @@ class TestConfig:
             os.environ.get("LLK_MATMUL_PRODUCTION") == "1"
             and os.path.basename(str(test_name)) == "matmul_test.cpp"
         ):
-            templates = MATMUL_PRODUCTION.apply(templates, runtimes, formats)
+            templates = MATMUL_PRODUCTION.apply_acc(
+                templates, runtimes, formats, dest_acc
+            )
             for run_templates, run_runtimes, _ in getattr(self, "run_configs", []):
-                run_templates[:] = MATMUL_PRODUCTION.apply(
-                    run_templates, run_runtimes, formats
+                run_templates[:] = MATMUL_PRODUCTION.apply_acc(
+                    run_templates, run_runtimes, formats, dest_acc
                 )
 
         # Artefact directory is always relative to ARTEFACTS_DIR. An absolute

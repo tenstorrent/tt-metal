@@ -79,15 +79,32 @@ inline bool matmul_call_reuse_a(const std::uint32_t ct_dim, const std::uint32_t 
 // the block holds the 32-bit operand and streams the other, which halves the unpack stream of a block of 4 tiles or more where the held operand
 // is reused (>= 2 rows or columns). The default direction already does it when the 32-bit operand is in0 and ct_dim >= rt_dim, or in1 and
 // ct_dim < rt_dim.
-// The kernels whose plain matmul_block calls run the ttsync unpack: above LoFi, except HiFi4 at full sync with a 32-bit DEST.
-constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest)
-{
-    return fidelity != MathFidelity::LoFi && !(fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest);
-}
-
 constexpr bool matmul_format_is_32bit(const DataFormat f)
 {
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
+}
+
+// The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): above LoFi, except HiFi4 at
+// full sync with a 32-bit DEST, and HiFi2 at half sync with a 32-bit DEST in a kernel holding a Bfp8_b and a 32-bit format (a Bfp8_b SrcA
+// block there measured slower under ttsync).
+template <std::size_t N>
+constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest, const std::uint8_t (&formats)[N])
+{
+    if (fidelity == MathFidelity::LoFi || (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest))
+    {
+        return false;
+    }
+    if (fidelity == MathFidelity::HiFi2 && !full_sync && fp32_dest)
+    {
+        bool bfp8 = false, wide = false;
+        for (const std::uint8_t f : formats)
+        {
+            bfp8 = bfp8 || f == static_cast<std::uint8_t>(DataFormat::Bfp8_b);
+            wide = wide || matmul_format_is_32bit(static_cast<DataFormat>(f));
+        }
+        return !(bfp8 && wide);
+    }
+    return true;
 }
 constexpr bool matmul_format_is_16bit(const DataFormat f)
 {

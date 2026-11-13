@@ -118,7 +118,7 @@ __attribute__((noinline)) int main(void) // not in the naked _start (no stack fr
     _llk_unpack_AB_matmul_ttsync_restore_();
 #elif defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_PRODUCTION)
     // as the firmware: only a kernel the rule turns on restores
-    if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en))
+    if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS))
     {
         _llk_unpack_AB_matmul_ttsync_restore_();
     }

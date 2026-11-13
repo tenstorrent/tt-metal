@@ -153,7 +153,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
 #if defined(MATMUL_PRODUCTION)
     // a plain call's kernel rule, the function llk_unpack_AB_matmul_kernel_ttsync calls
-    constexpr std::uint32_t unpack_auto_ttsync = matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en) ? 1 : 0;
+    constexpr std::uint32_t unpack_auto_ttsync =
+        matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) ? 1 : 0;
 #else
 #ifdef MATMUL_UNPACK_TTSYNC_EXCL
     constexpr std::uint32_t unpack_ttsync_req = 2;
