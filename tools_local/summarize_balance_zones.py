@@ -20,7 +20,9 @@ PREFIXES = ("B-", "R-", "C-", "W-", "G-")
 ORDER = [
     "R-COST",
     "B-COSTS",
+    "B-ROWS",
     "B-EXCHANGE",
+    "B-SWAPS",
     "B-ASSIGN",
     "B-TABLES",
     "R-RANGE",
