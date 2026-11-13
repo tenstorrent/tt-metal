@@ -253,6 +253,7 @@ bool can_use_reshard(
 
 Tensor typecast_keeping_memory_config(
     const Tensor& tensor, DataType dtype, std::string_view op_name, const std::optional<CoreRangeSet>& sub_core_grids) {
+    TT_FATAL(tensor.is_allocated(), "{}: cannot change the dtype of a deallocated tensor", op_name);
     TT_FATAL(
         tensor.layout() == Layout::TILE || (dtype != DataType::BFLOAT8_B && dtype != DataType::BFLOAT4_B),
         "{}: dtype {} requires TILE_LAYOUT, but the tensor is {}",
@@ -287,6 +288,7 @@ Tensor to_memory_config(
         if (dtype.has_value() && dtype.value() != tensor.dtype()) {
             // The tensor is already in the requested memory config, so honour the dtype by typecasting
             // instead of silently dropping it.
+            // to_memory_config takes no sub_core_grids, so this cast always runs on the default grid.
             return typecast_keeping_memory_config(tensor, dtype.value(), "ttnn::to_memory_config");
         }
         return tensor;
