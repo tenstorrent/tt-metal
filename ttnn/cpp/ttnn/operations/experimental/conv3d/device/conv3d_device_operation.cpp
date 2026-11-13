@@ -12,6 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -172,6 +173,58 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
             args.output_channels);
     }
 
+    const auto& d2s = args.output_depth_to_space;
+    const uint32_t d2s_factor = d2s[0] * d2s[1] * d2s[2];
+    if (d2s_factor > 1 || args.output_trim_t_front > 0) {
+        TT_FATAL(
+            d2s[0] > 0 && d2s[1] > 0 && d2s[2] > 0 && args.output_channels % d2s_factor == 0,
+            "output_depth_to_space ({}, {}, {}) must be positive and divide output_channels ({})",
+            d2s[0],
+            d2s[1],
+            d2s[2],
+            args.output_channels);
+        const uint32_t d2s_C = args.output_channels / d2s_factor;
+        const uint32_t c_out_block = args.config.C_out_block > 0
+                                         ? args.config.C_out_block
+                                         : tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            d2s_C % tt::constants::TILE_WIDTH == 0 && args.output_channels % c_out_block == 0 &&
+                (c_out_block % d2s_C == 0 || d2s_C % c_out_block == 0) && c_out_block / d2s_C <= 8,
+            "Depth-to-space output needs output_channels / ({} * {} * {}) = {} to be a multiple of {} and to nest "
+            "with C_out_block ({}), with at most 8 groups per block",
+            d2s[0],
+            d2s[1],
+            d2s[2],
+            d2s_C,
+            tt::constants::TILE_WIDTH,
+            c_out_block);
+        TT_FATAL(
+            args.output_pad_h == 0 && args.output_pad_w == 0,
+            "Depth-to-space output does not support padded-output mode");
+        const auto [T_out_conv, H_out_conv, W_out_conv] = detail::compute_output_dims(
+            input_shape[1], input_shape[2], input_shape[3], args.padding, args.stride, args.kernel_size, args.dilation);
+        TT_FATAL(
+            args.output_trim_t_front < T_out_conv * d2s[0],
+            "output_trim_t_front ({}) must be less than the unpacked output frames ({})",
+            args.output_trim_t_front,
+            T_out_conv * d2s[0]);
+
+        // The reader pushes each block's patches in TILE_HEIGHT-page chunks into a vol2col_rm ring of
+        // min(n, 2 * TILE_HEIGHT) pages when n is not tile aligned. For n > 2 * TILE_HEIGHT those pushes
+        // do not divide the ring, a chunk straddles its end and the device hangs. Checked on this path only.
+        const uint32_t num_patches = args.config.T_out_block * args.config.H_out_block * args.config.W_out_block;
+        TT_FATAL(
+            num_patches % tt::constants::TILE_HEIGHT == 0 || num_patches <= 2 * tt::constants::TILE_HEIGHT,
+            "T_out_block * H_out_block * W_out_block ({} * {} * {} = {}) must be a multiple of {} or at most {}: "
+            "other blockings overrun the vol2col CB ring and hang the device.",
+            args.config.T_out_block,
+            args.config.H_out_block,
+            args.config.W_out_block,
+            num_patches,
+            tt::constants::TILE_HEIGHT,
+            2 * tt::constants::TILE_HEIGHT);
+    }
+
     // Validate weight shape and config arguments
     const auto patch_size =
         args.kernel_size[0] * args.kernel_size[1] * args.kernel_size[2] * input_tensor_a.logical_shape()[4];
@@ -326,6 +379,42 @@ void Conv3dDeviceOperation::validate_on_program_cache_hit(
             2 * sizeof(uint32_t),
             offset_tensor.buffer()->aligned_page_size());
     }
+
+    if (tensor_args.residual_tensor.has_value()) {
+        // The writer reads residual rows with the output's page index and channel offset, and compute
+        // adds them as bf16 pages after the untilize.
+        const auto& residual = tensor_args.residual_tensor.value();
+        TT_FATAL(residual.storage_type() == StorageType::DEVICE, "Residual tensor must be on device");
+        TT_FATAL(residual.buffer() != nullptr, "Residual tensor must be allocated in a buffer on device");
+        TT_FATAL(residual.layout() == Layout::ROW_MAJOR, "Residual tensor must be row-major");
+        TT_FATAL(
+            residual.dtype() == DataType::BFLOAT16 && input_tensor_a.dtype() == DataType::BFLOAT16 &&
+                args.dtype == DataType::BFLOAT16,
+            "Residual epilogue needs bfloat16 input, residual and output; got input {}, residual {}, output {}",
+            input_tensor_a.dtype(),
+            residual.dtype(),
+            args.dtype);
+        TT_FATAL(
+            residual.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+                residual.buffer()->is_dram(),
+            "Residual tensor must be DRAM interleaved");
+        TT_FATAL(
+            args.output_pad_h == 0 && args.output_pad_w == 0 && d2s_factor == 1 && args.output_trim_t_front == 0,
+            "Residual epilogue does not support output padding or depth-to-space");
+        const auto output_spec = compute_output_specs(args, tensor_args);
+        TT_FATAL(
+            residual.padded_shape() == output_spec.padded_shape(),
+            "Residual shape {} must match the output shape {}",
+            residual.padded_shape(),
+            output_spec.padded_shape());
+        const uint32_t C_out_block = args.config.C_out_block > 0
+                                         ? args.config.C_out_block
+                                         : tt::round_up(args.output_channels, tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            (C_out_block * residual.element_size()) % tt::tt_metal::hal::get_dram_alignment() == 0,
+            "Residual epilogue needs C_out_block ({}) rows aligned to DRAM reads",
+            C_out_block);
+    }
 }
 
 // The framework runs the hit validator on every call, so the L1 plan is only derived here, on a miss:
@@ -354,6 +443,17 @@ tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
     // Padded-output mode: allocate a spatially padded output; the writer fills only the interior.
     H_out += 2 * args.output_pad_h;
     W_out += 2 * args.output_pad_w;
+
+    // Depth-to-space output: C_out = (p1, p2, p3, C) is unpacked into T, H and W.
+    const auto& d2s = args.output_depth_to_space;
+    const uint32_t d2s_factor = d2s[0] * d2s[1] * d2s[2];
+    if (d2s_factor > 1 || args.output_trim_t_front > 0) {
+        C_out /= d2s_factor;
+        padded_C_out = C_out;
+        T_out = (T_out * d2s[0]) - args.output_trim_t_front;
+        H_out *= d2s[1];
+        W_out *= d2s[2];
+    }
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
     ttnn::Shape padded_output_shape({N, T_out, H_out, W_out, padded_C_out});
@@ -420,6 +520,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv3dDeviceOperation
     if (tensor_args.weight_lo_tensor.has_value()) {
         input_tensors.push_back(tensor_args.weight_lo_tensor.value());
     }
+    if (tensor_args.residual_tensor.has_value()) {
+        input_tensors.push_back(tensor_args.residual_tensor.value());
+    }
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
 
@@ -451,7 +554,10 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     const std::optional<Tensor>& pad_offset_tensor,
     uint32_t output_pad_h,
     uint32_t output_pad_w,
-    const std::optional<Tensor>& weight_lo_tensor) {
+    const std::optional<Tensor>& weight_lo_tensor,
+    const std::array<uint32_t, 3>& output_depth_to_space,
+    uint32_t output_trim_t_front,
+    const std::optional<Tensor>& residual_tensor) {
     using OperationType = ttnn::experimental::prim::Conv3dDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -475,7 +581,9 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .logical_h_mask = logical_h_mask,
         .logical_w_mask = logical_w_mask,
         .output_pad_h = output_pad_h,
-        .output_pad_w = output_pad_w};
+        .output_pad_w = output_pad_w,
+        .output_depth_to_space = output_depth_to_space,
+        .output_trim_t_front = output_trim_t_front};
     TT_FATAL(
         config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
@@ -491,7 +599,28 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .bias_tensor = bias_tensor,
         .halo_buffer = halo_buffer,
         .pad_offset_tensor = pad_offset_tensor,
-        .weight_lo_tensor = weight_lo_tensor};
+        .weight_lo_tensor = weight_lo_tensor,
+        .residual_tensor = residual_tensor};
+
+    if (residual_tensor.has_value() &&
+        !ttnn::experimental::prim::residual_epilogue_fits(operation_attributes, tensor_args)) {
+        // The epilogue's CBs would cost this blocking its prefetch shard or its L1 headroom (halo mode refuses
+        // it outright): run the plain conv and add the residual separately, as the unfused caller does. The
+        // residual is still held to the fused path's checks, so both paths accept the same arguments.
+        OperationType::validate_on_program_cache_hit(operation_attributes, tensor_args);
+        log_debug(
+            tt::LogOp,
+            "conv3d: residual epilogue does not fit L1 at T_out_block={}, H_out_block={}, W_out_block={}, "
+            "C_in_block={}, C_out_block={}; adding the residual separately",
+            config.T_out_block,
+            config.H_out_block,
+            config.W_out_block,
+            config.C_in_block,
+            config.C_out_block);
+        tensor_args.residual_tensor = std::nullopt;
+        const Tensor output = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+        return ttnn::add(residual_tensor.value(), output);
+    }
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

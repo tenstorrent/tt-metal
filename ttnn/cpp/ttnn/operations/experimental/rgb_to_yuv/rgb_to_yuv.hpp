@@ -87,6 +87,10 @@ inline prim::YUVCoefficients yuv_coefficients(YUVColorSpace color_space, RGBRang
 // explicit `coefficients` matrix, which overrides the color_space/range choice.
 // memory_config: output memory config; defaults to the input's. Must be
 //                interleaved — sharded output is not supported.
+// input_patch_size: 0 for the CHWT input above.  An even p >= 2 instead takes
+//                a patchified (1, T, H/p, W/p, 3*p*p) row-major tensor whose
+//                channel index is c*p*p + r*p + q for pixel (row h*p + q,
+//                column w*p + r), and unpatchifies it while reading.
 std::tuple<Tensor, Tensor, Tensor> rgb_to_yuv(
     const Tensor& input,
     prim::YUVFormat format = prim::YUVFormat::YUV420Planar,
@@ -95,7 +99,8 @@ std::tuple<Tensor, Tensor, Tensor> rgb_to_yuv(
     YUVRange output_range = YUVRange::Limited,
     const std::optional<prim::YUVCoefficients>& coefficients = std::nullopt,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    bool wide_rows = false);
+    bool wide_rows = false,
+    uint32_t input_patch_size = 0);
 
 // BT.601 / BT.709 coefficients for input ∈ [-1, 1] → limited-range uint8.
 inline prim::YUVCoefficients yuv_bt601_coefficients() {

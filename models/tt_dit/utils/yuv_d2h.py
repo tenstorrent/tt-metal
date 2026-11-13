@@ -298,6 +298,7 @@ def fast_device_to_host_yuv(
     logical_w: int | None = None,
     use_persistent_buffer: bool = True,
     defer: bool = False,
+    input_patch_size: int = 0,
 ) -> np.ndarray | Callable[[], np.ndarray] | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
@@ -359,6 +360,12 @@ def fast_device_to_host_yuv(
             returns; what is left is host work the caller can overlap with the
             next frame's device work.  Calling it yields the frame.
 
+        input_patch_size: ``0`` (default) for BCTHW input.  An even ``p >= 2``
+            takes the patchified ``(1, T, H/p, W/p, 3*p*p)`` tensor instead, with
+            channels ordered ``(c, w_in_patch, h_in_patch)`` (the LTX VAE
+            ``conv_out`` layout), and ``rgb_to_yuv`` unpatchifies it while
+            reading, which skips the reshape + permute to CHWT.  Single-host only.
+
     Returns:
         ``np.ndarray`` of shape ``(T, H'*W' + 2*(H'/2 * W'/2))``, dtype uint8,
         where ``H'``/``W'`` are ``logical_h``/``logical_w`` when set and
@@ -375,7 +382,16 @@ def fast_device_to_host_yuv(
 
     # NOTE: ttnn ``.shape`` on a multi-device sharded tensor returns the per-shard (local) shape
     mesh_shape = tuple(mesh_device.shape)
-    B, C, T, h_per, w_per = tt_video_BCTHW.shape
+    if input_patch_size:
+        if ttnn.using_distributed_env():
+            msg = "fast_device_to_host_yuv: input_patch_size is single-host only"
+            raise ValueError(msg)
+        p = input_patch_size
+        B, T, hp_per, wp_per, Cp = tt_video_BCTHW.shape
+        assert Cp == 3 * p * p, f"patchified input needs 3*p*p={3 * p * p} channels, got {Cp}"
+        C, h_per, w_per = 3, hp_per * p, wp_per * p
+    else:
+        B, C, T, h_per, w_per = tt_video_BCTHW.shape
     assert B == 1, f"fast_device_to_host_yuv requires B=1, got {B}"
     assert C == 3, f"fast_device_to_host_yuv requires C=3 (RGB), got {C}"
 
@@ -461,17 +477,23 @@ def fast_device_to_host_yuv(
         h_per % 2 == 0 and w_per % 2 == 0
     ), f"per-shard H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
 
-    # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
-    tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
-    if debug:
-        print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
+    if input_patch_size:
+        # 1+2. The kernel reads the patchified shard directly.
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(
+            tt_video_BCTHW, coefficients=coefficients, wide_rows=True, input_patch_size=input_patch_size
+        )
+    else:
+        # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
+        tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
+        if debug:
+            print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
 
-    tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
-    if debug:
-        print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
+        tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
+        if debug:
+            print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
-    # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=True)
+        # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=True)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")

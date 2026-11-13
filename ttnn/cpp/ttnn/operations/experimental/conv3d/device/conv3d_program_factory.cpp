@@ -66,6 +66,7 @@ Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, co
     g.partial_tile_size = tt::tile_size(g.use_fp32_partials ? tt::DataFormat::Float32 : data_format);
     g.use_bias = tensor_args.bias_tensor.has_value();
     g.operand_split = config.enable_fp32_operand_split;
+    g.use_residual = tensor_args.residual_tensor.has_value();
 
     g.padded_patch_size_bytes = tt::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;
     g.C_in_block_bytes = C_in_block * dtype_bytes;
@@ -134,7 +135,8 @@ Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, co
     return g;
 }
 
-Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
+// plan_l1 without its span check: never throws, so residual_epilogue_fits can compare two plans.
+static Conv3dL1Plan plan_l1_unchecked(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
     // The static circular buffers at a given out_subblock_h: every CB but the prefetch shard.
     auto static_cb_bytes_for = [&](uint32_t sub_h) -> uint32_t {
         uint32_t bytes = g.vol2col_rm_pages * g.padded_patch_size_bytes +     // vol2col_rm
@@ -156,6 +158,10 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
             bytes += 2 * sub_h * g.matmul_K_t * g.tile_size +
                      g.matmul_K_t * g.matmul_N_t * g.tile_size;  // x_hi, x_lo, weight_lo
         }
+        if (g.use_residual) {
+            // residual_rm, and untilized_rm at its full-block (non-streaming) size
+            bytes += 2 * g.matmul_M_t * g.matmul_N_t * g.tile_size;
+        }
         return bytes;
     };
 
@@ -176,24 +182,7 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
         plan.out_subblock_h = shrunk;
     }
 
-    // The loop stops at out_subblock_h=1 whether or not the CBs fit. A blocking whose static CBs cannot be
-    // placed below the top of L1 at all fails here, where the message can say what was asked for, rather than at
-    // enqueue where only the region clash is reported. One that fits the span but not the planning budget runs
-    // with less than the headroom left for L1 buffers; nothing warns, and a clash with a live L1 buffer is
-    // reported by the enqueue-time region check.
     plan.static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
-    TT_FATAL(
-        plan.static_cb_bytes <= budget.span,
-        "conv3d: the static circular buffers need {} B at out_subblock_h={} (M_t={}, K_t={}, N_t={}, C_in blocks={}) "
-        "but only {} B of L1 lie above the allocator base; shrink the blocking (C_in_block, C_out_block, "
-        "T/H/W_out_block)",
-        plan.static_cb_bytes,
-        plan.out_subblock_h,
-        g.matmul_M_t,
-        g.matmul_K_t,
-        g.matmul_N_t,
-        g.C_in_num_blocks,
-        budget.span);
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation: gathers the spatial receptive field from DRAM
     // once per spatial block, then vol2col reads from L1. Budget: what the static CBs leave of the planning
@@ -228,6 +217,29 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
     return plan;
 }
 
+Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
+    Conv3dL1Plan plan = plan_l1_unchecked(g, budget);
+    // The loop stops at out_subblock_h=1 whether or not the CBs fit. A blocking whose static CBs cannot be
+    // placed below the top of L1 at all fails here, where the message can say what was asked for, rather than at
+    // enqueue where only the region clash is reported. One that fits the span but not the planning budget runs
+    // with less than the headroom left for L1 buffers; nothing warns, and a clash with a live L1 buffer is
+    // reported by the enqueue-time region check.
+    TT_FATAL(
+        plan.static_cb_bytes <= budget.span,
+        "conv3d: the static circular buffers need {} B at out_subblock_h={} (M_t={}, K_t={}, N_t={}, C_in blocks={}) "
+        "but only {} B of L1 lie above the allocator base; shrink the blocking (C_in_block, C_out_block, "
+        "T/H/W_out_block)",
+        plan.static_cb_bytes,
+        plan.out_subblock_h,
+        g.matmul_M_t,
+        g.matmul_K_t,
+        g.matmul_N_t,
+        g.C_in_num_blocks,
+        budget.span);
+
+    return plan;
+}
+
 Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device) {
     // Circular buffers are placed upward from the allocator's L1 base and L1 buffers are allocated downward
     // from the top of L1. The plan keeps a fixed headroom below the top for the L1 buffers that are live when
@@ -250,6 +262,28 @@ Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device) {
 Conv3dL1Plan select_l1_plan(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
     return plan_l1(
         derive_cb_geometry(operation_attributes, tensor_args), conv3d_l1_cb_budget(tensor_args.input_tensor.device()));
+}
+
+bool residual_epilogue_fits(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
+    if (!tensor_args.residual_tensor.has_value()) {
+        return true;
+    }
+    // The residual_rm and untilized_rm CBs take L1 from the prefetch shard and the L1 tensor headroom. Fuse only
+    // when they cost neither: the static CBs still fit (the planning budget, where the plain plan fits it), and
+    // a plain plan that prefetches still prefetches. Otherwise halo mode would refuse the blocking and the
+    // non-halo reader would silently drop to the direct path.
+    Conv3dCbGeometry geometry = derive_cb_geometry(operation_attributes, tensor_args);
+    const Conv3dL1Budget budget = conv3d_l1_cb_budget(tensor_args.input_tensor.device());
+    const Conv3dL1Plan fused = plan_l1_unchecked(geometry, budget);
+    geometry.use_residual = false;
+    const Conv3dL1Plan plain = plan_l1_unchecked(geometry, budget);
+    if (fused.static_cb_bytes > budget.span) {
+        return false;
+    }
+    if (plain.static_cb_bytes <= budget.planning && fused.static_cb_bytes > budget.planning) {
+        return false;
+    }
+    return fused.prefetch_shard || !plain.prefetch_shard;
 }
 
 tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
@@ -304,6 +338,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     auto tile_size = tt::tile_size(data_format);
 
     bool use_bias = bias_tensor.has_value();
+    const bool use_residual = tensor_args.residual_tensor.has_value();
 
     // Extract compute kernel config early (needed for CB format decisions)
     [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -506,6 +541,36 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             .core_ranges = CoreRangeSet(core_grid),
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(cb_bias_tiled_id),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
+    }
+
+    // Residual epilogue: the writer stages a whole output block of residual rows; compute untilizes
+    // into cb_untilized_rm and adds the two into cb_matmul_result_rm. Streaming untilizes one
+    // subblock at a time and adds it right away, so cb_untilized_rm only needs that subblock.
+    uint32_t cb_residual_rm_id = 32;
+    uint32_t cb_untilized_rm_id = 32;
+    if (use_residual) {
+        const uint32_t untilized_rm_tiles =
+            enable_streaming_output ? out_subblock_h * matmul_N_t : matmul_M_t * matmul_N_t;
+        cb_residual_rm_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = matmul_M_t * matmul_N_t * tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_residual_rm_id),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
+        cb_untilized_rm_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = untilized_rm_tiles * tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_untilized_rm_id),
                 .data_format = data_format,
                 .page_size = tile_size,
             }}},
@@ -990,7 +1055,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         cb_x_hi_tiled_id,
         cb_x_lo_tiled_id,
         cb_weight_lo_tiled_id,
-        (uint32_t)operand_split};
+        (uint32_t)operand_split,
+        (uint32_t)use_residual,
+        cb_residual_rm_id,
+        cb_untilized_rm_id};
 
     // Deliver every CB the fp32 tail reads UnpackToDestFp32 -- interm (untilize/bias read-back),
     // bias, and, with multiple C_in blocks, reduction + acc. Without the flag the unpacker rounds
@@ -1054,12 +1122,20 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         operation_attributes.output_pad_h,
         operation_attributes.output_pad_w,
         cb_weight_lo_tiled_id,
-        (uint32_t)operand_split};
+        (uint32_t)operand_split,
+        operation_attributes.output_depth_to_space[0],
+        operation_attributes.output_depth_to_space[1],
+        operation_attributes.output_depth_to_space[2],
+        operation_attributes.output_trim_t_front,
+        (uint32_t)use_residual,
+        cb_residual_rm_id};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(use_residual ? tensor_args.residual_tensor.value().buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
@@ -1076,6 +1152,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* weight_lo_buffer = operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr;
+    tt::tt_metal::Buffer* residual_buffer = use_residual ? tensor_args.residual_tensor.value().buffer() : nullptr;
 
     // Per-core work assignments. Unassigned cores retain empty work ranges.
     struct CoreWork {
@@ -1392,10 +1469,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 (uint32_t)cw.is_reducer,
                 num_workers});
 
-        // Writer pos[0..2] are the output, weight, and bias buffer addresses. nullptr bias becomes
+        // Writer pos[0..4] are the output, weight, bias, weight_lo and residual buffer addresses. nullptr becomes
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(27 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
+        writer_args.reserve(28 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
         writer_args.push_back(out_buffer);
         writer_args.push_back(weight_buffer);
         if (bias_buffer != nullptr) {
@@ -1405,6 +1482,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         }
         if (weight_lo_buffer != nullptr) {
             writer_args.push_back(weight_lo_buffer);
+        } else {
+            writer_args.push_back(uint32_t{0});
+        }
+        if (residual_buffer != nullptr) {
+            writer_args.push_back(residual_buffer);
         } else {
             writer_args.push_back(uint32_t{0});
         }

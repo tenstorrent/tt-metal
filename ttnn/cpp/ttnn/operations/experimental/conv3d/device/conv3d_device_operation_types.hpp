@@ -104,6 +104,12 @@ struct Conv3dParams {
     // 0 == compact output.
     uint32_t output_pad_h = 0;
     uint32_t output_pad_w = 0;
+    // Depth-to-space output (opt-in)
+    // {1, 1, 1} with no trim == off. Otherwise the output channels are packed (p1, p2, p3, C) and the
+    // writer stores each C-channel group at (t * p1 + i, h * p2 + j, w * p3 + k), dropping the first
+    // output_trim_t_front frames of the result.
+    std::array<uint32_t, 3> output_depth_to_space = {1, 1, 1};
+    uint32_t output_trim_t_front = 0;
 };
 
 struct Conv3dInputs {
@@ -113,6 +119,8 @@ struct Conv3dInputs {
     std::optional<const Tensor> halo_buffer;
     std::optional<const Tensor> pad_offset_tensor;
     std::optional<const Tensor> weight_lo_tensor;
+    // Added to the conv output in the epilogue (output = conv(input) + residual).
+    std::optional<const Tensor> residual_tensor;
 };
 
 namespace detail {

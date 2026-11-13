@@ -63,12 +63,24 @@ void kernel_main() {
     constexpr uint32_t output_pad_w = get_compile_time_arg_val(24);
     constexpr uint32_t cb_weight_lo_tiled = get_compile_time_arg_val(25);
     constexpr bool operand_split = get_compile_time_arg_val(26) == 1;
+    // Depth-to-space output
+    // Output channels are packed (p1, p2, p3, C); each C-channel group goes to (t * p1 + i, h * p2 + j, w * p3 + k)
+    // and the first d2s_trim_t frames of the result are dropped. {1, 1, 1} with no trim == off.
+    constexpr uint32_t d2s_p1 = get_compile_time_arg_val(27);
+    constexpr uint32_t d2s_p2 = get_compile_time_arg_val(28);
+    constexpr uint32_t d2s_p3 = get_compile_time_arg_val(29);
+    constexpr uint32_t d2s_trim_t = get_compile_time_arg_val(30);
+    // Residual epilogue: the reducer reads the residual block into cb_residual_rm, laid out like
+    // cb_matmul_result_rm, and compute adds it before the output write.
+    constexpr bool use_residual = get_compile_time_arg_val(31) == 1;
+    constexpr uint32_t cb_residual_rm = get_compile_time_arg_val(32);
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t weight_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t bias_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t weight_lo_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t residual_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t c_in_block_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t c_in_block_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t c_out_block_start = get_arg_val<uint32_t>(argidx++);
@@ -96,11 +108,13 @@ void kernel_main() {
     experimental::CB cb_interm(cb_matmul_interm_tiled);
     experimental::CB cb_reduction(cb_reduction_tiled);
     experimental::CB cb_ack(cb_worker_ack_back);
+    experimental::CB cb_residual(cb_residual_rm);
     Semaphore<> sem(semaphore_id);
-    constexpr auto out_args = TensorAccessorArgs<27>();
+    constexpr auto out_args = TensorAccessorArgs<33>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto weight_lo_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+    constexpr auto residual_args = TensorAccessorArgs<weight_lo_args.next_compile_time_args_offset()>();
     constexpr auto weight_mcast = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("weights_mcast_ct_offset"),
         get_named_compile_time_arg_val("weights_mcast_rt_offset")>();
@@ -125,6 +139,7 @@ void kernel_main() {
     const auto weight_reader = TensorAccessor(weight_args, weight_addr);
     const auto bias_reader = TensorAccessor(bias_args, bias_addr);
     const auto weight_lo_reader = TensorAccessor(weight_lo_args, weight_lo_addr);
+    const auto residual_reader = TensorAccessor(residual_args, residual_addr);
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -133,6 +148,18 @@ void kernel_main() {
     constexpr uint32_t H_out_p = H_out + 2 * output_pad_h;
     constexpr uint32_t W_out_p = W_out + 2 * output_pad_w;
     constexpr uint32_t T_out_H_out_W_out = T_out * H_out_p * W_out_p;
+
+    constexpr uint32_t d2s_groups = d2s_p1 * d2s_p2 * d2s_p3;
+    constexpr bool d2s_enabled = d2s_groups > 1 || d2s_trim_t > 0;
+    constexpr uint32_t d2s_max_sub = 8;
+    constexpr uint32_t d2s_group_bytes = C_out_block_bytes * C_out_num_blocks / d2s_groups;
+    constexpr uint32_t d2s_sub_bytes = C_out_block_bytes < d2s_group_bytes ? C_out_block_bytes : d2s_group_bytes;
+    constexpr uint32_t d2s_num_sub = C_out_block_bytes / d2s_sub_bytes;
+    static_assert(!d2s_enabled || d2s_num_sub <= d2s_max_sub, "depth-to-space: too many groups per C_out block");
+    constexpr uint32_t d2s_H = H_out * d2s_p2;
+    constexpr uint32_t d2s_W = W_out * d2s_p3;
+    constexpr uint32_t d2s_HW = d2s_H * d2s_W;
+    constexpr uint32_t d2s_THW = (T_out * d2s_p1 - d2s_trim_t) * d2s_HW;
 
     uint32_t weight_round = 0;
     // Process each batch element
@@ -211,6 +238,30 @@ void kernel_main() {
                                 cb_ack.push_back(1);
                             } else {
                                 // I'm a reducer.
+                                if constexpr (use_residual) {
+                                    // validate() guarantees no output pad and no depth-to-space, so the
+                                    // residual shares the output's page index and channel offset.
+                                    cb_residual.reserve_back(output_tiles);
+                                    uint32_t res_write_offset = 0;
+                                    for (uint32_t t = t_block; t < t_block_end; ++t) {
+                                        for (uint32_t h = h_block; h < h_block_end; ++h) {
+                                            for (uint32_t w = w_block; w < w_block_end; ++w) {
+                                                const uint32_t res_page_idx =
+                                                    batch_idx * T_out_H_out_W_out + (t * H_out + h) * W_out + w;
+                                                noc.async_read(
+                                                    residual_reader,
+                                                    cb_residual,
+                                                    C_out_block_bytes,
+                                                    {.page_id = res_page_idx,
+                                                     .offset_bytes = c_out_block * C_out_block_bytes},
+                                                    {.offset_bytes = res_write_offset});
+                                                res_write_offset += C_out_block_bytes;
+                                            }
+                                        }
+                                    }
+                                    noc.async_read_barrier();
+                                    cb_residual.push_back(output_tiles);
+                                }
                                 if (num_workers > 0) {
                                     // Wait for all workers to finish.
                                     sem.wait(num_workers);
@@ -247,6 +298,21 @@ void kernel_main() {
                                 uint32_t patch_idx = 0;
                                 uint32_t cb_read_offset = 0;
                                 uint32_t rows_waited = 0;
+                                // Depth-to-space: per channel group in this block, its frame offset i and its
+                                // page offset j * W + k within the output frame.
+                                uint32_t d2s_sub_t[d2s_max_sub];
+                                uint32_t d2s_sub_hw[d2s_max_sub];
+                                uint32_t d2s_dst_offset = 0;
+                                if constexpr (d2s_enabled) {
+                                    const uint32_t block_start = c_out_block * C_out_block_bytes;
+                                    const uint32_t g0 = block_start / d2s_group_bytes;
+                                    d2s_dst_offset = block_start % d2s_group_bytes;
+                                    for (uint32_t s = 0; s < d2s_num_sub; ++s) {
+                                        const uint32_t g = g0 + s;
+                                        d2s_sub_t[s] = g / (d2s_p2 * d2s_p3);
+                                        d2s_sub_hw[s] = ((g / d2s_p3) % d2s_p2) * d2s_W + g % d2s_p3;
+                                    }
+                                }
                                 for (uint32_t t = t_block; t < t_block_end; ++t) {
                                     for (uint32_t h = h_block; h < h_block_end; ++h) {
                                         for (uint32_t w = w_block; w < w_block_end; ++w) {
@@ -256,16 +322,34 @@ void kernel_main() {
                                                     cb_out.wait_front(rows_waited * row_tiles);
                                                 }
                                             }
-                                            uint32_t out_page_idx = batch_idx * T_out_H_out_W_out +
-                                                                    t * H_out_p * W_out_p +
-                                                                    (h + output_pad_h) * W_out_p + (w + output_pad_w);
-                                            noc.async_write(
-                                                cb_out,
-                                                out_writer,
-                                                C_out_block_bytes,
-                                                {.offset_bytes = cb_read_offset},
-                                                {.page_id = out_page_idx,
-                                                 .offset_bytes = c_out_block * C_out_block_bytes});
+                                            if constexpr (d2s_enabled) {
+                                                const uint32_t base_page =
+                                                    batch_idx * d2s_THW + h * d2s_p2 * d2s_W + w * d2s_p3;
+                                                for (uint32_t s = 0; s < d2s_num_sub; ++s) {
+                                                    const uint32_t t_d = t * d2s_p1 + d2s_sub_t[s];
+                                                    if (t_d >= d2s_trim_t) {
+                                                        noc.async_write(
+                                                            cb_out,
+                                                            out_writer,
+                                                            d2s_sub_bytes,
+                                                            {.offset_bytes = cb_read_offset + s * d2s_sub_bytes},
+                                                            {.page_id = base_page + (t_d - d2s_trim_t) * d2s_HW +
+                                                                        d2s_sub_hw[s],
+                                                             .offset_bytes = d2s_dst_offset});
+                                                    }
+                                                }
+                                            } else {
+                                                uint32_t out_page_idx =
+                                                    batch_idx * T_out_H_out_W_out + t * H_out_p * W_out_p +
+                                                    (h + output_pad_h) * W_out_p + (w + output_pad_w);
+                                                noc.async_write(
+                                                    cb_out,
+                                                    out_writer,
+                                                    C_out_block_bytes,
+                                                    {.offset_bytes = cb_read_offset},
+                                                    {.page_id = out_page_idx,
+                                                     .offset_bytes = c_out_block * C_out_block_bytes});
+                                            }
                                             cb_read_offset += C_out_block_bytes;
                                             if constexpr (enable_streaming_output) {
                                                 patch_idx++;

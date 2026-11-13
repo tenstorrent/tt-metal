@@ -23,6 +23,7 @@ struct Conv3dCbGeometry {
     bool use_fp32_partials = false;  // with use_fp32_exact: the running-partial CB
     bool use_bias = false;
     bool operand_split = false;  // the x_hi, x_lo and weight_lo CBs
+    bool use_residual = false;   // the residual_rm and untilized_rm CBs
     uint32_t vol2col_rm_pages = 0;
     uint32_t padded_patch_size_bytes = 0;
     uint32_t C_in_block_bytes = 0;
@@ -73,6 +74,10 @@ Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device);
 // derive_cb_geometry and plan_l1 against conv3d_l1_cb_budget: what validate_on_program_cache_miss checks and
 // what create_descriptor builds.
 Conv3dL1Plan select_l1_plan(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args);
+// Whether the residual epilogue's CBs fit beside the plan conv3d would use without them: no span overrun, no
+// lost L1 tensor headroom and no lost prefetch shard. True without a residual_tensor. Never throws where
+// select_l1_plan on the same args without the residual would not.
+bool residual_epilogue_fits(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args);
 
 struct Conv3dProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
