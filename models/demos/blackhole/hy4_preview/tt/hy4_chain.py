@@ -156,6 +156,7 @@ class Hy4ChainLayer:
         )
         if self.attn.indexer is not None:
             self.attn.indexer.idx_rope_first = ch.idx_rope_first
+        self.ckc_norm = compute_cfg(md, "hifi4", False)
         self.t_attn = time.time() - t0
         t0 = time.time()
         if self.spec.mlp == DENSE:
@@ -185,7 +186,7 @@ class Hy4ChainLayer:
     # --- helpers
     def _norm(self, h32, w):
         h = ttnn.typecast(h32, ttnn.bfloat16)
-        out = ttnn.rms_norm(h, weight=w, epsilon=self.ch.cfg.rms_norm_eps, compute_kernel_config=self.attn.ckc)
+        out = ttnn.rms_norm(h, weight=w, epsilon=self.ch.cfg.rms_norm_eps, compute_kernel_config=self.ckc_norm)
         ttnn.deallocate(h)
         return out
 
