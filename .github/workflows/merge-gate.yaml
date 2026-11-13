@@ -575,6 +575,7 @@ jobs:
     if: ${{
         github.event.action != 'destroyed' &&
         github.event_name != 'pull_request' &&
+        github.event_name != 'merge_group' &&
         (github.ref_name == 'main' ||
          needs.find-changes.outputs.llk-quasar-changed == 'true' ||
          needs.find-changes.outputs.llk-common-changed == 'true' ||
@@ -870,6 +871,8 @@ jobs:
     # complete, and a failed warehouse upload or report-only stage 2 must not block.
     needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate-measure, llk-perf-merge-gate]
     runs-on: ubuntu-slim
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
@@ -878,13 +881,13 @@ jobs:
           optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
-      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
+      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group' && env.SLACK_WEBHOOK_URL != '')
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
+          slack_webhook_url: ${{ env.SLACK_WEBHOOK_URL }}
           owner: ""
-      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main')
+      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main' && env.SLACK_WEBHOOK_URL != '')
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
+          slack_webhook_url: ${{ env.SLACK_WEBHOOK_URL }}
           owner: "U0AK4BVCFM0,S0985AN7TC5"
