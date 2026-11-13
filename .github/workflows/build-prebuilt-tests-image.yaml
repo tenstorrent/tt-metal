@@ -333,7 +333,7 @@ jobs:
           # would leave behind holding the layers alive.
           provenance: false
           outputs: |
-            type=registry,push=true,compression=zstd,compression-level=7,oci-mediatypes=true
+            type=registry,push=true,compression=zstd,compression-level=9,oci-mediatypes=true
 
       # Gated alternative to the step above. Throwaway images, so no SBOM; the
       # labels and Trivy are still checked before anything is pushed. A failed
