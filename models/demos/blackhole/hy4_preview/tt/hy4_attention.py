@@ -36,6 +36,7 @@ class Hy4Attention:
         idx_rope_interleave=False,
         wdtype=ttnn.bfloat16,
         sink_over_scale_dtype=ttnn.bfloat16,
+        wdtypes=None,
     ):
         """sd: checkpoint tensors of the layer keyed by the path after ``model.layers.<i>.`` (torch)."""
         self.md, self.mesh_config, self.ccl, self.cfg, self.layer, self.kv_fmt = (
@@ -54,7 +55,12 @@ class Hy4Attention:
         self.has_indexer = self.spec.has_indexer_weights
         hw = build_attn_host_weights(cfg, sd, self.cols)
         self.host_w = hw
-        T = lambda k, dt=wdtype, ly=ttnn.TILE_LAYOUT: upload(md, hw[k].tensor, dt, ly, shard_dim=hw[k].shard_dim)
+        wdtypes = (
+            wdtypes or {}
+        )  # attn-bfp4 task: per-tensor dtype override {q_a,q_b,kv_a,w_uk,w_uv_t,gate,o_proj,idx_wq_b,idx_wk,idx_wp: ttnn dtype}; default OFF = unchanged
+        T = lambda k, dt=wdtype, ly=ttnn.TILE_LAYOUT: upload(
+            md, hw[k].tensor, wdtypes.get(k, dt), ly, shard_dim=hw[k].shard_dim
+        )
         self.w_q_a, self.w_q_b, self.w_kv_a = T("q_a"), T("q_b"), T("kv_a")
         self.w_uk, self.w_uv_t = T("w_uk", ttnn.bfloat16), T("w_uv_t", ttnn.bfloat16)
         self.w_gate, self.w_o = T("gate"), T("o_proj")
@@ -69,7 +75,9 @@ class Hy4Attention:
         self.sink_full = upload(md, hw["sink_over_scale"].tensor, sink_over_scale_dtype, ttnn.ROW_MAJOR_LAYOUT)
         self.rope = RopeDev(md, cfg.qk_rope_head_dim, cfg.rope_theta, rope_interleave)
         self.idx_rope = RopeDev(md, cfg.qk_rope_head_dim, cfg.rope_theta, idx_rope_interleave)
-        self.indexer = Hy4Indexer(md, cfg, hw, self.idx_rope, wdtype=wdtype) if self.has_indexer else None
+        self.indexer = (
+            Hy4Indexer(md, cfg, hw, self.idx_rope, wdtype=wdtype, wdtypes=wdtypes) if self.has_indexer else None
+        )
         self.ckc = compute_cfg(md, "hifi4", True)
         self.ckc_sdpa = ttnn.init_device_compute_kernel_config(
             md.arch(),

@@ -15,7 +15,8 @@ from models.demos.blackhole.hy4_preview.tt.hy4_common import SENTINEL, compute_c
 
 
 class Hy4Indexer:
-    def __init__(self, md, cfg, host_w, rope, idx_rope_first=True, ln_eps=1e-6, wdtype=ttnn.bfloat16):
+    def __init__(self, md, cfg, host_w, rope, idx_rope_first=True, ln_eps=1e-6, wdtype=ttnn.bfloat16, wdtypes=None):
+        wdtypes = wdtypes or {}
         self.md, self.cfg, self.rope, self.idx_rope_first, self.ln_eps = md, cfg, rope, idx_rope_first, ln_eps
         self.nh, self.d, self.rd, self.topk = (
             cfg.index_n_heads,
@@ -23,7 +24,7 @@ class Hy4Indexer:
             cfg.qk_rope_head_dim,
             cfg.index_topk,
         )
-        w = lambda k, dt=wdtype, ly=ttnn.TILE_LAYOUT: upload(md, host_w[k].tensor, dt, ly)
+        w = lambda k, dt=wdtype, ly=ttnn.TILE_LAYOUT: upload(md, host_w[k].tensor, wdtypes.get(k, dt), ly)
         self.w_q = w("idx_wq_b")
         self.w_k = w("idx_wk")
         self.w_p = w("idx_wp", ttnn.bfloat16)
