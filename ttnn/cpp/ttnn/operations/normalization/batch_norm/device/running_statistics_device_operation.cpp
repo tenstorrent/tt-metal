@@ -83,6 +83,14 @@ void RunningStatistics::validate_on_program_cache_miss(
     }
 
     validate_tensors(operation_attributes, tensor_args);
+
+    const bool any_float32 = batch_mean.dtype() == DataType::FLOAT32 || batch_var.dtype() == DataType::FLOAT32 ||
+                             operation_attributes.get_dtype() == DataType::FLOAT32 ||
+                             (running_mean.has_value() && running_mean->dtype() == DataType::FLOAT32) ||
+                             (running_var.has_value() && running_var->dtype() == DataType::FLOAT32);
+    TT_FATAL(
+        !any_float32 || ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config),
+        "batch_norm with float32 tensors requires fp32_dest_acc_en=True in compute_kernel_config");
 };
 
 DataType RunningStatistics::operation_attributes_t::get_dtype() const {
