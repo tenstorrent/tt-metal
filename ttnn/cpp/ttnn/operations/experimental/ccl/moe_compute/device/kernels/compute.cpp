@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_ring_common.h"
+#include "mz_prof.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/common.h"
@@ -25,6 +26,9 @@
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_gelu.h"
 #endif
+
+// per-chunk wait accumulators of the zone profile (UNPACK thread only)
+static uint32_t mz_t, mz_ww, mz_w2w, mz_ring;
 
 namespace detail {
 
@@ -208,7 +212,9 @@ FORCE_INLINE void compute_w0_w1_block_column(
     tile_regs_acquire();
     [[maybe_unused]] uint32_t k_tracker = 0;
     for (uint32_t block_id = 0; block_id < num_blocks; ++block_id) {
+        UNPACK(mz_t = MZ_WALL());
         cb_w0_w1.wait_front(tiles_per_block);
+        UNPACK(mz_ww += MZ_WALL() - mz_t);
 
         for (uint32_t k = 0; k < tiles_per_block; k += ct_dim) {
             if constexpr (has_bias) {
@@ -448,15 +454,23 @@ void kernel_main() {
             }
 
             // Initialize matmul for W0
+            // MZ_FLAGS bit 4: chunks of <= 16 tokens use the 16x32 tile views of the tilized chunk / of in2 (half the MVMULs, only faces 0 and 1 are read)
+            const uint32_t mz_chunk_tokens = (num_tokens - chunk * tokens_per_chunk) < tokens_per_chunk ? (num_tokens - chunk * tokens_per_chunk) : tokens_per_chunk;
+            const bool mz_small = ((get_named_compile_time_arg_val("mz_flags") & 16u) != 0) && (mz_chunk_tokens <= 16 || (get_named_compile_time_arg_val("mz_flags") & 32u) != 0);  // bit 5: force (probe)
+            const uint32_t mz_in0cb = mz_small ? (((get_named_compile_time_arg_val("mz_flags") & 64u) != 0) ? (uint32_t)tt::CBIndex::c_21 : (uint32_t)tt::CBIndex::c_20) : (uint32_t)cb_s2c_in_id;  // bit 6: probe (wrong CB)
+            const uint32_t mz_in2cb = mz_small ? (uint32_t)tt::CBIndex::c_21 : (uint32_t)cb_s2c_in2_id;
             matmul_block_init(
-                cb_s2c_in_id, cb_r2c_w0_w1_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+                mz_in0cb, cb_r2c_w0_w1_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
+            UNPACK(mz_t = MZ_WALL());
             ::detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
+            UNPACK(MZ_TS("C_CR", MZ_WALL() - mz_t));
+            mz_ww = mz_w2w = mz_ring = 0;
 
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
@@ -469,6 +483,9 @@ void kernel_main() {
             const uint32_t prod_tiles_per_step = Cfg::w0_w1_prod_cols(ring_core_id, is_shared_expert);
             const uint32_t prod_pair_tiles = prod_tiles_per_step & ~1u;
             const uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
+            // MZ_FLAGS bit 2 (all-gather): this core's piece lives in slot ring_core_id of the in2 buffer
+            constexpr bool mz_ag = (get_named_compile_time_arg_val("mz_flags") & 4u) != 0;
+            const uint32_t mz_own_slot = mz_ag ? ring_core_id * tiles_per_step : 0;
             for (uint32_t tile_id = 0; tile_id < prod_pair_tiles; tile_id += 2) {
                 ::detail::compute_w0_w1_block_column<
                     activation_type,
@@ -476,11 +493,12 @@ void kernel_main() {
                     Cfg::w0_w1_blocks_per_col,
                     w0_w1_tiles_per_block,
                     num_w0_w1_tiles_h,
-                    has_bias>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_c2c_ones_tile_id, cb_s2c_in2_id, in0_index, tile_id);
+                    has_bias>(
+                    mz_in0cb, cb_r2c_w0_w1_id, cb_c2c_ones_tile_id, cb_s2c_in2_id, in0_index, tile_id + mz_own_slot);
             }
             if (prod_pair_tiles != prod_tiles_per_step) {
                 matmul_block_init(
-                    cb_s2c_in_id,
+                    mz_in0cb,
                     cb_r2c_w0_w1_id,
                     /*transpose=*/false,
                     /*ct_dim=*/moe_ring::W0_W1_HALF_BLOCK_TILES_W,
@@ -493,10 +511,15 @@ void kernel_main() {
                     w0_w1_tiles_per_block,
                     num_w0_w1_tiles_h,
                     has_bias>(
-                    cb_s2c_in_id, cb_r2c_w0_w1_id, cb_c2c_ones_tile_id, cb_s2c_in2_id, in0_index, prod_pair_tiles);
+                    mz_in0cb,
+                    cb_r2c_w0_w1_id,
+                    cb_c2c_ones_tile_id,
+                    cb_s2c_in2_id,
+                    in0_index,
+                    prod_pair_tiles + mz_own_slot);
                 // Restore the 4-wide matmul for the W2 phase.
                 matmul_block_init(
-                    cb_s2c_in_id, cb_r2c_w0_w1_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+                    mz_in0cb, cb_r2c_w0_w1_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
             }
 
             // Zero-fill the unproduced columns [prod_tiles_per_step, num_w0_w1_tiles_w) of this core's in2
@@ -511,12 +534,13 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t tile_id = prod_tiles_per_step; tile_id < num_w0_w1_tiles_w; ++tile_id) {
-                    pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/tile_id);
+                    pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/tile_id + mz_own_slot);
                 }
                 tile_regs_release();
             }
 
             // Signal to DM1 that the output from this core is ready
+            UNPACK(MZ_TS("C_W01", mz_ww));
             cb_c2w_rdy.reserve_back(1);
             cb_c2w_rdy.push_back(1);
 
@@ -544,7 +568,7 @@ void kernel_main() {
                     half_iter ? Cfg::w2_blocks_per_half_a2a_iter : w2_blocks_per_a2a_iter;
                 if (half_iter) {
                     matmul_block_init(
-                        cb_s2c_in2_id,
+                        mz_in2cb,
                         cb_r2c_w2_id,
                         /*transpose=*/false,
                         /*ct_dim=*/moe_ring::W2_HALF_A2A_ITER_TILES_W,
@@ -553,15 +577,27 @@ void kernel_main() {
                 }
                 uint32_t src_core = ring_core_id;
                 uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
-                cb_w2c_rdy.wait_front(1);
+                // MZ_FLAGS bit 1 (needs bit 0 in dm1): iterations >= 1 reuse the in2 pieces of iteration 0, no ring tokens
+                // bit 2 (all-gather): ONE token per chunk (waited at iteration 0, popped after the last iteration), no per-piece waits
+                const bool mz_sync = !(((get_named_compile_time_arg_val("mz_flags") & 2u) != 0) && iter > 0);
+                const bool tok_wait = mz_ag ? (iter == 0) : mz_sync;
+                const bool tok_piece = !mz_ag && mz_sync;
+                const bool tok_pop = mz_ag ? (iter == Cfg::num_a2a_iters - 1) : mz_sync;
+                UNPACK(mz_t = MZ_WALL());
+                if (tok_wait) {
+                    cb_w2c_rdy.wait_front(1);
+                }
+                UNPACK(mz_ring += MZ_WALL() - mz_t);
 
-                uint32_t in2_offset = 0, in2_index = 0;
+                uint32_t in2_offset = mz_own_slot, in2_index = mz_own_slot;
 
                 tile_regs_acquire();
 
                 uint32_t w2_k_tracker = 0;
                 for (uint32_t block_id = 0; block_id < w2_blocks_this_iter; ++block_id) {
+                    UNPACK(mz_t = MZ_WALL());
                     cb_r2c_w2.wait_front(w2_tiles_per_block);
+                    UNPACK(mz_w2w += MZ_WALL() - mz_t);
                     for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_row_tiles) {
                         if constexpr (has_bias) {
                             if (w2_k_tracker == num_w2_tiles_h) {
@@ -584,17 +620,21 @@ void kernel_main() {
                             continue;  // skip padding K slots (bias: after bias tile; no_bias: at/past logical K)
                         }
                         if (dm1_tiles_remaining == 0) {
-                            cb_w2c_rdy.pop_front(1);
-                            cb_w2c_rdy.wait_front(1);
+                            if (tok_piece) {
+                                cb_w2c_rdy.pop_front(1);
+                                UNPACK(mz_t = MZ_WALL());
+                                cb_w2c_rdy.wait_front(1);
+                                UNPACK(mz_ring += MZ_WALL() - mz_t);
+                            }
                             src_core = (src_core == 0) ? num_cores - 1 : src_core - 1;
                             dm1_tiles_remaining = shard_tiles_lut[src_core];
-                            in2_offset += tiles_per_step;
+                            in2_offset = mz_ag ? src_core * tiles_per_step : in2_offset + tiles_per_step;
                             in2_index = in2_offset;
                         }
                         dm1_tiles_remaining--;
 
                         matmul_block(
-                            cb_s2c_in2_id,
+                            mz_in2cb,
                             cb_r2c_w2_id,
                             in2_index++,
                             /*in1_index=*/k,
@@ -607,7 +647,9 @@ void kernel_main() {
                     }
                     cb_r2c_w2.pop_front(w2_tiles_per_block);
                 }
-                cb_w2c_rdy.pop_front(1);
+                if (tok_pop) {
+                    cb_w2c_rdy.pop_front(1);
+                }
 
                 tile_regs_commit();
 
@@ -621,6 +663,7 @@ void kernel_main() {
             // Uninit pack_untilize ONCE after the iter loop (hoisted, mirrors moe_gpt pattern).
             pack_untilize_uninit(cb_c2s_out_id);
 
+            UNPACK(MZ_TS("C_W2", MZ_PACK(mz_w2w, mz_ring)));
             cb_c2s_out.push_back(num_w0_w1_tiles_h);
 
             // Toggle the buffer to use

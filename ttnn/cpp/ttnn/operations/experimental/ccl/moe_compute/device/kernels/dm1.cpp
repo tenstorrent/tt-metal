@@ -9,6 +9,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
+#include "mz_prof.h"
 
 namespace {
 // LOCAL_OUTPUT: the e_t and final-output TensorAccessor args follow the three matmul tensors in the
@@ -351,13 +352,83 @@ void kernel_main() {
 #endif
 
             // Wait for compute core to tell us that all mm01 data is ready
+            uint32_t mz_a = MZ_WALL(), mz_ringw = 0;
             cb_c2w_rdy.wait_front(1);
             cb_c2w_rdy.pop_front(1);
+            MZ_TS("D1_C2W", MZ_WALL() - mz_a);
+
+            // MZ_FLAGS bit 2 (experiment): ALL-GATHER by multicast instead of the ring. Slot k of cb_s2c_in2 holds the piece of ring core k
+            // (compute packs its own piece to slot ring_core_id and reads source core q from slot q). Every core multicasts its piece to the same
+            // slot of all cores of the matmul bounding box (non-posted, barrier = acked), then increments the ring semaphore of every other ring core
+            // by one; a core proceeds when the other num_cores - 1 increments of this chunk arrived and releases compute with ONE token.
+            constexpr bool mz_ag = (get_named_compile_time_arg_val("mz_flags") & 4u) != 0;
+            if constexpr (mz_ag) {
+                constexpr uint32_t ag_bb_x0 = get_named_compile_time_arg_val("ag_bb_x0");
+                constexpr uint32_t ag_bb_y0 = get_named_compile_time_arg_val("ag_bb_y0");
+                constexpr uint32_t ag_bb_x1 = get_named_compile_time_arg_val("ag_bb_x1");
+                constexpr uint32_t ag_bb_y1 = get_named_compile_time_arg_val("ag_bb_y1");
+                constexpr uint32_t ag_bb_dests = get_named_compile_time_arg_val("ag_bb_dests");
+                constexpr uint32_t ag_num_banks = get_named_compile_time_arg_val("num_banks");
+                const uint32_t ag_args = 9 + ag_num_banks + (local_output ? 2 : 0);
+                const uint32_t slot_l1 = local_base_addr + ring_core_id * a2a_xfer_bytes_per_step;
+                if constexpr ((get_named_compile_time_arg_val("mz_flags") & 8u) != 0) {
+                    // bit 3: UNICAST variant: posted writes of the piece to every other ring core (cyclic order starting after this core,
+                    // so the senders do not all hit the same core first), each followed by a semaphore increment on the same core (same path, in order)
+                    for (uint32_t j = 1; j < num_cores; ++j) {
+                        uint32_t k = ring_core_id + j;
+                        k = (k >= num_cores) ? k - num_cores : k;
+                        const uint32_t px = get_arg_val<uint32_t>(ag_args + 2 * k);
+                        const uint32_t py = get_arg_val<uint32_t>(ag_args + 2 * k + 1);
+                        uint32_t off = 0;
+                        for (uint32_t pkt = 0; pkt < a2a_full_packets; ++pkt) {
+                            noc_async_write_one_packet_set_state</*posted=*/true>(
+                                get_noc_addr(px, py, slot_l1 + off), a2a_full_packet_size, /*noc=*/1, vchannel);
+                            noc_async_write_one_packet_with_state</*posted=*/true>(slot_l1 + off, slot_l1 + off);
+                            off += a2a_full_packet_size;
+                        }
+                        if constexpr (a2a_remainder_tiles > 0) {
+                            noc_async_write_one_packet_set_state</*posted=*/true>(
+                                get_noc_addr(px, py, slot_l1 + off), a2a_remainder_size, /*noc=*/1, vchannel);
+                            noc_async_write_one_packet_with_state</*posted=*/true>(slot_l1 + off, slot_l1 + off);
+                        }
+                        noc_semaphore_inc</*posted=*/true>(get_noc_addr(px, py, semaphore_addr), 1, /*noc_id=*/1, vchannel);
+                    }
+                } else {
+                    const uint64_t mc_dst = get_noc_multicast_addr(ag_bb_x1, ag_bb_y1, ag_bb_x0, ag_bb_y0, slot_l1, 1);  // NOC1: swapped corners
+                    noc_async_write_multicast(slot_l1, mc_dst, a2a_xfer_bytes_per_step, ag_bb_dests, false, 1);
+                    noc1_obj.async_write_barrier();
+                    for (uint32_t k = 0; k < num_cores; ++k) {
+                        if (k != ring_core_id) {
+                            const uint32_t px = get_arg_val<uint32_t>(ag_args + 2 * k);
+                            const uint32_t py = get_arg_val<uint32_t>(ag_args + 2 * k + 1);
+                            noc_semaphore_inc</*posted=*/true>(get_noc_addr(px, py, semaphore_addr), 1, /*noc_id=*/1, vchannel);
+                        }
+                    }
+                }
+                noc1_obj.async_writes_flushed<NocOptions::POSTED>();
+                semaphore_value += num_cores - 1;
+                mz_a = MZ_WALL();
+                ring_sem.wait_min(semaphore_value);
+                mz_ringw += MZ_WALL() - mz_a;
+                cb_w2c_rdy.reserve_back(1);
+                cb_w2c_rdy.push_back(1);
+            }
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
-            for (uint32_t i = 0; i < Cfg::num_a2a_iters; ++i) {
+            for (uint32_t i = 0; i < (mz_ag ? 0u : Cfg::num_a2a_iters); ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
+                    // MZ_FLAGS bit 0 (experiment): the in2 pieces rotate around the ring ONCE per chunk (iteration 0); later
+                    // W2 iterations reuse the pieces already stored in the in2 buffer (tokens only, no ring wait / send).
+                    if constexpr ((get_named_compile_time_arg_val("mz_flags") & 1u) != 0) {
+                        if (i > 0) {
+                            if constexpr ((get_named_compile_time_arg_val("mz_flags") & 2u) == 0) {
+                                cb_w2c_rdy.reserve_back(1);
+                                cb_w2c_rdy.push_back(1);
+                            }
+                            continue;
+                        }
+                    }
                     if constexpr (a2a_full_packets > 0 && a2a_remainder_tiles > 0) {
                         // Resetting required as both full and partial packets exist
                         // Device 2.0 migration: legacy primitive retained: state-machine setup
@@ -367,7 +438,9 @@ void kernel_main() {
                     }
 
                     // Wait for current data to be ready in cb_s2c_in2
+                    mz_a = MZ_WALL();
                     ring_sem.wait_min(semaphore_value);
+                    mz_ringw += MZ_WALL() - mz_a;
 
                     // Signal to compute core that data is ready
                     cb_w2c_rdy.reserve_back(1);
@@ -424,7 +497,10 @@ void kernel_main() {
                 }
             }
 
+            MZ_TS("D1_RING", mz_ringw);
+            mz_a = MZ_WALL();
             cb_c2s_out.wait_front(num_w0_w1_tiles_h);
+            MZ_TS("D1_OUT", MZ_WALL() - mz_a);
 
             const uint32_t source_base_l1_addr = cb_c2s_out.get_read_ptr();
             [[maybe_unused]] const uint32_t elts_per_page = source_width_tiles * tile_width;
@@ -545,6 +621,7 @@ void kernel_main() {
             // (matmul_chunk_available_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc
             noc_semaphore_inc</*posted=*/true>(
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+            MZ_TS("D1_END", 0);
         }
         if constexpr (has_combine) {
             combine_semaphore_inc();

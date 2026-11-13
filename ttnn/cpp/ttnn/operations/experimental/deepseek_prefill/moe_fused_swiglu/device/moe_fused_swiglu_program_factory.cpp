@@ -393,8 +393,15 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const uint32_t kr_pad = ((emb / geo::TILE) + kgroups - 1) / kgroups;
     const uint32_t activation_slice =
         activations_are_row_major ? kr_pad * geo::TILE * tensor_arguments.activations.element_size() : bfp8_tile;
+    // DSV41_FUSED_L1_RESERVE_KB (default 0 = unchanged): extra L1 kept free above the static CBs. The blocking below fills the whole worker L1 minus L1_CB_RESERVE, which in a server that
+    // holds persistent L1 buffers (decode buffers allocated at the top of L1) makes the static CB region overlap them (TT_THROW 'Statically allocated circular buffers ... clash with L1
+    // buffers', seen 19392 B over in the B=8 server). A fixed reserve (rather than the live frontier) keeps the program valid on a program-cache hit when later allocations lower the frontier.
+    const uint32_t extra_reserve = [] {
+        const char* e = std::getenv("DSV41_FUSED_L1_RESERVE_KB");
+        return e != nullptr ? static_cast<uint32_t>(std::atoi(e)) * 1024u : 0u;
+    }();
     const uint32_t l1_max = hal::get_max_worker_l1_unreserved_size();
-    TT_FATAL(l1_max > geo::L1_CB_RESERVE, "moe_fused_swiglu: invalid worker L1 budget");
+    TT_FATAL(l1_max > geo::L1_CB_RESERVE + extra_reserve, "moe_fused_swiglu: invalid worker L1 budget");
 
     geo::Blocking blocking(
         hgroups,
@@ -406,7 +413,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         bfp8_tile,
         bf16_tile,
         activation_slice,
-        l1_max - geo::L1_CB_RESERVE,
+        l1_max - geo::L1_CB_RESERVE - extra_reserve,
         output_tile,
         /*enable_phase_alias_=*/true,
         activations_are_row_major,
@@ -610,6 +617,8 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     }
     if (operation_arguments.activation == RoutedExpertActivation::SituGlu) {
         compute_descriptor.defines.emplace_back("SITU_GLU", "1");
+    } else if (operation_arguments.activation == RoutedExpertActivation::ClampedSiluGlu) {
+        compute_descriptor.defines.emplace_back("CLAMPED_SILU_GLU", "1");
     } else if (operation_arguments.activation == RoutedExpertActivation::SwiGluOai) {
         compute_descriptor.defines.emplace_back("SWIGLU_OAI", "1");
     }

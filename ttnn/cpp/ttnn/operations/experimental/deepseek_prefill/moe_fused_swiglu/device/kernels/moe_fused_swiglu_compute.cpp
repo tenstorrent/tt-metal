@@ -29,10 +29,10 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-#if defined(SWIGLU_OAI) && defined(SITU_GLU)
-#error "SWIGLU_OAI and SITU_GLU are mutually exclusive activation variants"
+#if (defined(SWIGLU_OAI) + defined(SITU_GLU) + defined(CLAMPED_SILU_GLU)) > 1
+#error "SWIGLU_OAI, SITU_GLU and CLAMPED_SILU_GLU are mutually exclusive activation variants"
 #endif
-#if defined(SWIGLU_OAI) || defined(SITU_GLU)
+#if defined(SWIGLU_OAI) || defined(SITU_GLU) || defined(CLAMPED_SILU_GLU)
 #define FUSED_BINARY_ACT 1
 #endif
 #ifdef SWIGLU_OAI
@@ -42,6 +42,9 @@
 #endif
 #ifdef SITU_GLU
 #include "api/compute/situ_glu.h"
+#endif
+#ifdef CLAMPED_SILU_GLU
+#include "api/compute/clamped_silu_glu.h"  // DeepSeek-V4: silu(min(gate, 10)) * clamp(up, -10, 10), the activation of the unified routed-expert op
 #endif
 #include "moe_fused_swiglu_compute_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"
@@ -71,6 +74,10 @@ constexpr bool kFp32DestAccEn = FP32_DEST_ACC_EN != 0;
 // situ_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() situ_glu_tile_init()
 #define BINARY_ACT_TILE(g, u, o) situ_glu_tile(g, u, o)
+#elif defined(CLAMPED_SILU_GLU)
+// clamped_silu_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
+#define BINARY_ACT_INIT() clamped_silu_glu_tile_init()
+#define BINARY_ACT_TILE(g, u, o) clamped_silu_glu_tile(g, u, o)
 #endif
 #endif
 

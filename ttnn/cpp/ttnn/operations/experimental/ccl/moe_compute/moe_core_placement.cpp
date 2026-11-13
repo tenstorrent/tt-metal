@@ -289,6 +289,61 @@ std::vector<tt::tt_metal::CoreCoord> build_matmul_ring_cores(
     CoreCoordPairSet used = core_coords_to_pair_set(cores);
     const tt::tt_metal::CoreRange base_bbox = tt::tt_metal::CoreRangeSet(cores).bounding_box();
 
+    // MOE_COMPUTE_RING=<N> (experiment, default off): GROUPED ring. Ring position p works on the weight shard of bank
+    // order[p / g] (g = N / banks cores per bank, banks ordered like the weight shards: logical y descending, then x
+    // descending), so the cores of a group are placed on the free cells nearest to that bank's adjacent core and the
+    // returned list is in ring order (the program factory keeps it as is instead of sorting it geometrically).
+    if (ring_size > num_banks) {
+        std::vector<uint32_t> order(num_banks);
+        for (uint32_t i = 0; i < num_banks; ++i) {
+            order[i] = i;
+        }
+        std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+            if (cores[a].y != cores[b].y) {
+                return cores[a].y > cores[b].y;
+            }
+            return cores[a].x > cores[b].x;
+        });
+        std::vector<std::vector<tt::tt_metal::CoreCoord>> group(num_banks);
+        for (uint32_t j = 0; j < num_banks; ++j) {
+            group[j].push_back(cores[order[j]]);
+        }
+        const uint32_t total_extra = ring_size - num_banks;
+        uint32_t added = 0;
+        while (added < total_extra) {
+            for (uint32_t j = 0; j < num_banks && added < total_extra; ++j) {
+                // nearest free cell (Manhattan) to the bank core of this group inside the base bounding box
+                const auto& bc = cores[order[j]];
+                int best = 1 << 30;
+                std::pair<uint32_t, uint32_t> bp{0, 0};
+                for (uint32_t y = base_bbox.start_coord.y; y <= base_bbox.end_coord.y; ++y) {
+                    for (uint32_t x = base_bbox.start_coord.x; x <= base_bbox.end_coord.x; ++x) {
+                        const std::pair<uint32_t, uint32_t> p{x, y};
+                        if (used.contains(p) || mux_pairs.contains(p)) {
+                            continue;
+                        }
+                        const int d = std::abs(static_cast<int>(x) - static_cast<int>(bc.x)) +
+                                      std::abs(static_cast<int>(y) - static_cast<int>(bc.y));
+                        if (d < best) {
+                            best = d;
+                            bp = p;
+                        }
+                    }
+                }
+                used.insert(bp);
+                group[j].push_back(tt::tt_metal::CoreCoord(bp.first, bp.second));
+                ++added;
+            }
+        }
+        std::vector<tt::tt_metal::CoreCoord> grouped;
+        for (uint32_t j = 0; j < num_banks; ++j) {
+            for (const auto& c : group[j]) {
+                grouped.push_back(c);
+            }
+        }
+        return grouped;
+    }
+
     std::set<uint32_t> matmul_cols;
     for (const auto& c : cores) {
         matmul_cols.insert(c.x);
@@ -519,8 +574,10 @@ MoEComputeCoreSelection select_moe_compute_cores(
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default).size();
     // On Blackhole the ring size must equal the live DRAM-bank count (7 or 8). Wormhole has no
     // DRAM-bank harvesting, so ring_size is always 12 and num_dram_banks is always 12 here.
+    // MOE_COMPUTE_RING=<N> (experiment, default off): several ring cores per DRAM bank
+    const bool ring_override = ring_size > num_dram_banks && ring_size % num_dram_banks == 0;
     TT_FATAL(
-        ring_size == num_dram_banks,
+        ring_size == num_dram_banks || ring_override,
         "moe_compute: ring_size must match the live DRAM-bank count ({}), got {}",
         num_dram_banks,
         ring_size);

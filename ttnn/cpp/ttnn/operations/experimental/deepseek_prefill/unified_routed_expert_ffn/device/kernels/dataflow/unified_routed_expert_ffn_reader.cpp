@@ -178,6 +178,16 @@ void kernel_main() {
     using GuRuns [[maybe_unused]] = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns [[maybe_unused]] = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
 #ifdef RING_WEIGHTS
+#ifdef RING_CORES
+    using Ring = unified_routed_expert_ffn::RingWeightsN<
+        experts_per_chip,
+        RING_CORES,
+        K_down_tiles,
+        K_gate_tiles,
+        GRID_X_NOC,
+        ((K_gate_tiles + 6) / 7) * 7,
+        ((K_down_tiles + 6) / 7) * 7>;
+#else
     using Ring = unified_routed_expert_ffn::RingWeights<
         experts_per_chip,
         (per_core_N_gu + 1) / 2,
@@ -187,6 +197,7 @@ void kernel_main() {
         GRID_X_NOC,
         in0_block_w_d,
         per_core_N_gu % 2>;
+#endif
 #endif
 
     constexpr uint32_t x_accessor_offset = 36;

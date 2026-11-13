@@ -226,9 +226,10 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_arguments.activation == RoutedExpertActivation::Silu ||
             operation_arguments.activation == RoutedExpertActivation::SituGlu ||
+            operation_arguments.activation == RoutedExpertActivation::ClampedSiluGlu ||
             operation_arguments.activation == RoutedExpertActivation::SwiGluOai,
-        "moe_fused_swiglu: activation must be RoutedExpertActivation::Silu, "
-        "RoutedExpertActivation::SituGlu or RoutedExpertActivation::SwiGluOai");
+        "moe_fused_swiglu: activation must be RoutedExpertActivation::Silu, SituGlu, ClampedSiluGlu "
+        "(DeepSeek-V4, limit 10) or RoutedExpertActivation::SwiGluOai");
     // All three or none: biasing some projections and not others is wrong numbers with no error.
     const auto& gate_biases = tensor_arguments.gate_biases;
     const auto& up_biases = tensor_arguments.up_biases;

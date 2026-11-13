@@ -7,9 +7,10 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "moe_ring_common.h"
+#include "mz_prof.h"
 
 // Weight CB slots (blocks): Cfg::weight_cb_slots; all but one slot hold blocks whose DRAM reads are in flight.
-#define NUM_SLOTS Cfg::weight_cb_slots
+#define NUM_SLOTS get_named_compile_time_arg_val("weight_cb_slots")
 
 // Helper macros for counter advancement (avoids modulo on RISC-V)
 #define ADVANCE_SLOT(s)       \
@@ -286,6 +287,8 @@ void kernel_main() {
             w2_ring_core_first_global_page + expert_id * w2_pages_per_logical_shard;
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
+            uint32_t mz_bar = 0, mz_res = 0, mz_a;
+            MZ_TS("D0_CHUNK", (expert_id << 8) | chunk);
             //-------------------------------------------------------------------------
             // Pipelined reading of W0/W1 -- bank-run loop
             //-------------------------------------------------------------------------
@@ -359,16 +362,23 @@ void kernel_main() {
 
                 // While the pipeline fills (the first blocks_in_flight - 1 blocks) nothing is waited on
                 if (++blocks_pending == blocks_in_flight) {
+                    mz_a = MZ_WALL();
                     noc_async_read_barrier_with_trid(trid_to_wait);
+                    mz_bar += MZ_WALL() - mz_a;
                     cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
 
                     ADVANCE_TRID(trid_to_wait);
                     --blocks_pending;
 
                     // Reserve for next block (the blocks in flight and the next one)
+                    mz_a = MZ_WALL();
                     cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block * blocks_in_flight);
+                    mz_res += MZ_WALL() - mz_a;
                 }
             }
+            MZ_TS("D0_W01", MZ_PACK(mz_bar, mz_res));
+            mz_bar = 0;
+            mz_res = 0;
 
             //-------------------------------------------------------------------------
             // Pipelined reading of W2 -- bank-run loop
@@ -426,16 +436,21 @@ void kernel_main() {
                 ADVANCE_TRID(trid_to_issue);
 
                 if (++blocks_pending == blocks_in_flight) {
+                    mz_a = MZ_WALL();
                     noc_async_read_barrier_with_trid(trid_to_wait);
+                    mz_bar += MZ_WALL() - mz_a;
                     cb_r2c_w2.push_back(w2_tiles_per_block);
 
                     ADVANCE_TRID(trid_to_wait);
                     --blocks_pending;
 
                     // Reserve for next block (the blocks in flight and the next one)
+                    mz_a = MZ_WALL();
                     cb_r2c_w2.reserve_back(w2_tiles_per_block * blocks_in_flight);
+                    mz_res += MZ_WALL() - mz_a;
                 }
             }
+            MZ_TS("D0_W2", MZ_PACK(mz_bar, mz_res));
         }
     }
 

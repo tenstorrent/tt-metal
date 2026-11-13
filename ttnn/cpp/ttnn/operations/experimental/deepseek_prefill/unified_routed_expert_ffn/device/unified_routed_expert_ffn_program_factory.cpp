@@ -22,6 +22,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/device/kernels/moe_ring_common.h"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
@@ -177,6 +178,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // Ring weights: 8 ring cores (= the op's 8 N columns); N is the multiple of 8 whose 7-padded size is the stored w2
     // K-row count and whose per-core group count (2 N tiles per group) is the stored w0_w1 group count.
     uint32_t ring_n_tiles = 0;
+    uint32_t ring_cores = 8;
     if (ring_weights) {
         const uint32_t rd = down_shape[-2] / TILE;
         for (uint32_t n = 8; n <= 8 * rd; n += 8) {
@@ -194,14 +196,53 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         const bool compact = (cols % 2 == 1) || cols < 4;
         const uint32_t expected_blocks =
             compact ? (cols / 2) * k_rows7 + (cols % 2) * ((K_gate_tiles + 13) / 14) : ((cols + 1) / 2) * k_rows7;
+        // decode ring of ring_cores = 8 * g cores (MOE_COMPUTE_RING): w2 is [ring_cores, 1, E, GD, RD * 32, 128], GD =
+        // ceil(ceil(hidden / ring_cores) / 4); w0_w1 is the compact layout [8, 1, E, bank blocks, 224, 128] whose bank
+        // holds the g sub-cores' slices back to back (the kernels' RingWeightsN)
+        ring_cores = static_cast<uint32_t>(down_shape[0]);
         TT_FATAL(
-            down_shape[-3] * 4 * 8 == K_gate_tiles &&
-                gate_shape[-3] == (compact ? expected_blocks : (cols + 1) / 2) &&
-                gate_shape[-2] / TILE == (compact ? 7u : k_rows7 * 7),
-            "ring weights: w2 hidden groups / w0_w1 layout {} do not match x ({} tiles) and N ({} tiles)",
-            gate_shape,
-            K_gate_tiles,
-            ring_n_tiles);
+            ring_cores % 8 == 0 && ring_cores >= 8,
+            "ring weights: the w2 ring size {} must be a multiple of 8",
+            ring_cores);
+        if (ring_cores == 8) {
+            TT_FATAL(
+                down_shape[-3] * 4 * 8 == K_gate_tiles &&
+                    gate_shape[-3] == (compact ? expected_blocks : (cols + 1) / 2) &&
+                    gate_shape[-2] / TILE == (compact ? 7u : k_rows7 * 7),
+                "ring weights: w2 hidden groups / w0_w1 layout {} do not match x ({} tiles) and N ({} tiles)",
+                gate_shape,
+                K_gate_tiles,
+                ring_n_tiles);
+        } else {
+            namespace mr = moe_ring;
+            const uint32_t max_cols = (ring_n_tiles + ring_cores - 1) / ring_cores;
+            TT_FATAL(
+                mr::w0_w1_compact_for_shape(ring_n_tiles, ring_cores),
+                "ring weights: ring {} needs the compact gate/up layout",
+                ring_cores);
+            const uint32_t bank_blocks =
+                mr::w0_w1_bank_blocks_per_expert(K_gate_tiles, ring_n_tiles, ring_cores, 8, mr::DEFAULT_TILES_PER_TXN);
+            // the sub-cores of a bank must fill exactly one bank piece of the stream (so a bank column reads only its
+            // own bank)
+            const uint32_t bpc = (K_gate_tiles + 6) / 7, bph = (K_gate_tiles + 13) / 14;
+            const uint32_t g = ring_cores / 8;
+            uint32_t sub_blocks = 0;
+            for (uint32_t s = 0; s < g; ++s) {
+                sub_blocks += mr::w0_w1_blocks_for_cols(mr::shard_tiles(ring_n_tiles, s, ring_cores), bpc, bph);
+            }
+            TT_FATAL(
+                sub_blocks == bank_blocks && gate_shape[-3] == bank_blocks && gate_shape[-2] / TILE == 7u &&
+                    down_shape[-3] == (((K_gate_tiles + ring_cores - 1) / ring_cores) + 3) / 4 && max_cols >= 1,
+                "ring weights: ring {}: w0_w1 {} / w2 {} layout does not match x ({} tiles) and N ({} tiles) (bank "
+                "blocks {}, sub-core blocks {})",
+                ring_cores,
+                gate_shape,
+                down_shape,
+                K_gate_tiles,
+                ring_n_tiles,
+                bank_blocks,
+                sub_blocks);
+        }
     }
     const uint32_t N_gate_tiles_full = ring_weights ? ring_n_tiles : gate_shape[-1] / TILE;  // = hidden / TILE
     const uint32_t K_down_tiles = ring_weights ? ring_n_tiles : down_shape[-2] / TILE;       // = hidden / TILE
@@ -1000,6 +1041,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     if (ring_weights) {
         reader_defines.emplace_back("RING_WEIGHTS", "1");
         reader_defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
+        if (ring_cores != 8 ||
+            std::getenv("DSV41_RING_N_KERNEL") !=
+                nullptr) {  // table-driven reads (RingWeightsN); 8 cores keep the original reads unless asked
+            reader_defines.emplace_back("RING_CORES", std::to_string(ring_cores));
+        }
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -1085,6 +1131,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     if (ring_weights) {
         writer_kernel_desc.defines.emplace_back("RING_WEIGHTS", "1");
         writer_kernel_desc.defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
+        if (ring_cores != 8 || std::getenv("DSV41_RING_N_KERNEL") != nullptr) {
+            writer_kernel_desc.defines.emplace_back("RING_CORES", std::to_string(ring_cores));
+        }
     }
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 

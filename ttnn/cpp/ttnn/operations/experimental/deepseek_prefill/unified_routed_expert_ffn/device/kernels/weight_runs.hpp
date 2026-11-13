@@ -162,4 +162,209 @@ struct RingWeights {
     }
 };
 
+// ---------------------------------------------------------------------------------------------
+// RING_WEIGHTS with a decode ring of NR = GPB * GRID_X cores (MOE_COMPUTE_RING=24 / 40: GPB ring cores per DRAM bank,
+// grouped by bank). The op keeps its GRID_X = 8 N columns; column c = bank c = ring cores GPB*c .. GPB*c + GPB - 1,
+// which own exactly the gate/up columns [COLS*c, COLS*c + COLS) and hidden tiles [HCOLS*c, HCOLS*c + HCOLS)
+// (static_assert: the Bresenham distribution of moe_ring_common.h is periodic per bank). Layout (moe_compute_utils.py,
+// compact gate/up layout):
+//   w0_w1: bank c, expert e: the sub-cores' slices back to back, each = (n/2) full block-columns (R K rows x 4 tiles:
+//   gate c, up c,
+//     gate c+1, up c+1) then, for an odd count n, one half block-column (K rows two per stored row: page (row/2)*4 +
+//     2*(row%2) + is_up).
+//   w2: ring core cr, expert e: GD groups of 4 hidden tiles (the last group padded), RD stored rows; the K rows (N
+//   tiles) are stored in the
+//     rotated chunk order of the ring: stored chunk q of core cr = gate/up chunk (cr - q) mod NR, a chunk = the columns
+//     of one ring core.
+// Everything here is constexpr tables built from the same Bresenham functions as the host (moe_ring_common.h
+// shard_tiles / w2_shard_tiles).
+namespace ring_n {
+constexpr uint32_t shard_tiles(uint32_t n_tiles, uint32_t id, uint32_t n_cores) {
+    const uint32_t n_big = n_tiles % n_cores;
+    const uint32_t small = n_tiles / n_cores;
+    return small + ((n_big > 0 && (id * n_big) % n_cores < n_big) ? 1u : 0u);
+}
+constexpr uint32_t w2_shard_tiles(uint32_t Ht, uint32_t id, uint32_t Nt, uint32_t n_cores) {
+    const uint32_t n_big_nt = Nt % n_cores;
+    const uint32_t n_big_ht = Ht % n_cores;
+    const uint32_t small_ht = Ht / n_cores;
+    if (n_big_nt + n_big_ht == n_cores) {
+        const bool big_nt = n_big_nt > 0 && (id * n_big_nt) % n_cores < n_big_nt;
+        return big_nt ? small_ht : small_ht + 1u;
+    }
+    return shard_tiles(Ht, id, n_cores);
+}
+}  // namespace ring_n
+
+// E experts, NR ring cores, NT intermediate tiles (72), HT hidden tiles (160), GRID_X banks (8), R = HT padded to 7
+// (gate/up K rows), RD = NT padded to 7 (stored w2 K rows).
+template <uint32_t E, uint32_t NR, uint32_t NT, uint32_t HT, uint32_t GRID_X, uint32_t R, uint32_t RD>
+struct RingWeightsN {
+    static constexpr uint32_t GPB = NR / GRID_X;
+    static constexpr uint32_t COLS = NT / GRID_X;
+    static constexpr uint32_t HCOLS = HT / GRID_X;
+    static constexpr uint32_t F_PAGES = R * 4;
+    static constexpr uint32_t H_PAGES = ((HT + 13) / 14) * 14 / 2 * 4;
+    static constexpr uint32_t GD = (((HT + NR - 1) / NR) + 3) / 4;
+
+    static_assert(
+        NR % GRID_X == 0 && NT % GRID_X == 0 && HT % GRID_X == 0,
+        "ring weights: NR, N and hidden must divide by the bank count");
+    static constexpr bool periodic() {
+        for (uint32_t b = 0; b < GRID_X; ++b) {
+            for (uint32_t s = 0; s < GPB; ++s) {
+                if (ring_n::shard_tiles(NT, GPB * b + s, NR) != ring_n::shard_tiles(NT, s, NR)) {
+                    return false;
+                }
+                if (ring_n::w2_shard_tiles(HT, GPB * b + s, NT, NR) != ring_n::w2_shard_tiles(HT, s, NT, NR)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    static_assert(periodic(), "ring weights: the shard distribution must repeat per DRAM bank");
+
+    struct GuTab {
+        uint32_t off[COLS];
+        uint8_t half[COLS];
+        uint8_t sub[COLS];
+        uint32_t cols;
+        uint32_t pages;
+    };
+    static constexpr GuTab make_gu() {
+        GuTab t{};
+        uint32_t j = 0, off = 0;
+        for (uint32_t s = 0; s < GPB; ++s) {
+            const uint32_t n = ring_n::shard_tiles(NT, s, NR);
+            for (uint32_t p = 0; p < n / 2; ++p) {
+                for (uint32_t i = 0; i < 2; ++i) {
+                    if (j < COLS) {
+                        t.off[j] = off;
+                        t.half[j] = 0;
+                        t.sub[j] = static_cast<uint8_t>(i);
+                    }
+                    ++j;
+                }
+                off += F_PAGES;
+            }
+            if (n % 2) {
+                if (j < COLS) {
+                    t.off[j] = off;
+                    t.half[j] = 1;
+                }
+                ++j;
+                off += H_PAGES;
+            }
+        }
+        t.cols = j;
+        t.pages = off;
+        return t;
+    }
+    static constexpr GuTab GU = make_gu();
+    static_assert(GU.cols == COLS, "ring weights: the sub-cores of a bank must own exactly COLS gate/up columns");
+    static constexpr bool compact_gu() {
+        const uint32_t max_cols = (NT + NR - 1) / NR;
+        const uint32_t even = max_cols + (max_cols % 2);
+        const uint32_t stride = even < 4 ? 4 : even;
+        return max_cols < stride;
+    }
+    static_assert(compact_gu(), "ring weights: only the compact gate/up layout is supported");
+
+    struct DTab {
+        uint8_t tiles[GPB];
+        uint8_t dst[GPB];
+        uint32_t total;
+    };
+    static constexpr DTab make_d() {
+        DTab t{};
+        uint32_t d = 0;
+        for (uint32_t s = 0; s < GPB; ++s) {
+            const uint32_t n = ring_n::w2_shard_tiles(HT, s, NT, NR);
+            t.tiles[s] = static_cast<uint8_t>(n);
+            t.dst[s] = static_cast<uint8_t>(d);
+            d += n;
+        }
+        t.total = d;
+        return t;
+    }
+    static constexpr DTab DT = make_d();
+    static_assert(DT.total == HCOLS, "ring weights: the sub-cores of a bank must own exactly HCOLS hidden tiles");
+
+    struct ChTab {
+        uint32_t cum[NR + 1];  // first N tile of gate/up chunk x (chunk x = columns of ring core x)
+        uint8_t ch[NT];        // chunk of N tile n
+        uint8_t off[NT];       // n - cum[ch[n]]
+    };
+    static constexpr ChTab make_ch() {
+        ChTab t{};
+        uint32_t a = 0;
+        for (uint32_t x = 0; x < NR; ++x) {
+            t.cum[x] = a;
+            const uint32_t n = ring_n::shard_tiles(NT, x, NR);
+            for (uint32_t i = 0; i < n; ++i) {
+                t.ch[a + i] = static_cast<uint8_t>(x);
+                t.off[a + i] = static_cast<uint8_t>(i);
+            }
+            a += n;
+        }
+        t.cum[NR] = a;
+        return t;
+    }
+    static constexpr ChTab CH = make_ch();
+
+    template <class Acc>
+    static FORCE_INLINE void read_gu(
+        const Noc& noc,
+        const Acc& acc,
+        uint32_t is_up,
+        uint32_t e,
+        uint32_t c,
+        uint32_t row,
+        uint32_t ncols,
+        uint32_t l1_base,
+        uint32_t page_bytes) {
+        const uint32_t base = (c * E + e) * GU.pages;
+#pragma GCC unroll 9
+        for (uint32_t j = 0; j < COLS; ++j) {
+            if (j < ncols) {
+                const uint32_t page = GU.half[j] ? base + GU.off[j] + (row >> 1) * 4 + 2 * (row & 1) + is_up
+                                                 : base + GU.off[j] + row * 4 + is_up + 2 * GU.sub[j];
+                noc.async_read(
+                    acc, CoreLocalMem<uint32_t>(l1_base + j * page_bytes), page_bytes, {.page_id = page}, {});
+            }
+        }
+    }
+
+    // down tiles of logical K row `row`, hidden columns [HCOLS c, HCOLS c + HCOLS) of bank column c, into l1_base + n *
+    // page_bytes
+    template <class Acc>
+    static FORCE_INLINE void read_d(
+        const Noc& noc, const Acc& acc, uint32_t e, uint32_t c, uint32_t row, uint32_t l1_base, uint32_t page_bytes) {
+        const uint32_t ch = CH.ch[row];
+        const uint32_t o = CH.off[row];
+#pragma GCC unroll 5
+        for (uint32_t s = 0; s < GPB; ++s) {
+            const uint32_t cr = GPB * c + s;
+            // stored rows before the chunk: the chunks cr, cr-1, ..., ch+1 (mod NR) of the rotated order
+            const uint32_t before =
+                (ch <= cr) ? CH.cum[cr + 1] - CH.cum[ch + 1] : NT - (CH.cum[ch + 1] - CH.cum[cr + 1]);
+            const uint32_t r = before + o;
+            const uint32_t base = (cr * E + e) * GD;
+            for (uint32_t g = 0; g < GD; ++g) {
+                const int32_t left = static_cast<int32_t>(DT.tiles[s]) - static_cast<int32_t>(4 * g);
+                if (left > 0) {
+                    const uint32_t cnt = left < 4 ? static_cast<uint32_t>(left) : 4u;
+                    noc.async_read(
+                        acc,
+                        CoreLocalMem<uint32_t>(l1_base + (DT.dst[s] + 4 * g) * page_bytes),
+                        cnt * page_bytes,
+                        {.page_id = ((base + g) * RD + r) * 4},
+                        {});
+                }
+            }
+        }
+    }
+};
+
 }  // namespace unified_routed_expert_ffn
