@@ -366,12 +366,18 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     kd.fp32_dest_acc_en = cc->fp32_dest_acc_en;
                     kd.dst_full_sync_en = cc->dst_full_sync_en;
                     kd.math_fidelity = static_cast<uint32_t>(cc->math_fidelity);
+                    for (const auto m : cc->unpack_to_dest_mode) {
+                        kd.unpack_to_dest_mode.push_back(static_cast<uint8_t>(m));
+                    }
                 } else if (const auto* qc = std::get_if<experimental::quasar::QuasarComputeConfig>(&cfg)) {
                     // Quasar carries the same compute scalars on its own config type.
                     kd.has_compute_config = true;
                     kd.fp32_dest_acc_en = qc->fp32_dest_acc_en;
                     kd.dst_full_sync_en = qc->dst_full_sync_en;
                     kd.math_fidelity = static_cast<uint32_t>(qc->math_fidelity);
+                    for (const auto m : qc->unpack_to_dest_mode) {
+                        kd.unpack_to_dest_mode.push_back(static_cast<uint8_t>(m));
+                    }
                 }
             }
             {
