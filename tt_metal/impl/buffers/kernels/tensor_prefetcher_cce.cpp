@@ -149,18 +149,14 @@ void deliver_chunk(
     // port, which a Rocket core does not cache, but that is not confirmed against RTL. The tensor's DRAM writes land
     // before the host releases a WAIT_CQ (SDMeshCommandQueue::enqueue_write_dram_core_counter) because the host
     // transport acknowledges each write before sending the next.
-    const volatile uint32_t* source = reinterpret_cast<const volatile uint32_t*>(
-        experimental::cce_gddr_address(context.mimir, context.view_offset + view_byte_offset));
-    volatile uint32_t* stage = hart::own_tl1_words(stage_slot_addr);
     const uint32_t num_words = bytes / sizeof(uint32_t);
-    for (uint32_t word = 0; word < num_words; ++word) {
-        stage[word] = source[word];
-    }
-    volatile uint32_t* destination =
-        remote_cb::receiver_back_words(sender, receiver) + fifo_byte_offset / sizeof(uint32_t);
-    for (uint32_t word = 0; word < num_words; ++word) {
-        destination[word] = stage[word];
-    }
+    experimental::cce_gddr_read(
+        context.mimir, context.view_offset + view_byte_offset, stage_slot_addr + MEM_L1_UNCACHED_BASE, num_words);
+    experimental::cce_sram_write(
+        remote_cb::receiver_cce_index(sender, receiver),
+        sender.fifo_wr_ptr + fifo_byte_offset,
+        stage_slot_addr + MEM_L1_UNCACHED_BASE,
+        num_words);
 }
 
 // One receiver-contiguous tensor, batched: receiver r reads slab recv_index_base + r, whose block_count blocks of
