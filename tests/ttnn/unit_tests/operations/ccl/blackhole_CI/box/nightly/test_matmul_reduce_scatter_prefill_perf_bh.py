@@ -81,7 +81,7 @@ EXPECTED_NS = {
     ("ring", "kimi_k27_o_proj_decode"): 46_800,
     ("ring", "kimi_k3_dense_ffn_decode"): 171_500,
     ("ring", "kimi_k3_dense_ffn_decode_m96"): 267_000,
-    ("line", "kimi_k27_o_proj"): 157_000,
+    ("line", "kimi_k27_o_proj"): 149_500,
 }
 
 
