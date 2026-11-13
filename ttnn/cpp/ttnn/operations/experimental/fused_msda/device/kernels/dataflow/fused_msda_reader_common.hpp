@@ -138,7 +138,7 @@ constexpr uint32_t loc_stick_nbytes = get_compile_time_arg_val(14);
 constexpr bool LOC_PACKED = get_compile_time_arg_val(16) != 0;
 constexpr bool ATTN_PACKED = get_compile_time_arg_val(17) != 0;
 [[maybe_unused]] constexpr uint32_t REF_MODE = get_compile_time_arg_val(18);  // 0 = level, 1 = pillar
-constexpr bool VALUE_PACKED = get_compile_time_arg_val(19) != 0;
+constexpr auto VALUE_LAYOUT = static_cast<fused_msda_value_layout::ValueLayout>(get_compile_time_arg_val(19));
 constexpr uint32_t value_page_nbytes = get_compile_time_arg_val(20);
 constexpr bool FROM_OFFSETS = get_compile_time_arg_val(21) != 0;
 
@@ -146,7 +146,7 @@ struct ReaderGatherCfg {
     static constexpr uint32_t D = ::D;
     static constexpr uint32_t NUM_KEYS = ::NUM_KEYS;
     static constexpr uint32_t NUM_HEADS = ::NUM_HEADS;
-    static constexpr bool VALUE_PACKED = ::VALUE_PACKED;
+    static constexpr fused_msda_value_layout::ValueLayout VALUE_LAYOUT = ::VALUE_LAYOUT;
     static constexpr uint32_t STICK_NBYTES = value_stick_nbytes;
 };
 
@@ -230,7 +230,7 @@ struct LevelGeom {
 // Per-row NW corner and bounds flags for one (level, point), reused across the
 // four corners.
 struct RowGeometry {
-    uint32_t nw[TILE_MAX_ROWS];  // (b, s) row of the NW corner
+    uint32_t nw[TILE_MAX_ROWS];  // key of the NW corner in its batch
     uint8_t flags[TILE_MAX_ROWS];
 };
 
@@ -688,9 +688,6 @@ inline void reader_main(
             noc.async_read_barrier();
         }
 
-        // Base page of this (batch, head) pair in the (B, S, H, D) value tensor.
-        const uint32_t value_batch_base = b * NUM_KEYS;
-
         // Hands one sampling point's operands to the SFPU: column 0, and on V2 the
         // offset in column 16.
         auto push_point_geometry = [&](uint32_t j) {
@@ -825,10 +822,10 @@ inline void reader_main(
                 input_tile_cb.push_back(4 * N_D_TILES);
             } else {
                 namespace cw = fused_msda_corner_word;
-                // nw_base + index is the NW corner's (b, s) row. Unsigned
-                // wraparound keeps every in-bounds sum exact; the sum itself
-                // wraps below zero only for an out-of-bounds NW, never read.
-                const uint32_t nw_base = value_batch_base + g.start_index - (g.width + 1);
+                // nw_base + index is the NW corner's key. Unsigned wraparound
+                // keeps every in-bounds sum exact; the sum itself wraps below
+                // zero only for an out-of-bounds NW, never read.
+                const uint32_t nw_base = g.start_index - (g.width + 1);
                 for (uint32_t r = 0; r < v_rows; ++r) {
                     const auto w = cw::decode(CoreLocalMem<volatile uint32_t>(
                         corner_l1 + fused_msda_tile_layout::tile_col16_offset_fp32(r))[0]);
@@ -854,18 +851,7 @@ inline void reader_main(
                         if (!in_bounds(r)) {
                             continue;
                         }
-                        // Canonical (B, S, H, D): one page per (b, s, h).
-                        // Packed (B, S, H*D): one page per (b, s), head at byte offset h*D*2.
-                        const uint32_t bs = geom.nw[r] + step;
-                        uint32_t page;
-                        uint32_t offset_bytes;
-                        if constexpr (VALUE_PACKED) {
-                            page = bs;
-                            offset_bytes = head * (D * 2u);
-                        } else {
-                            page = bs * NUM_HEADS + head;
-                            offset_bytes = 0;
-                        }
+                        const auto loc = fused_msda_gather::value_loc<ReaderGatherCfg>(b, geom.nw[r] + step, head);
                         CoreLocalMem<uint32_t> dst(value_arena_l1 + r * value_stick_nbytes);
                         // Both page_id and offset_bytes belong to the *source* pack: async_read is
                         // (src, dst, size, src_args, dst_args), so an offset in the 5th argument
@@ -874,7 +860,7 @@ inline void reader_main(
                             value_acc,
                             dst,
                             value_stick_nbytes,
-                            {.page_id = page, .offset_bytes = offset_bytes},
+                            {.page_id = loc.page, .offset_bytes = loc.offset_bytes},
                             {.offset_bytes = 0});
                     }
                     noc.async_read_barrier();

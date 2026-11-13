@@ -485,6 +485,8 @@ ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/ @tens
 ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metallium-maintainers-llama-models
+ttnn/cpp/ttnn/operations/experimental/untilize_and_split_heads/ @ctr-mmicic @ctr-ikasic @ctr-mdukic
+ttnn/cpp/ttnn/operations/experimental/untilize_and_split_heads/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/normalization/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/normalization/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
@@ -576,6 +578,7 @@ tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-develope
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill
 tests/ttnn/**/operations/experimental/test_fused_msda*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic
 tests/ttnn/**/operations/experimental/test_modulated_deform_conv2d*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic
+tests/ttnn/**/operations/experimental/test_untilize_and_split_heads*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa

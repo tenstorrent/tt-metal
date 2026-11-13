@@ -53,21 +53,20 @@ on Blackhole only.
 
 These runs used the commands above:
 
-| Variant | BEV size | Encoder layers | Device FPS (Snapshot #1) | Device FPS (Snapshot #2) | Device FPS (Snapshot #3) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 44.12 | 53.19 | 54.58 |
-| small | 150 | 3 | 13.03 | 14.72 | 15.70 |
-| base | 200 | 6 | 4.89 | 5.88 | 6.44 |
+| Variant | BEV size | Encoder layers | Device FPS (Snapshot #1) | Device FPS (Snapshot #2) |
+| --- | ---: | ---: | ---: | ---: |
+| tiny | 50 | 3 | 53.19 | 54.58 |
+| small | 150 | 3 | 14.72 | 15.70 |
+| base | 200 | 6 | 5.88 | 6.44 |
 
 Each snapshot is one card and compute grid, measured on one branch:
 
 | Snapshot | Card | Enabled Tensix cores | Compute grid | DRAM channels | Branch |
 | --- | --- | ---: | ---: | ---: | --- |
 | #1 | P100 | 120 | 11x10 | 7 | `main` |
-| #2 | P100 | 120 | 11x10 | 7 | `ctr-ikasic/bevformer-integration-dcn-backbone-stem-encoder` |
-| #3 | P150 | 140 | 13x10 | 8 | `ctr-ikasic/bevformer-integration-dcn-backbone-stem-encoder` |
+| #2 | P150 | 140 | 13x10 | 8 | `main` |
 
-Snapshot #3 used firmware 19.12.0 with the Tensix column disable count patched from 2 to 0,
+Snapshot #2 used firmware 19.12.0 with the Tensix column disable count patched from 2 to 0,
 which enables all 14 columns. One column goes to dispatch, which leaves a 13x10 compute grid.
 
 Compare runs by Device FPS (see [Output](#output)). These come from one ten-frame run per variant
