@@ -32,6 +32,8 @@ def main():
     if args.action == "check":
         check(args, server)
         return
+    if (BASE / "stop_after_row").exists():
+        raise RuntimeError("Coordinator stopped chain between requests for measurement repair")
     collect(args, server)
     timing = json.loads((BASE / "stage_timing.json").read_text())
     plan = json.loads((BASE / "plan.json").read_text())

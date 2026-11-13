@@ -56,6 +56,7 @@ def main():
         result_filename=output / name,
         dataset_seed=int(value("--seed")),
     )
+    command = [str(CLIENT.parent / "python"), str(MAIN / "llm_module/vllm_bench_cache_off.py"), *command[1:]]
     # Request policy is an explicit benchmark input; main's client source is unchanged.
     extra_index = command.index("--extra-body") + 1
     extra = json.loads(command[extra_index])

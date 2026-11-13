@@ -336,6 +336,8 @@ def main():
             "--tokenizer-revision",
             REVISION,
             "--language-model-only",
+            "--middleware",
+            "models.autoports.google_gemma_4_31b_it.tt.response_logging.ResponseLoggingMiddleware",
             "--async-scheduling",
             "--reasoning-parser",
             "gemma4",
