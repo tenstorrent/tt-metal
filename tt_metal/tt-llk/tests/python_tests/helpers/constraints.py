@@ -140,6 +140,17 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
         ):
             return [MathFidelity.LoFi]
 
+    else:
+        # Wormhole/Blackhole: the SrcA layout is narrower than Quasar's, so the caps differ.
+        # Integer and block-float inputs are already exact at LoFi, Float16_b reaches full
+        # precision at HiFi2, and Float32 needs the high phases (HiFi3/HiFi4).
+        if format.input == DataFormat.Int8 or format.input.is_block_float():
+            return [MathFidelity.LoFi]
+        if format.input == DataFormat.Float16_b:
+            return [MathFidelity.LoFi, MathFidelity.HiFi2]
+        if format.input == DataFormat.Float32:
+            return [MathFidelity.HiFi3, MathFidelity.HiFi4]
+
     # HiFi2 will multiply BFP8 and BFP8_b in full precision, skip HiFi3 and HiFi4
     if PERF_RUN and format.input in [DataFormat.Bfp8_b, DataFormat.Bfp8]:
         return [MathFidelity.LoFi, MathFidelity.HiFi2]
@@ -157,18 +168,13 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
 
 
 def get_valid_eltwise_binary_math_fidelities(formats, math_op=None):
-    if math_op is not None and math_op != MathOperation.Elwmul:
-        return [MathFidelity.LoFi]
-    input_format = formats.input_format
-    if input_format == DataFormat.Int8:
-        return [MathFidelity.LoFi]
-    if input_format.is_block_float():
-        return [MathFidelity.LoFi]
-    elif input_format == DataFormat.Float16_b:
-        return [MathFidelity.LoFi, MathFidelity.HiFi2]
-    elif input_format == DataFormat.Float32:
-        return [MathFidelity.HiFi3, MathFidelity.HiFi4]
-    return list(ALL_MATH_FIDELITIES)
+    """Valid math fidelities for an eltwise binary FPU op, on every architecture.
+
+    Delegates to ``get_valid_math_fidelities`` so Wormhole/Blackhole and Quasar share one policy:
+    only Elwmul reads the fidelity phases, and the real ISA caps (for example Float16_b at LoFi on
+    Quasar) live in that helper behind the architecture check.
+    """
+    return get_valid_math_fidelities(formats, math_op)
 
 
 def get_perf_math_operations():
