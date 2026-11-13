@@ -925,8 +925,6 @@ public:
             // outlive the cache miss and every program on the occupied ranges can reference them.
             // Shared ownership keeps the device allocation alive for the life of the cache entry.
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
-            // Per binding, the address and spec of the tensor the program was last refreshed with.
-            std::vector<std::pair<tt::tt_metal::DeviceAddr, tt::tt_metal::TensorSpec>> bound_tensors;
         };
 
         // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
@@ -938,7 +936,7 @@ public:
             const auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
                 // Reproduce the cache-miss enumeration: fresh io tensors, then the
                 // parked op-owned tensors (stable addresses, retrieved from the cache).
@@ -947,27 +945,6 @@ public:
                     for (const auto& op_owned_tensor : *sv.op_owned_tensors) {
                         mesh_tensors.push_back(std::cref(op_owned_tensor));
                     }
-                }
-
-                // A tensor at the same address with the same spec would rewrite every runtime argument the program
-                // derives from it with the value it holds: without validation, leave a program alone when all of its
-                // bindings are such tensors, the common case for a model whose allocations repeat call to call.
-                bool unchanged = skip_validation && sv.bound_tensors.size() == sv.bindings.size();
-                for (std::size_t i = 0; unchanged && i < sv.bindings.size(); ++i) {
-                    const auto& tensor = mesh_tensors[sv.bindings[i].tensor_idx].get();
-                    // A per-core allocation's address is only its first core's.
-                    unchanged = !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
-                                    tensor.mesh_buffer()) &&
-                                sv.bound_tensors[i].first == tensor.address() &&
-                                sv.bound_tensors[i].second == tensor.tensor_spec();
-                }
-                if (unchanged) {
-                    continue;
-                }
-                sv.bound_tensors.clear();
-                for (const auto& b : sv.bindings) {
-                    const auto& tensor = mesh_tensors[b.tensor_idx].get();
-                    sv.bound_tensors.emplace_back(tensor.address(), tensor.tensor_spec());
                 }
 
                 tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
