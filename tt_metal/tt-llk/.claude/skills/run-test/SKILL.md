@@ -41,9 +41,9 @@ Examples:
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
 - `--speed-of-light` — compile runtime parameters as constants (the build the nightly `LLK perf` run measures; the PR and merge perf gates build without it)
-- `--perf` — perf sweep built and run as CI does: `-m perf` (plus `--mode perf` for SFPU sweep modules), `TT_LLK_DISABLE_ASSERTS=1`, a compile phase without `-x`, no default `--maxfail`, and `--dist loadgroup -n 15` for the silicon consumer. Ends with a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`. See `perf-report` for validating the result
-- `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`); need `--perf`. A tag whose directory already exists is refused
-- `--consumer-jobs <N>` — silicon consumer parallelism with `--perf` (default 15; 0 is serial)
+- `--perf` — perf sweep with CI's build: `-m perf` (plus `--mode perf` for SFPU sweep modules), `TT_LLK_DISABLE_ASSERTS=1`, and `--dist loadgroup -n 15` for the silicon consumer. Unlike CI it does not stop at the first failure (no compile `-x`, no default `--maxfail`). `simulate` / `--rerun` need a prior `compile --perf` of the same test, or they exit 4; a module or `--k` with no perf variants also exits 4. Prints a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>` before the verdict. See `perf-report` for validating the result
+- `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`; `--keep-runs 0` keeps all); need `--perf`. A tag whose directory already exists is refused
+- `--consumer-jobs <N>` — silicon consumer parallelism (default 15; 0 is serial); needs `--perf`
 - `--perf-counters` / `--dump-perf-counters` — counter report (a separate report kind); need `--perf`
 - `--keep-asserts` — keep `LLK_ASSERT` in a `--perf` build (numbers then differ from CI)
 - `--progress` — manual-debug aid: emit a `[progress] <phase>: elapsed=Ns, last_output=Ns ago` line to stderr every 30s during compile and simulate. Off by default; pass when you suspect a hang and want to see whether a phase is alive but slow vs. truly stuck. Pair with `--progress-interval <secs>` to tune.

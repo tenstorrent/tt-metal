@@ -38,16 +38,20 @@
 #   --sim-path PATH   Override TT_UMD_SIMULATOR_PATH
 #                     (default: /proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-<arch>-1x3)
 #   --speed-of-light  Pass pytest --speed-of-light (compile-time formats / SOL path).
-#   --perf            Perf sweep, built and run the way CI runs it: selects
-#                     -m perf (and --mode perf for SFPU sweep modules), sets
+#   --perf            Perf sweep with CI's build: selects -m perf (and
+#                     --mode perf for SFPU sweep modules), sets
 #                     TT_LLK_DISABLE_ASSERTS=1 for both phases, and on silicon
 #                     runs the consumer with --dist loadgroup -n <consumer-jobs>.
-#                     Prints the report directory in a RUN_LLK_TESTS_PERF_REPORT line.
+#                     Unlike CI it does not stop at the first failure.
+#                     simulate needs a prior compile --perf of the same tests.
+#                     Prints the report directory in a RUN_LLK_TESTS_PERF_REPORT
+#                     line. Selecting no perf variant is exit 4.
 #   --run-tag  TAG    Perf report directory name, perf_data/runs/<TAG>
 #                     (sets PERF_RUN_TAG; default local-<utc timestamp>-<pid>;
-#                     an existing report directory is refused)
+#                     an existing report directory is refused, again under the
+#                     lock, which only serialises runs sharing that lock)
 #   --keep-runs N     Perf run directories to retain (sets PERF_KEEP_RUNS;
-#                     default 10). Raise it for A/B or repeat series.
+#                     default 10; 0 keeps all). Raise it for A/B or repeat series.
 #   --consumer-jobs N Silicon consumer parallelism in --perf mode (default: 15,
 #                     as CI). 0 runs the consumer serially.
 #   --perf-counters   Pass --enable-perf-counters (a separate report kind).
@@ -99,6 +103,11 @@
 
 # ── Parse ────────────────────────────────────────────────────────────────────
 
+# The help text is the header comment, up to the Parse marker.
+_print_help() {
+  sed -n '2,/^# ── Parse/{/^# ── Parse/d;s/^# \{0,1\}//p}' "$0"
+}
+
 CMD="${1:-}"
 shift 2>/dev/null || true
 
@@ -119,6 +128,7 @@ PERF="false"
 RUN_TAG=""
 KEEP_RUNS=""
 CONSUMER_JOBS="15"
+CONSUMER_JOBS_SET="false"
 PERF_COUNTERS="false"
 DUMP_PERF_COUNTERS="false"
 KEEP_ASSERTS="false"
@@ -144,14 +154,14 @@ while [[ $# -gt 0 ]]; do
     --perf)          PERF="true";        shift   ;;
     --run-tag)       RUN_TAG="$2";       shift 2 ;;
     --keep-runs)     KEEP_RUNS="$2";     shift 2 ;;
-    --consumer-jobs) CONSUMER_JOBS="$2"; shift 2 ;;
+    --consumer-jobs) CONSUMER_JOBS="$2"; CONSUMER_JOBS_SET="true"; shift 2 ;;
     --perf-counters) PERF_COUNTERS="true"; shift ;;
     --dump-perf-counters) DUMP_PERF_COUNTERS="true"; shift ;;
     --keep-asserts)  KEEP_ASSERTS="true"; shift  ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
     --help|-h)
-      sed -n 's/^# \{0,1\}//p' "$0" | head -60
+      _print_help
       exit 0
       ;;
     *)
@@ -240,6 +250,9 @@ _validate() {
     LOCKFILE="/tmp/tt-llk-test-${ARCH}.lock"
   fi
 
+  # An inherited LLK_HOME would compile another tree and write its perf_data.
+  export LLK_HOME="${WORKTREE}"
+
   # Mode inferred from arch: quasar runs against the UMD simulator; blackhole
   # and wormhole run against physical silicon. Hardware mode skips the
   # --run-simulator flag and TT_UMD_SIMULATOR_PATH.
@@ -268,10 +281,39 @@ _validate() {
       echo "ERROR: --consumer-jobs must be a non-negative integer, got '${CONSUMER_JOBS}'" >&2
       exit 4
     fi
-  elif [[ -n "$RUN_TAG$KEEP_RUNS" || "$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
-    echo "ERROR: --run-tag, --keep-runs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
+  elif [[ -n "$RUN_TAG$KEEP_RUNS" || "$CONSUMER_JOBS_SET$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
+    echo "ERROR: --run-tag, --keep-runs, --consumer-jobs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
     exit 4
   fi
+}
+
+# The ELF variant hash does not include the asserts define, and the consumer
+# never rebuilds, so simulate --perf would run whatever the last compile of
+# each test built. A --perf compile records its asserts setting per test file;
+# any other compile of the file removes the record.
+_perf_compile_marker() {
+  printf '%s' "${WORKTREE}/perf_data/.perf-compile-${ARCH}-${1//\//_}"
+}
+
+_check_perf_compile_markers() {
+  [[ "$PERF" == "true" && "$NO_SPLIT" == "false" ]] || return 0
+  local test_file marker recorded
+  for test_file in "${TEST_FILES[@]}"; do
+    marker=$(_perf_compile_marker "$test_file")
+    recorded=""
+    [[ -f "$marker" ]] && recorded=$(<"$marker")
+    if [[ "$recorded" != "${PERF_ENV[*]}" ]]; then
+      echo "ERROR: no compile --perf of ${test_file} with ${PERF_ENV[*]} since its last other compile;" >&2
+      echo "       the ELFs may carry another asserts setting. Run compile --perf with the same flags first." >&2
+      return 4
+    fi
+  done
+}
+
+# pytest exit 5 means nothing was collected. Under --perf that is a module or
+# -k with no perf variants, not a failure.
+_no_perf_variants() {
+  echo "ERROR: no perf variants selected in $(_test_label)${K_FILTER:+ with -k '${K_FILTER}'}${TEST_ID:+ (--test-id)}" >&2
 }
 
 # pytest selection and report flags shared by every phase of a --perf run, so
@@ -324,6 +366,7 @@ _do_count() {
 
   if [[ $exit_code -ne 0 ]]; then
     echo "0"
+    [[ "$PERF" == "true" && $exit_code -eq 5 ]] && return 0
     return "$exit_code"
   fi
 
@@ -362,6 +405,11 @@ _do_compile() {
 
   _vlog "compile: ${target_label} (arch=${ARCH}, -n ${JOBS}${kflag[*]:+, -k '${K_FILTER}'}$([[ "$SPEED_OF_LIGHT" == true ]] && echo ', sol'))"
 
+  local test_file compile_exit
+  for test_file in "${TEST_FILES[@]}"; do
+    rm -f "$(_perf_compile_marker "$test_file")"
+  done
+
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
     (
@@ -371,6 +419,7 @@ _do_compile() {
       env ${PERF_ENV+"${PERF_ENV[@]}"} CHIP_ARCH="${ARCH}" \
         pytest --compile-producer -n "${JOBS}" ${solflag+"${solflag[@]}"} ${kflag+"${kflag[@]}"} "${pytest_targets[@]}"
     ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2)
+    compile_exit=$?
   else
     (
       # shellcheck disable=SC1091
@@ -379,7 +428,22 @@ _do_compile() {
       env ${PERF_ENV+"${PERF_ENV[@]}"} CHIP_ARCH="${ARCH}" \
         pytest --compile-producer -n "${JOBS}" ${solflag+"${solflag[@]}"} ${kflag+"${kflag[@]}"} "${pytest_targets[@]}"
     )
+    compile_exit=$?
   fi
+
+  if [[ "$PERF" == "true" ]]; then
+    if [[ $compile_exit -eq 5 ]]; then
+      _no_perf_variants
+      return 4
+    fi
+    if [[ $compile_exit -eq 0 ]]; then
+      mkdir -p "${WORKTREE}/perf_data"
+      for test_file in "${TEST_FILES[@]}"; do
+        printf '%s' "${PERF_ENV[*]}" >"$(_perf_compile_marker "$test_file")"
+      done
+    fi
+  fi
+  return "$compile_exit"
 }
 
 # ── simulate ──────────────────────────────────────────────────────────────────
@@ -422,6 +486,7 @@ _do_simulate() {
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
   _perf_pytest_args
   _perf_env_prefix
+  _check_perf_compile_markers || return 4
   if [[ "$PERF" == "true" ]]; then
     pytest_flags="${pytest_flags} ${PERF_PYTEST_ARGS[*]}"
     if [[ "$MODE" == "hardware" && "$CONSUMER_JOBS" -gt 0 ]]; then
@@ -509,6 +574,11 @@ _do_simulate() {
     sim_exit=$?
   fi
 
+  if [[ "$PERF" == "true" && $sim_exit -eq 5 ]]; then
+    _no_perf_variants
+    sim_exit=4
+  fi
+
   local tag_was_taken=false
   [[ -e "$tag_taken" ]] && tag_was_taken=true
   rm -f "${sim_script}" "${tag_taken}"
@@ -539,6 +609,7 @@ _do_run() {
   if [[ "$NO_SPLIT" == "false" ]]; then
     _do_compile
     local compile_exit=$?
+    [[ $compile_exit -eq 4 ]] && return 4
     if [[ $compile_exit -ne 0 ]]; then
       echo "ERROR: compile step failed (exit ${compile_exit})" >&2
       return 2
@@ -556,7 +627,7 @@ case "${CMD}" in
   simulate) _do_simulate ;;
   run)      _do_run      ;;
   help|--help|-h)
-    sed -n 's/^# \{0,1\}//p' "$0" | head -60
+    _print_help
     exit 0
     ;;
   "")

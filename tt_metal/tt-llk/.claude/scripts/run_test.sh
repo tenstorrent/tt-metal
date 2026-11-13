@@ -36,18 +36,22 @@
 #   --sim-path PATH   Override TT_UMD_SIMULATOR_PATH
 #                     (default: /proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-<arch>-1x3)
 #   --speed-of-light  Pass pytest --speed-of-light (compile-time formats / SOL path).
-#   --perf            Perf sweep, built and run the way CI runs it: selects
-#                     -m perf (and --mode perf for SFPU sweep modules), sets
-#                     TT_LLK_DISABLE_ASSERTS=1 for both phases, drops the
-#                     default --maxfail so the combined report is not silently
-#                     partial, and on silicon runs the consumer with
-#                     --dist loadgroup -n <consumer-jobs>. Prints the report
-#                     directory in a RUN_LLK_TESTS_PERF_REPORT line.
+#   --perf            Perf sweep with CI's build: selects -m perf (and
+#                     --mode perf for SFPU sweep modules), sets
+#                     TT_LLK_DISABLE_ASSERTS=1 for both phases, and on silicon
+#                     runs the consumer with --dist loadgroup -n <consumer-jobs>.
+#                     Unlike CI it does not stop at the first failure: the
+#                     default --maxfail and the compile -x are dropped, so the
+#                     report is not silently partial. simulate needs a prior
+#                     compile --perf of the same test. Prints the report
+#                     directory in a RUN_LLK_TESTS_PERF_REPORT line before the
+#                     verdict. Selecting no perf variant is exit 4.
 #   --run-tag  TAG    Perf report directory name, perf_data/runs/<TAG>
 #                     (sets PERF_RUN_TAG; default local-<utc timestamp>-<pid>;
-#                     an existing report directory is refused)
+#                     an existing report directory is refused, again under the
+#                     lock, which only serialises runs sharing that lock)
 #   --keep-runs N     Perf run directories to retain (sets PERF_KEEP_RUNS;
-#                     default 10). Raise it for A/B or repeat series.
+#                     default 10; 0 keeps all). Raise it for A/B or repeat series.
 #   --consumer-jobs N Silicon consumer parallelism in --perf mode (default: 15,
 #                     as CI). 0 runs the consumer serially.
 #   --perf-counters   Pass --enable-perf-counters (a separate report kind).
@@ -121,6 +125,11 @@
 
 # ── Parse ────────────────────────────────────────────────────────────────────
 
+# The help text is the header comment, up to the Parse marker.
+_print_help() {
+  sed -n '2,/^# ── Parse/{/^# ── Parse/d;s/^# \{0,1\}//p}' "$0"
+}
+
 CMD="${1:-}"
 shift 2>/dev/null || true
 
@@ -142,6 +151,7 @@ PERF="false"
 RUN_TAG=""
 KEEP_RUNS=""
 CONSUMER_JOBS="15"
+CONSUMER_JOBS_SET="false"
 PERF_COUNTERS="false"
 DUMP_PERF_COUNTERS="false"
 KEEP_ASSERTS="false"
@@ -171,14 +181,14 @@ while [[ $# -gt 0 ]]; do
     --perf)          PERF="true";        shift   ;;
     --run-tag)       RUN_TAG="$2";       shift 2 ;;
     --keep-runs)     KEEP_RUNS="$2";     shift 2 ;;
-    --consumer-jobs) CONSUMER_JOBS="$2"; shift 2 ;;
+    --consumer-jobs) CONSUMER_JOBS="$2"; CONSUMER_JOBS_SET="true"; shift 2 ;;
     --perf-counters) PERF_COUNTERS="true"; shift ;;
     --dump-perf-counters) DUMP_PERF_COUNTERS="true"; shift ;;
     --keep-asserts)  KEEP_ASSERTS="true"; shift  ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
     --help|-h)
-      sed -n 's/^# \{0,1\}//p' "$0" | head -60
+      _print_help
       exit 0
       ;;
     *)
@@ -241,6 +251,10 @@ _validate() {
     LOCKFILE="/tmp/tt-llk-test-${ARCH}.lock"
   fi
 
+  # An inherited LLK_HOME would compile another tree and write its perf_data.
+  export LLK_HOME="${WORKTREE}"
+  PERF_COMPILE_MARKER="${WORKTREE}/perf_data/.perf-compile-${ARCH}-${TEST_FILE//\//_}"
+
   # Mode inferred from arch: quasar runs against the UMD simulator; blackhole
   # and wormhole run against physical silicon. Hardware mode skips the
   # --run-simulator flag and TT_UMD_SIMULATOR_PATH.
@@ -271,10 +285,31 @@ _validate() {
       echo "ERROR: --consumer-jobs must be a non-negative integer, got '${CONSUMER_JOBS}'" >&2
       exit 4
     fi
-  elif [[ -n "$RUN_TAG$KEEP_RUNS" || "$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
-    echo "ERROR: --run-tag, --keep-runs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
+  elif [[ -n "$RUN_TAG$KEEP_RUNS" || "$CONSUMER_JOBS_SET$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
+    echo "ERROR: --run-tag, --keep-runs, --consumer-jobs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
     exit 4
   fi
+}
+
+# The ELF variant hash does not include the asserts define, and the consumer
+# never rebuilds, so simulate --perf would run whatever the last compile of
+# this test built. A --perf compile records its asserts setting; any other
+# compile of the test removes the record.
+_check_perf_compile_marker() {
+  [[ "$PERF" == "true" && "$NO_SPLIT" == "false" ]] || return 0
+  local recorded=""
+  [[ -f "$PERF_COMPILE_MARKER" ]] && recorded=$(<"$PERF_COMPILE_MARKER")
+  if [[ "$recorded" != "${PERF_ENV[*]}" ]]; then
+    echo "ERROR: no compile --perf of ${TEST_FILE} with ${PERF_ENV[*]} since its last other compile;" >&2
+    echo "       the ELFs may carry another asserts setting. Run compile --perf with the same flags first." >&2
+    return 4
+  fi
+}
+
+# pytest exit 5 means nothing was collected. Under --perf that is a module or
+# -k with no perf variants, not a hang or a compile failure.
+_no_perf_variants() {
+  echo "ERROR: no perf variants selected in ${TEST_FILE}${K_FILTER:+ with --k '${K_FILTER}'}${TEST_ID:+ (--test-id)}" >&2
 }
 
 # pytest selection and report flags shared by every phase of a --perf run, so
@@ -506,6 +541,7 @@ _do_count() {
 
   if [[ $exit_code -ne 0 ]]; then
     echo "0"
+    [[ "$PERF" == "true" && $exit_code -eq 5 ]] && return 0
     return "$exit_code"
   fi
 
@@ -544,6 +580,7 @@ _do_compile() {
   # A perf sweep compiles every variant, as CI's producer does.
   local exitfirst=(-x)
   [[ "$PERF" == "true" ]] && exitfirst=()
+  rm -f "$PERF_COMPILE_MARKER"
 
   # Background pytest so the progress ticker can run alongside. If progress is
   # disabled we still pay the (negligible) cost of background+wait — keeps the
@@ -581,6 +618,17 @@ _do_compile() {
   if [[ -n "$progress_pid" ]]; then
     kill "$progress_pid" 2>/dev/null || true
     wait "$progress_pid" 2>/dev/null || true
+  fi
+
+  if [[ "$PERF" == "true" ]]; then
+    if [[ $compile_exit -eq 5 ]]; then
+      _no_perf_variants
+      return 4
+    fi
+    if [[ $compile_exit -eq 0 ]]; then
+      mkdir -p "$(dirname "$PERF_COMPILE_MARKER")"
+      printf '%s' "${PERF_ENV[*]}" >"$PERF_COMPILE_MARKER"
+    fi
   fi
 
   return "$compile_exit"
@@ -631,6 +679,7 @@ _do_simulate() {
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
   _perf_pytest_args
   _perf_env_prefix
+  _check_perf_compile_marker || return 4
   if [[ "$PERF" == "true" ]]; then
     pytest_flags="${pytest_flags} ${PERF_PYTEST_ARGS[*]}"
     if [[ "$MODE" == "hardware" && "$CONSUMER_JOBS" -gt 0 ]]; then
@@ -747,6 +796,11 @@ _do_simulate() {
   kill "$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
 
+  if [[ "$PERF" == "true" && $sim_exit -eq 5 && ! -s "$hang_log" ]]; then
+    _no_perf_variants
+    sim_exit=4
+  fi
+
   if [[ -n "$progress_pid" ]]; then
     kill "$progress_pid" 2>/dev/null || true
     wait "$progress_pid" 2>/dev/null || true
@@ -824,6 +878,7 @@ _do_run() {
   if [[ "$NO_SPLIT" == "false" ]]; then
     _do_compile
     local compile_exit=$?
+    [[ $compile_exit -eq 4 ]] && return 4
     if [[ $compile_exit -ne 0 ]]; then
       echo "ERROR: compile step failed (exit ${compile_exit})" >&2
       return 2
@@ -842,7 +897,7 @@ case "${CMD}" in
   simulate) _do_simulate ; _dispatch_exit=$? ;;
   run)      _do_run      ; _dispatch_exit=$? ;;
   help|--help|-h)
-    sed -n 's/^# \{0,1\}//p' "$0" | head -60
+    _print_help
     exit 0
     ;;
   "")
