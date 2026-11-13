@@ -31,9 +31,10 @@ unpack and math for unary unpack paths. Multiply it by `LOOP_FACTOR`.
   `_perf_src_handshake_iters_` calls; call the shared helper rather than the
   wrapper).
 - Some unpack paths post a zeroed SrcB with every SrcA dvalid, because math's
-  `ELWADD` datacopy branch reads SrcB: `unpack_A` with `BroadcastType::NONE`
-  (no `acc_to_dest`, not unpack-to-dest), every face, and both tilize MOPs.
-  They do it whatever `dest_acc` is, `No` included. Stand-ins for these paths
+  datacopy clears SrcA and SrcB every face (`CLR_AB` end op), whether it
+  copies with `MOVA2D` (SrcA only) or `ELWADD`: `unpack_A` with
+  `BroadcastType::NONE` (no `acc_to_dest`, not unpack-to-dest), every face,
+  and both tilize MOPs. They do it whatever `dest_acc` is, `No` included. Stand-ins for these paths
   are `<true, true>`. Datacopy-style unary kernels: unpack sets SrcB for
   `tilize_en || is_fp32_dest_acc_en`, and math clears `<true, true>`.
 - Unpack-to-dest posts no source dvalids. Unpack writes Dest and hands it to

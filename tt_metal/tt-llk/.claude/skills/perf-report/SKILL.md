@@ -63,8 +63,9 @@ bash .claude/scripts/run_test.sh run --worktree "$PWD" --arch <arch> \
 
 Choose the build kind deliberately:
 
-- `--speed-of-light` matches CI. Use it when the report will be compared
-  with CI numbers, and never mix speed-of-light and normal rows.
+- `--speed-of-light` matches the nightly **LLK perf** run; the PR and merge
+  perf gates build without it. Match the CI numbers you compare against,
+  and never mix speed-of-light and normal rows.
 - `--perf-counters` (plus `--dump-perf-counters` for raw values) produces a
   counter report, a separate report kind. Run it as its own sweep. Perf
   counters work on Quasar too: four banks in every NEO and one l1_client

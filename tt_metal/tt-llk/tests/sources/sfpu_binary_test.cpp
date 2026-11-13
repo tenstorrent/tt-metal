@@ -72,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (BROADCAST_TYPE == BroadcastType::NONE)
                 {
-                    // SrcA plus a zeroed SrcB every face, including dest_acc=No: math's ELWADD datacopy branch reads SrcB.
+                    // SrcA plus a zeroed SrcB, including dest_acc=No: math's datacopy clears SrcA and SrcB every face.
                     _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(tile_iters * num_faces /*iterations*/);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)

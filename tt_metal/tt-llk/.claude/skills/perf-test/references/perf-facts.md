@@ -25,8 +25,9 @@ Each of these changes the measured code. Never mix them in one report or one
 comparison.
 
 - **Speed of light.** `--speed-of-light` turns runtime parameters into
-  compile-time constants (`SPEED_OF_LIGHT` is defined). CI gates on it.
-  Normal builds also load the runtime-parameter struct, so they move more
+  compile-time constants (`SPEED_OF_LIGHT` is defined). The nightly
+  **LLK perf** run measures it; the PR and merge perf gates build both sides
+  without it, and the gate refuses to compare the two kinds. Normal builds also load the runtime-parameter struct, so they move more
   under layout changes.
 - **Asserts.** CI builds perf with `TT_LLK_DISABLE_ASSERTS=1`, which drops
   `-DENABLE_LLK_ASSERT`. A local perf build without it measures code with
@@ -80,7 +81,9 @@ comparison.
 - At session finish they are combined into
   `tt_metal/tt-llk/perf_data/runs/<tag>/<module>/` and `perf_data/latest`
   points at that run. The producer phase writes no report.
-- `PERF_RUN_TAG` names the run (default `local-<utc timestamp>`).
+- `PERF_RUN_TAG` names the run (default `local-<utc timestamp>-<pid>` from
+  `run_test.sh`). `run_test.sh` refuses a tag whose directory exists: a reused
+  tag mixes rows from two runs.
   `PERF_KEEP_RUNS` (default 10) bounds how many runs are kept; raise it for
   A/B or repeat series, or older runs are pruned mid-analysis.
 - `perf_data/` is gitignored. A report is identified by test, architecture,
@@ -100,7 +103,7 @@ comparison.
 - Workflow **LLK perf** (`llk-perf.yaml`) runs `tests/run_llk_perf_wormhole.sh`
   and `tests/run_llk_perf_blackhole.sh`: producer `-n 10`, consumer
   `--dist loadgroup -n 15`, `-m "perf and not accuracy"`, `--timeout=60`,
-  speed of light by default, `TT_LLK_DISABLE_ASSERTS=1`.
+  speed of light for the scheduled run, `TT_LLK_DISABLE_ASSERTS=1`.
 - CI cuts the perf sweep into groups of equal estimated time. It prefers
   measured per-test durations from earlier runs (`LLK_SPLIT_DURATIONS`,
   summed by `perf/sum_split_durations.py`) and otherwise falls back to the
@@ -108,6 +111,16 @@ comparison.
   `tests/perf_split_costs_sol.json`. A module missing from that table counts
   as 1 s. When a PR adds a perf module or changes its build count a lot,
   update its entries and say so in the PR.
-- The PR gate and `perf_compare_commits.sh` share `perf/regression_compare.py`:
-  a point regresses only when it is both more than 2% and more than 30 cycles
-  slower.
+- The perf gates and `perf_compare_commits.sh` share
+  `perf/regression_compare.py`: a point regresses only when it is slower by
+  both more than the threshold and more than 30 cycles. The threshold depends
+  on the architecture and the gate:
+  - Blackhole: 2% on every gate; also the `perf_compare_commits.sh` default.
+  - Wormhole PR gate (`llk-perf-gate.yaml`): 13%.
+  - Wormhole merge gate (`merge-gate.yaml`): 13%, and 25% for `perf_matmul`
+    and `perf_math_matmul`.
+  - Wormhole nightly gate (`llk-perf-gate.yaml`): 10%, and 25% for the two
+    matmul modules.
+
+  Pass `--threshold` to `perf_compare_commits.sh` to match the gate when
+  reproducing a Wormhole verdict locally (`0.25` for the matmul modules).
