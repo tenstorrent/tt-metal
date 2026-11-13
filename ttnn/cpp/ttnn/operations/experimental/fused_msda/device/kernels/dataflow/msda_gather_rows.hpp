@@ -57,7 +57,7 @@ constexpr uint32_t POINT_ARGS_WORDS = sizeof(PointArgs) / sizeof(uint32_t);
 // tail block with v_rows <= SPLIT_ROW leaves the writer nothing to read.
 //
 // Empirical: op device time on Blackhole, tiled geometry, D = 32 (SCA in
-// test_encoder_layer_perf.py bev_100x100 and nuscenes_base in
+// test_encoder_layer_perf.py bev_100x100 and surround_base in
 // test_fused_msda_perf.py); a row either way is 1-10% slower. The time is not
 // linear in the split, so re-measure rather than derive it. Both RISCs take
 // the row from the same accessor type, so they agree on which rows they own.

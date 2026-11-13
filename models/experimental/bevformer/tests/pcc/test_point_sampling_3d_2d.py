@@ -44,9 +44,9 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
 @pytest.mark.parametrize(
     "config_name, bev_h, bev_w, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        ("nuscenes_tiny", 100, 100, 1, 1.0, 0.0, 0, 0.0),  # Tiny model with perfect accuracy expected
-        ("nuscenes_base", 200, 200, 1, 1.0, 0.0, 0, 0.0),  # Base model with perfect accuracy expected
-        ("nuscenes_base", 200, 200, 2, 1.0, 0.0, 0, 0.0),  # Base model with batch size 2
+        ("surround_tiny", 100, 100, 1, 1.0, 0.0, 0, 0.0),  # Tiny model with perfect accuracy expected
+        ("surround_base", 200, 200, 1, 1.0, 0.0, 0, 0.0),  # Base model with perfect accuracy expected
+        ("surround_base", 200, 200, 2, 1.0, 0.0, 0, 0.0),  # Base model with batch size 2
         ("carla_base", 200, 200, 1, 1.0, 0.0, 0, 0.0),  # CARLA base model
     ],
 )
@@ -132,8 +132,8 @@ def test_generate_reference_points(
 @pytest.mark.parametrize(
     "config_name, bev_h, bev_w, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        ("nuscenes_tiny", 100, 100, 1, 0.999, 13.06, 0.02, 0.5),  # NuScenes tiny model
-        ("nuscenes_base", 200, 200, 1, 0.999, 4.98, 0.03, 0.5),  # NuScenes base model
+        ("surround_tiny", 100, 100, 1, 0.999, 13.06, 0.02, 0.5),
+        ("surround_base", 200, 200, 1, 0.999, 4.98, 0.03, 0.5),
         ("carla_base", 200, 200, 1, 0.999, 5.21, 0.02, 0.5),  # CARLA base model
     ],
 )

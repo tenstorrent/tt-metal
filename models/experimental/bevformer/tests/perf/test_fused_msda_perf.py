@@ -3,7 +3,7 @@
 
 """Tracy harness for BEVFormer's fused multi-scale deformable attention.
 
-Same shapes as ``tests/pcc/test_fused_msda.py`` -- nuscenes tiny
+Same shapes as ``tests/pcc/test_fused_msda.py`` -- surround tiny
 (Q=900, H=4, L=1) and base (Q=2500, H=8, L=4) -- and the same structure as
 ``test_encoder_layer_perf.py``: a PCC gate that doubles as the warmup, then a signposted
 region so the report covers already-compiled, already-cached programs.
@@ -67,8 +67,8 @@ DEVICE_PERF_ITERS = 1
 
 # (config_name, batch_size, num_queries) -- mirrors the PCC file's parametrization.
 WORKLOADS = [
-    ("nuscenes_tiny", 1, 900),
-    ("nuscenes_base", 1, 2500),
+    ("surround_tiny", 1, 900),
+    ("surround_base", 1, 2500),
 ]
 
 KERNEL_VARIANTS = ["packed_multi_dram", "packed_multi_l1", "canonical_multi_dram", "packed_per_level_dram"]
