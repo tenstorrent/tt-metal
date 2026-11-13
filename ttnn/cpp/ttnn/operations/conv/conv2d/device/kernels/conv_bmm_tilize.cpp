@@ -11,6 +11,10 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
+#ifdef EPILOGUE_STATS
+#include "api/compute/reduce.h"
+#include "api/compute/eltwise_binary.h"
+#endif
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -203,6 +207,92 @@ inline void reblock_and_untilize(
     interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
+#ifdef EPILOGUE_STATS
+// For the output tiles just packed into the OUT CB, the column sums of x
+// (tile `col` of the stats page, row 0) and of x * x (tile STATS_NTILES + col), accumulated with the packer's L1
+// accumulation; the square goes through one fp32 scratch tile because the reduce reads a CB.
+// A2m: `row_base` is the tile row (within the core's output shard) of the subblock's first tile and `valid_rows`
+// the shard's image rows: tiles beyond them are skipped, the straddling tile is multiplied by the row mask
+// (MASK_CB) into the scratch CB first.
+template <
+    uint32_t out_cb,
+    uint32_t stats_cb,
+    uint32_t scaler_cb,
+    uint32_t scratch_cb,
+    uint32_t mask_cb,
+    uint32_t stats_ntiles>
+ALWI void epilogue_stats_tiles(
+    uint32_t first_tile,
+    uint32_t ntiles,
+    uint32_t subblock_w,
+    uint32_t col_base,
+    uint32_t row_base,
+    uint32_t valid_rows) {
+    cb_wait_front(out_cb, first_tile + ntiles);
+    for (uint32_t k = 0; k < ntiles; ++k) {
+        const uint32_t tile = first_tile + k;
+        const uint32_t col = col_base + (k % subblock_w);
+        const uint32_t row = row_base + k / subblock_w;
+        if (row * 32 >= valid_rows) {
+            continue;  // padding rows only
+        }
+        const bool partial = (row + 1) * 32 > valid_rows;
+        uint32_t src_cb = out_cb;
+        uint32_t src_tile = tile;
+        if (partial) {
+            // the masked copy of the tile into scratch page 0
+            tile_regs_acquire();
+            reconfig_data_format(out_cb, mask_cb);
+            mul_init(out_cb, mask_cb);
+            mul_tiles(out_cb, mask_cb, tile, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(scratch_cb);
+            pack_reconfig_l1_acc(0);
+            cb_reserve_back(scratch_cb, 1);
+            pack_tile(0, scratch_cb);
+            cb_push_back(scratch_cb, 1);
+            tile_regs_release();
+            cb_wait_front(scratch_cb, 1);
+            src_cb = scratch_cb;
+            src_tile = 0;
+        }
+        const uint32_t sq_page = partial ? 1 : 0;  // the square goes behind the masked copy
+        tile_regs_acquire();
+        reconfig_data_format(src_cb, scaler_cb);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(src_cb, scaler_cb, stats_cb);
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(src_cb, scaler_cb, src_tile, 0, 0);
+        reduce_uninit();
+        reconfig_data_format(src_cb, src_cb);
+        mul_init(src_cb, src_cb);
+        mul_tiles(src_cb, src_cb, src_tile, src_tile, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(scratch_cb);
+        pack_reconfig_l1_acc(0);
+        cb_reserve_back(scratch_cb, 1);
+        pack_tile(1, scratch_cb);
+        cb_push_back(scratch_cb, 1);
+        pack_reconfig_data_format(stats_cb);
+        pack_reconfig_l1_acc(1);
+        pack_tile<true>(0, stats_cb, col);
+        tile_regs_release();
+        tile_regs_acquire();
+        cb_wait_front(scratch_cb, 1 + sq_page);
+        reconfig_data_format(scratch_cb, scaler_cb);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(scratch_cb, scaler_cb, stats_cb);
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(scratch_cb, scaler_cb, sq_page, 0, 0);
+        reduce_uninit();
+        cb_pop_front(scratch_cb, 1 + sq_page);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, stats_cb, stats_ntiles + col);
+        tile_regs_release();
+    }
+    pack_reconfig_l1_acc(0);
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
@@ -293,6 +383,14 @@ void kernel_main() {
     DataflowBuffer dfb_untilize_mode_out(untilize_mode_out_cb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
+#ifdef EPILOGUE_STATS
+    uint32_t stats_tiles_pushed = 0;
+    // This core's valid output rows (runtime arg 0: the height-sharded kernel has no skip arg)
+    const uint32_t stats_valid_rows = get_arg_val<uint32_t>(check_skip_compute ? 1 : 0);
+    cb_reserve_back(STATS_CB, 2 * STATS_NTILES);
+    cb_wait_front(SCALER_CB, 1);
+    cb_wait_front(MASK_CB, 1);
+#endif
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -492,6 +590,24 @@ void kernel_main() {
 
                         tile_regs_release();
                         curr_out_dfb.push_back(out_subblock_num_tiles);
+#ifdef EPILOGUE_STATS
+                        if constexpr (!fuse_bias && !untilize_out) {
+                            if (last_inner_dim_block) {
+                                epilogue_stats_tiles<out_cb_id, STATS_CB, SCALER_CB, SCRATCH_CB, MASK_CB, STATS_NTILES>(
+                                    stats_tiles_pushed,
+                                    out_subblock_num_tiles,
+                                    out_subblock_w,
+                                    in1_block_w_i * in1_block_w + in1_index_subblock_offset,
+                                    (in0_block_h_i * in0_num_subblocks + in0_subblock_i) * out_subblock_h,
+                                    stats_valid_rows);
+                                stats_tiles_pushed += out_subblock_num_tiles;
+                                reconfig_data_format(in1_cb_id, mm_in0_cb_id);
+                                matmul_block_init(
+                                    mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                                pack_reconfig_data_format(mm_out_cb_id);
+                            }
+                        }
+#endif
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks
@@ -560,6 +676,21 @@ void kernel_main() {
                         }
                         tile_regs_release();
                         dfb_untilize_mode_out.push_back(out_subblock_num_tiles);
+#ifdef EPILOGUE_STATS
+                        if constexpr (!untilize_out) {
+                            epilogue_stats_tiles<out_cb_id, STATS_CB, SCALER_CB, SCRATCH_CB, MASK_CB, STATS_NTILES>(
+                                stats_tiles_pushed,
+                                out_subblock_num_tiles,
+                                out_subblock_w,
+                                in1_block_w_i * in1_block_w + in1_index_subblock_offset,
+                                (in0_block_h_i * in0_num_subblocks + in0_subblock_i) * out_subblock_h,
+                                stats_valid_rows);
+                            stats_tiles_pushed += out_subblock_num_tiles;
+                            reconfig_data_format(matmul_partials_cb, bias_cb_id);
+                            add_bcast_rows_init(matmul_partials_cb, bias_cb_id);
+                            pack_reconfig_data_format(untilize_mode_out_cb_id);
+                        }
+#endif
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks
@@ -617,4 +748,7 @@ void kernel_main() {
             dfb_bias.pop_front(bias_ntiles_w);
         }
     }
+#ifdef EPILOGUE_STATS
+    cb_push_back(STATS_CB, 2 * STATS_NTILES);  // the page is complete; the writer stores it
+#endif
 }  // void kernel_main()

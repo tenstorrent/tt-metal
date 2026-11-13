@@ -176,7 +176,12 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("slice_config") = nb::none(),
         nb::arg("return_output_dim") = false,
-        nb::arg("return_weights_and_bias") = false);
+        nb::arg("return_weights_and_bias") = false,
+        nb::arg("prologue_scale") = nb::none(),
+        nb::arg("prologue_shift") = nb::none(),
+        nb::arg("halo_boundary") = nb::none(),
+        nb::arg("epilogue_stats") = nb::none(),
+        nb::arg("epilogue_stats_slice_stride") = 0);
 
     mod.def(
         "prepare_conv_weights",
