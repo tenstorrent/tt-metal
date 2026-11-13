@@ -1,0 +1,1 @@
+Error running local model: an error was encountered while running the model: read tcp 127.0.0.1:56663->127.0.0.1:57030: wsarecv: An existing connection was forcibly closed by the remote host. (status code: 500)
