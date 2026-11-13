@@ -4673,7 +4673,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 577.2,
-  "full_pending": true,
+  "full_pending": false,
   "history": [
    {
     "s": 0.0,
@@ -4811,24 +4811,47 @@
   },
   "attempt": 1,
   "attempts": 0,
-  "duration_s": 0.0,
+  "duration_s": 232.1,
   "full_pending": true,
   "history": [
    {
     "s": 0.0,
     "status": "PASS",
     "t": "2026-11-12T16:25:11"
+   },
+   {
+    "reused": [
+     "P.50#test_ladder",
+     "P.50#test_profile"
+    ],
+    "s": 232.1,
+    "status": "PASS",
+    "t": "2026-11-13T19:32:17"
    }
   ],
-  "last_run": "2026-11-12T16:25:11",
+  "last_run": "2026-11-13T19:32:15",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.50.log",
   "rc": 0,
   "reason": [],
   "role": "perf",
-  "stamp": null,
-  "started": "2026-11-12T16:25:11",
+  "stamp": {
+   "reused": [
+    "P.50#test_ladder",
+    "P.50#test_profile"
+   ],
+   "units": {
+    "P.50#test_determinism": "86e6f5bcbf2e6b8a",
+    "P.50#test_ladder": "7ec6f403131ce00d",
+    "P.50#test_profile": "a48a19042b5dc6d0"
+   }
+  },
+  "started": "2026-11-13T19:28:23",
   "status": "PASS",
-  "units": null,
+  "units": {
+   "P.50#test_determinism": "PASS",
+   "P.50#test_ladder": "PASS",
+   "P.50#test_profile": "PASS"
+  },
   "waiting": null
  },
  "P.51": {
