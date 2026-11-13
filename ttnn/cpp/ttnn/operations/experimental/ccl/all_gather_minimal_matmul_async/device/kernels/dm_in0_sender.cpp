@@ -323,12 +323,8 @@ void kernel_main() {
     // is still reading. The announcement lands on the row's other fabric core (beside this one), which on the
     // destination is the core that writes into this device, so each sending core gets exactly one per call.
     auto join_fabric = [&]() {
-        if (mux_backward.connection_valid) {
-            mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_l1_base_semaphore_id);
-        }
-        if (mux_forward.connection_valid) {
-            mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_l1_base_semaphore_id);
-        }
+        mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_l1_base_semaphore_id);
+        mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_l1_base_semaphore_id);
         if (barrier_sem == 0 || !fabric_announces) {
             return;
         }

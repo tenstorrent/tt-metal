@@ -501,9 +501,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // write instead of hopping core to core. Every other configuration keeps the core-to-core relay.
     const bool mcast = fabric_2d && !transpose_core_grid;
     // With multicast, the last K block packs straight to the output over its reloaded FP32 partials (compute.cpp
-    // matmul_blocks<true>): for a plain matmul output (no fused bias, ternary, SwiGLU or activation) with one-tile-high
-    // subblocks and FP32 partials, which unpack to DEST, and whole N blocks of whole subblocks (the output goes out in
-    // subblock pieces).
+    // matmul_blocks_k<true>): for a plain matmul output (no fused bias, ternary, SwiGLU or activation) with
+    // one-tile-high subblocks and FP32 partials, which unpack to DEST, and whole N blocks of whole subblocks (the
+    // output goes out in subblock pieces).
     const bool direct_out = mcast && !fuse_swiglu && !use_bias && !use_fused_ternary && !fused_activation.has_value() &&
                             subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
                             N_tiles_per_core % N_block_tiles == 0 && N_block_tiles % subblock_w == 0;
@@ -902,6 +902,23 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in1_defines["USE_MUX"] = "1";
     }
 
+    // Fabric2D Ring: both neighbours must be one link away, i.e. the fabric wraps this axis (else use Linear).
+    if (fabric_2d && topology == ttnn::ccl::Topology::Ring) {
+        const auto self_node = device->get_fabric_node_id(sender_device_coord);
+        for (const auto& neighbour : {forward_coord, backward_coord}) {
+            const auto node = device->get_fabric_node_id(neighbour.value());
+            const auto direction = tt::tt_fabric::pipeline_get_forwarding_direction(*device, self_node, node);
+            const auto adjacent = direction.has_value()
+                                      ? tt::tt_fabric::pipeline_get_chip_neighbors(*device, self_node, *direction)
+                                      : std::map<uint32_t, std::vector<uint32_t>>{};
+            const auto chips = adjacent.find(*node.mesh_id);
+            TT_FATAL(
+                chips != adjacent.end() &&
+                    std::find(chips->second.begin(), chips->second.end(), node.chip_id) != chips->second.end(),
+                "all_gather_minimal_matmul_async: Fabric2D Ring needs the fabric to wrap this axis; use Linear");
+        }
+    }
+
     // Fabric2D Linear: the two ends of the line address each other by fabric node (rank 0 sends its blocks to the last
     // rank, the last rank announces its entry to rank 0). Both go along the line, so the first hop must be the link to
     // the line neighbour; on an axis the fabric wraps it is not.
@@ -1089,7 +1106,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         kernel.core_ranges = cores;
         kernel.compile_time_args = compile_args;
         kernel.defines = map_to_defines(defines);
-        kernel.named_compile_time_args = agmm_named_args;
         kernel.config = tt::tt_metal::DataMovementConfigDescriptor{.processor = processor, .noc = noc};
         kernel.opt_level = opt_level;
         desc.kernels.push_back(std::move(kernel));
@@ -1319,7 +1335,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         compute_kernel.core_ranges = tt::tt_metal::CoreRangeSet(core_grid);
         compute_kernel.compile_time_args = compute_compile_time_args;
         compute_kernel.defines = map_to_defines(compute_defines);
-        compute_kernel.named_compile_time_args = agmm_named_args;
         compute_kernel.config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -1864,6 +1879,16 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[kComputeKernelIdx].emplace_runtime_args(core, as_runtime_args(compute_runtime_args));
     }
 
+    for (const uint32_t k :
+         {kIn0SenderKernelIdx,
+          kIn0ReceiverNoFabricKernelIdx,
+          kIn0ReceiverFabricKernelIdx,
+          kIn1SenderKernelIdx,
+          kIn1ReceiverKernelIdx,
+          kComputeKernelIdx}) {
+        desc.kernels[k].named_compile_time_args = agmm_named_args;
+    }
+
     // in1 down each column from its row-0 injector, in0 along each row from its x = 0 injector (the fabric cores at
     // the far end of the row receive it like any core and forward it to the neighbour chips from their L1). Without
     // multicast the kernels see the channels as absent.
@@ -1874,10 +1899,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[kIn0ReceiverNoFabricKernelIdx],
         desc.kernels[kIn0ReceiverFabricKernelIdx]};
     // A block's later in1 column chunks: one pipe each, no handshake (the first chunk's covers the block).
-    std::vector<std::string> in1_chunk_channels;
-    for (uint32_t c = 1; c < kMaxIn1Chunks; c++) {
-        in1_chunk_channels.push_back(fmt::format("in1_chunk{}_mcast", c));
-    }
+    constexpr std::array<std::string_view, kMaxIn1Chunks - 1> in1_chunk_channels = {
+        "in1_chunk1_mcast", "in1_chunk2_mcast"};
     if (!mcast) {
         for (auto& kernel : in1_targets) {
             ttnn::kernel_lib::host::attach_absent_mcast(kernel.get(), "in1_mcast");
