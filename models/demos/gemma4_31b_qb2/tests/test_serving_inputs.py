@@ -504,3 +504,16 @@ def test_warm_up_captures_every_decode_and_verify_trace(monkeypatch):
     model.warmup_model_decode(model.cache, True)
     expected = [model.cache, *model.sub_caches.values(), *model.verify_caches.values()]
     assert len(captured) == len(expected) == 1 + 2 + 2 and all(any(c is e for c in captured) for e in expected)
+
+
+@pytest.mark.parametrize("context", [100096, 1152, 129 * 128])
+def test_serving_context_must_be_a_multiple_of_1024(context, expect_error):
+    with expect_error(ValueError, "multiple of 1024"):
+        Gemma4ForCausalLM.initialize_vllm_model(SimpleNamespace(), None, 32, max_seq_len=context)
+
+
+@pytest.mark.parametrize("context", [262144, 131072, 65536, 8192])
+def test_supported_serving_contexts_pass_the_page_table_check(context, expect_error):
+    config = SimpleNamespace(text_config=SimpleNamespace(hidden_size=1, num_hidden_layers=1))
+    with expect_error(ValueError, "Expected the Gemma4 31B checkpoint"):  # past the context checks
+        Gemma4ForCausalLM.initialize_vllm_model(config, None, 32, max_seq_len=context)
