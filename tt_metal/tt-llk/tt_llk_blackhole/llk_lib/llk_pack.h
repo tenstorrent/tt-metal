@@ -693,6 +693,26 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
     }
 }
 
+// _llk_pack_'s byte-wise default form for a tile whose destination follows prev_address within the same pack call: the
+// address's high byte is written only where it differs from prev_address's, the last value written.
+template <DstSync Dst, bool w_invalidate = true>
+inline void _llk_pack_next_(const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t prev_address)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    if constexpr (w_invalidate)
+    {
+        LLK_PACK_W_INVALIDATE();
+    }
+    TT_RMWCIB0(0xff, address & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    TT_RMWCIB1(0xff, (address >> 8) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    if (((address ^ prev_address) >> 16) != 0)
+    {
+        TT_INSN(TT_OP_RMWCIB2(0xff, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32) + ((address >> 8) & 0xff00));
+    }
+    set_dst_write_addr(tile_index);
+    ckernel::ckernel_template::run();
+}
+
 // Packs num_tiles consecutive 32x32 tiles to consecutive L1 tiles with one run of the default program.
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false, bool w_invalidate = true>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)

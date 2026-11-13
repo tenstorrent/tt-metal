@@ -820,6 +820,15 @@ __attribute__((always_inline)) inline void llk_pack_block_tiles(const std::uint3
             return;
         }
     }
+    if constexpr (ntiles == 2 && llk_pack_rmw_per_tile<is_fp32_dest_acc_en, PackMode::Default>)
+    {
+        // The second tile's address is in hand with the first's: its high byte is written only if it differs.
+        const std::uint32_t addr0 = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+        llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default, false>(start_tile_index, addr0, output_id);
+        const std::uint32_t addr1 = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+        _llk_pack_next_<DST_SYNC_MODE, false>(start_tile_index + 1, addr1, addr0);
+        return;
+    }
     llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
 }
 
