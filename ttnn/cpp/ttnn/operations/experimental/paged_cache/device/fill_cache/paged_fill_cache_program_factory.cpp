@@ -7,6 +7,7 @@
 #include "paged_fill_cache_device_operation.hpp"
 #include "paged_fill_cache_device_operation_types.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <tt-metalium/buffer.hpp>
@@ -17,6 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/mesh_device_operation_utils.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -52,6 +54,11 @@ const TensorParamName FC_PAGE_TABLE_T{"page_table"};
 const TensorParamName FC_BATCH_IDX_T{"batch_idx"};
 const TensorParamName FC_VALID_SEQ_LEN_T{"valid_seq_len"};
 
+// Whether `coord` is selected by mesh_coords (every coordinate is when mesh_coords is not given).
+bool paged_fill_cache_selected(const PagedFillCacheParams& operation_attributes, const ttnn::MeshCoordinate& coord) {
+    return !operation_attributes.mesh_coords.has_value() || operation_attributes.mesh_coords->contains(coord);
+}
+
 // `noop` is the only thing that differs between the single-device and the mesh-workload factory: a
 // mesh coordinate outside operation_attributes.mesh_coords gets a noop program (kernels early-exit).
 // Single source of truth for that choice, called by both artifact-building entry points and by
@@ -59,8 +66,7 @@ const TensorParamName FC_VALID_SEQ_LEN_T{"valid_seq_len"};
 // (mesh_coords is nullopt on the single-device path, where the coordinate is ignored).
 bool paged_fill_cache_noop(
     const PagedFillCacheParams& operation_attributes, const std::optional<ttnn::MeshCoordinate>& coord) {
-    if (operation_attributes.mesh_coords.has_value() && coord.has_value() &&
-        !operation_attributes.mesh_coords->contains(coord.value())) {
+    if (coord.has_value() && !paged_fill_cache_selected(operation_attributes, *coord)) {
         return true;
     }
     return operation_attributes.noop;
@@ -569,21 +575,27 @@ ttnn::device_operation::MeshWorkloadArtifacts PagedFillCacheMeshWorkloadFactory:
     const PagedFillCacheInputs& tensor_args,
     Tensor& /*tensor_return_value*/,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    // One program per coordinate, which is what the ported-from descriptor path built (the descriptor
-    // adapter iterates tensor_coords.coords() for a create_descriptor that takes a coordinate). Every
-    // coordinate gets a program; coordinates outside mesh_coords get one whose kernels early-exit on
-    // `noop`, so the cache slot is still populated for them.
+    // Every coordinate gets a program; coordinates outside mesh_coords get one whose kernels early-exit on
+    // `noop`, so the cache slot is still populated for them. The programs differ only in `noop`, so one program
+    // covers each rectangle of coordinates on the same side of mesh_coords (part of the program hash). The
+    // rectangles follow mesh_coords alone, not the hash-excluded attrs.noop, so a cache hit with another attrs.noop
+    // still finds every range on one side (the override derives `noop` per range).
     ttnn::device_operation::MeshWorkloadArtifacts artifacts;
-    for (const auto& coord : tensor_coords.coords()) {
-        auto per_coord = build_paged_fill_cache_artifacts(
-            operation_attributes,
-            tensor_args,
-            paged_fill_cache_noop(operation_attributes, std::optional<ttnn::MeshCoordinate>(coord)));
-        artifacts.programs.push_back({
-            .range = ttnn::MeshCoordinateRange(coord),
-            .spec = std::move(per_coord.spec),
-            .run_params = std::move(per_coord.run_params),
-        });
+    for (const auto& tensor_range : tensor_coords.ranges()) {
+        for (const bool selected : {true, false}) {
+            for (const auto& range : ttnn::device_operation::mesh_device_operation_utils::coalesce_coordinates(
+                     tensor_range, [&](const ttnn::MeshCoordinate& coord) {
+                         return paged_fill_cache_selected(operation_attributes, coord) == selected;
+                     })) {
+                auto per_range = build_paged_fill_cache_artifacts(
+                    operation_attributes, tensor_args, operation_attributes.noop || !selected);
+                artifacts.programs.push_back({
+                    .range = range,
+                    .spec = std::move(per_range.spec),
+                    .run_params = std::move(per_range.run_params),
+                });
+            }
+        }
     }
     return artifacts;
 }
@@ -593,8 +605,18 @@ ProgramRunArgs PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
     const PagedFillCacheInputs& tensor_args,
     Tensor& /*tensor_return_value*/,
     const ttnn::MeshCoordinateRange& range) {
-    // create_mesh_workload_artifacts emits one program per coordinate, so every range is a single
-    // coordinate and its start coordinate is the whole of it.
+    // create_mesh_workload_artifacts emits ranges whose coordinates are all on one side of mesh_coords, so the
+    // range's start coordinate decides `noop` for the whole range.
+    TT_ASSERT(
+        std::all_of(
+            range.begin(),
+            range.end(),
+            [&](const ttnn::MeshCoordinate& coord) {
+                return paged_fill_cache_selected(operation_attributes, coord) ==
+                       paged_fill_cache_selected(operation_attributes, range.start_coord());
+            }),
+        "paged_fill_cache: range {} mixes selected and unselected coordinates",
+        range);
     return paged_fill_cache_run_args_for_coord(
         operation_attributes, tensor_args, std::optional<ttnn::MeshCoordinate>(range.start_coord()));
 }

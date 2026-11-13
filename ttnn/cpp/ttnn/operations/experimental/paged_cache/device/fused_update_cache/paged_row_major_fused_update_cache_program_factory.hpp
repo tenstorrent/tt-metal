@@ -48,9 +48,9 @@ struct PagedRowMajorFusedUpdateCacheProgramFactory {
 };
 
 struct PagedRowMajorFusedUpdateCacheMeshWorkloadFactory {
-    // Per-coord program build. Coordinates outside operation_attributes.mesh_coords (when provided)
-    // get no program at all, which is what the ported-from path expressed by handing back an empty
-    // ProgramDescriptor for them.
+    // One program per rectangle of selected coordinates (the program is the same on all of them).
+    // Coordinates outside operation_attributes.mesh_coords (when provided) get no program at all,
+    // which is what the ported-from path expressed by handing back an empty ProgramDescriptor.
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const PagedFusedUpdateCacheParams& operation_attributes,
         const PagedFusedUpdateCacheInputs& tensor_args,
