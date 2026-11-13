@@ -40,9 +40,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
-    CACHE_LEN,
     CHUNK,
-    HF_CONFIGS,
     build_stack,
     compose,
     placements,
@@ -89,16 +87,14 @@ def _run_sequence(model, mesh_device, ids, kvpe, index) -> list[torch.Tensor | N
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize(
-    "model, mesh_device, device_params", placements(["kimi_k3_1"]), indirect=["mesh_device", "device_params"]
-)
+@pytest.mark.parametrize("mesh_device, device_params", placements(), indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("window", list(WINDOWS), ids=list(WINDOWS))
-def test_k31_dsa_block_finite_and_deterministic(model, mesh_device, device_params, window):
+def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, window):
     first_layer_idx, num_layers, kv_only = WINDOWS[window]
     logger.info(f"{window}: building synthetic weights for layers [{first_layer_idx}, {first_layer_idx + num_layers})")
-    state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), first_layer_idx, num_layers)
+    state_dict = synthetic_state_dict(first_layer_idx, num_layers)
     logger.info(f"{window}: building the model")
-    stack, caches = build_stack(mesh_device, model, state_dict, first_layer_idx, num_layers, kv_only_last_layer=kv_only)
+    stack, caches = build_stack(mesh_device, state_dict, first_layer_idx, num_layers, kv_only_last_layer=kv_only)
     dsa_layers = [layer for layer in stack.layers if layer.attention.writes_kv]
     assert dsa_layers and all(layer.attention.mla._has_indexer for layer in dsa_layers), "K3.1 layers must be DSA"
     kvpe, index = caches.kvpe, caches.index
