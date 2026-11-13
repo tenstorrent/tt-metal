@@ -25,7 +25,7 @@ from models.demos.common.prefill.prefill_chunk import (
     decode_forward_metadata,
     decode_media_refs,
     forward_metadata_words,
-    max_media_refs,
+    media_refs_capacity,
     metadata_size_bytes,
     packed_forward_capabilities,
     sentinel_words,
@@ -199,9 +199,9 @@ assert (
 ), f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: model {ADAPTER.name!r} does not take media refs"
 assert not (MEDIA_MAX_REFS and USE_TRACE), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_USE_TRACE=1 yet"
 _H2D_PAGE_BYTES = int(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS).shape[-1]) * TOKEN_ID_BYTES
-assert MEDIA_MAX_REFS <= max_media_refs(FORWARD_CHUNKS, _H2D_PAGE_BYTES), (
+assert MEDIA_MAX_REFS <= media_refs_capacity(FORWARD_CHUNKS, _H2D_PAGE_BYTES), (
     f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: the H2D metadata must fit one {_H2D_PAGE_BYTES} B socket page, "
-    f"which holds at most {max_media_refs(FORWARD_CHUNKS, _H2D_PAGE_BYTES)} refs"
+    f"which holds at most {media_refs_capacity(FORWARD_CHUNKS, _H2D_PAGE_BYTES)} refs"
 )
 
 check_packed_forward_support(
