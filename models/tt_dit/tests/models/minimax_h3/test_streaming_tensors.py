@@ -163,8 +163,12 @@ class CurrentSourceBridgeTests(unittest.TestCase):
             for target_height, target_width in ((32, 32), (64, 96)):
                 with self.subTest(mode=mode, target=(target_height, target_width)):
                     prepared, frames = r.prepare_references(
-                        [ref], 124, 32000, reference_resize_mode=mode,
-                        target_height=target_height, target_width=target_width
+                        [ref],
+                        124,
+                        32000,
+                        reference_resize_mode=mode,
+                        target_height=target_height,
+                        target_width=target_width,
                     )
                     side = target_height if mode == "match" else 768
                     self.assertEqual(frames, 124)

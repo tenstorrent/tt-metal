@@ -51,8 +51,15 @@ class Native:
 
 
 def manager(native):
-    names = {"get_dim", "get_ag_ping_pong_buffer", "get_np_ping_pong_buffer", "transient_ping_pong_buffers",
-             "audio_buffer_scope", "_check_audio_buffer", "_record_audio_buffer"}
+    names = {
+        "get_dim",
+        "get_ag_ping_pong_buffer",
+        "get_np_ping_pong_buffer",
+        "transient_ping_pong_buffers",
+        "audio_buffer_scope",
+        "_check_audio_buffer",
+        "_record_audio_buffer",
+    }
     cls = type("Manager", (), methods("parallel/manager.py", "CCLManager", names, {"ttnn": native}))
     obj = cls()
     obj.mesh_device = SimpleNamespace(shape=(4, 8))
@@ -90,6 +97,7 @@ def vocoder(m, native):
             return x
         finally:
             native.capturing = False
+
     forward._tracers_keyed = {}
     cls._forward_device = forward
     obj._device_to_host = lambda x: x
@@ -105,10 +113,16 @@ class PreparationTest(unittest.TestCase):
         native = Native()
         m = manager(native)
         names = {"warmup", "_warm_audio_decode", "_capture_audio", "_audio_ccl_transient"}
-        ns = {"_skip_decode_warm": lambda: False, "_is_host_rank": lambda: False,
-              "tqdm": SimpleNamespace(tqdm=lambda x, **kw: x), "sys": SimpleNamespace(stderr=None),
-              "_TQDM_BAR_FORMAT": ""}
-        cls = type("Pipeline", (), methods("pipelines/minimax_h3/pipeline_minimax_h3.py", "MiniMaxH3Pipeline", names, ns))
+        ns = {
+            "_skip_decode_warm": lambda: False,
+            "_is_host_rank": lambda: False,
+            "tqdm": SimpleNamespace(tqdm=lambda x, **kw: x),
+            "sys": SimpleNamespace(stderr=None),
+            "_TQDM_BAR_FORMAT": "",
+        }
+        cls = type(
+            "Pipeline", (), methods("pipelines/minimax_h3/pipeline_minimax_h3.py", "MiniMaxH3Pipeline", names, ns)
+        )
         p = cls()
         p.dynamic_length = False
         p.bucket_denoise = True
@@ -122,7 +136,9 @@ class PreparationTest(unittest.TestCase):
         p._host_log = lambda *args: None
         p._audio_warm_inputs = lambda: [tensor(32), tensor(64)]
         v = vocoder(m, native)
-        p._prepare_audio_decoder = lambda: lambda x, traced=False: v.forward_device_BTC(x, t_pad=0, traced=traced, trace_key=x.shape)
+        p._prepare_audio_decoder = lambda: lambda x, traced=False: v.forward_device_BTC(
+            x, t_pad=0, traced=traced, trace_key=x.shape
+        )
         p._capture_traces = lambda prompt, fitted, overrides, trace_audio: p._capture_audio(trace_audio)
         p.warmup()
         self.assertEqual(v.calls, [False, False, True, True])
@@ -132,8 +148,10 @@ class PreparationTest(unittest.TestCase):
         syncs = native.syncs
         p._capture_audio(True)
         self.assertEqual(native.syncs, syncs)
+
         def fail_warm(*args):
             raise RuntimeError("warm failed")
+
         p._warm_denoise_buckets = fail_warm
         with self.assertRaisesRegex(RuntimeError, "warm failed"):
             p.warmup()
@@ -142,12 +160,20 @@ class PreparationTest(unittest.TestCase):
 
     def test_untraced_nonpersistent_policy_still_releases_buffers(self):
         ns = methods("pipelines/minimax_h3/pipeline_minimax_h3.py", "MiniMaxH3Pipeline", {"_audio_ccl_transient"}, {})
-        for trace, warming, persistent in [(False, False, False), (True, False, False),
-                                            (False, True, False), (False, False, True)]:
+        for trace, warming, persistent in [
+            (False, False, False),
+            (True, False, False),
+            (False, True, False),
+            (False, False, True),
+        ]:
             native = Native()
             m = manager(native)
-            p = SimpleNamespace(audio_ccl_manager=m, trace_audio=trace,
-                                _warming_audio_trace=warming, use_persistent_ccl_buffers=persistent)
+            p = SimpleNamespace(
+                audio_ccl_manager=m,
+                trace_audio=trace,
+                _warming_audio_trace=warming,
+                use_persistent_ccl_buffers=persistent,
+            )
             with ns["_audio_ccl_transient"](p):
                 np_buffer(m)
             self.assertEqual(bool(m._ping_pong_buffer_cache), trace or warming or persistent)
@@ -158,8 +184,13 @@ class PreparationTest(unittest.TestCase):
         a, b = vocoder(m, native), vocoder(m, native)
         x = tensor()
         a.forward_device_BTC(x, t_pad=0, trace_key="a")
-        for target, value, pad, key in [(b, x, 0, "a"), (a, tensor(64), 0, "a"),
-                                         (a, tensor(dtype="fp32"), 0, "a"), (a, x, 1, "a"), (a, x, 0, "b")]:
+        for target, value, pad, key in [
+            (b, x, 0, "a"),
+            (a, tensor(64), 0, "a"),
+            (a, tensor(dtype="fp32"), 0, "a"),
+            (a, x, 1, "a"),
+            (a, x, 0, "b"),
+        ]:
             with self.subTest(target=target, shape=value.shape, pad=pad, key=key):
                 with self.assertRaisesRegex(RuntimeError, "prepar|warm"):
                     target.forward_device_BTC(value, t_pad=pad, traced=True, trace_key=key)
