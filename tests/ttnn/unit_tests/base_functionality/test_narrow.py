@@ -300,8 +300,16 @@ def test_narrow_mesh(input_shape, dim, start, length, memory_config, layout, mes
         ((1, 1, 40, 64), 2, 0, 64),
         ((1, 1, 32, 40), 3, 32, 32),
         ((1, 1, 32, 40), 3, 0, 64),
+        # negative start below -logical (but within -padded) must be rejected, not underflow
+        ((1, 1, 40, 64), 2, -64, 32),
     ],
-    ids=["height_ends_in_pad", "height_full_padded", "width_ends_in_pad", "width_full_padded"],
+    ids=[
+        "height_ends_in_pad",
+        "height_full_padded",
+        "width_ends_in_pad",
+        "width_full_padded",
+        "height_negative_start_below_logical",
+    ],
 )
 def test_narrow_rejects_window_into_tile_padding(input_shape, dim, start, length, device, expect_error):
     # Regression for #55310: bounds are checked against the logical shape, not the tile-padded shape.
@@ -312,6 +320,24 @@ def test_narrow_rejects_window_into_tile_padding(input_shape, dim, start, length
     )
     with expect_error(RuntimeError, "out of bounds"):
         ttnn.narrow(input_tensor, dim, start, length)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, length",
+    [((1, 1, 40, 64), 2, 0, 32)],
+    ids=["height_within_logical"],
+)
+def test_narrow_non_tile_aligned_logical_shape_in_bounds(input_shape, dim, start, length, device):
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_result = torch.narrow(torch_input_tensor, dim, start, length)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn_output = ttnn.narrow(input_tensor, dim, start, length)
+
+    assert list(ttnn_output.shape) == list(torch_result.shape)
+    assert_equal(torch_result, ttnn.to_torch(ttnn_output))
 
 
 @pytest.mark.parametrize(
