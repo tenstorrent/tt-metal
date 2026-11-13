@@ -64,7 +64,8 @@ class Gemma4ForCausalLM:
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
-        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+        from vllm.v1.kv_cache_interface import FullAttentionSpec
+        from vllm_tt_plugin.kv_cache_anchor import AnchoredSlidingWindowSpec
 
         if vllm_config.max_in_flight_tokens > 2 * cls.MAX_PREFILL_TOKENS:
             raise ValueError("Gemma4 QB2 supports at most 8192 batched tokens with async chunked prefill")
@@ -87,7 +88,7 @@ class Gemma4ForCausalLM:
                 page_size_padded=page_bytes,
             )
             result[f"model.layers.{i}.self_attn"] = (
-                SlidingWindowSpec(**common, sliding_window=config.sliding_window)
+                AnchoredSlidingWindowSpec(**common, sliding_window=config.sliding_window)
                 if sliding
                 else FullAttentionSpec(**common)
             )
@@ -98,8 +99,14 @@ class Gemma4ForCausalLM:
         # The shared pool uses one full-attention group and five sliding groups.
         # Each window can straddle nine pages. Reserve both async batches of
         # in-flight prefill tokens globally, in addition to the per-request tails.
+        # vLLM checks that one request of the full context fits, and that request also keeps the eight pages of its
+        # prompt's cache-hit window (AnchoredSlidingWindowSpec): reserve them once. Many requests holding their
+        # windows at once wait for blocks in the scheduler instead of growing the pool.
         # The plugin separately adds one output page per request.
-        tails = Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
+        tails = (
+            Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
+            + (Decoder.SLIDING_WINDOW_PAGES - 1) * Decoder.PAGE_SIZE
+        )
         return 262144 + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
