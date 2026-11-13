@@ -560,8 +560,8 @@ def test_kv_cache_spec_declares_k_speculative_blocks(hf_config, expect_error):
 
 
 def test_decode_input_update_contract():
-    """The spec class opts out of the reload commands; the base class keeps them."""
-    assert CLS.decode_input_update_contract == 0
+    """Both classes take the reload commands; the spec class stages every input from the host."""
+    assert CLS.decode_input_update_contract == 1
     assert Qwen36ForCausalLM.decode_input_update_contract == 1
 
 
@@ -587,7 +587,7 @@ def test_capabilities():
     assert caps["supports_spec_decode"] is True
     assert "device_propose" in caps["spec_requirements"]
     assert tuple(caps["spec_hidden_handoff"]) == ("on_device",)
-    assert caps["supports_async_decode"] is False
+    assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is True and caps["supports_chunked_prefill"] is True
     assert issubclass(CLS, Qwen36ForCausalLM)
@@ -713,6 +713,45 @@ def test_decode_forward_verify(gen_eng):
     table = kw["page_table"]
     assert table.shape == (1, w) and table.dtype == torch.int32
     assert torch.equal(table[0, :4], pt[0]) and not table[0, 4:].any()
+
+
+def test_a_verify_read_from_device_false_is_read_through_its_event(gen_eng, expect_error):
+    """read_from_device=False defers an argmax_ids verify: decode_forward returns the engine's PendingVerify unread,
+    read_decode_output hands it back with its read event, and process_decode_output_host reads it, masking the columns
+    past each row's valid drafts. Host outputs pass through with no event; a step that would keep inputs resident is
+    refused, since every input is staged from the host."""
+    from models.demos.blackhole.qwen36.tt.spec_engine import PendingVerify
+
+    gen, eng = gen_eng
+    lanes = torch.zeros(1, 1, 1, 32, dtype=torch.int64)
+    lanes[0, 0, 0, :4] = torch.tensor([4, 5, 6, 7])
+    reads = SimpleNamespace(event="event", result=lambda: [lanes])
+    pending = PendingVerify(1, 3, [2], [True], None, 1, set(), reads=reads)
+
+    def deferred(tokens, start_pos, slot_remap=None, **kw):
+        eng.calls.append(("decode_forward", tokens, start_pos, kw))
+        return VerifyResult(spec_mode=kw["spec_mode"], argmax_ids=pending)
+
+    eng.decode_forward = deferred
+    kw = dict(
+        tokens=torch.tensor([[1, 2, 3, 4]], dtype=torch.int32), start_pos=torch.tensor([10], dtype=torch.int32),
+        page_table=torch.arange(1, 5, dtype=torch.int32).reshape(1, 4), kv_cache=None, enable_trace=True,
+        num_valid_drafts=torch.tensor([2], dtype=torch.int32), accepted_counts=torch.tensor([1], dtype=torch.int32),
+        spec_mode="argmax_ids", mamba_state=MAMBA_STATE, reload_inputs=True, reload_page_table=False,
+    )  # fmt: skip
+    out = gen.decode_forward(**kw, read_from_device=False)
+    assert _last(eng, "decode_forward")[3]["defer"] is True and out.argmax_ids is pending
+    handle, events = gen.read_decode_output(out.argmax_ids, async_read=True)
+    assert handle is pending and events == ["event"]
+    assert gen.process_decode_output_host(handle, is_tokens=True).tolist() == [[4, 5, 6, -1]]
+    assert gen.read_decode_output(pending).tolist() == [[4, 5, 6, -1]]
+    host = torch.zeros(1, 1)
+    assert gen.read_decode_output(host, async_read=True) == (host, []) and gen.read_decode_output(host) is host
+    assert gen.process_decode_output_host(host) is host
+    gen.decode_forward(**kw)
+    assert _last(eng, "decode_forward")[3]["defer"] is False
+    with expect_error(ValueError, "reload_inputs=False"):
+        gen.decode_forward(**{**kw, "reload_inputs": False}, read_from_device=False)
 
 
 def test_decode_forward_logits_mode_carries_logits(gen_eng):

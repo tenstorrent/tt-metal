@@ -580,8 +580,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     _PER_ROW_ROPE_DELTA = True
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
-    # decode_forward is overridden and does not execute the reload commands (DECODE_RELOAD_CONTRACT legacy mode)
-    decode_input_update_contract = 0
+    # decode_forward takes the reload commands: it stages every input of every step from the host, so it accepts only
+    # reload_inputs=True. The plugin sends nothing else: a verify always reloads, and an ordinary decode returns host
+    # ids (read inside the call), which makes the next ordinary decode a reload too.
+    decode_input_update_contract = 1
 
     # verify answers argmax_ids (greedy, or the device sampler's draws on a device-sampled step) or logits
     # ([B, 1+K, V] for host acceptance)
@@ -590,8 +592,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose", "hidden_feed"),
         "spec_hidden_handoff": ("on_device",),
-        "supports_async_decode": False,
-        "supports_async_spec_decode": False,
+        # An argmax_ids verify returns unread (read_from_device=False): read_decode_output waits on its event. An
+        # ordinary decode returns host ids.
+        "supports_async_decode": True,
+        "supports_async_spec_decode": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,
@@ -804,8 +808,14 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             raise ValueError(
                 "Qwen36MTPContractForCausalLM keeps the GDN state in vLLM KV cache blocks and needs mamba_state"
             )
+        if kwargs.get("reload_inputs", True) is not True or kwargs.get("reload_page_table", False):
+            raise ValueError(
+                f"Qwen36MTPContractForCausalLM stages every input from the host: reload_inputs="
+                f"{kwargs.get('reload_inputs')}, reload_page_table={kwargs.get('reload_page_table')}"
+            )
         if "spec_mode" not in kwargs:
             return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap, mamba_state)
+        defer = not kwargs.get("read_from_device", True)
         num_valid_drafts = kwargs.pop("num_valid_drafts")
         accepted_counts = kwargs.pop("accepted_counts")
         spec_mode = kwargs.pop("spec_mode")
@@ -821,9 +831,26 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             slot_remap=remap,
             mamba_state=mamba_state,
             sampling=kwargs.get("sampling_params"),
+            defer=defer,
         )
         logits = res.logits if spec_mode == "logits" else None
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
+
+    def read_decode_output(self, tt_out, async_read=False, **kwargs):
+        """A deferred verify's ids (PendingVerify): with ``async_read``, the handle and its read event, which
+        process_decode_output_host turns into host ids; else the host ids. Host outputs (an ordinary decode, a logits
+        verify) pass through with no event."""
+        from models.demos.blackhole.qwen36.tt.spec_engine import PendingVerify
+
+        if isinstance(tt_out, PendingVerify):
+            return (tt_out, [tt_out.event]) if async_read else tt_out.result()
+        return (tt_out, []) if async_read else tt_out
+
+    def process_decode_output_host(self, tt_out, is_tokens=False, **kwargs):
+        """The host ids [B, 1+K] int32 of a deferred verify (columns past a row's valid drafts -1)."""
+        from models.demos.blackhole.qwen36.tt.spec_engine import PendingVerify
+
+        return tt_out.result() if isinstance(tt_out, PendingVerify) else tt_out
 
     def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap, mamba_state):
         """Ordinary [B, 1] decode step (no drafts) run as a verify whose drafts are all padding: column 0's state goes

@@ -16,7 +16,9 @@ start_pos + 1 .. start_pos + m + 1. The bonus is the next ``pending``; the ancho
 The drafter pairs (hidden at slot s, token at s+1) -> slot s."""
 import math
 import os
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -71,6 +73,63 @@ class VerifyResult:
     spec_mode: str
     argmax_ids: torch.Tensor
     logits: torch.Tensor | None = None
+
+
+class DeviceReads:
+    """Non-blocking reads of device tensors, and the event recorded after them: result() waits for the event once and
+    returns the host torch tensors."""
+
+    def __init__(self, reads, event):
+        self.reads, self.event, self._host = reads, event, None
+
+    def result(self):
+        if self._host is None:
+            ttnn.event_synchronize(self.event)
+            self._host = [ttnn.to_torch(r) for r in self.reads]
+        return self._host
+
+
+class PendingVerify:
+    """One argmax_ids verify of MTPBlockEngine and what the propose_draft_tokens after it needs: its reads (the ids, the
+    sampler's draws on a device-sampled step, and on a one-enqueue step the drafter pack and the drafts), the rows it
+    ran (``num_valid``, ``active``, the fitted table ``pt`` and its width ``cap_blocks``), the slots whose drafts the
+    runner withholds at that verify (``no_draft``) and its one-enqueue ``plan``. wait() reads once, on whichever thread
+    first asks, and touches no engine state; result() returns the ids with columns past each row's valid drafts set to
+    PLACEHOLDER_TOKEN_ID, as a synchronous verify returns them."""
+
+    def __init__(self, B, K, num_valid, active, pt, cap_blocks, no_draft, plan=None, sample_plan=None, reads=None):
+        self.B, self.K, self.T = int(B), int(K), int(K) + 1
+        self.num_valid = torch.as_tensor(num_valid).reshape(-1).to(torch.int64).clone()
+        self.active = torch.as_tensor(active, dtype=torch.bool).reshape(-1).clone()
+        self.pt, self.cap_blocks, self.no_draft = pt, cap_blocks, set(no_draft)
+        self.plan, self.sample_plan, self.reads = plan, sample_plan, reads
+        self.ids = self.pack = self.drafts = None
+        self._lock = threading.Lock()
+
+    @property
+    def event(self):
+        return None if self.reads is None else self.reads.event
+
+    def wait(self):
+        """The merged ids [B, T] int64 (draws in a drawn row's columns), unmasked."""
+        with self._lock:
+            if self.ids is None:
+                B, T = self.B, self.T
+                host = self.reads.result()
+                ids = host[0].reshape(-1)[: B * T].to(torch.int64).reshape(B, T)
+                k = 1
+                if self.sample_plan is not None:
+                    ids = with_draws(ids, host[1], self.sample_plan)
+                    k = 2
+                if self.plan is not None:
+                    self.pack = host[k].to(torch.int64)
+                    steps = [r.reshape(-1)[:B].to(torch.int64) for r in host[k + 1 :]]
+                    self.drafts = torch.stack(steps, dim=1).to(torch.int32)
+                self.ids = ids
+            return self.ids
+
+    def result(self):
+        return mask_unused_columns(self.wait(), self.num_valid).to(torch.int32)
 
 
 @dataclass
@@ -1208,9 +1267,11 @@ class MTPSpecEngine:
         mamba_state=None,
         sampling=None,
         one_enqueue=True,
+        defer=False,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block); slot_remap is applied after
-        validation. ``mamba_state``: the GDN state blocks of the step (MTPBlockEngine only). ``sampling``: the step's
+        validation. ``defer`` (MTPBlockEngine, argmax_ids): return the verify unread, as a PendingVerify in
+        ``argmax_ids``. ``mamba_state``: the GDN state blocks of the step (MTPBlockEngine only). ``sampling``: the step's
         device sampling parameters (the plugin's ``sampling_params``, one entry per row) or None; a row they sample
         returns the device sampler's draws in place of its argmax ids (spec_sample). ``one_enqueue``: an argmax_ids
         verify may also run the device acceptance and the drafter (MTPBlockEngine); a narrow decode step, which the
@@ -1255,7 +1316,10 @@ class MTPSpecEngine:
             **(
                 {"one_enqueue": True} if one_enqueue and spec_mode == "argmax_ids" and self._one_enqueue_ready() else {}
             ),
+            **({"defer": True} if defer and spec_mode == "argmax_ids" else {}),
         )
+        if isinstance(ids, PendingVerify):
+            return VerifyResult(spec_mode, ids, logits)
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 
     def _one_enqueue_ready(self):
@@ -1600,6 +1664,12 @@ class MTPSpecEngine:
         """[*, B] uint32 device ids of each tensor -> B ints per tensor (_read_device0)."""
         return [[int(v) for v in t.reshape(-1)[: self.B]] for t in self._read_device0(id_tts)]
 
+    def _read_device0_async(self, tensors):
+        """Each tensor's device-0 replica, read without blocking; the reads land once the returned DeviceReads' event
+        has passed."""
+        reads = [ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False) for t in tensors]
+        return DeviceReads(reads, ttnn.record_event(self.mesh, 0))
+
     def _read_device0(self, tensors):
         """Each tensor's device-0 replica as a torch tensor, with one wait: every read is enqueued without blocking,
         then one synchronize fills them all."""
@@ -1789,7 +1859,7 @@ class MTPBlockEngine(MTPSpecEngine):
         self._accept = None  # spec_accept.StepAccept, once prepared
         self._acc_trace = None  # the step trace
         self._acc_pt_staged = None  # host table rows the step trace's pt_rows holds, None when unknown
-        self._step_pending = None  # the one-enqueue verify whose drafts the next propose returns
+        self._pending = deque()  # PendingVerify of each verify whose propose_draft_tokens has not run, oldest first
         self.one_enqueue_steps = 0  # verifies that ran the device acceptance and the drafter
         self.verify_steps = 0  # every verify after capture
         self.one_enqueue_host_proposes = 0  # one-enqueue verifies whose propose drafted again on the host
@@ -1891,7 +1961,8 @@ class MTPBlockEngine(MTPSpecEngine):
         if self._accept is not None:
             self._accept.release()
             self._accept = None
-        self._acc_pt_staged = self._step_pending = None
+        self._acc_pt_staged = None
+        self._pending.clear()
         super().shutdown()
 
     def capture_decode(self):
@@ -1955,17 +2026,20 @@ class MTPBlockEngine(MTPSpecEngine):
         mamba_state=None,
         sample_plan=None,
         one_enqueue=False,
+        defer=False,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j, every GDN layer on the blocks of
         ``mamba_state``. A row's first verify after its prompt first writes the drafter KV of the prompt's last
         position. ``accepted_counts`` selects no state. Returns (ids int32 [B, T], logits [B, T, vocab] or None).
         ``sample_plan`` (spec_sample.sampling_plan): each row it samples returns the device sampler's draws instead of
         its argmax ids. ``one_enqueue`` (argmax_ids only): run the step as a one-enqueue step when its next propose is
-        decided before the verify (_one_enqueue_plan)."""
+        decided before the verify (_one_enqueue_plan). ``defer`` (argmax_ids only): enqueue the reads without waiting
+        and return a PendingVerify in place of the ids."""
         assert self.captured, "verify before capture"
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
-        self._step_pending = None
+        # Each propose_draft_tokens follows its own verify; one never run leaves nothing to return.
+        self._pending.clear()
         if self.verify_steps % ONE_ENQUEUE_LOG_EVERY == 0:  # a server's engine is killed without a shutdown
             self._log_one_enqueue_counts()
         self.verify_steps += 1
@@ -2013,8 +2087,20 @@ class MTPBlockEngine(MTPSpecEngine):
         plan = None
         if one_enqueue and not read_logits and num_valid_drafts is not None:
             plan = self._one_enqueue_plan(start_pos, active, num_valid_drafts, sample_plan)
+        nv = torch.zeros(B, dtype=torch.int64) if num_valid_drafts is None else num_valid_drafts
+        step = PendingVerify(
+            B, self.K, nv, active, pt, self._last_cap_blocks, self._no_draft, plan=plan, sample_plan=sample_plan
+        )
+        self._pending.append(step)
         if plan is not None:
-            return self._verify_one_enqueue(args, kw, plan, sample_plan), None
+            self._verify_one_enqueue(args, kw, step)
+            return (step if defer else step.result()), None
+        if defer and not read_logits and not self._timing:
+            self.model.verify_enqueue(*args, **kw)
+            draws = [] if sample_plan is None else [self.model._vfy_sampler.draws]
+            step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws])
+            self._vfeed = self.model._vfy_rows_out
+            return step, None
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
@@ -2058,10 +2144,11 @@ class MTPBlockEngine(MTPSpecEngine):
         }
         return SimpleNamespace(rows=rows, p0=p0, declined=declined, keep=keep)
 
-    def _verify_one_enqueue(self, args, kw, plan, sample_plan):
-        """Stage, enqueue the verify, [sampler], step and drafter traces, and read the ids, the drafter pack and the
-        drafts with one wait. Returns the ids int32 [B, T]; the drafts wait for the next propose_draft_tokens."""
-        B, T, model = self.B, self.T, self.model
+    def _verify_one_enqueue(self, args, kw, step):
+        """Stage, enqueue the verify, [sampler], step and drafter traces, and enqueue the reads of the ids, the drafter
+        pack and the drafts into ``step`` (a PendingVerify), which the caller waits on or defers; the drafts wait for
+        the next propose_draft_tokens."""
+        model, plan, T = self.model, step.plan, self.T
         self._stage_table(self._draft_table(self._last_pt, plan.declined), "_mtp_pt", "_mtp_pt_staged")
         pt_rows = self._last_pt.repeat_interleave(T, dim=0)
         if self._acc_pt_staged is None or not torch.equal(self._acc_pt_staged, pt_rows):
@@ -2069,20 +2156,18 @@ class MTPBlockEngine(MTPSpecEngine):
             self._acc_pt_staged = pt_rows
         kw = {k: v for k, v in kw.items() if k != "read_logits"}
         model.verify_enqueue(*args, accept_rows=plan.rows, **kw)
+        self._enqueue_step_and_drafter(step)
+
+    def _enqueue_step_and_drafter(self, step):
+        """Replay the step and drafter traces after a one-enqueue verify and enqueue its reads."""
+        model = self.model
         ttnn.execute_trace(self.mesh, self._acc_trace, cq_id=0, blocking=False)
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         self._dr_rs_staged = None  # the step trace wrote the reseed table
-        draws = [] if sample_plan is None else [model._vfy_sampler.draws]
-        reads = self._read_device0([model._vfy_ids_out, *draws, self._dr_pack, *self._dr_outs])
-        ids = reads[0].reshape(-1)[: B * T].to(torch.int64).reshape(B, T)
-        if sample_plan is not None:
-            ids = with_draws(ids, reads[1], sample_plan)
-        pack = reads[1 + len(draws)].to(torch.int64)
-        drafts = self._drafts_to_host([[int(v) for v in r.reshape(-1)[:B]] for r in reads[2 + len(draws) :]])
+        draws = [] if step.sample_plan is None else [model._vfy_sampler.draws]
+        step.reads = self._read_device0_async([model._vfy_ids_out, *draws, self._dr_pack, *self._dr_outs])
         self._vfeed = model._vfy_rows_out
-        self._step_pending = SimpleNamespace(plan=plan, pack=pack, drafts=drafts, ids=ids)
         self.one_enqueue_steps += 1
-        return ids.to(torch.int32)
 
     def propose_draft_tokens(
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
@@ -2096,10 +2181,11 @@ class MTPBlockEngine(MTPSpecEngine):
         verify). The base propose's drafter rewrites every drafter KV slot the device's wrote up to the runner's
         commit plus K - 1; the slots past it are written again before any read. Any other commit raises ValueError: it
         is not a prefix of the device's greedy walk over the same ids, so the device acceptance is wrong."""
-        step, self._step_pending = self._step_pending, None
+        step = self._pending.popleft() if self._pending else None
         args = (num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, hidden)
-        if step is None:
+        if step is None or step.plan is None:
             return super().propose_draft_tokens(*args)
+        step.wait()
         q = self._propose_request(*args)
         plan, B, K = step.plan, self.B, self.K
         moved = [u for u in range(B) if not q.pad[u] and int(q.cpos[u, 0]) != plan.p0[u] + 1]
