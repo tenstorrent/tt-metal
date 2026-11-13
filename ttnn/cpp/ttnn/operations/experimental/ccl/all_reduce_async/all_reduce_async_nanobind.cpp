@@ -38,6 +38,7 @@ void bind_all_reduce_async(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             num_links (int, optional): Number of links to use for the all_reduce_async operation. Defaults to `None`, which indicates to the operation that it should choose. Note that this value will be ignored if there are fewer links available than requested.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
+            residual_tensor (ttnn.Tensor, optional): persistent-buffer overload only. When given, the reduction kernel returns `residual_tensor + sum(input_tensor over cluster_axis)` in one op (fused residual add). It must be L1 WIDTH_SHARDED with the output shard spec, the input dtype and the input padded shape. Defaults to `None` (plain all-reduce).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -119,7 +120,8 @@ void bind_all_reduce_async(nb::module_& mod) {
                 std::optional<tt::tt_metal::SubDeviceId>,
                 bool,
                 bool,
-                bool>(ttnn::experimental::all_reduce_async),
+                bool,
+                const std::optional<ttnn::Tensor>&>(ttnn::experimental::all_reduce_async),
             nb::arg("input_tensor"),
             nb::arg("buffer_tensor"),
             nb::arg("cluster_axis"),
@@ -133,7 +135,8 @@ void bind_all_reduce_async(nb::module_& mod) {
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("use_noc1_only") = false,
             nb::arg("use_optimal_ccl_for_llama") = false,
-            nb::arg("fp32_dest_acc") = false));
+            nb::arg("fp32_dest_acc") = false,
+            nb::arg("residual_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::ccl
