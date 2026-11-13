@@ -44,6 +44,9 @@ class Gemma4ForCausalLM:
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
         self.rows = max_batch_size
+        # Full-attention layers keep their KV in 256-token scheduler blocks packed into the shared wide rows (see
+        # allocate_kv_cache_per_layer and _tables).
+        self.full_layers = frozenset(i for i, layer in enumerate(generator.model.layers) if not layer.sliding)
         self.entry = None
         self.cache = None
         # Decode traces of fewer rows over the same KV pool; a step runs the smallest one that covers its live rows.
@@ -96,15 +99,20 @@ class Gemma4ForCausalLM:
         block = vllm_config.cache_config.block_size
         if block != 128:
             raise ValueError("Gemma4 QB2 uses 128-token cache pages")
-        # Equal accounting page sizes preserve the logical block size across
-        # hybrid groups. Different native geometries still use separate pools.
+        # Equal accounting page sizes: a sliding block is 128 tokens of 16 x 256 values and a full-attention block is 256
+        # tokens of 4 x 512 values, the same 2 MiB (one wide row). The scheduler gives the full group 256-token blocks and
+        # the sliding groups 128-token blocks over one global ID space, so a full block owns one whole wide row where it
+        # used to leave half of a separate tensor idle; the hash block stays 128 tokens (cache_config.block_size).
         # The runner divides these global head counts by the TP degree.
         page_bytes = 2 * block * config.num_key_value_heads * config.head_dim * 2
+        full_block = 2 * block
+        if 2 * full_block * config.num_global_key_value_heads * config.global_head_dim * 2 != page_bytes:
+            raise ValueError("A 256-token full-attention block must have the page size of a sliding block")
         result = {}
         for i, kind in enumerate(config.layer_types):
             sliding = kind == "sliding_attention"
             common = dict(
-                block_size=block,
+                block_size=block if sliding else full_block,
                 num_kv_heads=config.num_key_value_heads if sliding else config.num_global_key_value_heads,
                 head_size=config.head_dim if sliding else config.global_head_dim,
                 dtype=torch.bfloat16,
@@ -151,25 +159,75 @@ class Gemma4ForCausalLM:
         # prompt's cache-hit window (AnchoredSlidingWindowSpec): reserve them once. Many requests holding their
         # windows at once wait for blocks in the scheduler instead of growing the pool.
         # The plugin separately adds one output page per request.
+        # An ID is one wide row: 128 sliding tokens or 256 full-attention tokens (allocate_kv_cache_per_layer), so the
+        # same number of IDs holds twice the full-attention tokens; the first term stays max_model_len / 128 IDs.
         tails = (
             Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
             + (Decoder.SLIDING_WINDOW_PAGES - 1) * Decoder.PAGE_SIZE
         )
         return max_model_len + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
 
+    @staticmethod
+    def _full_view(wide):
+        """The full-attention view of a wide sliding-geometry backing: [P, 4, 128, 256] -> [2P, 1, 128, 512], zero-copy."""
+        views = []
+        for root in wide:
+            shape = tuple(int(x) for x in root.shape)
+            if (
+                len(shape) != 4
+                or shape[1:] != (4, 128, 256)
+                or root.dtype != ttnn.bfloat8_b
+                or root.layout != ttnn.TILE_LAYOUT
+            ):
+                raise ValueError(f"Unsupported wide KV backing: {shape} {root.dtype} {root.layout}")
+            view = ttnn.experimental.view(root, [2 * shape[0], 1, 128, 512])
+            if (
+                view.buffer_unique_id() != root.buffer_unique_id()
+                or view.buffer_address() != root.buffer_address()
+                or view.buffer_aligned_page_size() != root.buffer_aligned_page_size()
+            ):
+                raise RuntimeError("The full-attention view must alias the wide backing")
+            views.append(view)
+        return tuple(views)
+
     def allocate_kv_cache_per_layer(self, per_layer_specs):
+        """One wide backing per pool position; its full-attention layer reads it as 2P half-pages.
+
+        A pool position holds one full-attention layer and its sliding layers. The scheduler hands every block ID to one
+        group at a time, so they can share memory: the backing has the sliding layers' geometry [P, 4, 128, 256] (P = IDs +
+        scratch rows) and the full layer sees it as [2P, 1, 128, 512] through a zero-copy view. A full-attention
+        block (256 tokens) owns the whole wide row b, native half-pages 2b and 2b + 1 (_tables); null block 0 stays unused.
+        """
         pools, kv, scratch = {}, [], {}
         scratch_rows = max([self.rows] + [users * (1 + k) for users, k in self.verify_shapes])
-        for i, (layer, (shape, dtype, pool_id)) in enumerate(zip(self.generator.model.layers, per_layer_specs)):
-            if tuple(shape[1:]) != (layer.kv_heads, 128, layer.head_dim) or dtype != torch.bfloat16:
-                raise ValueError(f"Unexpected allocator geometry or accounting dtype: {shape}, {dtype}")
-            key = (pool_id, tuple(shape[1:]))
-            if key not in pools:
-                pools[key] = layer.allocate_cache(physical_pages=shape[0] + scratch_rows)
-            kv.append(pools[key])
-            scratch[i] = list(range(shape[0], shape[0] + scratch_rows))
-        if len(kv) != len(self.generator.model.layers):
+        layers = self.generator.model.layers
+        if len(per_layer_specs) != len(layers):
             raise ValueError("The allocator must supply one spec per layer")
+        members = {}
+        for i, (layer, (shape, dtype, pool_id)) in enumerate(zip(layers, per_layer_specs)):
+            expected = (layer.kv_heads, 128 if layer.sliding else 256, layer.head_dim)
+            if tuple(shape[1:]) != expected or dtype != torch.bfloat16 or (i in self.full_layers) == layer.sliding:
+                raise ValueError(f"Unexpected allocator geometry or accounting dtype: {shape}, {dtype}")
+            members.setdefault(pool_id, []).append((i, layer, int(shape[0])))
+        for pool_id, group in members.items():
+            blocks = {n for _, _, n in group}
+            sliding = [layer for _, layer, _ in group if layer.sliding]
+            if len(blocks) != 1 or not sliding or sum(not layer.sliding for _, layer, _ in group) != 1:
+                raise ValueError(
+                    "A pool position needs one full-attention layer and sliding layers with equal block counts"
+                )
+            n = blocks.pop()
+            if n <= 1:
+                raise ValueError("A pool must contain the null block and live blocks")
+            wide = sliding[0].allocate_cache(physical_pages=n + scratch_rows)
+            pools[pool_id] = (wide, self._full_view(wide))
+        for i, (layer, (shape, dtype, pool_id)) in enumerate(zip(layers, per_layer_specs)):
+            wide, view = pools[pool_id]
+            kv.append(wide if layer.sliding else view)
+            first = shape[0] if layer.sliding else 2 * shape[0]
+            scratch[i] = list(
+                range(first, first + (1 if layer.sliding else 2) * scratch_rows, 1 if layer.sliding else 2)
+            )
         tables = {i: torch.zeros(self.rows, self.max_seq_len // 128, dtype=torch.int32) for i in range(len(kv))}
         self.cache = CacheState(
             kv,
@@ -216,7 +274,13 @@ class Gemma4ForCausalLM:
             # Share immutable host rows only within this update: vLLM mutates
             # its source tensors in place between scheduler steps. Layers of one group may be separate views of
             # one table.
-            key = (source.data_ptr(), source.storage_offset(), tuple(source.shape), source.stride())
+            key = (
+                source.data_ptr(),
+                source.storage_offset(),
+                tuple(source.shape),
+                source.stride(),
+                i in self.full_layers,
+            )
             if key not in translated:
                 dest = torch.zeros_like(cache.page_tables[i])
                 rows, cols = source.shape
@@ -227,13 +291,30 @@ class Gemma4ForCausalLM:
                     raise ValueError("Page table has fewer rows than prefill requests")
                 # Prefill rows are compact, then padded to the decode batch.
                 # Scatter only the live prefix into its assigned state slots.
-                dest[indices, :cols] = source[: len(indices)].to(torch.int32).clamp_min(0)
+                live = source[: len(indices)].to(torch.int32).clamp_min(0)
+                if i in self.full_layers:
+                    live = self._half_pages(live, dest.shape[1])
+                dest[indices, : live.shape[1]] = live
                 if slots is None:
                     for column in range(1, cache.columns):
                         dest[column * rows : (column + 1) * rows] = dest[:rows]
                 translated[key] = dest
             result[i] = translated[key]
         return result
+
+    @staticmethod
+    def _half_pages(blocks, width):
+        """Full-attention scheduler blocks (256 tokens) as native 128-token half-pages: block b is pages 2b and 2b + 1.
+
+        The null block 0 maps to page 0 in both halves. The scheduler's table is as wide as for 128-token blocks; the
+        entries past width // 2 columns belong to blocks that cannot exist and must be empty.
+        """
+        columns = width // 2
+        if blocks[:, columns:].any():
+            raise ValueError("A full-attention block table has live entries past its 256-token capacity")
+        blocks = blocks[:, :columns]
+        pages = torch.stack((2 * blocks, 2 * blocks + 1), dim=2)
+        return torch.where(blocks[:, :, None] > 0, pages, torch.zeros_like(pages)).reshape(blocks.shape[0], -1)
 
     def _sampling(self, params, positions, *, batch=None, reset_seed=True):
         """Per-row sampling state for `positions`, one per row; a slot's params repeat in its draft columns."""
