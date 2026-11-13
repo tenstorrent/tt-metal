@@ -56,8 +56,10 @@ void kernel_main() {
     constexpr uint32_t local_n_padded_tiles = local_n_has_padding ? Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t) : 0;
 
     uint32_t argidx = 0;
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // The static split's units; with load balancing, the positions of the core's unit table (cb_balance, from the
+    // reader).
+    uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t ring_size_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
@@ -123,6 +125,18 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
+    constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
+    [[maybe_unused]] constexpr uint32_t cb_balance = get_named_compile_time_arg_val("cb_balance");
+    // The table's units ([count, units]): only their heads matter here (sdpa_ring_resident's step groups).
+    [[maybe_unused]] const volatile uint32_t* unit_table = nullptr;
+    if constexpr (balance) {
+        CircularBuffer(cb_balance).wait_front(1);
+        unit_table = reinterpret_cast<const volatile uint32_t*>(ckernel::get_tile_address(cb_balance, 0));
+        invalidate_l1_cache();
+        global_q_start = 0;
+        global_q_end = unit_table[0];
+        ++unit_table;
+    }
     const uint32_t q_per_core = global_q_end - global_q_start;
     // The K/V CBs' read position in entries, carried across ring iterations and passes (the CBs are never reset).
     uint32_t kv_pos = 0;
@@ -211,7 +225,8 @@ void kernel_main() {
                 has_block_counts,
                 cb_key_bias,
                 key_bias_tiles,
-                cb_sum_identity>(
+                cb_sum_identity,
+                balance>(
                 pass_q_start,
                 pass_q_end,
                 num_q_chunks,
@@ -227,10 +242,14 @@ void kernel_main() {
                 kb_pos,
                 is_last_ring_iter,
                 is_first_active_iter,
-                block_counts);
+                block_counts,
+                unit_table);
         }
     }
     if constexpr (has_block_counts) {
         CircularBuffer(cb_block_counts).pop_front(1);
+    }
+    if constexpr (balance) {
+        CircularBuffer(cb_balance).pop_front(1);
     }
 }

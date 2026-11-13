@@ -257,6 +257,8 @@ constexpr uint32_t kPrefetchPackets = 4;
 // The halo writer scatters up to the fabric's scatter-write chunk limit (NOC_SCATTER_WRITE_MAX_CHUNKS).
 constexpr uint32_t kMaxHaloPagesPerPacket = 4;
 constexpr uint32_t kPacketHeaderSlots = 8;
+// The writer's load-balancing block: ring_attention_balance::kNumArgs (kernels/ring_attention_balance.hpp).
+constexpr uint32_t kBalanceWriterArgCount = 33;
 constexpr uint32_t kDoubleBufferingFactor = 2;
 constexpr uint32_t kMaxScatterPagesPerPacket = 2;
 
@@ -710,7 +712,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    RingAttentionBalance* balance) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -998,6 +1001,49 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const bool has_slot_metadata = slot_id.has_value();
     const bool has_metadata = kv_actual_isl.has_value();
     TT_FATAL(!has_slot_metadata || has_metadata, "slot metadata requires KV-extent metadata");
+    const bool has_balance = balance != nullptr;
+    TT_FATAL(
+        !has_balance || (fuse_op && !rank_mapping.full_mesh),
+        "Ring attention load balancing needs a fused consumer and an axis ring");
+    // Load balancing: the writers' flag (raised by sparse_ring_sdpa's balance core) and scratch (one row block's Q or
+    // output pages of a head, or a payload; then the partner page).
+    const uint32_t balance_cb_index = tt::CB::c_in4;
+    uint32_t balance_list_offset = 0;
+    if (has_balance) {
+        auto& config = *balance;
+        const uint32_t data_bytes = tt::round_up(
+            std::max(
+                {config.block_tiles * config.dht * config.q_page_bytes,
+                 config.block_tiles * config.vdht * config.out_page_bytes,
+                 max_payload_size_bytes}),
+            64u);
+        balance_list_offset = data_bytes;
+        const uint32_t list_bytes = tt::round_up(config.q_blocks, 16u) * sizeof(uint32_t);
+        const CoreRangeSet writers = sender_forward_core_ranges.merge(sender_backward_core_ranges);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = data_bytes + list_bytes,
+            .core_ranges = writers,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(balance_cb_index),
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = data_bytes + list_bytes,
+            }}},
+        });
+        config.writer_flag_semaphore = static_cast<uint32_t>(desc.semaphores.size());
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = config.writer_flag_semaphore,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = writers,
+            .initial_value = 0,
+        });
+        config.writer_cores_noc.clear();
+        for (const auto& w : forward_workers) {
+            config.writer_cores_noc.push_back(mesh_device->worker_core_from_logical_core(w.core));
+        }
+        for (const auto& w : backward_workers) {
+            config.writer_cores_noc.push_back(mesh_device->worker_core_from_logical_core(w.core));
+        }
+    }
     const uint32_t meta_cb_index = tt::CB::c_in3;
     if (has_metadata) {
         const uint32_t meta_cb_page_size_bytes = kv_actual_isl->buffer()->page_size();
@@ -1113,6 +1159,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
+            static_cast<uint32_t>(has_balance),                 // kHasBalance
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,
@@ -1124,6 +1171,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         }
         if (has_metadata) {
             tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
+        }
+        if (has_balance) {
+            for (tt::tt_metal::Buffer* const buf :
+                 {balance->table, balance->partner, balance->q, balance->mask, balance->out}) {
+                tt::tt_metal::TensorAccessorArgs(buf).append_to(args);
+            }
         }
         return args;
     };
@@ -1342,6 +1395,59 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (has_metadata) {
             writer_args.push_back(kv_actual_isl->buffer());
             writer_args.push_back(chunk_local_tiles);
+        }
+        if (has_balance) {
+            // ring_attention_balance::Arg order. The forward worker sends toward rank - 1; link 0 multicasts the cost
+            // page over its half of the ring (the diametric device on the minus side) or its side of a line.
+            const auto& config = *balance;
+            const bool ring = topology == ttnn::ccl::Topology::Ring;
+            const uint32_t minus_range = ring ? ring_size / 2 : ring_index;
+            const uint32_t plus_range = ring ? ring_size - 1 - ring_size / 2 : ring_size - 1 - ring_index;
+            const uint32_t table_range = placement.link == 0 ? (is_forward ? minus_range : plus_range) : 0u;
+            uint32_t pushed = 0;  // RTArgList has no size; buffers stay address-patched on cache hits
+            const auto put = [&](auto value) {
+                writer_args.push_back(value);
+                ++pushed;
+            };
+            put(config.table);
+            put(config.partner);
+            put(config.q);
+            put(config.import_q);
+            put(config.mask);
+            put(config.import_mask);
+            put(config.export_out);
+            put(config.out);
+            put(config.tables_arrived_addr);
+            put(config.imports_arrived_addr);
+            put(config.returns_arrived_addr);
+            put(static_cast<uint32_t>(config.balance_core_noc.x));
+            put(static_cast<uint32_t>(config.balance_core_noc.y));
+            put(config.writer_flag_semaphore);
+            put(ring_index);
+            put(ring_size);
+            put(ring ? 1u : 0u);
+            put(table_range);
+            put(placement.link);
+            put(num_links);
+            put(config.heads);
+            put(config.q_blocks);
+            put(config.q_row_tiles);
+            put(config.dht);
+            put(config.vdht);
+            put(config.block_tiles);
+            put(config.mask_rows);
+            put(config.mask_row_bytes);
+            put(config.table_page_bytes);
+            put(config.q_page_bytes);
+            put(config.out_page_bytes);
+            put(max_payload_size_bytes);
+            put(balance_list_offset);
+            TT_FATAL(
+                pushed == kBalanceWriterArgCount,
+                "Ring attention load-balancing args: {} words, the writer reads {}",
+                pushed,
+                kBalanceWriterArgCount);
+            writer_args.push_back(balance_cb_index);
         }
 
         const auto neighbor_coord = is_forward ? backward_device_coord : forward_device_coord;

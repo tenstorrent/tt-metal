@@ -140,6 +140,39 @@ inline uint32_t rank_mapping_compile_time_arg(const RingAttentionRankMapping& ma
                                       : ring_attention_all_gather::kRowMajorRankMapping;
 }
 
+// sparse_ring_sdpa's cross-device load balancing, carried by the gather writers (kernels/ring_attention_balance.hpp):
+// the cost-table multicast, the swapped row blocks' Q pages and mask rows, and their outputs' return. The helper fills
+// the writer side (writer_flag_semaphore, writer_cores_noc) for the balance kernel, which raises the flag.
+struct RingAttentionBalance {
+    tt::tt_metal::Buffer* table = nullptr;    // R cost pages per device
+    tt::tt_metal::Buffer* partner = nullptr;  // this device's partner page
+    tt::tt_metal::Buffer* q = nullptr;        // sent from q and mask, received into the import buffers (same layouts)
+    tt::tt_metal::Buffer* import_q = nullptr;
+    tt::tt_metal::Buffer* mask = nullptr;
+    tt::tt_metal::Buffer* import_mask = nullptr;
+    tt::tt_metal::Buffer* export_out = nullptr;  // sent from the export buffer into the home's output
+    tt::tt_metal::Buffer* out = nullptr;
+    // GlobalSemaphores on the balance core (the same address and NoC coordinates on every device).
+    uint32_t tables_arrived_addr = 0;
+    uint32_t imports_arrived_addr = 0;
+    uint32_t returns_arrived_addr = 0;
+    CoreCoord balance_core_noc;
+    uint32_t heads = 0;
+    uint32_t q_blocks = 0;     // Q blocks per head (row blocks)
+    uint32_t q_row_tiles = 0;  // tile rows of Q / the output per head
+    uint32_t dht = 0;
+    uint32_t vdht = 0;
+    uint32_t block_tiles = 0;
+    uint32_t mask_rows = 0;  // mask rows per head
+    uint32_t mask_row_bytes = 0;
+    uint32_t table_page_bytes = 0;
+    uint32_t q_page_bytes = 0;
+    uint32_t out_page_bytes = 0;
+    // Set by the helper.
+    uint32_t writer_flag_semaphore = 0;
+    std::vector<CoreCoord> writer_cores_noc;
+};
+
 // Sliding attention exchanges one or two predecessor tails into compact output slots.
 struct RingAttentionNeighborHaloConfig {
     uint32_t send_to_next_start_Ht;
@@ -340,7 +373,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    RingAttentionBalance* balance = nullptr);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,
