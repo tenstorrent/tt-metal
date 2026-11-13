@@ -37,6 +37,8 @@ class Hy4Indexer:
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
+        self._mask = {}
+        self._sent = {}
         self.keys = None  # [1,1,T,128] TILE bf16
         self.length = 0
 
@@ -59,6 +61,28 @@ class Hy4Indexer:
         ttnn.deallocate(nope)
         return out
 
+    def _causal_fix(self, score, start, n, T):
+        """indexer_score_dsa derives each device's causal offset from its LINEAR mesh index (chunk_start + index * Sq) unless seq_shard_axes names an axis, so on the 4x8 mesh
+        only device 0 masks exactly (probe found ids of columns 1..7 unmasked). Re-apply the in-chunk causal block mask ourselves: columns [start, start+n) get -inf above the
+        diagonal (columns before it are always visible; columns past start+n are never written). v0: one slice + add + concat (a fused fix belongs in the op).
+        """
+        import torch
+
+        if n not in self._mask:
+            m = torch.zeros(n, n).masked_fill(torch.ones(n, n, dtype=torch.bool).triu(1), float("-inf"))
+            self._mask[n] = upload(self.md, m.reshape(1, 1, n, n), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        tail = ttnn.slice(score, [0, 0, 0, start], [1, 1, n, start + n])
+        tail = ttnn.add(tail, self._mask[n])
+        if start == 0:
+            out = tail
+        else:
+            head = ttnn.slice(score, [0, 0, 0, 0], [1, 1, n, start])
+            out = ttnn.concat([head, tail], dim=3)
+            ttnn.deallocate(head)
+            ttnn.deallocate(tail)
+        ttnn.deallocate(score)
+        return out
+
     def append_keys(self, h, cos, sin):
         """h [1,1,n,6144] -> k rows [1,1,n,128] (layer_norm + rope) appended to the key cache; returns the new rows."""
         n = h.shape[2]
@@ -69,11 +93,43 @@ class Hy4Indexer:
         self.length += n
         return k
 
-    def select(self, h, qa, start, cos, sin, taps=None):
+    def select_decode(self, h, qa, pos, cos, sin, append=True):
+        """One query row per user (position ``pos``, this call's key appended). Requires pos + 1 >= 2048 (shorter contexts are dense: see ``Hy4Attention.decode_step``).
+        Scores the key cache padded to a whole number of tiles; the top-k bound is valid_length = pos + 1 (padded / stale columns are never ranked).
+        """
+        if append:
+            self.append_keys(h, cos, sin)
+        T = self.length
+        assert T == pos + 1 and T >= self.topk
+        q = ttnn.linear(qa, self.w_q, compute_kernel_config=self.ckc)
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q, num_heads=self.nh, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        q = self._rot_first(q, cos, sin)
+        w = ttnn.linear(h, self.w_p, compute_kernel_config=self.ckc)
+        Tp = -(-T // 32) * 32
+        keys = _pad_rows(self.keys, Tp)
+        q32, w32 = _pad_rows(q, 32), _pad_rows(w, 32)  # the op wants whole tiles of query rows: row 0 is the real one
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=min(Tp, 256), head_group_size=1)
+        score32 = ttnn.experimental.indexer_score_dsa(
+            q32, keys, w32, chunk_start_idx=pos, program_config=cfg, compute_kernel_config=self.ckc_score, kv_len=Tp
+        )  # [1,1,32,Tp]; columns past pos are not ranked (valid_length below)
+        score = ttnn.slice(score32, [0, 0, 0, 0], [1, 1, 1, Tp])
+        ttnn.deallocate(score32)
+        for t in (q32, w32):
+            ttnn.deallocate(t)
+        ids = ttnn.experimental.topk_large_indices(score, k=self.topk, valid_length=T)
+        for t in (q, w, score):
+            ttnn.deallocate(t)
+        del keys  # NOT deallocate: ttnn.pad of a tile-padded tensor may return a view of self.keys (explicit deallocate freed the shared buffer)
+        return ids
+
+    def select(self, h, qa, start, cos, sin, taps=None, append=True):
         """Score the n query rows of ``h`` (positions start .. start+n) against the key cache (this call's keys are appended first) and return their top-k ids
         uint32 RM [1,1,n,2048]."""
         n = h.shape[2]
-        self.append_keys(h, cos, sin)
+        if append:
+            self.append_keys(h, cos, sin)
         T = self.length
         assert T % 16 == 0 and start + n == T, (start, n, T)
         q = ttnn.linear(qa, self.w_q, compute_kernel_config=self.ckc)  # [1,1,n,4096]
@@ -86,6 +142,7 @@ class Hy4Indexer:
         score = ttnn.experimental.indexer_score_dsa(
             q, self.keys, w, chunk_start_idx=start, program_config=cfg, compute_kernel_config=self.ckc_score, kv_len=T
         )  # [1,1,n,T] bf16 RM, future columns -inf
+        score = self._causal_fix(score, start, n, T)
         k_eff = min(self.topk, T)
         ids = ttnn.experimental.topk_large_indices(score, k=k_eff, valid_length=T)
         if taps is not None:
@@ -95,10 +152,11 @@ class Hy4Indexer:
         for t in (q, w):
             ttnn.deallocate(t)
         if k_eff < self.topk:
-            pad = upload_sentinel(self.md, n, self.topk - k_eff)
+            if (n, self.topk - k_eff) not in self._sent:
+                self._sent[(n, self.topk - k_eff)] = upload_sentinel(self.md, n, self.topk - k_eff)
+            pad = self._sent[(n, self.topk - k_eff)]
             ids2 = ttnn.concat([ids, pad], dim=3)
             ttnn.deallocate(ids)
-            ttnn.deallocate(pad)
             ids = ids2
         return ids
 
@@ -108,3 +166,10 @@ def upload_sentinel(md, n, width):
 
     t = torch.full((1, 1, n, width), -1, dtype=torch.int32)  # -1 == 0xFFFFFFFF as uint32
     return upload(md, t, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def _pad_rows(t, to):
+    n = t.shape[2]
+    if n == to:
+        return t
+    return ttnn.pad(t, [(0, 0), (0, 0), (0, to - n), (0, 0)], 0)

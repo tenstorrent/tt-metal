@@ -15,7 +15,7 @@ timeout ${TMO:-3000} docker run --name lattn_$TAG --network host --ipc host --us
   --device /dev/tenstorrent:/dev/tenstorrent --mount type=bind,src=/dev/hugepages-1G,dst=/dev/hugepages-1G \
   --mount type=bind,src=$W/models/demos/blackhole/hy4_preview,dst=$TM/models/demos/blackhole/hy4_preview,readonly \
   --mount type=bind,src=$W/models/demos/blackhole/deepseek_v41_flash/tt,dst=$TM/models/demos/blackhole/deepseek_v41_flash/tt,readonly \
-  -v /mnt/tt-data/Hy4-Preview:/ckpt:ro -v /mnt/tt-data/ssinghal/hy4-logs/layer-attn:/gold:ro \
+  -v $P:/out -v /mnt/tt-data/Hy4-Preview:/ckpt:ro -v /mnt/tt-data/ssinghal/hy4-logs/layer-attn:/gold:ro \
   -v /etc/passwd:/etc/passwd:ro -v $O/traces:$TM/build/profiler/build_wasm/traces -v $O/kern:/kcache -v $O/gen:$TM/generated -v $O/root:/home/container_app_user/cache_root -v $O/logs:/home/container_app_user/logs \
   -e TT_METAL_CACHE=/kcache -e PYTHONDONTWRITEBYTECODE=1 -e HOME=/tmp -e USER=$(id -un) -e LOGNAME=$(id -un) -e ARCH_NAME=blackhole $EXTRAE \
   --entrypoint /bin/bash $IMAGE -c "source \${PYTHON_ENV_DIR}/bin/activate && cd $TM && python -X faulthandler $TM/models/demos/blackhole/hy4_preview/tests/$SCRIPT" > $P/run_$TAG.log 2>&1

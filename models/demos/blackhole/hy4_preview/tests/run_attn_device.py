@@ -12,6 +12,7 @@ import torch
 import ttnn
 from models.demos.blackhole.hy4_preview.config import Hy4Config
 from models.demos.blackhole.hy4_preview.tt.hy4_attention import Hy4Attention
+from models.demos.blackhole.hy4_preview.tt.hy4_attn_ref import column_intermediates
 from models.demos.blackhole.hy4_preview.tt.hy4_common import to_host, upload
 from models.demos.gpt_oss.config import mesh_4x8
 from models.demos.gpt_oss.tt.ccl import CCLManager
@@ -60,7 +61,7 @@ def main():
     g = torch.load(f"{GOLD}/L{L}.pt")
     conv = g["conv"]
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
-    md = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=16384, trace_region_size=100_000_000)
+    md = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=16384, trace_region_size=800_000_000)
     try:
         mc = mesh_4x8()
         ccl = CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
@@ -89,7 +90,30 @@ def main():
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+def trace_time(md, fn, mk_tabs, reps=5):
+    """device-side latency of one call: fn() re-runs the layer with append=False (static shapes) under a trace; returns ms per call."""
+    global tabs_t
+    tabs_t = mk_tabs()
+    fn()
+    ttnn.synchronize_device(md)
+    tid = ttnn.begin_trace_capture(md, cq_id=0)
+    fn()
+    ttnn.end_trace_capture(md, tid, cq_id=0)
+    ttnn.synchronize_device(md)
+    ts = []
+    for _ in range(3):
+        t = time.perf_counter()
+        for _ in range(reps):
+            ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        ts.append((time.perf_counter() - t) / reps)
+    ttnn.release_trace(md, tid)
+    return {"traced_ms": round(min(ts) * 1e3, 3)}
+
+
 def run_prefill(md, attn, g, cfg):
+    global HW
+    HW = attn.host_w
     h_all, out_all = g["h"], g["out"]
     idx_gold = g["idx"]  # [S,2048] int64 (-1 unused), index source = g["idx_source"]
     shared = not attn.has_indexer
@@ -109,7 +133,14 @@ def run_prefill(md, attn, g, cfg):
         )
         attn.taps = {}
         t = time.perf_counter()
-        out, ids = attn.prefill_chunk(h, p0, ids_in)
+        ov = None
+        if os.environ.get("IDS", "dev") != "dev":
+            ix = idx_gold[p0 : p0 + CHUNK].clone()
+            if os.environ["IDS"] == "host_sorted":
+                ix = torch.where(ix >= 0, ix, torch.full_like(ix, 2**31 - 1)).sort(-1).values
+                ix = torch.where(ix == 2**31 - 1, torch.full_like(ix, -1), ix)
+            ov = upload(md, ix.to(torch.int32).reshape(1, 1, CHUNK, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        out, ids = attn.prefill_chunk(h, p0, ids_in, ids_override=ov)
         ttnn.synchronize_device(md)
         dt_first = time.perf_counter() - t
         o = to_host(out, md).reshape(CHUNK, -1).float()
@@ -132,30 +163,61 @@ def run_prefill(md, attn, g, cfg):
         r["pcc_lat"] = round(pcc(lat, g["lat"][p0 : p0 + CHUNK]), 6)
         r["pcc_k_pe"] = round(pcc(kpe, g["k_pe"][p0 : p0 + CHUNK]), 6)
         r["pcc_qa"] = round(pcc(to_host(tp["qa"], md).reshape(CHUNK, -1).float(), g["qa"][p0 : p0 + CHUNK]), 6)
+        if os.environ.get("DIAG", "1") == "1":
+            n = p0 + CHUNK
+            rows = torch.cat([g["lat"][:n], g["k_pe"][:n]], -1)
+            ix = idx_gold[p0 : p0 + CHUNK]
+            allowed = torch.zeros(CHUNK, n + 1, dtype=torch.bool)
+            allowed.scatter_(1, torch.where(ix >= 0, ix, torch.full_like(ix, n)), True)
+            allowed = allowed[:, :n] & (torch.arange(n)[None, :] <= torch.arange(p0, n)[:, None])
+            for c in (0, 5):
+                ci = column_intermediates(cfg, HW, g["qa"][p0:n], rows, allowed, c, p0, g["conv"]["rope_interleave"])
+                r[f"pcc_qfull_c{c}"] = round(pcc(to_host(tp["qfull"], md, col=c).float(), ci["qfull"]), 6)
+                r[f"pcc_olat_c{c}"] = round(pcc(to_host(tp["o_lat"], md, col=c).float(), ci["o_lat"]), 6)
+                r[f"pcc_o_cpu_c{c}"] = round(pcc(ci["o"], g["o"][p0:n, c * 2048 : (c + 1) * 2048]), 7)
+        if os.environ.get("IDCHK", "0") == "1" and not shared:
+            allid = [to_host(ids, md, col=c).reshape(CHUNK, -1).to(torch.int64) for c in range(8)]
+            for c in range(8):
+                d = torch.where(allid[c] >= 2**31, torch.full_like(allid[c], -1), allid[c])
+                nbad = 0
+                for rr in range(CHUNK):
+                    v = d[rr][d[rr] >= 0]
+                    want = set(idx_gold[p0 + rr][idx_gold[p0 + rr] >= 0].tolist())
+                    if set(v.tolist()) != want or len(v) != len(want):
+                        nbad += 1
+                        if nbad <= 3:
+                            print(
+                                f"IDBAD col {c} row {rr}: dev n={len(v)} want n={len(want)} extra={sorted(set(v.tolist())-want)[:5]} missing={sorted(want-set(v.tolist()))[:5]}",
+                                flush=True,
+                            )
+                print(f"IDCHK chunk {i} col {c}: rows with wrong id set: {nbad}", flush=True)
+        if os.environ.get("DUMP", "0") == "1":
+            torch.save(
+                {
+                    "o_lat_c0": to_host(tp["o_lat"], md, col=0).float(),
+                    "ids": to_host(ids, md),
+                    "qfull_c0": to_host(tp["qfull"], md, col=0).float(),
+                },
+                f"/out/dump_L{L}_chunk{i}.pt",
+            )
+        po = []
+        for c in (0, 3, 7):
+            oc = to_host(tp["o"], md, col=c).reshape(CHUNK, -1).float()
+            po.append(round(pcc(oc, g["o"][p0 : p0 + CHUNK, c * 2048 : (c + 1) * 2048]), 6))
+        r["pcc_o_cols_0_3_7"] = po
         if not shared:
             dev_ids = to_host(ids, md).reshape(CHUNK, -1).to(torch.int64)
             dev_ids = torch.where(dev_ids >= 2**31, torch.full_like(dev_ids, -1), dev_ids)
             ov, same = idx_setmatch(dev_ids, idx_gold[p0 : p0 + CHUNK])
             r["idx_overlap"], r["idx_rows_identical"] = round(ov, 5), round(same, 4)
         if os.environ.get("TIMING", "0") == "1" and i == NCH - 1:
-            ts = []
-            for _ in range(3):
-                saved = (
-                    attn.cache.rows,
-                    attn.cache.length,
-                    attn.indexer.keys if attn.indexer else None,
-                    attn.indexer.length if attn.indexer else 0,
+            r.update(
+                trace_time(
+                    md,
+                    lambda: attn.prefill_chunk(h, p0, ids_in, append=False, tabs=tabs_t),
+                    lambda: attn.rope_tabs(p0, CHUNK),
                 )
-                attn.cache.rows, attn.cache.length = snap[0], snap[1]
-                if attn.indexer:
-                    attn.indexer.keys, attn.indexer.length = snap[2], snap[3]
-                attn.taps = None
-                ttnn.synchronize_device(md)
-                t = time.perf_counter()
-                out2, _ = attn.prefill_chunk(h, p0, ids_in)
-                ttnn.synchronize_device(md)
-                ts.append(time.perf_counter() - t)
-            r["eager_ms_warm"] = round(min(ts) * 1e3, 2)
+            )
         res.append(r)
         print("RES " + json.dumps(r), flush=True)
     print("SUMMARY " + json.dumps({"layer": L, "kv": KVFMT, "min_pcc": min(x["pcc"] for x in res)}), flush=True)
