@@ -147,7 +147,7 @@ class TtPrefillRuntime:
         self.config = config
         self.media_embedding_reader = media_embedding_reader
         self.media_buffers = None
-        self._pending_media = None
+        self._media_partial_buffers = {}
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -394,15 +394,8 @@ class TtPrefillRuntime:
         finally:
             self.media_embedding_reader = real_reader
 
-    def _hold_media(self, partials):
-        """Keep the forward's partials so prefill_forward can free them once the embedding is done."""
-        self._pending_media = partials
-        return partials
-
     def _media_partials(self, chunks: list, media_refs: list):
-        """D: image rows as per-SP-row partials, or None when the 1D embedding forces the later splice."""
-        if not self.model.embedding.shard_vocab_on_sp:
-            return None
+        """D: image rows as per-SP-row partials, refilled into buffers kept per table height."""
         cfg = self.config
         packed = build_media_partials(
             media_refs,
@@ -414,15 +407,21 @@ class TtPrefillRuntime:
         if packed is None:
             return None
         table, lookup, is_img = packed
-        return MediaPartials(
-            self.mesh_device,
-            table,
-            lookup,
-            is_img,
-            mesh_shape=cfg.mesh_shape,
-            sp_axis=cfg.sp_axis,
-            tp_axis=cfg.tp_axis,
-        )
+        sp, height, hidden = table.shape
+        buffers = self._media_partial_buffers.get(height)
+        if buffers is None:
+            buffers = self._media_partial_buffers[height] = MediaPartials(
+                self.mesh_device,
+                sp=sp,
+                height=height,
+                hidden=hidden,
+                s_total=lookup.shape[1],
+                mesh_shape=cfg.mesh_shape,
+                sp_axis=cfg.sp_axis,
+                tp_axis=cfg.tp_axis,
+            )
+        buffers.refill(table, lookup, is_img)
+        return buffers
 
     def _splice_media(self, x_embd: ttnn.Tensor, chunks: list, media_refs: list) -> ttnn.Tensor:
         """x_embd with each ref's image positions overwritten by its stored embeddings. Consumes x_embd.
@@ -597,22 +596,22 @@ class TtPrefillRuntime:
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
         if cfg.is_first_rank:
+            # The 2D embedding carries the image rows on its reduce-scatter; the 1D path has no
+            # collective to ride and splices after the embedding instead.
+            on_partials = bool(media_refs) and self.model.embedding.shard_vocab_on_sp
             media_fn = None
-            if media_refs:
+            if on_partials:
                 # The embedding calls this after enqueuing the lookup. Under PREFILL_PREFETCH_MEDIA the
                 # fetch happens there and overlaps that work; otherwise it is done here, as before, and
-                # the thunk just hands over the result. self._pending_media is what gets freed below.
+                # the thunk just hands the result over.
                 if prefetch_media():
-                    media_fn = lambda: self._hold_media(self._media_partials(chunks, media_refs))
+                    media_fn = lambda: self._media_partials(chunks, media_refs)
                 else:
-                    held = self._hold_media(self._media_partials(chunks, media_refs))
-                    media_fn = (lambda: held) if held is not None else None
+                    partials = self._media_partials(chunks, media_refs)
+                    media_fn = lambda: partials
             x_embd = self._embed_tokens(input_tensor, media_fn=media_fn)
             ttnn.deallocate(input_tensor)
-            if self._pending_media is not None:
-                self._pending_media.deallocate()
-                self._pending_media = None
-            elif media_refs:
+            if media_refs and not on_partials:
                 x_embd = self._splice_media(x_embd, chunks, media_refs)
         else:
             assert not media_refs, "media is spliced on the first rank only"

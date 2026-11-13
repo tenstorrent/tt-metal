@@ -54,50 +54,67 @@ class MediaInjectionBuffers:
 class MediaPartials:
     """D's per-SP-row image rows, on device, for the hook inside TtParallelEmbedding._forward_2d.
 
-    table [k+1, hidden/tp] per chip (row 0 zeros), lookup [1,1,s_total] per chip (0 = not this SP
-    row's), is_img [1,1,s_total,1] replicated. Uploaded per forward: k varies with how many images the
-    forward names, so unlike the A+B buffers these are not fixed-shape. The payload is small — the
-    table is the image bytes divided by SP and TP — so the allocation is not what this is saving.
+    table [h, hidden/tp] per chip (row 0 zeros), lookup [1,1,s_total] per chip (0 = not this SP row's),
+    is_img [1,1,s_total,1] replicated. Allocated once per table height — build_media_partials snaps the
+    height to a power of two, so a deployment uses a handful — and refilled with
+    copy_host_to_device_tensor, so a forward pays no allocation and no host tilize.
     """
 
-    def __init__(self, mesh_device, table, lookup, is_img, *, mesh_shape, sp_axis: int, tp_axis: int):
-        sp = mesh_shape[sp_axis]
-        assert table.shape[0] == sp and lookup.shape[0] == sp, f"{tuple(table.shape)} {tuple(lookup.shape)}"
-
-        def mapper(dims):
-            return ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape)
-
-        sp_tp, sp_only, replicated = [None, None], [None, None], (None, None)
+    def __init__(self, mesh_device, *, sp: int, height: int, hidden: int, s_total: int, mesh_shape, sp_axis, tp_axis):
+        self.shape = (sp, height, hidden)
+        self.s_total = s_total
+        sp_tp, sp_only = [None, None], [None, None]
         sp_tp[sp_axis], sp_tp[tp_axis] = 0, 2
         sp_only[sp_axis] = 0
-        self.table = ttnn.from_torch(
-            table,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper(tuple(sp_tp)),
+        self._sp_tp, self._sp_only, self._replicated = tuple(sp_tp), tuple(sp_only), (None, None)
+        self._mapper = lambda dims: ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape)
+
+        self.table = self._to_device(
+            mesh_device,
+            torch.zeros(sp, height, hidden, dtype=torch.bfloat16),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self._sp_tp,
         )
-        self.lookup = ttnn.from_torch(
-            lookup.reshape(sp, 1, -1),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper(tuple(sp_only)),
+        self.lookup = self._to_device(
+            mesh_device,
+            torch.zeros(sp, 1, s_total, dtype=torch.int32),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self._sp_only,
         )
-        self.is_img = ttnn.from_torch(
-            is_img.reshape(1, 1, -1, 1).to(torch.int32),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper(replicated),
+        self.is_img = self._to_device(
+            mesh_device,
+            torch.zeros(1, 1, s_total, 1, dtype=torch.int32),
+            ttnn.uint32,
+            ttnn.TILE_LAYOUT,
+            self._replicated,
         )
 
-    def deallocate(self) -> None:
-        for t in (self.table, self.lookup, self.is_img):
-            ttnn.deallocate(t)
+    def _to_device(self, mesh_device, t, dtype, layout, dims):
+        return ttnn.from_torch(
+            t,
+            device=mesh_device,
+            dtype=dtype,
+            layout=layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._mapper(dims),
+        )
+
+    def _host(self, t, dtype, layout, dims):
+        return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=self._mapper(dims))
+
+    def refill(self, table: torch.Tensor, lookup: torch.Tensor, is_img: torch.Tensor) -> None:
+        sp, height, hidden = self.shape
+        assert tuple(table.shape) == (sp, height, hidden), f"{tuple(table.shape)} against {self.shape}"
+        ttnn.copy_host_to_device_tensor(self._host(table, ttnn.bfloat16, ttnn.TILE_LAYOUT, self._sp_tp), self.table)
+        ttnn.copy_host_to_device_tensor(
+            self._host(lookup.reshape(sp, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self._sp_only), self.lookup
+        )
+        ttnn.copy_host_to_device_tensor(
+            self._host(is_img.reshape(1, 1, -1, 1).to(torch.int32), ttnn.uint32, ttnn.TILE_LAYOUT, self._replicated),
+            self.is_img,
+        )
 
 
 def inject_media_embeddings(
