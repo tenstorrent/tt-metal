@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from models.experimental.vadv1.common import CAN_BUS_DIMS, synthetic_can_bus, synthetic_rig
 from models.experimental.vadv1.demo.dataset import SequenceManifest
 
 CAMERA_ORDER = ("CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT")
@@ -37,7 +38,6 @@ CLASS_NAMES = (
 )
 MAP_CLASS_NAMES = ("divider", "ped_crossing", "boundary")
 COMMAND_NAMES = ("turn_right", "turn_left", "go_straight")
-CAN_BUS_DIMS = 18
 # VAD-Tiny's input: each camera image scaled by 0.4 and padded to a multiple of 32.
 IMAGE_SCALE = 0.4
 IMAGE_HEIGHT, IMAGE_WIDTH = 384, 640
@@ -66,29 +66,6 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _yaw_quaternion(yaw):
-    return [math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)]
-
-
-def synthetic_rig():
-    """Six pinhole cameras around the ego at VAD's input size, as (num_cams, 4, 4) lidar2img. The
-    lidar frame has x to the right, y forward and z up; each camera looks along its yaw."""
-    # The image content is 640x360; the padding below it holds no pixels.
-    fx = fy = 500.0
-    cx, cy = 320.0, 180.0
-    intrinsic = np.array([[fx, 0, cx, 0], [0, fy, cy, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-    matrices = []
-    for yaw_deg in (0.0, -55.0, 55.0, 180.0, 110.0, -110.0):
-        yaw = math.radians(yaw_deg)
-        forward = np.array([-math.sin(yaw), math.cos(yaw), 0.0])
-        right = np.array([math.cos(yaw), math.sin(yaw), 0.0])
-        down = np.array([0.0, 0.0, -1.0])
-        extrinsic = np.eye(4)
-        extrinsic[:3, :3] = np.stack([right, down, forward])
-        matrices.append(intrinsic @ extrinsic)
-    return matrices
-
-
 def synthetic_frames(count, seed):
     """count frames of random images, the synthetic rig and an ego driving a gentle curve."""
     import torch
@@ -98,11 +75,7 @@ def synthetic_frames(count, seed):
     frames = []
     x = y = yaw = 0.0
     for index in range(count):
-        can_bus = np.zeros(CAN_BUS_DIMS)
-        can_bus[:3] = (x, y, 0.0)
-        can_bus[3:7] = _yaw_quaternion(yaw)
-        angle = math.degrees(yaw) % 360
-        can_bus[-2], can_bus[-1] = math.radians(angle), angle
+        can_bus = synthetic_can_bus(x, y, yaw)
         images = torch.randn(len(CAMERA_ORDER), 3, IMAGE_HEIGHT, IMAGE_WIDTH, generator=generator)
         frames.append((images, rig, can_bus, None, f"synthetic-{index}"))
         x += SYNTHETIC_SPEED_MPS * FRAME_INTERVAL_S * math.cos(yaw)
