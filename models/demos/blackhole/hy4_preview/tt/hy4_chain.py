@@ -302,6 +302,7 @@ class Hy4Chain:
             idx_rope_first if idx_rope_first is not None else os.environ.get("HY4_IDX_ROPE_FIRST", "0") == "1"
         )
         self.layers = []
+        self.mtp_layers = []  # built, unused until the spec-mtp device stage
         self.moe_buffers = None
         self.load_log = []
         self._head = None
@@ -312,8 +313,8 @@ class Hy4Chain:
             t0, b0 = time.time(), self.rd.bytes_read
             sd = self.rd.layer_sd(L if L < self.cfg.num_hidden_layers else -1)
             t_sd = time.time() - t0
-            self.layers.append(Hy4ChainLayer(self, L, sd))
-            ly = self.layers[-1]
+            ly = Hy4ChainLayer(self, L, sd)
+            (self.mtp_layers if L >= self.cfg.num_hidden_layers else self.layers).append(ly)
             rec = dict(
                 layer=L,
                 sec=round(time.time() - t0, 1),
