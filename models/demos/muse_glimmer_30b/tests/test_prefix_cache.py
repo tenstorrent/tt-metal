@@ -318,3 +318,34 @@ def test_resumed_bucket_stays_inside_rope_tables(monkeypatch):
     nxt = torch.cat([prompt, torch.arange(1000)])
     call = _run(a, nxt, cached=129_984)
     assert call["resume"].start + call["pad_len"] <= 131072
+
+
+# ---- ring geometry: plain adapter (256-row pad) vs the DFlash2 engine (coarse prefill buckets) ----------------------------
+
+import os  # noqa: E402
+
+import pytest  # noqa: E402
+
+from models.demos.muse_glimmer_30b.tt.model_config import PREFILL_MAX_PAD, MuseGlimmerModelArgs, checkpoint_dir  # noqa: E402
+
+_CKPT = checkpoint_dir()
+needs_ckpt = pytest.mark.skipif(not os.path.exists(os.path.join(_CKPT, "config.json")), reason="checkpoint not available")
+
+
+@needs_ckpt
+def test_plain_adapter_ring_is_36_blocks_and_dflash_ring_is_unchanged():
+    plain = MuseGlimmerModelArgs.from_checkpoint(_CKPT, tp=4, max_seq_len=131072, ring_pad_rows=gv.RING_PAD_ROWS)
+    spec = MuseGlimmerModelArgs.from_checkpoint(_CKPT, tp=4, max_seq_len=131072)
+    assert plain.sliding_kv_blocks == 36 and plain.sliding_kv_blocks * plain.block_size == 2304
+    assert spec.ring_pad_rows == PREFILL_MAX_PAD
+    assert spec.sliding_kv_blocks == -(-(2048 + PREFILL_MAX_PAD) // spec.block_size) == 288  # as in the merge tree 6c2fd2caaac
+
+
+def test_ring_fill_len_is_the_prompt_rounded_to_256_and_fits_the_ring_pad():
+    for n in list(range(1, 700)) + [4200, 90_000, 130_944]:
+        f = gv._ring_fill_len(n)
+        assert f >= n and (f == 128 or f % 256 == 0)
+        assert f - n < max(256, 128)  # padded rows past the real ones never exceed the ring's 256 pad rows
+        # the window of the last real rows survives a fill of f rows into a ring of window + RING_PAD_ROWS rows
+        ring = 2048 + gv.RING_PAD_ROWS
+        assert f - ring <= n - 2048

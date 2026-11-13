@@ -130,6 +130,10 @@ class MuseGlimmerModelArgs:
     max_seq_len: int = 8192
     max_prefill_len: int = 8192
     block_size: int = 64
+    # Rows a sliding ring keeps beyond the window: the largest prefill pad the model writes. The DFlash2 engine pads prompts to
+    # coarse buckets (< PREFILL_MAX_PAD rows) and verifies 16-row blocks; the vLLM plain adapter pads to 256 and sets 256, which
+    # keeps a ring at 36 blocks (24.4 MB per snapshot) instead of 288.
+    ring_pad_rows: int = PREFILL_MAX_PAD
     attn_weight_dtype: ttnn.DataType = ttnn.bfloat4_b if LOW_PRECISION else ttnn.bfloat8_b
     mlp_weight_dtype: ttnn.DataType = ttnn.bfloat4_b if LOW_PRECISION else ttnn.bfloat8_b
     lm_head_dtype: ttnn.DataType = ttnn.bfloat4_b if LOW_PRECISION else ttnn.bfloat8_b
@@ -307,9 +311,9 @@ class MuseGlimmerModelArgs:
 
     @property
     def sliding_kv_blocks(self) -> int:
-        """Per-user KV blocks of a sliding layer: a ring of the window plus the largest prefill pad, so the last
+        """Per-user KV blocks of a sliding layer: a ring of the window plus the largest prefill pad (ring_pad_rows), so the last
         `sliding_window` real rows of a padded prompt survive the fill. Never more than the full span."""
-        return min(self.max_num_blocks_per_user, math.ceil((self.sliding_window + PREFILL_MAX_PAD) / self.block_size))
+        return min(self.max_num_blocks_per_user, math.ceil((self.sliding_window + self.ring_pad_rows) / self.block_size))
 
     def is_sliding(self, i: int) -> bool:
         return self.layer_types[i] == "sliding_attention"

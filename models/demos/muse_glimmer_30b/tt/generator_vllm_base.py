@@ -55,6 +55,12 @@ def prefill_buckets(max_len: int, step_div: int | None = None) -> list[int]:
     return [b for b in buckets if b <= max_len] or [max_len]
 
 
+# Rows a sliding ring keeps beyond the window in plain mode: the adapter pads prefills by at most 256 rows (_ring_fill_len), so
+# a ring is 36 blocks of 64 (24.4 MB for the 39 sliding layers) and a snapshot copies exactly that. The DFlash2 engine keeps
+# the model default (coarse prefill buckets, window + PREFILL_MAX_PAD).
+RING_PAD_ROWS = 256
+
+
 def _ring_fill_len(n: int) -> int:
     """Rows a sliding ring may take from a prompt of n rows: 128 or n rounded up to the 256-row SDPA chunk. A ring holds
     the window plus 256 pad rows, so a coarser bucket would wrap padded rows over the last real ones."""
@@ -146,6 +152,7 @@ class MuseGlimmerForConditionalGeneration:
             max_batch_size=DECODE_B_PAD,
             max_seq_len=max_seq_len,
             max_prefill_len=max_seq_len,
+            ring_pad_rows=RING_PAD_ROWS,
         )
         model = MuseGlimmerModel(args, mesh_device, allocate_kv=False)
         logger.info(f"Muse-Glimmer vLLM adapter: tp={args.tp} max_seq_len={max_seq_len} max_num_seqs={max_batch_size}")
