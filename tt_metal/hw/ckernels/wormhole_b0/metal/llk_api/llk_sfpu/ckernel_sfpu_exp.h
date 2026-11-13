@@ -339,10 +339,10 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
-    // Number of instructions in one iteration of the loop body. Used by
-    // TTI_REPLAY/record and TTI_REPLAY/replay below; MUST match exactly the count of
-    // TTI_ instructions emitted between the TTI_REPLAY/record call and the
-    // replay loop, or the replay buffer will misalign.
+    // Number of instructions in one iteration of the loop body. Used by the
+    // load_replay_buf record and TTI_REPLAY/replay below; MUST match exactly the
+    // count of TTI_ instructions emitted by the recorded lambda, or the replay
+    // buffer will misalign.
     //
     //   Base body:                                                17
     //     SFPLOAD, SFPMAD, SFPNOP, SFPSWAP, SFPNOP,
@@ -368,80 +368,80 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // the replay buffer, so slot 0 is free here. Callers that mix this
     // function with other replay-buffer clients should ensure they don't
     // require slot 0 to survive across the call.
-    TTI_REPLAY(0, BODY_LEN, 1, 1);
+    load_replay_buf<Exec>(0, BODY_LEN, [exp_base_scale_factor] {
+        // val = sfpi::dst_reg[0]
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 
-    // val = sfpi::dst_reg[0]
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        if constexpr (SCALE_EN) {
+            // Multiply LREG0 by the BF16 scale immediate in-place.
+            TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;
+        }
 
-    if constexpr (SCALE_EN) {
-        // Multiply LREG0 by the BF16 scale immediate in-place.
-        TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+        // xlog2 = val * (1/ln2) + 127.0f
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+
+        // CLAMP_NEGATIVE is used for performance when callee guarantees
+        // that xlog2 < 0.0 (i.e x < 0)
+        // Numerics are identical whenever that precondition holds. The
+        // upper clamp below is unconditional because no caller advertises an
+        // upper bound on input magnitude.
+        if constexpr (CLAMP_NEGATIVE) {
+            // Lower clamp: xlog2 <- max(xlog2, 0). SFPSWAP cannot reference
+            // the LCONST_0 fixed register directly, so we materialize 0.0 in
+            // LREG1 first. Mode VEC_MIN_MAX puts max(a, b) into the dest LReg.
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        }
         TTI_SFPNOP;
-    }
 
-    // xlog2 = val * (1/ln2) + 127.0f
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+        // Upper clamp: xlog2 <- min(xlog2, 255). LREG2 holds 255.
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPNOP;
 
-    // CLAMP_NEGATIVE is used for performance when callee guarantees
-    // that xlog2 < 0.0 (i.e x < 0)
-    // Numerics are identical whenever that precondition holds. The
-    // upper clamp below is unconditional because no caller advertises an
-    // upper bound on input magnitude.
-    if constexpr (CLAMP_NEGATIVE) {
-        // Lower clamp: xlog2 <- max(xlog2, 0). SFPSWAP cannot reference
-        // the LCONST_0 fixed register directly, so we materialize 0.0 in
-        // LREG1 first. Mode VEC_MIN_MAX puts max(a, b) into the dest LReg.
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-    }
-    TTI_SFPNOP;
+        // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
+        TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);  // LREG1 = exexp(xlog2)
+        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);  // LREG0 = exman8(xlog2)
+        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);   // LREG0 <<= LREG1
 
-    // Upper clamp: xlog2 <- min(xlog2, 255). LREG2 holds 255.
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-    TTI_SFPNOP;
+        // Extract fractional part (sfpi::exman9 with PAD9). LREG0 still holds
+        // the integer-part-as-float-encoding which feeds SETEXP later.
+        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
 
-    // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
-    TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);  // LREG1 = exexp(xlog2)
-    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);  // LREG0 = exman8(xlog2)
-    TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);   // LREG0 <<= LREG1
+        // frac = convert<vFloat>(fractional_part, RoundMode::Nearest)
+        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
 
-    // Extract fractional part (sfpi::exman9 with PAD9). LREG0 still holds
-    // the integer-part-as-float-encoding which feeds SETEXP later.
-    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
+        // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
+        //   frac = c0 + frac * (c1 + frac * c2)
+        //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, p_sfpu::LREG2, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
 
-    // frac = convert<vFloat>(fractional_part, RoundMode::Nearest)
-    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
+        // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
+        // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
-    // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
-    //   frac = c0 + frac * (c1 + frac * c2)
-    //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
-    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-    TTI_SFPNOP;
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+        // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
+        constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
+        TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
 
-    // Refresh LREG2 = 255.0f for next iteration's upper-clamp. Hidden in
-    // the SFPMAD's 2-cycle latency window before LREG1 is consumed.
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
+        if constexpr (!is_fp32_dest_acc_en) {
+            // Round float32 -> bfloat16 using round-to-nearest before
+            // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        }
 
-    // y = setexp(frac, exponential_part) — recombine 2^x_i * 2^x_f.
-    constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
-    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
-
-    if constexpr (!is_fp32_dest_acc_en) {
-        // Round float32 -> bfloat16 using round-to-nearest before
-        // SFPSTORE truncates. Avoids ULP loss on values like 9*9 = 80.8.
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN,
-            0,
-            p_sfpu::LCONST_0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    }
-
-    // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-    TTI_INCRWC(0, 2, 0, 0);
+        // sfpi::dst_reg[0] = y; sfpi::dst_reg++;
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    });
 
 #pragma GCC unroll 8
     for (std::uint32_t i = 1; i < ITERATIONS; i++) {
@@ -1030,43 +1030,42 @@ inline __attribute__((always_inline)) void exp_init() {
         //   SHFT2 uses: LREG2, LREG3, LREG0, LREG1, LREG2, ...
         // ===================================================================
 
-        lltt::record(0, 32);
-
-        // 16 pairs of LM + SHFT2 (LREG pattern repeats every 4 pairs)
-        // Pairs 0-1: dummy SHFT2s, Pairs 2-15: real SHFT2s for elements 0-13
-        TTI_SFPLOADMACRO(0, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(1, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(2, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(3, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(0, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(1, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(2, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(3, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(0, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(1, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(2, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(3, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(0, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(1, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(2, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-        TTI_SFPLOADMACRO(3, 0, 3, 0);
-        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
-
+        load_replay_buf(0, 32, [] {
+            // 16 pairs of LM + SHFT2 (LREG pattern repeats every 4 pairs)
+            // Pairs 0-1: dummy SHFT2s, Pairs 2-15: real SHFT2s for elements 0-13
+            TTI_SFPLOADMACRO(0, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(1, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(2, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(3, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(0, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(1, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(2, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(3, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(0, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(1, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(2, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(3, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(0, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(1, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(2, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+            TTI_SFPLOADMACRO(3, 0, 3, 0);
+            TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
+        });
         TTI_SFPNOP;
 #endif
     } else {

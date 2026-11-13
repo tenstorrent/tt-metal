@@ -37,6 +37,9 @@ TT_ALWAYS_INLINE void configure_gathering()
         .option push
         li   t1, 0x2
         csrrs zero, 0x7c0, t1
+        .rept 20
+        nop
+        .endr
         li   t1, 0x1
         slli t1, t1, 18
         fence

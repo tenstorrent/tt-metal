@@ -74,29 +74,29 @@ inline void _top2_calculate_top2_() {
 
     //-------------------------------------------------------------------------
     // Group 0
-    lltt::record<lltt::Exec>(0, 14);
+    load_replay_buf<Exec>(0, 14, [] {
+        TTI_SFPTRANSP(0, 0, 0, 0);
+        // Load 4 tile rows into LREG4-7
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);
+        TTI_SFPTRANSP(0, 0, 0, 0);
 
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    // Load 4 tile rows into LREG4-7
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);
-    TTI_SFPTRANSP(0, 0, 0, 0);
+        // Tournament on LREG4-7 to find top-2 of this batch
+        // After: LREG4 = max, LREG5 = 2nd max
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
 
-    // Tournament on LREG4-7 to find top-2 of this batch
-    // After: LREG4 = max, LREG5 = 2nd max
-    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
-
-    // Merge batch top-2 (LREG4/5) with running top-2 (LREG0/1)
-    // After: LREG0 = max, LREG1 = 2nd max
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
+        // Merge batch top-2 (LREG4/5) with running top-2 (LREG0/1)
+        // After: LREG0 = max, LREG1 = 2nd max
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
+    });
 
     //-------------------------------------------------------------------------
     lltt::replay(0, 14);  // Group 1
@@ -107,16 +107,16 @@ inline void _top2_calculate_top2_() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
-    lltt::record<lltt::Exec>(14, 6);
-
-    // Group 4
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    // Load 4 tile rows into LREG4-7
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 32);
-    TTI_SFPTRANSP(0, 0, 0, 0);
+    load_replay_buf<Exec>(14, 6, [] {
+        // Group 4
+        TTI_SFPTRANSP(0, 0, 0, 0);
+        // Load 4 tile rows into LREG4-7
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);
+        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);
+        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 32);
+        TTI_SFPTRANSP(0, 0, 0, 0);
+    });
 
     lltt::replay(6, 8);
 

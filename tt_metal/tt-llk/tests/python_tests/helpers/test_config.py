@@ -81,6 +81,7 @@ from .llk_params import (
     MailboxesQuasar,
 )
 from .logger import logger
+from .replay_record_scan import check_elf_records
 from .stimuli_config import StimuliConfig
 from .target_config import TestTargetConfig
 from .test_variant_parameters import (
@@ -1997,6 +1998,22 @@ class TestConfig:
                 ]
                 for fut in futures:
                     fut.result()
+
+            if TestConfig.gathering_build():
+                # A replay record that gathering sees can hang the core; the source lint cannot see
+                # records the compiler makes or a helper that lost its bracket, the binary can.
+                unbracketed = [
+                    f"{name}.elf: {line}"
+                    for name in TestConfig.KERNEL_COMPONENTS
+                    for line in check_elf_records(VARIANT_ELF_DIR / f"{name}.elf")[1]
+                ]
+                if unbracketed:
+                    raise RuntimeError(
+                        f"{self.test_name} variant {self.variant_id[:12]}: replay record(s) not "
+                        "bracketed by disable_gathering()/enable_gathering() in a gathering build; "
+                        "record through ckernel::load_replay_buf:\n  "
+                        + "\n  ".join(unbracketed)
+                    )
 
             if self.profiler_build == ProfilerBuild.Yes:
                 # Extract profiler metadata

@@ -362,37 +362,37 @@ inline void init_max_pool_with_indices() {
 
     if constexpr (layout == ckernel::DataLayout::ROW_MAJOR) {
         // Program replay buffer for row major layout
-        lltt::record(0, 7);
+        load_replay_buf(0, 7, [] {
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
 
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPTRANSP(0, 0, 0, 0);
 
-        TTI_SFPTRANSP(0, 0, 0, 0);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
-        TTI_SFPTRANSP(0, 0, 0, 0);
+            TTI_SFPTRANSP(0, 0, 0, 0);
+        });
     } else {
         // Program replay buffer for tiled layout (original)
-        lltt::record(0, 7);
+        load_replay_buf(0, 7, [] {
+            // Values have been loaded such that 4 rows of Dest occupy the 4 lanes of each LREG
+            // To sort those 4 rows, we transpose the SFPU LREGs to put elements of 4 rows of each column into separate
+            // LREGs of each unit of SFPU
+            TTI_SFPTRANSP(0, 0, 0, 0);
 
-        // Values have been loaded such that 4 rows of Dest occupy the 4 lanes of each LREG
-        // To sort those 4 rows, we transpose the SFPU LREGs to put elements of 4 rows of each column into separate
-        // LREGs of each unit of SFPU
-        TTI_SFPTRANSP(0, 0, 0, 0);
+            // Sort the 4 rows of Dest, placing the max value into LREG0 (index into LREG4)
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
 
-        // Sort the 4 rows of Dest, placing the max value into LREG0 (index into LREG4)
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+            // Transpose the LREGs back
+            TTI_SFPTRANSP(0, 0, 0, 0);
 
-        // Transpose the LREGs back
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        });
     }
 }
 

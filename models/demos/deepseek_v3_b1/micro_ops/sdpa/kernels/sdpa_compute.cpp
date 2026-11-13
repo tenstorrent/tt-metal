@@ -46,6 +46,9 @@ void kernel_main() {
     // TODO: Init ahead of time
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
+    // PACK's SFPU writes Dst while MATH's matmul does. With the Dst remap left on by an earlier untilize-type kernel,
+    // a MATH Dst write in the same cycle as a PACK SFPU Dst write can be lost (Blackhole), so turn it off.
+    MATH((llk_math_reconfig_remap(false)));
 
     PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
     PACK(SFPU_UNARY_INIT_FN(

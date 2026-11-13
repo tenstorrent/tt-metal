@@ -5,15 +5,15 @@
 Regression: the LLK test firmware must configure Blackhole instruction gathering
 the same way tt-metal firmware does.
 
-Blackhole boots with instruction gathering enabled. tt-metal firmware disables it
-on every RISC around Tensix (``configure_gathering()`` in
-``tt_metal/hw/inc/internal/firmware_common.h``). ``ckernel.h``'s
-``load_replay_buf()`` is the complement: it brackets the replay-record window with
-disable/enable, but only ``#if defined(ENABLE_GATHERING)``.
+Blackhole boots with instruction gathering enabled. By default tt-metal firmware disables
+it on every RISC around Tensix (``configure_gathering()`` in
+``tt_metal/hw/inc/internal/firmware_common.h``). With TT_METAL_ENABLE_GATHERING=1 the build
+defines ENABLE_GATHERING: firmware leaves gathering on and ``ckernel.h``'s
+``load_replay_buf()`` brackets every replay-record window with disable/enable.
 
 Those are two halves of one contract: either gathering is off globally, or it is on
-and the record window is bracketed. The test firmware must implement one of them, and
-this test is what holds it to that.
+and the record window is bracketed. The test firmware must implement the same one as
+tt-metal for the same switch, and this test is what holds it to that.
 
 This test asserts on the built firmware rather than on behaviour, because the
 gathering hazard is a codegen lottery: a kernel that happens to be laid out safely
@@ -23,13 +23,14 @@ configuration. CSR 0x7c0 is write-only in this codebase (every use is
 """
 
 import os
-import struct
 from pathlib import Path
 
 import pytest
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats
+from helpers.replay_record_scan import _executable_words
+from helpers.replay_record_scan import check_elf_records as _check_elf_records
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -58,38 +59,10 @@ CSRRC_ZERO_CFG0_T1 = 0x7C033073  # csrrc zero, 0x7c0, t1   (funct3=011)
 # pinned separately by test_harness_gathering_sequence_matches_tt_metal below.
 MIN_CSRRS = 2
 MIN_CSRRC = 1
-# The three words span 7 words when emitted (one asm block, so the compiler cannot
-# interleave); allow slack for scheduling changes without admitting unrelated writes.
-SEQUENCE_WINDOW_WORDS = 16
-
-
-def _executable_words_with_addresses(elf_path):
-    """Every 4-byte aligned word of every executable PROGBITS section, with the word address
-    list and the address -> word index map (for following jumps)."""
-    data = elf_path.read_bytes()
-    assert data[:4] == b"\x7fELF" and data[4] == 1, f"{elf_path} is not a 32-bit ELF"
-
-    (e_shoff,) = struct.unpack_from("<I", data, 0x20)
-    e_shentsize, e_shnum, _ = struct.unpack_from("<HHH", data, 0x2E)
-
-    words, word_addresses, index_of_address = [], [], {}
-    for i in range(e_shnum):
-        _, sh_type, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
-            "<IIIIII", data, e_shoff + i * e_shentsize
-        )
-        SHT_PROGBITS, SHF_EXECINSTR = 1, 0x4
-        if sh_type != SHT_PROGBITS or not (sh_flags & SHF_EXECINSTR):
-            continue
-        for off in range(sh_offset, sh_offset + sh_size - 3, 4):
-            index_of_address[sh_addr + (off - sh_offset)] = len(words)
-            word_addresses.append(sh_addr + (off - sh_offset))
-            words.append(struct.unpack_from("<I", data, off)[0])
-    return words, (word_addresses, index_of_address)
-
-
-def _executable_words(elf_path):
-    """Every 4-byte aligned word of every executable PROGBITS section."""
-    return _executable_words_with_addresses(elf_path)[0]
+# The three words span 27 words when emitted (one asm block, so the compiler cannot
+# interleave; 20 of them are the nop drain); allow slack for scheduling changes without
+# admitting unrelated writes.
+SEQUENCE_WINDOW_WORDS = 36
 
 
 def _has_gathering_sequence(words):
@@ -112,8 +85,13 @@ def _has_gathering_sequence(words):
 
 
 @blackhole_only
-def test_gathering_disabled_in_all_risc_firmware():
-    """Every RISC's firmware must carry tt-metal's gathering-disable sequence."""
+def test_firmware_gathering_matches_build_config():
+    """With gathering off (the default), every RISC's firmware must carry tt-metal's
+    gathering-disable sequence; with gathering on (TT_METAL_ENABLE_GATHERING=1), BRISC's must not.
+
+    BRISC only: it records nothing, so a disable_gathering() bracket around a record cannot
+    look like the boot sequence there. run_hardware_free.sh runs this test in both
+    configurations."""
     # Any kernel will do: the sequence under test lives in do_crt0(), which every
     # RISC's firmware runs. This mirrors test_dest_copy's invocation so the build
     # is a known-good one.
@@ -155,6 +133,13 @@ def test_gathering_disabled_in_all_risc_firmware():
     missing = [n for n, p in elves.items() if not p.is_file()]
     assert not missing, f"firmware ELFs were not built: {missing} (looked in {elf_dir})"
 
+    if TestConfig.gathering_build():
+        assert not _has_gathering_sequence(_executable_words(elves["brisc"])), (
+            "brisc.elf carries configure_gathering()'s gathering-disable sequence in a build "
+            "with ENABLE_GATHERING: boot.h must leave gathering on, as tt-metal firmware does."
+        )
+        return
+
     for name, path in elves.items():
         words = _executable_words(path)
         n_set = words.count(CSRRS_ZERO_CFG0_T1)
@@ -186,7 +171,9 @@ def test_harness_gathering_sequence_matches_tt_metal():
         return [
             line.strip()
             for line in body.splitlines()
-            if "0x7c0" in line or "slli" in line or line.strip().startswith("li ")
+            if "0x7c0" in line
+            or "slli" in line
+            or line.strip().startswith(("li ", ".rept"))
         ]
 
     assert csr_ops(harness) == csr_ops(metal), (
@@ -195,158 +182,40 @@ def test_harness_gathering_sequence_matches_tt_metal():
     )
 
 
-# Replay-record checks for ENABLE_GATHERING builds (tenstorrent/tt-llk#1701 item 9).
-# RISC-V CSR fields: csr[31:20] rs1[19:15] funct3[14:12] rd[11:7] op[6:0]; rs1 is whatever
-# register the compiler picked for the bit mask.
-CFG0_CSR = 0x7C0
-FUNCT3_CSRRS, FUNCT3_CSRRC = 0b010, 0b011
-# disable_gathering() is csrrs, fence, csrrs, csrrc, fence, three TTNOPs, plus scheduling slack.
-DISABLE_WINDOW_WORDS = 16
-# Walk from a record to its enable_gathering() csrrc: counts Tensix words (RISC-V code is
-# scheduled among them) and follows unconditional jumps (GCC cross-jumps common body tails).
-BODY_WALK_LIMIT_WORDS = 512
-TT_OPCODE_REPLAY = 0x04
+def _sw(rs2, rs1=2, imm=0):
+    """sw rs2, imm(rs1)"""
+    return (
+        ((imm >> 5) << 25)
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (0b010 << 12)
+        | ((imm & 0x1F) << 7)
+        | 0x23
+    )
+
+
+def test_runtime_record_is_the_store_of_the_composed_value():
+    """A runtime-composed record is the sw of the register that holds the REPLAY word, not the
+    first sw after it: a spill of another register in between must not be taken for the record.
+    """
+    from helpers.replay_record_scan import _runtime_replay_records
+
+    t0, t1, a0 = 5, 6, 10
+    lui = (0x04000 << 12) | (t0 << 7) | 0x37  # lui t0, REPLAY in bits 31:24
+    addi = (1 << 20) | (t0 << 15) | (t0 << 7) | 0x13  # addi t0, t0, 1 (load_mode)
+    words = [lui, addi, _sw(t1), _sw(t0, a0)]
+    assert _runtime_replay_records(words) == [(3, None)]
+    # The value never stored from t0 (moved first): the first sw still stands in for the record.
+    assert _runtime_replay_records([lui, addi, _sw(t1, a0)]) == [(2, None)]
+    # A record at a non-zero start (math's replay_buf_offset, 16): start << 14 lands in the lui bits.
+    lui_start16 = ((0x04000 | (16 << 2)) << 12) | (t0 << 7) | 0x37
+    assert _runtime_replay_records([lui_start16, addi, _sw(t0, a0)]) == [(2, None)]
+
+
 # _calculate_where_'s plain-SFPLOAD path (DISABLE_SFPLOADMACRO) records 6 instructions: three
 # SFPLOADs, SFPSETCC, SFPENCC, SFPSTORE. Its SFPLOADMACRO paths record 3 and 4, so the length
 # tells the site under test apart from the two that were already bracketed.
 WHERE_PLAIN_SFPLOAD_RECORD_LEN = 6
-
-
-def _cfg0_csr_op(word):
-    """'s' / 'c' for csrrs / csrrc zero, 0x7c0, <any rs1>; None otherwise."""
-    if word & 0x7F != 0x73 or (word >> 7) & 0x1F != 0 or word >> 20 != CFG0_CSR:
-        return None
-    return {FUNCT3_CSRRS: "s", FUNCT3_CSRRC: "c"}.get((word >> 12) & 0x7)
-
-
-def _replay_records(words):
-    """(index, length) of every REPLAY that records (load_mode=1), from the inline
-    ``.ttinsn`` encoding: the Tensix word rotated left by two bits."""
-    records = []
-    for i, word in enumerate(words):
-        if word & 0x3 == 0x3:  # 32-bit RISC-V opcode space: not a Tensix instruction
-            continue
-        insn = (word >> 2) | ((word & 0x3) << 30)
-        if insn >> 24 == TT_OPCODE_REPLAY and insn & 0x1:
-            records.append((i, (insn >> 4) & 0x3FF))
-    return records
-
-
-# A runtime-length record (_llk_pack_block_contiguous_mop_config_) is not an inline .ttinsn word:
-# the compiler composes it as `lui rd, 0x4000` (REPLAY opcode), `addi rd, rd, 1` (load_mode), sw.
-RISCV_OPCODE_LUI = 0x37
-RISCV_OPCODE_OP_IMM = 0x13
-RISCV_OPCODE_STORE = 0x23
-RISCV_OPCODE_JAL = 0x6F
-FUNCT3_SW = 0b010
-REPLAY_OPCODE_LUI_IMM = (
-    TT_OPCODE_REPLAY << 12
-)  # lui immediate placing 0x04 in bits 31:24
-RUNTIME_RECORD_COMPOSE_WORDS = 12
-RUNTIME_RECORD_DISABLE_WINDOW_WORDS = 32
-
-
-def _runtime_replay_records(words):
-    """(index of the instruction-buffer store, None) of every REPLAY record composed at runtime."""
-    records = []
-    for i, word in enumerate(words):
-        if word & 0x7F != RISCV_OPCODE_LUI or word >> 12 != REPLAY_OPCODE_LUI_IMM:
-            continue
-        rd = (word >> 7) & 0x1F
-        addi_rd_rd_1 = RISCV_OPCODE_OP_IMM | (rd << 7) | (rd << 15) | (1 << 20)
-        window = words[i + 1 : i + RUNTIME_RECORD_COMPOSE_WORDS]
-        if addi_rd_rd_1 not in window:
-            continue  # a playback word (no load_mode bit), e.g. a MOP template operand
-        for j in range(i + 1, min(i + RUNTIME_RECORD_COMPOSE_WORDS, len(words))):
-            if (
-                words[j] & 0x7F == RISCV_OPCODE_STORE
-                and (words[j] >> 12) & 0x7 == FUNCT3_SW
-            ):
-                records.append((j, None))
-                break
-    return records
-
-
-def _is_tensix_word(word):
-    """Inline ``.ttinsn`` words are the only words outside the 32-bit RISC-V opcode space."""
-    return word & 0x3 != 0x3
-
-
-def _jal_zero_target(words, index, addresses):
-    """Word index of the target of ``jal zero, imm`` at ``index``, or None."""
-    word = words[index]
-    if word & 0x7F != RISCV_OPCODE_JAL or (word >> 7) & 0x1F != 0:
-        return None
-    imm = (
-        ((word >> 31) & 0x1) << 20
-        | ((word >> 12) & 0xFF) << 12
-        | ((word >> 20) & 0x1) << 11
-        | ((word >> 21) & 0x3FF) << 1
-    )
-    if imm & (1 << 20):
-        imm -= 1 << 21
-    word_addresses, index_of_address = addresses
-    return index_of_address.get(word_addresses[index] + imm)
-
-
-def _first_cfg0_op_after(words, index, addresses):
-    """(op, tensix words seen) for the first cfg0 CSR op after word ``index``, following
-    unconditional jumps; op is None if none is found within the walk limit."""
-    tensix = 0
-    position = index + 1
-    for _ in range(BODY_WALK_LIMIT_WORDS):
-        if position >= len(words):
-            break
-        target = _jal_zero_target(words, position, addresses)
-        if target is not None:
-            position = target
-            continue
-        op = _cfg0_csr_op(words[position])
-        if op:
-            return op, tensix
-        if _is_tensix_word(words[position]):
-            tensix += 1
-        position += 1
-    return None, tensix
-
-
-def _unbracketed_records(
-    words, records, addresses, disable_window_words=DISABLE_WINDOW_WORDS
-):
-    """The records not bracketed by disable_gathering()'s csrrs/csrrs/csrrc before and
-    enable_gathering()'s csrrc as the first cfg0 CSR op after the body. A body that issues
-    more Tensix instructions than its record length (an under-counted record: the tail would
-    not be in the buffer) is reported too; a runtime-length record (length None) is only
-    checked for the bracket.
-    """
-    unbracketed = []
-    for index, length in records:
-        before = [
-            _cfg0_csr_op(w) for w in words[max(0, index - disable_window_words) : index]
-        ]
-        before = [op for op in before if op]
-        disabled = before[-3:] == ["s", "s", "c"]
-        after, tensix = _first_cfg0_op_after(words, index, addresses)
-        enabled = after == "c"
-        overlong = length is not None and tensix > length
-        if not (disabled and enabled) or overlong:
-            unbracketed.append(
-                f"record at word {index} (len {'runtime' if length is None else length}): "
-                f"disable_gathering before={disabled}, enable_gathering after={enabled}, "
-                f"Tensix instructions before the enable={tensix}"
-            )
-    return unbracketed
-
-
-def _check_elf_records(elf_path):
-    """All replay records of ``elf_path``, and the ones not bracketed."""
-    words, addresses = _executable_words_with_addresses(elf_path)
-    inline = _replay_records(words)
-    runtime = _runtime_replay_records(words)
-    unbracketed = _unbracketed_records(words, inline, addresses) + _unbracketed_records(
-        words, runtime, addresses, RUNTIME_RECORD_DISABLE_WINDOW_WORDS
-    )
-    return inline + runtime, unbracketed
 
 
 def _assert_records_bracketed(elf_path):

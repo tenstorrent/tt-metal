@@ -223,6 +223,9 @@ void kernel_main() {
     cb_wait_front(cb_q, 2 * Tt);
     // Qs = Q * scale
     compute_kernel_hw_startup(cb_q, cb_q, cb_qs);
+    // PACK runs SFPU on Dst while MATH writes Dst with the FPU. With the Dst remap left on by an earlier untilize-type
+    // kernel, a MATH Dst write in the same cycle as a PACK SFPU Dst write can be lost (Blackhole), so turn it off.
+    MATH((llk_math_reconfig_remap(false)));
     cb_reserve_back(cb_qs, 2 * Tt);
     for (uint32_t t = 0; t < 2 * Tt; t += 2) {
         tile_regs_acquire();
