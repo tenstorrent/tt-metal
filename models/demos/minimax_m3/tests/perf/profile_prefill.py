@@ -345,10 +345,33 @@ def main():
 
         tokens = load_tokens(total)
 
-        def prefill_chunk(c):
+        n_media = int(os.getenv("PROFILE_MEDIA", "0"))
+        media_tokens = int(os.getenv("PROFILE_MEDIA_TOKENS", "576"))
+        if n_media:
+            from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+
+            # compile() warms the splice through _warm_media, which installs a stub reader and then
+            # restores the original in a finally — so afterwards the reader is whatever it was, and
+            # this harness has no store, so that is None. The profiled chunk needs its own.
+            runtime.media_embedding_reader = StubEmbeddingReader(hf_config.hidden_size)
+            print(f"[zone-prof] media reader: StubEmbeddingReader(hidden={hf_config.hidden_size})", flush=True)
+
+        def media_refs_for(c):
+            from models.demos.common.prefill.media_stub import stub_media_key
+            from models.demos.common.prefill.prefill_chunk import MediaRef
+
+            a = c * chunk
+            return [
+                MediaRef(0, a + i * media_tokens, a + (i + 1) * media_tokens, stub_media_key(media_tokens, i))
+                for i in range(n_media)
+            ]
+
+        def prefill_chunk(c, media_refs=()):
             a = c * chunk
             inp = runtime.make_chunk_input(tokens[a : a + chunk])
-            out = runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=a + chunk)
+            out = runtime.prefill_chunk(
+                inp, kv_cache, slot_id=0, actual_start=a, actual_end=a + chunk, media_refs=media_refs
+            )
             if out is not None:  # a non-last stage returns the hidden state meant for the next stage
                 out.deallocate(True)
 
@@ -381,6 +404,7 @@ def main():
             else "no reads inside the chunk — op-to-op latency is clean"
         )
         print(
+            f"[zone-prof] media: {n_media} x {media_tokens}-token refs on the profiled chunk\n"
             f"[zone-prof] profiling the final chunk: {chunk} tok @ {cache} cache "
             f"(zones {'ON' if ZONES_ENABLED else 'OFF'}, {read_note}) ...",
             flush=True,
@@ -389,7 +413,7 @@ def main():
         state["in_chunk"] = True
         t0 = time.perf_counter()
         with zone("profiled_chunk", COARSE):
-            prefill_chunk(n_chunks - 1)
+            prefill_chunk(n_chunks - 1, media_refs=media_refs_for(n_chunks - 1))
             ttnn.synchronize_device(mesh)
         wall = time.perf_counter() - t0
         state["in_chunk"] = False
