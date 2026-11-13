@@ -23,16 +23,16 @@ REP, NREP = 10, 15
 
 
 def routing_for(n, B):
-    """token t gets 8 experts; the active set is n experts on each of 32/n chips (rows x cols); B tokens x 8 acts = 8B activations in total, each distinct per token (n=1 needs 8B <= 32 chips)."""
-    nchip = max(1, (8 * B) // n)
-    chips = [(r, c) for c in range(8) for r in range(4)][:nchip]
+    """token t gets 8 experts; the active set is n experts on each of ceil(8B/n) chips (busiest chip = n); chips taken row-major so the columns are all used."""
+    need = 8 * B
+    chips = [(r, c) for r in range(4) for c in range(8)]
     acts = []
     for r, c in chips:
         for e in experts_of_chip(r, c)[:n]:
-            acts.append(e)
-    acts = acts[: 8 * B]
-    ids = torch.tensor(acts, dtype=torch.int64).reshape(B, 8)
-    return ids
+            if len(acts) < need:
+                acts.append(e)
+    assert len(acts) == need
+    return torch.tensor(acts, dtype=torch.int64).reshape(B, 8)
 
 
 def trace_us(md, fn, rep=REP, n=NREP):
