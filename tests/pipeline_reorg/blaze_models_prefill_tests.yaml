@@ -502,7 +502,8 @@
   # test_k31_depth_ladder_matches_golden, layers 0-23 (PP4 stage 0) on K3.1's real weights against its
   # vLLM trace -- rung L24 on the 10K trace (two chunks), then rung L24-128k on the 128K trace (26 chunks,
   # K3's long-context check), both in one test on one stage build (each rung from fresh caches), so the
-  # stage's weights load once. Its bound is the sum of its K3 counterparts' (70 + 90). The test is
+  # stage's weights load once. Its bound is the sum of its K3 counterparts' (70 + 90); measured pytest time
+  # 1249 s on bh-glx-120-b08u02 2026-11-13 (612 + 1139 s as two tests). The test is
   # TorusXY-only and this row has no fabric_profile, so the section exports what the impl's TorusXY step
   # would set. Weights, TTNN cache and goldens are KimiK31Adapter's defaults on /mnt/weka; a missing cache
   # skips, so the section fails unless its one test passed.
@@ -515,7 +516,7 @@
     # Each K3 body ([1/4]..[3/4]) is the leg's previous `cmd` verbatim, wrapped in a subshell with its
     # mpirun bounded, so it can be diffed against the leg it replaces. The three K3 sections happen to
     # export the same environment, so the subshell is only keeping them independent (and away from the
-    # K3.1 sections' TorusXY exports, see the entry comment) -- unlike the accuracy suite
+    # K3.1 section's TorusXY exports, see the entry comment) -- unlike the accuracy suite
     # above, where it is load-bearing because one section must NOT see another's KIMI_K3_HF_MODEL.
     # Repeating the exports per section rather than hoisting them is what keeps each body verbatim.
 
