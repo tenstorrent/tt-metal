@@ -747,8 +747,11 @@ def fast_device_to_host(
         elif pre_transfer_fn is not None:
             gathered_tensor = pre_transfer_fn(gathered_tensor)
 
-        # Step 2: Only root rank (if specified) does D2H.
+        # Step 2: Only root rank (if specified) does D2H. On a multi-host mesh, synchronize_device ends in an MPI
+        # barrier over the mesh's ranks (tt_metal/distributed/fd_mesh_command_queue.cpp, finish()), so the other
+        # ranks join the synchronize of step 3 here; otherwise the root blocks for good once they run ahead.
         if root is not None and rank != root:
+            ttnn.synchronize_device(mesh_device)
             return None
 
         # Step 3: DMA all local shards and reassemble on host.
