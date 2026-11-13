@@ -18,7 +18,7 @@ import pytest
 from models.demos.common.prefill.adapter import get_adapter
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_kimi_k3_1_stage import MAX_SEQ_LEN, NUM_STAGES, STAGE_MAX_USERS
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import MAX_SEQ_LEN, NUM_STAGES, STAGE_MAX_USERS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
