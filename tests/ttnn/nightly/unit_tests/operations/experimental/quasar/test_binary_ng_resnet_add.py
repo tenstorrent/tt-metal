@@ -182,7 +182,7 @@ def test_resnet_add_uneven_block_sharded(device, dtype_tt, fuse_relu):
 def test_resnet_add_program_cache_hit(device):
     """
     A 2nd dispatch must hit the program cache and still be correct (the borrowed sharded DFB
-    addresses are refreshed on cache hit via the adapter's SetProgramRunArgs path). Run the same
+    addresses are refreshed on cache hit via the adapter's Program::set_run_args path). Run the same
     in-place add twice on freshly-allocated inputs and verify both dispatches.
     """
     torch.manual_seed(0)

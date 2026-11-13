@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Array args through SetProgramRunArgs, UpdateProgramRunArgs and MergeProgramRunArgs: which values are
+// Array args through Program::set_run_args, Program::update_run_args and MergeProgramRunArgs: which values are
 // accepted, and where they land in the kernel's arg buffers.
 
 #include <gtest/gtest.h>
@@ -93,7 +93,7 @@ void ExpectArgsWithBase(const Program& program, uint32_t base) {
 }
 
 // ============================================================================
-// SetProgramRunArgs: layout
+// Program::set_run_args: layout
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestGen1, CPU_ArraysFollowScalarsInNamedSection) {
@@ -139,7 +139,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_ArrayValuesSerializeAsUint32Conversion) {
 }
 
 // ============================================================================
-// SetProgramRunArgs: validation
+// Program::set_run_args: validation
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestGen1, CPU_WrongLengthRtaArrayFails) {
@@ -256,7 +256,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_WrongLengthArrayFailsEvenWithoutValidation) {
 }
 
 // ============================================================================
-// UpdateProgramRunArgs
+// Program::update_run_args
 // ============================================================================
 
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateReplacesWholeArraysAndKeepsTheRest) {

@@ -2001,7 +2001,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         &mesh_device);
 
     // Every parametrization of these tests uses a single-core CoreRangeSet of {0, 0};
-    // MakeProgramFromSpec models the kernel set per single-core WorkUnit.
+    // The Program constructor models the kernel set per single-core WorkUnit.
     TT_FATAL(
         test_config.cores.ranges().size() == 1,
         "sfpu test expects a single CoreRange (got {})",

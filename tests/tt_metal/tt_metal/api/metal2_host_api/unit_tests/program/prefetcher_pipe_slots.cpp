@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// PrefetcherPipe slot reservation, relay DFB creation and pipe accessor tokens in MakeProgramFromSpec.
+// PrefetcherPipe slot reservation, relay DFB creation and pipe accessor tokens in Program construction.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>

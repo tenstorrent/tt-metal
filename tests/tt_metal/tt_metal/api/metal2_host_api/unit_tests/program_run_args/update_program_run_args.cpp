@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// UpdateProgramRunArgs: arbitrary partial updates; omitted arguments keep their previous values.
+// Program::update_run_args: arbitrary partial updates; omitted arguments keep their previous values.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -232,7 +232,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_RetainsOmittedVarargsA
 
 // --- DFB size overrides on the fast path (mock fixture: inspects config, no enqueue) ---
 
-// UpdateProgramRunArgs applies a DFB size override, mirroring the SetProgramRunArgs path.
+// Program::update_run_args applies a DFB size override, mirroring the Program::set_run_args path.
 TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_AppliesDFBSizeOverride) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
@@ -247,7 +247,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UpdateProgramRunArgs_AppliesDFBSizeOverride
 
     auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
     EXPECT_EQ(dfb->config.entry_size, 1024u);  // unchanged
-    EXPECT_EQ(dfb->config.num_entries, 4u);    // overridden via UpdateProgramRunArgs
+    EXPECT_EQ(dfb->config.num_entries, 4u);    // overridden via Program::update_run_args
 }
 
 // DFB size overrides are stateful: a DFB not re-specified in a later update keeps its current

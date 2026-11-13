@@ -1830,7 +1830,7 @@ CONFIG_TC_TEST_2_0(DMTensixTest1xDFB4Sx1SConfig, DM, TENSIX, 4, 1, STRIDED, STRI
 CONFIG_TC_TEST_2_0(DMTest1xDFB4Sx1SConfig, DM, DM, 4, 1, STRIDED, STRIDED, 1, 4)
 // DM→DM 4Sx4S omitted: 4 producers + 4 consumers = 8 DM threads, exceeds Gen2's
 // 6-DM cap. Legacy DMTest1xDFB4Sx4SConfig on main can probe this via the legacy
-// host-only API which doesn't validate the cap, but M2's MakeProgramFromSpec
+// host-only API which doesn't validate the cap, but M2's Program constructor
 // enforces the limit at spec validation. Same architectural reason the runtime
 // DMTest1xDFB4Sx4A macro tuple is excluded from the M2 DFB_TEST_M2 matrix.
 CONFIG_TC_TEST_2_0(DMTest1xDFB2Sx4SConfig, DM, DM, 2, 4, STRIDED, STRIDED, 2, 1)
@@ -1997,7 +1997,7 @@ TEST_F(UnitMeshFixture, B4_CachedThreshold_Config_2_0) {
     }
 }
 
-// B10: divisibility — (a) pathological num_entries should fail at MakeProgramFromSpec/finalize;
+// B10: divisibility — (a) pathological num_entries should fail at Program construction/finalize;
 // (b) barely-divisible (only n=1 works) should succeed.
 TEST_F(UnitMeshFixture, B10_NumEntriesDivisibility_2_0) {
     if (this->device().arch() != ARCH::QUASAR) {
@@ -2006,7 +2006,7 @@ TEST_F(UnitMeshFixture, B10_NumEntriesDivisibility_2_0) {
     using namespace m2_config_test_helpers;
 
     // 10a: num_entries=10, 3 producers, 3 consumers — 10 % (n * 3 * 1) ≠ 0 for any n.
-    // Expected: MakeProgramFromSpec or finalize throws with "must be divisible by" in the message.
+    // Expected: the Program constructor or finalize throws with "must be divisible by" in the message.
     {
         SCOPED_TRACE("10a: pathological num_entries=10, 3P 3C");
         M2ConfigDFBParams p{
@@ -2049,7 +2049,7 @@ TEST_F(UnitMeshFixture, B10_NumEntriesDivisibility_2_0) {
 // =====================================================================================
 
 // B5 (1S × 5 Tensix consumers STRIDED) omitted: Quasar has only 4 Tensix engines
-// per node (QUASAR_TENSIX_ENGINES_PER_NODE = 4), and M2's MakeProgramFromSpec
+// per node (QUASAR_TENSIX_ENGINES_PER_NODE = 4), and M2's Program constructor
 // rejects compute KernelSpecs with num_threads > 4 at spec-validation time
 // ("KernelSpec 'consumer' has too many threads"). Legacy DMTensix B5 on main
 // probes this via the permissive experimental::dfb API which doesn't validate
@@ -2101,7 +2101,7 @@ TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
 
 // =====================================================================================
 // Group 3 M2: rejection tests. Where the M2 spec model can express the same bad
-// config, we assert that MakeProgramFromSpec / finalize throws. Where the bad
+// config, we assert that the Program constructor / finalize throws. Where the bad
 // config is not expressible (B7 CB+DFB mix, B9 INTER scope), the test is
 // documented as not-applicable.
 // =====================================================================================

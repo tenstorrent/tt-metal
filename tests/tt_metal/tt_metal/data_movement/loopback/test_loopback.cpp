@@ -267,7 +267,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
 
     if (arch_ == ARCH::QUASAR) {
         // Single small config on Quasar emulator to fit within 3-min timeout while still
-        // exercising the Metal 2.0 host path (MakeProgramFromSpec + named RTAs + SemaphoreSpec).
+        // exercising the Metal 2.0 host path (Program constructor + named RTAs + SemaphoreSpec).
         unit_tests::dm::core_loopback::LoopbackConfig test_config = {
             .test_id = 44,
             .master_core_coord = {0, 0},

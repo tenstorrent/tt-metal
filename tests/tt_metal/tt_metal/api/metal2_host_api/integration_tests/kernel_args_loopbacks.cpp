@@ -414,7 +414,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 
 // The common-runtime-arg (CRTA) buffer is laid out in four sections, in order:
 //     [ named CRTAs | tensor bindings | scratchpads | common varargs ]
-// Both the host (SetProgramRunArgs full assembly + UpdateProgramRunArgs in-place patch) and the
+// Both the host (Program::set_run_args full assembly + Program::update_run_args in-place patch) and the
 // device-side generated header compute each section's offset independently, so a boundary miscomputed
 // on either side silently cross-contaminates regions — the classic sneaky offset bug. This generalizes
 // the "A1" regression (which carried only a scratchpad + one vararg): here ONE kernel carries ALL FOUR
@@ -435,9 +435,9 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 // read surfaces as a known value).
 //
 // Two phases:
-//   SET    — SetProgramRunArgs installs all four sections; verify every region reads its own value
+//   SET    — Program::set_run_args installs all four sections; verify every region reads its own value
 //            (the full-assembly offset math for all four sections, binding two words wide).
-//   UPDATE — UpdateProgramRunArgs patches the named CRTAs + common varargs to NEW sentinels; verify the
+//   UPDATE — Program::update_run_args patches the named CRTAs + common varargs to NEW sentinels; verify the
 //            new values land AND the tensor-binding + scratchpad slots are untouched. The vararg base
 //            here is named + tensor-binding(2 words) + scratchpad section words — the A1 sum, now with a
 //            MULTI-WORD binding in the middle (River's original had named=0, binding=0).
@@ -664,8 +664,8 @@ void kernel_main() {
 // reads each scratchpad back at its allocated address.
 //
 // Two phases:
-//   SET    — SetProgramRunArgs installs everything; every slot must read its own value.
-//   UPDATE — UpdateProgramRunArgs replaces x and d whole; the new values must land and the scalars and
+//   SET    — Program::set_run_args installs everything; every slot must read its own value.
+//   UPDATE — Program::update_run_args replaces x and d whole; the new values must land and the scalars and
 //            varargs around them must be untouched.
 
 constexpr const char* kArrayArgsReadbackSource = R"(
@@ -737,7 +737,7 @@ TEST_F(ProgramSpecHWTest, ArrayArgsReadbackSetAndPartialUpdate) {
     workload.add_program(device_range, Program(*mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
-    // A kernel's report scratchpad, allocated by MakeProgramFromSpec.
+    // A kernel's report scratchpad, allocated by the Program constructor.
     auto report_address = [&](const Reader& reader) {
         return program.impl()
             .get_kernel_by_spec_name(reader.name)

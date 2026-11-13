@@ -19,7 +19,7 @@ namespace ttnn::device_operation {
 // allocates for itself. Returned by a ProgramSpecFactoryConcept or
 // CustomProgramSpecFactoryConcept factory's
 // create_program_artifacts method; the framework adapter maps that same spec
-// onto tensor_coords via tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs.
+// onto tensor_coords via the MeshWorkload constructor.
 //
 // This artifact is SPMD-shaped: one program, replicated. Ops whose programs vary
 // across the mesh return MeshWorkloadArtifacts instead.

@@ -202,16 +202,16 @@ void kernel_main() {
             {{TensorParamName{"per_node"}, TensorArgument{per_node_a.tensor}},
              {TensorParamName{"plain"}, TensorArgument{plain}}},
     });
-    run_and_check("SetProgramRunArgs", per_node_a.tensor, 0x1000);
+    run_and_check("Program::set_run_args", per_node_a.tensor, 0x1000);
     program.update_tensor_args(
         {{TensorParamName{"per_node"}, TensorArgument{per_node_b}}, {TensorParamName{"plain"}, TensorArgument{plain}}});
-    run_and_check("UpdateTensorArgs", per_node_b, 0x1000);
+    run_and_check("Program::update_tensor_args", per_node_b, 0x1000);
     // Omits the ordinary tensor and the varargs, which must keep their values.
     program.update_run_args(ProgramRunArgs{
         .kernel_run_args = {kernel_run_args(0x2000, /*with_varargs=*/false)},
         .tensor_args = {{TensorParamName{"per_node"}, TensorArgument{per_node_a.tensor}}},
     });
-    run_and_check("partial UpdateProgramRunArgs", per_node_a.tensor, 0x2000);
+    run_and_check("partial Program::update_run_args", per_node_a.tensor, 0x2000);
 }
 
 }  // namespace

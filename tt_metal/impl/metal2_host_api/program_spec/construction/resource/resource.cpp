@@ -83,7 +83,7 @@ ProgramResources RegisterResources(
     resources.dfbs = RegisterDataflowBuffers(spec, collected, risc_masks, program_impl);
 
     // Reserve PrefetcherPipe slots (one per kernel accessor group) from the spec geometry, register
-    // relay DFBs against them, and record each parameter's placement for SetProgramRunArgs. Must
+    // relay DFBs against them, and record each parameter's placement for Program::set_run_args. Must
     // precede kernel creation: the slot id is baked into the kernel's `pipe::<accessor>` token and
     // a relay DFB's `dfb::` token.
     resources.prefetcher_pipes =

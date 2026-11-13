@@ -227,7 +227,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .target_nodes = node,
     };
 
-    // The ProgramSpec aggregates everything and is consumed by `MakeProgramFromSpec`.
+    // The ProgramSpec aggregates everything and is consumed by the `Program` constructor.
     ProgramSpec spec{
         .name = "semaphore_accessor_loopback",
         .kernels = {producer, consumer},
@@ -245,7 +245,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 // ============================================================================
 //
 // Proves that the Metal 2.0 TensorAccessor binding feature works end-to-end on real WH/BH:
-//   1. Spec → MakeProgramFromSpec resolves the binding's TensorSpec into a correct CTA payload
+//   1. Spec → the Program constructor resolves the binding's TensorSpec into a correct CTA payload
 //      (page size, args_config, bank coords, alignment).
 //   2. Each binding's slot in the kernel's TensorBinding address section is filled with
 //      MeshTensor::address() at enqueue.

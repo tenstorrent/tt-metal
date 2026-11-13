@@ -132,7 +132,7 @@ struct ProgramSpecFactory {
 
 // Same, but additionally provides override_runtime_arguments -> classified as the
 // custom variant, whose cache-hit path applies the returned ProgramRunArgs via
-// UpdateProgramRunArgs.
+// Program::update_run_args.
 struct CustomProgramSpecFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
@@ -468,7 +468,7 @@ TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterMapsProgramsPerCoordinate)
 }
 
 // Same per-coordinate mapping, but with an override so the cache-hit path takes the
-// UpdateProgramRunArgs branch instead of the tensor-only refresh.
+// Program::update_run_args branch instead of the tensor-only refresh.
 struct PerCoordProdAllFactoryWithOverride : PerCoordProdAllFactory {
     static std::atomic<int> override_calls;
 

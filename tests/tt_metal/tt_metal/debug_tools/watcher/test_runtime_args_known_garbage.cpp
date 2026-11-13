@@ -197,7 +197,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
     }
 
     // Part B: Accessing unset RTAs on a subset of cores should trigger assert.
-    // Uses the legacy host API because Metal 2.0's SetProgramRunArgs validates that every
+    // Uses the legacy host API because Metal 2.0's Program::set_run_args validates that every
     // targeted node has its varargs bound and rejects partial bindings up front — i.e. it
     // structurally prevents the bug class this sub-test exercises. The legacy dispatcher instead
     // writes a 0xBEEF#### sentinel on unbound cores, which the device interprets as

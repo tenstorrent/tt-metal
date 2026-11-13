@@ -396,7 +396,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorTwoPipesOneSenderNodeF
     PrefetcherPipe other = MakePipeFor(*mesh_device_, MakeOtherPipeParameter(), pipe_sender_node);
     EXPECT_THROWS_WITH(
         program.set_run_args(PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}})),
-        "is claimed by two different PrefetcherPipe objects in one SetProgramRunArgs");
+        "is claimed by two different PrefetcherPipe objects in one Program::set_run_args");
     EXPECT_FALSE(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->is_bound());
     EXPECT_FALSE(ParticipantOn(program, pipe_sender_node, 0)->is_bound());
 }

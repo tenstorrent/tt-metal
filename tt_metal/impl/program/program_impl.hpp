@@ -478,7 +478,7 @@ public:
 
     // Binding a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
     // receiver split matches the pipe's) is split in two so a batch of bindings can be checked in
-    // full before any of it lands (a rejected SetProgramRunArgs must leave the program untouched):
+    // full before any of it lands (a rejected Program::set_run_args must leave the program untouched):
     //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry and credit
     //     lanes, the sticky per-core binding and the relay ring agreement. No mutation.
     //     `preflight` accumulates what earlier checks in the same batch would commit (ring address
@@ -561,7 +561,7 @@ public:
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;
-        // identity() of the pipe SetProgramRunArgs bound, 0 until one is. Same-pipe checks compare
+        // identity() of the pipe Program::set_run_args bound, 0 until one is. Same-pipe checks compare
         // this, not the address: a destroyed pipe's address can be reused by a new pipe, but its
         // identity never is. The bound pipe may be destroyed while the program lives on; a later bind
         // may replace it only with a pipe of the same bound_pipe_key.
@@ -732,7 +732,7 @@ public:
 
         // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
         // position within its dispatch-buffer section). Built once at Program construction so the
-        // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
+        // hot Program::update_run_args path does O(1) lookups instead of rebuilding a map per call —
         // that path is not bypassable via skip_validation, so per-call construction would be pure
         // host overhead on the inner re-enqueue loop.
         std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
@@ -763,7 +763,7 @@ public:
     std::vector<std::string> get_registered_kernel_names() const;
 
     // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
-    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    // finalize_offsets can compute dispatch sizes before Program::set_run_args fills values.
     void reserve_runtime_arg_buffers();
 
     bool program_run_args_initialized() const { return program_run_args_initialized_; }

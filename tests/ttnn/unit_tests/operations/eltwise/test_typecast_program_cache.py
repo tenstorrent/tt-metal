@@ -12,7 +12,7 @@ Typecast was ported from the legacy `ProgramDescriptor` API to Metal 2.0
     (`KernelDescriptor::emplace_runtime_args`) and the descriptor adapter patched those
     address slots in place on every dispatch.
   - Metal 2.0: the buffers are `TensorParameter`s bound by name; on a hit the adapter calls
-    `UpdateTensorArgs` to re-resolve every `TensorArgument` against the *current* tensors. For
+    `Program::update_tensor_args` to re-resolve every `TensorArgument` against the *current* tensors. For
     `TypecastShardedProgramFactory` this also re-attaches the borrowed-memory DFBs
     (`DataflowBufferSpec::borrowed_from`), whose backing L1 address comes straight from the
     tensor argument.

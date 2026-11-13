@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// UpdateTensorArgs: the fast path that patches only tensor binding address slots.
+// Program::update_tensor_args: the fast path that patches only tensor binding address slots.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -33,11 +33,11 @@ using test_helpers::ProgramRunArgsTestGen1;
 using test_helpers::ReadBindingAddressFromCRTA;
 
 // ============================================================================
-// UpdateTensorArgs Tests (Gen1 / WH)
+// Program::update_tensor_args Tests (Gen1 / WH)
 // ============================================================================
-// UpdateTensorArgs is the partial-update fast path: it patches only the tensor binding
+// Program::update_tensor_args is the partial-update fast path: it patches only the tensor binding
 // address slots in the per-kernel CRTA buffer, leaving everything else (named CRTAs,
-// vararg CRTAs, all RTAs) statefully unchanged from the most recent SetProgramRunArgs
+// vararg CRTAs, all RTAs) statefully unchanged from the most recent Program::set_run_args
 // call.
 
 // Helper: allocate a MeshTensor matching the given TensorParameter's spec.
@@ -58,11 +58,11 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_BeforeSetProgramRunArgsFails
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
 
-    // No SetProgramRunArgs call before the partial update.
+    // No Program::set_run_args call before the partial update.
     EXPECT_THAT(
         [&] { program.update_tensor_args(tensor_args); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("UpdateTensorArgs called on Program before SetProgramRunArgs")));
+            ::testing::HasSubstr("Program::update_tensor_args called on Program before Program::set_run_args")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_MissingTensorArgFails) {
@@ -148,7 +148,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_TensorSpecMismatchFails) {
             "TensorArgument for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
 }
 
-// Locks the gate's polarity: the three tests above prove UpdateTensorArgs validates by default, so
+// Locks the gate's polarity: the three tests above prove Program::update_tensor_args validates by default, so
 // this one proves skip_validation=true is what turns it off — and still performs the address patch.
 TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_SkipValidationBypassesSpecCheck) {
     NodeCoord node{0, 0};
@@ -191,7 +191,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_PatchesBindingAddress) {
 
     Program program(*mesh_device_, spec);
 
-    // First enqueue: full SetProgramRunArgs with tensor T1.
+    // First enqueue: full Program::set_run_args with tensor T1.
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
@@ -253,7 +253,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
 
     // Named CRTA preserved; binding address patched.
     const auto* crta_data_after = dm_kernel->common_runtime_args_data().data();
-    EXPECT_EQ(crta_data_after[0], kNamedCRTAValue) << "named CRTA must be untouched by UpdateTensorArgs";
+    EXPECT_EQ(crta_data_after[0], kNamedCRTAValue) << "named CRTA must be untouched by Program::update_tensor_args";
     EXPECT_EQ(
         ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor2.address()));
 }

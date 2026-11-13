@@ -273,7 +273,7 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 }
 
 // A KernelSpec lowered into a core-runtime Kernel, plus the runtime-arg schema the ProgramImpl
-// registers for it (consumed by ValidateProgramRunArgs / SetProgramRunArgs).
+// registers for it (consumed by ValidateProgramRunArgs / Program::set_run_args).
 struct LoweredKernel {
     std::shared_ptr<Kernel> kernel;
     detail::ProgramImpl::KernelRTASchema rta_schema;
@@ -508,7 +508,7 @@ LoweredKernel LowerKernel(
     kernel->set_array_args(std::move(array_args));
 
     // Build the RTA+CRTA schema (named lists, array slots + vararg counts) for the ProgramImpl.
-    // Used by ValidateProgramRunArgs and SetProgramRunArgs to validate and serialize
+    // Used by ValidateProgramRunArgs and Program::set_run_args to validate and serialize
     // the user-provided values at dispatch time.
     //
     // User-facing vararg RTA specification (see kernel_spec.hpp):
@@ -526,10 +526,10 @@ LoweredKernel LowerKernel(
     // Pass the user CRTA list through.
     // NOTE: The TensorBinding address section is tracked separately on the Kernel
     // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
-    // addr_crta_offset; SetProgramRunArgs uses BOTH to assemble the per-enqueue CRTA buffer.
+    // addr_crta_offset; Program::set_run_args uses BOTH to assemble the per-enqueue CRTA buffer.
     runtime_schema.common_runtime_arg_names = user_named_crtas;
 
-    // Precompute the name -> slot-index maps so the hot UpdateProgramRunArgs path does O(1)
+    // Precompute the name -> slot-index maps so the hot Program::update_run_args path does O(1)
     // lookups rather than rebuilding a map per call.
     for (size_t i = 0; i < runtime_schema.runtime_arg_names.size(); ++i) {
         runtime_schema.runtime_arg_name_to_slot.emplace(runtime_schema.runtime_arg_names[i], i);

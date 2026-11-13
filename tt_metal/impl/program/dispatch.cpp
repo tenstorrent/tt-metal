@@ -569,7 +569,7 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
         TT_FATAL(
             participant.is_bound(),
             "PrefetcherPipe slot {} is not bound to a PrefetcherPipe object; supply a PrefetcherPipeArgument for "
-            "every PrefetcherPipeParameter via SetProgramRunArgs before enqueueing the program",
+            "every PrefetcherPipeParameter via Program::set_run_args before enqueueing the program",
             participant.prefetcher_pipe_id);
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;

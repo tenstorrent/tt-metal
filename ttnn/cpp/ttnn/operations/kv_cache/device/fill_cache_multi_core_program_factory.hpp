@@ -23,7 +23,7 @@ struct FillCacheMultiCoreProgramFactory {
         const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& tensor_return_value);
 
     // CustomProgramSpecFactoryConcept cache-hit hook: returns the per-dispatch ProgramRunArgs the
-    // framework applies via UpdateProgramRunArgs. Re-applies only the hash-excluded, attribute-derived
+    // framework applies via Program::update_run_args. Re-applies only the hash-excluded, attribute-derived
     // writer cache_start_id plus the tensor bindings; shape-derived args stay at their cache-miss values.
     static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const KvCacheParams& operation_attributes,
