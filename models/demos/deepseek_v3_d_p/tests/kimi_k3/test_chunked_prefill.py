@@ -47,6 +47,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, TRACE_10
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     CACHE_LEN,
+    CHUNK,
     build_stack,
     cache_rows,
     compose,
