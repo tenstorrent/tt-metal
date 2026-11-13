@@ -1397,8 +1397,10 @@ class Qwen36Model:
         return tuple(t.reshape(1, 1, -1, rd) for t in self._rope_tp_cos_sin_decode_torch(row_positions, deltas))
 
     def rope_table_rows(self):
-        """Rows of the device RoPE tables (rope_rm_tables), spec_step.rope_table_rows of max_seq_len."""
-        return rope_table_rows(self.args.max_seq_len)
+        """Rows of the device RoPE tables (rope_rm_tables): the rows they were built with, or before that
+        spec_step.rope_table_rows of max_seq_len."""
+        built = getattr(self, "_rope_rows", None)
+        return rope_table_rows(self.args.max_seq_len) if built is None else built
 
     def rope_row_deltas(self, n, deltas=None):
         """The M-RoPE delta of each of ``n`` rows for rope_rows: ``deltas`` (one per row), or rope.rope_delta for every
@@ -1410,12 +1412,15 @@ class Qwen36Model:
             raise ValueError(f"{len(deltas)} M-RoPE deltas for {n} positions")
         return deltas
 
-    def rope_rm_tables(self):
+    def rope_rm_tables(self, reach=0):
         """(cos, sin) bf16 ROW_MAJOR [rope_table_rows, rope_head_dim], replicated in DRAM. Row i holds
         _rope_tp_cos_sin_decode_torch of RoPE position i (KV position plus M-RoPE delta), so rope_lookup returns the
-        bytes the host would stage. Built on first use; the callers build them before any trace capture."""
+        bytes the host would stage. Built on first use, for max_seq_len or ``reach`` (the KV positions the paged
+        tables reach, which can pass max_seq_len), whichever is larger; the callers build them before any trace
+        capture."""
         if getattr(self, "_rope_rm", None) is None:
-            rows, rd = self.rope_table_rows(), self.args.rope_head_dim
+            rows, rd = rope_table_rows(max(int(self.args.max_seq_len), int(reach))), self.args.rope_head_dim
+            self._rope_rows = rows
             positions = torch.arange(rows, dtype=torch.int32)
             tables = self._rope_tp_cos_sin_decode_torch(positions, torch.zeros(rows, dtype=torch.int32))
             self._rope_rm = tuple(
@@ -1731,7 +1736,7 @@ class Qwen36Model:
         # verify_traced in one copy. The hybrid verify feeds the DECODE attention kernel one rotation per ROW at that
         # row's own position, looked up from the RoPE tables, which hold the host math of the plain decode step, so the
         # two paths' rotations are byte-identical and near-ties round the same way.
-        self.rope_rm_tables()
+        self.rope_rm_tables(reach=nb * get_block_size(self._paged_kv_caches))
         self._vfy_step_buf = ttnn.from_torch(
             self._vfy_step_host([[0] * T] * B, warm_positions, None),
             dtype=ttnn.uint32,

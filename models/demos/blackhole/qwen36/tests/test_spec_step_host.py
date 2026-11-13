@@ -265,3 +265,17 @@ def test_the_drafter_derives_its_inputs_from_the_pack(monkeypatch):
     add = next(c for c in calls if c[0] == "add")
     assert add[1][1] == 1.0 and eq[1][1] == f"add{calls.index(add) + 1}"
     assert x["anchor_sel"] in owned and all(p in owned for p in x["pos"])
+
+
+def test_the_rope_tables_reach_every_paged_position(monkeypatch):
+    """The paged tables can reach past max_seq_len (whole blocks of max_seq_len + K + 1 positions): the tables are
+    built for that reach, and rope_table_rows reports the rows they hold."""
+    model = _rope_model(max_seq_len=4096)
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: t)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: None)
+    assert model.rope_table_rows() == rope_table_rows(4096)
+    cos_t, _ = model.rope_rm_tables(reach=5 * 1024)
+    assert model.rope_table_rows() == cos_t.shape[0] == rope_table_rows(5 * 1024)
+    want, _ = model._rope_tp_cos_sin_decode_torch(torch.tensor([5100], dtype=torch.int32), [0])
+    assert torch.equal(cos_t[5100], want.reshape(RD))
+    assert model.rope_rm_tables(reach=10**6)[0] is cos_t, "built once"
