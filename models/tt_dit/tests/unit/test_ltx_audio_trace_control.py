@@ -148,6 +148,7 @@ def fixture(*, traced=True, independent=True, env=None):
             self.loaded = True
             self.eager_calls = 0
             self.stats = None
+            self._prepared_audio_ccl = {}
 
         @traced_function(device=lambda self: self.mesh_device, prep_run=False)
         def _forward_device(self, value):
@@ -443,7 +444,6 @@ class AudioTraceControlTest(unittest.TestCase):
                         )["release_trace"]
                         for module in (a.mel_decoder, voc.vocoder, voc.bwe_generator):
                             module._tpad_mask_cache = {}
-                        voc.vocoder._prepared_audio_ccl = {}
                         voc.mel_stft = SimpleNamespace(stft_fn=SimpleNamespace(_window_indices={}))
                         caches = (
                             voc.vocoder._tpad_mask_cache,
