@@ -637,10 +637,39 @@ template <DstSync>
 inline constexpr bool pack_reconfig_u2d = true;
 #endif
 
+// Half sync, fp32 DEST and an unpack to DEST: a reconfigure whose writes the skip mask drops lets the pack start into the
+// unpack to DEST of the other half, so the reconfigure helpers gate it (gate = true) unless the caller waits for the unpacker.
+template <bool is_fp32_dest_acc_en, DstSync sync>
+constexpr bool llk_pack_reconfig_u2d_half()
+{
+    return is_fp32_dest_acc_en && sync == DstSync::SyncHalf && pack_reconfig_u2d<sync>;
+}
+
+constexpr bool llk_pack_out32(const unsigned char f)
+{
+    return f == to_underlying(DataFormat::Float32) || f == to_underlying(DataFormat::Tf32) || f == to_underlying(DataFormat::Int32) ||
+           f == to_underlying(DataFormat::UInt32);
+}
+
+// 0 no pack CB is 32 bit, 1 every one is, 2 both kinds.
+template <std::size_t n>
+constexpr int llk_pack_out32_kind(const unsigned char (&pack_dst_format)[n])
+{
+    bool w = false, o = false;
+    for (const unsigned char f : pack_dst_format)
+    {
+        if (f != to_underlying(DataFormat::Invalid))
+        {
+            (llk_pack_out32(f) ? w : o) = true;
+        }
+    }
+    return w ? (o ? 2 : 1) : 0;
+}
+
 // The reconfigure's global writes that a kernel's pack formats keep constant (LLK_PACK_RECONFIG_SKIP_*), from the descriptor
 // arrays (constant in the JIT): a field with the same value for every pack CB was written by hw_configure, and no reconfigure
 // can change it. The strides stay where another stride writer is linked (fast tilize and untilize, pack_strides_writer tags).
-template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n>
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true>
 constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n])
 {
     std::uint32_t skip = LLK_PACK_RECONFIG_SKIP_PAC_LF8 | LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD | LLK_PACK_RECONFIG_SKIP_DSTACC | LLK_PACK_RECONFIG_SKIP_STRIDES;
@@ -685,7 +714,7 @@ constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_fo
         }
     }
     // Half sync, fp32 DEST and an unpack to DEST: the pack restarts sooner after a skipping reconfigure and loses L1 to the unpacker.
-    if (!any || (is_fp32_dest_acc_en && sync == DstSync::SyncHalf && pack_reconfig_u2d<sync>))
+    if (!any || (gate && llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, sync>()))
     {
         return 0;
     }
@@ -706,7 +735,7 @@ constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_fo
 // The whole reconfigure, its drain included, where every pack output has one format pair and face count and no partial
 // face: hw_configure wrote the same values and the other writers of those fields are other programs, which the stride
 // writers already exclude. Fast tilize writes a Float16_b input; the tile header register has no reader on Blackhole.
-template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n>
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true>
 constexpr std::uint32_t llk_pack_reconfig_skip_all(
     const unsigned char (&pack_src_format)[n],
     const unsigned char (&pack_dst_format)[n],
@@ -715,7 +744,7 @@ constexpr std::uint32_t llk_pack_reconfig_skip_all(
 {
     constexpr std::uint32_t every =
         LLK_PACK_RECONFIG_SKIP_PAC_LF8 | LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD | LLK_PACK_RECONFIG_SKIP_DSTACC | LLK_PACK_RECONFIG_SKIP_STRIDES;
-    const std::uint32_t skip = llk_pack_reconfig_skip<is_fp32_dest_acc_en, sync>(pack_src_format, pack_dst_format);
+    const std::uint32_t skip = llk_pack_reconfig_skip<is_fp32_dest_acc_en, sync, n, gate>(pack_src_format, pack_dst_format);
     if (skip != every || pack_fast_tilize_linked<sync>)
     {
         return skip;
@@ -1092,7 +1121,7 @@ struct llk_pack_reconfig_imm_t
     std::uint32_t format, section, lf8, threshold, dstacc, ystride, zwstride;
 };
 
-template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n>
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true>
 constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
     const unsigned char (&pack_src_format)[n],
     const unsigned char (&pack_dst_format)[n],
@@ -1144,7 +1173,7 @@ constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
         m.zwstride |= z ^ z0;
     }
     m.ok = any;
-    if (is_fp32_dest_acc_en && sync == DstSync::SyncHalf && pack_reconfig_u2d<sync>)
+    if (gate && llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, sync>())
     {
         m.ok = false;
         return m;

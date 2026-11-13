@@ -164,20 +164,21 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output)
 
 // A run-time output's reconfigure through the kernel's constant profiles: where the immediate reconfigure is allowed and no
 // SKIP_ALL applies, the output's (input, output, face count) selects that profile's immediate sequence.
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool gate = true>
 constexpr bool llk_pack_reconfig_table_ok() {
     constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
-        ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+        ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
             pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
-    constexpr bool skip_all = (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE>(
-                                   pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
-                               ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
+    constexpr bool skip_all =
+        (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
+             pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
+         ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
     constexpr ckernel::packer::llk_pack_reconfig_profiles_t prof =
         ckernel::packer::llk_pack_reconfig_profiles(pack_src_format, pack_dst_format, pack_tile_num_faces);
     return imm.ok && !skip_all && prof.n >= 1 && prof.n <= 8;
 }
 
-template <bool is_fp32_dest_acc_en, std::uint32_t k>
+template <bool is_fp32_dest_acc_en, std::uint32_t k, bool gate = true>
 __attribute__((always_inline)) inline bool llk_pack_reconfig_table_case(
     const std::uint32_t src, const std::uint32_t dst, const std::uint32_t faces) {
     constexpr ckernel::packer::llk_pack_reconfig_profiles_t prof =
@@ -186,8 +187,8 @@ __attribute__((always_inline)) inline bool llk_pack_reconfig_table_case(
         return false;
     } else {
         if (src == prof.src[k] && dst == prof.dst[k] && faces == prof.faces[k]) {
-            constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
-                ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+            constexpr ckernel::packer::llk_pack_reconfig_imm_t imm = ckernel::packer::
+                llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
                     pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
             ckernel::packer::reconfig_packer_data_format_imm_and_state<
                 is_fp32_dest_acc_en,
@@ -204,17 +205,18 @@ __attribute__((always_inline)) inline bool llk_pack_reconfig_table_case(
                 prof.faces[k]>();
             return true;
         }
-        return llk_pack_reconfig_table_case<is_fp32_dest_acc_en, k + 1>(src, dst, faces);
+        return llk_pack_reconfig_table_case<is_fp32_dest_acc_en, k + 1, gate>(src, dst, faces);
     }
 }
 
 // Out of line, as the reconfigure it replaces; an output of none of the profiles (an invalid id) keeps the full reconfigure.
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool gate = true>
 __attribute__((noinline)) void llk_pack_reconfig_data_format_table(const std::uint32_t output_id) {
-    if (!llk_pack_reconfig_table_case<is_fp32_dest_acc_en, 0>(
+    if (!llk_pack_reconfig_table_case<is_fp32_dest_acc_en, 0, gate>(
             pack_src_format[output_id], pack_dst_format[output_id], pack_tile_num_faces[output_id])) {
-        constexpr std::uint32_t skip = ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE>(
-            pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
+        constexpr std::uint32_t skip = ckernel::packer::
+            llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
+                pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
         _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip>(
             pack_src_format[output_id],
             pack_dst_format[output_id],
@@ -234,8 +236,9 @@ __attribute__((noinline)) void llk_pack_reconfig_data_format_table(const std::ui
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
  */
-template <bool is_fp32_dest_acc_en>
-inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
+// gate: the u2d reconfigure gate (llk_pack_reconfig_u2d_half); without it the pack waits for the unpacker instead.
+template <bool is_fp32_dest_acc_en, bool gate>
+inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -249,11 +252,15 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::PartialFace>(false),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
-    if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en>()) {
-        llk_pack_reconfig_data_format_table<is_fp32_dest_acc_en>(output_id);
+    if constexpr (!gate) {
+        TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::UNPACK0);
+    }
+    if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>()) {
+        llk_pack_reconfig_data_format_table<is_fp32_dest_acc_en, gate>(output_id);
     } else {
-        constexpr std::uint32_t skip = ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE>(
-            pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
+        constexpr std::uint32_t skip = ckernel::packer::
+            llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
+                pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
         _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip>(
             pack_src_format[output_id],
             pack_dst_format[output_id],
@@ -264,6 +271,24 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     }
 }
 
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
+    if constexpr (ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>()) {
+        // A 32-bit output keeps the gated full reconfigure: its pack is long enough that a wait for the unpacker costs.
+        constexpr int kind = ckernel::packer::llk_pack_out32_kind(pack_dst_format);
+        if constexpr (kind == 0) {
+            llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, false>(new_output);
+            return;
+        } else if constexpr (kind == 2) {
+            if (!ckernel::packer::llk_pack_out32(pack_dst_format[get_output_id(new_output)])) {
+                llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, false>(new_output);
+                return;
+            }
+        }
+    }
+    llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, true>(new_output);
+}
+
 /**
  * llk_pack_reconfig_data_format for an output known at compile time (pack_reconfig_data_format's constant call sites):
  * where the kernel allows it (llk_pack_reconfig_imm), only the config bits its pack formats change, as immediates.
@@ -271,22 +296,23 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam new_output          New output circular buffer / operand index to configure for.
  */
-template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
-__attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate>
+__attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate() {
     constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
-        ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+        ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
             pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
     // get_output_id is the identity.
     constexpr std::uint32_t output_id = new_output;
     // A SKIP_ALL kernel keeps the no-op reconfigure.
-    constexpr bool skip_all = (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE>(
-                                   pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
-                               ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
+    constexpr bool skip_all =
+        (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
+             pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
+         ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
     if constexpr (
         !imm.ok || skip_all || output_id >= sizeof(pack_dst_format) ||
         pack_src_format[output_id] == static_cast<unsigned char>(DataFormat::Invalid) ||
         pack_dst_format[output_id] == static_cast<unsigned char>(DataFormat::Invalid)) {
-        llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
+        llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, gate>(new_output);
     } else {
         SAN_HOOK(reconfigure(
             StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -297,6 +323,9 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
             StateVal<Operand<Exu::Pack>::PartialFace>(false),
             StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
         LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
+        if constexpr (!gate) {
+            TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::UNPACK0);
+        }
         ckernel::packer::reconfig_packer_data_format_imm_and_state<
             is_fp32_dest_acc_en,
             imm.strides_full,
@@ -310,6 +339,20 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
             pack_src_format[output_id],
             pack_dst_format[output_id],
             pack_tile_num_faces[output_id]>();
+    }
+}
+
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
+__attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
+    if constexpr (
+        ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() &&
+        new_output < sizeof(pack_dst_format)) {
+        llk_pack_reconfig_data_format_ct_gate<
+            is_fp32_dest_acc_en,
+            new_output,
+            ckernel::packer::llk_pack_out32(pack_dst_format[new_output])>();
+    } else {
+        llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();
     }
 }
 

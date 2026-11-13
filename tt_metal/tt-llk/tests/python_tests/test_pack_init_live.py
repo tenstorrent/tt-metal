@@ -3,7 +3,10 @@
 """Per-tile packs on output A alternating with output B, the two of different format and packer input width, with the compute API's
 default pack inits (pack_api_shim.h) after every reconfigure: hw_configure keeps the default program live, inits skip what is live
 (pack_strides_width for the strides, pack_mop_dirty for the MOP). Init modes: n none, l one-tile, c counted one-tile, z zero-output then
-one-tile, m two-tile then one-tile, s counted with the address modes and strides skipped (SDPA streaming's refresh). Checked against the golden (A: output of the even blocks, B: output of the odd blocks).
+one-tile, m two-tile then one-tile, s counted with the address modes and strides skipped (SDPA streaming's refresh), r and R the
+compute API's reconfigure of a constant and a run-time output with no init; u2d: a Float32 input unpacked to DEST (half sync, fp32
+DEST), where a 32-bit output keeps the gated reconfigure and the others wait for the unpacker. Checked against the golden (A: output
+of the even blocks, B: output of the odd blocks).
 """
 
 import pytest
@@ -55,7 +58,7 @@ PAGE = {F32: 4096, B8: 1088, F16B: 2048}
 # (output A, output B): bf16, f32 and bfp8 outputs of different widths, both orders
 PAIRS = [(F16B, F32), (F32, F16B), (B8, F32), (B8, F16B), (F16B, B8)]
 TILES = [1, 2]
-MODES = ["n", "l", "c", "z", "m", "s"]
+MODES = ["n", "l", "c", "z", "m", "s", "r", "R"]
 
 
 def _golden(src, fmt, first_tile, tiles):
@@ -75,12 +78,14 @@ def _golden(src, fmt, first_tile, tiles):
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     block_tiles=TILES,
     init_mode=MODES,
+    u2d=[False, True],
 )
 def test_pack_init_live(
     pair,
     dest_acc,
     block_tiles,
     init_mode,
+    u2d,
     *,
     is_perf=False,
     perf_report=None,
@@ -90,23 +95,31 @@ def test_pack_init_live(
     fmt_a, fmt_b = pair
     wide = dest_acc == DestAccumulation.Yes
     if F32 in pair and not wide:
+        pytest.skip("the gathered kernels pack a Float32 output from a 32 bit DEST")
+    if u2d and (not wide or init_mode not in ("r", "R")):
         pytest.skip(
-            "the gathered kernels pack a Float32 output from a 32 bit DEST"
+            "an unpack to DEST needs fp32 DEST; its cases are the reconfigure modes"
         )
     dest_sync = DestSync.Half if block_tiles <= (4 if wide else 8) else DestSync.Full
     if wide and block_tiles > 8:
         pytest.skip("block exceeds the 32 bit DEST section")
-    formats = InputOutputFormat(F16B, fmt_a)
+    src_fmt = F32 if u2d else F16B
+    formats = InputOutputFormat(src_fmt, fmt_a)
     # output B's packer input as the JIT's per-CB pack_src_format: the same inference as output A's
     src_b = infer_pack_in(
-        F16B, fmt_b, F16B, dest_acc, chip_arch=ChipArchitecture.BLACKHOLE, pack_src_from_output=True
+        src_fmt,
+        fmt_b,
+        src_fmt,
+        dest_acc,
+        chip_arch=ChipArchitecture.BLACKHOLE,
+        pack_src_from_output=True,
     )
     tile_cnt = BLOCKS * block_tiles
     dims = [32, 32 * tile_cnt]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=F16B,
+        stimuli_format_A=src_fmt,
         input_dimensions_A=dims,
-        stimuli_format_B=F16B,
+        stimuli_format_B=src_fmt,
         input_dimensions_B=dims,
     )
     # source block k goes to output A (k even) or B (k odd), tile (k // 2) * block_tiles + i of it
@@ -148,9 +161,9 @@ def test_pack_init_live(
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
-            F16B,
+            src_fmt,
             src_B,
-            F16B,
+            src_fmt,
             fmt_a,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
@@ -158,7 +171,7 @@ def test_pack_init_live(
             operand_res_tile_size=res_page,
         ),
         "dest_acc": dest_acc,
-        "unpack_to_dest": False,
+        "unpack_to_dest": u2d,
     }
     configuration = create_test_or_perf_config(
         is_perf=is_perf, run_types=run_types, test_config_kwargs=kwargs

@@ -2764,7 +2764,7 @@ class PACK_SRC_FROM_OUTPUT(TemplateParameter):
 
 @dataclass
 class PACK_INIT_LIVE(TemplateParameter):
-    """pack_init_live_test.cpp: "<B format>/<B packer input>/<init mode n|l|c|z|m>": the second output and the default inits between outputs."""
+    """pack_init_live_test.cpp: "<B format>/<B packer input>/<init mode n|l|c|z|m|s|r|R>": the second output and the default inits or reconfigures between outputs."""
 
     pack_init_live: str
 

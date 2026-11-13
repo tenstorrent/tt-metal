@@ -204,7 +204,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // The compute API's default pack inits between packs of two outputs of different widths, after hw_configure kept the
 // default program live: init_mode 'n' none, 'l' the one-tile init, 'c' a counted init of one tile, 'z' a zero-output
 // init then the one-tile init, 'm' a two-tile init then the one-tile init (the last two leave pack_mop_dirty set), 's' a
-// counted init that skips the address modes and strides.
+// counted init that skips the address modes and strides; 'r' and 'R' the compute API's reconfigure itself (a constant and a
+// run-time output), with no init.
 #if defined(ARCH_BLACKHOLE) && PACK_API_SHIM_PR
 static inline std::uint32_t alt_page_bytes(const std::uint32_t fmt)
 {
@@ -263,6 +264,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         pack_api_shim::pack_hw_configure<is_fp32_dest_acc_en>(cb_a, page_a / 16);
         pack_api_shim::pack_init(cb_a);
+        if constexpr (init_mode == 'r' || init_mode == 'R')
+        {
+            pack_api_shim::cb_bind(cb_a, base_a, page_a / 16, tiles_a);
+            pack_api_shim::cb_bind(cb_b, base_b, page_b / 16, tiles_a);
+        }
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
@@ -278,8 +284,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 const std::uint32_t fmt = out ? fmt_b : fmt_a;
                 if (out != cur)
                 {
-                    _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(out ? src_b : static_cast<std::uint32_t>(formats.pack_src), fmt, out ? page_b : page_a);
-                    live_init(out ? cb_b : cb_a);
+                    if constexpr (init_mode == 'r')
+                    {
+                        if (out)
+                        {
+                            pack_api_shim::pack_reconfig_data_format<is_fp32_dest_acc_en, cb_b>();
+                        }
+                        else
+                        {
+                            pack_api_shim::pack_reconfig_data_format<is_fp32_dest_acc_en, cb_a>();
+                        }
+                    }
+                    else if constexpr (init_mode == 'R')
+                    {
+                        pack_api_shim::pack_reconfig_data_format<is_fp32_dest_acc_en>(out ? cb_b : cb_a);
+                    }
+                    else
+                    {
+                        _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(
+                            out ? src_b : static_cast<std::uint32_t>(formats.pack_src), fmt, out ? page_b : page_a);
+                        live_init(out ? cb_b : cb_a);
+                    }
                     cur = out;
                 }
                 const std::uint32_t page  = out ? page_b : page_a;
