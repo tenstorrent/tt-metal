@@ -470,6 +470,13 @@ class Vocoder(Module):
                 raise RuntimeError("release audio traces before eager warmup")
             self._prepared_audio_ccl.pop(key, None)
             buffers = None
+            # A replay copies its fresh input into the trace's input slot (Tracer._update_input: `ttnn.copy`),
+            # a program no eager op builds. Compile it here, in the eager warm a capture needs anyway, so neither
+            # the capture nor the first replay compiles a program under a live trace (served warms such as
+            # ltx-server's never run the pipeline's own capture warm). The forward may free x_dev, so copy first.
+            slot = ttnn.allocate_tensor_on_device(x_dev.spec, x_dev.device())
+            ttnn.copy(x_dev, slot)
+            ttnn.deallocate(slot)
         self._t_pad = t_pad
         scope = manager.audio_buffer_scope(buffers) if manager is not None else nullcontext({})
         with scope as used:

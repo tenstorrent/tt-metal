@@ -32,6 +32,7 @@ class Native:
         self.syncs = 0
         self.allocated = []
         self.freed = []
+        self.copies = []
 
     def synchronize_device(self, mesh):
         if self.capturing:
@@ -48,6 +49,11 @@ class Native:
 
     def deallocate(self, x):
         self.freed.append(x)
+
+    def copy(self, src, dst):
+        if self.capturing:
+            raise RuntimeError("input copy compiled inside capture")
+        self.copies.append((src, dst))
 
 
 def manager(native):
@@ -74,7 +80,7 @@ def np_buffer(m, length=32):
 
 def vocoder(m, native):
     names = {"forward_device_BTC", "release_trace"}
-    cls = type("Vocoder", (), methods("models/audio_vae/vocoder_ltx.py", "Vocoder", names, {}))
+    cls = type("Vocoder", (), methods("models/audio_vae/vocoder_ltx.py", "Vocoder", names, {"ttnn": native}))
     obj = cls()
     obj.ccl_manager = m
     obj.mesh_device = m.mesh_device
@@ -105,7 +111,9 @@ def vocoder(m, native):
 
 
 def tensor(length=32, dtype="bf16"):
-    return SimpleNamespace(shape=(1, length, 32), get_dtype=lambda: dtype)
+    return SimpleNamespace(
+        shape=(1, length, 32), spec=(1, length, 32, dtype), get_dtype=lambda: dtype, device=lambda: "mesh"
+    )
 
 
 class PreparationTest(unittest.TestCase):
@@ -145,7 +153,9 @@ class PreparationTest(unittest.TestCase):
         self.assertEqual(v.calls, [False, False, True, True, True, True])
         self.assertTrue(p.trace_audio)
         self.assertFalse(getattr(p, "_warming_audio_trace", False))
-        self.assertEqual(native.freed, [])
+        # the only frees are the eager warm's input-copy slots, one per length (no CCL pool is released)
+        self.assertEqual(native.freed, [dst for _, dst in native.copies])
+        self.assertEqual(len(native.copies), 2)
         syncs = native.syncs
         p._capture_audio(True)
         self.assertEqual(native.syncs, syncs)
@@ -286,6 +296,21 @@ class PreparationTest(unittest.TestCase):
         v.release_trace()
         with self.assertRaisesRegex(RuntimeError, "prepar|warm"):
             v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+
+    def test_eager_warm_compiles_the_replay_input_copy(self):
+        # A replay copies its input into the trace's slot (ttnn.copy); the eager warm builds that program first.
+        native = Native()
+        m = manager(native)
+        v = vocoder(m, native)
+        x = tensor()
+        v.forward_device_BTC(x, t_pad=0, trace_key="a")
+        self.assertEqual(len(native.copies), 1)
+        src, slot = native.copies[0]
+        self.assertIs(src, x)
+        self.assertEqual(slot.shape, x.spec)
+        self.assertEqual(native.freed, [slot])
+        v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+        self.assertEqual(len(native.copies), 1)
 
 
 if __name__ == "__main__":
