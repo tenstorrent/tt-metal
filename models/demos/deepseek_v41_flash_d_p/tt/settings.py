@@ -509,7 +509,7 @@ TABLE = {
     ),
     "MOE_REPLICAS": Setting(
         "off",
-        ("off", "runtime"),
+        ("off", "runtime", "exact"),
         "P.46 / P.47 (owner 2026-11-12, expert replicas; MOE_BLOCK_SRC=main only; default off: owner 2026-11-12, "
         "accepted as a switch). off = 12 "
         "expert slots a chip (8x4), "
@@ -520,7 +520,39 @@ TABLE = {
         "(expert_slot_copy over the 2D fabric, table-driven, one cached program), then the layer's slot map written "
         "into the router bias, in program order on CQ0. The fused head maps each (token, chosen expert) to one of the "
         "expert's slots (own + copies) by a hash of the token (router_rows.hpp slot_of; the gate weight from the "
-        "expert before the map): an even split. No copies: the off path's outputs bit for bit",
+        "expert before the map): an even split. No copies: the off path's outputs bit for bit. exact = P.55 (owner "
+        "2026-11-13, EXPERIMENTAL): the runtime layout (the same spare slot), filled by the hot experts of THIS layer "
+        "streamed inside the layer's own routed_experts_combine (set_combine_fill_exact, REC_FX: the port cores read "
+        "the home slot's blocks and send them over both links of the first hop, a ready flag every MOE_EXACT_BLOCK "
+        "pieces, receivers relaying to MOE_EXACT_FANOUT more; tt/expert_exact.py). Step 2 (P.55b) is the "
+        "microbenchmark only (tests/test_moe_exact_copy.py): the model's chunk path copies nothing yet (the device "
+        "planner and the dispatch split are P.55c), so in a chunk exact == runtime",
+    ),
+    "MOE_EXACT_BLOCK": Setting(
+        "32",
+        None,
+        "MOE_REPLICAS=exact: pieces (10880 B at the 8x4's fabric payload) a ready flag covers: after every this many "
+        "pieces of a copy path the sender's port sends a flushed atomic increment to the receiver (the block has "
+        "landed); a relay forwards a block once its flag is in, the receiver may compute on landed blocks",
+    ),
+    "MOE_EXACT_FANOUT": Setting(
+        "2",
+        None,
+        "MOE_REPLICAS=exact: the copies a chip sends of one hot expert (the home and every receiver that relays): a hot "
+        "expert with R receivers goes out as a tree (each receiver's parent the nearest chip already in it with fewer "
+        "than this many children), each edge one path a link of the first hop",
+    ),
+    "MOE_EXACT_CAP": Setting(
+        "8",
+        None,
+        "MOE_REPLICAS=exact: a copy piece leaves during the combine's main loop only in a round that sent no row and "
+        "while the port's fabric channel holds fewer than this many packets (rows keep priority)",
+    ),
+    "MOE_EXACT_LIMIT_MS": Setting(
+        "20",
+        None,
+        "MOE_REPLICAS=exact: the most a relay's gate or a receiver's wait for its copy may take in one call before it "
+        "gives up and flags the call (never a hang); ms at 1.35 GHz",
     ),
     "MOE_FILL": Setting(
         "serial",

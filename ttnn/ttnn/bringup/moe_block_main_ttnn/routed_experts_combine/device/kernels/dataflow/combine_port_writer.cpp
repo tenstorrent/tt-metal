@@ -261,7 +261,116 @@ void kernel_main() {
         } while (static_cast<int32_t>(bw[0] - tgt) < 0);
         bw[1] = bw[1] + 1;
     }
+#ifdef REC_FX
+    const uint32_t f_tbar = get_timestamp_32b();
+#endif
 #ifdef REC_FILL
+#ifdef REC_FX
+    // MOE_REPLICAS=exact (P.55b): the copy of a hot expert of THIS layer, streamed in this call. The jobs come from a
+    // DRAM page of the exact jobs tensor (page dir x L + link: this port's; page 4 L: the chip's waits), not from the
+    // args, so a device planner can write them. Job j (8 words at 16 + 8 j): [table | dst << 8, p0, p1, rxy (dst's
+    // words core; 0: mine), flag word | K << 16, gate (word + 1) | gK << 16, 0, 0]: pieces [p0, p1) of run table
+    // `table` read from this chip's DRAM and written into chip dst's DRAM through this port's connection (rows first: a
+    // piece in the main loop only in a round that sent no row and while fewer than cap packets sit in the channel; the
+    // rest after it); every K pieces (and at p1) a flushed atomic increment of flag word w on dst (a per-block ready
+    // flag: the block has landed). gate: a relay - piece p is read only once this chip's word (gate - 1) counts (p -
+    // p0) / gK + 1 blocks (the incoming copy's flags; its pieces are numbered the same), so a receiver forwards the
+    // blocks it got. Flag words: 32 a call parity on the chip's words core (the call's parity from the port's own call
+    // counter; the chip's zeroing port clears the other parity's words at the start, so they count from 0 every call).
+    // The chip's waiter port records arrival times of the waited words' blocks and, after its own work, waits until
+    // each waited word reaches its target (bounded by `limit` cycles: never a hang), then writes its stamps.
+    constexpr uint32_t F_NSTG = REC_F_NSTG, F_CHUNK = REC_F_CHUNK, F_TABB = REC_F_TABB;
+    constexpr uint32_t FX_PG = 1024;  // (a jobs page's bytes)
+    (void)my_pid;
+    const uint32_t f_w[2] = {get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1)};
+    const uint32_t f_runs = get_arg_val<uint32_t>(a + 2), f_w3 = get_arg_val<uint32_t>(a + 3);
+    const uint32_t f_tabb = f_w3 & 0xFFFF, f_page = (f_w3 >> 16) & 0xFF;
+    const bool f_zero = (f_w3 >> 31) & 1, f_waiter = (f_w3 >> 30) & 1;
+    const uint32_t f_done = get_arg_val<uint32_t>(a + 4), f_jobs = get_arg_val<uint32_t>(a + 5);
+    const uint32_t f_rxy = get_arg_val<uint32_t>(a + 6), f_limit = get_arg_val<uint32_t>(a + 7);
+    const uint32_t f_wpage = get_arg_val<uint32_t>(a + 8);
+    const uint32_t f_tab = area + REC_F_OFF, f_stg = f_tab + F_TABB, f_pg = f_stg + F_NSTG * F_CHUNK;
+    const uint32_t f_cp = f_pg + FX_PG, f_scr = f_cp + FX_PG, f_sst = f_scr + 128, f_arr = f_sst + 64;
+    const volatile tt_l1_ptr uint32_t* ftab = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(f_tab);
+    volatile tt_l1_ptr uint32_t* fpg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f_pg);
+    volatile tt_l1_ptr uint32_t* fcp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f_cp);
+    volatile tt_l1_ptr uint32_t* fscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f_scr);
+    volatile tt_l1_ptr uint32_t* fsst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f_sst);
+    volatile tt_l1_ptr uint32_t* farr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f_arr);
+    const uint32_t f_par = call & 1;
+    const uint32_t f_rx = f_rxy & 0xFFFF, f_ry = f_rxy >> 16;
+    const uint32_t f_words = f_done + 4 * 32 * f_par;  // (this call's flag words, on every chip's words core)
+    {
+        const InterleavedAddrGen<true> jg = {.bank_base_address = f_jobs, .page_size = FX_PG};
+        noc_async_read(jg.get_noc_addr(f_page), f_pg, FX_PG);
+        if (f_waiter) {
+            noc_async_read(jg.get_noc_addr(f_wpage), f_cp, FX_PG);
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        if (f_zero) {  // (the other parity's words: the next call's, idle now)
+            for (uint32_t i = 0; i < 32; ++i) {
+                fscr[i] = 0;
+            }
+            noc_async_write(f_scr, get_noc_addr(f_rx, f_ry, f_done + 4 * 32 * (f_par ^ 1)), 128);
+            noc_async_write_barrier();
+        }
+        for (uint32_t i = 0; i < 16; ++i) {
+            fsst[i] = 0;
+        }
+    }
+    const uint32_t f_nj = fpg[0], f_cap = fpg[1] ? fpg[1] : 1;
+    const uint32_t f_nw = f_waiter ? (fcp[2] < 4 ? fcp[2] : 4) : 0;
+    uint32_t f_seen[4] = {0, 0, 0, 0};
+    for (uint32_t i = 0; i < f_nw * 64 + 16 && f_waiter; ++i) {
+        farr[i] = 0;
+    }
+    uint32_t f_j = 0;
+    bool f_live = false;
+    uint32_t f_dst = 0, f_p0 = 0, f_p1 = 0, f_dxy = 0, f_fw = 0, f_fk = 0, f_gw = 0, f_gk = 0;
+    uint32_t f_rd = 0, f_ok = 0, f_sd = 0, f_fl = 0;
+    uint32_t f_r = 0, f_o = 0, f_n = 0;
+    uint32_t f_gv = 0, f_gpoll = 0, f_gt0 = 0, f_status = 0, f_sent = 0, f_flags = 0, f_poll = 0;
+    uint64_t f_da[F_NSTG];
+    uint32_t f_len[F_NSTG];
+    // (this call's flag words of my chip into f_scr)
+    auto f_read_words = [&]() {
+        noc_async_read(get_noc_addr(f_rx, f_ry, f_words), f_scr, 128);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    };
+    auto f_load = [&]() {
+        const volatile tt_l1_ptr uint32_t* jb = fpg + 16 + 8 * f_j;
+        const uint32_t table = jb[0] & 0xFF;
+        f_dst = (jb[0] >> 8) & 0xFF;
+        f_p0 = jb[1];
+        f_p1 = jb[2];
+        f_dxy = jb[3] ? jb[3] : f_rxy;  // (0: the words core's virtual coordinates are the same on every chip)
+        f_fw = jb[4] & 0xFFFF;
+        f_fk = jb[4] >> 16;
+        f_gw = jb[5] & 0xFFFF;
+        f_gk = jb[5] >> 16;
+        const InterleavedAddrGen<true> rg = {.bank_base_address = f_runs, .page_size = f_tabb};
+        noc_async_read(rg.get_noc_addr(table), f_tab, f_tabb);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        f_n = ftab[0];
+        f_r = 0;
+        f_o = 0;
+        for (uint32_t g = 0; f_r < f_n; ++f_r) {  // (skip to piece p0)
+            const uint32_t np = (ftab[1 + f_r * 6 + 5] + F_CHUNK - 1) / F_CHUNK;
+            if (g + np > f_p0) {
+                f_o = (f_p0 - g) * F_CHUNK;
+                break;
+            }
+            g += np;
+        }
+        f_rd = f_ok = f_sd = f_fl = f_p0;
+        f_gv = 0;
+        f_gt0 = get_timestamp_32b();
+        f_live = true;
+    };
+#else
     // MOE_FILL=piggyback (P.53): this call's fill jobs (the last kernel args; the host schedules the pieces, so a
     // copy's progress is known without a read-back). Job j: pieces [p0, p1) of run table `table` (expert_slot_copy's
     // tables: runs cut in REC_F_CHUNK pieces, numbered across the runs) read from this chip's DRAM into REC_F_NSTG
@@ -312,6 +421,7 @@ void kernel_main() {
         f_rd = f_ok = f_sd = f_fl = p0;
         f_live = true;
     };
+#endif  // REC_FX
 #endif
 
     volatile tt_l1_ptr uint32_t* cred = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + CRED);
@@ -365,6 +475,115 @@ void kernel_main() {
 #endif
     };
 #ifdef REC_FILL
+#ifdef REC_FX
+    // one exact step: reads into the free staging slots (a relay's only for landed blocks), one piece out if may_send
+    // and fewer than cap packets sit in the channel, a flushed flag increment at each block's end; true: sent
+    auto f_step = [&](bool may_send, uint32_t cap) -> bool {
+        if (f_j >= f_nj) {
+            return false;
+        }
+        if (!f_live) {
+            if (f_fl != f_sd) {
+                return false;
+            }
+            f_load();
+        }
+        while (f_rd < f_p1 && f_rd - f_fl < F_NSTG) {
+            if (f_gw) {  // (a relay: the piece's block must have landed here)
+                const uint32_t need = (f_rd - f_p0) / f_gk + 1;
+                if (f_gv < need) {
+                    const uint32_t now = get_timestamp_32b();
+                    if (now - f_gpoll > 400) {
+                        f_gpoll = now;
+                        f_read_words();
+                        f_gv = fscr[f_gw - 1];
+                    }
+                    if (f_gv < need) {
+                        if (now - f_gt0 > f_limit) {  // (never a hang: the job is dropped, the status says so)
+                            f_status |= 1;
+                            noc_async_read_barrier();
+                            f_j = f_nj;
+                            f_live = false;
+                            return false;
+                        }
+                        break;
+                    }
+                }
+            }
+            const volatile tt_l1_ptr uint32_t* e = ftab + 1 + f_r * 6;
+            const uint32_t w = e[0], bytes = e[5];
+            const uint32_t len = bytes - f_o < F_CHUNK ? bytes - f_o : F_CHUNK;
+            const uint32_t sl = f_rd % F_NSTG;
+            noc_async_read(get_noc_addr_from_bank_id<true>(e[1], f_w[w] + e[2] + f_o), f_stg + sl * F_CHUNK, len);
+            f_da[sl] = get_noc_addr_from_bank_id<true>(e[3], f_w[w] + e[4] + f_o);
+            f_len[sl] = len;
+            f_o += len;
+            if (f_o >= bytes) {
+                f_o = 0;
+                ++f_r;
+            }
+            ++f_rd;
+        }
+        if (f_ok != f_rd && ncrisc_noc_reads_flushed(noc_index)) {
+            f_ok = f_rd;
+        }
+        bool out = false;
+        uint32_t fr = 0;
+        if (may_send && f_sd < f_ok && unflushed < NH && (fr = conn.get_num_free_write_slots()) > 0 &&
+            conn.num_buffers_per_channel - fr < cap) {
+            const uint32_t sl = f_sd % F_NSTG;
+            auto* h = hdr_at(f_dst, sent % NH);
+            h->to_noc_unicast_write(NocUnicastCommandHeader{f_da[sl]}, f_len[sl]);
+            conn.send_current_slot_non_blocking(f_stg + sl * F_CHUNK, f_len[sl], reinterpret_cast<uint32_t>(h));
+            ++sent;
+            ++unflushed;
+            ++f_sd;
+            ++f_sent;
+            out = true;
+            if (f_fk && ((f_sd - f_p0) % f_fk == 0 || f_sd == f_p1)) {  // (a block's end: its ready flag)
+                if (unflushed >= NH) {
+                    flush();
+                }
+                auto* hf = hdr_at(f_dst, sent % NH);
+                hf->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                    get_noc_addr(f_dxy & 0xFFFF, f_dxy >> 16, f_words + 4 * f_fw), 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address(
+                    reinterpret_cast<uint32_t>(hf), sizeof(PACKET_HEADER_TYPE));
+                ++f_flags;
+            }
+        }
+        if (f_sd == f_p1) {
+            f_live = false;
+            ++f_j;
+        }
+        return out;
+    };
+    auto f_more = [&]() { return f_j < f_nj; };
+    const uint32_t F_CAP = f_cap;
+    // the waiter: arrival times of the waited words' blocks (polled at most every ~1 us; the first 64 of each)
+    auto f_tick = [&](bool force) {
+        if (!f_nw) {
+            return;
+        }
+        const uint32_t now = get_timestamp_32b();
+        if (!force && now - f_poll < 1350) {
+            return;
+        }
+        f_poll = now;
+        f_read_words();
+        for (uint32_t w = 0; w < f_nw; ++w) {
+            const uint32_t v = fscr[fcp[8 + 2 * w] & 31];
+            while (f_seen[w] < v && f_seen[w] < 64) {
+                farr[w * 64 + f_seen[w]] = now;
+                ++f_seen[w];
+            }
+            if (v > f_seen[w]) {
+                f_seen[w] = v;
+            }
+        }
+    };
+#else
     // one fill step: issue the reads the free staging slots allow, note finished reads, send one piece if may_send
     // and the channel holds fewer than cap packets; true: a packet went out
     auto f_step = [&](bool may_send, uint32_t cap) -> bool {
@@ -429,8 +648,11 @@ void kernel_main() {
     };
     auto f_more = [&]() { return f_j < f_nj; };
     const uint32_t F_CAP = f_cap;
+    auto f_tick = [&](bool) {};
+#endif  // REC_FX
 #else
     constexpr uint32_t F_CAP = 0;
+    auto f_tick = [&](bool) {};
     auto f_step = [&](bool, uint32_t) { return false; };
     auto f_more = [&]() { return false; };
 #endif
@@ -620,6 +842,12 @@ void kernel_main() {
                 did = true;
             }
         }
+#ifdef REC_FX
+        if (inj_done >= n_inj && fsst[1] == 0) {
+            fsst[1] = get_timestamp_32b() | 1;
+        }
+#endif
+        f_tick(false);
         // (a fill piece only in a round that sent no row: the combine's rows keep the connection)
         if (f_step(!did, F_CAP)) {
             did = true;
@@ -632,13 +860,17 @@ void kernel_main() {
             give_back(true);
         }
     }
+#ifdef REC_FX
+    const uint32_t f_tloop = get_timestamp_32b();
+#endif
     // (the rest of this call's fill pieces, while the credits drain: the host bounds them)
     while (f_more()) {
+        f_tick(false);
         if (!f_step(true, 0xFFFFu) || unflushed >= NH) {
             flush();
         }
     }
-#ifdef REC_FILL
+#if defined(REC_FILL) && !defined(REC_FX)
     if (f_nj) {  // (the split of this call's pieces, on my chip's done-words core: words N + pid / N + 8 + pid)
         const uint32_t rx = f_rxy & 0xFFFF, ry = f_rxy >> 16;
         noc_semaphore_inc(get_noc_addr(rx, ry, f_done + 4 * (N + my_pid)), f_in);
@@ -675,6 +907,41 @@ void kernel_main() {
             }
         }
     }
+#ifdef REC_FX
+    // stamps (wall clock, 32-bit cycles; a page's 16 words at words + 256 + 64 page): t_bar, last row sent, main loop
+    // end, fill end, status, pieces, flags, exit; the waiter's: t_land, wait status (1 met, 2 limit), final words
+    fsst[0] = f_tbar;
+    fsst[2] = f_tloop;
+    fsst[3] = get_timestamp_32b();
+    if (f_nw) {  // (the waiter: every waited word at its target, or the limit)
+        const uint32_t t0 = get_timestamp_32b();
+        bool met = false;
+        while (true) {
+            f_tick(true);
+            met = true;
+            for (uint32_t w = 0; w < f_nw; ++w) {
+                met &= fscr[fcp[8 + 2 * w] & 31] >= fcp[9 + 2 * w];
+            }
+            if (met || get_timestamp_32b() - t0 > f_limit) {
+                break;
+            }
+        }
+        fsst[8] = get_timestamp_32b();
+        fsst[9] = met ? 1u : 2u;
+        for (uint32_t w = 0; w < f_nw; ++w) {
+            fsst[10 + w] = fscr[fcp[8 + 2 * w] & 31];
+        }
+        noc_async_write(f_arr, get_noc_addr(f_rx, f_ry, f_done + 768), 4 * 64 * f_nw);
+    }
+    fsst[4] = f_status;
+    fsst[5] = f_sent;
+    fsst[6] = f_flags;
+    fsst[14] = f_nj;
+    fsst[15] = call;
+    fsst[7] = get_timestamp_32b();
+    noc_async_write(f_sst, get_noc_addr(f_rx, f_ry, f_done + 256 + 64 * f_page), 64);
+    noc_async_write_barrier();
+#endif
     conn.close();
     noc_async_atomic_barrier();
 }

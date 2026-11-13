@@ -627,5 +627,11 @@
   "exact_save_ms_max_code_p51200": 10.55,
   "exact_save_ms_max_novel_p51200": 21.87,
   "exact_save_ms_max_randids_p51200": 30.94
+ },
+ "P.55b": {
+  "exact_combine_identical": 1,
+  "exact_copy_added_ms": 0.4185,
+  "exact_copy_bitexact": 1,
+  "exact_copy_runs_ok": 100
  }
 }

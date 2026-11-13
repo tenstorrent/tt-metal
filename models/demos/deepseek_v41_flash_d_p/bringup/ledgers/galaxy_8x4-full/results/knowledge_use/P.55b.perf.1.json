@@ -1,0 +1,87 @@
+{
+ "used": [
+  {
+   "id": "DS41-243",
+   "how": "the copy's added time is taken in one profiler window behind 100 matmuls, stock and exact calls alternating (no host-dispatch wait in a single op's device time)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-244",
+   "how": "the receivers' deadline is the light chips' own work at the DRAM floor (0.467 ms); the measured copy times are fed to P.55a's model against it",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-241",
+   "how": "a whole slot in one call is known to cost when it competes with rows, so rows keep priority (copy pieces only in idle rounds under a cap) and the cost is measured, not assumed hidden",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the fabric's per-link rate for one worker sender (~15 GB/s at 10880 B packets; expert_slot_copy's 0.71 ms used both links, which P.55a's '2 paths' lever read as one link pair a path)",
+  "2D fabric multicast writes one address on every chip of a rectangle, so it cannot drop a replica off at chosen chips without clobbering the others' spare slots"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "nothing padded or duplicated; the kernel was extended (REC_FX) instead"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched: routed_experts_combine is a C++ device op with its program cache (REC_FX hashed in fill_exact); the exact jobs are a DRAM tensor read by the kernel, the args are patched per call by set_combine_fill_args"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run on the 8x4; only the new test (gate unit P.55b) and the gate's determinism unit"
+  },
+  {
+   "id": "OV-39",
+   "answer": "done",
+   "evidence": "(1) per-block ready flags every 32 pieces with arrival stamps (first block 0.04-0.07 ms), relays gated on them; receiver compute on landed blocks left to P.55c; (2) every copy on both links of the hop (0.89 ms vs 1.40 on one), and a 4-link detour through a free chip (0.76 ms); (3) the home re-reads the slot from DRAM (one extra 19.9 MB read an edge, inside the added time: pair +0.11 ms, 4 links +0.01); copies on time with P.55a's model: novel 0 of 174 (5.87 ms a chunk) / 0 of 269 (8.74) at 2 / 4 links, code 0 of 41 (1.25) / 0 of 74 (2.44); results/P.55b_exact_copy.json"
+  }
+ ],
+ "cited_only": [
+  "DS41-245"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.55b",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-13T23:18:39",
+  "head": "55b04e3e0fc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.55b.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.55b_exact_copy.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.55b.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_exact.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_device_operation.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_program_factory.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/routed_experts_combine.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/routed_experts_combine.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/routed_experts_combine_nanobind.cpp"
+  ]
+ }
+}

@@ -1,0 +1,181 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-13T23:05:18",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-13T23:05:18",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-13T23:05:18",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-13T23:05:18",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-13T23:05:18",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-13T23:05:18",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-13T23:05:18",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-13T23:05:18",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-13T23:05:18",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-13T23:05:18",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-13T23:05:18",
+   "value": 91.8
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-13T23:05:18",
+   "value": 0.0
+  },
+  "exact_added_ms_neigh32": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0.1945
+  },
+  "exact_added_ms_nojob": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0.0043
+  },
+  "exact_added_ms_pair1": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0.5971
+  },
+  "exact_added_ms_pair2": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0.1369
+  },
+  "exact_added_ms_pair4": {
+   "t": "2026-11-13T23:11:47",
+   "value": -0.0039
+  },
+  "exact_checks_failed": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0
+  },
+  "exact_combine_identical": {
+   "t": "2026-11-13T23:11:47",
+   "value": 1
+  },
+  "exact_copy_added_ms": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0.4185
+  },
+  "exact_copy_bitexact": {
+   "t": "2026-11-13T23:11:47",
+   "value": 1
+  },
+  "exact_copy_latency_ms": {
+   "t": "2026-11-13T23:11:47",
+   "value": 1.229
+  },
+  "exact_copy_runs_ok": {
+   "t": "2026-11-13T23:11:47",
+   "value": 100
+  },
+  "exact_deadline_copies_code_2links": {
+   "t": "2026-11-13T23:11:39",
+   "value": 46
+  },
+  "exact_deadline_copies_code_4links": {
+   "t": "2026-11-13T23:11:47",
+   "value": 63
+  },
+  "exact_deadline_copies_novel_2links": {
+   "t": "2026-11-13T23:11:39",
+   "value": 183
+  },
+  "exact_deadline_copies_novel_4links": {
+   "t": "2026-11-13T23:11:47",
+   "value": 259
+  },
+  "exact_deadline_on_time_code_2links": {
+   "t": "2026-11-13T23:11:39",
+   "value": 0
+  },
+  "exact_deadline_on_time_code_4links": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0
+  },
+  "exact_deadline_on_time_novel_2links": {
+   "t": "2026-11-13T23:11:39",
+   "value": 0
+  },
+  "exact_deadline_on_time_novel_4links": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0
+  },
+  "exact_deadline_save_ms_code_2links": {
+   "t": "2026-11-13T23:11:39",
+   "value": 1.36
+  },
+  "exact_deadline_save_ms_code_4links": {
+   "t": "2026-11-13T23:11:47",
+   "value": 2.3
+  },
+  "exact_deadline_save_ms_novel_2links": {
+   "t": "2026-11-13T23:11:39",
+   "value": 6.16
+  },
+  "exact_deadline_save_ms_novel_4links": {
+   "t": "2026-11-13T23:11:47",
+   "value": 8.55
+  },
+  "exact_latency_ms_neigh32": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0.9612
+  },
+  "exact_latency_ms_pair1": {
+   "t": "2026-11-13T23:11:47",
+   "value": 1.3964
+  },
+  "exact_latency_ms_pair2": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0.8759
+  },
+  "exact_latency_ms_pair4": {
+   "t": "2026-11-13T23:11:47",
+   "value": 0.7723
+  }
+ },
+ "task": "P.55b"
+}

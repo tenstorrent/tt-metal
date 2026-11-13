@@ -73,7 +73,16 @@ struct CombineFillCall {
     Tensor gu, d, runs;  // the copied layer's routed weights (read on src, written on dst) and the run tables
     std::vector<CombineFillJob> jobs;
     uint32_t cap = 1;  // a piece goes only while the port's fabric channel holds fewer than cap packets (main loop)
+    // MOE_REPLICAS=exact (P.55b, REC_FX): the jobs are not runtime args but pages of this uint32 DRAM tensor, per chip
+    // [kFxPages, kFxPageWords] (page dir x L + link: that port's jobs; page kFxChipPage: the chip's waits; layout in
+    // combine_port_writer.cpp); `jobs` and `cap` are then unused. exact_limit: the cycles a relay's gate or the
+    // waiter's wait may take before it gives up (never a hang).
+    std::optional<Tensor> exact;
+    uint32_t exact_limit = 0;
 };
+inline constexpr uint32_t kFxPages = 9, kFxChipPage = 8, kFxPageWords = 256, kFxMaxJobs = 30, kFxWaits = 4;
+inline constexpr uint32_t kFxWords = 448;  // the exact words a chip: 2 x 32 flags, 8 x 16 stamps, 4 x 64 arrivals
+inline constexpr uint32_t kFxL1 = 3328;    // a port's L1 for the exact path past the staging slots
 
 // What the combine is planned from (k3 TtK3TokenSplitMoE.__init__: combine_auto on the flat plan's free cells).
 struct CombinePlanInputs {
@@ -213,7 +222,8 @@ CombineHandles add_combine_program(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineBuffers& buffers,
     const FlatHandoff& flat,
-    bool fill = false);
+    bool fill = false,
+    bool fill_exact = false);
 
 // MOE_FILL=piggyback: the port senders' fill args of chip `chip` for this call (call: none = no job; done: the fill's
 // done words' address). Written on every call (create and cache hit).
@@ -224,10 +234,11 @@ void set_combine_fill_args(
     ChipCoord chip,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineFillCall* call,
-    uint32_t done_addr);
+    uint32_t done_addr,
+    bool exact = false);
 
 // MOE_FILL=piggyback: the arena offset of a port's fill table and staging slots (they end at the arena's end).
-uint32_t combine_fill_offset(const CombinePlan& plan);
+uint32_t combine_fill_offset(const CombinePlan& plan, bool exact = false);
 
 // Re-applies the buffers' addresses (a program-cache hit): a source's args (and the arena's CBs) only when its address
 // moved.

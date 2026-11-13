@@ -315,6 +315,56 @@ void bind_routed_experts_combine(nb::module_& mod) {
         "MOE_FILL=piggyback: the direction (0 X+, 1 X-, 2 Y+, 3 Y-) of chip src's port that carries a copy to chip dst "
         "(the first hop, link 0): jobs with the same (src, port) share one connection.");
     mod.attr("COMBINE_FILL_MAX_JOBS") = kFillMaxJobs;
+    mod.def(
+        "set_combine_fill_exact",
+        [](MoEBlockResources& resources,
+           bool enabled,
+           const std::optional<ttnn::Tensor>& gate_up,
+           const std::optional<ttnn::Tensor>& down,
+           const std::optional<ttnn::Tensor>& runs,
+           const std::optional<ttnn::Tensor>& jobs,
+           uint32_t limit_cycles) {
+            std::optional<CombineFillCall> call;
+            if (enabled) {
+                TT_FATAL(gate_up && down && runs && jobs, "set_combine_fill_exact: needs gate_up, down, runs, jobs");
+                call = CombineFillCall{
+                    .gu = *gate_up, .d = *down, .runs = *runs, .exact = *jobs, .exact_limit = limit_cycles};
+            }
+            set_combine_fill_exact(resources, enabled, call);
+        },
+        nb::arg("resources"),
+        nb::arg("enabled"),
+        nb::arg("gate_up") = nb::none(),
+        nb::arg("down") = nb::none(),
+        nb::arg("runs") = nb::none(),
+        nb::arg("jobs") = nb::none(),
+        nb::arg("limit_cycles") = 27000000u,
+        R"doc(
+            MOE_REPLICAS=exact (P.55b): the next combine calls build the port senders with the exact fill (REC_FX):
+            each port reads its jobs from `jobs` (uint32 DRAM, per chip COMBINE_FX_PAGES rows of COMBINE_FX_PAGE_WORDS:
+            row dir x links + link = that port's jobs, row COMBINE_FX_CHIP_PAGE = the chip's waits; layout in
+            combine_port_writer.cpp) and streams expert-slot pieces of gate_up / down (run tables `runs`) to other chips
+            in the same call, with per-block ready flags, relays gated on them, and the waiter's stamps in
+            combine_fill_exact_words. limit_cycles: a gate or wait gives up after it (never a hang; the status says).
+            enabled False: the stock port writer.
+        )doc");
+    mod.def(
+        "combine_fill_exact_words",
+        &combine_fill_exact_words,
+        nb::arg("resources"),
+        "MOE_REPLICAS=exact: the exact words, uint32 [1, COMBINE_FX_WORDS] a chip (2 x 32 flag words by call parity, "
+        "8 x 16 port stamps at 64, 4 x 64 block arrival stamps at 192).");
+    mod.def(
+        "combine_fill_links",
+        [](MoEBlockResources& resources) { return static_cast<uint32_t>(resources.mesh_plan().num_links); },
+        nb::arg("resources"),
+        "The links a direction the combine's ports use (the exact jobs' page = direction x links + link).");
+    mod.attr("COMBINE_FX_PAGES") = kFxPages;
+    mod.attr("COMBINE_FX_CHIP_PAGE") = kFxChipPage;
+    mod.attr("COMBINE_FX_PAGE_WORDS") = kFxPageWords;
+    mod.attr("COMBINE_FX_MAX_JOBS") = kFxMaxJobs;
+    mod.attr("COMBINE_FX_WAITS") = kFxWaits;
+    mod.attr("COMBINE_FX_WORDS") = kFxWords;
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main::routed_experts_combine

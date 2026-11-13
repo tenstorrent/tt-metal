@@ -243,6 +243,7 @@ const CombineState& state(
 
 struct FillInput {
     bool enabled = false;
+    bool exact = false;  // (MOE_REPLICAS=exact: REC_FX)
     std::shared_ptr<const CombineFillCall> call;
 };
 constexpr const char* kFillInput = "routed_experts_combine/fill";
@@ -259,7 +260,29 @@ const ttnn::Tensor& fill_done_words(MoEBlockResources& res, const CombinePlan& p
         plan.topo.num_chips() + 16);
 }
 
+const ttnn::Tensor& fill_exact_words(MoEBlockResources& res, const CombinePlan& plan) {
+    return res.persistent_words(
+        "routed_experts_combine/fill_exact", CoreRangeSet(CoreRange(plan.collector, plan.collector)), kFxWords);
+}
+
 }  // namespace routed_experts_combine_detail
+
+void set_combine_fill_exact(MoEBlockResources& resources, bool enabled, const std::optional<CombineFillCall>& call) {
+    using namespace routed_experts_combine_detail;
+    FillInput in{.enabled = enabled, .exact = enabled};
+    if (enabled) {
+        TT_FATAL(call && call->exact.has_value(), "routed_experts_combine: the exact fill needs its jobs tensor");
+        in.call = std::make_shared<const CombineFillCall>(*call);
+    }
+    resources.set_op_input(kFillInput, in);
+}
+
+ttnn::Tensor combine_fill_exact_words(MoEBlockResources& resources) {
+    using namespace routed_experts_combine_detail;
+    const auto* st = resources.find_plan<CombineState>("routed_experts_combine/state");
+    TT_FATAL(st != nullptr, "combine_fill_exact_words: the combine has not run on these resources");
+    return fill_exact_words(resources, *st->plan);
+}
 
 void set_combine_fill(MoEBlockResources& resources, bool enabled, const std::optional<CombineFillCall>& call) {
     using namespace routed_experts_combine_detail;
@@ -377,8 +400,9 @@ ttnn::Tensor routed_experts_combine(
     std::optional<ttnn::Tensor> fill_done;
     if (const auto* f = fill_input(resources); f != nullptr && f->enabled) {
         params.fill = true;
+        params.fill_exact = f->exact;
         params.fill_call = f->call;
-        fill_done = fill_done_words(resources, *st.plan);
+        fill_done = f->exact ? fill_exact_words(resources, *st.plan) : fill_done_words(resources, *st.plan);
     }
     auto out = ttnn::prim::moe_block_main_routed_experts_combine(
         params,

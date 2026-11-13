@@ -52,9 +52,12 @@ struct RoutedExpertsCombineParams {
     // buffers (runtime args only, written on every call; none: no job)
     bool fill = false;
     std::shared_ptr<const CombineFillCall> fill_call;
+    // MOE_REPLICAS=exact (P.55b): the fill path's exact variant (REC_FX; hashed): jobs from a DRAM tensor, both links,
+    // per-block flags, relays, the waiter's stamps; fill_done is then the exact words (kFxWords)
+    bool fill_exact = false;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("S", "W", "plan_key", "fill");
-    auto attribute_values() const { return std::forward_as_tuple(S, W, plan_key, fill); }
+    static constexpr auto attribute_names = std::forward_as_tuple("S", "W", "plan_key", "fill", "fill_exact");
+    auto attribute_values() const { return std::forward_as_tuple(S, W, plan_key, fill, fill_exact); }
 };
 
 struct RoutedExpertsCombineInputs {

@@ -260,7 +260,8 @@ def replica_demo(mesh) -> None:
 
 
 def replicas_on() -> bool:
-    return settings.get("MOE_REPLICAS") == "runtime"
+    """The spare slot exists (MOE_REPLICAS runtime, or exact: P.55b's streamed copies fill the same spare slot)."""
+    return settings.get("MOE_REPLICAS") in ("runtime", "exact")
 
 
 def slot_map_words(perm, epc: int, spc: int, copies) -> torch.Tensor:

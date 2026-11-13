@@ -194,3 +194,29 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   routed_experts_combine_program_factory.{hpp,cpp}}, routed_experts_combine/device/kernels/dataflow/
   combine_port_writer.cpp, common/moe_block_resources.{hpp,cpp}; tests:
   models/demos/deepseek_v41_flash_d_p/tests/test_moe_fill_piggyback.py
+
+### The combine's exact fill: this layer's hot experts streamed in its own call (2026-11-13, deepseek_v41_flash_d_p P.55b)
+- What: `set_combine_fill_exact(resources, enabled, gate_up, down, runs, jobs, limit_cycles)` (default: never called =
+  the stock port writer; `set_combine_fill` / P.53's REC_FILL path unchanged). Enabled, routed_experts_combine builds
+  the port writer with REC_FILL + REC_FX (`RoutedExpertsCombineParams.fill_exact`, hashed): every port core reads its
+  jobs from a DRAM page of `jobs` (uint32, per chip COMBINE_FX_PAGES rows of 256 words: row dir x links + link = that
+  port, row COMBINE_FX_CHIP_PAGE = the chip's waits), not from runtime args, so a device planner can write them. A job
+  sends pieces [p0, p1) of a run table (home slot -> spare slot, or spare -> spare for a relay) to chip dst on this
+  port's link, rows first (main loop: only in a round with no row, under `cap` packets in the channel; the rest after
+  the main loop); every K pieces a flushed atomic increment of a flag word on dst (a per-block ready flag: the
+  receiving router flushes the block's writes first); a gated job (relay) reads piece p only once its own chip's flag
+  word counts (p - p0) / gK + 1 blocks. Flag words: 32 a call parity (the port's call counter) in
+  `combine_fill_exact_words` (persistent, the collector cell, 448 words); the chip's first fill port zeroes the other
+  parity at its start and is the waiter: it stamps each waited word's block arrivals (polled ~1 us), and after its own
+  work waits for every waited word's target (bounded by limit_cycles: the job / wait gives up and flags the status,
+  never a hang), then every port writes 16 stamp words (t_bar, last row, main-loop end, fill end, status, pieces,
+  flags, exit; the waiter's land time and wait status). `combine_fill_links(resources)`; constants COMBINE_FX_*.
+- Why: P.55 (owner 2026-11-13): the exact replicas copy this chunk's hot experts in the layer's own program, so the
+  receivers compute the replica last; P.53's path copies another layer's slot over many calls.
+- Measured: README "Measured" (exact fill).
+- Cores: none added (the 8 port cores' RISCV_0 senders; the reads on NoC1); +3328 B of each port's arena end.
+- Needed by: deepseek_v41_flash_d_p P.55b (MOE_REPLICAS=exact; tt/expert_exact.py builds the jobs on the host)
+- Files: routed_experts_combine/{routed_experts_combine.{hpp,cpp},routed_experts_combine_nanobind.cpp},
+  routed_experts_combine/device/{combine_program.{hpp,cpp},routed_experts_combine_device_operation{.cpp,_types.hpp},
+  routed_experts_combine_program_factory.cpp}, routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp;
+  tests: models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_copy.py

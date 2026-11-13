@@ -1285,3 +1285,32 @@ the owner decides from P.50's A/B).
   (~10 % of a link), and the home's L1 window: in ~94 % of the planned copies the copy outlasts the home's compute of
   that expert (+ one weight read), so the source would need to hold the blocks or re-read them from DRAM
   (`src_window_short`, results/P.55a_exact_bound.json).
+
+## A copy streamed in the layer's own combine moves ~7 GB/s a link while the combine runs, ~20 after
+tests/test_moe_exact_copy.py, layer 20, 8x4, a random 5120-token chunk (the combine alone 0.84-0.89 ms, every chip's
+own work 0.62-0.65 ms: its ports' main loops), MOE_EXACT_BLOCK 32 pieces (340 KiB), cap 8, AICLK 1350 MHz. Latency =
+the receiver's waiter port: its start barrier to the last flag of the copy; added = the combine program's device time
+(real-time profiler, slowest chip, median of 6, stock calls alternating in the window) minus the stock one.
+
+| case | copies | latency ms | added ms | first block ms |
+|---|---|---|---|---|
+| no job | 0 | - | +0.009 | - |
+| pair, 1 link | 1 | 1.397 | +0.630 | 0.065 |
+| pair, both links | 1 | 0.890 | +0.106 | 0.062 |
+| pair, 4 links (half via chip 4's spare slot, relayed) | 1 (+1 relay) | 0.761 | +0.008 | 0.064 |
+| neighbour, 32 copies at once | 32 | 0.954 | +0.254 | 0.038 |
+| real split, novel L20 (P.55a counts; 4 hot experts, relay trees depth 5) | 23 | 1.254 | +0.372 | 0.054 |
+| real split, code L20 (4 hot experts, depth 3) | 10 | 1.235 | +0.371 | 0.057 |
+
+Block arrivals (pair, both links, path 0, every 4th block, us): 65, 255, 402, 533, 623, 693, 762, 831: ~47 us a block
+while the combine's main loop runs (rows first, the experts reading their weights from the same DRAM), ~17 us after
+(~20 GB/s a link). One link alone 1.40 ms = 15.5 GB/s average, the rate expert_slot_copy reaches a link (P.47's
+0.71 ms used both links). A relay level adds ~0.05-0.1 ms (tree depth 5: the last receiver 1.25 ms vs the first 0.79).
+Two copies on one port go one after the other (the code split at first: 1.80 ms with 2 jobs a port; the tree now
+prefers a parent whose port toward the child is free: 1.24 ms).
+P.55a's model (moe_exact_model.py, chunk 10 at 51,200, every layer) with a copy edge taking the measured pair time:
+both links 0.89 ms: novel 5.87 ms a chunk (0 of 174 copies on time), code 1.25 (0 of 41); 4 links 0.76 ms: novel 8.74
+(0 of 269), code 2.44 (0 of 74). P.55a's own 0.71 / 2-path assumption gave 20.9 / 10.1.
+The final gate run (its recorded metrics, same code): pair both links 0.876 ms / +0.137, 4 links 0.772 / -0.004,
+neighbour 32 0.961 / +0.195, novel split 1.229 / +0.419, code split 1.229 / +0.297; the model: both links novel 6.16
+(0 of 183), code 1.36 (0 of 46); 4 links novel 8.55 (0 of 259), code 2.30 (0 of 63).

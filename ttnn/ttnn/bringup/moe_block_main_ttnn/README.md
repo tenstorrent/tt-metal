@@ -91,6 +91,14 @@ each default off (= the source's program):
   dst, table, p0, p1, last)], kept for every following call until replaced; at most 4 a port; `last`: a flushed done
   increment, `combine_fill_done(resources)`); `combine_fill_port(resources, src, dst)`: the carrying port. Enabled is a
   program of its own; with no job it is bit-identical to the stock combine.
+- `set_combine_fill_exact(resources, enabled, gate_up=None, down=None, runs=None, jobs=None, limit_cycles=27e6)` (P.55b,
+  MOE_REPLICAS=exact): the port senders stream copies inside the same call, their jobs read from `jobs` (uint32 DRAM,
+  per chip COMBINE_FX_PAGES rows of COMBINE_FX_PAGE_WORDS: row dir x links + link = that port's jobs [table | dst << 8,
+  p0, p1, 0, flag word | K << 16, (gate word + 1) | gK << 16, 0, 0] from word 16, header [n jobs, cap]; row
+  COMBINE_FX_CHIP_PAGE = the chip's waits [_, _, n, _, ..., (word, target) x n from word 8]); a flushed flag increment
+  every K pieces on dst; a gated job (relay) reads only blocks its own flags count; `combine_fill_exact_words(resources)`
+  (flags by call parity, per-port stamps, block arrivals), `combine_fill_links(resources)`. Enabled is a program of its
+  own (REC_FX); with an all-zero jobs table it is bit-identical to the stock combine.
 
 ## Measured
 
@@ -103,6 +111,14 @@ call pair -1.3 % / 92.5 %, neighbour 32 +0.2 % / 95.1 %, random 32 (4 copies on 
 -0.2 %, neighbour -0.5 %, random +2.6 % / 86.6 %; 1/16 (125 pieces) pair -0.7 %, neighbour 0.0 %, random -0.6 % /
 96.6 %; 1/32 all within +-0.2 %, 100 %. cap 1 hides less (random 1/16 +23 %). Every copied slot bit-exact, 100 calls
 back to back without a hang, every combine output bit-identical with and without copies.
+
+exact fill (P.55b, the same box and layer, copies into layer 20's own spare slots in its own call, 2000 pieces of
+10880 B a 19.9 MB slot, a ready flag every 32 pieces; models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_copy.py;
+latency = the receiver's start barrier to the copy's last flag, added = the combine's device time over the stock
+one, same window): no job +0.009 ms; one pair on one link 1.40 ms / +0.63, on both links 0.89 / +0.11, on 4 links (half
+relayed through a free neighbour's spare slot) 0.76 / +0.01; 32 neighbour copies at once 0.95 / +0.25; a real split
+(P.55a's layer-20 counts, relay trees) novel 23 copies 1.25 / +0.37, code 10 copies 1.24 / +0.37. Every copy
+bit-exact, 100 calls back to back without a hang, every gate and wait clean, outputs bit-identical (DS41-245).
 
 
 combine_snap_split (FIX.23 on the replica branch, Galaxy 8x4, DeepSeek-V4.1, 40 layers, chunk 5120, q = 2^-19, 17
@@ -143,6 +159,10 @@ runner smoke (tt-d-gen engine): pass.
 - The combine fill (P.53) carries one weight set (one layer's gate_up / down) a call, at most 4 jobs a port, on link 0
   of the first hop's direction only; it hides only while the pieces a port carries a call stay small (<= ~1/8 of a
   19 MiB slot at 8x4: above that the tail after the main loop and the link share show as combine time).
+- The exact fill (P.55b) moves ~15 GB/s a link (10880 B packets, the same as expert_slot_copy's): a 19.9 MB copy is
+  ~1.4 ms on one link, ~0.87 ms on both links of a hop; it reads the home slot again from DRAM (no hand-off from the
+  gate/up cores' L1); one spare slot a chip; jobs on one port run one after the other (30 a port at most); flag words
+  32 a chip, 4 waits a chip.
 - Kernels are main's of 2026-11-06 (`f93403fa228`); this branch's kernel APIs may differ (JIT errors show at first
   use).
 

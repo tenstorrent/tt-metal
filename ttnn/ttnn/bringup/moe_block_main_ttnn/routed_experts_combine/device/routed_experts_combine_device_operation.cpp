@@ -42,6 +42,7 @@ ttsl::hash::hash_t RoutedExpertsCombineDeviceOperation::compute_program_hash(
         p.flat_config.layout,
         p.plan_key,
         p.fill,
+        p.fill_exact,
         t.plan.tensor_spec(),
         t.table.tensor_spec(),
         t.out.tensor_spec(),

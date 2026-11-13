@@ -853,3 +853,67 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   (novel) is about what the brief's learned 32-copy table measured (~24.5 ms device a chunk).
 - Gotcha: record_json writes indent=1 (a number a line); per-chip lists went in as strings to stay under 500 KB.
 - Re-run: `gate P.55a --spec <spec> --check --unit P.55a` (~4 min on the 8x4, devjob).
+
+## P.55b (perf, attempt 1): MoE exact replicas, step 2: the streamed copy inside the layer's own combine
+- Expected per chunk (written before the first device run; perf_guide 1-2, 4 "moved time"): the model's chunk path
+  copies nothing in step 2 (MOE_REPLICAS=exact = the runtime layout, 13 slots, the spare slot empty; the device planner
+  and dispatch split are P.55c), so 0 ms device and 0 ms host vs runtime (P.52: runtime vs off +0.1 ms = noise).
+  Microbenchmark guesses: one 19.9 MB copy over two link paths ~0.36-0.45 ms (P.47: 0.71 ms on one); a real split
+  adds what the receivers wait past their own work (~0.2-0.5 ms a layer in a balanced random-input call).
+- Read first: P.55a's verdict (OV-39: novel 10.1 GO, code 2.9 NO-GO, random 16.5): the stop rule (both under ~5 ms)
+  does not trigger, so step 2 ran.
+- Design as built (MOE_REPLICAS=exact; MOE_EXACT_BLOCK 32, MOE_EXACT_FANOUT 2, MOE_EXACT_CAP 8, MOE_EXACT_LIMIT_MS 20):
+  - Kernel: routed_experts_combine's port writer, REC_FILL + REC_FX (`set_combine_fill_exact`; P.53's REC_FILL path
+    untouched). Each port core reads its jobs from a DRAM page (jobs tensor, page dir x links + link; chip page 8: the
+    waits), so P.55c's device planner can write them; a job sends pieces [p0, p1) of a run table to one chip on that
+    port's link, rows first; a flushed atomic increment of a flag word on the receiver every 32 pieces (the receiving
+    router flushes the block's writes first: a flag means the block is in DRAM); a relay job reads a piece only once
+    its own chip's flag word counts its block. Flag words by call parity (zeroed by the chip's first port for the next
+    call); the chip's first port is the waiter: stamps block arrivals, waits for every target after its own work
+    (bounded: never a hang), every port writes 16 stamp words. 448 persistent words on the collector; +3328 B of each
+    port's arena; cores: none added (the 8 port cores; rule 18 holds).
+  - Source (OV-39 (3)): the home RE-READS the slot from DRAM (the port's own reads, 4 staging slots), no L1 hand-off
+    from the gate/up cores: in ~94 % of P.55a's copies the copy outlasts the home's compute of that expert, so its L1
+    blocks are gone; cost: one extra 19.9 MB read a sending edge, inside the measured added time.
+  - Paths (OV-39 (2)): every edge sends half its pieces on each link of the first hop (2 links); `(home, slot, [r],
+    via)`: a quarter on each of 4 links, half relayed through a free chip's spare slot (route chosen so it avoids the
+    straight link). Several receivers of one expert: a relay tree (tt/expert_exact.plan_tree: nearest first, a parent
+    whose port toward the child is still free, at most 2 children) - two copies on one port serialize (code split
+    1.80 ms before that rule, 1.24 after). Not a fabric multicast: a 2D multicast writes the same address on every
+    chip of a rectangle, so non-receivers in it would lose their spare slot.
+  - Streaming (OV-39 (1)): the per-block flags and their arrival stamps are there (first block 0.04-0.07 ms); the
+    receiver computing on landed blocks is P.55c (the flat expert has to poll the flag before a block).
+- Results (gate unit P.55b PASS; layer 20, random chunk; combine alone ~0.86 ms, chips' own work 0.62-0.65 ms):
+
+  | case | copies | latency ms | added ms |
+  |---|---|---|---|
+  | no job | 0 | - | +0.009 |
+  | pair, 1 link | 1 | 1.397 | +0.630 |
+  | pair, both links | 1 | 0.890 | +0.106 |
+  | pair, 4 links (detour) | 1 | 0.761 | +0.008 |
+  | neighbour 32 | 32 | 0.954 | +0.254 |
+  | real split novel (4 hot experts, depth 5) | 23 | 1.254 | +0.372 |
+  | real split code (4 hot experts, depth 3) | 10 | 1.235 | +0.371 |
+
+  exact_copy_bitexact 1, exact_copy_runs_ok 100 (0.20 s, every gate / wait clean), exact_combine_identical 1,
+  exact_copy_added_ms 0.372, exact_copy_latency_ms 1.254 (novel split). Deadline (P.55a's model, chunk 10 at 51,200,
+  a copy edge = the measured pair): both links 0.89 ms -> novel 5.87 ms a chunk, 0 of 174 on time; code 1.25, 0 of
+  41; 4 links 0.76 ms -> novel 8.74, 0 of 269; code 2.44, 0 of 74 (P.55a assumed 0.36 ms: 20.9 / 10.1).
+- The final `gate P.55b --check` (PASS, determinism 0; the recorded metrics): exact_copy_added_ms 0.4185,
+  exact_copy_latency_ms 1.229 (novel), code 1.229 / +0.297, pair both links 0.876 / +0.137, 4 links 0.772 / -0.004,
+  neighbour 0.961 / +0.195; the model: both links novel 6.16 ms (0 of 183) code 1.36 (0 of 46), 4 links novel 8.55
+  (0 of 259) code 2.30 (0 of 63). Run-to-run spread ~0.02-0.05 ms on latency, ~0.05-0.1 ms on added.
+- `measure --task P.55b` (after the last edit): determinism 0 (novel, code, state), quick min layer PCC 0.60548578 at
+  L39 (bit-identical to P.52 / P.53's), host transfers 0, wall 231.9 ms (spread 25.1). Its stamp's env is EMPTY: P.55b's
+  task has no A/B switch entry, so it ran the defaults (MOE_REPLICAS=off, and not DS41_ENGRAM_TABLE=resident, which
+  P.52 / P.53's measures set: 182-185 ms). The wall is not comparable with theirs; no code on the off path changed
+  (the stock combine's kernel compiles without REC_FILL / REC_FX). The orchestrator's A/B sets the switches.
+- What limits it (DS41-245): a link carries ~7 GB/s of copy while the combine's main loop runs (rows first, the experts
+  streaming weights from the same DRAM; 47 us a 340 KiB block), ~20 GB/s after (17 us); one link averages 15.5 GB/s,
+  the same as expert_slot_copy. So a whole expert lands at 0.76-0.89 ms on a pair, ~1.25 ms through trees, after a
+  light receiver's own work (0.47 ms in P.55a's real chunk, 0.63 here): no copy is on time; the receiver waits.
+  Levers left: more links (detours through free chips, 3-4 directions), copy pieces not waiting for idle rounds,
+  partial replicas (only the blocks a receiver needs before its deadline).
+- Gotchas: metrics.results_dir() outside the gate is generated/bringup_adhoc (the test falls back to the ledger for
+  P.55a's record); a port's waiter stamps live in the persistent exact words, so they describe the last call only.
+- Re-run: `gate P.55b --spec <spec> --check --unit P.55b` (~6.5 min, devjob); `measure --task P.55b`.

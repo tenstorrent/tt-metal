@@ -67,7 +67,8 @@ void set_fill(
         sv.chip,
         *t.out.device(),
         p.fill_call.get(),
-        static_cast<uint32_t>(t.fill_done->buffer()->address()));
+        static_cast<uint32_t>(t.fill_done->buffer()->address()),
+        p.fill_exact);
 }
 
 }  // namespace routed_experts_combine_factory_detail
@@ -100,7 +101,8 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
                 sv.flat.y_writers.size(),
                 p.flat.writers.size());
             sv.chip = ChipCoord{coord[0], coord[1]};
-            sv.combine = add_combine_program(program, *p.plan, sv.chip, mesh_device, bufs, p.flat, p.fill);
+            sv.combine =
+                add_combine_program(program, *p.plan, sv.chip, mesh_device, bufs, p.flat, p.fill, p.fill_exact);
             set_report(program, sv, p, bufs);
             set_fill(program, sv, p, t);
             const ttnn::MeshCoordinateRange r(coord, coord);

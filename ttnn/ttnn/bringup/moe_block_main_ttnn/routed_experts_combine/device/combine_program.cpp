@@ -445,7 +445,8 @@ CombineHandles add_combine_program(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineBuffers& bufs,
     const FlatHandoff& flat,
-    bool fill) {
+    bool fill,
+    bool fill_exact) {
     using namespace combine_program_detail;
     const auto& topo = plan.topo;
     const uint32_t N = topo.num_chips(), L = plan.L, A = plan.A;
@@ -625,8 +626,11 @@ CombineHandles add_combine_program(
         };
         pool_defs(defs);
         if (fill) {  // (MOE_FILL=piggyback: its table and staging slots at the end of the port's arena)
-            const uint32_t off = combine_fill_offset(plan);
+            const uint32_t off = combine_fill_offset(plan, fill_exact);
             defs["REC_FILL"] = "1";
+            if (fill_exact) {
+                defs["REC_FX"] = "1";
+            }
             defs["REC_F_OFF"] = std::to_string(off);
             defs["REC_F_NSTG"] = std::to_string(kFillStages);
             defs["REC_F_CHUNK"] = std::to_string(plan.fill_chunk);
@@ -857,8 +861,8 @@ CombineHandles add_combine_program(
     return h;
 }
 
-uint32_t combine_fill_offset(const CombinePlan& plan) {
-    const uint32_t need = kFillTabBytes + kFillStages * plan.fill_chunk;
+uint32_t combine_fill_offset(const CombinePlan& plan, bool exact) {
+    const uint32_t need = kFillTabBytes + kFillStages * plan.fill_chunk + (exact ? kFxL1 : 0u);
     const uint32_t used = plan.fused ? plan.inj_off + plan.QP * plan.pc.slot : plan.tab_off_port + kTabCbBytes;
     const uint32_t off = (plan.arena_bytes - need) / 64 * 64;
     TT_FATAL(
@@ -877,9 +881,40 @@ void set_combine_fill_args(
     ChipCoord ch,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineFillCall* call,
-    uint32_t done_addr) {
+    uint32_t done_addr,
+    bool exact) {
     const auto& topo = plan.topo;
     const uint32_t me = topo.index(ch);
+    if (exact) {  // (MOE_REPLICAS=exact: every port reads its jobs page; the chip's first port zeroes and waits)
+        TT_FATAL(call != nullptr && call->exact.has_value(), "routed_experts_combine: the exact fill needs its jobs");
+        TT_FATAL(4 * plan.L <= kFxChipPage, "routed_experts_combine: the exact fill has pages for 2 links");
+        const auto& jt = *call->exact;
+        TT_FATAL(
+            jt.dtype() == DataType::UINT32 && jt.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                jt.buffer()->aligned_page_size() == 4 * kFxPageWords && jt.logical_volume() == kFxPages * kFxPageWords,
+            "routed_experts_combine: the exact jobs must be uint32 DRAM rows of {} words, {} a chip",
+            kFxPageWords,
+            kFxPages);
+        const uint32_t tabb = static_cast<uint32_t>(call->runs.buffer()->aligned_page_size());
+        TT_FATAL(tabb <= kFillTabBytes, "routed_experts_combine: a fill run table of {} B > {}", tabb, kFillTabBytes);
+        const auto rx = mesh_device.worker_core_from_logical_core(plan.collector);
+        for (size_t i = 0; i < h.fill_ports.size(); ++i) {
+            const auto& fp = h.fill_ports[i];
+            auto& rt = tt::tt_metal::GetRuntimeArgs(program, fp.kernel, fp.core);
+            uint32_t* w = &rt[fp.index];
+            std::fill(w, w + kFillArgs, 0u);
+            w[0] = static_cast<uint32_t>(call->gu.buffer()->address());
+            w[1] = static_cast<uint32_t>(call->d.buffer()->address());
+            w[2] = static_cast<uint32_t>(call->runs.buffer()->address());
+            w[3] = tabb | (fp.dir * plan.L + fp.li) << 16 | (i == 0 ? 3u << 30 : 0u);
+            w[4] = done_addr;
+            w[5] = static_cast<uint32_t>(jt.buffer()->address());
+            w[6] = static_cast<uint32_t>(rx.x) | static_cast<uint32_t>(rx.y) << 16;
+            w[7] = call->exact_limit;
+            w[8] = kFxChipPage;
+        }
+        return;
+    }
     for (const auto& fp : h.fill_ports) {
         auto& rt = tt::tt_metal::GetRuntimeArgs(program, fp.kernel, fp.core);
         uint32_t* w = &rt[fp.index];
