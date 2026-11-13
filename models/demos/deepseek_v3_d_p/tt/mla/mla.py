@@ -1668,7 +1668,7 @@ class ttMLA:
         the two in step by hand -- a divergence shows up only as a copy/shape failure at runtime.
 
         NOTE ON RESIDENCY: the cache holds one [1, 1, chunk, q_lora_rank] bf16 tensor per distinct
-        offset -- 1.31 MB per entry at 8x4 / chunk 5120 (3.28 MB before the scale moved from Q onto the
+        offset -- 1.31 MB per entry at 8x4 at the production chunk (3.28 MB before the scale moved from Q onto the
         q_a latent; the figures below were measured at that size), freed only with the model. Growth is linear in
         context depth, since an offset is visited once per request and never repeats.
         TtPrefillTransformer builds ONE dict and threads it down, so the layers pay that once. Measured
@@ -1691,7 +1691,7 @@ class ttMLA:
         the sharing stops here.
 
         An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
-        miss and rebuild a 21 MB host tensor ([1, 1, 5120, 1024] fp32; 52 MB in the Q-shaped layout
+        miss and rebuild a 21 MB host tensor ([1, 1, chunk, 1024] fp32; 52 MB in the Q-shaped layout
         it was measured with), which measured 3x slower at long context.
 
         BUILDING THESE AT WARM-UP instead of lazily is the natural next step, and the transformer is

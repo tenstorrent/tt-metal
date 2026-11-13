@@ -93,7 +93,7 @@ global_env:
   PREFILL_MANIFEST: "models/demos/my_model/tt/runners/manifests/my_model.json"
   PREFILL_NUM_LAYERS: "<L>"        # the runner defaults to 61 — pin the real depth
   PREFILL_MAX_SEQ_LEN: "<S>"
-  PREFILL_CHUNK_SIZE: "<C>"        # defaults to 5*1024
+  PREFILL_CHUNK_SIZE: "<C>"        # default: deepseek_v3_d_p/utils/chunk_config.py
   PREFILL_FABRIC_MODE: "2d"
   PREFILL_H2D_SERVICE_ID: "my_prefill"
   PREFILL_NUM_USERS: "4"           # must cover every dst slot: src 0,1 -> dst 2,3

@@ -48,29 +48,34 @@ constexpr uint32_t cb_wtok_id = tt::CBIndex::c_4;
 // c_1 for two tokens of them, else 1 (c_1 holds a single tile). Always divides num_experts.
 constexpr uint32_t weights_per_batch =
     get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 3);
+// Output tiles this core writes per 32-token block: its emb slice. emb_dim_out_tiles is the output row stride.
+constexpr uint32_t slice_out_tiles = get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 4);
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
 void kernel_main() {
     // Runtime arg layout: weight_addr, output_addr,
     //   (if dispatch_table_skip: dispatch_table_addr, indices_addr),
-    //   token_start_idx, num_chunks.
+    //   token_start_idx, num_chunks, out_col_tile_offset.
     uint32_t weight_addr = get_arg_val<uint32_t>(0);
     uint32_t output_addr = get_arg_val<uint32_t>(1);
     uint32_t dispatch_table_addr;
     uint32_t indices_addr;
     uint32_t token_start_idx;
     uint32_t num_chunks;
+    uint32_t out_col_tile_offset;
     if constexpr (use_dispatch_table_skip) {
         dispatch_table_addr = get_arg_val<uint32_t>(2);
         indices_addr = get_arg_val<uint32_t>(3);
         token_start_idx = get_arg_val<uint32_t>(4);
         num_chunks = get_arg_val<uint32_t>(5);
+        out_col_tile_offset = get_arg_val<uint32_t>(6);
     } else {
         dispatch_table_addr = 0;
         indices_addr = 0;
         token_start_idx = get_arg_val<uint32_t>(2);
         num_chunks = get_arg_val<uint32_t>(3);
+        out_col_tile_offset = get_arg_val<uint32_t>(4);
     }
 
     Noc noc;
@@ -211,15 +216,15 @@ void kernel_main() {
         }
 
         // Phase 2: Write output tiles after compute finishes this chunk.
-        // The output CB holds TOKENS_PER_CHUNK * emb_dim_cb_tiles tile-sized pages
+        // The output CB holds TOKENS_PER_CHUNK * emb_dim_cb_tiles tile-sized pages of this core's emb slice
         // (including padding when emb_dim is not 1024-aligned); only the first
-        // emb_dim_out_tiles of them hold real data for this 32-token block.
+        // slice_out_tiles of them hold real data for this 32-token block.
         cb_output.wait_front(cb_output_tiles);
 
         uint32_t tile_row = token_start_idx / TOKENS_PER_CHUNK;
-        uint32_t start_tile_idx = tile_row * emb_dim_out_tiles;
+        uint32_t start_tile_idx = tile_row * emb_dim_out_tiles + out_col_tile_offset;
 
-        for (uint32_t tile_idx = 0; tile_idx < emb_dim_out_tiles; ++tile_idx) {
+        for (uint32_t tile_idx = 0; tile_idx < slice_out_tiles; ++tile_idx) {
             noc.async_write(
                 cb_output,
                 output_addrg,

@@ -47,7 +47,7 @@ def power_class():
 
 
 def probe_tokens(label):
-    """Tokens a probe label stands for ("@5k" -> 5120, "@1M" -> 1048576, "@123" -> 123); -1 if unparsable."""
+    """Tokens a probe label stands for ("@5k" -> 5 * 1024, "@1M" -> 1048576, "@123" -> 123); -1 if unparsable."""
     scale = {"k": 1024, "M": 1048576}.get(label[-1:], 1)
     try:
         return int(label[1 : -1 if scale > 1 else None]) * scale

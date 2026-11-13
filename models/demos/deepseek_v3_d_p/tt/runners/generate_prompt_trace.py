@@ -172,7 +172,7 @@ def write_trace_dir(
     if ref_snapshots is not None:
         # ref_snapshots is [embed, layer_0..layer_{n-1}, norm, lm_head]; layer i is at 1 + i.
         # fp32 like the kv rows above: the snapshots are fp32 and a bf16 golden would put its own
-        # rounding into every PCC (visible on the near-1.0 early layers). Costs ~3 GB at 36L/isl 5120.
+        # rounding into every PCC (visible on the near-1.0 early layers). Costs ~3 GB at 36L for a one-chunk isl.
         n = num_layers if num_layers is not None else len(ref_snapshots) - 3
         (out_dir / "hidden_states").mkdir(parents=True, exist_ok=True)
         for i in range(n):

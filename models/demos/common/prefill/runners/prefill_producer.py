@@ -52,6 +52,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     resolve_trace_dir,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -114,7 +115,7 @@ def _load_env_config(check_budget: bool = True) -> None:
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
-    CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    CHUNK_SIZE = prefill_chunk_tokens()
     # Tokens per forward, a multiple of the chunk size; must match the runner's.
     forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
     assert not check_budget or (

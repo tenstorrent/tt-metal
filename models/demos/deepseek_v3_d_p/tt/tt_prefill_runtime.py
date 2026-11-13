@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.trace_geometry import MTPTraceGeometry
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
+from models.demos.deepseek_v3_d_p.tt.runners import weight_categories
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor, prepare_prefill_mtp_tokens
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
@@ -49,7 +50,7 @@ class TtPrefillRuntimeConfig:
     mesh_shape: tuple = (32, 4)
     # Chunked prefill streams tokens in chunks of `chunk_size`, with `num_users` independent cache
     # slots (user-major batch). The full cache holds num_users * num_layers slots of max_seq_len each.
-    chunk_size: int = PREFILL_CHUNK_TOKENS
+    chunk_size: int = PREFILL_CHUNK_TOKENS  # PREFILL_CHUNK_SIZE, see utils/chunk_config.py
     num_users: int = 2
     sp_axis: int = 0
     tp_axis: int = 1
@@ -64,6 +65,10 @@ class TtPrefillRuntimeConfig:
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
+    # Convert whatever TTNN cache pieces are missing from the HF checkpoint at `hf_model_path` (see
+    # tt/runners/weight_categories.py). False = cache-only: an incomplete cache is an error.
+    build_missing_cache: bool = False
+    hf_model_path: str = ""
     # Route the MoE routing all-gather's global semaphores to L1_SMALL (instead of pinning the main-L1
     # floor and clashing with the next layer's MLA static CBs). Requires the mesh opened with
     # l1_small_size > 0. Enable for Kimi (single expert group, device gate). See TtMoERoutingSetup.
@@ -232,10 +237,14 @@ class TtPrefillRuntime:
             f"chunk_size={self.config.chunk_size}, num_users={self.config.num_users}"
         )
         model_cfg = self.config.model_cfg
+        rebuilding_cache = False
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
             experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
-            if self.MODEL_CLS.check_cache_complete(
+            if self._can_build_missing_cache() and not state_dict:
+                state_dict = self._partial_state_dict_for_missing_cache(experts_per_chip)
+                rebuilding_cache = bool(state_dict)
+            elif self.MODEL_CLS.check_cache_complete(
                 self.config.weight_cache_path,
                 self.config.num_layers,
                 experts_per_chip,
@@ -265,7 +274,12 @@ class TtPrefillRuntime:
                     f"routed_expert_weights_dtype={self.config.routed_expert_weights_dtype}, and no "
                     f"source weights were supplied to rebuild it. Continuing would load uninitialized "
                     f"placeholders as the expert weights. Populate the cache at this dtype first "
-                    f"(run the pretrained smoke test once)."
+                    f"(run the pretrained smoke test once)"
+                    + (
+                        "."
+                        if not self.config.build_missing_cache
+                        else f", or point PREFILL_HF_MODEL at a checkpoint to build it from (got {self.config.hf_model_path!r})."
+                    )
                 )
             else:
                 logger.warning(
@@ -277,6 +291,7 @@ class TtPrefillRuntime:
             if self.config.is_last_rank:
                 self._build_mtp_predictor()
 
+        build_start = time.perf_counter()
         self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,
             config=self.hf_config,
@@ -310,9 +325,54 @@ class TtPrefillRuntime:
             tp_shard_kv=self.config.tp_shard_kv,
         )
         self.model_built = True
+        if rebuilding_cache:
+            logger.warning(
+                f"Weight-cache rebuild complete at {self.config.weight_cache_path} "
+                f"({time.perf_counter() - build_start:.0f}s to convert and build this rank's layers)"
+            )
 
         if self.config.dflash_enabled:
             self._build_dflash_drafter()
+
+    def _can_build_missing_cache(self) -> bool:
+        """The adapter allows building and ``hf_model_path`` holds a checkpoint to build from. Without a checkpoint
+        (e.g. a config-only directory) an incomplete cache stays the plain "cache incomplete" error."""
+        return self.config.build_missing_cache and weight_categories.checkpoint_available(self.config.hf_model_path)
+
+    def _partial_state_dict_for_missing_cache(self, experts_per_chip: int) -> dict:
+        """Check this rank's trunk cache category by category and read the missing, selected ones from the
+        checkpoint. Returns ``{}``
+        (cache-only) when nothing is missing."""
+        cfg = self.config
+        missing = weight_categories.missing_trunk_categories(
+            Path(cfg.weight_cache_path),
+            num_layers=cfg.num_layers,
+            first_layer_idx=cfg.first_layer_idx,
+            experts_per_chip=experts_per_chip,
+            model_cfg=cfg.model_cfg,
+            routed_expert_weights_dtype=cfg.routed_expert_weights_dtype,
+            is_first_rank=cfg.is_first_rank,
+            is_last_rank=cfg.is_last_rank,
+            mtp_levels=cfg.mtp_levels,
+            kv_only_last_layer=cfg.kv_only_last_layer,
+            hf_config=self.hf_config,
+            tp_factor=cfg.mesh_shape[cfg.tp_axis],
+        )
+        if not missing:
+            logger.info(f"TTNN weight cache complete at {cfg.weight_cache_path}; loading from disk")
+            return {}
+        logger.warning(
+            f"TTNN weight cache at {cfg.weight_cache_path} is missing {weight_categories.format_missing(missing)}; "
+            f"building it from the checkpoint at {cfg.hf_model_path}"
+        )
+        return weight_categories.load_trunk_state_dict(
+            cfg.hf_model_path,
+            self.hf_config,
+            cfg.model_cfg,
+            missing=missing,
+            first_layer_idx=cfg.first_layer_idx,
+            num_layers=cfg.num_layers,
+        )
 
     def _build_mtp_predictor(self) -> None:
         """Build this rank's ``TtMTPPredictor``. Last rank only.
@@ -349,12 +409,22 @@ class TtPrefillRuntime:
                 model_cfg=self.config.model_cfg,
             )
             init_checker(eff)
-        assert mtp_cached, (
-            f"MTP weight cache incomplete at {mtp_cache_path}. Building it here would dequantise "
-            f"layer {mtp_cfg.mtp_layer_idx}'s 256 fp8 experts inside the serving process; populate it "
-            "once with tests/mtp_prefill/test_mtp_transformer_chunks.py, or point "
-            "TT_GLM53_MTP_TTNN_CACHE at a populated tree."
-        )
+        mtp_state_dict = {"mtp": {}, "layer": {}}
+        if not mtp_cached:
+            if not self._can_build_missing_cache():
+                raise RuntimeError(
+                    f"MTP weight cache incomplete at {mtp_cache_path}. Building it here would dequantise "
+                    f"layer {mtp_cfg.mtp_layer_idx}'s 256 fp8 experts inside the serving process; populate it "
+                    "once with tests/mtp_prefill/test_mtp_transformer_chunks.py, point "
+                    f"{MTP_CACHE_ENV} at a populated tree."
+                )
+            logger.warning(
+                f"MTP weight cache incomplete at {mtp_cache_path}; building it from {self.config.hf_model_path}"
+            )
+            mtp_cache_path.mkdir(parents=True, exist_ok=True)
+            mtp_state_dict = weight_categories.load_mtp_state_dict(
+                self.config.hf_model_path, self.hf_config, self.config.model_cfg, mtp_cfg.mtp_layer_idx
+            )
 
         logger.info(
             f"Building MTP predictor: num_levels={k}, decode_levels={self.config.mtp_ack_levels}, "
@@ -366,7 +436,7 @@ class TtPrefillRuntime:
             self.mesh_device,
             self.hf_config,
             self.config.model_cfg,
-            {"mtp": {}, "layer": {}},
+            mtp_state_dict,
             mtp_cfg,
             seq_len=self.config.chunk_size,
             num_levels=k,
@@ -974,7 +1044,7 @@ class TtPrefillRuntime:
 
         One shared set for all layers, but linear in max_seq_len. Each offset is [1, 1, chunk_local,
         q_lora_rank] bf16 (the scale is applied to the TP-replicated q_a latent), so the cost is the same
-        at any TP: 1.31 MB/device/offset at chunk 5120 over 8 SP, 25 MiB/device at 102,400.
+        at any TP: 1.31 MB/device/offset at the production chunk over 8 SP, 25 MiB/device at 102,400.
         """
         self._llama4_scale_by_offset = {}
         if self._trace_metadata.llama4_scale is None:

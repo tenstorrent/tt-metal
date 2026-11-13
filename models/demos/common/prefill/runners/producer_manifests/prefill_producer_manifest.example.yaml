@@ -2,8 +2,8 @@ model:
   variant: deepseek_v3_d_p
   num_layers: 61
   max_seq_len: 81920
-  chunk_size: 5120
-  forward_tokens_budget: 5120
+  # chunk_size / forward_tokens_budget default to $PREFILL_CHUNK_SIZE (utils/chunk_config.py); set them here only
+  # to override it.
 
 transport:
   sp: 8
