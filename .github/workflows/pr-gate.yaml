@@ -70,12 +70,11 @@ concurrency:
         || github.ref }}-default
   cancel-in-progress: true
 
+# Least privilege: every job reads the repo only. A job that needs more names it
+# in its own block (a job block replaces this one, and a called workflow cannot
+# ask for more than the calling job grants).
 permissions:
-  contents: write
-  pull-requests: write
-  checks: write
-  packages: write
-  actions: read
+  contents: read
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
@@ -92,7 +91,9 @@ jobs:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     needs: check-harbor
     uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
+    permissions:
+      contents: read
+      packages: write
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: amd64
@@ -132,7 +133,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets: inherit
+    secrets:
+      GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
@@ -199,6 +201,9 @@ jobs:
   verify-time-budgets:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 5
@@ -283,7 +288,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
@@ -304,7 +308,8 @@ jobs:
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
       }}
     uses: ./.github/workflows/smoke.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
     with:
       # Empty on forks, where smoke falls back to downloading the artifact.
       prebuilt-image: ${{ needs.build-runtime-smoke-image.outputs.image }}
@@ -335,7 +340,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
@@ -357,7 +361,8 @@ jobs:
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
       }}
     uses: ./.github/workflows/smoke.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
     with:
       # Empty on forks, where smoke falls back to downloading the artifact.
       prebuilt-image: ${{ needs.build-ttnn-smoke-image.outputs.image }}
@@ -374,7 +379,12 @@ jobs:
           needs.find-changed-files.outputs.docs-changed == 'true' }}
     needs: [find-changed-files, asan-build, build-docker-images]
     uses: ./.github/workflows/docs-latest-public.yaml
-    secrets: inherit
+    permissions:
+      # On push to main the callee's deploy-docs job pushes to gh-pages.
+      contents: write
+      actions: read
+    secrets:
+      DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT: ${{ secrets.DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT }}
     with:
       # build-docs runs on ubuntu-latest (external runner) — no harbor access.
       # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from asan-build.
@@ -394,7 +404,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
@@ -421,7 +430,8 @@ jobs:
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
 
   build-ttnn-examples-image:
     needs: [ asan-build, build-docker-images, find-changed-files ]
@@ -436,7 +446,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
@@ -464,7 +473,8 @@ jobs:
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
@@ -498,7 +508,14 @@ jobs:
         ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group')
       }}
     uses: ./.github/workflows/code-analysis.yaml
-    secrets: inherit
+    permissions:
+      # The callee's clang-tidy jobs declare contents: write and pull-requests: write;
+      # its image build declares packages: write. A smaller grant fails at startup.
+      contents: write
+      pull-requests: write
+      packages: write
+    secrets:
+      GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
     with:
       platform: "Ubuntu 24.04"
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
@@ -610,7 +627,10 @@ jobs:
          needs.find-changed-files.outputs.llk-perf-changed == 'true')
       }}
     uses: ./.github/workflows/llk-smoke-impl.yaml
-    secrets: inherit
+    permissions:
+      contents: read
+      actions: read
+      checks: write
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
       enabled-skus: ALL_SKUS_IN_TESTS
@@ -648,7 +668,9 @@ jobs:
          needs.find-changed-files.outputs.ttsim-ci-changed == 'true')
       }}
     uses: ./.github/workflows/llk-ttsim-pr-gate-impl.yaml
-    secrets: inherit
+    permissions:
+      contents: read
+      checks: write
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
@@ -674,7 +696,9 @@ jobs:
          needs.find-changed-files.outputs.llk-quasar-changed == 'true')
       }}
     uses: ./.github/workflows/llk-hardware-free-impl.yaml
-    secrets: inherit
+    permissions:
+      contents: read
+      checks: write
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
