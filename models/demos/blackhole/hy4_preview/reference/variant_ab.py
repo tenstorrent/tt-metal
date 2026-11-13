@@ -5,6 +5,7 @@ model over a natural-text prompt, N variant streams sharing each layer's weights
 the clearly lowest next-token cross-entropy is the right convention (a wrong convention in any of
 ~77 layers wrecks the language model). Usage: python -m ...variant_ab OUT.json [--layers N]"""
 import json
+import os
 import sys
 import time
 from dataclasses import replace
@@ -30,9 +31,21 @@ VARIANTS = {
     "hc_eps_hc": dict(hc_norm_eps="hc"),
     "no_sink": dict(sink_in_denominator=False),
     "gate_in_raw": dict(attn_gate_in="raw"),
-    "no_clamp": dict(swiglu_clamp=False),
+    "no_clamp": dict(clamp_mode="none"),
     "no_attn_gate": dict(attn_gate_act="none"),
     "no_hc_pre_eps": dict(hc_pre_eps=False),
+}
+
+
+VARIANT_SETS = {
+    "clamp": {
+        "none": dict(clamp_mode="none"),
+        "all": dict(clamp_mode="all"),
+        "routed": dict(clamp_mode="routed"),
+        "shared": dict(clamp_mode="shared"),
+        "gate": dict(clamp_mode="gate"),
+        "up": dict(clamp_mode="up"),
+    }
 }
 
 
@@ -45,8 +58,9 @@ def main():
     tok = Tokenizer.from_file("/mnt/tt-data/Hy4-Preview/tokenizer.json")
     ids = torch.tensor([[120000] + tok.encode(TEXT).ids])
     o = Hy4Oracle()
-    names = list(VARIANTS)
-    convs = [replace(Conv(), **VARIANTS[n]) for n in names]
+    vs = VARIANT_SETS[os.environ["VARIANT_SET"]] if os.environ.get("VARIANT_SET") else VARIANTS
+    names = list(vs)
+    convs = [replace(Conv(), **vs[n]) for n in names]
     x4s = [o.embed_ids(ids) for _ in names]
     sts = [{} for _ in names]
     t = time.time()
@@ -67,9 +81,9 @@ def main():
         hs[n] = (h, hn, lg)
         print(n, res["variants"][n], flush=True)
     if nl == 78:
-        h, hn, lg = hs["base"]
+        h, hn, lg = hs[names[0]]
         for hsrc, cat in (("hc_head", "e_h"), ("normed", "e_h"), ("hc_head", "h_e"), ("normed", "h_e")):
-            c = replace(Conv(), mtp_h_source=hsrc, mtp_cat=cat)
+            c = replace(convs[0], mtp_h_source=hsrc, mtp_cat=cat)
             hh = (h if hsrc == "hc_head" else hn)[:, :-1]
             m = mtp_forward(o.ck, hh, ids[:, 1:], c, embed=o.embed)
             ml = o.logits(m)  # predicts ids[t+2] at position t

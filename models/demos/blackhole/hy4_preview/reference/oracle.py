@@ -22,17 +22,20 @@ class Conv:
 
     rope_interleave: bool = True  # main attention RoPE: adjacent-pair (DeepSeek-V3 HF) vs half-split (neox)
     gate_up: str = "chunk"  # fused expert layout: chunk [gate;up] | interleave | swap
-    swiglu_clamp: bool = True  # clamp(up, +-limit), clamp(gate, max=limit) like DSV4 Expert
-    clamp_dense: bool = False  # also clamp in the layer-0 dense MLP
+    # swiglu_limit handling: all = clamp(up,+-L) and clamp(gate,max=L) in routed+shared experts (DSV4 Expert);
+    # none | routed | shared | gate (gate max only) | up (up +-L only) | all+dense (also layer-0 MLP)
+    clamp_mode: str = "routed"
     attn_gate_in: str = "normed"  # input of linear_gate: normed (sublayer input after input_layernorm) | raw
     attn_gate_act: str = "sigmoid"
     hc_norm_eps: str = "rms"  # eps inside the hc mixes rsqrt: rms (config rms_norm_eps) | hc (hc_eps)
     hc_pre_eps: bool = True  # pre = sigmoid(..) + hc_eps
-    idx_rope_first: bool = True  # indexer RoPE on first 64 of 128 dims (DSV3.2) vs last 64
-    idx_rope_interleave: bool = False  # indexer RoPE half-split (DSV3.2) vs adjacent pair
+    idx_rope_first: bool = (
+        False  # indexer RoPE on first 64 of 128 dims (GLM-DSA) vs last 64 (DSV4): indexer_check says LAST
+    )
+    idx_rope_interleave: bool = True  # indexer RoPE adjacent pair (weak evidence, indexer_check) vs half-split
     idx_ln_eps: float = 1e-6  # indexer k_norm is a LayerNorm with bias
     sink_in_denominator: bool = True  # learnable sink = extra logit column in the softmax, no value
-    mtp_h_source: str = "hc_head"  # hidden fed to MTP: hc_head (pre model.norm) | normed (post model.norm)
+    mtp_h_source: str = "normed"  # hidden fed to MTP: normed (post model.norm; CONFIRMED by variant_ab: agree 0.77 vs 0.0) | hc_head (pre-norm)
     mtp_cat: str = "e_h"  # eh_proj input order: cat(enorm(emb), hnorm(h)) | cat(hnorm(h), enorm(emb))
 
 
@@ -138,7 +141,7 @@ def indexer_topk(h, qr, sd, cfg, conv, cos_i, sin_i):
     return out
 
 
-def attention(h, sd, cfg, conv, topk_idx):
+def attention(h, sd, cfg, conv, topk_idx, probe=None):
     """Gated MLA + sparse selection + learnable sink. h [B,S,D] = input_layernorm(collapsed stream).
     topk_idx [B,S,k] (position ids, -1 = unused) or None for full causal (S <= index_topk)."""
     B, S, D = h.shape
@@ -177,14 +180,16 @@ def attention(h, sd, cfg, conv, topk_idx):
                 p = full.softmax(-1)[..., :S]
             else:
                 p = sc.softmax(-1)
+            if probe is not None:
+                probe(b, s0, s1, p)
             o[b, s0:s1] = torch.einsum("hst,thd->shd", p, v[b])
     o = o.reshape(B, S, H * vd)
     g_in = h if conv.attn_gate_in == "normed" else None
     return o, g_in
 
 
-def attn_block(h, hraw, sd, cfg, conv, topk_idx):
-    o, g_in = attention(h, sd, cfg, conv, topk_idx)
+def attn_block(h, hraw, sd, cfg, conv, topk_idx, probe=None):
+    o, g_in = attention(h, sd, cfg, conv, topk_idx, probe)
     g_in = h if g_in is not None else hraw
     gate = F.linear(g_in, sd["self_attn.linear_gate.weight"])
     gate = torch.sigmoid(gate) if conv.attn_gate_act == "sigmoid" else gate
@@ -192,23 +197,37 @@ def attn_block(h, hraw, sd, cfg, conv, topk_idx):
 
 
 # ---------------------------------------------------------------- MLP / MoE
-def swiglu(gate, up, limit, clamp):
-    if clamp and limit > 0:
-        up = up.clamp(-limit, limit)
-        gate = gate.clamp(max=limit)
+def swiglu(gate, up, limit, mode, site):
+    """site in routed | shared | dense. See Conv.clamp_mode."""
+    on = {
+        "all": site in ("routed", "shared"),
+        "all+dense": True,
+        "routed": site == "routed",
+        "shared": site == "shared",
+        "gate": site in ("routed", "shared"),
+        "up": site in ("routed", "shared"),
+        "none": False,
+    }[mode]
+    if on and limit > 0:
+        if mode != "gate":
+            up = up.clamp(-limit, limit)
+        if mode != "up":
+            gate = gate.clamp(max=limit)
     return F.silu(gate) * up
 
 
 def dense_mlp(h, sd, cfg, conv):
     g = F.linear(h, sd["mlp.gate_proj.weight"])
     u = F.linear(h, sd["mlp.up_proj.weight"])
-    return F.linear(swiglu(g, u, cfg.swiglu_limit, conv.swiglu_clamp and conv.clamp_dense), sd["mlp.down_proj.weight"])
+    return F.linear(swiglu(g, u, cfg.swiglu_limit, conv.clamp_mode, "dense"), sd["mlp.down_proj.weight"])
 
 
 def shared_expert(h, sd, cfg, conv):
     g = F.linear(h, sd["mlp.shared_experts.gate_proj.weight"])
     u = F.linear(h, sd["mlp.shared_experts.up_proj.weight"])
-    return F.linear(swiglu(g, u, cfg.swiglu_limit, conv.swiglu_clamp), sd["mlp.shared_experts.down_proj.weight"])
+    return F.linear(
+        swiglu(g, u, cfg.swiglu_limit, conv.clamp_mode, "shared"), sd["mlp.shared_experts.down_proj.weight"]
+    )
 
 
 def router(x, sd, cfg):
@@ -242,7 +261,7 @@ def moe_multi(ck, layer, hs, sds, cfg, convs):
                 splits[conv.gate_up] = split_gate_up(gu, conv.gate_up)
             wg, wu = splits[conv.gate_up]
             xt = x[tok]
-            a = swiglu(xt @ wg.T, xt @ wu.T, cfg.swiglu_limit, conv.swiglu_clamp)
+            a = swiglu(xt @ wg.T, xt @ wu.T, cfg.swiglu_limit, conv.clamp_mode, "routed")
             y.index_add_(0, tok, (a @ dn.T) * w[tok, slot].unsqueeze(-1))
     outs = []
     for y, x, sd, conv, shp in zip(ys, xs, sds, convs, shapes):

@@ -115,6 +115,7 @@ def main():
         for p, x4 in enumerate(x4s):
             h, hn = o.head(x4, conv)
             lg = o.logits(hn[:, -1:])
+            torch.save({"hc_head": h, "final_normed": hn}, os.path.join(out, f"final_hidden_p{p}.pt"))
             res.append({"last_top5": lg[0, -1].topk(5)[1].tolist(), "last_logits_sha256": sha(lg)})
         json.dump(res, open(os.path.join(out, "final.json"), "w"), indent=1)
 
