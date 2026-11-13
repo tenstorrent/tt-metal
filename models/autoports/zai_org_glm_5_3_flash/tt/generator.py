@@ -2515,7 +2515,8 @@ class Glm53Generator(_ReadinessGenerator):
         # L + K are covered (the check above), so the OwnerBlockMap has mapped them; a rollback releases no block
         row = b.pt_shadow[0] if b.obm is None else b.phys[0]
         sp.set_page_table(row)
-        if getattr(sp, "samples", False):  # GLM53_SPEC_SAMPLED: the verify head's sampler pages for this user
+        if getattr(sp, "samples", False):  # GLM53_SPEC_SAMPLED: the verify head's sampler pages for this user, copied
+            self._write_params(b)  # from its params row: written first (after a prefill only the decode loop had)
             sp.set_sampling({0: L})
         sp.enter(row)
         rec = sp.read()
@@ -2573,7 +2574,8 @@ class Glm53Generator(_ReadinessGenerator):
         rows = [self._spec_row(b, s) for s in bases]  # (an inactive group's row is never read: its positions are -1)
         if hasattr(sp, "set_active"):  # (the KDA masks of the entered groups; a no-op for every group)
             sp.set_active([bases.index(s) for s in slots])
-        if getattr(sp, "samples", False):  # GLM53_SPEC_SAMPLED: the verify head's sampler pages for these users
+        if getattr(sp, "samples", False):  # GLM53_SPEC_SAMPLED: the verify head's sampler pages for these users,
+            self._write_params(b)  # copied from their params rows: written first (else the bases' rows are stale)
             sp.set_sampling({s: int(b.slots[s].seq_len) for s in slots})
         sp.set_page_tables(rows)
         sp.enter(rows)

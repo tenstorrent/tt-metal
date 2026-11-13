@@ -344,12 +344,14 @@ def _first_mismatch(gen, tok, prompt, plain, sids):
     return first, gap
 
 
-def _spec_sampled(gen, backend, mesh_device, tok, prompts, plain_timing, plain_ms, K, sampling) -> None:
+def _spec_sampled(gen, backend, mesh_device, tok, prompts, plains, plain_timing, plain_ms, K, sampling) -> None:
     """GLM53_SPEC_SAMPLED with GLM53_MK_TEMP (the served AgentX traffic: temperature 1.0 / top-p 0.95): the same prompts
     through the speculative step with the SAMPLED verify head (one user, or G on the group bases) after the plain sampled
     run; logs tau per user (committed tokens per step), the accept histogram, the effective tok/s per user against the
     plain sampled step, user 0's text; asserts the step ran, every user got OSL tokens in vocab, and tau >=
-    GLM53_MK_SPEC_MIN_TAU (default 1.0: a draw never commits fewer than the bonus)"""
+    GLM53_MK_SPEC_MIN_TAU (default 1.0: a draw never commits fewer than the bonus). GLM53_MK_SPEC_VS_GREEDY (default 1):
+    then the same prompts greedy through the same step (the sampled head's greedy rows) and, per user, the sampled spec
+    ids and the plain sampled ids must differ from the greedy ids (every user's verify rows draw, not only user 0's)"""
     G = len(prompts)
     souts = gen.generate_batch([list(p) for p in prompts], OSL, sampling=sampling, stop_on_eos=False,
                                enable_trace=True, spec_k=K)  # fmt: skip
@@ -379,6 +381,26 @@ def _spec_sampled(gen, backend, mesh_device, tok, prompts, plain_timing, plain_m
     assert all(0 <= t < vocab for o in souts for t in o), "a sampled spec token outside the vocabulary"
     min_tau = float(os.environ.get("GLM53_MK_SPEC_MIN_TAU", "1.0") or 1.0)
     assert min(taus) >= min_tau, f"tau per user {taus} below the floor {min_tau}"
+    if os.environ.get("GLM53_MK_SPEC_VS_GREEDY", "1") == "0":
+        return
+    gouts = gen.generate_batch([list(p) for p in prompts], OSL, stop_on_eos=False, enable_trace=True, spec_k=K)
+    ttnn.synchronize_device(mesh_device)
+
+    def first_diff(a, b_):
+        return next(
+            (i for i, (x, y) in enumerate(zip(a, b_)) if x != y), None if len(a) == len(b_) else min(len(a), len(b_))
+        )
+
+    spec_d = [first_diff(souts[u], gouts[u]) for u in range(G)]
+    plain_d = [first_diff(plains[u], gouts[u]) for u in range(G)]
+    for u in range(G):
+        logger.info(f"MK_SPEC_SAMPLED_VS_GREEDY user {u} (seed {sampling[u].seed}): sampled spec ids differ from greedy "
+                    f"at {spec_d[u]}, plain sampled at {plain_d[u]}; greedy ids {gouts[u][:16]}")  # fmt: skip
+    logger.info(f"MK_SPEC_SAMPLED_VS_GREEDY: spec {spec_d} plain {plain_d} (None = identical to greedy)")
+    assert all(d is not None for d in plain_d), f"plain sampled users identical to greedy: {plain_d}"
+    assert all(
+        d is not None for d in spec_d
+    ), f"sampled spec users identical to greedy (their rows did not draw): {spec_d}"
 
 
 def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing, plain_ms, K, stop) -> None:
@@ -549,15 +571,20 @@ def test_mk_e2e(mesh_device, monkeypatch):
     logger.info(f"prompt {len(ids)} tokens (ISL target {ISL}; per user {[len(p) for p in prompts]}); OSL {OSL}; "
                 f"cache {B} x {SEQ}; distinct {os.environ.get('GLM53_MK_DISTINCT', '0')}")  # fmt: skip
     # GLM53_MK_TEMP=1.0 (GLM53_MK_TOP_P, GLM53_MK_TOP_K, GLM53_MK_SEED): sampled requests (GLM's generation config is
-    # temperature 1.0 / top-p 0.95, no top-k); one seed for every user, so identical prompts still decode identically;
+    # temperature 1.0 / top-p 0.95, no top-k); one seed for every user, so identical prompts still decode identically
+    # (GLM53_MK_SEED_STEP=1: user u seeds GLM53_MK_SEED + u, distinct RNG streams; with GLM53_MK_DISTINCT=1 prompts);
     # a sampled run decodes the whole OSL (no stop on EOS) so the step time covers OSL tokens
     temp = float(os.environ.get("GLM53_MK_TEMP", "0") or 0)
     sampling, stop = None, True
     if temp > 0:
         top_k = int(os.environ.get("GLM53_MK_TOP_K", "0") or 0)
-        sp = SamplingParams(temperature=temp, top_k=top_k or None, top_p=float(os.environ.get("GLM53_MK_TOP_P", "0.95")),
-                            seed=int(os.environ.get("GLM53_MK_SEED", "1234")))  # fmt: skip
-        sampling, stop = [sp] * live, False
+        seed, seed_step = int(os.environ.get("GLM53_MK_SEED", "1234")), int(
+            os.environ.get("GLM53_MK_SEED_STEP", "0") or 0
+        )
+        top_p = float(os.environ.get("GLM53_MK_TOP_P", "0.95"))
+        sampling = [SamplingParams(temperature=temp, top_k=top_k or None, top_p=top_p, seed=seed + u * seed_step)
+                    for u in range(live)]  # fmt: skip
+        stop = False
     # one call: TTFT = prefill of every user + its first token, decode = the rest (the generator splits its wall at the
     # first predictions: last_batch_timing). A separate TTFT call and decode = (second call - TTFT) / (OSL - 1) put the
     # difference of two prefills into every step: at 1 M context ~0.05 % of a 46 min prefill is ~20 ms per step
@@ -619,7 +646,7 @@ def test_mk_e2e(mesh_device, monkeypatch):
         elif sampling is not None and gen.spec_samples() and live == max(1, G) and mm_in is None:
             # GLM53_SPEC_SAMPLED + GLM53_MK_TEMP: the sampled verify speculates on sampled requests (no ids gate: a draw
             # differs from the plain run's by construction; the distribution is the host Monte Carlo's)
-            _spec_sampled(gen, backend, mesh_device, tok, prompts, timing, step_ms, spec_k, sampling)
+            _spec_sampled(gen, backend, mesh_device, tok, prompts, outs, timing, step_ms, spec_k, sampling)
         elif not G and live == 1 and sampling is None and mm_in is None:
             _spec_ab(gen, backend, mesh_device, tok, prompts[0], outs[0], timing, step_ms, spec_k, stop)
         else:  # (an image prompt never speculates: the MTP-cache prefill embeds token ids, not the feature rows)

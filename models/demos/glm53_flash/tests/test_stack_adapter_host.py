@@ -44,6 +44,7 @@ from loguru import logger
 
 from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     BLOCK_SIZE,
+    SEED_SKIP,
     DecodeIO,
     DecodeOutput,
     Glm53Generator,
@@ -62,6 +63,7 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     spec_verify_masks,
     spec_verify_row_state,
     spec_widths,
+    xoshiro_state,
 )
 from models.autoports.zai_org_glm_5_3_flash.tt.owner_blocks import OwnerBlockMap
 from models.autoports.zai_org_glm_5_3_flash.tt.sampling import SamplingParams
@@ -2162,6 +2164,62 @@ class _MockSpecMultiBackend(_MockSpecBackend):
         return out
 
 
+class _SampledVerifyPages:
+    """the sampled verify head (GLM53_SPEC_SAMPLED) on a spec mock: set_sampling records the verify rows' pages as
+    tt/spec_mtp.py SpecMTP.set_sampling builds them (spec_sampler_pages) from the params rows the generator last wrote
+    (k, p x 1000, temperature x 1000) and the backend's per-slot RNG rows"""
+
+    samples = True
+
+    def set_sampling(self, Ls: dict) -> None:
+        io, n = self.be.io, self.be.max_batch
+        par = torch.zeros(32, 4, dtype=torch.int64)
+        par[:n, 0] = io.k.t.reshape(-1)[:n].to(torch.int64)
+        par[:n, 1] = (io.p.t.reshape(-1)[:n] * 1000).round().to(torch.int64)
+        par[:n, 2] = (io.temp.t.reshape(-1)[:n] * 1000).round().to(torch.int64)
+        groups, slots = int(getattr(self, "groups", 0)), tuple(getattr(self, "slots", (0,)))
+        pages = spec_sampler_pages(self.K, groups, slots, par, self.be.rng_rows(), Ls)
+        self.__dict__.setdefault("pages", []).append((*pages, dict(Ls)))
+
+
+class _SampledRng:
+    """the device sampler's RNG page on a mock backend: a request boundary's seeds row re-seeds each slot's row with
+    xoshiro_state(seed) (SEED_UNSEEDED: a fresh state per slot; SEED_SKIP keeps the row)"""
+
+    def rng_rows(self) -> torch.Tensor:
+        return self.__dict__.setdefault("_rng", torch.zeros(32, 4, dtype=torch.int64))
+
+    def write(self, buf, value):
+        super().write(buf, value)
+        io = getattr(self, "io", None)
+        if io is not None and buf is io.seeds:
+            for s, v in enumerate(torch.as_tensor(value).reshape(-1).tolist()):
+                if v != SEED_SKIP:
+                    self.rng_rows()[s] = torch.tensor(xoshiro_state(v if v >= 0 else (1 << 40) + s))
+
+
+class _MockSpecSampled(_SampledVerifyPages, _MockSpec):
+    pass
+
+
+class _MockSpecMultiSampled(_SampledVerifyPages, _MockSpecMulti):
+    pass
+
+
+class _MockSpecSampledBackend(_SampledRng, _MockSpecBackend):
+    def allocate_decode_io(self, kv):
+        io = super().allocate_decode_io(kv)
+        self.spec = _MockSpecSampled(self, self.K, self.good)
+        return io
+
+
+class _MockSpecMultiSampledBackend(_SampledRng, _MockSpecMultiBackend):
+    def allocate_decode_io(self, kv):
+        io = super().allocate_decode_io(kv)
+        self.spec = _MockSpecMultiSampled(self, self.K, self.G, self.good)
+        return io
+
+
 def _spec_multi_gen(K: int, G: int, mb: int, good=lambda step: 0, seq: int = SEQ):
     backend = _MockSpecMultiBackend(mb, K, G, good)
     gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=mb, max_seq_len=seq)
@@ -2308,6 +2366,31 @@ def test_spec_multi_refusals_and_room(monkeypatch):
     assert b.spec == dict(groups={2: dict(drafts=[7], bonus=6)})
     with expect_error(RuntimeError, "1 records for the 2 groups"):
         gen._spec_apply_groups(b, {2: 12}, recs[1:])
+    # ---- the sampled verify's pages carry EACH user's own params and RNG stream, single-user and G users (device
+    # 11-13, chain_smtp_2: the enter read the params rows before anything had written them after the prefill -- users
+    # 1..G-1 sat on never-written greedy rows and decoded greedy; user 0 inherited the plain run's slot-0 row)
+    for K, G, mb in ((1, 4, 8), (3, 0, B)):
+        backend = _MockSpecMultiSampledBackend(mb, K, G) if G else _MockSpecSampledBackend(mb, K)
+        gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=mb, max_seq_len=SEQ)
+        n = max(1, G)
+        sps = [SamplingParams(temperature=0.5 + 0.25 * u, top_k=3 + u, top_p=0.9 - 0.05 * u, seed=100 + u)
+               for u in range(n)]  # fmt: skip
+        out = gen.generate_batch([_prompt(60 + 7 * u, 3 + u) for u in range(n)], 16, sampling=sps, stop_on_eos=False,
+                                 enable_trace=True, spec_k=K)  # fmt: skip
+        assert gen.spec_samples() and [len(o) for o in out] == [16] * n
+        assert 1 <= backend.spec.counters["enters"] == len(backend.spec.pages)
+        par, rng, Ls = backend.spec.pages[0]
+        bases = list(gen.spec_slots()) if G else [0]
+        assert sorted(Ls) == bases
+        rows = set()
+        for u, s in enumerate(bases):
+            k, p, t = sps[u].device_values()
+            for j in range(K + 1):
+                r = u * (K + 1) + j
+                assert par[r, :3].tolist() == [k, round(p * 1000), round(t * 1000)], (G, u, j, par[r].tolist())
+                assert rng[r].tolist() == spec_verify_row_state(xoshiro_state(100 + u), j, Ls[s]), (G, u, j)
+                rows.add(tuple(rng[r].tolist()))
+        assert len(rows) == n * (K + 1) and par[n * (K + 1) :].abs().sum() == 0  # distinct streams; the rest zeros
     assert "ttnn" not in sys.modules
 
 
