@@ -25,8 +25,9 @@ def _distinct_values(shape, dtype):
     numel = 1
     for s in shape:
         numel *= s
-    # bf16 has 8 bits of mantissa, so keep integers small; use a per-slice permutation instead of a global one.
-    assert shape[-2] <= 256, "keep H <= 256 so values stay exact in bfloat16"
+    # bf16 has 8 bits of mantissa, so integers are only exact up to 256; float32 is exact far beyond any H used here.
+    if dtype == torch.bfloat16:
+        assert shape[-2] <= 256, "keep H <= 256 so values stay exact in bfloat16"
     flat = torch.stack([torch.randperm(shape[-2]) for _ in range(numel // shape[-2])])
     # flat: (numel / H, H) -> place H at dim -2
     lead = list(shape[:-2]) + [shape[-1]]
@@ -149,3 +150,18 @@ def test_argmax_rm_dim_rank_minus_2_preallocated_output(device):
     out = ttnn.argmax(tt_input, dim=-2, keepdim=False, output_tensor=prealloc)
     assert torch.equal(ttnn.to_torch(out).to(torch.int64), expected.to(torch.int64))
     assert torch.equal(ttnn.to_torch(prealloc).to(torch.int64), expected.to(torch.int64))
+
+
+def test_argmax_rm_dim_rank_minus_2_issue_63942_shape(device):
+    """Scaled-down version of the shape reported in #63942: (B, N, C) = (2, 2048, 512) float32, dim=1 (rank-2).
+
+    The report uses B=48; B is reduced for speed, while H=2048 and W=512 (W/32 = 16, i.e. padded tiles) are kept.
+    float32 is required: bfloat16 cannot hold a unique value per row once H > 256.
+    """
+    torch.manual_seed(0)
+    shape = (2, 2048, 512)
+    torch_input = _distinct_values(shape, torch.float32)
+    expected = torch.argmax(torch_input, dim=1, keepdim=False)
+    tt_output, actual = _run(device, torch_input, ttnn.float32, 1, False)
+    assert list(tt_output.shape) == list(expected.shape)
+    assert torch.equal(actual, expected.to(torch.int64))

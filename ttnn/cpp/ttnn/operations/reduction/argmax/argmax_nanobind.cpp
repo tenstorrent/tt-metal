@@ -24,7 +24,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             Keyword args:
                 dim (int, optional): Dim to reduce. ``None`` reduces all elements (ROW_MAJOR input only). Default: ``None``.
                 keepdim (bool, optional): Keep reduced dim. Default: ``False``.
-                sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges) and batch/channel dim reductions. Default: ``None``.
+                sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges), batch/channel dim reductions, and ROW_MAJOR height (rank-2) reductions with W a multiple of 32. Default: ``None``.
                 memory_config (ttnn.MemoryConfig, optional): Output memory (INTERLEAVED DRAM/L1). Default: input's memory_config.
                 output_tensor (ttnn.Tensor, optional): Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: ``None``.
                 enable_secondary_dm (bool, optional): Overrides the ROW_MAJOR last-dim second data movement processor heuristic. ``True`` requires it (raises if L1 cannot hold the buffers), ``False`` disables it, ``None`` follows the heuristic. Default: ``None``.
@@ -41,7 +41,11 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
 
             - **dim = rank-2** (height):
               - BFLOAT16/FLOAT32 only
-              - ROW_MAJOR inputs are internally tilized; this path runs single-core
+              - ROW_MAJOR input with last dim (W) a multiple of 32: multi-core. The input is viewed as
+                ``(..., H, W/32, 32)`` so the reduction runs on the batch/channel path below
+                (output is produced in TILE internally and converted to ROW_MAJOR; ``sub_core_grids`` is supported)
+              - ROW_MAJOR input with W not a multiple of 32: internally tilized; runs single-core
+              - TILE input: single-core
 
             - **0 <= dim < rank-2** (batch/channel dims, rank >= 3):
               - BFLOAT16/FLOAT32 only (integer dtypes not supported)
