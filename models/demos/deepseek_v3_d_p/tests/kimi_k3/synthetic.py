@@ -3,8 +3,8 @@
 
 """Kimi-K3.1 stacks on synthetic weights, with the caches the runner allocates for them.
 
-For the K3.1 checks that need no reference: what the stack wrote (carries stored, rows past a prompt's
-end untouched), that a repeated request is bit-identical, and that a split stack matches the undivided
+For the K3.1 checks that need no reference: what the stack wrote (carries stored, rows past the last
+chunk untouched), that a repeated request is bit-identical, and that a split stack matches the undivided
 one. K3.1 is K3 with Gated DSA on its 24 full-attention layers, run through
 K3's stack; accuracy against vLLM is the golden tests' job (`test_k31_golden.py`, the depth ladder's
 K3.1 rungs).
