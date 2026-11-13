@@ -42,36 +42,11 @@ const tt::tt_metal::experimental::TensorParamName kOutputTensor{"output"};
 constexpr uint32_t kNumInputTiles = 2;
 constexpr uint32_t kNumOutputTiles = 2;
 
-// Offsets the seed by the device ID so each device of a mesh draws a different mask.
-// Single-sourced: used by DropoutMeshWorkloadFactory::create_mesh_workload_artifacts (cache miss) and by
-// override_runtime_arguments (cache hit), which must reproduce the same seed bit-for-bit.
-uint32_t per_device_seed(
-    const DropoutParams& args,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
-    const ttnn::Tensor& input_tensor) {
-    auto* device = input_tensor.device();
-    return args.seed + (mesh_dispatch_coordinate.has_value()
-                            ? tt::tt_metal::internal::get_device(*device, *mesh_dispatch_coordinate)->id()
-                            : device->id());
-}
-
-uint32_t fmix32(uint32_t h) {
-    h ^= h >> 16;
-    h *= 0x85EBCA6Bu;
-    h ^= h >> 13;
-    h *= 0xC2B2AE35u;
-    h ^= h >> 16;
-    return h;
-}
-
-// Every core's SFPU PRNG starts from its own seed, so cores sharing a seed would emit identical masks.
-// Hashed rather than strided: Quasar's init_prng_seed seeds lane i with seed + i * 0x9E3779B9, so a linear
-// per-core stride would make one core's lanes shifted copies of another's. All-ones is the XNOR-LFSR lock-up
-// state and dropout_init passes the seed to init_prng_seed unfiltered.
-// Shared by the cache-miss build and override_runtime_arguments, which must agree bit-for-bit.
-uint32_t per_core_seed(uint32_t seed, uint32_t tile_offset) {
-    const uint32_t core_seed = fmix32(seed ^ fmix32(tile_offset + 0x632BE5ABu));
-    return core_seed == 0xFFFFFFFFu ? 0xFFFFFFFEu : core_seed;
+// Each device's seed offset when each device draws its own mask (use_per_device_seed): its device id, as the seed
+// offset has always been.
+uint32_t device_seed_offset(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const ttnn::MeshCoordinate& coord) {
+    return tt::tt_metal::internal::get_device(mesh_device, coord)->id();
 }
 
 }  // namespace
@@ -203,7 +178,11 @@ inline tt::tt_metal::experimental::KernelSpec create_compute_kernel(
                 },
             },
         .compile_time_args = std::move(compile_time_args),
-        .runtime_arg_schema = {.runtime_arg_names = {"seed"}},
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"tile_offset"},
+                .common_runtime_arg_names = {"seed", "device_seed_offset"},
+            },
         .hw_config =
             ComputeHardwareConfig{
                 .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
@@ -241,6 +220,9 @@ DropoutCoreSplit dropout_core_split(const Tensor& input) {
         num_tiles_per_core_group_2};
 }
 
+// Whether the work split has a second core group (and so a second compute kernel).
+bool has_second_compute_group(const Tensor& input) { return !dropout_core_split(input).core_group_2.ranges().empty(); }
+
 // Per-core slice of the work split.
 struct DropoutCoreWork {
     tt::tt_metal::CoreCoord core;
@@ -277,14 +259,20 @@ void for_each_dropout_core(const DropoutCoreSplit& split, const Fn& fn) {
 inline void assign_per_core_runtime_args(DropoutKernelRunArgs& run_args, const DropoutCoreSplit& split, uint32_t seed) {
     using namespace tt::tt_metal::experimental;
 
+    // Compute kernels: the call's seed and the device seed offset are common (0 here; the mesh factory sets it per
+    // device), the core's first tile is per core.
+    run_args.compute_group_1.common_runtime_arg_values = {{"seed", seed}, {"device_seed_offset", 0u}};
+    if (run_args.compute_group_2.has_value()) {
+        run_args.compute_group_2->common_runtime_arg_values = {{"seed", seed}, {"device_seed_offset", 0u}};
+    }
     for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
-        // Compute kernel: (seed)
-        const uint32_t core_seed = per_core_seed(seed, work.tile_offset);
         if (work.in_group_1) {
-            AddRuntimeArgsForNode(run_args.compute_group_1.runtime_arg_values, work.core, {{"seed", core_seed}});
+            AddRuntimeArgsForNode(
+                run_args.compute_group_1.runtime_arg_values, work.core, {{"tile_offset", work.tile_offset}});
         } else {
             TT_FATAL(run_args.compute_group_2.has_value(), "Core group 2 descriptor should be present");
-            AddRuntimeArgsForNode(run_args.compute_group_2->runtime_arg_values, work.core, {{"seed", core_seed}});
+            AddRuntimeArgsForNode(
+                run_args.compute_group_2->runtime_arg_values, work.core, {{"tile_offset", work.tile_offset}});
         }
 
         // Reader kernel: (number_of_tiles, offset_in_tiles).  src/dst reach the kernels as the input /
@@ -447,22 +435,79 @@ ttnn::device_operation::ProgramArtifacts DropoutProgramFactory::create_program_a
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
+namespace {
+// The cache-hit run args of a dropout program: fresh tensor bindings and the call's seed. The per-core args (tile
+// counts and offsets) derive from the input spec and the compute grid, both fixed for a cache entry, so the values
+// set at the miss are kept. Both DFBs are program-local (not borrowed from a tensor), so there is no DFB address to
+// re-point. `with_base_offset` also lists device_seed_offset = 0 (the mesh factory's base, see below).
+tt::tt_metal::experimental::ProgramRunArgs dropout_hit_run_args(
+    const DropoutParams& operation_attributes,
+    const DropoutInputs& tensor_args,
+    Tensor& tensor_return_value,
+    bool has_compute_group_2,
+    bool with_base_offset) {
+    using namespace tt::tt_metal::experimental;
+    // override_runtime_arguments supersedes the framework's tensor-binding refresh, so both tensor bindings are ours
+    // to re-supply. Each comes from its own tensor, which is what makes the in-place case (input == output, so both
+    // bindings name the same tensor) correct.
+    ProgramRunArgs run_args;
+    run_args.tensor_args.emplace(kInputTensor, tensor_args.input.mesh_tensor());
+    run_args.tensor_args.emplace(kOutputTensor, tensor_return_value.mesh_tensor());
+    for (const auto& kernel : {kComputeGroup1, kComputeGroup2}) {
+        if (kernel == kComputeGroup2 && !has_compute_group_2) {
+            continue;
+        }
+        KernelRunArgs compute_run_args{.kernel = kernel};
+        // `seed` is excluded from the program hash, so the cached program still carries the first miss's seed.
+        compute_run_args.common_runtime_arg_values = {{"seed", operation_attributes.seed}};
+        if (with_base_offset) {
+            compute_run_args.common_runtime_arg_values["device_seed_offset"] = 0u;
+        }
+        run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    }
+    return run_args;
+}
+
+// Each device's seed offset, on every compute kernel of the program.
+std::vector<ttnn::device_operation::DeviceRunArgs> dropout_device_seed_offsets(
+    const ttnn::MeshCoordinateRange& range,
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    bool has_compute_group_2) {
+    using namespace tt::tt_metal::experimental;
+    std::vector<ttnn::device_operation::DeviceRunArgs> per_device;
+    per_device.reserve(range.shape().mesh_size());
+    for (const auto& coord : range) {
+        ProgramRunArgs values;
+        const uint32_t offset = device_seed_offset(mesh_device, coord);
+        values.kernel_run_args.push_back(
+            KernelRunArgs{.kernel = kComputeGroup1, .common_runtime_arg_values = {{"device_seed_offset", offset}}});
+        if (has_compute_group_2) {
+            values.kernel_run_args.push_back(
+                KernelRunArgs{.kernel = kComputeGroup2, .common_runtime_arg_values = {{"device_seed_offset", offset}}});
+        }
+        per_device.push_back({coord, std::move(values)});
+    }
+    return per_device;
+}
+}  // namespace
+
 ttnn::device_operation::MeshWorkloadArtifacts DropoutMeshWorkloadFactory::create_mesh_workload_artifacts(
     const DropoutParams& args,
     const DropoutInputs& tensor_args,
     Tensor& output,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
-    // One program per coordinate: each device's program has its own seed.
+    // One program per range: the devices differ only in their seed offset, set per device on top of base offset 0.
+    const auto& mesh_device = *tensor_args.input.device();
+    const bool has_compute_group_2 = has_second_compute_group(tensor_args.input);
     ttnn::device_operation::MeshWorkloadArtifacts artifacts;
-    for (const auto& coord : tensor_coords.coords()) {
-        DropoutParams effective_args = args;
-        effective_args.seed = per_device_seed(args, coord, tensor_args.input);
-        auto per_coord = DropoutProgramFactory::create_program_artifacts(effective_args, tensor_args, output);
+    for (const auto& range : tensor_coords.ranges()) {
+        auto per_range = DropoutProgramFactory::create_program_artifacts(args, tensor_args, output);
         artifacts.programs.push_back({
-            .range = ttnn::MeshCoordinateRange(coord),
-            .spec = std::move(per_coord.spec),
-            .run_params = std::move(per_coord.run_params),
+            .range = range,
+            .spec = std::move(per_range.spec),
+            .run_params = std::move(per_range.run_params),
+            .per_device_run_params = dropout_device_seed_offsets(range, mesh_device, has_compute_group_2),
         });
     }
     return artifacts;
@@ -472,76 +517,29 @@ tt::tt_metal::experimental::ProgramRunArgs DropoutProgramFactory::override_runti
     const DropoutParams& operation_attributes,
     const DropoutInputs& tensor_args,
     Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    using namespace tt::tt_metal::experimental;
-
-    const auto& input = tensor_args.input;
-
-    // `seed` is excluded from the program hash, so the cached program still carries the first miss's
-    // seed and it must be re-derived here exactly as the selected factory derives it:
-    // DropoutMeshWorkloadFactory offsets it by the dispatch coordinate's device id.
-    const uint32_t seed = operation_attributes.use_per_device_seed
-                              ? per_device_seed(operation_attributes, mesh_dispatch_coordinate, input)
-                              : operation_attributes.seed;
-
-    // override_runtime_arguments supersedes the framework's tensor-binding refresh, so both tensor
-    // bindings are ours to re-supply. Each comes from its own tensor, which is what makes the in-place
-    // case (input == output, so both bindings name the same tensor) correct.
-    ProgramRunArgs run_args;
-    run_args.tensor_args.emplace(kInputTensor, input.mesh_tensor());
-    run_args.tensor_args.emplace(kOutputTensor, tensor_return_value.mesh_tensor());
-
-    // Everything else the build emitted (tile counts/offsets) derives from the input spec and the
-    // compute grid, both fixed on a cache hit; rewritten anyway since the shared walk already has them.
-    // Both DFBs are program-local (not borrowed from a tensor), so there is no DFB address to re-point.
-    const DropoutCoreSplit split = dropout_core_split(input);
-    const bool has_compute_group_2 = !split.core_group_2.ranges().empty();
-    KernelRunArgs reader_run_args{.kernel = kReader};
-    KernelRunArgs writer_run_args{.kernel = kWriter};
-    KernelRunArgs compute_group_1_run_args{.kernel = kComputeGroup1};
-    KernelRunArgs compute_group_2_run_args{.kernel = kComputeGroup2};
-
-    for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
-            work.core,
-            {
-                {"num_tiles", work.num_tiles},
-                {"start_id", work.tile_offset},
-            });
-
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            work.core,
-            {
-                {"num_tiles", work.num_tiles},
-                {"start_id", work.tile_offset},
-            });
-
-        TT_FATAL(work.in_group_1 || has_compute_group_2, "Core group 2 kernel should be present");
-        auto& compute_run_args = work.in_group_1 ? compute_group_1_run_args : compute_group_2_run_args;
-        AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, work.core, {{"seed", per_core_seed(seed, work.tile_offset)}});
-    });
-
-    run_args.kernel_run_args = {
-        std::move(reader_run_args),
-        std::move(writer_run_args),
-        std::move(compute_group_1_run_args),
-    };
-    if (has_compute_group_2) {
-        run_args.kernel_run_args.push_back(std::move(compute_group_2_run_args));
-    }
-    return run_args;
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    return dropout_hit_run_args(
+        operation_attributes,
+        tensor_args,
+        tensor_return_value,
+        has_second_compute_group(tensor_args.input),
+        /*with_base_offset=*/false);
 }
 
-tt::tt_metal::experimental::ProgramRunArgs DropoutMeshWorkloadFactory::override_runtime_arguments(
+ttnn::device_operation::RangeRunArgs DropoutMeshWorkloadFactory::override_runtime_arguments(
     const DropoutParams& operation_attributes,
     const DropoutInputs& tensor_args,
     Tensor& tensor_return_value,
     const ttnn::MeshCoordinateRange& range) {
-    return DropoutProgramFactory::override_runtime_arguments(
-        operation_attributes, tensor_args, tensor_return_value, range.start_coord());
+    // The base lists device_seed_offset (0) on every hit, as the adapter requires of args set per device; it never
+    // changes, and neither do the offsets, so the per-device commands are normally kept across hits (the seed goes by
+    // delta).
+    const bool has_compute_group_2 = has_second_compute_group(tensor_args.input);
+    return {
+        .base = dropout_hit_run_args(
+            operation_attributes, tensor_args, tensor_return_value, has_compute_group_2, /*with_base_offset=*/true),
+        .per_device = dropout_device_seed_offsets(range, *tensor_args.input.device(), has_compute_group_2),
+    };
 }
 
 }  // namespace ttnn::experimental::prim
