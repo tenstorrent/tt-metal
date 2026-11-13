@@ -28,12 +28,18 @@ from helpers.test_variant_parameters import (
     ),
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     math_transpose_faces=[Transpose.No, Transpose.Yes],
+    # Both are derived from the input format; declared as axes so they appear in the
+    # parametrization instead of being computed inside the test body.
+    dest_acc=lambda formats: [dest_acc_for(formats.input_format)],
+    unpack_to_dest=lambda formats: [formats.input_format.is_32_bit()],
 )
 def test_perf_transpose_dest(
     perf_report,
     formats,
     unpack_transpose_faces,
     math_transpose_faces,
+    dest_acc,
+    unpack_to_dest,
 ):
     if formats.input_format != formats.output_format:
         pytest.skip("Prevent mixing INT and FP in math transpose")
@@ -72,8 +78,8 @@ def test_perf_transpose_dest(
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc_for(formats.input_format),
+        unpack_to_dest=unpack_to_dest,
+        dest_acc=dest_acc,
     )
 
     configuration.run(perf_report)
