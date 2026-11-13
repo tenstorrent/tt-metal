@@ -14,6 +14,7 @@
 #include "../dataflow/simple_tls_check_defines.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
+#include "risc_common.h"
 
 uint32_t shared_global = 5;
 uint32_t uninitialized_global;
@@ -43,6 +44,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* signal_addr = (volatile tt_l1_ptr uint32_t*)((uintptr_t)signal_address);
     while (*signal_addr != hartid) {
+        invalidate_l1_cache();  // drop the TRISC's cached copy of the signal word so the next read sees the new value
     }
 
     uint32_t global_start = shared_global;

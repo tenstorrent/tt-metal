@@ -339,11 +339,12 @@ inline void invalidate_cache_all(uint32_t hartid) {
 
 #endif  // ARCH_QUASAR && COMPILE_FOR_DM
 
-// Fallback for Quasar non-DM cores (TRISC) - no cache management needed
+// Quasar non-DM cores (TRISC). The TRISC core has a small read cache of L1 (the low cache in the core RTL). A fence
+// request invalidates it, like the fence in Blackhole's invalidate_l1_cache(). The cache also invalidates itself about
+// once every 128 requests unless CSR_CFG bit 24 is set (see configure_l1_data_cache()), so a poll on L1 without this
+// call only ends because of that timer.
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DM)
-inline __attribute__((always_inline)) void invalidate_l1_cache() {
-    // No-op for non-DM cores on Quasar
-}
+inline __attribute__((always_inline)) void invalidate_l1_cache() { asm volatile("fence" ::: "memory"); }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
 
 #include "api/debug/assert.h"
