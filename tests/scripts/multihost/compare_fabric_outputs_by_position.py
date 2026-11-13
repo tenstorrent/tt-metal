@@ -10,11 +10,9 @@ asic_id and UMD chip ids are numbering, so they are not compared:
   - asic_to_fabric_node_mapping_rank_<r>_of_<n>: per rank, (hostname, tray_id, asic_location) -> fabric node.
   - physical_chip_mesh_coordinate_mapping_<r>_of_<n>: per rank, the set of mesh coordinates. Each one is
     chip_to_coordinate(fabric node), keyed by a process-local UMD chip id.
-  - intermesh_port_assignment_rank_<r>_of_<n>: compared as text. With --ignore-intermesh-channels, the
-    ethernet channel numbers are dropped first: where a chip pair has more cables than are assigned, which
-    channels are picked follows the ASIC ids.
+  - intermesh_port_assignment_rank_<r>_of_<n>: compared as text.
 
-usage: compare_fabric_outputs_by_position.py [--ignore-intermesh-channels] <generated/fabric a> <generated/fabric b>
+usage: compare_fabric_outputs_by_position.py <generated/fabric a> <generated/fabric b>
 """
 
 import argparse
@@ -50,11 +48,6 @@ def coordinates(path):
     return sorted(tuple(c) for c in (yaml.load(path.read_text(), Loader=LOADER)["chips"] or {}).values())
 
 
-def ports(path, ignore_channels):
-    text = path.read_text()
-    return re.sub(r"ch\d+", "ch", text) if ignore_channels else text
-
-
 def compare(name, a_files, b_files, load):
     if a_files.keys() != b_files.keys():
         print(f"{name}: rank files differ: {sorted(a_files)} vs {sorted(b_files)}")
@@ -69,7 +62,6 @@ def compare(name, a_files, b_files, load):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--ignore-intermesh-channels", action="store_true")
     parser.add_argument("a", type=pathlib.Path)
     parser.add_argument("b", type=pathlib.Path)
     args = parser.parse_args()
@@ -90,7 +82,7 @@ def main():
         "intermesh_port_assignment",
         per_rank_files(args.a, "intermesh_port_assignment_rank_"),
         per_rank_files(args.b, "intermesh_port_assignment_rank_"),
-        lambda path: ports(path, args.ignore_intermesh_channels),
+        lambda path: path.read_text(),
     )
     print(f"{args.a} vs {args.b}: {'match by physical position' if ok else 'MISMATCH'}")
     return 0 if ok else 1

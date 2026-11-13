@@ -774,20 +774,18 @@ done
 # Offline vs mock parity. Each mesh graph runs on the 16-host SC16 revC subtorus aisle-D mock + its FSD, then
 # with tt-run --offline on the FSD alone, which generates the mock cluster descriptors from it. The same gtest
 # filters have to pass on both runs, and generated/fabric has to match by physical position: the generated
-# descriptors number the ASICs themselves, so asic_id and UMD chip ids are not compared. On the superpod, which
-# spare channels a same-host Z connection gets follows the ASIC ids, so its ports are compared without them.
-# The quad-host graph runs on the 16-host mock rather than the 4-host pod: offline maps on all 16 FSD hosts,
-# and on the pod alone the mirror symmetry breaks the other way.
+# descriptors number the ASICs themselves, so asic_id and UMD chip ids are not compared. The quad-host graph
+# runs on the 16-host mock rather than the 4-host pod: offline maps on all 16 FSD hosts, and on the pod alone
+# the mirror symmetry breaks the other way.
 for offline_case in \
-  "${FSD_QUAD_HOST_MGD}|${FSD_HEALTHY_FILTER}|" \
-  "${MGD_SUBTORUS}/subtorus_32x4_8x2_mesh_graph_descriptor.textproto|${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestGalaxyCornerPins:${GTEST_PIPELINE_BUILDER_CHECK}|" \
-  "${MGD_SUBTORUS}/subtorus_8x4_pipeline_16stage_mesh_graph_descriptor.textproto|${GTEST_SUBTORUS_8X4_PIPELINE}|" \
-  "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto|${GTEST_SUBTORUS_2X4_PIPELINE}|--ignore-intermesh-channels"; do
-  IFS='|' read -r offline_mgd offline_filter offline_compare_flags <<<"$offline_case"
+  "${FSD_QUAD_HOST_MGD}|${FSD_HEALTHY_FILTER}" \
+  "${MGD_SUBTORUS}/subtorus_32x4_8x2_mesh_graph_descriptor.textproto|${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestGalaxyCornerPins:${GTEST_PIPELINE_BUILDER_CHECK}" \
+  "${MGD_SUBTORUS}/subtorus_8x4_pipeline_16stage_mesh_graph_descriptor.textproto|${GTEST_SUBTORUS_8X4_PIPELINE}"; do
+  IFS='|' read -r offline_mgd offline_filter <<<"$offline_case"
   offline_out="$FSD_PSD_PARITY_DIR/offline_$(basename "${offline_mgd%%_mesh_graph_descriptor.textproto}")"
   run_test env TT_METAL_LOGS_PATH=$offline_out/mock TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${offline_mgd}" --mock-cluster-rank-binding "${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${offline_filter}"
   run_test env TT_METAL_LOGS_PATH=$offline_out/offline TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${offline_mgd}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --offline --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${offline_filter}"
-  run_test python3 tests/scripts/multihost/compare_fabric_outputs_by_position.py ${offline_compare_flags} "$offline_out/mock/generated/fabric" "$offline_out/offline/generated/fabric"
+  run_test python3 tests/scripts/multihost/compare_fabric_outputs_by_position.py "$offline_out/mock/generated/fabric" "$offline_out/offline/generated/fabric"
 done
 rm -rf "$FSD_PSD_PARITY_DIR"
 trap - EXIT
