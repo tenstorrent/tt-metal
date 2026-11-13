@@ -753,19 +753,6 @@ ProgramDescriptor build_program_descriptor(
     // Per-core staging for one expert's weighted down output. Serial: kOutTilesPerCore tiles,
     // double-buffered. Parallel: shards_per_core * 2 tiles for the reduce ping-pong.
     const uint32_t wtmp_cb_bytes = (parallel_experts ? 1u : 2u) * acc_tiles * out_tile_bytes;
-    // The shared expert's gate_up, K-split: where a group owns one shared I-tile, kSharedSplit cores from
-    // shared_first_local on (non-producers, idle while the router runs) each read and multiply a K-range of its
-    // [K, 2] shard; the first of them, the aggregator, sums the others' 2 partial tiles (written into its cb_wtmp,
-    // counted on sem_shared_part) and runs the SwiGLU. One core alone reads at its own NoC's rate, ~28 GB/s.
-    constexpr uint32_t kSharedSplit = 4;
-    constexpr bool kSharedSplitEnabled = true;
-    const uint32_t shared_split = kSharedSplitEnabled && has_shared && parallel_experts && shared_slots == 1u &&
-                                          cores_per_expert == 2u * kGridY && shared_first_local == num_producers &&
-                                          shared_first_local + kSharedSplit < cores_per_expert &&
-                                          k_tiles % (kSharedSplit * shared_chunk_k) == 0u &&
-                                          (kSharedSplit - 1u) * kOutTilesPerCore * out_tile_bytes <= wtmp_cb_bytes
-                                      ? kSharedSplit
-                                      : 1u;
     // Group-0 reduce scratch: the other (num_expert_groups-1) groups unicast their H-slice here.
     // Allocated on every core so L1 addresses match; unused on non-root groups.
     const uint32_t reduce_cb_bytes =
@@ -839,6 +826,34 @@ ProgramDescriptor build_program_descriptor(
                                                : (uniform_stride ? weight_slot_tiles : weight_slice_tiles);
     const uint32_t down_reserve_tiles =
         split_gate_up ? half_slice_tiles : (uniform_stride ? weight_slot_tiles : down_stride_tiles);
+
+    // The routed gate_up, K-split: each producer's I-tile slice (its [K, 2] gate | up, kParallelGateUpPieces K-pieces)
+    // is read and multiplied half by the producer (local core c, the even column) and half by its partner (local core
+    // cores_per_expert / 2 + c, the odd column of the same row), which sends its 2 partial tiles into the producer's
+    // cb_wtmp (counted on sem_shared_part). Six producers alone, stacked in one column, read the group's 1.1 MB at
+    // 7-23 GB/s each and set the end of phase 1.
+    constexpr uint32_t kRoutedSplit = 2;
+    const uint32_t routed_split =
+        parallel_experts && cores_per_expert == 2u * kGridY && i_shards_per_core == 1u && swiglu_tiles_per_core == 1u &&
+                num_producers < kGridY && parallel_pieces && kParallelGateUpPieces % kRoutedSplit == 0u &&
+                gate_up_k_shards == kParallelGateUpPieces && kOutTilesPerCore * out_tile_bytes <= wtmp_cb_bytes &&
+                (!has_shared || shared_first_local + 2u <= kGridY)
+            ? kRoutedSplit
+            : 1u;
+    // The shared expert's gate_up, K-split: where a group owns one shared I-tile, kSharedSplit cores from
+    // shared_first_local on (non-producers, idle while the router runs) each read and multiply a K-range of its
+    // [K, 2] shard; the first of them, the aggregator, sums the others' 2 partial tiles (written into its cb_wtmp,
+    // counted on sem_shared_part) and runs the SwiGLU. One core alone reads at its own NoC's rate, ~28 GB/s.
+    // With the routed split on, the partners take the odd column, so the shared parts stay in the even one: 2.
+    const uint32_t kSharedSplit = routed_split > 1u ? 2u : 4u;
+    constexpr bool kSharedSplitEnabled = true;
+    const uint32_t shared_split = kSharedSplitEnabled && has_shared && parallel_experts && shared_slots == 1u &&
+                                          cores_per_expert == 2u * kGridY && shared_first_local == num_producers &&
+                                          shared_first_local + kSharedSplit < cores_per_expert &&
+                                          k_tiles % (kSharedSplit * shared_chunk_k) == 0u &&
+                                          (kSharedSplit - 1u) * kOutTilesPerCore * out_tile_bytes <= wtmp_cb_bytes
+                                      ? kSharedSplit
+                                      : 1u;
 
     // Only the current block's down slices can be prefetched: compute consumes them in block order,
     // so going past the block would stall the reader before its next gather.
@@ -957,7 +972,7 @@ ProgramDescriptor build_program_descriptor(
     // sem_shared_part: on a group's shared aggregator, one bump per partial that has landed (see shared_split). Id 10
     // is otherwise only the control core's, outside the grid.
     constexpr uint32_t sem_shared_part_id = 10;
-    if (shared_split > 1u) {
+    if (shared_split > 1u || routed_split > 1u) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sem_shared_part_id,
             .core_type = CoreType::WORKER,
@@ -2022,6 +2037,14 @@ ProgramDescriptor build_program_descriptor(
                     device->worker_core_from_logical_core(CoreCoord{agg_idx / GRID_Y, agg_idx % GRID_Y});
                 writer_args.push_back(static_cast<uint32_t>(agg_noc.x));
                 writer_args.push_back(static_cast<uint32_t>(agg_noc.y));
+                // The routed split's peer: a producer's partner, or a partner's producer (the other column, same row).
+                const uint32_t half = cores_per_expert / 2u;
+                const uint32_t local = parallel_experts ? idx % cores_per_expert : 0u;
+                const uint32_t peer_idx = local < half ? idx + half : idx - half;
+                const auto peer_noc =
+                    device->worker_core_from_logical_core(CoreCoord{peer_idx / GRID_Y, peer_idx % GRID_Y});
+                writer_args.push_back(static_cast<uint32_t>(peer_noc.x));
+                writer_args.push_back(static_cast<uint32_t>(peer_noc.y));
                 writer_desc.emplace_runtime_args(core, writer_args);
             }
         }
@@ -2588,6 +2611,7 @@ ProgramDescriptor build_program_descriptor(
         kernel.defines.emplace_back("FE_SHARED_SPLIT", std::to_string(shared_split) + "u");
         kernel.defines.emplace_back("FE_SEM_SHARED_PART", std::to_string(sem_shared_part_id));
         kernel.defines.emplace_back("FE_CB_WTMP", std::to_string(static_cast<uint32_t>(cb_wtmp)));
+        kernel.defines.emplace_back("FE_ROUTED_SPLIT", std::to_string(routed_split) + "u");
     }
     return desc;
 }

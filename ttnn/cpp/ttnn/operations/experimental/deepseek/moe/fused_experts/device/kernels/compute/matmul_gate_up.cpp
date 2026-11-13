@@ -21,6 +21,10 @@
 #ifndef FE_SHARED_SPLIT
 #define FE_SHARED_SPLIT 1u
 #endif
+// The routed gate_up's K-split (see the program factory's routed_split): 1 = off.
+#ifndef FE_ROUTED_SPLIT
+#define FE_ROUTED_SPLIT 1u
+#endif
 
 // Per-core gate_up matmul + SwiGLU gate + down matmul (runs on every compute core).
 //
@@ -169,10 +173,14 @@ void kernel_main() {
     const bool shared_split_core = FE_SHARED_SPLIT > 1u && shared_tiles == 1u && local_idx >= shared_first_local &&
                                    local_idx < shared_first_local + FE_SHARED_SPLIT;
     const uint32_t shared_part = shared_split_core ? local_idx - shared_first_local : 0u;
+    // FE_ROUTED_SPLIT > 1: producer c multiplies the first K-half of its gate_up slice, its partner (local core
+    // cores_per_expert / 2 + c) the second, whose partial its writer lands in the producer's cb_wtmp.
+    const bool routed_partner =
+        FE_ROUTED_SPLIT > 1u && local_idx >= cores_per_expert / 2u && local_idx < cores_per_expert / 2u + num_producers;
 #if defined(FE_PERSISTENT)
     const bool uses_input = true;
 #else
-    const bool uses_input = swiglu_core || shared_core || shared_split_core;
+    const bool uses_input = swiglu_core || shared_core || shared_split_core || routed_partner;
 #endif
 
     constexpr uint32_t kOutTilesPerCore = 2;
@@ -194,6 +202,9 @@ void kernel_main() {
     constexpr uint32_t kGateUpPieces =
         gate_up_reserve_tiles < kGateUpSliceTiles ? kGateUpSliceTiles / gate_up_reserve_tiles : 1;
     constexpr uint32_t kPieceK = k_tiles / kGateUpPieces;
+    // The K-pieces each of a producer and its partner multiplies (all of them unsplit).
+    constexpr uint32_t kMyPieces = kGateUpPieces / FE_ROUTED_SPLIT;
+    static_assert(FE_ROUTED_SPLIT == 1u || kMyPieces * FE_ROUTED_SPLIT == kGateUpPieces, "whole K-pieces per part");
     // Gate and up then share one DST acquire: 4 fp32 tiles at half sync.
     static_assert(kGateUpPieces == 1 || kShardTileCols <= 4, "a split gate_up slice holds gate and up in DST at once");
 #ifdef FE_CUSTOM_MM
@@ -255,9 +266,9 @@ void kernel_main() {
                         cb_input_id, cb_weights_id, cb_mm_id, kShardTileCols);
                     mm_cb.reserve_back(kShardTileCols);
                     tile_regs_acquire();
-                    for (uint32_t p = 0; p < kGateUpPieces; ++p) {
+                    for (uint32_t p = 0; p < kMyPieces; ++p) {
                         w_cb.wait_front(gate_up_reserve_tiles);
-                        if (p + 1 == kGateUpPieces) {
+                        if (p + 1 == kMyPieces) {
                             custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
                                 cb_input_id, cb_weights_id, p * kPieceK, 0, 0, kPieceK, kShardTileCols);
                         } else {
@@ -282,7 +293,7 @@ void kernel_main() {
                         // gate -> dst n, up -> dst swiglu_tiles + n, summed over the slice's K-pieces as
                         // each one lands.
                         tile_regs_acquire();
-                        for (uint32_t p = 0; p < kGateUpPieces; ++p) {
+                        for (uint32_t p = 0; p < kMyPieces; ++p) {
                             w_cb.wait_front(gate_up_reserve_tiles);
                             for (uint32_t k = 0; k < kPieceK; ++k) {
                                 for (uint32_t n = 0; n < swiglu_tiles; ++n) {
@@ -351,6 +362,15 @@ void kernel_main() {
                     for (uint32_t n = 0; n < kShardTileCols; ++n) {
                         copy_tile(cb_mm_id, n, n);
                     }
+                    if constexpr (FE_ROUTED_SPLIT > 1u) {
+                        // The partner's K-half of gate | up, onto ours.
+                        wtmp_cb.wait_front(kShardTileCols);
+                        reconfig_full_operand_srcb(cb_wtmp_id);
+                        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_wtmp_id);
+                        for (uint32_t n = 0; n < kShardTileCols; ++n) {
+                            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_wtmp_id, n, n);
+                        }
+                    }
                     if constexpr (kScaledAct) {
                         // The group's per-token routing weight, row b = token b's in every column.
                         copy_init(cb_rscalar_id);
@@ -384,8 +404,59 @@ void kernel_main() {
                     tile_regs_release();
 
                     mm_cb.pop_front(kShardTileCols);
+                    if constexpr (FE_ROUTED_SPLIT > 1u) {
+                        wtmp_cb.pop_front(kShardTileCols);
+                    }
                     out_cb.push_back(swiglu_tiles);
                 }
+            }
+            // A routed partner: the second K-half of its producer's slice, as a gate | up partial into cb_wtmp.
+            if (routed_partner) {
+                DeviceZoneScopedN("FE_C_GU_PART");
+                CircularBuffer part_cb(cb_wtmp_id);
+#ifdef FE_CUSTOM_MM
+                reconfig_full_operand(cb_weights_id, cb_input_id);
+                pack_reconfig_data_format(cb_wtmp_id);
+                custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                    cb_input_id, cb_weights_id, cb_wtmp_id, kShardTileCols);
+                part_cb.reserve_back(kShardTileCols);
+                tile_regs_acquire();
+                for (uint32_t p = 0; p < kMyPieces; ++p) {
+                    w_cb.wait_front(gate_up_reserve_tiles);
+                    const uint32_t k0 = (kMyPieces + p) * kPieceK;
+                    if (p + 1 == kMyPieces) {
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                            cb_input_id, cb_weights_id, k0, 0, 0, kPieceK, kShardTileCols);
+                    } else {
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
+                            cb_input_id, cb_weights_id, k0, 0, 0, kPieceK, kShardTileCols);
+                    }
+                    w_cb.pop_front(gate_up_reserve_tiles);
+                }
+#else
+                matmul_init(cb_input_id, cb_weights_id);
+                reconfig_full_operand(cb_weights_id, cb_input_id);
+                pack_reconfig_data_format(cb_wtmp_id);
+                part_cb.reserve_back(kShardTileCols);
+                tile_regs_acquire();
+                for (uint32_t p = 0; p < kMyPieces; ++p) {
+                    w_cb.wait_front(gate_up_reserve_tiles);
+                    const uint32_t k0 = (kMyPieces + p) * kPieceK;
+                    for (uint32_t k = 0; k < kPieceK; ++k) {
+                        for (uint32_t n = 0; n < kShardTileCols; ++n) {
+                            matmul_tiles(cb_input_id, cb_weights_id, k0 + k, k * kShardTileCols + n, n);
+                        }
+                    }
+                    w_cb.pop_front(gate_up_reserve_tiles);
+                }
+#endif
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t n = 0; n < kShardTileCols; ++n) {
+                    pack_tile<true>(n, cb_wtmp_id, n);
+                }
+                tile_regs_release();
+                part_cb.push_back(kShardTileCols);
             }
 
             // Shared expert: one I-tile's gate (dst 0) and up (dst 1), accumulated over the streamed

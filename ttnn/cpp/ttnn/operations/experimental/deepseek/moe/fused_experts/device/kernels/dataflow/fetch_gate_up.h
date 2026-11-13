@@ -110,7 +110,8 @@ inline void fetch_weight_one(
     const WeightArgs& weight_args,
     uint32_t ct_w_addr_base,
     uint32_t k_shards = 1,
-    uint32_t col_shards = 0) {
+    uint32_t col_shards = 0,
+    uint32_t k_shard_first = 0) {
     const uint32_t pieces = reserve_tiles < slice_tiles ? slice_tiles / reserve_tiles : 1u;
     const uint32_t piece_bytes = slice_tiles / pieces * tile_bytes;
     const uint32_t k_shard_bytes = slice_tiles / k_shards * tile_bytes;
@@ -142,7 +143,7 @@ inline void fetch_weight_one(
                 w_shard,
                 CoreLocalMem<uint32_t>(dst),
                 len,
-                {.shard_id = k_shard * col_shards + shard_id, .offset_bytes = offset},
+                {.shard_id = (k_shard_first + k_shard) * col_shards + shard_id, .offset_bytes = offset},
                 {.offset_bytes = b - p * piece_bytes},
                 {.trid = trid});
             b += len;
@@ -560,6 +561,10 @@ constexpr uint32_t kSharedExpertCtArgs = 9;
 #ifndef FE_SHARED_SPLIT
 #define FE_SHARED_SPLIT 1u
 #endif
+// The routed gate_up's K-split (see the program factory's routed_split): 1 = off.
+#ifndef FE_ROUTED_SPLIT
+#define FE_ROUTED_SPLIT 1u
+#endif
 
 struct SharedExpert {
     uint32_t i_tiles;       // shared I-tiles over all groups (0: no shared expert)
@@ -837,20 +842,41 @@ inline void run_reader_loop(
 
         {
             DeviceZoneScopedN("FE_PHASE1_GATE_UP");
+            // FE_ROUTED_SPLIT > 1 (one I-tile per producer, the host checks): the producer reads the first of the
+            // slice's K-halves, its partner in the odd column the second.
+            constexpr uint32_t kSplit = FE_ROUTED_SPLIT;
+            const uint32_t half = cores_per_expert / 2u;
+            const bool routed_partner = kSplit > 1u && local_idx >= half && local_idx < half + num_producers;
             for (uint32_t s = 0; swiglu_core && s < i_shards_per_core; ++s) {
                 fetch_weight_one(
                     noc,
                     cb_bcast_id,
                     cb_weights_id,
                     expert_group,
-                    gate_up_slice_tiles,
+                    gate_up_slice_tiles / kSplit,
                     gate_up_reserve_tiles,
                     gate_up_tile_bytes,
                     local_idx * i_shards_per_core + s,
                     gate_up_args,
                     ct_gu_addr_base,
-                    gate_up_k_shards,
+                    gate_up_k_shards / kSplit,
                     gate_up_col_shards);
+            }
+            if (routed_partner) {
+                fetch_weight_one(
+                    noc,
+                    cb_bcast_id,
+                    cb_weights_id,
+                    expert_group,
+                    gate_up_slice_tiles / kSplit,
+                    gate_up_reserve_tiles,
+                    gate_up_tile_bytes,
+                    local_idx - half,
+                    gate_up_args,
+                    ct_gu_addr_base,
+                    gate_up_k_shards / kSplit,
+                    gate_up_col_shards,
+                    gate_up_k_shards / kSplit);
             }
             if (shared_core && swiglu_core) {
                 fetch_shared_gate_up_tile();
