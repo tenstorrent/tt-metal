@@ -1437,7 +1437,7 @@ PERF_TEST_SCHEMAS = {
 
 PERF_TEST_SCHEMAS_QSR = {
     "perf_eltwise_binary_broadcast_quasar": {
-        "version": 7,
+        "version": 8,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -1475,6 +1475,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "output_num_blocks",
             "output_num_tiles_in_block",
             "output_tile_cnt",
+            "reuse_dest_type",
             "tile_cnt",
             "unpack_to_dest",
         ],
