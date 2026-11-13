@@ -95,10 +95,11 @@ class Gemma4ForCausalLM:
         return result
 
     @classmethod
-    def get_max_tokens_all_users(cls, *, max_num_seqs, **kwargs):
+    def get_max_tokens_all_users(cls, *, max_num_seqs, max_model_len=262144, **kwargs):
         # The shared pool uses one full-attention group and five sliding groups.
         # Each window can straddle nine pages. Reserve both async batches of
         # in-flight prefill tokens globally, in addition to the per-request tails.
+        # The pool is one request of --max-model-len plus those windows, so a shorter context frees DRAM.
         # vLLM checks that one request of the full context fits, and that request also keeps the eight pages of its
         # prompt's cache-hit window (AnchoredSlidingWindowSpec): reserve them once. Many requests holding their
         # windows at once wait for blocks in the scheduler instead of growing the pool.
@@ -107,7 +108,7 @@ class Gemma4ForCausalLM:
             Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
             + (Decoder.SLIDING_WINDOW_PAGES - 1) * Decoder.PAGE_SIZE
         )
-        return 262144 + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
+        return max_model_len + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         pools, kv, scratch = {}, [], {}
