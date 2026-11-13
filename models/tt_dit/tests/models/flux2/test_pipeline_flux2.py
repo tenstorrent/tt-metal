@@ -30,25 +30,25 @@ from .device_params import line_params_flux2, line_params_flux2_klein
 )
 @pytest.mark.parametrize(("width", "height"), [(1024, 1024)])
 @pytest.mark.parametrize(
-    "variant, num_inference_steps, mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, "
+    "variant, num_inference_steps, mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_w_axis, topology, "
     "num_links, is_fsdp, dynamic_load, traced",
     [
         # is_fsdp and dynamic_load are both mandatory for 2x2 -- the 32B transformer, the 24B encoder and the VAE
         # cannot be co-resident on 4 chips.
         ["dev", 12, (2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, False],
-        ["dev", 12, (1, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 1, False, True, False],
+        ["dev", 12, (1, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 1, False, True, False],
         ["dev", 12, (4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 4, True, False, True],
         ["dev", 12, (4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 2, False, False, True],
         ["klein-4B", 4, (2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, True],
         ["klein-4B", 4, (4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 2, False, False, True],
     ],
     ids=[
-        "dev-2x2sp0tp1vaetp1nl2_linear_is_fsdp1",
-        "dev-1x8sp0tp1vaetp1nl1_linear_is_fsdp0",
-        "dev-4x8sp0tp1vaetp0nl4_linear_is_fsdp1",
-        "dev-4x8sp0tp1vaetp0nl2_linear_is_fsdp0",
-        "klein-4B-2x2sp0tp1vaetp1nl2_linear_is_fsdp0",
-        "klein-4B-4x8sp0tp1vaetp0nl2_linear_is_fsdp0",
+        "dev-2x2sp0tp1vaew1nl2_linear_is_fsdp1",
+        "dev-1x8sp0tp1vaew0nl1_linear_is_fsdp0",
+        "dev-4x8sp0tp1vaew0nl4_linear_is_fsdp1",
+        "dev-4x8sp0tp1vaew0nl2_linear_is_fsdp0",
+        "klein-4B-2x2sp0tp1vaew1nl2_linear_is_fsdp0",
+        "klein-4B-4x8sp0tp1vaew0nl2_linear_is_fsdp0",
     ],
     indirect=["mesh_device"],
 )
@@ -62,7 +62,7 @@ def test_pipeline(
     sp_axis: int,
     tp_axis: int,
     encoder_tp_axis: int,
-    vae_tp_axis: int,
+    vae_w_axis: int,
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
@@ -80,9 +80,8 @@ def test_pipeline(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         encoder_tp_axis=encoder_tp_axis,
-        vae_tp_axis=vae_tp_axis,
-        vae_h_axis=1 - vae_tp_axis,
-        vae_w_axis=None,
+        vae_h_axis=1 - vae_w_axis,
+        vae_w_axis=vae_w_axis,
         num_links=num_links,
         topology=topology,
         width=width,
