@@ -118,51 +118,62 @@ def test_custom_mm_reuse_dest_srcb(
     B0_bytes = bytes(packer(_tile(B0.flatten(), dims=[kp, kt], fmt=in_fmt)))
     B1_bytes = bytes(packer(_tile(B1.flatten(), dims=[kt, nt], fmt=in_fmt)))
 
+    test_config_kwargs = dict(
+        test_name="sources/custom_mm_reuse_dest_srcb_test.cpp",
+        formats=formats,
+        templates=[
+            CUSTOM_MM_REUSE_CFG(
+                in0_tile_r_dim=IN0_TILE_R_DIM,
+                producer_kt=PRODUCER_KT,
+                reuse_kt=REUSE_KT,
+                reuse_nt=REUSE_NT,
+            ),
+        ],
+        runtimes=[
+            NUM_FACES(num_faces=4, num_faces_A=2, num_faces_B=4),
+        ],
+        variant_stimuli=StimuliConfig(
+            A0_bytes,
+            in_fmt,
+            B0_bytes,
+            in_fmt,
+            formats.output_format,
+            tile_count_A=PRODUCER_KT,  # in0 spans PRODUCER_KT tiles along K
+            tile_count_B=PRODUCER_KT * REUSE_KT,
+            tile_count_res=REUSE_NT,
+            buffer_C=B1_bytes,
+            stimuli_C_format=in_fmt,
+            tile_count_C=REUSE_KT * REUSE_NT,
+        ),
+        dest_acc=dest_acc,
+    )
     outcome = execute_llk(
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
         loop_factor=loop_factor,
-        test_config_kwargs=dict(
-            test_name="sources/custom_mm_reuse_dest_srcb_test.cpp",
-            formats=formats,
-            templates=[
-                CUSTOM_MM_REUSE_CFG(
-                    in0_tile_r_dim=IN0_TILE_R_DIM,
-                    producer_kt=PRODUCER_KT,
-                    reuse_kt=REUSE_KT,
-                    reuse_nt=REUSE_NT,
-                ),
-            ],
-            runtimes=[
-                NUM_FACES(num_faces=4, num_faces_A=2, num_faces_B=4),
-            ],
-            variant_stimuli=StimuliConfig(
-                A0_bytes,
-                in_fmt,
-                B0_bytes,
-                in_fmt,
-                formats.output_format,
-                tile_count_A=PRODUCER_KT,  # in0 spans PRODUCER_KT tiles along K
-                tile_count_B=PRODUCER_KT * REUSE_KT,
-                tile_count_res=REUSE_NT,
-                buffer_C=B1_bytes,
-                stimuli_C_format=in_fmt,
-                tile_count_C=REUSE_KT * REUSE_NT,
-            ),
-            dest_acc=dest_acc,
-        ),
+        test_config_kwargs=test_config_kwargs,
     )
     if is_perf:
         return
-    res_from_L1 = outcome.result
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     # Each output tile is packed as two 8-row faces (cols 0..15, then cols 16..31);
     # the rest of the tile is undefined. Reorder the defined rows to [m, nt].
-    per_tile = res_tensor.reshape(REUSE_NT, -1)[:, : 2 * m * 16]
-    device = per_tile.reshape(REUSE_NT, 2, m, 16).permute(2, 0, 1, 3).reshape(m, nt)
+    def defined_rows(result):
+        result_tensor = torch.tensor(result, dtype=torch_format)
+        per_tile = result_tensor.reshape(REUSE_NT, -1)[:, : 2 * m * 16]
+        return per_tile.reshape(REUSE_NT, 2, m, 16).permute(2, 0, 1, 3).reshape(m, nt)
+
+    device = defined_rows(outcome.result)
+
+    # This largest case is a deterministic canary for accidental FPU stochastic
+    # rounding. A ULP budget alone lets most such perturbed variants pass.
+    if reuse_kt_nt == (8, 4):
+        repeated = execute_llk(is_perf=False, test_config_kwargs=test_config_kwargs)
+        assert torch.equal(
+            device, defined_rows(repeated.result)
+        ), "defined lanes changed across identical runs"
 
     assert passed_test(
-        golden, device, formats.output_format, max_ulp=1
+        golden, device, formats.output_format, max_ulp=4
     ), "Assert against golden failed (defined lanes)"

@@ -131,14 +131,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t k = 0; k < PRODUCER_KT; ++k)
                 {
-                    _perf_unpack_loop_set_valid<true /* set_a */, true /* set_b */>(1 /* iterations */);
+                    _perf_unpack_stream_set_valid<true /* set_a */, true /* set_b */, PERF_RUN_TYPE>(1 /* iterations */);
                     if constexpr (REUSE_KT > 1)
                     {
-                        _perf_unpack_loop_set_valid<true /* set_a */, false /* set_b */>(REUSE_KT - 1 /* iterations */);
+                        _perf_unpack_stream_set_valid<true /* set_a */, false /* set_b */, PERF_RUN_TYPE>(REUSE_KT - 1 /* iterations */);
                     }
                 }
-                _perf_unpack_loop_set_valid<false /* set_a */, true /* set_b */>(1 /* iterations */);
-                _perf_unpack_loop_set_valid<true /* set_a */, false /* set_b */>(REUSE_OUTPUT_POSTS /* iterations */);
+                _perf_unpack_stream_set_valid<false /* set_a */, true /* set_b */, PERF_RUN_TYPE>(1 /* iterations */);
+                _perf_unpack_stream_set_valid<true /* set_a */, false /* set_b */, PERF_RUN_TYPE>(REUSE_OUTPUT_POSTS /* iterations */);
             }
         }
         else
@@ -209,7 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -217,12 +217,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (REUSE_KT > 1)
                     {
-                        _perf_math_loop_clear_valid<true /* clear_a */, false /* clear_b */>(REUSE_KT - 1 /* iterations */);
+                        _perf_math_stream_clear_valid<true /* clear_a */, false /* clear_b */, PERF_RUN_TYPE>(REUSE_KT - 1 /* iterations */);
                     }
-                    _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(1 /* iterations */);
+                    _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(1 /* iterations */);
                 }
-                _perf_math_loop_clear_valid<true /* clear_a */, false /* clear_b */>(REUSE_OUTPUT_POSTS /* iterations */);
-                _perf_math_loop_clear_valid<false /* clear_a */, true /* clear_b */>(1 /* iterations */);
+                _perf_math_stream_clear_valid<true /* clear_a */, false /* clear_b */, PERF_RUN_TYPE>(REUSE_OUTPUT_POSTS /* iterations */);
+                _perf_math_stream_clear_valid<false /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(1 /* iterations */);
             }
         }
         else
