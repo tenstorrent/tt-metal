@@ -1318,6 +1318,167 @@ TEST_F(CommandListMultiDeviceTest, FailedPerDeviceRunArgsUpdateChangesNothing) {
     }
 }
 
+// The per-device command images are updated by delta, not rebuilt, when only words outside the per-device args
+// change between enqueues and the same per-device values are set again (an op's cache hit with a new hash-excluded
+// arg, such as dropout's seed); a changed base word under a per-device arg rebuilds them.
+TEST_F(CommandListMultiDeviceTest, PerDeviceImagesKeptWhenOnlyOtherWordsChange) {
+    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_images_kept");
+    const MeshCoordinateRange all_devices(mesh_device_->shape());
+    auto& program = workload.get_programs().at(all_devices);
+    auto& cq = mesh_device_->mesh_command_queue(0);
+    set_per_device_values(workload, all_devices);
+    // The first enqueue loads the binaries and stalls differently from later ones: steady state starts after it.
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    auto rebuilds = [&]() -> uint64_t {
+        const auto* per_device = workload.impl().per_device_runtime_args(all_devices);
+        EXPECT_NE(per_device, nullptr);
+        return per_device != nullptr ? per_device->device_images.rebuilds : 0;
+    };
+    const uint64_t before = rebuilds();
+    EXPECT_GT(before, 0u);
+
+    // `address` is a unique runtime arg, outside the images' region: the packed command carries it.
+    for (int round = 0; round < 3; ++round) {
+        const uint32_t address = round % 2 == 0 ? kAddressB : kAddressA;
+        m2::UpdateProgramRunArgs(program, l1_write_address(address));
+        set_per_device_values(workload, all_devices);
+        for (const auto& coord : all_devices) {
+            write_l1(mesh_device_, coord, address, 0);
+        }
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        uint32_t index = 0;
+        for (const auto& coord : all_devices) {
+            EXPECT_EQ(read_l1(mesh_device_, coord, address), expected_value(index++))
+                << "Device coordinate: " << coord << ", round " << round;
+        }
+        EXPECT_EQ(rebuilds(), before) << "round " << round;
+    }
+
+    // The first device has no per-device value: a new base value under the per-device arg rebuilds the images.
+    // (The last round left `address` at kAddressB.)
+    m2::UpdateProgramRunArgs(program, l1_write_value_for_device(kValueB));
+    set_per_device_values(workload, all_devices);
+    for (const auto& coord : all_devices) {
+        write_l1(mesh_device_, coord, kAddressB, 0);
+    }
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    EXPECT_GT(rebuilds(), before);
+    uint32_t index = 0;
+    for (const auto& coord : all_devices) {
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressB), index == 0 ? kValueB : per_device_value(index))
+            << "Device coordinate: " << coord;
+        index++;
+    }
+}
+
+// As above, with the changing word next to the per-device arg, inside the images' region (a common `other` beside
+// the per-device common `value`, like dropout's seed beside its device salt): the delta update copies it into
+// every device's image, with no rebuild.
+TEST_F(CommandListMultiDeviceTest, PerDeviceImagesDeltaInsideRegion) {
+    auto kernel = MakeMinimalGen1DMKernel(kKernelName, DataMovementProcessor::RISCV_0);
+    kernel.source = m2::KernelSpec::SourceCode{R"(
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+void kernel_main() {
+    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg(args::address));
+    out[0] = get_arg(args::value);
+    out[1] = get_arg(args::other);
+}
+)"};
+    kernel.runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value", "other"}};
+    const m2::ProgramSpec spec{
+        .name = "per_device_images_delta",
+        .kernels = {kernel},
+        .work_units = {m2::WorkUnitSpec{
+            .name = "main", .kernels = {m2::KernelSpecName{kKernelName}}, .target_nodes = kNode}},
+    };
+    auto workload = m2::MakeMeshWorkloadFromSpec(*mesh_device_, spec);
+    const MeshCoordinateRange all_devices(mesh_device_->shape());
+    auto& program = workload.get_programs().at(all_devices);
+    auto other_args = [](uint32_t other) {
+        m2::ProgramRunArgs args;
+        args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{kKernelName}, .common_runtime_arg_values = {{"other", other}}}};
+        return args;
+    };
+    m2::ProgramRunArgs args = l1_write_address(kAddressA);
+    args.kernel_run_args[0].common_runtime_arg_values = {{"value", kValueA}, {"other", 0u}};
+    m2::SetProgramRunArgs(program, args);
+    set_per_device_values(workload, all_devices);
+    auto& cq = mesh_device_->mesh_command_queue(0);
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    auto rebuilds = [&]() -> uint64_t {
+        const auto* per_device = workload.impl().per_device_runtime_args(all_devices);
+        EXPECT_NE(per_device, nullptr);
+        return per_device != nullptr ? per_device->device_images.rebuilds : 0;
+    };
+    const uint64_t before = rebuilds();
+    ASSERT_GT(before, 0u) << "the per-device command images must exist for this test to mean anything";
+
+    for (uint32_t round = 0; round < 3; ++round) {
+        const uint32_t other = 900 + round;
+        m2::UpdateProgramRunArgs(program, other_args(other));
+        set_per_device_values(workload, all_devices);
+        for (const auto& coord : all_devices) {
+            write_l1(mesh_device_, coord, kAddressA, 0);
+            write_l1(mesh_device_, coord, kAddressA + sizeof(uint32_t), 0);
+        }
+        EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        uint32_t index = 0;
+        for (const auto& coord : all_devices) {
+            EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), expected_value(index++))
+                << "Device coordinate: " << coord << ", round " << round;
+            EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA + sizeof(uint32_t)), other)
+                << "Device coordinate: " << coord << ", round " << round;
+        }
+        EXPECT_EQ(rebuilds(), before) << "round " << round;
+    }
+}
+
+// A failed first per-device set creates no per-device entry and leaves the program's owner as it was: the checks
+// run before anything changes.
+TEST_F(CommandListMultiDeviceTest, FailedFirstPerDeviceSetTakesNoOwnership) {
+    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_no_owner");
+    const MeshCoordinateRange all_devices(mesh_device_->shape());
+    const auto& program = workload.get_programs().at(all_devices);
+    const uint64_t owner = program.impl().per_device_run_arg_drops().owner;
+    m2::ProgramRunArgs args = l1_write_value_for_device(per_device_value(1));
+    args.kernel_run_args.push_back(m2::ProgramRunArgs::KernelRunArgs{
+        .kernel = m2::KernelSpecName{kKernelName},
+        .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(m2::NodeCoord{5, 5}, {{"address", kAddressB}})});
+    EXPECT_ANY_THROW(m2::SetProgramRunArgsPerDevice(workload, all_devices, *all_devices.begin(), args));
+    EXPECT_FALSE(workload.impl().has_per_device_runtime_args());
+    EXPECT_EQ(program.impl().per_device_run_arg_drops().owner, owner);
+    EXPECT_FALSE(program.impl().tracks_per_device_run_args());
+}
+
+// A per-device arg whose values were all dropped is removed at the next enqueue (with its entry); setting it again
+// adds it back and it applies.
+TEST_F(CommandListMultiDeviceTest, RemovedPerDeviceRunArgCanBeSetAgain) {
+    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_set_removed");
+    const MeshCoordinateRange all_devices(mesh_device_->shape());
+    const auto device = *std::next(all_devices.begin());
+    auto& program = workload.get_programs().at(all_devices);
+    auto& cq = mesh_device_->mesh_command_queue(0);
+    m2::SetProgramRunArgsPerDevice(workload, all_devices, device, l1_write_value_for_device(per_device_value(7)));
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    m2::UpdateProgramRunArgs(program, l1_write_value_for_device(kValueB));
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    EXPECT_EQ(workload.impl().per_device_runtime_args(all_devices), nullptr);
+
+    m2::SetProgramRunArgsPerDevice(workload, all_devices, device, l1_write_value_for_device(per_device_value(8)));
+    for (const auto& coord : all_devices) {
+        write_l1(mesh_device_, coord, kAddressA, 0);
+    }
+    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    for (const auto& coord : all_devices) {
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), coord == device ? per_device_value(8) : kValueB)
+            << "Device coordinate: " << coord;
+    }
+}
+
 TEST_F(CommandListMultiDeviceTest, RejectsParameterUnderPerDeviceRunArg) {
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_overlap");
     const MeshCoordinateRange all_devices(mesh_device_->shape());

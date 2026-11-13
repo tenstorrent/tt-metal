@@ -14,6 +14,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
@@ -96,6 +97,7 @@ protected:
     void rejects_invalid_fields();
     void program_on_sub_range();
     void trace_node_in_several_partitions();
+    void slot_field_removed_then_neighbour_set();
 };
 
 class MeshPerDeviceRuntimeArgsTest : public MeshDeviceFixtureBase, public PerDeviceRuntimeArgsChecks {
@@ -502,6 +504,67 @@ void PerDeviceRuntimeArgsChecks::field_after_kernel_without_args_on_core() {
     }
 }
 
+// One field of a slot is cleared on every device and removed at the next enqueue while its neighbour stays: the slot
+// index forgets it, so words it covered can be taken by another field, and ClearRuntimeArgs found the right field.
+void PerDeviceRuntimeArgsChecks::slot_field_removed_then_neighbour_set() {
+    const MeshCoordinateRange range(mesh_device_->shape());
+    const CoreCoord core{0, 0};
+    const uint32_t results = results_addr();
+    Program program = CreateProgram();
+    const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
+    SetRuntimeArgs(program, kernel, core, default_args(core));
+    SetCommonRuntimeArgs(program, kernel, default_common_args());
+    MeshWorkload workload;
+    workload.add_program(range, std::move(program));
+    auto& cq = mesh_device_->mesh_command_queue();
+
+    // [2, 4) first, so removing it removes a field ahead of one that stays (the removal compacts the field list).
+    uint32_t idx = 0;
+    for (const auto& coord : range) {
+        tt::tt_metal::experimental::SetRuntimeArgs(
+            workload, range, coord, kernel, core, 2, std::vector<uint32_t>{8000 + idx, 8100 + idx});
+        tt::tt_metal::experimental::SetRuntimeArgs(
+            workload, range, coord, kernel, core, 0, std::vector<uint32_t>{7000 + idx, 7100 + idx});
+        idx++;
+    }
+    EnqueueMeshWorkload(cq, workload, false);
+    Finish(cq);
+    // Clear [2, 4) on every device (and a field that does not exist, which changes nothing).
+    for (const auto& coord : range) {
+        tt::tt_metal::experimental::ClearRuntimeArgs(workload, range, coord, kernel, core, 2);
+        tt::tt_metal::experimental::ClearRuntimeArgs(workload, range, coord, kernel, core, 4);
+    }
+    EnqueueMeshWorkload(cq, workload, false);
+    Finish(cq);
+    idx = 0;
+    for (const auto& coord : range) {
+        auto expected = default_args(core);
+        expected[0] = 7000 + idx;
+        expected[1] = 7100 + idx;
+        EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
+        idx++;
+    }
+    // Words [2, 4) are free again: a field at [3, 5) no longer overlaps anything.
+    idx = 0;
+    for (const auto& coord : range) {
+        tt::tt_metal::experimental::SetRuntimeArgs(
+            workload, range, coord, kernel, core, 3, std::vector<uint32_t>{9000 + idx, 9100 + idx});
+        idx++;
+    }
+    EnqueueMeshWorkload(cq, workload, false);
+    Finish(cq);
+    idx = 0;
+    for (const auto& coord : range) {
+        auto expected = default_args(core);
+        expected[0] = 7000 + idx;
+        expected[1] = 7100 + idx;
+        expected[3] = 9000 + idx;
+        expected[4] = 9100 + idx;
+        EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
+        idx++;
+    }
+}
+
 void PerDeviceRuntimeArgsChecks::rejects_invalid_fields() {
     const MeshCoordinateRange range(mesh_device_->shape());
     const CoreCoord core{0, 0};
@@ -529,6 +592,22 @@ void PerDeviceRuntimeArgsChecks::rejects_invalid_fields() {
                 workload, range, coord, kernel, core, 3, std::vector<uint32_t>{1, 2});
         },
         ThrowsMessage<std::runtime_error>(HasSubstr("overlap")));
+    // Adjacent fields are fine; an overlap is found with the field before as well as the one after.
+    tt::tt_metal::experimental::SetRuntimeArgs(workload, range, coord, kernel, core, 0, std::vector<uint32_t>{1, 2});
+    tt::tt_metal::experimental::SetRuntimeArgs(workload, range, coord, kernel, core, 5, std::vector<uint32_t>{1});
+    for (const auto& [first_word, num_words] : std::vector<std::pair<uint32_t, uint32_t>>{{1, 1}, {3, 1}, {4, 2}}) {
+        EXPECT_THAT(
+            [&] {
+                tt::tt_metal::experimental::SetRuntimeArgs(
+                    workload, range, coord, kernel, core, first_word, std::vector<uint32_t>(num_words, 1));
+            },
+            ThrowsMessage<std::runtime_error>(HasSubstr("overlap")))
+            << "words [" << first_word << ", " << first_word + num_words << ")";
+    }
+    tt::tt_metal::experimental::SetRuntimeArgs(workload, range, coord, kernel, core, 4, std::vector<uint32_t>{1});
+    // Clearing a field that is not there changes nothing; clearing one that is drops this device's value.
+    tt::tt_metal::experimental::ClearRuntimeArgs(workload, range, coord, kernel, core, 3);
+    tt::tt_metal::experimental::ClearRuntimeArgs(workload, range, coord, kernel, core, 4);
     // Beyond the program's args.
     EXPECT_THAT(
         [&] {
@@ -666,6 +745,7 @@ TEST_F(MeshPerDeviceRuntimeArgsTest, OwnArgsChangeBetweenEnqueues) { own_args_ch
 TEST_F(MeshPerDeviceRuntimeArgsTest, TraceReplaysCaptureTimeValues) { trace_replays_capture_time_values(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, FieldAfterKernelWithoutArgsOnCore) { field_after_kernel_without_args_on_core(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, RejectsInvalidFields) { rejects_invalid_fields(); }
+TEST_F(MeshPerDeviceRuntimeArgsTest, SlotFieldRemovedThenNeighbourSet) { slot_field_removed_then_neighbour_set(); }
 
 // Slow dispatch writes runtime args per device from the kernels' own storage. Mesh fixtures run in fast dispatch only,
 // so this opens a 1x2 mesh itself when TT_METAL_SLOW_DISPATCH_MODE is set.
@@ -691,6 +771,9 @@ protected:
 TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, UniqueAndCommonFields) { unique_and_common_fields_eager(); }
 TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, BatchedSetterAndClear) { batched_setter_and_clear(); }
 TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, SameValuesKeepVersion) { same_values_keep_version(); }
+TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, SlotFieldRemovedThenNeighbourSet) {
+    slot_field_removed_then_neighbour_set();
+}
 TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, FieldAfterKernelWithoutArgsOnCore) {
     field_after_kernel_without_args_on_core();
 }

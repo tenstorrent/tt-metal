@@ -5,6 +5,9 @@
 #pragma once
 
 #include <optional>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -68,6 +71,25 @@ struct PerDeviceRuntimeArgs {
     uint64_t owner = 0;
     std::vector<std::unique_ptr<PerDeviceRuntimeArgsField>> fields;  // stable while others are added
     uint64_t generation = 0;                                         // bumps when a field is added or removed
+    // The fields of each runtime-arg slot (a kernel's unique args on a core, or its common args when core is nullopt),
+    // sorted by first_word, so finding a field and checking it for overlaps is a hash lookup and a binary search
+    // rather than a scan of every field. Kept in sync with `fields`; snapshots carry no index.
+    struct SlotKey {
+        uint32_t kernel = 0;
+        std::optional<CoreCoord> core;
+        bool operator==(const SlotKey&) const = default;
+    };
+    struct SlotKeyHash {
+        size_t operator()(const SlotKey& key) const noexcept {
+            uint64_t h = static_cast<uint64_t>(key.kernel) << 32;
+            if (key.core.has_value()) {
+                h ^= ((static_cast<uint64_t>(key.core->x) << 16) ^ key.core->y ^ (uint64_t{1} << 31)) *
+                     0x9E3779B97F4A7C15ull;
+            }
+            return std::hash<uint64_t>{}(h);
+        }
+    };
+    std::unordered_map<SlotKey, std::vector<PerDeviceRuntimeArgsField*>, SlotKeyHash> fields_by_slot;
     // The fields resolved against the last command sequence enqueued (see resolve_per_device_runtime_args).
     struct ResolvedCache {
         uint64_t assembly_id = 0;
@@ -96,6 +118,7 @@ struct PerDeviceRuntimeArgs {
         std::vector<uint32_t> snapshot;  // the packed region when the images were last brought up to date
         std::vector<uint8_t> in_field;   // per region word: a field covers it
         std::vector<uint32_t> images;    // [device][words]
+        uint64_t rebuilds = 0;           // times the images were rebuilt rather than updated by delta (tests)
     };
     mutable DeviceImages device_images;
 };
@@ -180,6 +203,18 @@ private:
         uint32_t first_word,
         uint32_t num_words,
         bool metal2 = false);
+    // The program at `program_range` (checked to allow per-device args) and its per-device entry, or null when it has
+    // no fields yet. Creates nothing.
+    std::pair<Program*, PerDeviceRuntimeArgs*> per_device_target(const MeshCoordinateRange& program_range, bool metal2);
+    // Adds a field to the entry of `program_range` (creating the entry for `program`); the caller checked it.
+    PerDeviceRuntimeArgsField& add_per_device_runtime_args_field(
+        Program& program,
+        const MeshCoordinateRange& program_range,
+        KernelHandle kernel,
+        const std::optional<CoreCoord>& core,
+        uint32_t first_word,
+        uint32_t num_words,
+        bool metal2);
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
     // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed before normal finalization.
@@ -226,15 +261,21 @@ public:
         KernelHandle kernel,
         const std::optional<CoreCoord>& core,
         uint32_t first_word);
-    // Metal 2.0 (ProgramSpec) programs: the words of named run args, resolved by
-    // experimental::SetProgramRunArgsPerDevice. Same semantics as the legacy setter.
+    // Metal 2.0 (ProgramSpec) programs: one device's words of several named run args, resolved by
+    // experimental::SetProgramRunArgsPerDevice. Same semantics as the legacy setter, all or nothing: every arg is
+    // checked before any is set, and the program and its per-device entry are looked up once per call.
+    struct NamedArgWords {
+        KernelHandle kernel = 0;
+        std::optional<CoreCoord> core;  // nullopt: common run args
+        uint32_t first_word = 0;
+        uint32_t offset = 0;  // into the call's words
+        uint32_t num_words = 0;
+    };
     void set_per_device_named_runtime_args(
         const MeshCoordinateRange& program_range,
         const MeshCoordinate& device,
-        KernelHandle kernel,
-        const std::optional<CoreCoord>& core,
-        uint32_t first_word,
-        ttsl::Span<const uint32_t> values);
+        ttsl::Span<const NamedArgWords> args,
+        ttsl::Span<const uint32_t> words);
     // The field at (kernel, core, first_word), checking that it may be set: null when it does not exist yet (and may be
     // added). Changes nothing, so a multi-arg set can check every arg before setting any.
     PerDeviceRuntimeArgsField* find_per_device_runtime_args_field(

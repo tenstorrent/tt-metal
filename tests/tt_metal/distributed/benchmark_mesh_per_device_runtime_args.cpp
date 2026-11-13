@@ -14,6 +14,12 @@
 //   values, update "address" (no drop). mode=2: update the 30 args (dropping their per-device values), then set the
 //   same per-device values again on every device. mode=3: only set the same per-device values again (no update).
 // Each iteration enqueues the workload once (non-blocking); the queue is drained outside the timed region.
+// - Setter/...: the per-device setters alone (no enqueue), one device per call, with matched workloads so the legacy
+//   and Metal 2.0 paths set the same words: api=0 legacy experimental::SetRuntimeArgs / SetCommonRuntimeArgs (one
+//   call per field and device), api=1 experimental::SetProgramRunArgsPerDevice (one call per device). kind=0: 30
+//   scalar common args; kind=1: one scalar runtime arg on each of `cores` cores (0: the whole worker grid).
+//   changed=1 alternates between two value sets (changed=0 sets the same values every iteration). The
+//   `per_arg_device` counter is the time per (arg x device).
 
 #include <benchmark/benchmark.h>
 
@@ -23,6 +29,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -31,7 +38,10 @@
 
 #include <cstdint>
 #include <map>
+#include <utility>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -204,6 +214,125 @@ void BM_ProgramPerDevice(benchmark::State& state) {
     run(state, workload);
 }
 
+constexpr uint32_t kSetterCommonArgs = 30;
+constexpr char kSetterKernelSource[] = R"(
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
+void kernel_main() {}
+)";
+
+std::vector<CoreCoord> setter_cores(int64_t count) {
+    const auto grid = mesh_device().compute_with_storage_grid_size();
+    std::vector<CoreCoord> cores;
+    for (uint32_t y = 0; y < grid.y; y++) {
+        for (uint32_t x = 0; x < grid.x; x++) {
+            if (count == 0 || std::cmp_less(cores.size(), count)) {
+                cores.push_back({x, y});
+            }
+        }
+    }
+    return cores;
+}
+
+void BM_Setter(benchmark::State& state) {
+    const bool metal2 = state.range(0) != 0;
+    const bool common = state.range(1) == 0;
+    const auto cores = setter_cores(state.range(2));
+    const bool changed = state.range(3) != 0;
+    const MeshCoordinateRange range(mesh_device().shape());
+    const auto num_devices = static_cast<uint32_t>(range.shape().mesh_size());
+    const auto num_args = static_cast<uint32_t>(common ? kSetterCommonArgs : cores.size());
+    const CoreRangeSet core_set(std::set<CoreRange>(cores.begin(), cores.end()));
+    // Two value sets; changed=1 alternates between them.
+    auto value = [&](uint32_t set, uint32_t device, uint32_t arg) { return 1 + set + 2 * (device * num_args + arg); };
+    uint32_t set = 0;
+    if (metal2) {
+        auto kernel = m2::test_helpers::MakeMinimalGen1DMKernel(kMetal2Kernel, DataMovementProcessor::RISCV_0);
+        kernel.source = m2::KernelSpec::SourceCode{kSetterKernelSource};
+        if (common) {
+            for (uint32_t i = 0; i < kSetterCommonArgs; i++) {
+                kernel.runtime_arg_schema.common_runtime_arg_names.push_back("v" + std::to_string(i));
+            }
+        } else {
+            kernel.runtime_arg_schema.runtime_arg_names = {"seed"};
+        }
+        const m2::ProgramSpec spec{
+            .name = "bench_setter_metal2",
+            .kernels = {kernel},
+            .work_units = {m2::test_helpers::MakeMinimalWorkUnit("main", core_set, {kMetal2Kernel})},
+        };
+        auto workload = m2::MakeMeshWorkloadFromSpec(mesh_device(), spec);
+        auto& program = workload.get_programs().at(range);
+        auto make_args = [&](uint32_t value_set, std::optional<uint32_t> device) {
+            m2::ProgramRunArgs::KernelRunArgs kernel_args{.kernel = m2::KernelSpecName{kMetal2Kernel}};
+            const uint32_t d = device.value_or(0);
+            for (uint32_t i = 0; i < num_args; i++) {
+                const uint32_t v = device.has_value() ? value(value_set, d, i) : 0;
+                if (common) {
+                    kernel_args.common_runtime_arg_values["v" + std::to_string(i)] = v;
+                } else {
+                    m2::AddRuntimeArgsForNode(kernel_args.runtime_arg_values, cores[i], {{"seed", v}});
+                }
+            }
+            m2::ProgramRunArgs args;
+            args.kernel_run_args = {std::move(kernel_args)};
+            return args;
+        };
+        m2::SetProgramRunArgs(program, make_args(0, std::nullopt));
+        std::vector<std::vector<m2::ProgramRunArgs>> per_device(2);
+        for (uint32_t s = 0; s < 2; s++) {
+            for (uint32_t d = 0; d < num_devices; d++) {
+                per_device[s].push_back(make_args(s, d));
+            }
+        }
+        for ([[maybe_unused]] auto _ : state) {
+            uint32_t d = 0;
+            for (const auto& coord : range) {
+                m2::SetProgramRunArgsPerDevice(workload, range, coord, per_device[set][d++]);
+            }
+            set = changed ? set ^ 1 : set;
+        }
+    } else {
+        Program program = CreateProgram();
+        const KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
+            core_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .defines = {{"RESULTS_ADDR", "0"}, {"NUM_RUNTIME_ARGS", "1"}}});
+        if (common) {
+            SetCommonRuntimeArgs(program, kernel, std::vector<uint32_t>(kSetterCommonArgs, 0));
+        } else {
+            for (const auto& core : cores) {
+                SetRuntimeArgs(program, kernel, core, std::vector<uint32_t>{0});
+            }
+        }
+        MeshWorkload workload;
+        workload.add_program(range, std::move(program));
+        for ([[maybe_unused]] auto _ : state) {
+            uint32_t d = 0;
+            for (const auto& coord : range) {
+                for (uint32_t i = 0; i < num_args; i++) {
+                    const uint32_t v = value(set, d, i);
+                    if (common) {
+                        m2::SetCommonRuntimeArgs(workload, range, coord, kernel, i, ttsl::Span<const uint32_t>(&v, 1));
+                    } else {
+                        m2::SetRuntimeArgs(
+                            workload, range, coord, kernel, cores[i], 0, ttsl::Span<const uint32_t>(&v, 1));
+                    }
+                }
+                d++;
+            }
+            set = changed ? set ^ 1 : set;
+        }
+    }
+    state.counters["per_arg_device"] = benchmark::Counter(
+        static_cast<double>(num_args) * num_devices,
+        benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+}
+
 BENCHMARK(BM_OneProgram)
     ->Name("BM_PerDeviceRuntimeArgs/OneProgram")
     ->ArgNames({"fields", "reset"})
@@ -223,6 +352,15 @@ BENCHMARK(BM_Metal2)
     ->Arg(2)
     ->Arg(3)
     ->Iterations(4000)
+    ->Repetitions(3)
+    ->UseRealTime()
+    ->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_Setter)
+    ->Name("BM_PerDeviceRuntimeArgs/Setter")
+    ->ArgNames({"api", "kind", "cores", "changed"})
+    ->ArgsProduct({{0, 1}, {0}, {0}, {0, 1}})
+    ->ArgsProduct({{0, 1}, {1}, {15, 0}, {0, 1}})
+    ->MinTime(0.5)
     ->Repetitions(3)
     ->UseRealTime()
     ->Unit(benchmark::kMicrosecond);
