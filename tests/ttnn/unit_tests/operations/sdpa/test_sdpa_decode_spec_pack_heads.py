@@ -160,13 +160,18 @@ def test_spec_pack_heads_matches_unpacked(device, cid, Tg, NH, groups, bases, k_
 
 
 def test_spec_pack_heads_program_cache(device):
-    """Packed and unpacked are two programs; a second set of tensors of the same shapes (new addresses, new positions)
-    hits both, and the outputs still match."""
-    nb = math.ceil((max(MID) + 4) / BLOCK) + SPARE_BLOCKS
+    """Packed and unpacked are two programs (spec_pack_heads is in the program hash); a second set of tensors of the
+    same shapes (new addresses, new positions) hits both, and the outputs still match."""
+    nb = math.ceil((max(MID) + 4) / BLOCK) + SPARE_BLOCKS + 1  # a cache shape no other test uses
     cfg = _cfg(device, 8, 0)
     first = _Case(device, 4, 3, 8, EDGES, ttnn.bfloat8_b, seed=7, nb=nb)
-    _assert_same_bytes(first.valid_rows(first.call(cfg, False)), first.valid_rows(first.call(cfg, True)), "miss")
+    before = device.num_program_cache_entries()
+    unpacked = first.valid_rows(first.call(cfg, False))
+    after_unpacked = device.num_program_cache_entries()
+    packed = first.valid_rows(first.call(cfg, True))
     entries = device.num_program_cache_entries()
+    assert after_unpacked == before + 1 and entries == after_unpacked + 1, (before, after_unpacked, entries)
+    _assert_same_bytes(unpacked, packed, "miss")
 
     second = _Case(device, 4, 3, 8, MID, ttnn.bfloat8_b, seed=8, nb=nb)
     first.free()
