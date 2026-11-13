@@ -94,13 +94,18 @@ def _manifest_env(name: str) -> dict[str, str]:
 
 
 def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
-    """`kimi_k3_1.json` is `kimi_k3.json` with K3.1's model, user count and kvpe format; nothing else differs.
+    """`kimi_k3_1.json` is `kimi_k3.json` with K3.1's model, user count, kvpe format and stage layout; nothing
+    else differs.
 
-    The mesh (8x4, TP on axis 1) and the PP split are not in either manifest: the runner's defaults and the
-    adapter's AttnRes split boundaries give both models the same 0-23 / 24-47 / 48-71 / 72-92 stages.
+    K3 runs 4x4 stages (two per galaxy, SP=4 on axis 1, 2560-token chunks: its manifest's layout keys). K3.1 is
+    brought up on one 8x4 stage per galaxy and declares no layout, so it takes the runner's defaults (SP=8 on
+    axis 0, TP on axis 1, 5120-token chunks), and the adapter's AttnRes split boundaries give it the
+    0-23 / 24-47 / 48-71 / 72-92 stages.
     """
     k3, k31 = _manifest_env("kimi_k3"), _manifest_env("kimi_k3_1")
-    own = {"PREFILL_MODEL", "PREFILL_NUM_USERS", "PREFILL_SCALED_FP8_KV_CACHE"}
+    layout = {"PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_CHUNK_SIZE"}
+    assert not layout & set(k31), f"K3.1 runs the runner's 8x4 defaults, not {sorted(layout & set(k31))}"
+    own = {"PREFILL_MODEL", "PREFILL_NUM_USERS", "PREFILL_SCALED_FP8_KV_CACHE"} | layout
     assert {k: v for k, v in k31.items() if k not in own} == {k: v for k, v in k3.items() if k not in own}
     assert get_adapter(k31["PREFILL_MODEL"]) is K31
 
