@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import eh_proj_to_tt_layout
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 
 class TtFusedMTP(LightweightModule):
@@ -139,6 +140,7 @@ class TtFusedMTP(LightweightModule):
                 dtype=weights_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
                 cache_file_name=cache_file_name,
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         if eh_proj_weight is not None:

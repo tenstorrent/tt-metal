@@ -22,6 +22,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # DeepSeek 671B RMSNorm dimensions
 EMB_DIM = 7168
@@ -108,6 +109,7 @@ class TtDistributedRmsNorm(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
             cache_file_name=cache_file_name,
+            cache_dump_mode=weight_cache_dump_mode(),
         )
 
         if device is None:

@@ -52,6 +52,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENAB
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import _in0_block_w, _out_subblock
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # Cache-file basenames. Kept as a tuple so check_cache_complete and the writer cannot drift.
 _PROJ_NAMES = ("down_proj", "up_proj")
@@ -211,6 +212,7 @@ class TtLatentMoeProjections(LightweightModule):
                 dtype=weights_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
                 cache_file_name=_cache_name(name),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         # (None, -1): shard OUT features across the TP axis -> column-parallel.

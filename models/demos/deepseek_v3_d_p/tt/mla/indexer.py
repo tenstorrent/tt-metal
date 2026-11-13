@@ -25,6 +25,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
 # module-level INDEXER_WEIGHT_NAMES alias is defined at the bottom of this file for back-compat.
@@ -233,6 +234,7 @@ class TtIndexerBase:
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name(short),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         def shard(
@@ -248,6 +250,7 @@ class TtIndexerBase:
                 memory_config=mem,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
                 cache_file_name=_cache_name(short),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         # wq_b is REPLICATED (all H_idx heads on every chip) so the indexer_score head-sum is COMPLETE
@@ -1225,6 +1228,7 @@ class TtCsaIndexer(TtIndexerBase):
                 memory_config=memory_config,
                 mesh_mapper=mapper,
                 cache_file_name=cache_name(name),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         result = {

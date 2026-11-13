@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     declared_seq_shard_factor,
     is_tp_deduped_kv_cache,
 )
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
@@ -204,6 +205,7 @@ class ttMLA:
                 memory_config=mem,
                 mesh_mapper=mapper,
                 cache_file_name=name,
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         def _wkv_b1():
@@ -239,6 +241,7 @@ class ttMLA:
                     memory_config=mem,
                     mesh_mapper=mapper_tp3,
                     cache_file_name=tp_name if cached else None,
+                    cache_dump_mode=weight_cache_dump_mode(),
                 )
             local = ttnn.mesh_partition(replicated, dim=2, cluster_axis=tp_axis)
             row = ttnn.reshape(local, (1, 1, 1, q_lora_rank // mesh_device.shape[tp_axis]))
@@ -258,6 +261,7 @@ class ttMLA:
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name("kv_a_layernorm"),
+                cache_dump_mode=weight_cache_dump_mode(),
             ),
             "kv_a_proj_with_mqa": ttnn.as_tensor(
                 kv_a_proj,
@@ -267,6 +271,7 @@ class ttMLA:
                 memory_config=mem,
                 mesh_mapper=mapper_tp0,
                 cache_file_name=_cache_name("kv_a_proj_with_mqa"),
+                cache_dump_mode=weight_cache_dump_mode(),
             ),
         }
         if not kv_only:
@@ -280,6 +285,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                         cache_file_name=_cache_name("q_a_layernorm"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "q_a_proj": ttnn.as_tensor(
                         q_a_proj,
@@ -289,6 +295,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
                         cache_file_name=_cache_name("q_a_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "q_b_proj": ttnn.as_tensor(
                         q_b_proj,
@@ -298,6 +305,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
                         cache_file_name=_cache_name("q_b_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "wkv_b1": _wkv_b1(),
                     "wkv_b2": ttnn.as_tensor(
@@ -308,6 +316,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
                         cache_file_name=_cache_name("wkv_b2"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                     "o_proj": ttnn.as_tensor(
                         o_proj,
@@ -317,6 +326,7 @@ class ttMLA:
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
                         cache_file_name=_cache_name("o_proj"),
+                        cache_dump_mode=weight_cache_dump_mode(),
                     ),
                 }
             )
@@ -331,6 +341,7 @@ class ttMLA:
                     memory_config=mem,
                     mesh_mapper=mapper_tp1,
                     cache_file_name=_cache_name("g_proj"),
+                    cache_dump_mode=weight_cache_dump_mode(),
                 )
             if tp_shard_q_a_norm:
                 result["q_a_layernorm_tp"] = _q_a_layernorm_tp(result["q_a_layernorm"])

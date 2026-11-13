@@ -41,6 +41,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import per_rank_cache_dumps
 
 
 @dataclass
@@ -286,12 +287,30 @@ class TtPrefillRuntime:
                     f"TTNN weight cache not complete at {self.config.weight_cache_path}; "
                     f"it will be rebuilt from the supplied weights."
                 )
+        # A multi-stage pipeline builds different layers on every rank, so a cache miss must be written by the rank
+        # that builds it rather than through ttnn's default all-rank gather, which deadlocks when ranks miss different
+        # tensors (see utils/weight_cache_dump.py). Every rank owns a whole host-local mesh here.
+        multi_rank = not (self.config.is_first_rank and self.config.is_last_rank)
+        with per_rank_cache_dumps(enabled=multi_rank):
+            self._build_model_layers(model_cfg, state_dict)
+        self.model_built = True
+        if rebuilding_cache:
+            logger.warning(
+                f"Weight-cache rebuild complete at {self.config.weight_cache_path} "
+                f"({time.perf_counter() - self._build_start:.0f}s to convert and build this rank's layers)"
+            )
+
+        if self.config.dflash_enabled:
+            self._build_dflash_drafter()
+
+    def _build_model_layers(self, model_cfg, state_dict) -> None:
+        """Build the MTP predictor (last rank) and this rank's trunk, writing any missing cache files."""
         if self.config.mtp_levels:
             enable_mtp_indexer_slot(self.hf_config)
             if self.config.is_last_rank:
                 self._build_mtp_predictor()
 
-        build_start = time.perf_counter()
+        self._build_start = time.perf_counter()
         self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,
             config=self.hf_config,
@@ -324,15 +343,6 @@ class TtPrefillRuntime:
             mtp_predictor=self.mtp_predictor,
             tp_shard_kv=self.config.tp_shard_kv,
         )
-        self.model_built = True
-        if rebuilding_cache:
-            logger.warning(
-                f"Weight-cache rebuild complete at {self.config.weight_cache_path} "
-                f"({time.perf_counter() - build_start:.0f}s to convert and build this rank's layers)"
-            )
-
-        if self.config.dflash_enabled:
-            self._build_dflash_drafter()
 
     def _can_build_missing_cache(self) -> bool:
         """The adapter allows building and ``hf_model_path`` holds a checkpoint to build from. Without a checkpoint
