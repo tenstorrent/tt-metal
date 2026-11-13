@@ -32,6 +32,11 @@ constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(3);
 constexpr uint32_t M_block_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t K_block_tiles = get_compile_time_arg_val(5);
 constexpr uint32_t N_block_tiles = get_compile_time_arg_val(6);
+#ifdef AGMM_OUT_PUSH_W
+constexpr uint32_t out_piece_tiles = AGMM_OUT_PUSH_W;  // the compute publishes the output a subblock at a time
+#else
+constexpr uint32_t out_piece_tiles = N_block_tiles;
+#endif
 constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(7);
 constexpr uint32_t in0_tile_size = get_compile_time_arg_val(8);
 constexpr uint32_t out_tile_size = get_compile_time_arg_val(9);
@@ -870,7 +875,7 @@ void kernel_main() {
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
-                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                        write_block_sync_granular<M_block_tiles, N_block_tiles, out_piece_tiles>(
                             noc_obj,
                             std::get<0>(outputs_tuple),
                             out_shape,

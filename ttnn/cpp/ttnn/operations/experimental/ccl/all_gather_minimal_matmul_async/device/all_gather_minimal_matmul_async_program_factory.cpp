@@ -25,6 +25,11 @@
 #include <vector>
 
 namespace {
+// The in1 injector reads a column chunk under one NoC transaction id; keep a chunk's reads within the
+// (NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2 outstanding reads per id that the NoC API allows.
+constexpr uint32_t kMaxReadsPerTransactionId = 128;
+// A block goes in at most this many in1 chunks: each later chunk has its own multicast pipe.
+constexpr uint32_t kMaxIn1Chunks = 3;
 
 // Push order of desc.kernels. The FSDP mux kernel, when present, is last so these stay fixed.
 constexpr uint32_t kIn0SenderKernelIdx = 0;
@@ -484,6 +489,25 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // SwiGLU writes half the N tiles per block (one per gate/up pair); the intermediate
     // still holds the full (2N) block.
     uint32_t out_cb_num_tiles = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;  // single-buffered
+    // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
+    // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // Fabric2D (the KDA Galaxy path): input blocks reach a whole row or column of the matmul grid in one multicast
+    // write instead of hopping core to core. Every other configuration keeps the core-to-core relay.
+    const bool mcast = fabric_2d && !transpose_core_grid;
+    // With multicast, the last K block packs straight to the output over its reloaded FP32 partials (compute.cpp
+    // matmul_blocks<true>): for a plain matmul output (no fused bias, ternary, SwiGLU or activation) with one-tile-high
+    // subblocks and FP32 partials, which unpack to DEST, and whole N blocks of whole subblocks (the output goes out in
+    // subblock pieces).
+    const bool direct_out = mcast && !fuse_swiglu && !use_bias && !use_fused_ternary && !fused_activation.has_value() &&
+                            subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
+                            N_tiles_per_core % N_block_tiles == 0 && N_block_tiles % subblock_w == 0;
+    // With direct output, a core whose only output block is this one has it packed and written a row at a time, so one
+    // row of output buffer is enough; frees M_block - 1 rows of L1 for larger K blocks.
+    if (direct_out && N_blocks_per_core == 1 &&
+        ttnn::experimental::prim::agmm_single_m_block(M_tiles, M_block_tiles, in0_parallel_axis_cores)) {
+        out_cb_num_tiles = N_block_tiles;
+    }
     uint32_t interm_cb_num_tiles = out_block_num_tiles;                                         // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;                                            // not double buffered
 
@@ -517,12 +541,14 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         });
         return id;
     };
-    auto in0_sender_semaphore_id = add_grid_semaphore(INVALID);
-    auto in0_receiver_semaphore_id = add_grid_semaphore(INVALID);
-    auto in0_valid_semaphore_id = add_grid_semaphore(VALID);
-    auto in1_sender_semaphore_id = add_grid_semaphore(INVALID);
-    auto in1_receiver_semaphore_id = add_grid_semaphore(INVALID);
-    auto in1_valid_semaphore_id = add_grid_semaphore(VALID);
+    // The core-to-core relay's handshakes; the multicast pipes replace them (their ids are then unused, 0).
+    auto add_relay_semaphore = [&](uint32_t initial_value) { return mcast ? 0u : add_grid_semaphore(initial_value); };
+    auto in0_sender_semaphore_id = add_relay_semaphore(INVALID);
+    auto in0_receiver_semaphore_id = add_relay_semaphore(INVALID);
+    auto in0_valid_semaphore_id = add_relay_semaphore(VALID);
+    auto in1_sender_semaphore_id = add_relay_semaphore(INVALID);
+    auto in1_receiver_semaphore_id = add_relay_semaphore(INVALID);
+    auto in1_valid_semaphore_id = add_relay_semaphore(VALID);
 
     // Mux termination-sync semaphores. Created ONCE on the full grid so every mux client
     // (master and peers) sees this semaphore at the SAME L1 address — required because peers
@@ -534,7 +560,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Fabric2D: the in0 fabric cores' mux-client semaphores (status, flow control, teardown, buffer index) on the
     // whole grid, so the launch writes them in one multicast rather than one write per fabric core.
     std::optional<std::array<uint32_t, 4>> in0_mux_client_semaphore_ids;
-    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+    if (fabric_2d) {
         in0_mux_client_semaphore_ids = std::array<uint32_t, 4>{
             add_grid_semaphore(0), add_grid_semaphore(0), add_grid_semaphore(0), add_grid_semaphore(0)};
     }
@@ -657,12 +683,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // A mux must sit at the far end of the in0 forwarding chains it serves
     const bool in0_mux_in_column = !single_row_muxes && !transpose_core_grid && (grid_size.x < full_grid_size.x);
     const bool mux_index_on_x = !in0_mux_in_column;
-    // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
-    // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
-    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
-    // Fabric2D (the KDA Galaxy path): input blocks reach a whole row or column of the matmul grid in one multicast
-    // write instead of hopping core to core. Every other configuration keeps the core-to-core relay.
-    const bool mcast = fabric_2d && !transpose_core_grid;
     TT_FATAL(
         (mux_index_on_x ? full_grid_size.x : full_grid_size.y) >= num_mux_cores,
         "There are not enough cores along the mux axis ({}) for the number of mux cores requested ({})",
@@ -781,6 +801,10 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
     std::map<std::string, std::string> defines;
+    if (direct_out) {
+        // The compute publishes the output a subblock at a time; the output writers take it in those pieces.
+        defines["AGMM_OUT_PUSH_W"] = std::to_string(subblock_w);
+    }
     std::map<std::string, std::string> in0_defines;
     std::map<std::string, std::string> in0_injector_defines;
     std::map<std::string, std::string> in0_fabric_defines;
@@ -827,6 +851,24 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 
     if (mcast) {
         defines["AGMM_MCAST"] = "1";
+    }
+    // in1 in column chunks: the injector multicasts each K block chunk by chunk (the first chunk in the in1_mcast
+    // round, each later one on its own pipe) and the compute starts on the first chunk while the rest is in flight.
+    // For one full N block per core (the chunk-major layout assumes it). A chunk is the widest whole number of
+    // subblocks that divides the block in two or three chunks and whose reads fit one transaction id: each chunk costs
+    // a multicast and a flag, so a few wide chunks beat many narrow ones.
+    uint32_t in1_chunk_w = 0;
+    if (mcast && N_blocks_per_core == 1 && N_tiles_per_core == N_block_tiles) {
+        for (uint32_t w = subblock_w; 2 * w <= N_block_tiles; w += subblock_w) {
+            if (N_block_tiles % w == 0 && N_block_tiles / w <= kMaxIn1Chunks &&
+                w * K_block_tiles <= kMaxReadsPerTransactionId) {
+                in1_chunk_w = w;
+            }
+        }
+    }
+    if (in1_chunk_w) {
+        defines["AGMM_IN1_CHUNK_W"] = std::to_string(in1_chunk_w);
+        defines["AGMM_IN1_CHUNKS"] = std::to_string(N_block_tiles / in1_chunk_w);
     }
     if (fabric_2d) {
         defines["FABRIC_2D"] = "1";
@@ -1203,6 +1245,14 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in1_receiver_compile_time_args,
         in1_defines);
 
+    // Blackhole, full 32x32 tiles: one MOP run walks a whole reuse row of the subblock (row_mop of
+    // matmul_block_init / matmul_block_k, api/compute/matmul.h).
+    const auto full_tile = [](const tt::tt_metal::Tile& tile) {
+        return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    };
+    const bool row_mop = device->arch() == tt::ARCH::BLACKHOLE && full_tile(input_tensor.tensor_spec().tile()) &&
+                         full_tile(weight_tensor.tensor_spec().tile());
+
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks,
         M_block_tiles,
@@ -1214,6 +1264,15 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_parallel_axis_cores};
 
     auto compute_defines = defines;
+    if (mcast && row_mop) {
+        compute_defines["AGMM_ROW_MOP"] = "1";
+    }
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (direct_out) {
+        compute_defines["AGMM_DIRECT_OUT"] = "1";
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[tt::CBIndex::c_3] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     if (topology == ttnn::ccl::Topology::Linear) {
         compute_defines["IS_LINEAR"] = "1";
     }
@@ -1239,6 +1298,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
         };
         desc.kernels.push_back(std::move(compute_kernel));
@@ -1756,6 +1816,19 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 2> in1_targets{
             desc.kernels[kIn1SenderKernelIdx], desc.kernels[kIn1ReceiverKernelIdx]};
         in1_mcast.attach(desc, "in1_mcast", in1_targets, next_semaphore_id);
+        uint32_t mcast_semaphore_id = in1_mcast.next_semaphore_id();
+        // A block's later column chunks: one pipe each, no handshake (the first chunk's covers the block).
+        for (uint32_t c = 1; in1_chunk_w && c < N_block_tiles / in1_chunk_w; c++) {
+            ttnn::kernel_lib::host::Mcast in1_chunk_mcast(
+                *device,
+                ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .handshake = false},
+                tt::tt_metal::CoreRangeSet(core_grid),
+                grid_size.y,
+                ttnn::kernel_lib::host::McastFixedSenderConfig{},
+                ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
+            in1_chunk_mcast.attach(desc, fmt::format("in1_chunk{}_mcast", c), in1_targets, mcast_semaphore_id);
+            mcast_semaphore_id = in1_chunk_mcast.next_semaphore_id();
+        }
         // in0: multicast along each row from its x = 0 injector. The fabric cores at the far end of the row receive it
         // like any core and forward it to the neighbour chips from their L1.
         ttnn::kernel_lib::host::Mcast in0_mcast(
@@ -1769,7 +1842,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             desc.kernels[kIn0SenderKernelIdx],
             desc.kernels[kIn0ReceiverNoFabricKernelIdx],
             desc.kernels[kIn0ReceiverFabricKernelIdx]};
-        in0_mcast.attach(desc, "in0_mcast", in0_targets, in1_mcast.next_semaphore_id());
+        in0_mcast.attach(desc, "in0_mcast", in0_targets, mcast_semaphore_id);
     }
 
     return desc;
