@@ -14,14 +14,31 @@
 namespace {
 
 constexpr uint32_t auxiliary_tiles = get_arg(args::auxiliary_tiles);
-constexpr auto aux0_type = static_cast<ttnn::kernel_lib::ReduceAuxiliaryTileType>(get_arg(args::aux0_type));
-constexpr uint32_t aux0_valid = get_arg(args::aux0_valid);
-constexpr uint32_t aux0_value = get_arg(args::aux0_value);
-constexpr auto aux1_type = static_cast<ttnn::kernel_lib::ReduceAuxiliaryTileType>(get_arg(args::aux1_type));
-constexpr uint32_t aux1_valid = get_arg(args::aux1_valid);
-constexpr uint32_t aux1_value = get_arg(args::aux1_value);
+static_assert(auxiliary_tiles >= 1 && auxiliary_tiles <= 3);
 
-static_assert(auxiliary_tiles == 1 || auxiliary_tiles == 2);
+template <typename DFB>
+FORCE_INLINE void prepare_auxiliary_tiles(DFB& aux) {
+    using ttnn::kernel_lib::ReduceAuxiliaryTileType;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tile<
+        dfb::aux,
+        static_cast<ReduceAuxiliaryTileType>(get_arg(args::aux0_type)),
+        get_arg(args::aux0_valid),
+        get_arg(args::aux0_value)>(aux);
+    if constexpr (auxiliary_tiles > 1) {
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tile<
+            dfb::aux,
+            static_cast<ReduceAuxiliaryTileType>(get_arg(args::aux1_type)),
+            get_arg(args::aux1_valid),
+            get_arg(args::aux1_value)>(aux);
+    }
+    if constexpr (auxiliary_tiles > 2) {
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tile<
+            dfb::aux,
+            static_cast<ReduceAuxiliaryTileType>(get_arg(args::aux2_type)),
+            get_arg(args::aux2_valid),
+            get_arg(args::aux2_value)>(aux);
+    }
+}
 
 }  // namespace
 
@@ -33,10 +50,7 @@ void kernel_main() {
 
     // reduce() waits on the auxiliary tiles before its first input tile.
     DataflowBuffer aux(dfb::aux);
-    dataflow_kernel_lib::prepare_reduce_auxiliary_tile<dfb::aux, aux0_type, aux0_valid, aux0_value>(aux);
-    if constexpr (auxiliary_tiles == 2) {
-        dataflow_kernel_lib::prepare_reduce_auxiliary_tile<dfb::aux, aux1_type, aux1_valid, aux1_value>(aux);
-    }
+    prepare_auxiliary_tiles(aux);
 
     AllocatorBank<AllocatorBankType::DRAM> src_dram;
     Noc noc;

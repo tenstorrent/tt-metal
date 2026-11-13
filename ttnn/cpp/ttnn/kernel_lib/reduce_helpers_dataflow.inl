@@ -183,6 +183,11 @@ FORCE_INLINE void prepare_reduce_scaler(DFB& dfb, float scaler_f, uint32_t valid
     ASSERT(valid_reduce_dim_elements_in_tile > 0);
 
     constexpr uint32_t full_dim = (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
+#ifdef ARCH_QUASAR
+    // The Quasar reduce LLK reads only face 0 of the scaler and applies it to every face, so a partial scaler
+    // also admits the same lanes of the next face.
+    ASSERT(valid_reduce_dim_elements_in_tile >= full_dim);
+#endif
 
     ASSERT(dfb.get_id() == dfb_id);
 
@@ -280,6 +285,10 @@ FORCE_INLINE void prepare_reduce_auxiliary_tile(DFB& dfb) {
     } else {
         static_assert(tile_type == ReduceAuxiliaryTileType::Zero, "Unknown reduction auxiliary tile type");
     }
+#ifdef ARCH_QUASAR
+    // FirstRowPerFaceRow is Native's partial REDUCE_COL scaler; Quasar reads only face 0 of a scaler (see reduce()).
+    ASSERT(tile_type != ReduceAuxiliaryTileType::FirstRowPerFaceRow || valid_elements >= tile_r_dim);
+#endif
 
     ASSERT(dfb.get_id() == dfb_id);
     dfb.reserve_back(1);

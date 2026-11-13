@@ -1017,6 +1017,11 @@ ALWI void reduce(
     if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
         ASSERT(partial_mode == ReducePartialMode::None);
     }
+#ifdef ARCH_QUASAR
+    // The Quasar reduce LLK unpacks only face 0 of the scaler and applies it to every face, so a partial scaler
+    // also admits the same lanes of the next face. Use ReduceAlgorithm::TileSum with ReducePartialMode::Mask.
+    ASSERT(partial_mode != ReducePartialMode::Scaler);
+#endif
     const bool has_partial_scaler = partial_mode == ReducePartialMode::Scaler;
     // This call's auxiliary slice is [full scaler, optional partial scaler].
     const uint32_t scaler_tile_count = has_partial_scaler ? 2u : 1u;
