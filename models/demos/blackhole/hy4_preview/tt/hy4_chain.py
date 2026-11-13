@@ -336,7 +336,7 @@ class Hy4Chain:
         h = ttnn.sum(ttnn.multiply(x4, w), dim=1, keepdim=True)  # [1,1,n,D] fp32
         hb = ttnn.typecast(h, ttnn.bfloat16)
         hn = ttnn.rms_norm(
-            hb, weight=self.final_norm, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=self.ckc_head
+            hb, weight=self.final_norm, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=self.ckc_norm
         )
         logits = ttnn.linear(hn, self.lm_head, compute_kernel_config=self.ckc_head)
         return hn, logits
