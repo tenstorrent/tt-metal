@@ -225,6 +225,37 @@ constexpr char alt_reconf_form[2][3][4][17] = {
     },
 };
 
+#if !defined(RUNTIME_FORMATS)
+// The production reconfigure of a constant output (llk_pack_reconfig_data_format_ct) for outputs A and B; the third entry
+// is the init's strides, which take output A's format as the packer input.
+constexpr unsigned char alt_imm_src[3]   = {static_cast<unsigned char>(formats.pack_src), static_cast<unsigned char>(formats.pack_src),
+                                            static_cast<unsigned char>(formats.pack_dst)};
+constexpr unsigned char alt_imm_dst[3]   = {static_cast<unsigned char>(formats.pack_dst), static_cast<unsigned char>(alt_pack_dst),
+                                            static_cast<unsigned char>(formats.pack_dst)};
+constexpr unsigned char alt_imm_faces[3] = {4, 4, 4};
+constexpr unsigned char alt_imm_part[3]  = {0, 0, 0};
+constexpr ckernel::packer::llk_pack_reconfig_imm_t alt_imm =
+    ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, dest_sync>(alt_imm_src, alt_imm_dst, alt_imm_faces, alt_imm_part);
+
+template <std::uint32_t dst>
+inline void alt_reconfig_imm()
+{
+    ckernel::packer::reconfig_packer_data_format_imm_and_state<
+        is_fp32_dest_acc_en,
+        alt_imm.strides_full,
+        alt_imm.format,
+        alt_imm.section,
+        alt_imm.lf8,
+        alt_imm.threshold,
+        alt_imm.dstacc,
+        alt_imm.ystride,
+        alt_imm.zwstride,
+        static_cast<std::uint32_t>(formats.pack_src),
+        dst,
+        4>();
+}
+#endif
+
 inline std::uint32_t alt_form(const std::uint32_t fmt, const std::uint32_t ntiles, const std::uint32_t head, const bool src32)
 {
     const bool bfp = fmt == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
@@ -296,7 +327,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t page = out ? page_b : page_a;
                     if (out != cur)
                     {
-                        _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats.pack_src, fmt, page);
+#if !defined(RUNTIME_FORMATS)
+                        if (alt_imm.ok && num_faces == 4)
+                        {
+                            if (out)
+                            {
+                                alt_reconfig_imm<static_cast<std::uint32_t>(alt_pack_dst)>();
+                            }
+                            else
+                            {
+                                alt_reconfig_imm<static_cast<std::uint32_t>(formats.pack_dst)>();
+                            }
+                        }
+                        else
+#endif
+                        {
+                            _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en>(formats.pack_src, fmt, page);
+                        }
                         cur = out;
                     }
                     if constexpr (alt_l1_acc)

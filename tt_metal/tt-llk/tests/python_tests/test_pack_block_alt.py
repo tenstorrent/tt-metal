@@ -119,6 +119,8 @@ def test_pack_block_alt(
     kwargs = {
         "test_name": "sources/pack_block_alt_test.cpp",
         "formats": formats,
+        # Compile-time formats, as the JIT's arrays: the constant-output reconfigure (llk_pack_reconfig_imm) needs them.
+        "compile_time_formats": True,
         "templates": [
             generate_input_dim(dims, dims),
             TILIZE(),

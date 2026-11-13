@@ -115,7 +115,11 @@ __attribute__((always_inline)) inline void block(const std::uint32_t dst, BlockI
     }
     if constexpr (state == 2)
     {
+#if PACK_API_SHIM_PR
+        pack_api_shim::pack_reconfig_data_format<is_fp32_dest_acc_en, out>();
+#else
         pack_api_shim::pack_reconfig_data_format<is_fp32_dest_acc_en>(out);
+#endif
     }
     if constexpr (state == 1)
     {

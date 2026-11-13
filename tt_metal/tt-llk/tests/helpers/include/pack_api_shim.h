@@ -340,6 +340,40 @@ inline void pack_reconfig_data_format(const std::uint32_t new_output)
 }
 
 #if PACK_API_SHIM_PR
+// The compute API's pack_reconfig_data_format(cb) with a constant cb (llk_pack_reconfig_data_format_ct): the immediate reconfigure.
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
+__attribute__((always_inline)) inline void pack_reconfig_data_format()
+{
+    constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
+        ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE>(pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
+    constexpr bool skip_all = (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+                                   pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
+                               ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
+    if constexpr (
+        !imm.ok || skip_all || new_output >= sizeof(pack_dst_format) || pack_src_format[new_output] == static_cast<unsigned char>(DataFormat::Invalid) ||
+        pack_dst_format[new_output] == static_cast<unsigned char>(DataFormat::Invalid))
+    {
+        pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
+    }
+    else
+    {
+        LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
+        ckernel::packer::reconfig_packer_data_format_imm_and_state<
+            is_fp32_dest_acc_en,
+            imm.strides_full,
+            imm.format,
+            imm.section,
+            imm.lf8,
+            imm.threshold,
+            imm.dstacc,
+            imm.ystride,
+            imm.zwstride,
+            pack_src_format[new_output],
+            pack_dst_format[new_output],
+            pack_tile_num_faces[new_output]>();
+    }
+}
+
 // The PR's pack_block<ntiles, acc, kt>: the form tables, or arm_form ('T', 'B', 'W') as a constant output that always takes it.
 template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, std::uint32_t matmul_kt = 0, char arm_form = 0>
 __attribute__((always_inline)) inline void pack_block(const std::uint32_t start_tile_index, const std::uint32_t output)
