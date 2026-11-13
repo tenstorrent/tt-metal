@@ -21,7 +21,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -288,8 +287,8 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
             case tt::ARCH::WORMHOLE_B0: {
                 // The crossover is set by each device's input bytes per link, on rings of 4 and 8 devices and across
                 // dtypes, while pages do not line up across dtypes.
-                const uint64_t input_bytes =
-                    static_cast<uint64_t>(input_tensor.buffer()->num_pages()) * input_tensor.buffer()->page_size();
+                const uint64_t input_bytes = static_cast<uint64_t>(input_tensor.mesh_buffer().num_pages()) *
+                                             input_tensor.mesh_buffer().page_size();
                 const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
                 const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
                 if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
@@ -317,8 +316,8 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 // init handshake included): 1.05 MB on a line, 233 KB on a ring, where both directions carry it.
                 const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
                 const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
-                const uint64_t input_bytes =
-                    static_cast<uint64_t>(input_tensor.buffer()->num_pages()) * input_tensor.buffer()->page_size();
+                const uint64_t input_bytes = static_cast<uint64_t>(input_tensor.mesh_buffer().num_pages()) *
+                                             input_tensor.mesh_buffer().page_size();
                 const uint64_t busiest_link_bytes =
                     input_bytes * (args.num_devices - 1) / ((is_ring ? 2u : 1u) * num_links);
                 constexpr uint64_t line_unicast_bytes = 1'050'000, ring_unicast_bytes = 233'000;
@@ -423,7 +422,7 @@ std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
         }
         input_pages_per_stripe *= extent;
     }
-    const uint64_t num_input_pages = input_tensor.buffer()->num_pages();
+    const uint64_t num_input_pages = input_tensor.mesh_buffer().num_pages();
     if (input_pages_per_stripe == 0 || num_input_pages % input_pages_per_stripe != 0) {
         return std::nullopt;
     }
@@ -449,11 +448,11 @@ std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
 
 uint32_t compute_packet_cap(const all_gather_walk::WalkGeo& geo, const Tensor& output_tensor) {
     // The output's page stride between banks and its contiguous runs bound how long a packet segment can be.
-    const auto* buffer = output_tensor.buffer();
-    const auto& dist_spec = buffer->buffer_distribution_spec();
-    const uint32_t page_stride = dist_spec.has_value()
-                                     ? dist_spec->contiguous_page_stride()
-                                     : output_tensor.device()->allocator()->get_num_banks(buffer->buffer_type());
+    const auto& dist_spec = output_tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
+    const uint32_t page_stride =
+        dist_spec.has_value()
+            ? dist_spec->contiguous_page_stride()
+            : output_tensor.device()->allocator()->get_num_banks(output_tensor.memory_config().buffer_type());
     const uint32_t run_pages =
         dist_spec.has_value() ? dist_spec->num_contiguous_pages(0) : std::numeric_limits<uint32_t>::max();
     return all_gather_walk::packet_cap(geo, page_stride, run_pages);
@@ -470,7 +469,7 @@ uint32_t compute_packets_per_slot(
     // A slot's packets are read behind one read barrier: enough of them to keep read_bytes_per_barrier of reads in
     // flight, at least min_slots slots per worker iteration, and only as many as fit in L1.
     constexpr uint32_t max_packets_per_slot = 32;
-    const uint32_t num_elements = input_tensor.buffer()->num_pages() * geo.in_page_units / geo.element_units;
+    const uint32_t num_elements = input_tensor.mesh_buffer().num_pages() * geo.in_page_units / geo.element_units;
     const uint64_t iter_packets = tt::div_up(
         uint64_t{tt::div_up(num_elements, num_slices)} * geo.element_units * geo.unit_bytes, uint64_t{packet_cap});
     uint32_t packets_per_slot = static_cast<uint32_t>(std::clamp<uint64_t>(

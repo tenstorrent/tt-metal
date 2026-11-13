@@ -186,11 +186,11 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     TT_FATAL(
         walk_geometry.has_value(),
         "all_gather multicast cannot cut {} B input pages and {} B output pages on the input's read alignment",
-        input_tensor.buffer()->page_size(),
-        output_tensor.buffer()->page_size());
+        input_tensor.mesh_buffer().page_size(),
+        output_tensor.mesh_buffer().page_size());
     const all_gather_walk::WalkGeo& geo = *walk_geometry;
     const uint32_t unit_bytes = geo.unit_bytes;
-    const uint32_t num_elements = input_tensor.buffer()->num_pages() * geo.in_page_units / geo.element_units;
+    const uint32_t num_elements = input_tensor.mesh_buffer().num_pages() * geo.in_page_units / geo.element_units;
     const uint32_t packet_cap = compute_packet_cap(geo, output_tensor);
 
     // --- CB sizing ---
@@ -336,6 +336,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         TT_FATAL(
             writer_dst_nodes.size() == num_connections, "AllGather multicast: a direction with hops has no neighbor");
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            *mesh_device,
             sender_fabric_node_id,
             writer_dst_nodes,
             {link},

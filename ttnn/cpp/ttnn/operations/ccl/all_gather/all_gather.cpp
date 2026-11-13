@@ -77,7 +77,7 @@ std::pair<bool, std::string> use_composite_all_gather(
     // Resharding (input and output rows differ) cuts rows anywhere on a quantum that is a multiple of the NoC write
     // alignment and of the input's read alignment, so both rows must be multiples of it (then the input is unpadded).
     constexpr uint32_t noc_write_alignment = 16;
-    const uint32_t cut_alignment = std::lcm(noc_write_alignment, input_tensor.buffer()->alignment());
+    const uint32_t cut_alignment = std::lcm(noc_write_alignment, input_tensor.mesh_buffer().alignment());
     if (input_page_size != output_page_size &&
         (input_page_size % cut_alignment != 0 || output_page_size % cut_alignment != 0)) {
         return {
