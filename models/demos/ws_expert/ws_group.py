@@ -69,21 +69,27 @@ def group_cores(cfg, g):
     return [(a, y) for y in range(10)] + [(b, y) for y in range(10)]  # core j = c * 10 + y
 
 
-def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
+def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t, fab=None):
+    """fab: None (on-chip injectors) or dict(relay=logical core, icred=tensor holding NC credit words on it): the
+    weights land over the fabric (ws_fab) and the cores' freed counts go to the relay core instead of injectors."""
     assert cfg.GC == 20 and cfg.PAIRS == cfg.GC and cfg.DCOLS * cfg.GC == cfg.HT
     groups = [group_cores(cfg, g) for g in range(cfg.G)]
     C = [c for gr in groups for c in gr]
-    INJ = [(cfg.inj_cols[i // 10], i % 10) for i in range(cfg.NINJ)]
+    INJ = [] if fab else [(cfg.inj_cols[i // 10], i % 10) for i in range(cfg.NINJ)]
     assert not set(INJ) & set(C)
-    cset, iset = crs(C), crs(INJ)
+    cset = crs(C)
     KT, KTD, DC, BK, NX, NS = cfg.KT, cfg.PAIRS, cfg.DCOLS, cfg.BK, cfg.NX, cfg.NS
     DB = 3
     WGU, WDN = KT * 2, KTD * DC
     wtile, htile, xtile = TILE_BYTES[cfg.w_dt], TILE_BYTES[cfg.h_dt], TILE_BYTES[cfg.x_dt]
     NT = cfg.GC // cfg.NINJ
     # (first: the injectors' only L1 tensor, at the top of L1, so their CB 0 can be large in "l1" mode)
-    icred = sharded_l1(device, INJ, [cfg.G * NT, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    if fab:
+        icred = fab["icred"]
+    else:
+        icred = sharded_l1(device, INJ, [cfg.G * NT, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     # L1 tensors (same address on every core)
+    warr = sharded_l1(device, C, [1, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)  # landed weight slices
     wgu_ring = sharded_l1(device, C, [2 * WGU * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
     wd_ring = sharded_l1(device, C, [2 * WDN * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
     hring = sharded_l1(device, C, [NS * KTD * 32, 32], cfg.h_dt, ttnn.TILE_LAYOUT)
@@ -115,15 +121,19 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
         cx1, _ = noc(device, *gr[10])
         for j, (x, y) in enumerate(gr):
             assert noc(device, x, y) == ((cx0, cx1)[j // 10], ny0 + j % 10)
-            inj = INJ[j % cfg.NINJ]
-            ix, iy = noc(device, *inj)
+            if fab:
+                ix, iy = noc(device, *fab["relay"])
+                ioff = (g * cfg.GC + j) * 16
+            else:
+                ix, iy = noc(device, *INJ[j % cfg.NINJ])
+                ioff = (g * NT + j // cfg.NINJ) * 16
             cp_rt[x][y] = [st.buffer_address(), j, g, nexp_g]
             wr_rt[x][y] = [j, g, nexp_g, cx0, cx1, ny0, out_t.buffer_address(), x_t.buffer_address()] + [
                 idx_t.buffer_address(),
                 counts_t.buffer_address(),
                 st.buffer_address(),
             ]
-            rd_rt[x][y] = [j, g, nexp_g, cx0, cx1, ny0, ix, iy, (g * NT + j // cfg.NINJ) * 16, st.buffer_address()]
+            rd_rt[x][y] = [j, g, nexp_g, cx0, cx1, ny0, ix, iy, ioff, st.buffer_address()]
         gwr = ttnn.RuntimeArgs()
         grd = ttnn.RuntimeArgs()
         for x, y in gr:
@@ -158,7 +168,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
                 compile_time_args=[KT, BK, KTD, DC, cfg.GC, cfg.G, NS, NX, hflags.buffer_address()]
                 + [xring.buffer_address(), xflags.buffer_address(), xprog.buffer_address()]
                 + r_noc1
-                + [xtile, cnt_base, icred.buffer_address(), hring.buffer_address(), htile],
+                + [xtile, cnt_base, icred.buffer_address(), hring.buffer_address(), htile, warr.buffer_address()],
                 runtime_args=grd,
                 defines=[("WG_XORDER", str(cfg.xorder))]
                 + ([("WG_TRACE0", str(cfg.trace0))] if cfg.trace0 >= 0 else []),
@@ -167,42 +177,10 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
                 ),
             )
         )
-    # injectors
-    irr, iwr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    for i, (x, y) in enumerate(INJ):
-        irr[x][y] = [i, wgu_t.buffer_address(), wd_t.buffer_address()]
-        tg = []
-        for g, gr in enumerate(groups):
-            for t in range(NT):
-                tg += list(noc(device, *gr[i + cfg.NINJ * t]))
-        iwr[x][y] = [i] + tg
-    kernels.append(
-        ttnn.KernelDescriptor(
-            kernel_source=kpath("wg_inj_read.cpp"),
-            core_ranges=iset,
-            compile_time_args=[cfg.nexp, KT, KTD, DC, cfg.PAIRS, cfg.HT, cfg.CH, NT, cfg.NINJ]
-            + list(ttnn.TensorAccessorArgs(wgu_t).get_compile_time_args())
-            + list(ttnn.TensorAccessorArgs(wd_t).get_compile_time_args()),
-            defines=idefs_all,
-            runtime_args=irr,
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
-            ),
+    if not fab:
+        kernels += injector_kernels(
+            device, cfg, groups, INJ, NT, wgu_t, wd_t, wgu_ring, wd_ring, icred, warr, idefs_all
         )
-    )
-    kernels.append(
-        ttnn.KernelDescriptor(
-            kernel_source=kpath("wg_inj_write.cpp"),
-            core_ranges=iset,
-            compile_time_args=[cfg.nexp, KT, KTD, DC, cfg.CH, NT, cfg.NINJ, cfg.G]
-            + [wgu_ring.buffer_address(), wd_ring.buffer_address(), icred.buffer_address()],
-            defines=idefs_all,
-            runtime_args=iwr,
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
-            ),
-        )
-    )
     utd = ttnn._ttnn.program_descriptor.VectorUnpackToDestMode([ttnn.UnpackToDestMode.Default] * 64)
     ccfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True)
     ccfg.unpack_to_dest_mode = utd
@@ -237,10 +215,57 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
         cb(8, cfg.x_dt, XST * BK, cset),
         cb(16, cfg.h_dt, 2, cset),
         cb(17, cfg.out_dt, 2 * DC, cset),
-        cb(0, cfg.w_dt, cfg.P * NT * WTOT if pre else cfg.ICB * cfg.CH, iset),
     ]
+    if not fab:
+        cbs.append(cb(0, cfg.w_dt, cfg.P * NT * WTOT if pre else cfg.ICB * cfg.CH, crs(INJ)))
     sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=crs(C + INJ), initial_value=0) for s in range(6)]
+    # (semaphore 0 unused since the arrival counter became the warr tensor: its address is known to other chips)
+    if fab:
+        kernels += fab.get("kernels", [])  # (the caller's relay kernel: RT args filled in after, with fabric args)
     prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
     io = [x_t, idx_t, counts_t, wgu_t, wd_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1]
-    io += [idx_l1, icred, st, out_t]
-    return prog, io, st
+    io += [idx_l1, icred, warr, st, out_t]
+    return prog, io, st, dict(wgu_ring=wgu_ring, wd_ring=wd_ring, warr=warr)
+
+
+def injector_kernels(device, cfg, groups, INJ, NT, wgu_t, wd_t, wgu_ring, wd_ring, icred, warr, idefs_all):
+    """On-chip weight landing (stand-in for the fabric): NINJ injector cores, reader (BRISC) + writer (NCRISC)."""
+    KT, KTD, DC = cfg.KT, cfg.PAIRS, cfg.DCOLS
+    iset = crs(INJ)
+    kernels = []
+    irr, iwr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for i, (x, y) in enumerate(INJ):
+        irr[x][y] = [i, wgu_t.buffer_address(), wd_t.buffer_address()]
+        tg = []
+        for g, gr in enumerate(groups):
+            for t in range(NT):
+                tg += list(noc(device, *gr[i + cfg.NINJ * t]))
+        iwr[x][y] = [i] + tg
+    kernels.append(
+        ttnn.KernelDescriptor(
+            kernel_source=kpath("wg_inj_read.cpp"),
+            core_ranges=iset,
+            compile_time_args=[cfg.nexp, KT, KTD, DC, cfg.PAIRS, cfg.HT, cfg.CH, NT, cfg.NINJ]
+            + list(ttnn.TensorAccessorArgs(wgu_t).get_compile_time_args())
+            + list(ttnn.TensorAccessorArgs(wd_t).get_compile_time_args()),
+            defines=idefs_all,
+            runtime_args=irr,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+    )
+    kernels.append(
+        ttnn.KernelDescriptor(
+            kernel_source=kpath("wg_inj_write.cpp"),
+            core_ranges=iset,
+            compile_time_args=[cfg.nexp, KT, KTD, DC, cfg.CH, NT, cfg.NINJ, cfg.G]
+            + [wgu_ring.buffer_address(), wd_ring.buffer_address(), icred.buffer_address(), warr.buffer_address()],
+            defines=idefs_all,
+            runtime_args=iwr,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
+            ),
+        )
+    )
+    return kernels

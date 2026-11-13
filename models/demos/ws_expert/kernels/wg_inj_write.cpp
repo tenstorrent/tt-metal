@@ -10,15 +10,13 @@
 // 6 NINJ, 7 G, 8 wgu ring addr, 9 wd ring addr, 10 credit words addr (16 B a (g, t))
 #include "api/dataflow/dataflow_api.h"
 
-constexpr uint32_t SEM_WARR = 0;
-
 void kernel_main() {
     constexpr uint32_t NEXP = get_compile_time_arg_val(0), KT = get_compile_time_arg_val(1);
     constexpr uint32_t KTD = get_compile_time_arg_val(2), DCOLS = get_compile_time_arg_val(3);
     constexpr uint32_t CH = get_compile_time_arg_val(4), NT = get_compile_time_arg_val(5);
     constexpr uint32_t NINJ = get_compile_time_arg_val(6), G = get_compile_time_arg_val(7);
     constexpr uint32_t wgu_ring = get_compile_time_arg_val(8), wd_ring = get_compile_time_arg_val(9);
-    constexpr uint32_t cred = get_compile_time_arg_val(10);
+    constexpr uint32_t cred = get_compile_time_arg_val(10), warr = get_compile_time_arg_val(11);
     constexpr uint32_t WGU = KT * 2, WDN = KTD * DCOLS, WTOT = WGU + WDN;
     const uint32_t tb = get_tile_size(0);
 #ifdef WG_INJ_P
@@ -53,7 +51,7 @@ void kernel_main() {
 #endif
             }
             noc_async_write_barrier();
-            noc_semaphore_inc(get_noc_addr(tx, ty, get_semaphore(SEM_WARR)), 1);
+            noc_semaphore_inc(get_noc_addr(tx, ty, warr), 1);
         }
     }
     noc_async_atomic_barrier();

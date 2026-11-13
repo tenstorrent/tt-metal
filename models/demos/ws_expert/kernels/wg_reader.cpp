@@ -23,7 +23,7 @@ constexpr uint32_t w_cb = tt::CBIndex::c_1;
 constexpr uint32_t hr_cb = tt::CBIndex::c_2;
 constexpr uint32_t wd_cb = tt::CBIndex::c_3;
 constexpr uint32_t xst_cb = tt::CBIndex::c_8;
-constexpr uint32_t SEM_WARR = 0, SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
+constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
@@ -44,6 +44,7 @@ void kernel_main() {
     constexpr uint32_t counts_l1 = get_compile_time_arg_val(17);
     constexpr uint32_t icred = get_compile_time_arg_val(18);
     constexpr uint32_t hring = get_compile_time_arg_val(19), htile = get_compile_time_arg_val(20);
+    constexpr uint32_t warr_addr = get_compile_time_arg_val(21);  // landed weight slices (written by other chips)
     constexpr uint32_t BPR = KT / BK, HALF = GC / 2;
     constexpr uint32_t WGU = KT * 2, WDN = KTD * DCOLS;
 
@@ -65,7 +66,7 @@ void kernel_main() {
 
     // ---- QW
     uint32_t w_n = 0, w_freed_sent = 0, gu_pages = 0, dn_pages = 0;
-    volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_WARR));
+    volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(warr_addr);
     const uintptr_t gu_ack = (uintptr_t)get_cb_tiles_acked_ptr(w_cb), dn_ack = (uintptr_t)get_cb_tiles_acked_ptr(wd_cb);
     uint16_t gu_last = (uint16_t)reg_read(gu_ack), dn_last = (uint16_t)reg_read(dn_ack);
     const uint64_t cred_dst = get_noc_addr(ix, iy, icred + ioff);

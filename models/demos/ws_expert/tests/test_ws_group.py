@@ -35,7 +35,7 @@ def run_group(device, cfg: GCfg, Ms, seed=0):
     wgu_t = to_dev(wgu, cfg.w_dt, device)
     wd_t = to_dev(wd.reshape(-1, cfg.H), cfg.w_dt, device)
     out_t = to_dev(torch.zeros(cfg.G * cfg.RMAX * 32, cfg.H), cfg.out_dt, device)
-    prog, io, st = build(device, cfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t)
+    prog, io, st, _ = build(device, cfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t)
     ttnn.generic_op(io, prog)
     ttnn.synchronize_device(device)
     clk = aiclk_mhz(0)
