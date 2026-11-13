@@ -12,7 +12,7 @@ Greedy decoding and stochastic sampling with `top_k=1..32` are supported. Launch
 
 ## Run
 
-Build TT-Metal with its supported toolchain and install the [vLLM TT plugin](https://github.com/tenstorrent/vllm-tt-plugin/blob/main/docs/install-vllm-tt.sh) in the TT-Metal environment. Use unmodified plugin `main`; no companion plugin PR is required. Set `HF_HOME` to a cache containing checkpoint revision `842da3794eaa0b77d5f08bae87a17459d91ff475`.
+Build TT-Metal with its supported toolchain and install the [vLLM TT plugin](https://github.com/tenstorrent/vllm-tt-plugin/blob/main/docs/install-vllm-tt.sh) in the TT-Metal environment. Use the plugin with the state-slots fix (draft P1, branch `gemma31b-2-state-slots`: a continuing prefill keeps its device state slot when its batch row moves); unmodified plugin `main` is not enough. Set `HF_HOME` to a cache containing checkpoint revision `842da3794eaa0b77d5f08bae87a17459d91ff475`.
 
 ```bash
 export TT_METAL_HOME=$PWD
@@ -35,7 +35,9 @@ python -m vllm.entrypoints.openai.api_server \
     --additional-config '{"tt":{"sample_on_device_mode":"all","trace_region_size":536870912,"l1_small_size":16384}}'
 ```
 
-`HF_MODEL`, if set before checkpoint resolution, must name a local checkpoint directory. Use a new cache directory for different weights. The maximum context setting is allocation capacity; it does not establish accuracy at 262,144 tokens. Keep the default decode interleaving enabled and use a batched-token budget no greater than 8,192. Disabling interleaving exhausted DRAM in the tested 32-user configuration because more BF16 prefill histories remained live. Images, audio, speculative decoding and prefix caching are unsupported.
+`HF_MODEL`, if set before checkpoint resolution, must name a local checkpoint directory. Use a new cache directory for different weights. The maximum context setting is allocation capacity; it does not establish accuracy at 262,144 tokens. Keep the default decode interleaving enabled and use a batched-token budget no greater than 8,192. Disabling interleaving exhausted DRAM in the tested 32-user configuration because more BF16 prefill histories remained live. Images, audio and speculative decoding are unsupported.
+
+Prefix caching can be selected with `--enable-prefix-caching`. A fresh cached request reconstructs each sliding layer's preceding window from vLLM-owned BF8 pages, then retains the usual BF16 tail for its later chunks. The scheduler owns prefix hashes, page residency and eviction. Request history uses private identities so concurrent requests sharing pages remain independent. Cached continuation is numerically approximate relative to a cold BF16 prefill; greedy output need not be identical. Targeted sliding-layer HF checks pass PCC ≥ 0.995 at 128-, 1024- and 1152-token boundaries. Scored agentic quality and performance validation is pending; the benchmark table below was measured without prefix caching.
 
 ## Validation and weekly CI
 
