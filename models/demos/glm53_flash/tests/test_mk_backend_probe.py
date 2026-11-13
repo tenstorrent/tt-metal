@@ -94,6 +94,32 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
         rows = [obm.set_row(s, list(range(s * bps, (s + 1) * bps)), bps) for s in range(B)]
         backend.write(io.page_table, torch.tensor(rows, dtype=torch.int32))
     backend.write(io.cur_pos, torch.full((B,), POS, dtype=torch.int32))
+    # GLM53_MK_PROBE_RANDKEYS=1 (2026-11-13, the long-context B 16 decode study): the DSA layers' pooled-key stores hold
+    # random keys, different on every chip, instead of zeros. With zeros every index score ties: the radix rounds never
+    # compact, the tie round resolves every key, and the ties pick the lowest pools, so a few chips do every user's
+    # attention -- the 1 M B 16 probe (2026-11-13 02:11, 5.39 ms for layers 0-3) then overstates the merge, the local
+    # select and the attention. Random keys give distinct scores spread over the chips; the timing is what matters,
+    # the decoded values are garbage either way. One host tensor (one chip-distinct slice per device) serves every layer.
+    if os.environ.get("GLM53_MK_PROBE_RANDKEYS", "0") == "1" and kv.extra.get("dsa"):
+        t0 = time.perf_counter()
+        n_dev = int(mesh_device.get_num_devices())
+        filled = {}
+        for _i, st in sorted(kv.extra["dsa"].items()):
+            pools = st["pools"]
+            shp = tuple(int(x) for x in pools.shape)
+            if shp not in filled:
+                gen = torch.Generator().manual_seed(1234)
+                host = torch.randn((n_dev * shp[0],) + shp[1:], generator=gen, dtype=torch.float32).to(torch.bfloat16)
+                filled[shp] = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                              mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0))  # fmt: skip
+                del host
+            ttnn.copy_host_to_device_tensor(filled[shp], pools)
+        ttnn.synchronize_device(mesh_device)
+        logger.info(
+            f"MK_PROBE_RANDKEYS: {len(kv.extra['dsa'])} DSA pooled-key stores filled with chip-distinct random keys "
+            f"(per-chip shapes {sorted(filled)}) in {time.perf_counter() - t0:.1f} s"
+        )
+        del filled
     t0 = time.perf_counter()
     backend.decode(io, kv, B)  # one eager step (compiles)
     ttnn.synchronize_device(mesh_device)
