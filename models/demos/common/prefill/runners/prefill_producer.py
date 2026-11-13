@@ -1532,15 +1532,17 @@ def _dflash_caches_are_local(kv_table, device_map: dict, *, slot_id: int) -> boo
     its configs because the table is shared. ``read_dram_umd`` is local-PCIe only, so a rank elsewhere
     would resolve a chip it cannot read and abort inside umd_dram_reader
     (``TT_FATAL: it != uid_to_chip.end()``) rather than skip. Probing one config is enough: all of them
-    describe the same two caches on the same host.
+    describe the drafter's caches (K and V, or the one MLA latent) on the same host.
 
     The KVPE reader has the equivalent behaviour inline (``except KeyError: continue`` per layer); the
     drafter needs it hoisted because its reader checks every (layer, head) as one unit.
     """
-    from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import dflash_config_name
-
+    # Any drafter config will do: GQA's dflash_k_h00 or MLA's single dflash_latent.
+    names = sorted(name for name in _config_names(kv_table) if name.startswith("dflash_"))
+    if not names:
+        return False
     try:
-        config_id = kv_table.config_id_of(dflash_config_name("k", 0))
+        config_id = kv_table.config_id_of(names[0])
         # Last row, not layer 0: the drafter's configs span the merged table's global layer axis and only
         # its tail is populated. An unpopulated row reads back zeroed, and device_group_index 0 is a real
         # group, so probing layer 0 would resolve some other cache's host and answer True anywhere.

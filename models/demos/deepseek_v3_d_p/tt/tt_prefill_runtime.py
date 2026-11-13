@@ -22,6 +22,7 @@ from models.demos.common.prefill.runners.runner_utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_mla_drafter import TtDFlashMlaDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scale_geometry
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -38,7 +39,11 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCacheFormat,
+    allocate_dflash_kv_cache,
+    allocate_dflash_mla_kv_cache,
+)
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 
@@ -169,6 +174,8 @@ class TtPrefillRuntime:
         self.drafter = None
         self._dflash_k_cache = None
         self._dflash_v_cache = None
+        # MLA (DFlash2) drafter: ONE latent cache instead of K and V (last rank only).
+        self._dflash_latent_cache = None
         self.mtp_predictor = None
 
         assert (
@@ -446,15 +453,14 @@ class TtPrefillRuntime:
             f"build_kv_tail={self.config.is_last_rank}, "
             f"checkpoint={path}"
         )
-        state_dict = load_drafter_state_dict(path, build_kv_tail=self.config.is_last_rank)
+        state_dict = load_drafter_state_dict(
+            path, build_kv_tail=self.config.is_last_rank, attention_mode=dcfg.attention_mode
+        )
         # The drafter's context cache and rope table span the FULL per-user sequence, like the verifier's
         # kvpe cache: chunked prefill writes chunk c at global offset actual_start, and multi-turn resumes a
         # slot mid-sequence, so neither can be expressed by a chunk_size-deep cache (issue #50725).
         dflash_seq = self.config.max_seq_len
-        self.drafter = TtDFlashDrafter(
-            self.mesh_device,
-            dcfg,
-            state_dict=state_dict,
+        drafter_kwargs = dict(
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
             max_seq_len=dflash_seq,
@@ -464,6 +470,18 @@ class TtPrefillRuntime:
             owned_target_layer_ids=owned,
             build_kv_tail=self.config.is_last_rank,
         )
+        if dcfg.is_mla:
+            # The latent cache follows the verifier KVPE's dedup so both block-cyclic configs of the merged
+            # migration table share one device-group layout (asserted when the table is built).
+            self.drafter = TtDFlashMlaDrafter(
+                self.mesh_device,
+                dcfg,
+                state_dict=state_dict,
+                tp_shard_kv=self._dflash_tp_shard_kv(),
+                **drafter_kwargs,
+            )
+        else:
+            self.drafter = TtDFlashDrafter(self.mesh_device, dcfg, state_dict=state_dict, **drafter_kwargs)
 
         owned_set = set(owned)
 
@@ -475,7 +493,17 @@ class TtPrefillRuntime:
         self._on_layer_hidden = on_layer_hidden
 
         # Only the last rank finalizes the drafter KV → allocate the caller-owned context caches it fills.
-        if self.config.is_last_rank:
+        if self.config.is_last_rank and dcfg.is_mla:
+            self._dflash_latent_cache = allocate_dflash_mla_kv_cache(
+                self.mesh_device,
+                dcfg,
+                dflash_seq,  # max_seq_len — MUST match the drafter's cache_seq/rope (see note above)
+                sp_axis=self.config.sp_axis,
+                tp_axis=self.config.tp_axis,
+                num_users=self.config.num_users,
+                tp_shard_kv=self._dflash_tp_shard_kv(),
+            )
+        elif self.config.is_last_rank:
             self._dflash_k_cache, self._dflash_v_cache = allocate_dflash_kv_cache(
                 self.mesh_device,
                 dcfg,
@@ -484,6 +512,21 @@ class TtPrefillRuntime:
                 tp_axis=self.config.tp_axis,
                 num_users=self.config.num_users,  # user-major slots, like the verifier's kvpe cache
             )
+
+    def _dflash_tp_shard_kv(self) -> bool:
+        """Whether the MLA drafter's latent cache is TP-deduped: the same switch as the verifier's KVPE
+        (``config.tp_shard_kv``; None means dense-not-deduped, see TtPrefillRuntimeConfig)."""
+        return bool(self.config.tp_shard_kv) and self.config.mesh_shape[self.config.tp_axis] > 1
+
+    def _dflash_caches(self) -> tuple:
+        """The drafter's caller-owned caches, positionally, as its ``forward`` takes them: ``(latent,)`` for an
+        MLA drafter, ``(k, v)`` for GQA."""
+        if self._dflash_latent_cache is not None:
+            return (self._dflash_latent_cache,)
+        return (self._dflash_k_cache, self._dflash_v_cache)
+
+    def _dflash_owns_caches(self) -> bool:
+        return self._dflash_latent_cache is not None or self._dflash_k_cache is not None
 
     def _dflash_tap_layer(self, target_layer_idx: int) -> int:
         """The layer whose forward fires the drafter tap for ``target_layer_idx``; the rank holding it owns
@@ -953,8 +996,7 @@ class TtPrefillRuntime:
             return out
         if self.config.is_last_rank:
             self.drafter.forward(
-                self._dflash_k_cache,
-                self._dflash_v_cache,
+                *self._dflash_caches(),
                 d2h_service=self._trace_d2h_service,
                 metadata_msg=self._trace_metadata_msg,
                 on_layer_complete=self._on_layer_complete,
@@ -1302,8 +1344,7 @@ class TtPrefillRuntime:
                 # migration). Same (offset, slot) the verifier's kvpe write uses, so the drafter cache stays
                 # positionally aligned with it across chunks and users.
                 self.drafter.forward(
-                    self._dflash_k_cache,
-                    self._dflash_v_cache,
+                    *self._dflash_caches(),
                     actual_start,
                     slot_idx=slot_id,
                     actual_end=actual_end,
@@ -1471,7 +1512,8 @@ class TtPrefillRuntime:
         return stages
 
     def _dflash_migration_stages(self, draft_first: int):
-        """The drafter's two stages, K then V, appended LAST to a runtime's stages.
+        """The drafter's stages, appended LAST to a runtime's stages: K then V (GQA), or the single latent
+        cache (MLA). Every rank knows the mode (all load the drafter config), so all emit the same count.
 
         They are distinct allocations, so each needs its own gathered base address. The drafter is built on
         the KV-tail rank alone, so every other rank contributes a null stage — the all-gather is collective
@@ -1484,9 +1526,13 @@ class TtPrefillRuntime:
         """
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
+        draft_layers = self.drafter.config.num_hidden_layers
+        if self.drafter.config.is_mla:
+            if self._dflash_latent_cache is None:
+                return [KvCacheStage(0, 0, 0)]
+            return [KvCacheStage(int(self._dflash_latent_cache.buffer_address()), draft_first, draft_layers)]
         if self._dflash_k_cache is None:
             return [KvCacheStage(0, 0, 0), KvCacheStage(0, 0, 0)]
-        draft_layers = self.drafter.config.num_hidden_layers
         return [
             KvCacheStage(int(self._dflash_k_cache.buffer_address()), draft_first, draft_layers),
             KvCacheStage(int(self._dflash_v_cache.buffer_address()), draft_first, draft_layers),
@@ -1624,6 +1670,8 @@ class TtPrefillRuntime:
         dflash_first_layer = self.config.first_layer_idx + self.config.num_layers
         if not self.config.dflash_enabled:
             return stage_layouts, None, None, dflash_first_layer
+        if self.drafter.config.is_mla:
+            return self._dflash_mla_table_args(stage_layouts, n_block_cyclic, dflash_first_layer)
         if stage_layouts is None:
             # Inline-gather path (single-rank / tests): this rank owns the drafter, so describe it
             # straight from the tensors.
@@ -1654,6 +1702,38 @@ class TtPrefillRuntime:
             "v_stage_layout": v_layout,
         }
         return stage_layouts, None, dflash_spec, dflash_first_layer
+
+    def _dflash_mla_table_args(self, stage_layouts, n_block_cyclic: int, dflash_first_layer: int):
+        """MLA drafter half of ``_dflash_table_args``: one latent stage (not K and V), always passed to the builder
+        as a metadata spec (``dflash_mla_spec``) so single- and multi-rank runs take the same populate path."""
+        from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import dflash_mla_spec
+
+        dcfg = self.drafter.config
+        if stage_layouts is None:
+            # Inline-gather path (single-rank / tests): describe the latent cache with its own gathered layout.
+            (stage,) = self._dflash_migration_stages(dflash_first_layer)
+            latent_layout = allgather_kv_stage_layout(
+                self.mesh_device, stage.base_addr, self.config.mesh_shape, stage.first_layer, stage.count
+            )
+        else:
+            if len(stage_layouts) != n_block_cyclic + 1:
+                raise RuntimeError(
+                    f"MLA dflash is on, so kv_migration_stages emits {n_block_cyclic} stage(s) plus the drafter's "
+                    f"latent cache, but {len(stage_layouts)} layouts were gathered. The caller must gather one "
+                    "layout per stage this runtime declares."
+                )
+            *stage_layouts, latent_layout = stage_layouts
+        owning = [s for s in latent_layout if s["count"] > 0]
+        if owning:
+            dflash_first_layer = owning[0]["first_layer"]
+        spec = dflash_mla_spec(
+            num_layers=dcfg.num_hidden_layers,
+            latent_dim=dcfg.latent_dim,
+            stage_layout=latent_layout,
+            tp_deduped=self._dflash_tp_shard_kv(),
+        )
+        return stage_layouts, None, spec, dflash_first_layer
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
         """Read one slot's KV cache from device to host: the `.kvpe` block as a single host tensor
@@ -1757,15 +1837,30 @@ class TtPrefillRuntime:
 
         Only the last rank builds the drafter KV tail and owns the caches, so every other rank has
         nothing to check and returns 1.0 unmeasured."""
-        if self._dflash_k_cache is None:
+        if not self._dflash_owns_caches():
             logger.info(
                 f"[dflash-pcc] rank owns no drafter KV cache (is_last_rank={self.config.is_last_rank}); "
                 "nothing to check"
             )
             return 1.0
-        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import dflash_kv_cache_pcc_check
+        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import (
+            dflash_kv_cache_pcc_check,
+            dflash_latent_cache_pcc_check,
+        )
 
         dcfg = self.drafter.config
+        if dcfg.is_mla:
+            return dflash_latent_cache_pcc_check(
+                self.mesh_device,
+                self._dflash_latent_cache,
+                chunk_size_global=self.config.chunk_size,
+                num_layers=dcfg.num_hidden_layers,
+                kv_lora_rank=dcfg.kv_lora_rank,
+                slot_id=slot_id,
+                out_len=out_len,
+                golden_dir=golden_dir,
+                record_only=os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1",
+            )
         return dflash_kv_cache_pcc_check(
             self.mesh_device,
             self._dflash_k_cache,

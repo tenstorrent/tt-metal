@@ -562,6 +562,9 @@
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_trace.py -vvv --tb=short
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_golden_pcc -vvv --tb=short
+        # DFlash2 (MLA) latent context cache: synthetic weights, so no checkpoint or golden is needed.
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_mla_host.py -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_mla.py -k "torus-xy-8x4" -vvv --tb=short --timeout=1800
       '
     )
 
