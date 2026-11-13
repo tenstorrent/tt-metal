@@ -29,6 +29,7 @@
   "perf_vif_targets": 6.4
  },
  "blackhole": {
+  "perf_custom_mm": 165.1,
   "perf_eltwise_bcast_col_custom": 2.5,
   "perf_eltwise_binary": 1542.2,
   "perf_eltwise_binary_broadcast": 2867.5,

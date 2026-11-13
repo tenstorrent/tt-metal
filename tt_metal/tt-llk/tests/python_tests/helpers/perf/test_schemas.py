@@ -982,7 +982,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_unpack_transpose": "perf_unpack_transpose"},
     },
     "perf_custom_mm": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1009,6 +1009,7 @@ PERF_TEST_SCHEMAS = {
             "preserve",
             "r_dimm",
             "rearm",
+            "tile_cnt",
             "transpose",
             "unpack_to_dest",
         ],

@@ -4,7 +4,7 @@
 import pytest
 from conftest import blackhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, DestSync
+from helpers.llk_params import CustomMmDestLayout, DestAccumulation, DestSync
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from helpers.test_variant_parameters import CUSTOM_MM_CALLS
@@ -18,6 +18,10 @@ from test_custom_mm import (
     KT_DIMS,
     LONG_K_CASES,
     MULTI_CALL_CASES,
+    N16,
+    N16_BFP_LONG_K_CASES,
+    N16_COMPACT_KT,
+    N16_CT_DIMS_16BIT,
     NARROW_PACK_SRC_FORMATS,
     ODD_K_CASES,
     SPLIT_ACC_LAYOUTS,
@@ -303,5 +307,176 @@ def test_perf_custom_mm_multi_call(
         formats,
         DestAccumulation.No,
         CUSTOM_MM_CALLS(num_calls=num_calls),
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=list(SUPPORTED_M),
+    kt=[1, 2],
+    ct=N16_CT_DIMS_16BIT,
+    **PERF_MEASUREMENT_AXES,
+)
+def test_perf_custom_mm_n16(
+    perf_report, formats, M, kt, ct, run_types, loop_factor, is_perf
+):
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        tile_c=N16,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    M=[1, 8],
+    kt=KT_DIMS,
+    ct=[1, 7],
+    **PERF_MEASUREMENT_AXES,
+)
+def test_perf_custom_mm_n16_fp32_dest(
+    perf_report, formats, M, kt, ct, run_types, loop_factor, is_perf
+):
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.Yes,
+        tile_c=N16,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    layout=[CustomMmDestLayout.Default] + SPLIT_ACC_LAYOUTS,
+    M=[1, 8],
+    kt=[1, 9],
+    ct=[1, 7],
+    **PERF_MEASUREMENT_AXES,
+)
+def test_perf_custom_mm_n16_layouts(
+    perf_report, formats, layout, M, kt, ct, run_types, loop_factor, is_perf
+):
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        layout=layout,
+        tile_c=N16,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@parametrize(
+    layout=SPLIT_ACC_LAYOUTS,
+    ct=[1, 2],
+    **PERF_MEASUREMENT_AXES,
+)
+def test_perf_custom_mm_n16_split_acc_multi_call(
+    perf_report, layout, ct, run_types, loop_factor, is_perf
+):
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    _run_custom_mm(
+        8,
+        8,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=4),
+        layout=layout,
+        tile_c=N16,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=[1, 8],
+    ct=[1, 25, 32],
+    **PERF_MEASUREMENT_AXES,
+)
+def test_perf_custom_mm_n16_compact(
+    perf_report, formats, M, ct, run_types, loop_factor, is_perf
+):
+    _run_compact_against_default(
+        M,
+        N16_COMPACT_KT,
+        ct,
+        formats,
+        DestAccumulation.No,
+        tile_c=N16,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", N16_BFP_LONG_K_CASES)
+@parametrize(**PERF_MEASUREMENT_AXES)
+def test_perf_custom_mm_n16_bfp_long_k(
+    perf_report, formats, M, kt, ct, run_types, loop_factor, is_perf
+):
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        tile_c=N16,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    tile_c=[32, N16],
+    layout=[CustomMmDestLayout.Default, CustomMmDestLayout.DefaultSplitAcc],
+    M=[1, 8],
+    kt=[1, 2],
+    ct=[1, 3, 7],
+    **PERF_MEASUREMENT_AXES,
+)
+def test_perf_custom_mm_transpose(
+    perf_report,
+    formats,
+    tile_c,
+    layout,
+    M,
+    kt,
+    ct,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        layout=layout,
+        tile_c=tile_c,
+        transpose=True,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )

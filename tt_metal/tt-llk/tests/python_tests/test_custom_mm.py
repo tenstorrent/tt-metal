@@ -70,6 +70,7 @@ from helpers.test_variant_parameters import (
     IN_FACE_DIMS,
     LOOP_FACTOR,
     NUM_FACES,
+    TILE_COUNT,
     TemplateParameter,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
@@ -272,6 +273,7 @@ def _build_custom_mm(
                 ),
                 IN_FACE_DIMS(in0_face_r_dim=M),
                 LOOP_FACTOR(loop_factor),
+                TILE_COUNT(ct * kt),
             ],
             variant_stimuli=CustomMMStimuliConfig(
                 kt, ct, in0_format, in1_format, out_format, packed_a, packed_b
