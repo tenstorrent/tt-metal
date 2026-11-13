@@ -9,7 +9,6 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -67,14 +66,12 @@ protected:
 };
 
 // A receiver-contiguous weight -- one (K, N / receivers) slab per receiver, round-robin over the DRAM banks --
-// and the PrefetcherPipes that deliver it to `receivers_per_bank` receivers of every bank through
-// `endpoints_per_bank` of the bank's sender endpoints, `ring_entries` blocks deep per receiver.
+// and the PrefetcherPipes that deliver it to `receivers_per_bank` receivers of every bank, `ring_entries`
+// blocks deep per receiver. A dispatch engine holds one sender endpoint per bank, so each bank's
+// receivers share one pipe.
 struct ReceiverContiguousCase {
     ReceiverContiguousCase(
-        tt::tt_metal::distributed::MeshDevice* device,
-        uint32_t receivers_per_bank,
-        uint32_t endpoints_per_bank,
-        uint32_t ring_entries) {
+        tt::tt_metal::distributed::MeshDevice* device, uint32_t receivers_per_bank, uint32_t ring_entries) {
         const uint32_t num_banks = device->dram_grid_size().x;
         const uint32_t num_receivers = receivers_per_bank * num_banks;
         const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -99,20 +96,13 @@ struct ReceiverContiguousCase {
         const uint32_t k = block_count * kKBlockTiles * TILE_HEIGHT;
         const uint32_t n = num_receivers * kTilesPerReceiver * TILE_WIDTH;
         const uint32_t entry_bytes = kKBlockTiles * kTilesPerReceiver * kBfloat16TileBytes;
-        TT_FATAL(
-            endpoints_per_bank >= 1 && endpoints_per_bank <= std::min(2u, receivers_per_bank),
-            "{} sender endpoints per bank for {} receivers per bank",
-            endpoints_per_bank,
-            receivers_per_bank);
         space = std::make_unique<metal_exp::PrefetcherPipeSpace>(metal_exp::CreatePrefetcherPipeSpace(
             *device,
-            {.num_dram_senders = endpoints_per_bank * num_banks,
+            {.num_dram_senders = num_banks,
              .receiver_domain = receiver_domain,
              .ring_size = ring_entries * entry_bytes,
              .max_receivers_per_pipe = num_receivers}));
-        // One endpoint per bank is the factory's one-sender-per-bank split.
-        for (auto& pipe : metal_exp::CreatePrefetcherPipesForTensorPrefetcher(
-                 *space, bank_to_receivers, /*support_multi_receiver_shards=*/endpoints_per_bank == 1)) {
+        for (auto& pipe : metal_exp::CreatePrefetcherPipesForTensorPrefetcher(*space, bank_to_receivers)) {
             pipes.push_back(std::make_shared<metal_exp::PrefetcherPipe>(std::move(pipe)));
         }
 
@@ -169,7 +159,7 @@ void validate_layers(
 
 // Every block of one tensor arrives, through two-entry rings.
 TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversReceiverContiguousWeight) {
-    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*endpoints_per_bank=*/2, /*ring_entries=*/2);
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2);
     metal_exp::StartTensorPrefetcher(*device_, {});
     queue_layers(device_, prefetch, /*num_layers=*/1);
     validate_layers(device_, prefetch, /*num_layers=*/1);
@@ -179,7 +169,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversReceiverContiguousWeight) 
 // One-entry rings, several layers: every block after the first waits on the receiver's ack, which crosses to
 // the dispatch engine, and the pipes' cursors wrap and persist across tensors and requests.
 TEST_F(DispatchEngineTensorPrefetcherFixture, TradesCreditsAcrossLayersAndRuns) {
-    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*endpoints_per_bank=*/2, /*ring_entries=*/1);
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/1);
     for (uint32_t run = 0; run < 2; ++run) {
         metal_exp::StartTensorPrefetcher(*device_, {});
         queue_layers(device_, prefetch, /*num_layers=*/3);
@@ -189,12 +179,10 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, TradesCreditsAcrossLayersAndRuns) 
 }
 
 // Back-to-back requests for different receiver counts: the stage ring is laid out per receiver count, so the
-// second request waits for the first one's blocks to leave the stage ring before it stages into it. The first
-// request's bank feeds both its receivers through one endpoint, so one pipe on the dispatch engine credits
-// two receivers.
+// second request waits for the first one's blocks to leave the stage ring before it stages into it.
 TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverCount) {
-    ReceiverContiguousCase wide(device_, /*receivers_per_bank=*/2, /*endpoints_per_bank=*/1, /*ring_entries=*/1);
-    ReceiverContiguousCase narrow(device_, /*receivers_per_bank=*/1, /*endpoints_per_bank=*/1, /*ring_entries=*/1);
+    ReceiverContiguousCase wide(device_, /*receivers_per_bank=*/2, /*ring_entries=*/1);
+    ReceiverContiguousCase narrow(device_, /*receivers_per_bank=*/1, /*ring_entries=*/1);
     metal_exp::StartTensorPrefetcher(*device_, {});
     queue_layers(device_, wide, /*num_layers=*/2);
     queue_layers(device_, narrow, /*num_layers=*/2);

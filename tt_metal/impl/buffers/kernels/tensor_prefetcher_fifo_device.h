@@ -35,22 +35,32 @@ FORCE_INLINE volatile tt_l1_ptr T* region_ptr(uint32_t region_base, uint32_t off
 #endif
 }
 
-// Blocks of receiver `i` the reader has staged, and the pusher has pushed (freeing their stage slots).
-FORCE_INLINE volatile tt_l1_ptr uint32_t* staged_ptr(uint32_t region_base, uint32_t i) {
-    return region_ptr<uint32_t>(region_base, fifo::kStagedOffset + i * fifo::kLineBytes);
-}
-FORCE_INLINE volatile tt_l1_ptr uint32_t* pushed_ptr(uint32_t region_base, uint32_t i) {
-    return region_ptr<uint32_t>(region_base, fifo::kPushedOffset + i * fifo::kLineBytes);
-}
+// One dispatch engine's region as a kernel sees it: its L1 base and its layout (both compile-time).
+struct Region {
+    uint32_t base = 0;
+    fifo::RegionLayout layout;
+
+    // Blocks of receiver `i` the reader has staged, and the pusher has pushed (freeing their stage slots).
+    FORCE_INLINE volatile tt_l1_ptr uint32_t* staged(uint32_t i) const {
+        return region_ptr<uint32_t>(base, layout.staged_offset() + i * fifo::kLineBytes);
+    }
+    FORCE_INLINE volatile tt_l1_ptr uint32_t* pushed(uint32_t i) const {
+        return region_ptr<uint32_t>(base, layout.pushed_offset() + i * fifo::kLineBytes);
+    }
+    FORCE_INLINE volatile tt_l1_ptr fifo::SlotHeader* slot(uint32_t slot_count) const {
+        return region_ptr<fifo::SlotHeader>(base, layout.slot_offset(slot_count));
+    }
+    constexpr uint32_t stage_ring_base() const { return base + layout.stage_ring_offset(); }
+};
 
 // One kernel's view of the FIFO: it retires slots in order and publishes how many it has retired.
 class FifoConsumer {
 public:
-    FORCE_INLINE FifoConsumer(uint32_t region_base, uint32_t rd_offset) :
-        region_base_(region_base),
-        terminate_(region_ptr<uint32_t>(region_base, fifo::kTerminateOffset)),
-        wr_(region_ptr<uint32_t>(region_base, fifo::kFifoWrOffset)),
-        rd_(region_ptr<uint32_t>(region_base, rd_offset)),
+    FORCE_INLINE FifoConsumer(const Region& region, uint32_t rd_offset) :
+        region_(region),
+        terminate_(region_ptr<uint32_t>(region.base, fifo::kTerminateOffset)),
+        wr_(region_ptr<uint32_t>(region.base, fifo::kFifoWrOffset)),
+        rd_(region_ptr<uint32_t>(region.base, rd_offset)),
         rd_count_(*rd_) {}
 
     FORCE_INLINE bool terminate_requested() const { return *terminate_ != 0; }
@@ -64,13 +74,13 @@ public:
             }
         }
         WAYPOINT("TFD");
-        return region_ptr<fifo::SlotHeader>(region_base_, fifo::slot_offset(rd_count_));
+        return region_.slot(rd_count_);
     }
 
     FORCE_INLINE void retire_slot() { *rd_ = ++rd_count_; }
 
 private:
-    uint32_t region_base_;
+    Region region_;
     volatile tt_l1_ptr uint32_t* terminate_;
     volatile tt_l1_ptr uint32_t* wr_;
     volatile tt_l1_ptr uint32_t* rd_;
@@ -80,9 +90,10 @@ private:
 // Retires every slot the host writes until termination is requested. `serve_request(requests, slot)`
 // handles a request slot and returns false if termination was requested before it finished.
 template <typename ServeRequest>
-FORCE_INLINE void serve_requests(uint32_t region_base, uint32_t rd_offset, ServeRequest&& serve_request) {
-    FifoConsumer requests(region_base, rd_offset);
+FORCE_INLINE void serve_requests(const Region& region, uint32_t rd_offset, ServeRequest&& serve_request) {
+    FifoConsumer requests(region, rd_offset);
     while (volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot()) {
+        ASSERT(slot->num_lanes <= region.layout.lanes);
         switch (slot->command) {
             case fifo::kSlotNop: break;
             case fifo::kSlotRequest:

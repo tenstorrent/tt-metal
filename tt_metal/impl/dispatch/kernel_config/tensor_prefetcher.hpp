@@ -8,16 +8,20 @@
 #include <optional>
 
 #include "fd_kernel.hpp"
+#include "impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "impl/context/context_descriptor.hpp"
 
 namespace tt::tt_metal {
 
 class DispatchMemMap;
 
+// The layout of the dispatch engine's Tensor prefetcher region on `cluster`: one lane per DRAM bank of its
+// devices, each bank's one sender endpoint.
+tensor_prefetcher_fifo::RegionLayout tensor_prefetcher_region_layout(const Cluster& cluster);
+
 // Whether fast dispatch runs the Tensor prefetcher kernels beside the CQ kernels: only on a dispatch
-// engine (not the Tensix dispatch cores) serving a single CQ, with at least
-// tensor_prefetcher_fifo::kMinRegionBytes of its L1 unused above the CQ zones, on devices with no more
-// DRAM banks than a request can name (tensor_prefetcher_fifo::kMaxDramBanks).
+// engine (not the Tensix dispatch cores) serving a single CQ, with the region its layout needs unused above
+// the CQ zones, on devices with no more DRAM banks than a slot can name (tensor_prefetcher_fifo::kMaxLanes).
 bool dispatch_engine_hosts_tensor_prefetcher(
     const Cluster& cluster, CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map);
 
@@ -50,6 +54,7 @@ public:
 private:
     DispatchWorkerType type_;
     uint32_t region_base_ = 0;
+    tensor_prefetcher_fifo::RegionLayout layout_;
 };
 
 }  // namespace tt::tt_metal

@@ -29,6 +29,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -53,7 +54,9 @@ void TensorPrefetcherManager::start_on_dispatch_engine() {
 
     // The request serializer sizes layouts from the stage ring as the DRAM-core kernel splits it (halves
     // and thirds). The dispatch-engine kernels split it per receiver instead, which queue time checks.
-    set_stage_ring_size(fifo::stage_ring_bytes(mem_map.unused_l1_size()), metal.hal().get_alignment(HalMemType::L1));
+    fifo_layout_ = tensor_prefetcher_region_layout(mesh_device_->impl().metal_env().get_cluster());
+    set_stage_ring_size(
+        fifo_layout_.stage_ring_bytes(mem_map.unused_l1_size()), metal.hal().get_alignment(HalMemType::L1));
 
     // The kernels run for as long as fast dispatch does and keep their counters across prefetcher runs,
     // so a run resumes at the device's count. An earlier run's stop waited for them to go idle.
@@ -86,10 +89,10 @@ void TensorPrefetcherManager::start_on_dispatch_engine() {
 void TensorPrefetcherManager::validate_dispatch_engine_pages(
     const std::vector<std::vector<uint8_t>>& sender_pages, const RequestTarget& target) const {
     TT_FATAL(
-        target.mapping.size() <= fifo::kMaxLanes,
+        target.mapping.size() <= fifo_layout_.lanes,
         "Tensor prefetcher request names {} DRAM-sender endpoints; fast dispatch's prefetcher serves at most {}",
         target.mapping.size(),
-        fifo::kMaxLanes);
+        fifo_layout_.lanes);
     TT_FATAL(
         target.total_receivers <= fifo::kMaxReceivers,
         "Tensor prefetcher request has {} receivers; fast dispatch's prefetcher serves at most {}",
@@ -97,7 +100,7 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
         fifo::kMaxReceivers);
     // The stage slot each of this target's blocks lands in, exactly as the kernels size it.
     const uint32_t stage_slot_bytes = fifo::stage_slot_bytes(
-        fifo::stage_ring_bytes(mesh_device_->impl().metal_context().dispatch_mem_map().unused_l1_size()),
+        fifo_layout_.stage_ring_bytes(mesh_device_->impl().metal_context().dispatch_mem_map().unused_l1_size()),
         target.total_receivers);
     for (const auto& page : sender_pages) {
         const TensorPrefetcherRequestHeader& header = header_of(page);
@@ -183,7 +186,7 @@ void TensorPrefetcherManager::write_fifo_slot(uint32_t d, std::span<const uint8_
     ::tt::tt_metal::detail::WriteToDeviceL1(
         device,
         device_fifo.dispatch_engine,
-        fifo_region_base_ + fifo::slot_offset(device_fifo.written),
+        fifo_region_base_ + fifo_layout_.slot_offset(device_fifo.written),
         slot,
         CoreType::DISPATCH);
     cluster.l1_barrier(device->id());
@@ -210,8 +213,8 @@ void TensorPrefetcherManager::worker_loop_dispatch_engine() {
     // receivers together. A DRAIN request's lanes are independent, so it may take several slots.
     const auto slots_for = [this](const Request& request) {
         std::vector<std::vector<uint8_t>> slots;
-        for (size_t first = 0; first < request.target_sender_indices.size(); first += fifo::kMaxLanes) {
-            const size_t num_lanes = std::min<size_t>(fifo::kMaxLanes, request.target_sender_indices.size() - first);
+        for (size_t first = 0; first < request.target_sender_indices.size(); first += fifo_layout_.lanes) {
+            const size_t num_lanes = std::min<size_t>(fifo_layout_.lanes, request.target_sender_indices.size() - first);
             std::vector<uint8_t> slot(fifo::kSlotHeaderBytes + num_lanes * fifo::kLanePageBytes, 0);
             fifo::SlotHeader header{};
             header.command = fifo::kSlotRequest;

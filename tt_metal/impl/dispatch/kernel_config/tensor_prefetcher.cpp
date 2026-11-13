@@ -4,6 +4,7 @@
 
 #include "tensor_prefetcher.hpp"
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -11,6 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "hostdev/remote_dfb_config_layout.h"
 #include "impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
@@ -20,20 +22,30 @@ namespace tt::tt_metal {
 
 namespace {
 namespace fifo = tensor_prefetcher_fifo;
+
+// tensor_prefetcher_fifo::kSenderStatePageBytes is derived from these.
+static_assert(PREFETCHER_PIPE_CONFIG_HEADER_WORDS == 10 && PREFETCHER_PIPE_MAX_CREDIT_LANES == 4);
+static_assert(
+    fifo::kSenderStatePageBytes >= prefetcher_pipe_noc_xy_byte_offset() + 2 * fifo::kMaxReceivers * sizeof(uint32_t) +
+                                       2 * fifo::kMaxReceivers * PREFETCHER_PIPE_MAX_CREDIT_LANES * 16,
+    "A sender config page for kMaxReceivers receivers must fit kSenderStatePageBytes");
 }  // namespace
+
+fifo::RegionLayout tensor_prefetcher_region_layout(const Cluster& cluster) {
+    uint32_t num_dram_banks = 1;
+    for (const ChipId chip : cluster.all_chip_ids()) {
+        num_dram_banks = std::max<uint32_t>(num_dram_banks, cluster.get_soc_desc(chip).get_num_dram_views());
+    }
+    return fifo::RegionLayout{num_dram_banks};
+}
 
 bool dispatch_engine_hosts_tensor_prefetcher(
     const Cluster& cluster, CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map) {
-    if (dispatch_core_type != CoreType::DISPATCH || num_hw_cqs != 1 ||
-        dispatch_mem_map.unused_l1_size() < fifo::kMinRegionBytes) {
+    if (dispatch_core_type != CoreType::DISPATCH || num_hw_cqs != 1) {
         return false;
     }
-    for (const ChipId chip : cluster.all_chip_ids()) {
-        if (cluster.get_soc_desc(chip).get_num_dram_views() > fifo::kMaxDramBanks) {
-            return false;
-        }
-    }
-    return true;
+    const fifo::RegionLayout layout = tensor_prefetcher_region_layout(cluster);
+    return layout.lanes <= fifo::kMaxLanes && dispatch_mem_map.unused_l1_size() >= layout.min_region_bytes();
 }
 
 TensorPrefetcherKernel::TensorPrefetcherKernel(
@@ -74,15 +86,17 @@ TensorPrefetcherKernel::TensorPrefetcherKernel(
 void TensorPrefetcherKernel::GenerateStaticConfigs() {
     const DispatchMemMap& mem_map = get_dispatch_mem_map();
     region_base_ = mem_map.unused_l1_base();
+    layout_ = tensor_prefetcher_region_layout(descriptor_.cluster());
     // The topology adds these kernels only where dispatch_engine_hosts_tensor_prefetcher holds.
-    TT_ASSERT(mem_map.unused_l1_size() >= fifo::kMinRegionBytes);
+    TT_ASSERT(mem_map.unused_l1_size() >= layout_.min_region_bytes());
 }
 
 void TensorPrefetcherKernel::CreateKernel() {
     const std::map<std::string, std::string> defines = {
         {"TENSOR_PREFETCHER_REGION_BASE", std::to_string(region_base_)},
+        {"TENSOR_PREFETCHER_LANES", std::to_string(layout_.lanes)},
         {"TENSOR_PREFETCHER_STAGE_RING_SIZE",
-         std::to_string(fifo::stage_ring_bytes(get_dispatch_mem_map().unused_l1_size()))},
+         std::to_string(layout_.stage_ring_bytes(get_dispatch_mem_map().unused_l1_size()))},
     };
     configure_kernel_variant(dispatch_kernel_file_names[type_], {}, defines);
 }
@@ -96,8 +110,9 @@ void TensorPrefetcherKernel::ConfigureCore() {
     const CoreCoord core(logical_core_.x, logical_core_.y);
     std::vector<uint32_t> control(fifo::kControlBytes / sizeof(uint32_t), 0);
     detail::WriteToDeviceL1(device_, core, region_base_, control, CoreType::DISPATCH);
-    std::vector<uint32_t> counters((fifo::kSenderStateZoneOffset - fifo::kStagedOffset) / sizeof(uint32_t), 0);
-    detail::WriteToDeviceL1(device_, core, region_base_ + fifo::kStagedOffset, counters, CoreType::DISPATCH);
+    std::vector<uint32_t> counters(
+        (layout_.sender_state_zone_offset() - layout_.staged_offset()) / sizeof(uint32_t), 0);
+    detail::WriteToDeviceL1(device_, core, region_base_ + layout_.staged_offset(), counters, CoreType::DISPATCH);
 }
 
 std::optional<TerminationInfo> TensorPrefetcherKernel::GetTerminationInfo() const {
