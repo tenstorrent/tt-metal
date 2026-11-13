@@ -10,8 +10,10 @@ different program: the large-tensor factory, when a whole row no longer fits in 
 pre-all-gather stage by following fp32_dest_acc_en. The distributed norm is covered end to end on one
 device: pre-all-gather statistics, then post-all-gather with the weight.
 
-These tests are skipped on the simulator (tests/pipeline_reorg/ttsim-skip-list.yaml): the rows are too
-big for its time budget.
+The row-width test here uses a few tile rows: the factory is chosen from the width, not the height. It runs
+on the Blackhole simulator, but not on the Wormhole one (#38203, see tests/pipeline_reorg/ttsim-skip-list.yaml).
+The full-grid size, with 4 tile rows on every core, is in
+tests/ttnn/nightly/unit_tests/operations/fused/test_norm_model_widths_full_grid.py.
 """
 
 import pytest
@@ -31,18 +33,12 @@ def norm_reference(op, x, weight, bias):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + EPS) * weight.float()
 
 
-# The large-tensor path loops over the tile rows of a core, so every core gets at least this many.
-TILE_ROWS_PER_CORE = 4
+# The factory is chosen from the width (the L1 footprint of a row), not the height, so a few tile rows suffice.
+TILE_ROWS = 2
 
 
-@pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
-# Where the large-tensor factory starts depends on L1, so all three widths run.
-@pytest.mark.parametrize("w", [4096, 5120, 8192])
-def test_norm_model_width_hifi2_fp32_acc(device, op, w):
+def run_norm_model_width(device, op, w, h):
     torch.manual_seed(0)
-    grid = device.compute_with_storage_grid_size()
-    h = 32 * TILE_ROWS_PER_CORE * grid.x * grid.y
-
     torch_input = torch.randn((1, h, w), dtype=torch.bfloat16)
     torch_weight = torch.rand((w,), dtype=torch.bfloat16)
     torch_bias = torch.rand((w,), dtype=torch.bfloat16)
@@ -65,10 +61,17 @@ def test_norm_model_width_hifi2_fp32_acc(device, op, w):
         tt_output = ttnn.rms_norm(tt_input, epsilon=EPS, weight=tt_weight, compute_kernel_config=compute_config)
     output = ttnn.to_torch(tt_output).float()
 
-    # Every core gets rows: compare a sample that spans all of them, so the reference stays cheap.
+    # Compare a sample of rows that spans all cores, so the reference stays cheap.
     rows = torch.arange(0, h, 17)
     golden = norm_reference(op, torch_input[:, rows], torch_weight, torch_bias)
     assert_with_pcc(golden, output[:, rows], 0.999)
+
+
+@pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
+# Where the large-tensor factory starts depends on L1, so all three widths run.
+@pytest.mark.parametrize("w", [4096, 5120, 8192])
+def test_norm_model_width_hifi2_fp32_acc(device, op, w):
+    run_norm_model_width(device, op, w, h=32 * TILE_ROWS)
 
 
 @pytest.mark.parametrize("op", ["layer_norm", "rms_norm"])
