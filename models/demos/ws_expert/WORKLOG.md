@@ -161,3 +161,26 @@ Hangs found with run_safe_pytest --dev + tt-triage callstacks:
 | 5000 | 157 | 90 | 258,622 | 191.6 | 77.7 | 77.3 | 78 |
 Below M 576 the R / 2 active-cluster rule (no row across three clusters) leaves clusters idle: the active cores
 still run at ~80%.
+
+## Stage 4 (WIP): streamed weights, 20-core groups (ws_group.py, kernels wg_*.cpp)
+Why: streaming weights into the 9 x 10 clusters needs >= 2 expert slices a core (2 x 414 KB) beside ~900 KB of x / h
+rings, and the fabric lands unicast writes only (mesh API: chip multicast of NoC unicast writes / scatter / fused
+atomic inc; no NoC multicast at the destination), so 9 on-chip copies would need an 8x re-multicast relay. Groups:
+expert e on group e % G (4 groups of two adjacent columns = 80 cores), core j: gate/up pair j (1 x 2) + down
+columns 6j..6j+5 (2 x 1 x 3), weight slice 207 KB in a 2-slot ring. Weights landed by 10 injector cores from DRAM
+(stand-in for the fabric: same ring addresses, WARR semaphore after the slice, per-core credit words back). h: each
+core unicasts its tile to its column's leader for the row (core (c, q % 10)), the 2 leaders multicast 10 tiles each.
+Every expert has its own weights in the test; all groups' last experts PCC 0.99998 (rings / credits / slots right).
+Bugs: DRAM -> L1 reads need the L1 address congruent mod 64 (watcher caught the 128 B id read): 64-aligned landing.
+Perf (M 586, 32 experts, cycles / expert at chip rate, util tile):
+| config | cycles | util | note |
+|---|---|---|---|
+| BK 12, NX 15 | 262K | 10.4% | x waits ~all; weight waits ~0; h waits small |
+| G 1 / 2 / 4 groups | 478K / 349K / 262K | 22.9 / 15.7 / 10.5% | slow inside one group already |
+| BK 6, NX 30 | 358K | 7.7% | more multicasts: worse |
+| BK 24, NX 8 | 167K | 16.4% | |
+| BK 30, NX 6 | 153K | 17.9% | |
+Diagnosis (x block timeline, one group): blocks are tilized early and their slots are free, but the producer's
+multicast goes out 3-15K cycles later: 20 producers' linked 24 KB multicasts into the 2-column group serialize
+(~2.4K cycles a block, ~13 GB/s a group). A group needs all of its experts' x: per core 2.25x the x of a 10-core
+cluster (the price of halving the weight slice), ~49 GB/s into every core at the M 586 target.
