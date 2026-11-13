@@ -306,6 +306,7 @@ class Hy4Chain:
             md, g("model.norm.weight").float().reshape(1, 1, -1, 32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT
         )
         self.ckc_head = compute_cfg(md, "hifi4", True)
+        self.ckc_norm = compute_cfg(md, "hifi4", False)
 
     # --- embedding / head
     def embed_ids(self, ids):
