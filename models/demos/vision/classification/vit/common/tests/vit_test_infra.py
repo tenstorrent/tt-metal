@@ -56,7 +56,10 @@ class VitTestInfra:
         model = load_torch_model(model_location_generator, embedding=True)
         config = model.config
 
-        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+        if is_blackhole():
+            self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
+        else:
+            self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
         self.parameters = preprocess_model_parameters(
@@ -85,7 +88,7 @@ class VitTestInfra:
 
         if use_random_input_tensor == False:
             ## IMAGENET INFERENCE
-            data_loader = get_data_loader("ImageNet_data", batch_size * self.num_devices, 2)
+            data_loader = get_data_loader(batch_size * self.num_devices, 2)
             self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
         else:
             self.torch_pixel_values = torch.randn(
