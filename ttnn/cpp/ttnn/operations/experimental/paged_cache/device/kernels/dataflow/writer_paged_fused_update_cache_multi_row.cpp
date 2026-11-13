@@ -21,6 +21,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/tile_constants.h"
 
 #ifdef PAGE_TABLE_IS_DRAM
 constexpr bool page_table_is_dram = true;
@@ -55,7 +56,7 @@ void kernel_main() {
     constexpr auto rows_per_user = get_arg(args::rows_per_user);
     constexpr auto num_passes = get_arg(args::num_passes);
 
-    constexpr uint32_t TILE_HEIGHT = 32;
+    using tt::constants::TILE_HEIGHT;
     constexpr uint32_t NO_PASS = 0xFFFFFFFFu;
     // Untilized input: block j (= input tile row j) is TILE_HEIGHT rows of Wbytes each.
     constexpr uint32_t input_block_bytes = TILE_HEIGHT * Wbytes;
