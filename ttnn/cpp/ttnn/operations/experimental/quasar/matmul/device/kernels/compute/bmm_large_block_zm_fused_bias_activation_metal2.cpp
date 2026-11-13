@@ -484,7 +484,7 @@ void kernel_main() {
 #ifdef FUSE_BIAS
                     if (block < num_blocks_inner_dim - 1) {
                         // TEN-4746 (#48552): drain mm_partials without consuming it. dummy_unpack() orders the
-                        // POP after the WAIT via a clear-SrcA UNPACR_NOP (required on Quasar, no-op on WH/BH);
+                        // POP after the WAIT via an UNPACR_NOP (required on Quasar, no-op on WH/BH);
                         // it reads nothing, so PACKER_L1_ACC is undisturbed.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
