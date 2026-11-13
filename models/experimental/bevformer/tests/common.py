@@ -81,8 +81,8 @@ from models.experimental.bevformer.reference.spatial_cross_attention import MSDe
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
 from models.experimental.bevformer.tests.fixtures.camera_rigs import (
     CameraSpec,
-    NUSCENES_CAMERA_ORDER,
-    NUSCENES_CAMERA_RIG,
+    SURROUND_CAMERA_ORDER,
+    SURROUND_CAMERA_RIG,
     build_lidar2img,
     ring_camera_rig,
 )
@@ -103,13 +103,13 @@ logger.info(f"BEVFormer variant {VARIANT}")
 
 
 def camera_rig_for_dataset(dataset_config) -> Tuple[CameraSpec, ...]:
-    """nuScenes' rig for a nuScenes dataset, else a synthetic ring."""
+    """The surround rig for a surround preset, else a synthetic ring."""
     if (
-        dataset_config.name.startswith("nuscenes")
-        and dataset_config.num_cams == len(NUSCENES_CAMERA_RIG)
-        and CAMERA_ORDER == NUSCENES_CAMERA_ORDER
+        dataset_config.name.startswith("surround")
+        and dataset_config.num_cams == len(SURROUND_CAMERA_RIG)
+        and CAMERA_ORDER == SURROUND_CAMERA_ORDER
     ):
-        return NUSCENES_CAMERA_RIG
+        return SURROUND_CAMERA_RIG
     return ring_camera_rig(dataset_config.num_cams, dataset_config.input_size)
 
 
@@ -182,8 +182,8 @@ def rig_sequence_metas(dataset_config, steps, batch_size: int = 1) -> List[List[
 class DatasetPreset:
     """
     Attributes:
-        name: Dataset identifier; :func:`camera_rig_for_dataset` picks nuScenes' rig for names
-            starting "nuscenes", a synthetic ring otherwise.
+        name: Dataset identifier; :func:`camera_rig_for_dataset` picks the surround rig for names
+            starting "surround", a synthetic ring otherwise.
         pc_range: (x_min, y_min, z_min, x_max, y_max, z_max) in metres.
         num_cams: Cameras.
         input_size: Image size, (width, height).
@@ -237,7 +237,7 @@ def _upstream_preset(variant):
     v = VARIANTS[variant]
     size = tuple(round(side * v.image_scale) for side in CAMERA_IMAGE_SIZE)
     return DatasetPreset(
-        "nuscenes_v1.0_full_{}x{}".format(*size),
+        "surround_{}x{}".format(*size),
         PC_RANGE,
         NUM_CAMS,
         size,
@@ -246,14 +246,14 @@ def _upstream_preset(variant):
 
 
 PRESETS = {
-    "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
-    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, CAMERA_IMAGE_SIZE, **_BASE),
+    "surround_tiny": DatasetPreset("surround_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
+    "surround_base": DatasetPreset("surround_1600x900", PC_RANGE, NUM_CAMS, CAMERA_IMAGE_SIZE, **_BASE),
     "carla_tiny": DatasetPreset("carla_v0.9.10_640x480", _CARLA_PC_RANGE, NUM_CAMS, (640, 480), **_TINY),
     "carla_base": DatasetPreset("carla_v0.9.10_1280x960", _CARLA_PC_RANGE, NUM_CAMS, (1280, 960), **_BASE),
     # The selected variant's camera images, for the img_metas of the detector and the encoder glue.
     # Its feature levels are SPATIAL_SHAPES, from the padded images, not this preset's.
-    "nuscenes_variant": DatasetPreset(
-        "nuscenes_v1.0_full_{}x{}".format(*RAW_IMAGE_SIZE),
+    "surround_variant": DatasetPreset(
+        "surround_{}x{}".format(*RAW_IMAGE_SIZE),
         PC_RANGE,
         NUM_CAMS,
         RAW_IMAGE_SIZE,
@@ -263,8 +263,8 @@ PRESETS = {
         num_points=SCA_NUM_POINTS,
         tsa_num_points=TSA_NUM_POINTS,
     ),
-    "nuscenes_small_upstream": _upstream_preset("small"),
-    "nuscenes_tiny_upstream": _upstream_preset("tiny"),
+    "surround_small_upstream": _upstream_preset("small"),
+    "surround_tiny_upstream": _upstream_preset("tiny"),
 }
 
 
@@ -545,7 +545,7 @@ def random_encoder_inputs(bev_shape, batch_size=1, seed=0, yaw_step_deg=0.0):
     )
 
 
-def camera_img_metas(batch_size, preset="nuscenes_variant", yaw_step_deg=0.0):
+def camera_img_metas(batch_size, preset="surround_variant", yaw_step_deg=0.0):
     """``lidar2img`` and ``img_shape`` of a preset's six-camera rig (:func:`img_metas_for_dataset`).
     ``yaw_step_deg`` turns sample ``b``'s rig by ``b * yaw_step_deg`` about the vertical axis, so
     the samples' cameras see different BEV cells."""
@@ -555,7 +555,7 @@ def camera_img_metas(batch_size, preset="nuscenes_variant", yaw_step_deg=0.0):
     return metas
 
 
-def preset_pc_range(preset="nuscenes_variant"):
+def preset_pc_range(preset="surround_variant"):
     """A preset's point-cloud range, the box its camera geometry projects pillars from."""
     return tuple(PRESETS[preset].pc_range)
 
@@ -767,7 +767,7 @@ def build_reference_head(bev_shape, seed=0):
 
 
 # Box center error bounds in metres: PCC alone allows metres of error on x and y, which span
-# 102.4 m, where nuScenes matches boxes from 0.5 m. The worst of the 900 queries carries a
+# 102.4 m, where the detection metric matches boxes from 0.5 m. The worst of the 900 queries carries a
 # bfloat16 tail no single op's precision moves; the bounds leave headroom over it.
 CENTER_MEAN_ATOL = 0.015
 CENTER_MAX_ATOL = 0.5

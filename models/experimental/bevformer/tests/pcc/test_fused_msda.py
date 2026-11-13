@@ -118,8 +118,8 @@ def _run_tt(device, config, tt_parameters, torch_inputs):
 @pytest.mark.parametrize(
     "config_name, batch_size, num_queries",
     [
-        ("nuscenes_tiny", 1, 900),
-        ("nuscenes_base", 1, 2500),
+        ("surround_tiny", 1, 900),
+        ("surround_base", 1, 2500),
     ],
 )
 @pytest.mark.parametrize("seed", [0, 1, 2])
@@ -147,7 +147,7 @@ def test_msda_output_is_deterministic(device):
     input slot held, so the one-time zeroing of the input CB and the zero weight
     compute gives that corner are what keep stale bytes out of the result.
     """
-    config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_tiny", 1, 900, 0)
+    config, _, tt_parameters, torch_inputs = _build(device, "surround_tiny", 1, 900, 0)
 
     first = _run_tt(device, config, tt_parameters, torch_inputs)
     second = _run_tt(device, config, tt_parameters, torch_inputs)
@@ -157,7 +157,7 @@ def test_msda_output_is_deterministic(device):
 
 @pytest.mark.parametrize("value_memory, buffer_type", [("l1", ttnn.BufferType.L1), ("dram", ttnn.BufferType.DRAM)])
 def test_msda_value_memory_modes_match_reference(device, monkeypatch, value_memory, buffer_type):
-    config, ref_model, tt_parameters, torch_inputs = _build(device, "nuscenes_tiny", 1, 64, 0)
+    config, ref_model, tt_parameters, torch_inputs = _build(device, "surround_tiny", 1, 64, 0)
     query, value, reference_points, spatial_shapes = torch_inputs
     placements = _record_value_placement(monkeypatch)
 
@@ -187,7 +187,7 @@ def test_msda_auto_keeps_value_in_l1_on_large_blackhole(device, monkeypatch, bat
     if l1_num_banks < 90:
         pytest.skip(f"strict fused-MSDA L1 placement requires 90 L1 banks; found {l1_num_banks}")
 
-    config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_base", batch_size, 2500, 0)
+    config, _, tt_parameters, torch_inputs = _build(device, "surround_base", batch_size, 2500, 0)
     placements = _record_value_placement(monkeypatch)
 
     _run_tt(device, config, tt_parameters, torch_inputs)

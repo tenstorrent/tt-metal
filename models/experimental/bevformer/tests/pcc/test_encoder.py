@@ -37,7 +37,7 @@ ENABLE_LOGGING = True
 torch.manual_seed(0)
 
 # Get default configuration for testing (can be overridden in individual tests)
-DEFAULT_TEST_CONFIG = PRESETS["nuscenes_base"]  # NuScenes + Base model
+DEFAULT_TEST_CONFIG = PRESETS["surround_base"]
 
 # Flag to control detailed comparison output
 PRINT_DETAILED_COMPARISON_FLAG = False
@@ -128,13 +128,13 @@ def reference_forward(ref_model, inputs, bev_size, spatial_shapes, img_metas):
 @pytest.mark.parametrize(
     "config_name, bev_size, num_layers, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        ("nuscenes_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base model
-        ("nuscenes_base", (100, 100), 1, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base, single layer
-        ("nuscenes_tiny", (100, 100), 3, 2, 0.996, 0.05, 0.8, 0.5),  # NuScenes tiny model, bs>1 grid widening
+        ("surround_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),
+        ("surround_base", (100, 100), 1, 1, 0.997, 0.05, 0.8, 0.5),  # Base preset, single layer
+        ("surround_tiny", (100, 100), 3, 2, 0.996, 0.05, 0.8, 0.5),  # Tiny preset, bs>1 grid widening
         ("carla_tiny", (100, 100), 3, 1, 0.995, 0.05, 0.8, 0.5),  # CARLA tiny model
         # Off: (arch, camera rig) corners the three above already cover.
         # ("carla_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # CARLA base model
-        # ("nuscenes_base_fast", (100, 100), 6, 1, 0.996, 0.05, 0.8, 0.5),  # NuScenes base fast model
+        # ("surround_base_fast", (100, 100), 6, 1, 0.996, 0.05, 0.8, 0.5),  # Base fast preset
     ],
 )
 @pytest.mark.parametrize("seed", [0])
@@ -235,7 +235,7 @@ RIG_SEQUENCE = ((0, 1.0), (5, 1.0), (10, 1.1), (15, 0.9), (20, 0.95), (25, 0.8))
     [
         # The busiest camera's visible BEV cells per frame of RIG_SEQUENCE, from the reference's
         # projection at 100x100.
-        ("nuscenes_base", (2472, 2474, 2295, 2662, 2559, 2797), 0.997),  # nuScenes rig
+        ("surround_base", (2472, 2474, 2295, 2662, 2559, 2797), 0.997),  # surround rig
         ("carla_tiny", (2146, 2161, 2053, 2300, 2233, 2448), 0.995),  # ring rig
     ],
 )
@@ -298,4 +298,4 @@ def test_bevformer_encoder_glue_intermediates_in_dram(device, monkeypatch):
     group; the attention tests force the others. Forced, since whether a grid outgrows the budget
     depends on the device's L1."""
     monkeypatch.setattr(tt_common, "L1_INTERMEDIATE_SHARE", 0.0)
-    test_bevformer_encoder_forward(device, "nuscenes_base", (100, 100), 1, 2, 0.997, 0.05, 0.8, 0.5, seed=0)
+    test_bevformer_encoder_forward(device, "surround_base", (100, 100), 1, 2, 0.997, 0.05, 0.8, 0.5, seed=0)
