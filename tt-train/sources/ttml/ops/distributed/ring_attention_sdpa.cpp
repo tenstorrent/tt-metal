@@ -64,8 +64,9 @@ namespace detail {
 // A logsumexp of -inf means no contribution: the first merge (L = -inf) gives O' = O_i, and a
 // step the causal schedule skips (l_i = -inf) leaves O and L unchanged. Both can't be -inf,
 // since every device computes its diagonal block at step 0.
-// O_i must be finite even on skipped steps (0 * inf = NaN); the caller's zero-filled, reused
-// output buffer guarantees this.
+// O_i must be finite even on skipped steps (0 * inf = NaN). In the ring caller, step 0 writes
+// every row of the reused output buffer on every device, so a skipped step re-merges an
+// earlier finite output with weight 0.
 void online_softmax_merge(
     ttnn::Tensor& output_accum,
     ttnn::Tensor& running_lse,
@@ -176,7 +177,10 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
 
-    ttnn::Tensor output_tensor = ttnn::zeros_like(query_tensor);
+    // Left uninitialized: step 0 writes every row on every device before any skipped step merges
+    // it. A schedule in which a device can merge this buffer before writing it (e.g. one that
+    // skips step 0 somewhere) must zero-fill it instead.
+    ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
     ttnn::Tensor intermediate_tensor = ttnn::empty(
         ttnn::Shape{batch_num, heads, seq_len_local, 32U},
         ttnn::DataType::FLOAT32,
