@@ -448,9 +448,10 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 #   * `coresident: True` for t2va (`coresident_tasks`) with `evict_vae_for_denoise`. A Wormhole chip has 12 GB of
 #     DRAM against Blackhole's 32 GB.
 #     With `dit_fsdp` the DiT is ~2 GB a device, so it, the text encoder (~2 GB) and the audio decoder (0.56 GB) stay
-#     resident across requests; the video VAE decoder (4.9 GB of fp32 weights) does not fit beside a denoise, so it
-#     is dropped before each denoise and reloaded for the decode (~2.9 s a request). t2va at its capacity length
-#     (120320 rows) on the mock 4x8: device 0 holds 8.6 GB after the first denoise step, 10.7 GB after the decode.
+#     resident across requests; the video VAE decoder (4.9 GB of fp32 weights) does not fit beside a denoise. With
+#     `park_vae_decoder` each device keeps 1/SP of the decoder's weights through the denoise and the decode gathers
+#     them back over the fabric, instead of a ~2.9 s reload from the host. t2va at its capacity length (120320 rows)
+#     on the mock 4x8: device 0 holds 8.6 GB after the first denoise step, 10.7 GB after the decode.
 #     ref2va evicts each stage before the next loads: its token refiner and text encoder run at the 61440-token
 #     prompt cap, which fits beside neither the resident encoders (in the denoise) nor the video VAE decoder.
 #   * `dit_fsdp: True`: the DiT weights are sharded across the SP axis too and gathered layer by layer.
@@ -466,6 +467,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "coresident": True,
         "coresident_tasks": ("t2va",),
         "evict_vae_for_denoise": True,
+        "park_vae_decoder": True,
         "dit_fsdp": True,
         # Dynamic length by default, as on the Blackhole 4x8; the bucket ladder stays as the backup path and the
         # admission cap.
@@ -686,6 +688,12 @@ class MiniMaxH3Pipeline:
         # Coresident presets whose video VAE decoder does not fit beside a denoise: it is dropped before each denoise
         # and reloads for the decode (everything else stays resident across requests).
         self.evict_vae_for_denoise = coresident and preset.get("evict_vae_for_denoise", False)
+        # ... and keeps 1/SP of its decoder's weights through the denoise, gathered back over the fabric for the decode
+        # instead of reloaded from the host.
+        self.park_vae_decoder = (
+            self.evict_vae_for_denoise
+            and os.environ.get("MINIMAX_H3_PARK_VAE", "1" if preset.get("park_vae_decoder", False) else "0") == "1"
+        )
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -1767,6 +1775,11 @@ class MiniMaxH3Pipeline:
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
         )
+        if self.park_vae_decoder and module is self._vae.decoder:
+            # Park and unpark once at each host load, so the slice and gather programs compile with the load (the
+            # warmup) rather than at the first request's decode.
+            module.park_weights(self.ccl_manager, self.sp_axis)
+            module.unpark_weights()
 
     @property
     def vae(self) -> MiniMaxH3Vae:
@@ -2349,7 +2362,11 @@ class MiniMaxH3Pipeline:
             self._bind_kv_gather_pair(transformer)
         if self.evict_vae_for_denoise:
             for module in self._vae.modules:
-                if module.is_loaded():
+                if not module.is_loaded():
+                    continue
+                if self.park_vae_decoder and module is self._vae.decoder:
+                    module.park_weights(self.ccl_manager, self.sp_axis)
+                else:
                     module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
